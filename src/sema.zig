@@ -405,7 +405,10 @@ pub const Checker = struct {
                 if (ctx.no_lang_trap) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "indexing may trap in #[no_lang_trap]");
                 }
-                _ = self.checkExpr(node.base.*, ctx);
+                const base_class = self.checkExpr(node.base.*, ctx);
+                if (!isIndexableBase(base_class)) {
+                    self.errorCode(node.base.span, "E_INDEX_BASE_NOT_ARRAY_OR_SLICE", "indexing is defined only for arrays and slices");
+                }
                 const index_class = self.checkExpr(node.index.*, ctx);
                 if (!isIndexType(index_class)) {
                     self.errorCode(node.index.span, "E_INDEX_NOT_USIZE", "array and slice indices must be checked usize");
@@ -991,6 +994,13 @@ fn isNullableValue(kind: TypeClass) bool {
 fn isIndexType(kind: TypeClass) bool {
     return switch (kind) {
         .checked_usize, .int_literal, .never, .unknown => true,
+        else => false,
+    };
+}
+
+fn isIndexableBase(kind: TypeClass) bool {
+    return switch (kind) {
+        .array, .slice, .never, .unknown => true,
         else => false,
     };
 }
