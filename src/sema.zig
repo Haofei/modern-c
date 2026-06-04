@@ -1392,6 +1392,7 @@ fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .call => |node| if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .deref => |inner| derefResultType(inner.*, ctx),
         .index => |node| indexResultType(node, ctx),
+        .member => |node| memberResultFieldType(node, ctx),
         .grouped => |inner| exprResultType(inner.*, ctx),
         else => exprStorageType(expr, ctx),
     };

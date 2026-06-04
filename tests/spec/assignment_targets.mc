@@ -40,6 +40,10 @@ fn accept_direct_call_member_read() -> u32 {
     return make_packet().value;
 }
 
+fn accept_direct_call_member_pointer_read() -> *mut u8 {
+    return make_packet().ptr;
+}
+
 fn reject_member_read_return_type(packet: Packet) -> *mut u8 {
     // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
     return packet.value;
@@ -48,6 +52,11 @@ fn reject_member_read_return_type(packet: Packet) -> *mut u8 {
 fn reject_direct_call_member_read_return_type() -> *mut u8 {
     // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
     return make_packet().value;
+}
+
+fn reject_direct_call_member_pointer_return_conversion() -> *const u8 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return make_packet().ptr;
 }
 
 fn reject_member_assignment_bool(packet: Packet, flag: bool) -> void {
