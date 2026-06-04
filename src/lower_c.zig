@@ -9,6 +9,67 @@ pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *
     try inspector.inspectModule(module);
 }
 
+pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
+    _ = module;
+    try out.appendSlice(allocator,
+        \\#include <stdint.h>
+        \\#include <stdbool.h>
+        \\
+        \\#if defined(__GNUC__) || defined(__clang__)
+        \\#define MC_NORETURN __attribute__((noreturn))
+        \\#define MC_UNUSED __attribute__((unused))
+        \\#else
+        \\#define MC_NORETURN
+        \\#define MC_UNUSED
+        \\#endif
+        \\
+        \\MC_NORETURN MC_UNUSED static inline void mc_trap_IntegerOverflow(void) {
+        \\    __builtin_trap();
+        \\}
+        \\
+        \\MC_NORETURN MC_UNUSED static inline void mc_trap_DivideByZero(void) {
+        \\    __builtin_trap();
+        \\}
+        \\
+        \\MC_NORETURN MC_UNUSED static inline void mc_trap_InvalidShift(void) {
+        \\    __builtin_trap();
+        \\}
+        \\
+        \\MC_UNUSED static inline uint32_t mc_checked_add_u32(uint32_t a, uint32_t b) {
+        \\    uint32_t out;
+        \\    if (__builtin_add_overflow(a, b, &out)) mc_trap_IntegerOverflow();
+        \\    return out;
+        \\}
+        \\
+        \\MC_UNUSED static inline uint32_t mc_race_load_u32(uint32_t const *p) {
+        \\    uint32_t value;
+        \\    __atomic_load(p, &value, __ATOMIC_RELAXED);
+        \\    return value;
+        \\}
+        \\
+        \\MC_UNUSED static inline void mc_race_store_u32(uint32_t *p, uint32_t value) {
+        \\    __atomic_store(p, &value, __ATOMIC_RELAXED);
+        \\}
+        \\
+        \\MC_UNUSED static inline uint8_t mc_mmio_read_u8(uint8_t volatile const *p) {
+        \\    return *p;
+        \\}
+        \\
+        \\MC_UNUSED static inline void mc_mmio_write_u8(uint8_t volatile *p, uint8_t value) {
+        \\    *p = value;
+        \\}
+        \\
+        \\MC_UNUSED static inline void mc_barrier_release_before(void) {
+        \\    __atomic_signal_fence(__ATOMIC_RELEASE);
+        \\}
+        \\
+        \\MC_UNUSED static inline void mc_barrier_acquire_after(void) {
+        \\    __atomic_signal_fence(__ATOMIC_ACQUIRE);
+        \\}
+        \\
+    );
+}
+
 const Inspector = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -738,4 +799,36 @@ test "emits inspection markers for lowering-sensitive spec behavior" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "register_width=8 emitted_width=8") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ordering=release") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ordering=acquire") != null);
+}
+
+test "emits C support helpers used by lower-c evidence" {
+    const source =
+        \\fn noop() -> void {}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_IntegerOverflow") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_DivideByZero") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidShift") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_load_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after") != null);
 }

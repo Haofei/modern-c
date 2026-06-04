@@ -18,6 +18,7 @@ const usage =
     \\  mcc facts <file.mc>
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
+    \\  mcc emit-c <file.mc>
     \\
 ;
 
@@ -47,6 +48,8 @@ pub fn main(init: std.process.Init) !void {
         try runLowerIr(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
+    } else if (std.mem.eql(u8, command, "emit-c")) {
+        try runEmitC(allocator, path, source);
     } else {
         return failUsage();
     }
@@ -211,6 +214,28 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_c.appendInspection(allocator, module, &output);
+    std.debug.print("{s}", .{output.items});
+}
+
+fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitCFailed;
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    try lower_c.appendC(allocator, module, &output);
     std.debug.print("{s}", .{output.items});
 }
 
