@@ -793,6 +793,7 @@ const CEmitter = struct {
                     if (try self.emitDirectCallSliceIndexReturn(expr, locals)) return;
                     if (try self.emitMmioReadReturn(expr, locals)) return;
                     if (try self.emitOverlayFieldReadReturn(expr, locals, return_ty)) return;
+                    if (try self.emitResultTryReturn(expr, locals, return_ty)) return;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "return ");
                     if (return_ty) |target_ty| {
@@ -1779,6 +1780,31 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitResultTryReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const operand = switch (expr.kind) {
+            .try_expr => |inner| inner.*,
+            .grouped => |inner| return try self.emitResultTryReturn(inner.*, locals, return_ty),
+            else => return false,
+        };
+        const operand_result_ty = self.resultTypeForExpr(operand, locals) orelse return false;
+        _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
+        _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(operand_result_ty, .typedef_name), temp_name });
+        try self.emitExpr(operand, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "if (!{s}.is_ok) mc_trap_InvalidRepresentation();\n", .{temp_name});
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.out.print(self.allocator, "{s}.payload.ok;\n", .{temp_name});
+        return true;
+    }
+
     fn sliceReturnTypeForCall(self: *CEmitter, call: anytype) ?ast.TypeExpr {
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
@@ -1788,6 +1814,10 @@ const CEmitter = struct {
 
     fn resultTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         return switch (expr.kind) {
+            .ident => |ident| blk: {
+                const info = locals.get(ident.text) orelse break :blk null;
+                break :blk info.result_ty;
+            },
             .call => |node| blk: {
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
@@ -1860,6 +1890,7 @@ const CEmitter = struct {
             .generic => |node| .{
                 .c_type = try self.cTypeFor(ty, .typedef_name),
                 .source_type_name = source_type_name,
+                .result_ty = if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) ty else null,
                 .result_ok_c_type = if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) try self.cTypeFor(node.args[0], .typedef_name) else null,
                 .result_err_c_type = if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) try self.cTypeFor(node.args[1], .typedef_name) else null,
                 .mmio_pointee = mmio_pointee,
@@ -1897,6 +1928,7 @@ const LocalInfo = struct {
     slice_len_field: ?[]const u8 = null,
     iterable_element_c_type: ?[]const u8 = null,
     nullable_inner_c_type: ?[]const u8 = null,
+    result_ty: ?ast.TypeExpr = null,
     result_ok_c_type: ?[]const u8 = null,
     result_err_c_type: ?[]const u8 = null,
     mmio_pointee: ?[]const u8 = null,
@@ -3380,6 +3412,49 @@ test "emits C for Result try in local initializers" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = false, .payload.err = mc_tmp0.payload.err });") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value = mc_tmp0.payload.ok;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = true, .payload.ok = mc_checked_add_u32(value, 1) });") != null);
+}
+
+test "emits C for Result try in return statements" {
+    const source =
+        \\enum Error: u8 {
+        \\    denied = 1,
+        \\}
+        \\
+        \\extern fn make_result() -> Result<u32, Error>;
+        \\
+        \\fn unwrap_param(result: Result<u32, Error>) -> u32 {
+        \\    return result?;
+        \\}
+        \\
+        \\fn unwrap_call() -> u32 {
+        \\    return make_result()?;
+        \\}
+        \\
+        \\fn unwrap_grouped_call() -> u32 {
+        \\    return (make_result())?;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_try_return.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = result;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp0.is_ok) mc_trap_InvalidRepresentation();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0.payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp1 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp2 = (make_result());") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
