@@ -472,6 +472,13 @@ const CEmitter = struct {
                 for (local.names) |name| {
                     const info = if (local.ty) |decl_ty| try self.localInfoFromType(decl_ty) else LocalInfo{};
                     try locals.put(name.text, info);
+                    if (local.names.len == 1) {
+                        if (local.ty) |decl_ty| {
+                            if (local.init) |initializer| {
+                                if (try self.emitDirectCallSliceIndexLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                            }
+                        }
+                    }
                     try self.writeIndent();
                     if (local.ty) |decl_ty| {
                         try self.emitDeclarator(decl_ty, name.text);
@@ -929,6 +936,37 @@ const CEmitter = struct {
 
         try self.writeIndent();
         try self.out.print(self.allocator, "return {s}.ptr[mc_check_index_usize(", .{temp_name});
+        try self.emitExpr(index.index.*, locals);
+        try self.out.print(self.allocator, ", {s}.len)];\n", .{temp_name});
+        return true;
+    }
+
+    fn emitDirectCallSliceIndexLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const index = switch (initializer.kind) {
+            .index => |node| node,
+            .grouped => |inner| return try self.emitDirectCallSliceIndexLocalInit(name, decl_ty, inner.*, locals),
+            else => return false,
+        };
+        const call = switch (index.base.kind) {
+            .call => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .call => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const return_ty = self.sliceReturnTypeForCall(call) orelse return false;
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), temp_name });
+        try self.emitExpr(index.base.*, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+
+        try self.writeIndent();
+        try self.emitDeclarator(decl_ty, name);
+        try self.out.print(self.allocator, " = {s}.ptr[mc_check_index_usize(", .{temp_name});
         try self.emitExpr(index.index.*, locals);
         try self.out.print(self.allocator, ", {s}.len)];\n", .{temp_name});
         return true;
@@ -2084,6 +2122,16 @@ test "emits C for slice typedefs and indexing" {
         \\fn read_direct_index(i: usize) -> u32 {
         \\    return make_u32_slice()[i];
         \\}
+        \\
+        \\fn local_direct_literal() -> u8 {
+        \\    let x: u8 = make_u8_slice()[0];
+        \\    return x;
+        \\}
+        \\
+        \\fn local_direct_index(i: usize) -> u32 {
+        \\    let x: u32 = make_u32_slice()[i];
+        \\    return x;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_slices.mc", source);
@@ -2120,6 +2168,10 @@ test "emits C for slice typedefs and indexing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0.ptr[mc_check_index_usize(0, mc_tmp0.len)];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp1 = make_u32_slice();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp1.ptr[mc_check_index_usize(i, mc_tmp1.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 mc_tmp2 = make_u8_slice();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t x = mc_tmp2.ptr[mc_check_index_usize(0, mc_tmp2.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp3 = make_u32_slice();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp3.ptr[mc_check_index_usize(i, mc_tmp3.len)];") != null);
 }
 
 test "emits C checked u32 arithmetic helpers" {
