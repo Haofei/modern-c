@@ -969,6 +969,16 @@ fn iterableElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
+fn storageElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .pointer => |node| node.child.*,
+        .slice => |node| node.child.*,
+        .array => |node| node.child.*,
+        .qualified => |node| storageElementType(node.child.*),
+        else => null,
+    };
+}
+
 fn classifyGenericTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "Result")) return .result;
     if (std.mem.eql(u8, name, "UserPtr")) return .user_ptr;
@@ -1262,6 +1272,8 @@ fn assignmentTargetType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
             }
             return null;
         },
+        .deref => |inner| if (exprStorageType(inner.*, ctx)) |ty| storageElementType(ty) else null,
+        .index => |node| if (exprStorageType(node.base.*, ctx)) |ty| storageElementType(ty) else null,
         .grouped => |inner| assignmentTargetType(inner.*, ctx),
         else => null,
     };
