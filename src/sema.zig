@@ -213,8 +213,8 @@ pub const Checker = struct {
             const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
             const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
             const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
-            const const_drop_checked = if (local.ty) |ty| self.checkConstDropInitializer(ty, expr, ctx) else false;
-            if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !const_drop_checked and !canInitialize(kind, initializer)) {
+            const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
+            if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !canInitialize(kind, initializer)) {
                 self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
             }
         } else {
@@ -505,10 +505,10 @@ pub const Checker = struct {
         return false;
     }
 
-    fn checkConstDropInitializer(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
+    fn checkPointerViewInitializer(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         const source = exprStorageType(expr, ctx) orelse return false;
-        if (dropsConstView(target, source)) {
-            self.errorCode(expr.span, "E_DISCARD_CONST_VIEW", "initializer cannot discard const from a pointer or view");
+        if (implicitPointerViewConversion(target, source)) {
+            self.errorCode(expr.span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer and view conversions must be explicit");
             return true;
         }
         return false;
@@ -520,9 +520,19 @@ pub const Checker = struct {
         const literal_checked = self.checkIntegerLiteralInitializer(target, target_ty, expr);
         const null_checked = self.checkNullPointerInitializer(target, expr);
         const array_decay_checked = self.checkArrayDecayInitializer(target, returned, expr);
-        if (!literal_checked and !null_checked and !array_decay_checked and !canInitialize(target, returned)) {
+        const pointer_conversion_checked = self.checkPointerViewReturn(target_ty, expr, ctx);
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
+    }
+
+    fn checkPointerViewReturn(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
+        const source = exprStorageType(expr, ctx) orelse return false;
+        if (implicitPointerViewConversion(target, source)) {
+            self.errorCode(expr.span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer and view conversions must be explicit");
+            return true;
+        }
+        return false;
     }
 
     fn checkIfLetPattern(self: *Checker, pattern: ast.Pattern, value_class: TypeClass) void {
@@ -1074,13 +1084,117 @@ fn viewType(ty: ast.TypeExpr) ?ViewType {
     };
 }
 
-fn dropsConstView(target: ast.TypeExpr, source: ast.TypeExpr) bool {
-    const target_view = viewType(target) orelse return false;
-    const source_view = viewType(source) orelse return false;
-    return target_view.kind == source_view.kind and
-        target_view.nullable == source_view.nullable and
-        target_view.mutability == .mut and
-        source_view.mutability == .@"const";
+fn implicitPointerViewConversion(target: ast.TypeExpr, source: ast.TypeExpr) bool {
+    _ = viewType(target) orelse return false;
+    _ = viewType(source) orelse return false;
+    if (classifyType(target) == .c_void_pointer or classifyType(source) == .c_void_pointer) return false;
+    return !sameTypeSyntax(target, source);
+}
+
+fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {
+    if (std.meta.activeTag(left.kind) != std.meta.activeTag(right.kind)) return false;
+    return switch (left.kind) {
+        .name => |left_name| std.mem.eql(u8, left_name.text, switch (right.kind) {
+            .name => |right_name| right_name.text,
+            else => unreachable,
+        }),
+        .enum_literal => |left_name| std.mem.eql(u8, left_name.text, switch (right.kind) {
+            .enum_literal => |right_name| right_name.text,
+            else => unreachable,
+        }),
+        .member => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .member => |node| node,
+                else => unreachable,
+            };
+            break :blk sameTypeSyntax(left_node.base.*, right_node.base.*) and
+                std.mem.eql(u8, left_node.field.text, right_node.field.text);
+        },
+        .nullable => |left_child| sameTypeSyntax(left_child.*, switch (right.kind) {
+            .nullable => |right_child| right_child.*,
+            else => unreachable,
+        }),
+        .qualified => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .qualified => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.mutability == right_node.mutability and
+                sameTypeSyntax(left_node.child.*, right_node.child.*);
+        },
+        .pointer => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .pointer => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.mutability == right_node.mutability and
+                sameTypeSyntax(left_node.child.*, right_node.child.*);
+        },
+        .raw_many_pointer => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .raw_many_pointer => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.mutability == right_node.mutability and
+                sameTypeSyntax(left_node.child.*, right_node.child.*);
+        },
+        .slice => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .slice => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.mutability == right_node.mutability and
+                sameTypeSyntax(left_node.child.*, right_node.child.*);
+        },
+        .array => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .array => |node| node,
+                else => unreachable,
+            };
+            break :blk sameExprSyntax(left_node.len, right_node.len) and
+                sameTypeSyntax(left_node.child.*, right_node.child.*);
+        },
+        .generic => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .generic => |node| node,
+                else => unreachable,
+            };
+            if (!std.mem.eql(u8, left_node.base.text, right_node.base.text)) break :blk false;
+            if (left_node.args.len != right_node.args.len) break :blk false;
+            for (left_node.args, right_node.args) |left_arg, right_arg| {
+                if (!sameTypeSyntax(left_arg, right_arg)) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn sameExprSyntax(left: ast.Expr, right: ast.Expr) bool {
+    if (std.meta.activeTag(left.kind) != std.meta.activeTag(right.kind)) return false;
+    return switch (left.kind) {
+        .ident => |left_ident| std.mem.eql(u8, left_ident.text, switch (right.kind) {
+            .ident => |right_ident| right_ident.text,
+            else => unreachable,
+        }),
+        .int_literal => |left_text| std.mem.eql(u8, left_text, switch (right.kind) {
+            .int_literal => |right_text| right_text,
+            else => unreachable,
+        }),
+        .bool_literal => |left_value| left_value == switch (right.kind) {
+            .bool_literal => |right_value| right_value,
+            else => unreachable,
+        },
+        .null_literal, .uninit_literal, .unreachable_expr, .void_literal => true,
+        .enum_literal => |left_ident| std.mem.eql(u8, left_ident.text, switch (right.kind) {
+            .enum_literal => |right_ident| right_ident.text,
+            else => unreachable,
+        }),
+        .grouped => |left_inner| sameExprSyntax(left_inner.*, switch (right.kind) {
+            .grouped => |right_inner| right_inner.*,
+            else => unreachable,
+        }),
+        else => false,
+    };
 }
 
 fn isMmioRegisterType(ty: ast.TypeExpr) bool {
