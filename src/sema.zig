@@ -117,7 +117,8 @@ pub const Checker = struct {
                 self.checkBlock(loop.body, ctx);
             },
             .if_let => |node| {
-                _ = self.checkExpr(node.value, ctx);
+                const value_class = self.checkExpr(node.value, ctx);
+                self.checkIfLetPattern(node.pattern, value_class);
                 self.checkBlock(node.then_block, ctx);
                 if (node.else_block) |else_block| self.checkBlock(else_block, ctx);
             },
@@ -375,6 +376,26 @@ pub const Checker = struct {
         }
         return false;
     }
+
+    fn checkIfLetPattern(self: *Checker, pattern: ast.Pattern, value_class: TypeClass) void {
+        switch (pattern.kind) {
+            .bind => {
+                if (!isNullableValue(value_class)) {
+                    self.errorCode(pattern.span, "E_IF_LET_OPTIONAL_REQUIRED", "plain if let binding requires a nullable value");
+                }
+            },
+            .tag_bind => |node| {
+                if (!isResultNarrowingTag(node.tag.text)) {
+                    self.errorCode(node.tag.span, "E_IF_LET_RESULT_TAG", "if let result narrowing supports only ok(...) or err(...)");
+                } else if (value_class != .result) {
+                    self.errorCode(pattern.span, "E_IF_LET_RESULT_REQUIRED", "if let ok(...) or err(...) requires a Result value");
+                }
+            },
+            .wildcard, .tag, .literal => {
+                self.errorCode(pattern.span, "E_IF_LET_NARROW_PATTERN", "if let supports only optional bindings and Result ok(...) or err(...) bindings");
+            },
+        }
+    }
 };
 
 const Context = struct {
@@ -443,6 +464,7 @@ const TypeClass = enum {
     c_void_pointer,
     nullable_pointer,
     nullable_c_void_pointer,
+    result,
     never,
     void,
     bool,
@@ -565,6 +587,7 @@ fn classifyNullableType(child: ast.TypeExpr) TypeClass {
 }
 
 fn classifyGenericTypeName(name: []const u8) TypeClass {
+    if (std.mem.eql(u8, name, "Result")) return .result;
     if (std.mem.eql(u8, name, "wrap")) return .wrap;
     if (std.mem.eql(u8, name, "sat")) return .sat;
     if (std.mem.eql(u8, name, "serial")) return .serial;
@@ -673,6 +696,17 @@ fn isNullLiteral(expr: ast.Expr) bool {
         .grouped => |inner| isNullLiteral(inner.*),
         else => false,
     };
+}
+
+fn isNullableValue(kind: TypeClass) bool {
+    return switch (kind) {
+        .nullable_pointer, .nullable_c_void_pointer => true,
+        else => false,
+    };
+}
+
+fn isResultNarrowingTag(name: []const u8) bool {
+    return std.mem.eql(u8, name, "ok") or std.mem.eql(u8, name, "err");
 }
 
 fn parseIntegerLiteral(raw: []const u8) ?u128 {
