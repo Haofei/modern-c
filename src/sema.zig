@@ -200,7 +200,8 @@ pub const Checker = struct {
                 }
                 self.checkAssignmentTarget(node.target, ctx);
                 _ = self.checkExpr(node.target, ctx);
-                _ = self.checkExpr(node.value, ctx);
+                const value_class = self.checkExpr(node.value, ctx);
+                self.checkAssignmentValue(node.target, value_class, node.value, ctx);
             },
         }
     }
@@ -250,6 +251,19 @@ pub const Checker = struct {
             },
             .grouped => |inner| self.checkAssignmentTarget(inner.*, ctx),
             else => {},
+        }
+    }
+
+    fn checkAssignmentValue(self: *Checker, target: ast.Expr, value_class: TypeClass, value: ast.Expr, ctx: Context) void {
+        const target_ty = assignmentTargetType(target, ctx) orelse return;
+        const target_class = classifyType(target_ty);
+        const literal_checked = self.checkIntegerLiteralInitializer(target_class, target_ty, value);
+        const null_checked = self.checkNullPointerInitializer(target_class, value);
+        const array_decay_checked = self.checkArrayDecayInitializer(target_class, value_class, value);
+        const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, value, ctx);
+        const address_checked = self.checkAddressOfInitializer(target_class, value);
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !address_checked and !canInitialize(target_class, value_class)) {
+            self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
     }
 
@@ -1094,6 +1108,21 @@ fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
             return null;
         },
         .grouped => |inner| exprStorageType(inner.*, ctx),
+        else => null,
+    };
+}
+
+fn assignmentTargetType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| {
+                if (!entry.mutable) return null;
+                return entry.ty;
+            }
+            return null;
+        },
+        .grouped => |inner| assignmentTargetType(inner.*, ctx),
         else => null,
     };
 }
