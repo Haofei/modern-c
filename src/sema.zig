@@ -72,10 +72,12 @@ pub const Checker = struct {
             self.checkType(ty, .normal);
             break :blk isTypeName(ty, "never");
         } else false;
+        const returns_void = if (fn_decl.return_type) |ty| isTypeName(ty, "void") else false;
         if (fn_decl.body) |body| {
             self.checkBlock(body, .{
                 .no_lang_trap = no_lang_trap,
                 .returns_never = returns_never,
+                .returns_void = returns_void,
                 .unsafe_contracts = .{},
                 .scope = &scope,
                 .mmio_structs = mmio_structs,
@@ -131,6 +133,8 @@ pub const Checker = struct {
                     const returned = self.checkExpr(expr, ctx);
                     if (ctx.returns_never and returned != .never) {
                         self.errorCode(stmt.span, "E_NEVER_RETURNS", "function declared -> never cannot return normally");
+                    } else if (ctx.returns_void and returned != .void and returned != .never) {
+                        self.errorCode(stmt.span, "E_VOID_RETURNS_VALUE", "function declared -> void cannot return a value");
                     }
                 } else if (ctx.returns_never) {
                     self.errorCode(stmt.span, "E_NEVER_RETURNS", "function declared -> never cannot return normally");
@@ -157,7 +161,8 @@ pub const Checker = struct {
         return switch (expr.kind) {
             .ident => |ident| if (ctx.scope) |scope| scope.get(ident.text) orelse .unknown else .unknown,
             .int_literal => .checked_signed,
-            .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal => .unknown,
+            .void_literal => .void,
+            .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .enum_literal => .unknown,
             .unreachable_expr => {
                 if (ctx.no_lang_trap) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "reachable unreachable emits a language trap in #[no_lang_trap]");
@@ -306,6 +311,7 @@ pub const Checker = struct {
 const Context = struct {
     no_lang_trap: bool = false,
     returns_never: bool = false,
+    returns_void: bool = false,
     unsafe_contracts: UnsafeContracts = .{},
     scope: ?*Scope = null,
     mmio_structs: ?*const std.StringHashMap(MmioStruct) = null,
@@ -354,6 +360,7 @@ const TypeClass = enum {
     wrap,
     c_void_pointer,
     never,
+    void,
 };
 
 const TypeMode = enum {
@@ -409,6 +416,7 @@ fn classifyTypeName(name: []const u8) TypeClass {
     if (name.len >= 2 and name[0] == 'i' and std.ascii.isDigit(name[1])) return .checked_signed;
     if (std.mem.eql(u8, name, "isize")) return .checked_signed;
     if (std.mem.eql(u8, name, "never")) return .never;
+    if (std.mem.eql(u8, name, "void")) return .void;
     return .unknown;
 }
 
