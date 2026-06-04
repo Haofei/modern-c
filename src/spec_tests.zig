@@ -756,18 +756,17 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
     }
     if (std.mem.eql(u8, check, "race-ir-semantics")) {
         return containsAll(facts, &.{
-            "fact ordinary_access fn=possibly_racing_store object=shared_counter access=store",
-            "race_class=possibly_shared",
-            "creates_happens_before=false",
-            "assumes_no_race=false",
-            "fact ordinary_access fn=possibly_racing_load object=shared_counter access=load",
+            "fact ordinary_access fn=possibly_racing_store object=shared_counter access=store race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_load object=shared_counter access=load race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact racing_load_semantics fn=possibly_racing_load object=shared_counter result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact non_atomic_rmw fn=racing_increment_is_not_atomic object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false",
         });
     }
     if (std.mem.eql(u8, check, "race-ir-no-ub")) {
         return containsAll(facts, &.{
-            "fact ordinary_access",
-            "object=shared_counter",
-            "optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_store object=shared_counter access=store race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_load object=shared_counter access=load race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact non_atomic_rmw fn=racing_increment_is_not_atomic object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false",
         });
     }
     return false;
@@ -947,27 +946,24 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
     }
     if (std.mem.eql(u8, check, "race-tolerant-lowering")) {
         return containsAll(output, &.{
-            "lower ordinary_access fn=local_non_racing_access object=local access=load",
-            "race_class=local",
-            "strategy=plain_c",
-            "c_plain_access=true",
-            "lower ordinary_access fn=possibly_racing_store object=shared_counter access=store",
-            "strategy=race_helper",
-            "c_plain_access=false",
+            "lower ordinary_access fn=local_non_racing_access object=local access=load race_class=local strategy=plain_c c_plain_access=true",
+            "lower ordinary_access fn=possibly_racing_store object=shared_counter access=store race_class=possibly_shared strategy=race_helper c_plain_access=false",
+            "lower ordinary_access fn=possibly_racing_load object=shared_counter access=load race_class=possibly_shared strategy=race_helper c_plain_access=false",
+            "lower non_atomic_rmw fn=racing_increment_is_not_atomic object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false c_data_race_ub_dependency=false",
         });
     }
     if (std.mem.eql(u8, check, "no-happens-before")) {
         return containsAll(output, &.{
-            "lower race_semantics fn=possibly_racing_load object=shared_counter",
-            "creates_happens_before=false",
-            "assumes_no_race=false",
+            "lower race_semantics fn=possibly_racing_load object=shared_counter creates_happens_before=false assumes_no_race=false",
+            "lower racing_load_semantics fn=possibly_racing_load object=shared_counter result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false c_data_race_ub_dependency=false",
         });
     }
     if (std.mem.eql(u8, check, "no-c-data-race-ub")) {
         return containsAll(output, &.{
-            "lower c_ub",
-            "object=shared_counter",
-            "c_data_race_ub_dependency=false",
+            "lower c_ub fn=possibly_racing_store object=shared_counter c_data_race_ub_dependency=false",
+            "lower c_ub fn=possibly_racing_load object=shared_counter c_data_race_ub_dependency=false",
+            "lower racing_load_semantics fn=possibly_racing_load object=shared_counter result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false c_data_race_ub_dependency=false",
+            "lower non_atomic_rmw fn=racing_increment_is_not_atomic object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false c_data_race_ub_dependency=false",
         });
     }
     if (std.mem.eql(u8, check, "mmio-width-preserved")) {

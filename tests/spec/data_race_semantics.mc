@@ -20,6 +20,7 @@ fn possibly_racing_store(x: u32) -> void {
 
 fn possibly_racing_load() -> u32 {
     // EXPECT: ordinary load result is target-defined if racing.
+    // EXPECT: racing load may tear according to target width/alignment.
     // EXPECT: no happens-before edge is inferred.
     // EXPECT: optimizer must not assume this access cannot race.
     return shared_counter;
@@ -29,4 +30,5 @@ fn racing_increment_is_not_atomic() -> void {
     let x = possibly_racing_load();
     possibly_racing_store(x + 1);
     // EXPECT: this is a bug if concurrent, but it is not optimizer-license UB.
+    // EXPECT: the load/store pair is not an atomic read-modify-write.
 }

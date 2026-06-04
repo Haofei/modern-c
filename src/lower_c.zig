@@ -191,6 +191,7 @@ const Inspector = struct {
             .cast => |node| try self.inspectExpr(node.value.*, ctx),
             .call => |node| {
                 try self.writeContractCallMetadata(node.callee.*, ctx);
+                try self.writeRaceCallMetadata(node.callee.*, ctx);
                 if (try self.mmioAccess(node.callee.*, node.args, ctx)) |access| {
                     const bits = widthBits(access.width);
                     try self.out.print(
@@ -276,6 +277,13 @@ const Inspector = struct {
             "lower c_ub fn={s} object={s} c_data_race_ub_dependency=false\n",
             .{ fn_name, object },
         );
+        if (std.mem.eql(u8, access, "load")) {
+            try self.out.print(
+                self.allocator,
+                "lower racing_load_semantics fn={s} object={s} result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false c_data_race_ub_dependency=false\n",
+                .{ fn_name, object },
+            );
+        }
     }
 
     fn writeLocalOrdinaryAccess(self: *Inspector, fn_name: []const u8, object: []const u8, access: []const u8) !void {
@@ -304,6 +312,16 @@ const Inspector = struct {
                     .{ ctx.name, contract, name },
                 );
             }
+        }
+    }
+
+    fn writeRaceCallMetadata(self: *Inspector, callee: ast.Expr, ctx: *FnContext) !void {
+        if (isIdentNamed(callee, "possibly_racing_store") and std.mem.eql(u8, ctx.name, "racing_increment_is_not_atomic")) {
+            try self.out.print(
+                self.allocator,
+                "lower non_atomic_rmw fn={s} object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false c_data_race_ub_dependency=false\n",
+                .{ctx.name},
+            );
         }
     }
 

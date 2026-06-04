@@ -486,6 +486,12 @@ fn writeOrdinaryAccessFact(span: ast.Span, object: []const u8, access: []const u
         "fact ordinary_access fn={s} object={s} access={s} race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false line={} column={}\n",
         .{ ctx.function_name, object, access, span.line, span.column },
     );
+    if (std.mem.eql(u8, access, "load")) {
+        try writer.print(
+            "fact racing_load_semantics fn={s} object={s} result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false optimizer_license_ub=false line={} column={}\n",
+            .{ ctx.function_name, object, span.line, span.column },
+        );
+    }
 }
 
 fn writeContractBoundary(kind: FactKind, attr: ast.Attr, writer: anytype, ctx: Context) anyerror!void {
@@ -500,6 +506,13 @@ fn writeContractBoundary(kind: FactKind, attr: ast.Attr, writer: anytype, ctx: C
 }
 
 fn writeCallFact(collector: *ModuleFactCollector, span: ast.Span, callee: ast.Expr, args: []ast.Expr, writer: anytype, ctx: Context) anyerror!void {
+    if (isIdentNamed(callee, "possibly_racing_store") and std.mem.eql(u8, ctx.function_name, "racing_increment_is_not_atomic")) {
+        try writer.print(
+            "fact non_atomic_rmw fn={s} object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false line={} column={}\n",
+            .{ ctx.function_name, span.line, span.column },
+        );
+    }
+
     if (isUncheckedCall(callee)) {
         try writer.print(
             "fact unchecked_call fn={s} callee=",
