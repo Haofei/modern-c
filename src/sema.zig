@@ -640,6 +640,11 @@ pub const Checker = struct {
                     self.errorCode(target.span, "E_ASSIGN_THROUGH_CONST_VIEW", "cannot assign through a const pointer or view");
                 }
             },
+            .member => |node| {
+                if (!isMmioRegisterTarget(target, ctx) and immutableValueStorageBase(node.base.*, ctx)) {
+                    self.errorCode(target.span, "E_ASSIGN_TO_IMMUTABLE_LOCAL", "cannot assign to immutable local binding");
+                }
+            },
             .grouped => |inner| self.checkAssignmentTarget(inner.*, ctx),
             else => {},
         }
@@ -2260,6 +2265,18 @@ fn constStorageBase(expr: ast.Expr, ctx: Context) bool {
             return false;
         },
         .grouped => |inner| constStorageBase(inner.*, ctx),
+        else => false,
+    };
+}
+
+fn immutableValueStorageBase(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            return if (binding) |entry| !entry.mutable else false;
+        },
+        .member => |node| immutableValueStorageBase(node.base.*, ctx),
+        .grouped => |inner| immutableValueStorageBase(inner.*, ctx),
         else => false,
     };
 }

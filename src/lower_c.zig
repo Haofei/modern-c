@@ -1239,15 +1239,9 @@ const CEmitter = struct {
         var seen_ok = false;
         var seen_err = false;
         for (node.arms) |arm| {
-            if (arm.patterns.len != 1) {
+            const branch = (try self.resultSwitchBranch(arm.patterns, subject)) orelse {
                 try self.writeIndent();
-                try self.out.appendSlice(self.allocator, "/* unsupported result switch multi-pattern arm */\n");
-                return error.UnsupportedCEmission;
-            }
-            const pattern = arm.patterns[0];
-            const branch = (try self.resultSwitchBranch(pattern, subject)) orelse {
-                try self.writeIndent();
-                try self.out.print(self.allocator, "/* unsupported result switch pattern: {s} */\n", .{@tagName(pattern.kind)});
+                try self.out.appendSlice(self.allocator, "/* unsupported result switch pattern */\n");
                 return error.UnsupportedCEmission;
             };
 
@@ -1439,39 +1433,59 @@ const CEmitter = struct {
         return .{ .name = name, .ok_c_type = ok_ty, .err_c_type = err_ty };
     }
 
-    fn resultSwitchBranch(self: *CEmitter, pattern: ast.Pattern, subject: ResultSwitchSubject) !?ResultSwitchBranch {
-        return switch (pattern.kind) {
-            .tag => |tag| blk: {
-                if (std.mem.eql(u8, tag.text, "ok")) break :blk .{
-                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name}),
-                    .tag = "ok",
-                };
-                if (std.mem.eql(u8, tag.text, "err")) break :blk .{
-                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "!{s}.is_ok", .{subject.name}),
-                    .tag = "err",
-                };
-                break :blk null;
-            },
-            .tag_bind => |tag_bind| blk: {
-                if (std.mem.eql(u8, tag_bind.tag.text, "ok")) break :blk .{
-                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name}),
-                    .tag = "ok",
-                    .binding_name = tag_bind.binding.text,
-                    .binding_type = subject.ok_c_type,
-                    .payload_field = "ok",
-                };
-                if (std.mem.eql(u8, tag_bind.tag.text, "err")) break :blk .{
-                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "!{s}.is_ok", .{subject.name}),
-                    .tag = "err",
-                    .binding_name = tag_bind.binding.text,
-                    .binding_type = subject.err_c_type,
-                    .payload_field = "err",
-                };
-                break :blk null;
-            },
-            .wildcard => .{ .condition = null },
-            else => null,
-        };
+    fn resultSwitchBranch(self: *CEmitter, patterns: []const ast.Pattern, subject: ResultSwitchSubject) !?ResultSwitchBranch {
+        if (patterns.len == 0) return null;
+        if (patterns.len == 1) {
+            return switch (patterns[0].kind) {
+                .tag => |tag| blk: {
+                    if (std.mem.eql(u8, tag.text, "ok")) break :blk .{
+                        .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name}),
+                        .tag = "ok",
+                    };
+                    if (std.mem.eql(u8, tag.text, "err")) break :blk .{
+                        .condition = try std.fmt.allocPrint(self.scratch.allocator(), "!{s}.is_ok", .{subject.name}),
+                        .tag = "err",
+                    };
+                    break :blk null;
+                },
+                .tag_bind => |tag_bind| blk: {
+                    if (std.mem.eql(u8, tag_bind.tag.text, "ok")) break :blk .{
+                        .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name}),
+                        .tag = "ok",
+                        .binding_name = tag_bind.binding.text,
+                        .binding_type = subject.ok_c_type,
+                        .payload_field = "ok",
+                    };
+                    if (std.mem.eql(u8, tag_bind.tag.text, "err")) break :blk .{
+                        .condition = try std.fmt.allocPrint(self.scratch.allocator(), "!{s}.is_ok", .{subject.name}),
+                        .tag = "err",
+                        .binding_name = tag_bind.binding.text,
+                        .binding_type = subject.err_c_type,
+                        .payload_field = "err",
+                    };
+                    break :blk null;
+                },
+                .wildcard => .{ .condition = null },
+                else => null,
+            };
+        }
+
+        var condition: std.ArrayList(u8) = .empty;
+        for (patterns, 0..) |pattern, index| {
+            const tag = switch (pattern.kind) {
+                .tag => |tag| tag,
+                else => return null,
+            };
+            const tag_condition = if (std.mem.eql(u8, tag.text, "ok"))
+                try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name})
+            else if (std.mem.eql(u8, tag.text, "err"))
+                try std.fmt.allocPrint(self.scratch.allocator(), "!{s}.is_ok", .{subject.name})
+            else
+                return null;
+            if (index > 0) try condition.appendSlice(self.scratch.allocator(), " || ");
+            try condition.appendSlice(self.scratch.allocator(), tag_condition);
+        }
+        return .{ .condition = try condition.toOwnedSlice(self.scratch.allocator()) };
     }
 
     fn taggedUnionSubjectForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?TaggedUnionSwitchSubject {
@@ -6304,6 +6318,13 @@ test "emits C for Result switch narrowing" {
         \\        .err => { return 0; },
         \\    }
         \\}
+        \\
+        \\fn result_multi_payloadless_switch() -> u32 {
+        \\    let result = make_result();
+        \\    switch result {
+        \\        .ok, .err => { return 1; },
+        \\    }
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_switch.mc", source);
@@ -6337,6 +6358,8 @@ test "emits C for Result switch narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t v = result.payload.ok;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t result_payloadless_switch(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error result = make_result();\n    if (result.is_ok) {\n        return 1;\n    }\n    else {\n        return 0;\n    }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t result_multi_payloadless_switch(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error result = make_result();\n    if (result.is_ok || !result.is_ok) {\n        return 1;\n    }") != null);
 }
 
 test "emits C extern structs and member access" {

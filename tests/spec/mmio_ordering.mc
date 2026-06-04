@@ -52,7 +52,8 @@ fn reject_direct_mmio_assign(uart: MmioPtr<Uart16550>, ch: u8) -> void {
 
 fn allow_plain_member_assign(packet: Packet, value: u8) -> void {
     // EXPECT: ordinary struct fields are not MMIO registers.
-    packet.value = value;
+    var local: Packet = packet;
+    local.value = value;
 }
 
 fn ordered_device_sequence(uart: MmioPtr<Uart16550>, ch: u8) -> void {

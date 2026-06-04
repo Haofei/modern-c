@@ -23,6 +23,29 @@ fn reject_assign_to_param(x: u32) -> u32 {
     return x;
 }
 
+extern struct LocalPacket {
+    value: u32,
+}
+
+fn accept_assign_to_var_field(packet: LocalPacket) -> u32 {
+    var local: LocalPacket = packet;
+    local.value = 2;
+    return local.value;
+}
+
+fn reject_assign_to_param_field(packet: LocalPacket) -> u32 {
+    // EXPECT_ERROR: E_ASSIGN_TO_IMMUTABLE_LOCAL
+    packet.value = 2;
+    return packet.value;
+}
+
+fn reject_assign_to_let_field(packet: LocalPacket) -> u32 {
+    let local: LocalPacket = packet;
+    // EXPECT_ERROR: E_ASSIGN_TO_IMMUTABLE_LOCAL
+    local.value = 2;
+    return local.value;
+}
+
 fn reject_duplicate_local() -> u32 {
     let x: u32 = 1;
     // EXPECT_ERROR: E_DUPLICATE_LOCAL

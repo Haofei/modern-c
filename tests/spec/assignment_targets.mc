@@ -29,7 +29,8 @@ extern struct Packet {
 fn accept_storage_assignment_targets(p: *mut u32, xs: []mut u32, i: usize, packet: Packet, value: u32) -> void {
     p.* = value;
     xs[i] = value;
-    packet.value = value;
+    var local: Packet = packet;
+    local.value = value;
 }
 
 fn accept_member_read(packet: Packet) -> u32 {
@@ -75,23 +76,27 @@ fn reject_missing_member_call(packet: Packet) -> void {
 }
 
 fn reject_member_assignment_bool(packet: Packet, flag: bool) -> void {
+    var local: Packet = packet;
     // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
-    packet.value = flag;
+    local.value = flag;
 }
 
 fn reject_missing_member_assignment(packet: Packet, value: u32) -> void {
+    var local: Packet = packet;
     // EXPECT_ERROR: E_UNKNOWN_STRUCT_FIELD
-    packet.missing = value;
+    local.missing = value;
 }
 
 fn reject_member_assignment_wide_integer(packet: Packet, value: u64) -> void {
+    var local: Packet = packet;
     // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
-    packet.value = value;
+    local.value = value;
 }
 
 fn reject_member_assignment_pointer_conversion(packet: Packet, p: *const u8) -> void {
+    var local: Packet = packet;
     // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
-    packet.ptr = p;
+    local.ptr = p;
 }
 
 fn reject_literal_assignment(value: u32) -> u32 {
