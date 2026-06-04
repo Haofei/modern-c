@@ -141,6 +141,7 @@ const CEmitter = struct {
     mmio_structs: std.StringHashMap(MmioStruct),
     enums: std.StringHashMap(ast.EnumDecl),
     slice_types: std.StringHashMap(SliceInfo),
+    result_types: std.StringHashMap(ResultInfo),
     temp_index: usize,
     indent: usize,
 
@@ -155,12 +156,14 @@ const CEmitter = struct {
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
             .enums = std.StringHashMap(ast.EnumDecl).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
+            .result_types = std.StringHashMap(ResultInfo).init(allocator),
             .temp_index = 0,
             .indent = 0,
         };
     }
 
     fn deinit(self: *CEmitter) void {
+        self.result_types.deinit();
         self.slice_types.deinit();
         self.enums.deinit();
         var mmio_structs = self.mmio_structs.valueIterator();
@@ -178,14 +181,14 @@ const CEmitter = struct {
             switch (decl.kind) {
                 .global_decl => |global| {
                     if (global.ty) |ty| try self.globals.put(global.name.text, globalInfoFromType(ty));
-                    if (global.ty) |ty| try self.collectSliceType(ty);
+                    if (global.ty) |ty| try self.collectTypeArtifacts(ty);
                 },
                 .extern_struct => |struct_decl| {
                     if (isMmioStructAbi(struct_decl)) {
                         try self.collectMmioStruct(struct_decl);
                     } else {
                         try self.structs.put(struct_decl.name.text, struct_decl);
-                        for (struct_decl.fields) |field| try self.collectSliceType(field.ty);
+                        for (struct_decl.fields) |field| try self.collectTypeArtifacts(field.ty);
                     }
                 },
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
@@ -208,6 +211,7 @@ const CEmitter = struct {
             }
         }
         try self.emitSliceTypes();
+        try self.emitResultTypes();
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .global_decl => |global| try self.emitGlobal(global),
@@ -305,6 +309,28 @@ const CEmitter = struct {
         }
     }
 
+    fn emitResultTypes(self: *CEmitter) !void {
+        var it = self.result_types.valueIterator();
+        while (it.next()) |result| {
+            try self.out.print(self.allocator, "typedef struct {s} {{\n", .{result.name});
+            self.indent += 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "bool is_ok;\n");
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "union {\n");
+            self.indent += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} ok;\n", .{try self.cTypeFor(result.ok_ty, .typedef_name)});
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} err;\n", .{try self.cTypeFor(result.err_ty, .typedef_name)});
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "} payload;\n");
+            self.indent -= 1;
+            try self.out.print(self.allocator, "}} {s};\n\n", .{result.name});
+        }
+    }
+
     fn emitFunctionPrototype(self: *CEmitter, fn_decl: ast.FnDecl) !void {
         try self.emitFunctionSignature(fn_decl, false);
         try self.out.appendSlice(self.allocator, ";\n\n");
@@ -380,6 +406,9 @@ const CEmitter = struct {
             .nullable => |child| return self.appendType(out, child.*, style),
             .qualified => |node| return self.appendType(out, node.child.*, style),
             .generic => |node| {
+                if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
+                    return out.appendSlice(self.scratch.allocator(), try self.resultTypeName(node.args[0], node.args[1]));
+                }
                 if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1) {
                     const pointee = typeName(node.args[0]) orelse return out.appendSlice(self.scratch.allocator(), "void *");
                     if (self.mmio_structs.contains(pointee)) {
@@ -435,14 +464,14 @@ const CEmitter = struct {
     }
 
     fn collectFunctionSliceTypes(self: *CEmitter, fn_decl: ast.FnDecl) !void {
-        for (fn_decl.params) |param| try self.collectSliceType(param.ty);
-        if (fn_decl.return_type) |ret| try self.collectSliceType(ret);
+        for (fn_decl.params) |param| try self.collectTypeArtifacts(param.ty);
+        if (fn_decl.return_type) |ret| try self.collectTypeArtifacts(ret);
         if (fn_decl.body) |body| try self.collectBlockSliceTypes(body);
     }
 
     fn collectBlockSliceTypes(self: *CEmitter, block: ast.Block) anyerror!void {
         for (block.items) |stmt| switch (stmt.kind) {
-            .let_decl, .var_decl => |local| if (local.ty) |ty| try self.collectSliceType(ty),
+            .let_decl, .var_decl => |local| if (local.ty) |ty| try self.collectTypeArtifacts(ty),
             .loop => |node| try self.collectBlockSliceTypes(node.body),
             .if_let => |node| {
                 try self.collectBlockSliceTypes(node.then_block);
@@ -456,6 +485,11 @@ const CEmitter = struct {
             .contract_block => |contract| try self.collectBlockSliceTypes(contract.block),
             else => {},
         };
+    }
+
+    fn collectTypeArtifacts(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
+        try self.collectSliceType(ty);
+        try self.collectResultType(ty);
     }
 
     fn collectSliceType(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
@@ -475,6 +509,28 @@ const CEmitter = struct {
             .array => |node| try self.collectSliceType(node.child.*),
             .generic => |node| for (node.args) |arg| try self.collectSliceType(arg),
             .member => |node| try self.collectSliceType(node.base.*),
+            else => {},
+        }
+    }
+
+    fn collectResultType(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
+        switch (ty.kind) {
+            .pointer => |node| try self.collectResultType(node.child.*),
+            .raw_many_pointer => |node| try self.collectResultType(node.child.*),
+            .slice => |node| try self.collectResultType(node.child.*),
+            .array => |node| try self.collectResultType(node.child.*),
+            .nullable => |child| try self.collectResultType(child.*),
+            .qualified => |node| try self.collectResultType(node.child.*),
+            .member => |node| try self.collectResultType(node.base.*),
+            .generic => |node| {
+                for (node.args) |arg| try self.collectTypeArtifacts(arg);
+                if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
+                    const name = try self.resultTypeName(node.args[0], node.args[1]);
+                    if (!self.result_types.contains(name)) {
+                        try self.result_types.put(name, .{ .name = name, .ok_ty = node.args[0], .err_ty = node.args[1] });
+                    }
+                }
+            },
             else => {},
         }
     }
@@ -502,8 +558,18 @@ const CEmitter = struct {
             .array => |node| std.fmt.allocPrint(self.scratch.allocator(), "array_{s}", .{try self.typeSuffix(node.child.*)}),
             .nullable => |child| std.fmt.allocPrint(self.scratch.allocator(), "nullable_{s}", .{try self.typeSuffix(child.*)}),
             .qualified => |node| self.typeSuffix(node.child.*),
+            .generic => |node| {
+                if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
+                    return std.fmt.allocPrint(self.scratch.allocator(), "result_{s}_{s}", .{ try self.typeSuffix(node.args[0]), try self.typeSuffix(node.args[1]) });
+                }
+                return node.base.text;
+            },
             else => "unknown",
         };
+    }
+
+    fn resultTypeName(self: *CEmitter, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) ![]const u8 {
+        return std.fmt.allocPrint(self.scratch.allocator(), "mc_result_{s}_{s}", .{ try self.typeSuffix(ok_ty), try self.typeSuffix(err_ty) });
     }
 
     fn emitArrayLen(self: *CEmitter, expr: ast.Expr) !void {
@@ -1165,6 +1231,12 @@ const SliceAccess = struct {
 const SliceInfo = struct {
     name: []const u8,
     ptr_type: []const u8,
+};
+
+const ResultInfo = struct {
+    name: []const u8,
+    ok_ty: ast.TypeExpr,
+    err_ty: ast.TypeExpr,
 };
 
 const StructTypeStyle = enum { typedef_name, struct_tag };
@@ -2182,6 +2254,51 @@ test "emits C for simple MMIO register access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp0 = mc_mmio_read_u8(&uart->lsr);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
+}
+
+test "emits C ABI for simple Result types" {
+    const source =
+        \\enum Error: u8 {
+        \\    denied = 1,
+        \\}
+        \\
+        \\extern fn make_result() -> Result<u32, Error>;
+        \\extern fn consume_result(result: Result<u32, Error>) -> void;
+        \\
+        \\fn pass_result(result: Result<u32, Error>) -> Result<u32, Error> {
+        \\    return result;
+        \\}
+        \\
+        \\fn call_consume(result: Result<u32, Error>) -> void {
+        \\    consume_result(result);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_abi.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_result_u32_Error {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "bool is_ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Error err;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "} payload;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "void consume_result(mc_result_u32_Error result);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_result_u32_Error pass_result(mc_result_u32_Error result)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return result;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(result);") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
