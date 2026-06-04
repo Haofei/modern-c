@@ -748,7 +748,7 @@ pub const Checker = struct {
         _ = self;
         const label = loop.label orelse return;
         const iterable = loop.iterable orelse return;
-        const element_ty = if (exprStorageType(iterable, ctx)) |ty| iterableElementType(ty) else null;
+        const element_ty = if (exprResultType(iterable, ctx)) |ty| iterableElementType(ty) else null;
         scope.put(label.text, .{
             .class = if (element_ty) |ty| classifyType(ty) else .unknown,
             .mutable = false,

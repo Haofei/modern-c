@@ -4,6 +4,8 @@
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_BREAK_OUTSIDE_LOOP,E_CONTINUE_OUTSIDE_LOOP,E_RETURN_TYPE_MISMATCH,E_FOR_BASE_NOT_ARRAY_OR_SLICE
 
+extern fn make_u32_slice() -> []const u32;
+
 fn accept_break_in_while(flag: bool) -> void {
     while flag {
         break;
@@ -40,8 +42,23 @@ fn accept_for_binding_array_element(xs: [4]u32) -> u32 {
     return 0;
 }
 
+fn accept_for_binding_direct_call_slice_element() -> u32 {
+    for x in make_u32_slice() {
+        return x;
+    }
+    return 0;
+}
+
 fn reject_for_binding_return_type(xs: []const u32, fallback: *mut u8) -> *mut u8 {
     for x in xs {
+        // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
+        return x;
+    }
+    return fallback;
+}
+
+fn reject_for_binding_direct_call_slice_return_type(fallback: *mut u8) -> *mut u8 {
+    for x in make_u32_slice() {
         // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
         return x;
     }
