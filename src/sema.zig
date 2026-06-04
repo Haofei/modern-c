@@ -489,6 +489,7 @@ pub const Checker = struct {
                 if (!isIndexType(index_class)) {
                     self.errorCode(node.index.span, "E_INDEX_NOT_USIZE", "array and slice indices must be checked usize");
                 }
+                if (indexResultType(node, ctx)) |ty| return classifyType(ty);
                 return .unknown;
             },
             .deref => |inner| {
@@ -1350,7 +1351,8 @@ fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
 
 fn isAssignableTarget(target: ast.Expr) bool {
     return switch (target.kind) {
-        .ident, .deref, .index => true,
+        .ident, .deref => true,
+        .index => |node| isAssignableTarget(node.base.*),
         .member => |node| isAssignableTarget(node.base.*),
         .grouped => |inner| isAssignableTarget(inner.*),
         else => false,
@@ -1386,6 +1388,7 @@ fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |node| if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .index => |node| indexResultType(node, ctx),
         .grouped => |inner| exprResultType(inner.*, ctx),
         else => exprStorageType(expr, ctx),
     };
@@ -1407,6 +1410,11 @@ fn assignmentTargetType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .grouped => |inner| assignmentTargetType(inner.*, ctx),
         else => null,
     };
+}
+
+fn indexResultType(index: anytype, ctx: Context) ?ast.TypeExpr {
+    const base_ty = exprResultType(index.base.*, ctx) orelse return null;
+    return storageElementType(base_ty);
 }
 
 fn memberFieldType(member: anytype, ctx: Context) ?ast.TypeExpr {
