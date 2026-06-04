@@ -137,8 +137,17 @@ pub const Checker = struct {
                     .expr => |expr| _ = self.checkExpr(expr, ctx),
                 };
             },
-            .unsafe_block, .block => |block| self.checkBlock(block, ctx),
-            .asm_stmt => {},
+            .unsafe_block => |block| {
+                var next = ctx;
+                next.in_unsafe = true;
+                self.checkBlock(block, next);
+            },
+            .block => |block| self.checkBlock(block, ctx),
+            .asm_stmt => {
+                if (!ctx.in_unsafe) {
+                    self.errorCode(stmt.span, "E_UNSAFE_REQUIRED", "operation requires unsafe context");
+                }
+            },
             .contract_block => |contract| {
                 var next = ctx;
                 next.unsafe_contracts = next.unsafe_contracts.with(contract.attr);
@@ -287,6 +296,9 @@ pub const Checker = struct {
                     if (!ctx.unsafe_contracts.has(required)) {
                         self.errorCode(expr.span, "E_UNCHECKED_OUTSIDE_CONTRACT", "unchecked operation requires matching #[unsafe_contract]");
                     }
+                }
+                if (isUnsafeOperationCall(node.callee.*) and !ctx.in_unsafe) {
+                    self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "operation requires unsafe context");
                 }
                 if (isCVoidLayoutCall(node.callee.*, node.type_args)) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no size or alignment in MC");
@@ -448,6 +460,7 @@ pub const Checker = struct {
 
 const Context = struct {
     no_lang_trap: bool = false,
+    in_unsafe: bool = false,
     returns_never: bool = false,
     returns_void: bool = false,
     unsafe_contracts: UnsafeContracts = .{},
@@ -925,6 +938,18 @@ fn uncheckedRequirement(expr: ast.Expr) ?ContractKind {
         },
         .ident => |ident| if (std.mem.eql(u8, ident.text, "assume_noalias_unchecked")) .noalias_contract else null,
         else => null,
+    };
+}
+
+fn isUnsafeOperationCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |node| {
+            if (isIdentNamed(node.base.*, "raw") and std.mem.eql(u8, node.name.text, "store")) return true;
+            if (isIdentNamed(node.base.*, "mmio") and std.mem.eql(u8, node.name.text, "map")) return true;
+            return false;
+        },
+        .grouped => |inner| isUnsafeOperationCall(inner.*),
+        else => false,
     };
 }
 

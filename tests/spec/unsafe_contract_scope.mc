@@ -37,11 +37,15 @@ fn noalias_contract_region(p: *mut u8, n: usize) -> void {
     #[unsafe_contract(noalias)]
     {
         let a = compiler.assume_noalias_unchecked(p, n);
-        raw.store<u8>(a, 1);
+        unsafe {
+            raw.store<u8>(a, 1);
+        }
     }
 
     // EXPECT: noalias metadata from the contract is stripped or ended at region exit.
-    raw.store<u8>(p, 2);
+    unsafe {
+        raw.store<u8>(p, 2);
+    }
 }
 
 fn reject_noalias_assume_inside_no_overflow_contract(p: *mut u8, n: usize) -> void {

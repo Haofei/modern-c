@@ -39,7 +39,9 @@ fn putc(uart: MmioPtr<Uart16550>, ch: u8) -> void {
 fn read_status(uart: MmioPtr<Uart16550>) -> UartLsr {
     // EXPECT: .acquire read preserves u8 width and prevents later operations moving before it.
     let status = uart.lsr.read(.acquire);
-    raw.store<u8>(phys(0x2000_0000), 1);
+    unsafe {
+        raw.store<u8>(phys(0x2000_0000), 1);
+    }
     return status;
 }
 
@@ -55,10 +57,14 @@ fn allow_plain_member_assign(packet: Packet, value: u8) -> void {
 
 fn ordered_device_sequence(uart: MmioPtr<Uart16550>, ch: u8) -> void {
     // EXPECT: ordinary store cannot move after the release MMIO write.
-    raw.store<u8>(phys(0x2000_0000), ch);
+    unsafe {
+        raw.store<u8>(phys(0x2000_0000), ch);
+    }
     uart.thr.write(ch, .release);
     let status = uart.lsr.read(.acquire);
     // EXPECT: ordinary store cannot move before the acquire MMIO read.
-    raw.store<u8>(phys(0x2000_0001), status.tx_empty as u8);
+    unsafe {
+        raw.store<u8>(phys(0x2000_0001), status.tx_empty as u8);
+    }
     // EXPECT: lower-c/IR contains barriers or ordering markers that prevent reordering across release/acquire.
 }

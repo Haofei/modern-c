@@ -62,8 +62,10 @@ fn allow_wrapping_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
 #[no_lang_trap]
 export fn allow_boot_asm() -> never {
     // EXPECT: verifier accepts opaque volatile asm as target-fault capable, not a language trap.
-    asm opaque volatile {
-        "cli"
-        "hlt"
+    unsafe {
+        asm opaque volatile {
+            "cli"
+            "hlt"
+        }
     }
 }
