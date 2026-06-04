@@ -971,10 +971,12 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
     if (std.mem.eql(u8, check, "mmio-width-preserved")) {
         return containsAll(output, &.{
             "lower mmio_access fn=putc op=write register=Uart16550.thr",
+            "value_type=u8",
             "register_width=8 emitted_width=8",
             "volatile=true",
             "address_space=mmio",
             "lower mmio_access fn=read_status op=read register=Uart16550.lsr",
+            "value_type=UartLsr",
         });
     }
     if (std.mem.eql(u8, check, "mmio-ordering-preserved")) {

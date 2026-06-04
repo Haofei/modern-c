@@ -198,7 +198,7 @@ const Inspector = struct {
                     try self.out.print(
                         self.allocator,
                         "lower mmio_access fn={s} op={s} register={s}.{s} value_type={s} register_width={s} emitted_width={s} volatile=true address_space=mmio ordering={s}\n",
-                        .{ ctx.name, access.kind, access.struct_name, access.field, access.width, bits, bits, access.ordering },
+                        .{ ctx.name, access.kind, access.struct_name, access.field, access.value_type, bits, bits, access.ordering },
                     );
                     if (std.mem.eql(u8, access.ordering, "release")) {
                         if (ctx.mmio_sequence.ordinary_store_seen) {
@@ -353,6 +353,7 @@ const Inspector = struct {
             .kind = kind,
             .struct_name = struct_name,
             .field = reg_member.name.text,
+            .value_type = field.value_type,
             .width = field.width,
             .ordering = orderingArg(args),
         };
@@ -394,6 +395,7 @@ const MmioStruct = struct {
 };
 
 const MmioField = struct {
+    value_type: []const u8,
     width: []const u8,
 };
 
@@ -401,6 +403,7 @@ const MmioAccess = struct {
     kind: []const u8,
     struct_name: []const u8,
     field: []const u8,
+    value_type: []const u8,
     width: []const u8,
     ordering: []const u8,
 };
@@ -410,9 +413,18 @@ fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {
         .generic => |node| node,
         else => return null,
     };
-    if (!std.mem.eql(u8, generic.base.text, "Reg") and !std.mem.eql(u8, generic.base.text, "RegBits")) return null;
-    if (generic.args.len == 0) return null;
-    return .{ .width = typeName(generic.args[0]) orelse "unknown" };
+    if (std.mem.eql(u8, generic.base.text, "Reg")) {
+        if (generic.args.len == 0) return null;
+        const width = typeName(generic.args[0]) orelse "unknown";
+        return .{ .value_type = width, .width = width };
+    }
+    if (std.mem.eql(u8, generic.base.text, "RegBits")) {
+        if (generic.args.len == 0) return null;
+        const width = typeName(generic.args[0]) orelse "unknown";
+        const value_type = if (generic.args.len > 1) typeName(generic.args[1]) orelse width else width;
+        return .{ .value_type = value_type, .width = width };
+    }
+    return null;
 }
 
 fn mmioPointee(ty: ast.TypeExpr) ?[]const u8 {
@@ -626,6 +638,7 @@ test "emits inspection markers for lowering-sensitive spec behavior" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "access=store") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "access=load") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "lower mmio_access") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "value_type=UartLsr") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "register_width=8 emitted_width=8") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ordering=release") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ordering=acquire") != null);
