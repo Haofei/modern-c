@@ -889,6 +889,7 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ";\n");
             },
             .assert => |expr| {
+                if (try self.emitMmioReadAssert(expr, locals)) return;
                 try self.writeIndent();
                 try self.out.appendSlice(self.allocator, "if (!(");
                 try self.emitExpr(expr, locals);
@@ -907,6 +908,7 @@ const CEmitter = struct {
             },
             .loop => |loop| {
                 if (loop.kind == .@"while") {
+                    if (try self.emitMmioReadWhileLoop(loop, locals, return_ty)) return;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "while (");
                     if (loop.iterable) |condition| {
@@ -931,6 +933,79 @@ const CEmitter = struct {
             .@"switch" => |node| try self.emitSwitch(node, locals, return_ty),
             .if_let => |node| try self.emitIfLet(node, locals, return_ty),
             else => try self.writeUnsupportedStmt(stmt),
+        }
+    }
+
+    fn emitMmioReadAssert(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        var replacements: std.ArrayList(MmioReadReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectMmioReadHoistsForExpr(expr, locals, &replacements)) return false;
+
+        for (replacements.items) |replacement| {
+            try self.emitMmioReadReplacement(replacement);
+        }
+
+        var nested = try cloneLocals(self.allocator, locals.*);
+        defer nested.deinit();
+        for (replacements.items) |replacement| {
+            try nested.put(replacement.temp_name, .{
+                .c_type = replacement.c_type,
+                .source_type_name = replacement.source_type_name,
+            });
+        }
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "if (!(");
+        try self.emitMmioReadExprWithReplacements(expr, &nested, null, replacements.items);
+        try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
+        return true;
+    }
+
+    fn emitMmioReadWhileLoop(self: *CEmitter, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const condition = loop.iterable orelse return false;
+
+        var replacements: std.ArrayList(MmioReadReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectMmioReadHoistsForExpr(condition, locals, &replacements)) return false;
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "while (true) {\n");
+
+        var nested = try cloneLocals(self.allocator, locals.*);
+        defer nested.deinit();
+
+        self.indent += 1;
+        for (replacements.items) |replacement| {
+            try self.emitMmioReadReplacement(replacement);
+            try nested.put(replacement.temp_name, .{
+                .c_type = replacement.c_type,
+                .source_type_name = replacement.source_type_name,
+            });
+        }
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "if (!(");
+        try self.emitMmioReadExprWithReplacements(condition, &nested, null, replacements.items);
+        try self.out.appendSlice(self.allocator, ")) break;\n");
+
+        try self.emitBlockItems(loop.body, &nested, return_ty);
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}\n");
+        return true;
+    }
+
+    fn emitMmioReadReplacement(self: *CEmitter, replacement: MmioReadReplacement) !void {
+        const access = replacement.access;
+        try self.writeIndent();
+        try self.out.print(
+            self.allocator,
+            "{s} {s} = ({s})mc_mmio_read_{s}(&{s}->{s});\n",
+            .{ replacement.c_type, replacement.temp_name, replacement.c_type, access.width, access.param, access.field },
+        );
+        if (std.mem.eql(u8, access.ordering, "acquire")) {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "mc_barrier_acquire_after();\n");
         }
     }
 
@@ -1680,10 +1755,20 @@ const CEmitter = struct {
         const base_ty = self.packedBitsNameForExpr(node.base.*, locals) orelse return false;
         const info = self.packed_bits.get(base_ty) orelse return false;
         const field = info.fields.get(node.name.text) orelse return false;
-        try self.out.appendSlice(self.allocator, "((");
-        try self.emitExpr(node.base.*, locals);
-        try self.out.print(self.allocator, " & {s}) != 0)", .{try self.packedBitsMaskLiteral(info, field.bit_index)});
+        try self.emitPackedBitsMaskTest(node.base.*, locals, info, field.bit_index);
         return true;
+    }
+
+    fn emitPackedBitsMaskTest(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), info: PackedBitsInfo, bit_index: usize) !void {
+        try self.out.appendSlice(self.allocator, "((");
+        try self.emitExpr(base, locals);
+        try self.out.print(self.allocator, " & {s}) != 0)", .{try self.packedBitsMaskLiteral(info, bit_index)});
+    }
+
+    fn emitPackedBitsMaskTestWithMmioReplacements(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), info: PackedBitsInfo, bit_index: usize, replacements: []const MmioReadReplacement) !void {
+        try self.out.appendSlice(self.allocator, "((");
+        try self.emitMmioReadExprWithReplacements(base, locals, null, replacements);
+        try self.out.print(self.allocator, " & {s}) != 0)", .{try self.packedBitsMaskLiteral(info, bit_index)});
     }
 
     fn emitPackedBitsFieldWriteStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
@@ -2248,6 +2333,40 @@ const CEmitter = struct {
         }
     }
 
+    fn collectMmioReadHoistsForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(MmioReadReplacement)) !bool {
+        switch (expr.kind) {
+            .call => |node| {
+                if (self.mmioAccess(node.callee.*, node.args, locals)) |access| {
+                    if (!std.mem.eql(u8, access.kind, "read")) return false;
+                    if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
+
+                    const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+                    self.temp_index += 1;
+                    const c_type = self.cTypeForMmioValue(access.value_type);
+                    try replacements.append(self.scratch.allocator(), .{
+                        .span = expr.span,
+                        .temp_name = temp_name,
+                        .source_type_name = access.value_type,
+                        .c_type = c_type,
+                        .access = access,
+                    });
+                    return true;
+                }
+
+                var found = false;
+                for (node.args) |arg| found = (try self.collectMmioReadHoistsForExpr(arg, locals, replacements)) or found;
+                return found;
+            },
+            .grouped, .address_of, .deref => |inner| return try self.collectMmioReadHoistsForExpr(inner.*, locals, replacements),
+            .unary => |node| return try self.collectMmioReadHoistsForExpr(node.expr.*, locals, replacements),
+            .binary => |node| return (try self.collectMmioReadHoistsForExpr(node.left.*, locals, replacements)) or (try self.collectMmioReadHoistsForExpr(node.right.*, locals, replacements)),
+            .index => |node| return (try self.collectMmioReadHoistsForExpr(node.base.*, locals, replacements)) or (try self.collectMmioReadHoistsForExpr(node.index.*, locals, replacements)),
+            .member => |node| return try self.collectMmioReadHoistsForExpr(node.base.*, locals, replacements),
+            .cast => |node| return try self.collectMmioReadHoistsForExpr(node.value.*, locals, replacements),
+            else => return false,
+        }
+    }
+
     fn emitResultTryExprWithReplacements(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const TryReplacement) !void {
         if (!exprHasTryReplacement(expr, replacements)) return self.emitExprWithTarget(expr, locals, target_ty);
         switch (expr.kind) {
@@ -2295,6 +2414,78 @@ const CEmitter = struct {
             .cast => |node| {
                 try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(node.ty.*, .typedef_name)});
                 try self.emitResultTryExprWithReplacements(node.value.*, locals, null, replacements);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            else => try self.emitExprWithTarget(expr, locals, target_ty),
+        }
+    }
+
+    fn emitMmioReadExprWithReplacements(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const MmioReadReplacement) anyerror!void {
+        if (!exprHasMmioReadReplacement(expr, replacements)) return self.emitExprWithTarget(expr, locals, target_ty);
+        if (mmioReadReplacementForSpan(expr.span, replacements)) |replacement| {
+            try self.out.appendSlice(self.allocator, replacement.temp_name);
+            return;
+        }
+
+        switch (expr.kind) {
+            .grouped => |inner| {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitMmioReadExprWithReplacements(inner.*, locals, target_ty, replacements);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .call => |node| {
+                const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
+                try self.emitExpr(node.callee.*, locals);
+                try self.out.appendSlice(self.allocator, "(");
+                for (node.args, 0..) |arg, i| {
+                    if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                    const arg_target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+                    try self.emitMmioReadExprWithReplacements(arg, locals, arg_target_ty, replacements);
+                }
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .unary => |node| {
+                try self.out.appendSlice(self.allocator, unaryCOp(node.op));
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitMmioReadExprWithReplacements(node.expr.*, locals, null, replacements);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .binary => |node| {
+                if (checkedU32Helper(node.op)) |helper| {
+                    try self.out.print(self.allocator, "{s}(", .{helper});
+                    try self.emitMmioReadExprWithReplacements(node.left.*, locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ", ");
+                    try self.emitMmioReadExprWithReplacements(node.right.*, locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ")");
+                } else {
+                    try self.out.appendSlice(self.allocator, "(");
+                    try self.emitMmioReadExprWithReplacements(node.left.*, locals, null, replacements);
+                    try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
+                    try self.emitMmioReadExprWithReplacements(node.right.*, locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ")");
+                }
+            },
+            .index => |node| {
+                try self.emitMmioReadExprWithReplacements(node.base.*, locals, null, replacements);
+                try self.out.appendSlice(self.allocator, "[");
+                try self.emitMmioReadExprWithReplacements(node.index.*, locals, null, replacements);
+                try self.out.appendSlice(self.allocator, "]");
+            },
+            .member => |node| {
+                if (mmioReadReplacementValueTypeForExpr(node.base.*, replacements)) |base_ty| {
+                    if (self.packed_bits.get(base_ty)) |info| {
+                        if (info.fields.get(node.name.text)) |field| {
+                            try self.emitPackedBitsMaskTestWithMmioReplacements(node.base.*, locals, info, field.bit_index, replacements);
+                            return;
+                        }
+                    }
+                }
+                try self.emitMmioReadExprWithReplacements(node.base.*, locals, null, replacements);
+                try self.out.print(self.allocator, ".{s}", .{node.name.text});
+            },
+            .cast => |node| {
+                try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(node.ty.*, .typedef_name)});
+                try self.emitMmioReadExprWithReplacements(node.value.*, locals, null, replacements);
                 try self.out.appendSlice(self.allocator, ")");
             },
             else => try self.emitExprWithTarget(expr, locals, target_ty),
@@ -2535,6 +2726,14 @@ const FnInfo = struct {
 const TryReplacement = struct {
     span: ast.Span,
     temp_name: []const u8,
+};
+
+const MmioReadReplacement = struct {
+    span: ast.Span,
+    temp_name: []const u8,
+    source_type_name: []const u8,
+    c_type: []const u8,
+    access: MmioAccess,
 };
 
 const SliceAccess = struct {
@@ -3367,11 +3566,43 @@ fn exprHasTryReplacement(expr: ast.Expr, replacements: []const TryReplacement) b
     };
 }
 
+fn exprHasMmioReadReplacement(expr: ast.Expr, replacements: []const MmioReadReplacement) bool {
+    if (mmioReadReplacementForSpan(expr.span, replacements) != null) return true;
+    return switch (expr.kind) {
+        .grouped, .address_of, .deref => |inner| exprHasMmioReadReplacement(inner.*, replacements),
+        .unary => |node| exprHasMmioReadReplacement(node.expr.*, replacements),
+        .try_expr => |inner| exprHasMmioReadReplacement(inner.*, replacements),
+        .binary => |node| exprHasMmioReadReplacement(node.left.*, replacements) or exprHasMmioReadReplacement(node.right.*, replacements),
+        .call => |node| {
+            for (node.args) |arg| if (exprHasMmioReadReplacement(arg, replacements)) return true;
+            return false;
+        },
+        .index => |node| exprHasMmioReadReplacement(node.base.*, replacements) or exprHasMmioReadReplacement(node.index.*, replacements),
+        .member => |node| exprHasMmioReadReplacement(node.base.*, replacements),
+        .cast => |node| exprHasMmioReadReplacement(node.value.*, replacements),
+        else => false,
+    };
+}
+
 fn tryReplacementForSpan(span: ast.Span, replacements: []const TryReplacement) ?[]const u8 {
     for (replacements) |replacement| {
         if (sameSpan(span, replacement.span)) return replacement.temp_name;
     }
     return null;
+}
+
+fn mmioReadReplacementForSpan(span: ast.Span, replacements: []const MmioReadReplacement) ?MmioReadReplacement {
+    for (replacements) |replacement| {
+        if (sameSpan(span, replacement.span)) return replacement;
+    }
+    return null;
+}
+
+fn mmioReadReplacementValueTypeForExpr(expr: ast.Expr, replacements: []const MmioReadReplacement) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| mmioReadReplacementValueTypeForExpr(inner.*, replacements),
+        else => if (mmioReadReplacementForSpan(expr.span, replacements)) |replacement| replacement.source_type_name else null,
+    };
 }
 
 fn sameSpan(left: ast.Span, right: ast.Span) bool {
@@ -4562,6 +4793,66 @@ test "emits C for while loops and loop control" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "break;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "continue;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return out;") != null);
+}
+
+test "hoists MMIO reads in while conditions" {
+    const source =
+        \\packed bits Status: u8 {
+        \\    ready: bool,
+        \\}
+        \\
+        \\extern mmio struct Device {
+        \\    ctrl: Reg<u16, .write>,
+        \\    stat: RegBits<u8, Status, .read>,
+        \\    raw: Reg<u16, .read>,
+        \\}
+        \\
+        \\extern fn pause() -> void;
+        \\
+        \\fn poll_and_write(dev: MmioPtr<Device>, value: u16) -> void {
+        \\    while !dev.stat.read(.acquire).ready {
+        \\        pause();
+        \\    }
+        \\    dev.ctrl.write(value, .release);
+        \\}
+        \\
+        \\fn wait_raw(dev: MmioPtr<Device>) -> void {
+        \\    while dev.raw.read(.relaxed) == 0 {
+        \\        pause();
+        \\    }
+        \\}
+        \\
+        \\fn require_ready(dev: MmioPtr<Device>) -> void {
+        \\    assert(dev.stat.read(.acquire).ready);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_mmio_read_while_condition.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "while (true) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Status mc_tmp0 = (Status)mc_mmio_read_u8(&dev->stat);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(!(((mc_tmp0 & UINT8_C(1)) != 0)))) break;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "pause();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u16(&dev->ctrl, value);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t mc_tmp1 = (uint16_t)mc_mmio_read_u16(&dev->raw);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!((mc_tmp1 == 0))) break;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Status mc_tmp2 = (Status)mc_mmio_read_u8(&dev->stat);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(((mc_tmp2 & UINT8_C(1)) != 0))) mc_trap_Assert();") != null);
 }
 
 test "emits C for array and slice for loops" {
