@@ -1090,16 +1090,23 @@ const CEmitter = struct {
                     try deferred.append(self.scratch.allocator(), expr);
                     continue;
                 },
-                .@"return" => {
-                    var index = deferred.items.len;
-                    while (index > 0) {
-                        index -= 1;
-                        try self.emitDeferredCleanup(deferred.items[index], locals, return_ty);
-                    }
+                .@"return", .@"break", .@"continue" => {
+                    try self.emitDeferredCleanups(deferred.items, locals, return_ty);
+                    try self.emitStmt(stmt, locals, return_ty);
+                    return;
                 },
                 else => {},
             }
             try self.emitStmt(stmt, locals, return_ty);
+        }
+        try self.emitDeferredCleanups(deferred.items, locals, return_ty);
+    }
+
+    fn emitDeferredCleanups(self: *CEmitter, deferred: []const ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        var index = deferred.len;
+        while (index > 0) {
+            index -= 1;
+            try self.emitDeferredCleanup(deferred[index], locals, return_ty);
         }
     }
 
@@ -5477,6 +5484,8 @@ test "emits C for while loops and loop control" {
         \\            out = out + 1;
         \\        }
         \\        break;
+        \\    }
+        \\    while flag {
         \\        continue;
         \\    }
         \\    return out;
@@ -6556,6 +6565,24 @@ test "emits C lexical defer cleanup before return" {
         \\    };
         \\    return;
         \\}
+        \\
+        \\fn accept_cleanup_before_break(flag: bool) -> void {
+        \\    while flag {
+        \\        defer close_a();
+        \\        break;
+        \\    }
+        \\}
+        \\
+        \\fn accept_cleanup_before_continue(flag: bool) -> void {
+        \\    while flag {
+        \\        defer close_a();
+        \\        continue;
+        \\    }
+        \\}
+        \\
+        \\fn accept_cleanup_on_fallthrough() -> void {
+        \\    defer close_a();
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_defer.mc", source);
@@ -6577,6 +6604,9 @@ test "emits C lexical defer cleanup before return" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "void close_b(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_lexical_cleanup(void) {\n    close_b();\n    close_a();\n    return;\n}") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_block_cleanup(void) {\n    {\n        close_a();\n    }\n    return;\n}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_before_break(bool flag) {\n    while (flag) {\n        close_a();\n        break;\n    }\n}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_before_continue(bool flag) {\n    while (flag) {\n        close_a();\n        continue;\n    }\n}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_on_fallthrough(void) {\n    close_a();\n}") != null);
 }
 
 test "emits C unsafe blocks as scoped blocks" {

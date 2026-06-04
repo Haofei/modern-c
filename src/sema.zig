@@ -641,6 +641,9 @@ pub const Checker = struct {
                 }
             },
             .member => |node| {
+                if (constStorageBase(node.base.*, ctx)) {
+                    self.errorCode(target.span, "E_ASSIGN_THROUGH_CONST_VIEW", "cannot assign through a const pointer or view");
+                }
                 if (!isMmioRegisterTarget(target, ctx) and immutableValueStorageBase(node.base.*, ctx)) {
                     self.errorCode(target.span, "E_ASSIGN_TO_IMMUTABLE_LOCAL", "cannot assign to immutable local binding");
                 }
@@ -2264,6 +2267,9 @@ fn constStorageBase(expr: ast.Expr, ctx: Context) bool {
             if (globalType(ident.text, ctx)) |ty| return isConstStorageType(ty);
             return false;
         },
+        .deref => |inner| constStorageBase(inner.*, ctx),
+        .index => |node| constStorageBase(node.base.*, ctx),
+        .member => |node| constStorageBase(node.base.*, ctx),
         .grouped => |inner| constStorageBase(inner.*, ctx),
         else => false,
     };
