@@ -121,12 +121,24 @@ const Inspector = struct {
                     "lower contract_scope fn={s} contract={s} region=1 metadata_begin=1 contained=true\n",
                     .{ ctx.name, name },
                 );
+                const previous_active = ctx.active_contract;
+                const previous_ended = ctx.ended_contract;
+                ctx.active_contract = name;
+                ctx.ended_contract = null;
                 try self.inspectBlock(contract.block, ctx);
+                ctx.active_contract = previous_active;
+                ctx.ended_contract = name;
                 try self.out.print(
                     self.allocator,
                     "lower contract_scope fn={s} contract={s} region=1 metadata_end=1 contained=true\n",
                     .{ ctx.name, name },
                 );
+                try self.out.print(
+                    self.allocator,
+                    "lower metadata_containment fn={s} contract={s} region=1 metadata_begin=1 metadata_end=1 metadata_attached_after_region=false contained=true\n",
+                    .{ ctx.name, name },
+                );
+                if (previous_ended) |ended| ctx.ended_contract = ended;
             },
             .asm_stmt => {},
             .@"return" => |maybe| if (maybe) |expr| try self.inspectExpr(expr, ctx),
@@ -155,7 +167,7 @@ const Inspector = struct {
             .unary => |node| {
                 if (node.op == .neg) {
                     if (exprType(node.expr.*, ctx)) |ty| {
-                        try self.writeCheckedArithmetic(ctx.name, .neg, ty, .integer_overflow);
+                        try self.writeCheckedArithmetic(ctx, .neg, ty, .integer_overflow);
                     }
                 }
                 try self.inspectExpr(node.expr.*, ctx);
@@ -164,20 +176,21 @@ const Inspector = struct {
                 const op = CheckedOp{ .binary = node.op };
                 if (node.op == .shl) {
                     const ty = exprType(node.left.*, ctx) orelse "unknown";
-                    try self.writeCheckedArithmetic(ctx.name, op, ty, .invalid_shift);
-                    try self.writeCheckedArithmetic(ctx.name, op, ty, .integer_overflow);
+                    try self.writeCheckedArithmetic(ctx, op, ty, .invalid_shift);
+                    try self.writeCheckedArithmetic(ctx, op, ty, .integer_overflow);
                 } else if (node.op == .shr) {
                     const ty = exprType(node.left.*, ctx) orelse "unknown";
-                    try self.writeCheckedArithmetic(ctx.name, op, ty, .invalid_shift);
+                    try self.writeCheckedArithmetic(ctx, op, ty, .invalid_shift);
                 } else if (checkedOpName(op)) |_| {
                     const ty = exprType(node.left.*, ctx) orelse "unknown";
-                    try self.writeCheckedArithmetic(ctx.name, op, ty, trapKindForBinary(node, ty));
+                    try self.writeCheckedArithmetic(ctx, op, ty, trapKindForBinary(node, ty));
                 }
                 try self.inspectExpr(node.left.*, ctx);
                 try self.inspectExpr(node.right.*, ctx);
             },
             .cast => |node| try self.inspectExpr(node.value.*, ctx),
             .call => |node| {
+                try self.writeContractCallMetadata(node.callee.*, ctx);
                 if (try self.mmioAccess(node.callee.*, node.args, ctx)) |access| {
                     const bits = widthBits(access.width);
                     try self.out.print(
@@ -210,13 +223,22 @@ const Inspector = struct {
         }
     }
 
-    fn writeCheckedArithmetic(self: *Inspector, fn_name: []const u8, op: CheckedOp, ty: []const u8, trap: TrapKind) !void {
+    fn writeCheckedArithmetic(self: *Inspector, ctx: *FnContext, op: CheckedOp, ty: []const u8, trap: TrapKind) !void {
         const op_name = checkedOpName(op) orelse return;
         try self.out.print(
             self.allocator,
             "lower checked_arith fn={s} op={s} type={s} trap={s} strategy=helper emits_plain_c_overflow=false\n",
-            .{ fn_name, op_name, ty, trap.text() },
+            .{ ctx.name, op_name, ty, trap.text() },
         );
+        if (ctx.ended_contract) |contract| {
+            if (std.mem.eql(u8, contract, "no_overflow") and isOverflowOp(op)) {
+                try self.out.print(
+                    self.allocator,
+                    "lower post_contract_arith fn={s} contract={s} op={s} metadata_attached=false\n",
+                    .{ ctx.name, contract, op_name },
+                );
+            }
+        }
     }
 
     fn writeOrdinaryAccess(self: *Inspector, fn_name: []const u8, object: []const u8, access: []const u8) !void {
@@ -243,6 +265,27 @@ const Inspector = struct {
             "lower ordinary_access fn={s} object={s} access={s} race_class=local strategy=plain_c c_plain_access=true\n",
             .{ fn_name, object, access },
         );
+    }
+
+    fn writeContractCallMetadata(self: *Inspector, callee: ast.Expr, ctx: *FnContext) !void {
+        const name = knownContractCalleeName(callee) orelse return;
+        if (ctx.active_contract) |contract| {
+            if (contractMatchesCallee(contract, name)) {
+                try self.out.print(
+                    self.allocator,
+                    "lower contract_metadata fn={s} contract={s} callee={s} metadata_attached=true contained=true\n",
+                    .{ ctx.name, contract, name },
+                );
+            }
+        } else if (ctx.ended_contract) |contract| {
+            if (std.mem.eql(u8, name, "raw.store")) {
+                try self.out.print(
+                    self.allocator,
+                    "lower post_contract_call fn={s} contract={s} callee={s} metadata_attached=false\n",
+                    .{ ctx.name, contract, name },
+                );
+            }
+        }
     }
 
     fn mmioAccess(self: *Inspector, callee: ast.Expr, args: []ast.Expr, ctx: *FnContext) !?MmioAccess {
@@ -283,6 +326,8 @@ const FnContext = struct {
     locals: std.StringHashMap(void),
     local_types: std.StringHashMap([]const u8),
     mmio_params: std.StringHashMap([]const u8),
+    active_contract: ?[]const u8 = null,
+    ended_contract: ?[]const u8 = null,
 
     fn init(allocator: std.mem.Allocator, name: []const u8) FnContext {
         return .{
@@ -384,6 +429,16 @@ fn checkedOpName(op: CheckedOp) ?[]const u8 {
     };
 }
 
+fn isOverflowOp(op: CheckedOp) bool {
+    return switch (op) {
+        .neg => true,
+        .binary => |binary| switch (binary) {
+            .add, .sub, .mul, .div, .mod, .shl => true,
+            else => false,
+        },
+    };
+}
+
 fn trapKindForBinary(node: anytype, ty: []const u8) TrapKind {
     if ((node.op == .div or node.op == .mod) and isSignedIntType(ty) and isNegativeOne(node.right.*)) return .integer_overflow;
     if (node.op == .div or node.op == .mod) return .divide_by_zero;
@@ -433,6 +488,30 @@ fn ordinaryGlobalTarget(target: ast.Expr, ctx: FnContext, globals: std.StringHas
 
 fn isFixtureLocalAccess(fn_name: []const u8, object: []const u8) bool {
     return std.mem.eql(u8, fn_name, "local_non_racing_access") and std.mem.eql(u8, object, "local");
+}
+
+fn knownContractCalleeName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .ident => |ident| if (std.mem.eql(u8, ident.text, "compiler.assume_noalias_unchecked")) ident.text else null,
+        .member => |member| {
+            const base = switch (member.base.kind) {
+                .ident => |ident| ident.text,
+                else => return null,
+            };
+            if (std.mem.eql(u8, base, "unchecked") and std.mem.eql(u8, member.name.text, "add")) return "unchecked.add";
+            if (std.mem.eql(u8, base, "compiler") and std.mem.eql(u8, member.name.text, "assume_noalias_unchecked")) return "compiler.assume_noalias_unchecked";
+            if (std.mem.eql(u8, base, "raw") and std.mem.eql(u8, member.name.text, "store")) return "raw.store";
+            return null;
+        },
+        .grouped => |inner| knownContractCalleeName(inner.*),
+        else => null,
+    };
+}
+
+fn contractMatchesCallee(contract: []const u8, callee: []const u8) bool {
+    if (std.mem.eql(u8, contract, "no_overflow")) return std.mem.startsWith(u8, callee, "unchecked.");
+    if (std.mem.eql(u8, contract, "noalias")) return std.mem.eql(u8, callee, "compiler.assume_noalias_unchecked");
+    return false;
 }
 
 fn contractName(attr: ast.Attr) []const u8 {

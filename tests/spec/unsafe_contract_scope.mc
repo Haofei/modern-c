@@ -21,7 +21,8 @@ fn allow_unchecked_add_inside_contract(xs: []const u32) -> u32 {
 
     // EXPECT: MIR contains contract_region kind=no_overflow around unchecked add.
     // EXPECT: contract-derived overflow metadata does not persist beyond end_contract_region.
-    return sum;
+    let after: u32 = sum + 0;
+    return after;
 }
 
 fn reject_unchecked_add_inside_noalias_contract(a: u32, b: u32) -> u32 {

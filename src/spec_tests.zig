@@ -785,11 +785,16 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
     }
     if (std.mem.eql(u8, check, "metadata-contained")) {
         return containsAll(output, &.{
-            "lower contract_scope fn=allow_unchecked_add_inside_contract contract=no_overflow",
-            "metadata_begin=1",
-            "metadata_end=1",
-            "contained=true",
-            "lower contract_scope fn=noalias_contract_region contract=noalias",
+            "lower contract_scope fn=allow_unchecked_add_inside_contract contract=no_overflow region=1 metadata_begin=1 contained=true",
+            "lower contract_metadata fn=allow_unchecked_add_inside_contract contract=no_overflow callee=unchecked.add metadata_attached=true contained=true",
+            "lower contract_scope fn=allow_unchecked_add_inside_contract contract=no_overflow region=1 metadata_end=1 contained=true",
+            "lower metadata_containment fn=allow_unchecked_add_inside_contract contract=no_overflow region=1 metadata_begin=1 metadata_end=1 metadata_attached_after_region=false contained=true",
+            "lower post_contract_arith fn=allow_unchecked_add_inside_contract contract=no_overflow op=add metadata_attached=false",
+            "lower contract_scope fn=noalias_contract_region contract=noalias region=1 metadata_begin=1 contained=true",
+            "lower contract_metadata fn=noalias_contract_region contract=noalias callee=compiler.assume_noalias_unchecked metadata_attached=true contained=true",
+            "lower contract_scope fn=noalias_contract_region contract=noalias region=1 metadata_end=1 contained=true",
+            "lower metadata_containment fn=noalias_contract_region contract=noalias region=1 metadata_begin=1 metadata_end=1 metadata_attached_after_region=false contained=true",
+            "lower post_contract_call fn=noalias_contract_region contract=noalias callee=raw.store metadata_attached=false",
         });
     }
     if (std.mem.eql(u8, check, "race-tolerant-lowering")) {
