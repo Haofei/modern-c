@@ -605,7 +605,7 @@ pub const Checker = struct {
     }
 
     fn checkPointerViewInitializer(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
-        const source = exprStorageType(expr, ctx) orelse return false;
+        const source = exprResultType(expr, ctx) orelse return false;
         if (implicitPointerViewConversion(target, source)) {
             self.errorCode(expr.span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer and view conversions must be explicit");
             return true;
@@ -628,7 +628,7 @@ pub const Checker = struct {
     }
 
     fn checkPointerViewReturn(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
-        const source = exprStorageType(expr, ctx) orelse return false;
+        const source = exprResultType(expr, ctx) orelse return false;
         if (implicitPointerViewConversion(target, source)) {
             self.errorCode(expr.span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer and view conversions must be explicit");
             return true;
@@ -637,7 +637,7 @@ pub const Checker = struct {
     }
 
     fn checkCVoidPointerConversion(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
-        const source = exprStorageType(expr, ctx) orelse return false;
+        const source = exprResultType(expr, ctx) orelse return false;
         if (implicitCVoidPointerConversion(target, source)) {
             self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
             return true;

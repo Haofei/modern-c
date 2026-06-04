@@ -7,6 +7,8 @@
 extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
 extern "C" fn takes_c_void(handle: *mut c_void) -> void;
 extern "C" fn takes_typed_pointer(ptr: *mut u8) -> void;
+extern fn make_typed_pointer() -> *mut u8;
+extern fn make_c_void_pointer() -> *mut c_void;
 
 fn accept_c_void_ffi(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
     // EXPECT: extern C opaque-object pointers are accepted and may cross the FFI boundary.
@@ -108,6 +110,34 @@ fn reject_c_void_to_typed_pointer_return(p: *mut c_void) -> *mut u8 {
 fn reject_typed_pointer_to_c_void_return(p: *mut u8) -> *mut c_void {
     // EXPECT_ERROR: E_C_VOID_CONVERSION
     return p;
+}
+
+fn reject_direct_call_c_void_to_typed_pointer_return() -> *mut u8 {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return make_c_void_pointer();
+}
+
+fn reject_direct_call_typed_pointer_to_c_void_return() -> *mut c_void {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return make_typed_pointer();
+}
+
+fn reject_direct_call_typed_pointer_to_c_void_initializer() -> *mut c_void {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    let handle: *mut c_void = make_typed_pointer();
+    return handle;
+}
+
+fn reject_direct_call_typed_pointer_to_c_void_assignment(fallback: *mut c_void) -> *mut c_void {
+    var handle: *mut c_void = fallback;
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    handle = make_typed_pointer();
+    return handle;
+}
+
+fn reject_direct_call_typed_pointer_to_c_void_call_arg() -> void {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    takes_c_void(make_typed_pointer());
 }
 
 fn reject_c_void_bitwise(a: *mut c_void, b: *mut c_void) -> *mut c_void {

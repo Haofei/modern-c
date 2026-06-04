@@ -4,6 +4,10 @@
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_NO_IMPLICIT_POINTER_CONVERSION
 
+extern fn make_mut_u8_pointer() -> *mut u8;
+extern fn make_mut_u32_pointer() -> *mut u32;
+extern fn takes_mut_u16_pointer(p: *mut u16) -> void;
+
 fn accept_same_mut_pointer(p: *mut u32) -> *mut u32 {
     let q: *mut u32 = p;
     return q;
@@ -42,6 +46,10 @@ fn accept_nullable_same_pointer(maybe: ?*mut u32) -> ?*mut u32 {
 fn accept_nullable_null() -> ?*const u32 {
     let q: ?*const u32 = null;
     return q;
+}
+
+fn accept_direct_call_same_pointer() -> *mut u32 {
+    return make_mut_u32_pointer();
 }
 
 fn reject_const_to_mut_pointer(p: *const u32) -> *mut u32 {
@@ -111,4 +119,27 @@ fn reject_direct_return_element_mismatch(p: *mut u8) -> *mut u16 {
 fn reject_direct_return_nullable_to_nonnull(maybe: ?*mut u32) -> *mut u32 {
     // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
     return maybe;
+}
+
+fn reject_direct_call_return_element_mismatch() -> *mut u16 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return make_mut_u8_pointer();
+}
+
+fn reject_direct_call_initializer_element_mismatch() -> *mut u16 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    let q: *mut u16 = make_mut_u8_pointer();
+    return q;
+}
+
+fn reject_direct_call_assignment_element_mismatch(fallback: *mut u16) -> *mut u16 {
+    var q: *mut u16 = fallback;
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    q = make_mut_u8_pointer();
+    return q;
+}
+
+fn reject_direct_call_argument_element_mismatch() -> void {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    takes_mut_u16_pointer(make_mut_u8_pointer());
 }
