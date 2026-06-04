@@ -181,7 +181,7 @@ const CEmitter = struct {
                 },
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
                 .fn_decl, .extern_fn => |fn_decl| {
-                    try self.functions.put(fn_decl.name.text, .{ .return_type = fn_decl.return_type });
+                    try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type });
                     try self.collectFunctionSliceTypes(fn_decl);
                 },
                 else => {},
@@ -309,7 +309,7 @@ const CEmitter = struct {
         for (fn_decl.params) |param| try locals.put(param.name.text, try self.localInfoFromType(param.ty));
 
         self.indent += 1;
-        try self.emitBlockItems(body, &locals);
+        try self.emitBlockItems(body, &locals, fn_decl.return_type);
         self.indent -= 1;
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
@@ -466,7 +466,7 @@ const CEmitter = struct {
         }
     }
 
-    fn emitStmt(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitStmt(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
                 for (local.names) |name| {
@@ -480,7 +480,11 @@ const CEmitter = struct {
                     }
                     if (local.init) |initializer| {
                         try self.out.appendSlice(self.allocator, " = ");
-                        try self.emitExpr(initializer, locals);
+                        if (local.ty) |decl_ty| {
+                            try self.emitExprWithTarget(initializer, locals, decl_ty);
+                        } else {
+                            try self.emitExpr(initializer, locals);
+                        }
                     } else if (local.ty != null and local.ty.?.kind == .array) {
                         try self.out.appendSlice(self.allocator, " = {0}");
                     } else {
@@ -508,7 +512,11 @@ const CEmitter = struct {
                     if (try self.emitDirectCallSliceIndexReturn(expr, locals)) return;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "return ");
-                    try self.emitExpr(expr, locals);
+                    if (return_ty) |target_ty| {
+                        try self.emitExprWithTarget(expr, locals, target_ty);
+                    } else {
+                        try self.emitExpr(expr, locals);
+                    }
                     try self.out.appendSlice(self.allocator, ";\n");
                 } else {
                     try self.writeIndent();
@@ -541,7 +549,7 @@ const CEmitter = struct {
                 var nested = try cloneLocals(self.allocator, locals.*);
                 defer nested.deinit();
                 self.indent += 1;
-                try self.emitBlockItems(block, &nested);
+                try self.emitBlockItems(block, &nested, return_ty);
                 self.indent -= 1;
                 try self.writeIndent();
                 try self.out.appendSlice(self.allocator, "}\n");
@@ -559,7 +567,7 @@ const CEmitter = struct {
                     var nested = try cloneLocals(self.allocator, locals.*);
                     defer nested.deinit();
                     self.indent += 1;
-                    try self.emitBlockItems(loop.body, &nested);
+                    try self.emitBlockItems(loop.body, &nested, return_ty);
                     self.indent -= 1;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "}\n");
@@ -567,14 +575,14 @@ const CEmitter = struct {
                     try self.writeUnsupportedStmt(stmt);
                 }
             },
-            .@"switch" => |node| try self.emitSwitch(node, locals),
-            .if_let => |node| try self.emitIfLet(node, locals),
+            .@"switch" => |node| try self.emitSwitch(node, locals, return_ty),
+            .if_let => |node| try self.emitIfLet(node, locals, return_ty),
             else => try self.writeUnsupportedStmt(stmt),
         }
     }
 
-    fn emitBlockItems(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
-        for (block.items) |stmt| try self.emitStmt(stmt, locals);
+    fn emitBlockItems(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        for (block.items) |stmt| try self.emitStmt(stmt, locals, return_ty);
     }
 
     fn writeIndent(self: *CEmitter) !void {
@@ -591,7 +599,7 @@ const CEmitter = struct {
         return error.UnsupportedCEmission;
     }
 
-    fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         const subject_enum_name = self.enumNameForExpr(node.subject, locals);
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "switch (");
@@ -611,7 +619,7 @@ const CEmitter = struct {
             defer nested.deinit();
             self.indent += 1;
             switch (arm.body) {
-                .block => |block| try self.emitBlockItems(block, &nested),
+                .block => |block| try self.emitBlockItems(block, &nested, return_ty),
                 .expr => |expr| {
                     try self.writeIndent();
                     try self.emitExpr(expr, &nested);
@@ -664,7 +672,7 @@ const CEmitter = struct {
         }
     }
 
-    fn emitIfLet(self: *CEmitter, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitIfLet(self: *CEmitter, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         const binding = switch (node.pattern.kind) {
             .bind => |ident| ident,
             else => {
@@ -704,7 +712,7 @@ const CEmitter = struct {
         self.indent += 1;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ bind_ty, binding.text, source_name });
-        try self.emitBlockItems(node.then_block, &then_locals);
+        try self.emitBlockItems(node.then_block, &then_locals, return_ty);
         self.indent -= 1;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "}");
@@ -713,7 +721,7 @@ const CEmitter = struct {
             var else_locals = try cloneLocals(self.allocator, locals.*);
             defer else_locals.deinit();
             self.indent += 1;
-            try self.emitBlockItems(else_block, &else_locals);
+            try self.emitBlockItems(else_block, &else_locals, return_ty);
             self.indent -= 1;
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "}");
@@ -789,11 +797,13 @@ const CEmitter = struct {
                     try self.out.print(self.allocator, "{s}()", .{helper});
                     return;
                 }
+                const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
                 try self.emitExpr(node.callee.*, locals);
                 try self.out.appendSlice(self.allocator, "(");
                 for (node.args, 0..) |arg, i| {
                     if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-                    try self.emitExpr(arg, locals);
+                    const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+                    try self.emitExprWithTarget(arg, locals, target_ty);
                 }
                 try self.out.appendSlice(self.allocator, ")");
             },
@@ -840,6 +850,32 @@ const CEmitter = struct {
                 return error.UnsupportedCEmission;
             },
         }
+    }
+
+    fn emitExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+        switch (expr.kind) {
+            .enum_literal => |literal| {
+                const enum_name = if (target_ty) |ty| self.enumNameForType(ty) else null;
+                if (enum_name) |name| return self.emitEnumLiteral(literal, name);
+                try self.out.print(self.allocator, "/* unsupported enum literal: {s} */0", .{literal.text});
+                return error.UnsupportedCEmission;
+            },
+            .grouped => |inner| {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitExprWithTarget(inner.*, locals, target_ty);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            else => try self.emitExpr(expr, locals),
+        }
+    }
+
+    fn enumNameForType(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+        const name = typeName(ty) orelse return null;
+        return if (self.enums.contains(name)) name else null;
+    }
+
+    fn emitEnumLiteral(self: *CEmitter, literal: ast.Ident, enum_name: []const u8) !void {
+        try self.out.print(self.allocator, "{s}_{s}", .{ enum_name, literal.text });
     }
 
     fn globalAssignmentTarget(self: *CEmitter, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
@@ -943,6 +979,7 @@ const LocalInfo = struct {
 };
 
 const FnInfo = struct {
+    params: []const ast.Param,
     return_type: ?ast.TypeExpr,
 };
 
@@ -2195,6 +2232,53 @@ test "emits C for closed enum switch arms" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "switch (irq) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "case Irq_timer:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "case Irq_keyboard:") != null);
+}
+
+test "emits C for target-typed enum literals" {
+    const source =
+        \\enum Mode: u8 {
+        \\    read = 1,
+        \\    write = 2,
+        \\}
+        \\
+        \\extern fn sink(mode: Mode) -> u32;
+        \\
+        \\fn default_mode() -> Mode {
+        \\    return .read;
+        \\}
+        \\
+        \\fn local_mode() -> Mode {
+        \\    let mode: Mode = .write;
+        \\    return mode;
+        \\}
+        \\
+        \\fn pass_mode() -> u32 {
+        \\    return sink(.read);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_enum_literals.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef uint8_t Mode;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode_read = 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode_write = 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t sink(Mode mode);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return Mode_read;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode mode = Mode_write;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return sink(Mode_read);") != null);
 }
 
 test "emits C for optional pointer if-let" {
