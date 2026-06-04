@@ -4,6 +4,293 @@ const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 
+pub const TrapKind = enum {
+    IntegerOverflow,
+    DivideByZero,
+    InvalidShift,
+    Bounds,
+    Assert,
+    Unreachable,
+    Unknown,
+};
+
+pub const TrapSource = enum {
+    checked_arithmetic,
+    checked_shift,
+    index,
+    assert_stmt,
+    trap_call,
+    unreachable_expr,
+    unwrap,
+};
+
+pub const TrapEdge = struct {
+    function_name: []const u8,
+    kind: TrapKind,
+    source: TrapSource,
+    no_lang_trap: bool,
+    line: usize,
+    column: usize,
+};
+
+pub const SafeNoTrapOp = struct {
+    function_name: []const u8,
+    kind: []const u8,
+    line: usize,
+    column: usize,
+};
+
+pub const FunctionIr = struct {
+    name: []const u8,
+    no_lang_trap: bool,
+    trap_edges: []TrapEdge,
+    safe_no_trap_ops: []SafeNoTrapOp,
+};
+
+pub const ModuleIr = struct {
+    allocator: std.mem.Allocator,
+    functions: []FunctionIr,
+
+    pub fn deinit(self: *ModuleIr) void {
+        for (self.functions) |function| {
+            self.allocator.free(function.trap_edges);
+            self.allocator.free(function.safe_no_trap_ops);
+        }
+        self.allocator.free(self.functions);
+    }
+};
+
+pub fn buildModuleIr(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr {
+    var functions: std.ArrayList(FunctionIr) = .empty;
+    errdefer {
+        for (functions.items) |function| {
+            allocator.free(function.trap_edges);
+            allocator.free(function.safe_no_trap_ops);
+        }
+        functions.deinit(allocator);
+    }
+
+    for (module.decls) |decl| {
+        switch (decl.kind) {
+            .fn_decl, .extern_fn => |fn_decl| {
+                if (fn_decl.body) |body| {
+                    var builder = FunctionIrBuilder.init(allocator, fn_decl.name.text, hasNoLangTrap(decl.attrs));
+                    errdefer builder.deinit();
+                    try builder.collectBlock(body);
+                    try functions.append(allocator, try builder.finish());
+                }
+            },
+            .type_alias, .extern_struct, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+        }
+    }
+
+    return .{ .allocator = allocator, .functions = try functions.toOwnedSlice(allocator) };
+}
+
+pub fn appendLowerIr(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
+    var module_ir = try buildModuleIr(allocator, module);
+    defer module_ir.deinit();
+    for (module_ir.functions) |function| {
+        try out.print(
+            allocator,
+            "ir function name={s} no_lang_trap={} trap_edges={} safe_no_trap_ops={}\n",
+            .{ function.name, function.no_lang_trap, function.trap_edges.len, function.safe_no_trap_ops.len },
+        );
+        for (function.trap_edges) |edge| {
+            try out.print(
+                allocator,
+                "ir trap_edge fn={s} kind={s} source={s} no_lang_trap={} line={} column={}\n",
+                .{ edge.function_name, @tagName(edge.kind), @tagName(edge.source), edge.no_lang_trap, edge.line, edge.column },
+            );
+        }
+        for (function.safe_no_trap_ops) |op| {
+            try out.print(
+                allocator,
+                "ir safe_no_trap fn={s} kind={s} line={} column={}\n",
+                .{ op.function_name, op.kind, op.line, op.column },
+            );
+        }
+    }
+}
+
+const FunctionIrBuilder = struct {
+    allocator: std.mem.Allocator,
+    function_name: []const u8,
+    no_lang_trap: bool,
+    trap_edges: std.ArrayList(TrapEdge),
+    safe_no_trap_ops: std.ArrayList(SafeNoTrapOp),
+
+    fn init(allocator: std.mem.Allocator, function_name: []const u8, no_lang_trap: bool) FunctionIrBuilder {
+        return .{
+            .allocator = allocator,
+            .function_name = function_name,
+            .no_lang_trap = no_lang_trap,
+            .trap_edges = .empty,
+            .safe_no_trap_ops = .empty,
+        };
+    }
+
+    fn deinit(self: *FunctionIrBuilder) void {
+        self.trap_edges.deinit(self.allocator);
+        self.safe_no_trap_ops.deinit(self.allocator);
+    }
+
+    fn finish(self: *FunctionIrBuilder) !FunctionIr {
+        const trap_edges = try self.trap_edges.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(trap_edges);
+        const safe_no_trap_ops = try self.safe_no_trap_ops.toOwnedSlice(self.allocator);
+        return .{
+            .name = self.function_name,
+            .no_lang_trap = self.no_lang_trap,
+            .trap_edges = trap_edges,
+            .safe_no_trap_ops = safe_no_trap_ops,
+        };
+    }
+
+    fn collectBlock(self: *FunctionIrBuilder, block: ast.Block) anyerror!void {
+        for (block.items) |stmt| try self.collectStmt(stmt);
+    }
+
+    fn collectStmt(self: *FunctionIrBuilder, stmt: ast.Stmt) anyerror!void {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| if (local.init) |expr| try self.collectExpr(expr),
+            .loop => |node| {
+                if (node.iterable) |iterable| try self.collectExpr(iterable);
+                try self.collectBlock(node.body);
+            },
+            .if_let => |node| {
+                try self.collectExpr(node.value);
+                try self.collectBlock(node.then_block);
+                if (node.else_block) |else_block| try self.collectBlock(else_block);
+            },
+            .@"switch" => |node| {
+                try self.collectExpr(node.subject);
+                for (node.arms) |arm| switch (arm.body) {
+                    .block => |body| try self.collectBlock(body),
+                    .expr => |expr| try self.collectExpr(expr),
+                };
+            },
+            .unsafe_block, .comptime_block, .block => |body| try self.collectBlock(body),
+            .contract_block => |contract| try self.collectBlock(contract.block),
+            .asm_stmt => if (self.no_lang_trap) try self.addSafeOp("opaque_volatile_asm", stmt.span),
+            .@"return" => |maybe| if (maybe) |expr| try self.collectExpr(expr),
+            .@"break", .@"continue" => {},
+            .@"defer", .expr => |expr| try self.collectExpr(expr),
+            .assert => |expr| {
+                try self.addTrap(.Assert, .assert_stmt, stmt.span);
+                try self.collectExpr(expr);
+            },
+            .assignment => |node| {
+                try self.collectExpr(node.target);
+                try self.collectExpr(node.value);
+            },
+        }
+    }
+
+    fn collectExpr(self: *FunctionIrBuilder, expr: ast.Expr) anyerror!void {
+        switch (expr.kind) {
+            .ident,
+            .int_literal,
+            .string_literal,
+            .char_literal,
+            .bool_literal,
+            .null_literal,
+            .uninit_literal,
+            .void_literal,
+            .enum_literal,
+            => {},
+            .unreachable_expr => try self.addTrap(.Unreachable, .unreachable_expr, expr.span),
+            .grouped, .address_of, .deref => |inner| try self.collectExpr(inner.*),
+            .try_expr => |inner| {
+                try self.addTrap(.Unknown, .unwrap, expr.span);
+                try self.collectExpr(inner.*);
+            },
+            .block => |body| try self.collectBlock(body),
+            .unary => |node| {
+                if (node.op == .neg) try self.addTrap(.IntegerOverflow, .checked_arithmetic, expr.span);
+                try self.collectExpr(node.expr.*);
+            },
+            .binary => |node| {
+                if (isCheckedTrapOp(node.op)) {
+                    try self.addTrap(irTrapKindForBinary(node), .checked_arithmetic, expr.span);
+                }
+                if (isShiftOp(node.op)) {
+                    try self.addTrap(.InvalidShift, .checked_shift, expr.span);
+                }
+                try self.collectExpr(node.left.*);
+                try self.collectExpr(node.right.*);
+            },
+            .cast => |node| try self.collectExpr(node.value.*),
+            .call => |node| {
+                if (isTrapCall(node.callee.*)) {
+                    try self.addTrap(irTrapKindFromArgs(node.args), .trap_call, expr.span);
+                } else if (unwrapCalleeName(node.callee.*) != null) {
+                    try self.addTrap(.Unknown, .unwrap, expr.span);
+                } else if (safeNoLangTrapCalleeName(node.callee.*)) |callee_name| {
+                    if (self.no_lang_trap) try self.addSafeOp(callee_name, expr.span);
+                }
+                try self.collectExpr(node.callee.*);
+                for (node.args) |arg| try self.collectExpr(arg);
+            },
+            .index => |node| {
+                try self.addTrap(.Bounds, .index, expr.span);
+                try self.collectExpr(node.base.*);
+                try self.collectExpr(node.index.*);
+            },
+            .member => |node| try self.collectExpr(node.base.*),
+        }
+    }
+
+    fn addTrap(self: *FunctionIrBuilder, kind: TrapKind, source: TrapSource, span: ast.Span) !void {
+        try self.trap_edges.append(self.allocator, .{
+            .function_name = self.function_name,
+            .kind = kind,
+            .source = source,
+            .no_lang_trap = self.no_lang_trap,
+            .line = span.line,
+            .column = span.column,
+        });
+    }
+
+    fn addSafeOp(self: *FunctionIrBuilder, kind: []const u8, span: ast.Span) !void {
+        try self.safe_no_trap_ops.append(self.allocator, .{
+            .function_name = self.function_name,
+            .kind = kind,
+            .line = span.line,
+            .column = span.column,
+        });
+    }
+};
+
+fn irTrapKindForBinary(node: anytype) TrapKind {
+    return switch (node.op) {
+        .div, .mod => if (isNegativeOne(node.right.*)) .IntegerOverflow else .DivideByZero,
+        .add, .sub, .mul, .shl => .IntegerOverflow,
+        else => .Unknown,
+    };
+}
+
+fn irTrapKindFromArgs(args: []ast.Expr) TrapKind {
+    if (args.len == 0) return .Unknown;
+    return switch (args[0].kind) {
+        .enum_literal => |literal| if (std.mem.eql(u8, literal.text, "Bounds"))
+            .Bounds
+        else if (std.mem.eql(u8, literal.text, "Assert"))
+            .Assert
+        else if (std.mem.eql(u8, literal.text, "Unreachable"))
+            .Unreachable
+        else if (std.mem.eql(u8, literal.text, "IntegerOverflow"))
+            .IntegerOverflow
+        else if (std.mem.eql(u8, literal.text, "DivideByZero"))
+            .DivideByZero
+        else if (std.mem.eql(u8, literal.text, "InvalidShift"))
+            .InvalidShift
+        else
+            .Unknown,
+        else => .Unknown,
+    };
+}
+
 pub const FactKind = enum {
     checked_arithmetic_trap,
     no_lang_trap_index,
@@ -741,6 +1028,47 @@ test "writes early inspection facts for parser AST" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "fact unchecked_call") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "fact mmio_write_call") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "fact direct_mmio_assignment") != null);
+}
+
+test "builds lower-ir trap edge artifact" {
+    const source =
+        \\#[no_lang_trap]
+        \\fn checked_add(a: u32, b: u32) -> u32 {
+        \\    return a + b;
+        \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn wrapping_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
+        \\    return wrapping.add(a, b);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "lower_ir.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_ir = try buildModuleIr(std.testing.allocator, module);
+    defer module_ir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), module_ir.functions.len);
+    try std.testing.expectEqualStrings("checked_add", module_ir.functions[0].name);
+    try std.testing.expect(module_ir.functions[0].no_lang_trap);
+    try std.testing.expectEqual(@as(usize, 1), module_ir.functions[0].trap_edges.len);
+    try std.testing.expectEqual(TrapKind.IntegerOverflow, module_ir.functions[0].trap_edges[0].kind);
+    try std.testing.expectEqual(TrapSource.checked_arithmetic, module_ir.functions[0].trap_edges[0].source);
+    try std.testing.expect(module_ir.functions[0].trap_edges[0].no_lang_trap);
+
+    try std.testing.expectEqualStrings("wrapping_add", module_ir.functions[1].name);
+    try std.testing.expectEqual(@as(usize, 0), module_ir.functions[1].trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), module_ir.functions[1].safe_no_trap_ops.len);
+    try std.testing.expectEqualStrings("wrapping.add", module_ir.functions[1].safe_no_trap_ops[0].kind);
 }
 
 fn hasNoLangTrap(attrs: []ast.Attr) bool {

@@ -16,6 +16,7 @@ const usage =
     \\  mcc check <file.mc>
     \\  mcc run-trap <file.mc>
     \\  mcc facts <file.mc>
+    \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
     \\
 ;
@@ -42,6 +43,8 @@ pub fn main(init: std.process.Init) !void {
         try runTrap(allocator, path, source);
     } else if (std.mem.eql(u8, command, "facts")) {
         try runFacts(allocator, path, source);
+    } else if (std.mem.eql(u8, command, "lower-ir")) {
+        try runLowerIr(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
     } else {
@@ -126,6 +129,28 @@ fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     defer facts.deinit(allocator);
     try ir.appendFacts(allocator, module, &facts);
     std.debug.print("{s}", .{facts.items});
+}
+
+fn runLowerIr(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.LowerIrFailed;
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    try ir.appendLowerIr(allocator, module, &output);
+    std.debug.print("{s}", .{output.items});
 }
 
 fn runTrap(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {

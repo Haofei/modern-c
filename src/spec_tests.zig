@@ -533,6 +533,14 @@ test "tests/spec fixtures produce declared IR inspection facts" {
                 std.debug.print("{s}: expected IR fact evidence for {s}\nFacts:\n{s}", .{ path, check, facts.items });
                 try std.testing.expect(false);
             }
+            if (std.mem.eql(u8, check, "no-language-trap-edge")) {
+                var module_ir = try ir.buildModuleIr(allocator, module);
+                defer module_ir.deinit();
+                if (!hasLowerIrEvidenceForCheck(module_ir, check)) {
+                    std.debug.print("{s}: expected lower-ir artifact evidence for {s}\n", .{ path, check });
+                    try std.testing.expect(false);
+                }
+            }
         }
     }
 }
@@ -855,6 +863,47 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
         });
     }
     return false;
+}
+
+fn hasLowerIrEvidenceForCheck(module_ir: ir.ModuleIr, check: []const u8) bool {
+    if (std.mem.eql(u8, check, "no-language-trap-edge")) {
+        return lowerIrFunctionHasTrap(module_ir, "reject_checked_add", .IntegerOverflow, .checked_arithmetic) and
+            lowerIrFunctionHasTrap(module_ir, "reject_bounds_check", .Bounds, .index) and
+            lowerIrFunctionHasTrap(module_ir, "reject_assert", .Assert, .assert_stmt) and
+            lowerIrFunctionHasTrap(module_ir, "reject_reachable_unreachable", .Unreachable, .unreachable_expr) and
+            lowerIrFunctionHasTrap(module_ir, "reject_explicit_trap", .Assert, .trap_call) and
+            lowerIrFunctionHasTrap(module_ir, "reject_nullable_try", .Unknown, .unwrap) and
+            lowerIrFunctionHasTrap(module_ir, "reject_unwrap_call", .Unknown, .unwrap) and
+            lowerIrFunctionHasTrap(module_ir, "reject_right_shift", .InvalidShift, .checked_shift) and
+            lowerIrFunctionHasNoTrapsAndSafeOp(module_ir, "allow_wrapping_add", "wrapping.add") and
+            lowerIrFunctionHasNoTrapsAndSafeOp(module_ir, "allow_boot_asm", "opaque_volatile_asm");
+    }
+    return false;
+}
+
+fn lowerIrFunctionHasTrap(module_ir: ir.ModuleIr, name: []const u8, kind: ir.TrapKind, source: ir.TrapSource) bool {
+    const function = lowerIrFunctionByName(module_ir, name) orelse return false;
+    if (!function.no_lang_trap) return false;
+    for (function.trap_edges) |edge| {
+        if (edge.kind == kind and edge.source == source and edge.no_lang_trap) return true;
+    }
+    return false;
+}
+
+fn lowerIrFunctionHasNoTrapsAndSafeOp(module_ir: ir.ModuleIr, name: []const u8, op_kind: []const u8) bool {
+    const function = lowerIrFunctionByName(module_ir, name) orelse return false;
+    if (!function.no_lang_trap or function.trap_edges.len != 0) return false;
+    for (function.safe_no_trap_ops) |op| {
+        if (std.mem.eql(u8, op.kind, op_kind)) return true;
+    }
+    return false;
+}
+
+fn lowerIrFunctionByName(module_ir: ir.ModuleIr, name: []const u8) ?ir.FunctionIr {
+    for (module_ir.functions) |function| {
+        if (std.mem.eql(u8, function.name, name)) return function;
+    }
+    return null;
 }
 
 fn containsAll(haystack: []const u8, needles: []const []const u8) bool {
