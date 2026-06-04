@@ -194,6 +194,9 @@ pub const Checker = struct {
                 if (node.op == .neg and isCheckedUnsigned(inner)) {
                     self.errorCode(expr.span, "E_UNSIGNED_NEGATION", "unsigned checked integers do not support unary '-'");
                 }
+                if (node.op == .bit_not and isCheckedSigned(inner)) {
+                    self.errorCode(expr.span, "E_BITWISE_SIGNED_OPERAND", "bitwise operations are not defined on signed checked integers");
+                }
                 return inner;
             },
             .binary => |node| {
@@ -204,6 +207,9 @@ pub const Checker = struct {
                 const right = self.checkExpr(node.right.*, ctx);
                 if (isArithmeticBinary(node.op) and ((left == .wrap and isCheckedInt(right)) or (right == .wrap and isCheckedInt(left)))) {
                     self.errorCode(expr.span, "E_ARITH_POLICY_MIX", "arithmetic domains do not implicitly mix");
+                }
+                if (isBitwiseBinary(node.op) and (isCheckedSigned(left) or isCheckedSigned(right))) {
+                    self.errorCode(expr.span, "E_BITWISE_SIGNED_OPERAND", "bitwise operations are not defined on signed checked integers");
                 }
                 return mergeArithmetic(left, right);
             },
@@ -401,6 +407,13 @@ fn isTrapBinary(op: ast.BinaryOp) bool {
 fn isArithmeticBinary(op: ast.BinaryOp) bool {
     return switch (op) {
         .add, .sub, .mul, .div, .mod => true,
+        else => false,
+    };
+}
+
+fn isBitwiseBinary(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .bit_and, .bit_or, .bit_xor, .shl, .shr => true,
         else => false,
     };
 }
