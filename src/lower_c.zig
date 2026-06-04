@@ -754,6 +754,8 @@ const CEmitter = struct {
     }
 
     fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        if (try self.emitResultSwitch(node, locals, return_ty)) return;
+
         const subject_enum_name = self.enumNameForExpr(node.subject, locals);
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "switch (");
@@ -798,6 +800,117 @@ const CEmitter = struct {
 
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "}\n");
+    }
+
+    fn emitResultSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+        const subject = self.resultSubjectForExpr(node.subject, locals) orelse return false;
+        var emitted_any = false;
+        var seen_ok = false;
+        var seen_err = false;
+        for (node.arms) |arm| {
+            if (arm.patterns.len != 1) {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "/* unsupported result switch multi-pattern arm */\n");
+                return error.UnsupportedCEmission;
+            }
+            const pattern = arm.patterns[0];
+            const branch = (try self.resultSwitchBranch(pattern, subject)) orelse {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "/* unsupported result switch pattern: {s} */\n", .{@tagName(pattern.kind)});
+                return error.UnsupportedCEmission;
+            };
+
+            try self.writeIndent();
+            if (!emitted_any) {
+                if (branch.condition) |condition| {
+                    try self.out.print(self.allocator, "if ({s}) {{\n", .{condition});
+                } else {
+                    try self.out.appendSlice(self.allocator, "{\n");
+                }
+            } else if (branch.condition) |condition| {
+                const complement = if (branch.tag) |tag|
+                    (std.mem.eql(u8, tag, "ok") and seen_err) or (std.mem.eql(u8, tag, "err") and seen_ok)
+                else
+                    false;
+                if (complement) {
+                    try self.out.appendSlice(self.allocator, "else {\n");
+                } else {
+                    try self.out.print(self.allocator, "else if ({s}) {{\n", .{condition});
+                }
+            } else {
+                try self.out.appendSlice(self.allocator, "else {\n");
+            }
+            emitted_any = true;
+            if (branch.tag) |tag| {
+                if (std.mem.eql(u8, tag, "ok")) seen_ok = true;
+                if (std.mem.eql(u8, tag, "err")) seen_err = true;
+            }
+
+            var nested = try cloneLocals(self.allocator, locals.*);
+            defer nested.deinit();
+            self.indent += 1;
+            if (branch.binding_name) |binding_name| {
+                try nested.put(binding_name, .{ .c_type = branch.binding_type.? });
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = {s}.payload.{s};\n", .{ branch.binding_type.?, binding_name, subject.name, branch.payload_field.? });
+            }
+            try self.emitSwitchBody(arm.body, &nested, return_ty);
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "}\n");
+        }
+        return emitted_any;
+    }
+
+    fn emitSwitchBody(self: *CEmitter, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        switch (body) {
+            .block => |block| try self.emitBlockItems(block, locals, return_ty),
+            .expr => |expr| {
+                try self.writeIndent();
+                try self.emitExpr(expr, locals);
+                try self.out.appendSlice(self.allocator, ";\n");
+            },
+        }
+    }
+
+    fn resultSubjectForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ResultSwitchSubject {
+        _ = self;
+        const name = switch (expr.kind) {
+            .ident => |ident| ident.text,
+            .grouped => |inner| switch (inner.kind) {
+                .ident => |ident| ident.text,
+                else => return null,
+            },
+            else => return null,
+        };
+        const info = locals.get(name) orelse return null;
+        const ok_ty = info.result_ok_c_type orelse return null;
+        const err_ty = info.result_err_c_type orelse return null;
+        return .{ .name = name, .ok_c_type = ok_ty, .err_c_type = err_ty };
+    }
+
+    fn resultSwitchBranch(self: *CEmitter, pattern: ast.Pattern, subject: ResultSwitchSubject) !?ResultSwitchBranch {
+        return switch (pattern.kind) {
+            .tag_bind => |tag_bind| blk: {
+                if (std.mem.eql(u8, tag_bind.tag.text, "ok")) break :blk .{
+                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name}),
+                    .tag = "ok",
+                    .binding_name = tag_bind.binding.text,
+                    .binding_type = subject.ok_c_type,
+                    .payload_field = "ok",
+                };
+                if (std.mem.eql(u8, tag_bind.tag.text, "err")) break :blk .{
+                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "!{s}.is_ok", .{subject.name}),
+                    .tag = "err",
+                    .binding_name = tag_bind.binding.text,
+                    .binding_type = subject.err_c_type,
+                    .payload_field = "err",
+                };
+                break :blk null;
+            },
+            .wildcard => .{ .condition = null },
+            else => null,
+        };
     }
 
     fn emitForLoop(self: *CEmitter, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
@@ -1505,6 +1618,20 @@ const ResultInfo = struct {
     name: []const u8,
     ok_ty: ast.TypeExpr,
     err_ty: ast.TypeExpr,
+};
+
+const ResultSwitchSubject = struct {
+    name: []const u8,
+    ok_c_type: []const u8,
+    err_c_type: []const u8,
+};
+
+const ResultSwitchBranch = struct {
+    condition: ?[]const u8 = null,
+    tag: ?[]const u8 = null,
+    binding_name: ?[]const u8 = null,
+    binding_type: ?[]const u8 = null,
+    payload_field: ?[]const u8 = null,
 };
 
 const StructTypeStyle = enum { typedef_name, struct_tag };
@@ -3189,6 +3316,45 @@ test "emits C for Result if-let narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "} else {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static bool has_err(mc_result_u32_Error result)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!result.is_ok) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Error e = result.payload.err;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (e != 0);") != null);
+}
+
+test "emits C for Result switch narrowing" {
+    const source =
+        \\enum Error: u8 {
+        \\    denied = 1,
+        \\}
+        \\
+        \\fn result_nonzero(result: Result<u32, Error>) -> bool {
+        \\    switch result {
+        \\        ok(v) => { return v != 0; },
+        \\        err(e) => { return e != 0; },
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_switch.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_result_u32_Error {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static bool result_nonzero(mc_result_u32_Error result)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (result.is_ok) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t v = result.payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (v != 0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "else {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Error e = result.payload.err;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return (e != 0);") != null);
 }
