@@ -65,7 +65,7 @@ pub const Checker = struct {
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .normal);
-            scope.put(param.name.text, .{ .class = classifyType(param.ty), .mutable = false, .ty = param.ty }) catch {};
+            scope.put(param.name.text, .{ .class = classifyType(param.ty), .mutable = false, .ty = param.ty, .origin = .param }) catch {};
             if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {};
         }
         const return_kind = if (fn_decl.return_type) |ty| classifyType(ty) else TypeClass.void;
@@ -221,7 +221,7 @@ pub const Checker = struct {
             self.errorCode(local.names[0].span, "E_LOCAL_REQUIRES_INITIALIZER", "ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage");
         }
         if (ctx.scope) |scope| {
-            for (local.names) |name| scope.put(name.text, .{ .class = kind, .mutable = mutable, .ty = local.ty }) catch {};
+            for (local.names) |name| scope.put(name.text, .{ .class = kind, .mutable = mutable, .ty = local.ty, .origin = .local }) catch {};
         }
     }
 
@@ -524,7 +524,8 @@ pub const Checker = struct {
         const null_checked = self.checkNullPointerInitializer(target, expr);
         const array_decay_checked = self.checkArrayDecayInitializer(target, returned, expr);
         const pointer_conversion_checked = self.checkPointerViewReturn(target_ty, expr, ctx);
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !canInitialize(target, returned)) {
+        const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !local_escape_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
@@ -533,6 +534,15 @@ pub const Checker = struct {
         const source = exprStorageType(expr, ctx) orelse return false;
         if (implicitPointerViewConversion(target, source)) {
             self.errorCode(expr.span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer and view conversions must be explicit");
+            return true;
+        }
+        return false;
+    }
+
+    fn checkLocalAddressReturn(self: *Checker, target: TypeClass, expr: ast.Expr, ctx: Context) bool {
+        if (!isNonNullPointerLike(target) and !isNullablePointerLike(target)) return false;
+        if (localAddressRoot(expr, ctx) != null) {
+            self.errorCode(expr.span, "E_LOCAL_ADDRESS_ESCAPE", "cannot return the address of local storage");
             return true;
         }
         return false;
@@ -620,6 +630,12 @@ const LocalInfo = struct {
     class: TypeClass,
     mutable: bool,
     ty: ?ast.TypeExpr,
+    origin: BindingOrigin,
+};
+
+const BindingOrigin = enum {
+    param,
+    local,
 };
 
 const Scope = std.StringHashMap(LocalInfo);
@@ -1055,6 +1071,28 @@ fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
             return null;
         },
         .grouped => |inner| exprStorageType(inner.*, ctx),
+        else => null,
+    };
+}
+
+fn localAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
+    return switch (expr.kind) {
+        .address_of => |inner| localStorageRoot(inner.*, ctx),
+        .grouped => |inner| localAddressRoot(inner.*, ctx),
+        else => null,
+    };
+}
+
+fn localStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| {
+                if (entry.origin == .local) return expr.span;
+            }
+            return null;
+        },
+        .grouped => |inner| localStorageRoot(inner.*, ctx),
         else => null,
     };
 }
