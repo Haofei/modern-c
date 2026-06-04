@@ -4,6 +4,10 @@
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_NO_IMPLICIT_CONVERSION,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY,E_NO_IMPLICIT_POINTER_CONVERSION
 
+fn make_bool() -> bool {
+    return true;
+}
+
 fn accept_same_integer_assignment(value: u32) -> u32 {
     var x: u32 = 0;
     x = value;
@@ -54,6 +58,13 @@ fn reject_integer_to_bool_assignment(value: u32) -> bool {
     // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
     flag = value;
     return flag;
+}
+
+fn reject_call_assignment_value_type() -> u32 {
+    var x: u32 = 0;
+    // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
+    x = make_bool();
+    return x;
 }
 
 fn reject_null_to_nonnull_pointer_assignment() -> *mut u8 {

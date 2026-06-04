@@ -4,8 +4,22 @@
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_RETURN_TYPE_MISMATCH,E_RETURN_REQUIRES_VALUE,E_RETURN_MISSING,E_INTEGER_LITERAL_OUT_OF_RANGE,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY
 
+extern fn get_count() -> u32;
+
+fn returns_u32() -> u32 {
+    return 1;
+}
+
 fn accept_same_return(a: u32) -> u32 {
     return a;
+}
+
+fn accept_call_return_type() -> u32 {
+    return returns_u32();
+}
+
+fn accept_extern_call_return_type() -> u32 {
+    return get_count();
 }
 
 fn accept_context_integer_literal() -> u8 {
@@ -38,6 +52,11 @@ fn reject_widening_return(a: u32) -> u64 {
 fn reject_bool_return(flag: bool) -> u32 {
     // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
     return flag;
+}
+
+fn reject_call_return_type() -> bool {
+    // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
+    return returns_u32();
 }
 
 fn reject_out_of_range_literal_return() -> u8 {
