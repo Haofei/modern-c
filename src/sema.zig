@@ -169,6 +169,8 @@ pub const Checker = struct {
                     }
                 } else if (ctx.returns_never) {
                     self.errorCode(stmt.span, "E_NEVER_RETURNS", "function declared -> never cannot return normally");
+                } else if (ctx.return_ty != null and !ctx.returns_void) {
+                    self.errorCode(stmt.span, "E_RETURN_REQUIRES_VALUE", "function return type requires a value");
                 }
             },
             .@"defer", .expr => |expr| _ = self.checkExpr(expr, ctx),

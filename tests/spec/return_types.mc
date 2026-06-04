@@ -2,7 +2,7 @@
 // SPEC: milestone=return-type-checking
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_RETURN_TYPE_MISMATCH,E_INTEGER_LITERAL_OUT_OF_RANGE,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY
+// SPEC: check=E_RETURN_TYPE_MISMATCH,E_RETURN_REQUIRES_VALUE,E_INTEGER_LITERAL_OUT_OF_RANGE,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY
 
 fn accept_same_return(a: u32) -> u32 {
     return a;
@@ -10,6 +10,11 @@ fn accept_same_return(a: u32) -> u32 {
 
 fn accept_context_integer_literal() -> u8 {
     return 255;
+}
+
+fn reject_empty_return_from_typed() -> u32 {
+    // EXPECT_ERROR: E_RETURN_REQUIRES_VALUE
+    return;
 }
 
 fn reject_widening_return(a: u32) -> u64 {
