@@ -241,6 +241,16 @@ pub const Parser = struct {
             const end = try self.expectTok(.semicolon, "expected ';' after return");
             return .{ .span = end.span, .kind = .{ .@"return" = value } };
         }
+        if (self.match(.kw_break)) {
+            const start = self.lxTokenBeforeCurrent();
+            const end = try self.expectTok(.semicolon, "expected ';' after break");
+            return .{ .span = joinSpan(start, end.span), .kind = .@"break" };
+        }
+        if (self.match(.kw_continue)) {
+            const start = self.lxTokenBeforeCurrent();
+            const end = try self.expectTok(.semicolon, "expected ';' after continue");
+            return .{ .span = joinSpan(start, end.span), .kind = .@"continue" };
+        }
         if (self.match(.kw_defer)) {
             const expr = try self.parseExpr(0);
             const end = try self.expectTok(.semicolon, "expected ';' after defer");

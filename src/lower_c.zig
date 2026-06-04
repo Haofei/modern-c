@@ -142,6 +142,7 @@ const Inspector = struct {
             },
             .asm_stmt => {},
             .@"return" => |maybe| if (maybe) |expr| try self.inspectExpr(expr, ctx),
+            .@"break", .@"continue" => {},
             .@"defer", .expr, .assert => |expr| try self.inspectExpr(expr, ctx),
             .assignment => |node| {
                 if (ordinaryGlobalTarget(node.target, ctx.*, self.globals)) |target| {

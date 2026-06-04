@@ -148,6 +148,8 @@ pub const Stmt = struct {
         asm_stmt,
         block: Block,
         @"return": ?Expr,
+        @"break",
+        @"continue",
         @"defer": Expr,
         assert: Expr,
         assignment: struct {

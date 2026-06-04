@@ -127,7 +127,9 @@ pub const Checker = struct {
                         self.errorCode(expr.span, "E_CONDITION_NOT_BOOL", "condition must be bool");
                     }
                 }
-                self.checkBlock(loop.body, ctx);
+                var next = ctx;
+                next.loop_depth += 1;
+                self.checkBlock(loop.body, next);
             },
             .if_let => |node| {
                 const value_class = self.checkExpr(node.value, ctx);
@@ -173,6 +175,16 @@ pub const Checker = struct {
                     self.errorCode(stmt.span, "E_NEVER_RETURNS", "function declared -> never cannot return normally");
                 } else if (ctx.return_ty != null and !ctx.returns_void) {
                     self.errorCode(stmt.span, "E_RETURN_REQUIRES_VALUE", "function return type requires a value");
+                }
+            },
+            .@"break" => {
+                if (ctx.loop_depth == 0) {
+                    self.errorCode(stmt.span, "E_BREAK_OUTSIDE_LOOP", "break is valid only inside a loop");
+                }
+            },
+            .@"continue" => {
+                if (ctx.loop_depth == 0) {
+                    self.errorCode(stmt.span, "E_CONTINUE_OUTSIDE_LOOP", "continue is valid only inside a loop");
                 }
             },
             .@"defer" => |expr| {
@@ -492,6 +504,7 @@ const Context = struct {
     returns_void: bool = false,
     return_ty: ?ast.TypeExpr = null,
     return_kind: TypeClass = .void,
+    loop_depth: usize = 0,
     unsafe_contracts: UnsafeContracts = .{},
     scope: ?*Scope = null,
     mmio_structs: ?*const std.StringHashMap(MmioStruct) = null,
@@ -1043,7 +1056,7 @@ fn fallthroughSpan(block: ast.Block) ?diagnostics.Span {
 
 fn stmtMayFallThrough(stmt: ast.Stmt) bool {
     return switch (stmt.kind) {
-        .@"return", .asm_stmt => false,
+        .@"return", .@"break", .@"continue", .asm_stmt => false,
         .expr => |expr| exprMayFallThrough(expr),
         .block, .unsafe_block => |block| fallthroughSpan(block) != null,
         .contract_block => |contract| fallthroughSpan(contract.block) != null,
@@ -1089,6 +1102,7 @@ fn stmtContainsTry(stmt: ast.Stmt) bool {
         .unsafe_block, .block => |block| blockContainsTry(block),
         .contract_block => |contract| blockContainsTry(contract.block),
         .@"return" => |maybe| if (maybe) |expr| exprContainsTry(expr) else false,
+        .@"break", .@"continue" => false,
         .@"defer", .expr, .assert => |expr| exprContainsTry(expr),
         .assignment => |node| exprContainsTry(node.target) or exprContainsTry(node.value),
         .asm_stmt => false,

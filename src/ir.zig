@@ -320,6 +320,7 @@ fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anyty
         .@"return" => |maybe| {
             if (maybe) |expr| try writeExprFacts(collector, expr, writer, ctx);
         },
+        .@"break", .@"continue" => {},
         .@"defer", .expr => |expr| try writeExprFacts(collector, expr, writer, ctx),
         .assert => |expr| {
             if (ctx.no_lang_trap) {
