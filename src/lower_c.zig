@@ -454,9 +454,13 @@ const CEmitter = struct {
         } else {
             try self.out.print(self.allocator, "{s} {s}(", .{ ret, fn_decl.name.text });
         }
-        for (fn_decl.params, 0..) |param, i| {
-            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            try self.emitParamDecl(param.ty, param.name.text);
+        if (fn_decl.params.len == 0) {
+            try self.out.appendSlice(self.allocator, "void");
+        } else {
+            for (fn_decl.params, 0..) |param, i| {
+                if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                try self.emitParamDecl(param.ty, param.name.text);
+            }
         }
         try self.out.appendSlice(self.allocator, ")");
     }
@@ -1517,6 +1521,7 @@ const CEmitter = struct {
             .call => |node| {
                 if (target_ty) |ty| {
                     if (try self.emitResultConstructor(node, locals, ty)) return;
+                    if (try self.emitTaggedUnionConstructor(node, locals, ty)) return;
                 }
                 try self.emitExpr(expr, locals);
             },
@@ -1546,6 +1551,31 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, if (std.mem.eql(u8, tag, "ok")) "true, .payload.ok = " else "false, .payload.err = ");
         try self.emitExprWithTarget(call.args[0], locals, payload_ty);
         try self.out.appendSlice(self.allocator, " })");
+        return true;
+    }
+
+    fn emitTaggedUnionConstructor(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+        const tag = calleeIdentName(call.callee.*) orelse return false;
+        const union_name = typeName(target_ty) orelse return false;
+        const union_decl = self.tagged_unions.get(union_name) orelse return false;
+        const case = taggedUnionCase(union_decl, tag) orelse return false;
+        const c_union_ty = try self.cTypeFor(target_ty, .typedef_name);
+
+        if (case.ty) |payload_ty| {
+            if (call.args.len != 1) return error.UnsupportedCEmission;
+            try self.out.print(self.allocator, "(({s}){{ .tag = {s}Tag_{s}, .payload.{s} = ", .{
+                c_union_ty,
+                union_name,
+                tag,
+                try self.cPayloadFieldName(tag),
+            });
+            try self.emitExprWithTarget(call.args[0], locals, payload_ty);
+            try self.out.appendSlice(self.allocator, " })");
+            return true;
+        }
+
+        if (call.args.len != 0) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s}){{ .tag = {s}Tag_{s} }})", .{ c_union_ty, union_name, tag });
         return true;
     }
 
@@ -3130,7 +3160,7 @@ test "emits C ABI for simple Result types" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t ok;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Error err;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "} payload;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error make_result(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "void consume_result(mc_result_u32_Error result);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_result_u32_Error pass_result(mc_result_u32_Error result)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return result;") != null);
@@ -3223,6 +3253,56 @@ test "emits C for tagged union switch narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t token_kind(Token token)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return 0;") != null);
+}
+
+test "emits C for tagged union constructors" {
+    const source =
+        \\union Token {
+        \\    number: i64,
+        \\    eof,
+        \\}
+        \\
+        \\fn id(token: Token) -> Token {
+        \\    return token;
+        \\}
+        \\
+        \\fn make_number() -> Token {
+        \\    return number(7);
+        \\}
+        \\
+        \\fn make_eof() -> Token {
+        \\    return eof();
+        \\}
+        \\
+        \\fn call_id() -> Token {
+        \\    return id(number(7));
+        \\}
+        \\
+        \\fn local_number() -> Token {
+        \\    let token: Token = number(9);
+        \\    return token;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_tagged_union_constructors.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_number, .payload.number = 7 });") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_eof });") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return id(((Token){ .tag = TokenTag_number, .payload.number = 7 }));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token token = ((Token){ .tag = TokenTag_number, .payload.number = 9 });") != null);
 }
 
 test "emits C for Result ok and err constructors" {
@@ -3515,8 +3595,8 @@ test "emits C for slice typedefs and indexing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_slice_mut_u32 {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t * ptr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t len;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 make_u8_slice();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 make_u32_slice();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 make_u8_slice(void);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 make_u32_slice(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_slice(mc_slice_const_u8 xs, uintptr_t i)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.ptr[mc_check_index_usize(i, xs.len)];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.ptr[mc_check_index_usize(0, xs.len)];") != null);
@@ -3884,7 +3964,7 @@ test "emits C extern structs and member access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * ptr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "struct Packet * next;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Packet make_packet();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Packet make_packet(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Packet * id_packet_ptr(Packet * p)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Packet * maybe_packet(Packet * maybe, Packet * fallback)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Packet * p = maybe;") != null);
@@ -4005,9 +4085,9 @@ test "emits C explicit traps and unreachable" {
     defer output.deinit(std.testing.allocator);
     try appendC(std.testing.allocator, module, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t trap_as_value()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t trap_as_value(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Bounds();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Unreachable();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void never_returns_by_trap()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void never_returns_by_trap(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Assert();") != null);
 }
