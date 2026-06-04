@@ -122,7 +122,15 @@ pub const Checker = struct {
             .if_let => |node| {
                 const value_class = self.checkExpr(node.value, ctx);
                 self.checkIfLetPattern(node.pattern, value_class);
-                self.checkBlock(node.then_block, ctx);
+                var then_scope = Scope.init(self.reporter.allocator);
+                defer then_scope.deinit();
+                var then_ctx = ctx;
+                if (ctx.scope) |scope| {
+                    copyScope(scope, &then_scope) catch {};
+                    self.addIfLetBinding(node.pattern, node.value, value_class, &then_scope);
+                    then_ctx.scope = &then_scope;
+                }
+                self.checkBlock(node.then_block, then_ctx);
                 if (node.else_block) |else_block| self.checkBlock(else_block, ctx);
             },
             .@"switch" => |node| {
@@ -616,6 +624,33 @@ pub const Checker = struct {
             },
         }
     }
+
+    fn addIfLetBinding(self: *Checker, pattern: ast.Pattern, value: ast.Expr, value_class: TypeClass, scope: *Scope) void {
+        _ = self;
+        switch (pattern.kind) {
+            .bind => |ident| {
+                if (!isNullableValue(value_class)) return;
+                const narrowed_ty = if (exprStorageType(value, .{ .scope = scope })) |ty| nullableInnerType(ty) else null;
+                scope.put(ident.text, .{
+                    .class = tryResultType(value_class),
+                    .mutable = false,
+                    .ty = narrowed_ty,
+                    .origin = .local,
+                }) catch {};
+            },
+            .tag_bind => |node| {
+                if (!isResultNarrowingTag(node.tag.text) or value_class != .result) return;
+                const narrowed_ty = if (exprStorageType(value, .{ .scope = scope })) |ty| resultPayloadType(ty, node.tag.text) else null;
+                scope.put(node.binding.text, .{
+                    .class = if (narrowed_ty) |ty| classifyType(ty) else .unknown,
+                    .mutable = false,
+                    .ty = narrowed_ty,
+                    .origin = .local,
+                }) catch {};
+            },
+            .wildcard, .tag, .literal => {},
+        }
+    }
 };
 
 const Context = struct {
@@ -684,6 +719,13 @@ const AddressOrigin = enum {
 };
 
 const Scope = std.StringHashMap(LocalInfo);
+
+fn copyScope(source: *const Scope, dest: *Scope) !void {
+    var it = source.iterator();
+    while (it.next()) |entry| {
+        try dest.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+}
 
 const TypeClass = enum {
     unknown,
@@ -856,6 +898,27 @@ fn classifyNullableType(child: ast.TypeExpr) TypeClass {
         .c_void_pointer => .nullable_c_void_pointer,
         .pointer, .raw_many_pointer => .nullable_pointer,
         else => .unknown,
+    };
+}
+
+fn nullableInnerType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .nullable => |child| child.*,
+        .qualified => |node| nullableInnerType(node.child.*),
+        else => null,
+    };
+}
+
+fn resultPayloadType(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .generic => |node| {
+            if (!std.mem.eql(u8, node.base.text, "Result") or node.args.len != 2) return null;
+            if (std.mem.eql(u8, tag, "ok")) return node.args[0];
+            if (std.mem.eql(u8, tag, "err")) return node.args[1];
+            return null;
+        },
+        .qualified => |node| resultPayloadType(node.child.*, tag),
+        else => null,
     };
 }
 
