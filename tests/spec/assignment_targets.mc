@@ -7,6 +7,7 @@
 fn source_value() -> u32;
 fn make_packet() -> Packet;
 fn make_mut_u8_slice() -> []mut u8;
+fn make_mut_u32_pointer() -> *mut u32;
 
 fn accept_identifier_assignment() -> u32 {
     var x: u32 = 1;
@@ -85,6 +86,12 @@ fn reject_direct_call_member_assignment(value: u32) -> u32 {
 fn reject_direct_call_index_assignment(value: u8) -> u8 {
     // EXPECT_ERROR: E_INVALID_ASSIGNMENT_TARGET
     make_mut_u8_slice()[0] = value;
+    return value;
+}
+
+fn reject_direct_call_deref_assignment(value: u32) -> u32 {
+    // EXPECT_ERROR: E_INVALID_ASSIGNMENT_TARGET
+    make_mut_u32_pointer().* = value;
     return value;
 }
 
