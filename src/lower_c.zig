@@ -134,6 +134,7 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
 const CEmitter = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
+    scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
     structs: std.StringHashMap(ast.StructDecl),
     indent: usize,
@@ -142,6 +143,7 @@ const CEmitter = struct {
         return .{
             .allocator = allocator,
             .out = out,
+            .scratch = std.heap.ArenaAllocator.init(allocator),
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
             .indent = 0,
@@ -151,6 +153,7 @@ const CEmitter = struct {
     fn deinit(self: *CEmitter) void {
         self.structs.deinit();
         self.globals.deinit();
+        self.scratch.deinit();
     }
 
     fn emitModule(self: *CEmitter, module: ast.Module) anyerror!void {
@@ -174,7 +177,7 @@ const CEmitter = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .global_decl => |global| try self.emitGlobal(global),
-                .fn_decl => |fn_decl| if (fn_decl.body) |body| try self.emitFunction(fn_decl, body),
+                .fn_decl => |fn_decl| if (fn_decl.body) |body| try self.emitFunction(fn_decl, body) else try self.emitFunctionPrototype(fn_decl),
                 .extern_fn => |fn_decl| try self.emitExternFunction(fn_decl),
                 .type_alias, .extern_struct, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
             }
@@ -210,16 +213,20 @@ const CEmitter = struct {
         self.indent += 1;
         for (struct_decl.fields) |field| {
             try self.writeIndent();
-            try self.emitDeclarator(field.ty, field.name.text);
+            try self.emitStructFieldDeclarator(field.ty, field.name.text);
             try self.out.appendSlice(self.allocator, ";\n");
         }
         self.indent -= 1;
         try self.out.print(self.allocator, "}} {s};\n\n", .{struct_decl.name.text});
     }
 
-    fn emitExternFunction(self: *CEmitter, fn_decl: ast.FnDecl) !void {
+    fn emitFunctionPrototype(self: *CEmitter, fn_decl: ast.FnDecl) !void {
         try self.emitFunctionSignature(fn_decl, false);
         try self.out.appendSlice(self.allocator, ";\n\n");
+    }
+
+    fn emitExternFunction(self: *CEmitter, fn_decl: ast.FnDecl) !void {
+        try self.emitFunctionPrototype(fn_decl);
     }
 
     fn emitFunction(self: *CEmitter, fn_decl: ast.FnDecl, body: ast.Block) anyerror!void {
@@ -228,7 +235,7 @@ const CEmitter = struct {
 
         var locals = std.StringHashMap(LocalInfo).init(self.allocator);
         defer locals.deinit();
-        for (fn_decl.params) |param| try locals.put(param.name.text, localInfoFromType(param.ty));
+        for (fn_decl.params) |param| try locals.put(param.name.text, try self.localInfoFromType(param.ty));
 
         self.indent += 1;
         try self.emitBlockItems(body, &locals);
@@ -237,7 +244,7 @@ const CEmitter = struct {
     }
 
     fn emitFunctionSignature(self: *CEmitter, fn_decl: ast.FnDecl, comptime is_static: bool) !void {
-        const ret = if (fn_decl.return_type) |ret_ty| self.cTypeFor(ret_ty) else "void";
+        const ret = if (fn_decl.return_type) |ret_ty| try self.cTypeFor(ret_ty, .typedef_name) else "void";
         if (is_static) {
             try self.out.print(self.allocator, "MC_UNUSED static {s} {s}(", .{ ret, fn_decl.name.text });
         } else {
@@ -255,21 +262,56 @@ const CEmitter = struct {
     }
 
     fn emitDeclarator(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
+        try self.emitDeclaratorWithStyle(ty, name, .typedef_name);
+    }
+
+    fn emitStructFieldDeclarator(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
+        try self.emitDeclaratorWithStyle(ty, name, .struct_tag);
+    }
+
+    fn emitDeclaratorWithStyle(self: *CEmitter, ty: ast.TypeExpr, name: []const u8, style: StructTypeStyle) !void {
         switch (ty.kind) {
             .array => |node| {
-                try self.out.print(self.allocator, "{s} {s}[", .{ self.cTypeFor(node.child.*), name });
+                try self.out.print(self.allocator, "{s} {s}[", .{ try self.cTypeFor(node.child.*, style), name });
                 try self.emitArrayLen(node.len);
                 try self.out.appendSlice(self.allocator, "]");
             },
-            else => try self.out.print(self.allocator, "{s} {s}", .{ self.cTypeFor(ty), name }),
+            else => try self.out.print(self.allocator, "{s} {s}", .{ try self.cTypeFor(ty, style), name }),
         }
     }
 
-    fn cTypeFor(self: *CEmitter, ty: ast.TypeExpr) []const u8 {
-        if (typeName(ty)) |name| {
-            if (self.structs.contains(name)) return name;
+    fn cTypeFor(self: *CEmitter, ty: ast.TypeExpr, style: StructTypeStyle) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        try self.appendType(&out, ty, style);
+        return out.toOwnedSlice(self.scratch.allocator());
+    }
+
+    fn appendType(self: *CEmitter, out: *std.ArrayList(u8), ty: ast.TypeExpr, style: StructTypeStyle) anyerror!void {
+        switch (ty.kind) {
+            .pointer => |node| return self.appendPointerType(out, node.child.*, node.mutability, style),
+            .raw_many_pointer => |node| return self.appendPointerType(out, node.child.*, node.mutability, style),
+            .slice => |node| return self.appendPointerType(out, node.child.*, node.mutability, style),
+            .array => |node| return self.appendPointerType(out, node.child.*, .none, style),
+            .nullable => |child| return self.appendType(out, child.*, style),
+            .qualified => |node| return self.appendType(out, node.child.*, style),
+            else => {},
         }
-        return cType(ty);
+        if (typeName(ty)) |name| {
+            if (self.structs.contains(name)) {
+                if (style == .struct_tag) try out.appendSlice(self.scratch.allocator(), "struct ");
+                return out.appendSlice(self.scratch.allocator(), name);
+            }
+        }
+        try out.appendSlice(self.scratch.allocator(), cType(ty));
+    }
+
+    fn appendPointerType(self: *CEmitter, out: *std.ArrayList(u8), child: ast.TypeExpr, mutability: ast.Mutability, style: StructTypeStyle) anyerror!void {
+        try self.appendType(out, child, style);
+        if (mutability == .@"const") {
+            try out.appendSlice(self.scratch.allocator(), " const *");
+        } else {
+            try out.appendSlice(self.scratch.allocator(), " *");
+        }
     }
 
     fn emitArrayLen(self: *CEmitter, expr: ast.Expr) !void {
@@ -284,7 +326,7 @@ const CEmitter = struct {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
                 for (local.names) |name| {
-                    const info = if (local.ty) |decl_ty| localInfoFromType(decl_ty) else LocalInfo{};
+                    const info = if (local.ty) |decl_ty| try self.localInfoFromType(decl_ty) else LocalInfo{};
                     try locals.put(name.text, info);
                     try self.writeIndent();
                     if (local.ty) |decl_ty| {
@@ -617,7 +659,7 @@ const CEmitter = struct {
                 try self.out.print(self.allocator, ".{s}", .{node.name.text});
             },
             .cast => |node| {
-                try self.out.print(self.allocator, "(({s})", .{self.cTypeFor(node.ty.*)});
+                try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(node.ty.*, .typedef_name)});
                 try self.emitExpr(node.value.*, locals);
                 try self.out.appendSlice(self.allocator, ")");
             },
@@ -638,6 +680,25 @@ const CEmitter = struct {
             else => null,
         };
     }
+
+    fn localInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !LocalInfo {
+        return switch (ty.kind) {
+            .array => |node| .{ .c_type = try self.cTypeFor(ty, .typedef_name), .array_len = intLiteralText(node.len) },
+            .nullable => |child| .{
+                .c_type = try self.cTypeFor(ty, .typedef_name),
+                .nullable_inner_c_type = try self.nullableInnerCType(child.*),
+            },
+            else => .{ .c_type = try self.cTypeFor(ty, .typedef_name) },
+        };
+    }
+
+    fn nullableInnerCType(self: *CEmitter, ty: ast.TypeExpr) !?[]const u8 {
+        return switch (ty.kind) {
+            .pointer, .raw_many_pointer => try self.cTypeFor(ty, .typedef_name),
+            .qualified => |node| try self.nullableInnerCType(node.child.*),
+            else => null,
+        };
+    }
 };
 
 const LocalInfo = struct {
@@ -646,13 +707,7 @@ const LocalInfo = struct {
     nullable_inner_c_type: ?[]const u8 = null,
 };
 
-fn localInfoFromType(ty: ast.TypeExpr) LocalInfo {
-    return switch (ty.kind) {
-        .array => |node| .{ .c_type = cType(ty), .array_len = intLiteralText(node.len) },
-        .nullable => |child| .{ .c_type = cType(ty), .nullable_inner_c_type = nullableInnerCType(child.*) },
-        else => .{ .c_type = cType(ty) },
-    };
-}
+const StructTypeStyle = enum { typedef_name, struct_tag };
 
 fn cloneLocals(allocator: std.mem.Allocator, locals: std.StringHashMap(LocalInfo)) !std.StringHashMap(LocalInfo) {
     var cloned = std.StringHashMap(LocalInfo).init(allocator);
@@ -1210,14 +1265,6 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "i64")) return "int64_t";
     if (std.mem.eql(u8, name, "isize")) return "intptr_t";
     return "void *";
-}
-
-fn nullableInnerCType(ty: ast.TypeExpr) ?[]const u8 {
-    return switch (ty.kind) {
-        .pointer, .raw_many_pointer => cType(ty),
-        .qualified => |node| nullableInnerCType(node.child.*),
-        else => null,
-    };
 }
 
 fn ptrCType(child: ast.TypeExpr, mutability: ast.Mutability) []const u8 {
@@ -1821,6 +1868,25 @@ test "emits C extern structs and member access" {
         \\extern struct Packet {
         \\    value: u32,
         \\    ptr: *mut u8,
+        \\    next: ?*mut Packet,
+        \\}
+        \\
+        \\fn make_packet() -> Packet;
+        \\
+        \\fn id_packet_ptr(p: *mut Packet) -> *mut Packet {
+        \\    return p;
+        \\}
+        \\
+        \\fn maybe_packet(maybe: ?*mut Packet, fallback: *mut Packet) -> *mut Packet {
+        \\    if let p = maybe {
+        \\        return p;
+        \\    } else {
+        \\        return fallback;
+        \\    }
+        \\}
+        \\
+        \\fn cast_packet_ptr(raw: *mut u8) -> *mut Packet {
+        \\    return raw as *mut Packet;
         \\}
         \\
         \\fn read_value(packet: Packet) -> u32 {
@@ -1833,6 +1899,10 @@ test "emits C extern structs and member access" {
         \\
         \\fn read_ptr(packet: Packet) -> *mut u8 {
         \\    return packet.ptr;
+        \\}
+        \\
+        \\fn read_direct() -> u32 {
+        \\    return make_packet().value;
         \\}
     ;
 
@@ -1854,10 +1924,18 @@ test "emits C extern structs and member access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct Packet {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * ptr;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "struct Packet * next;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Packet make_packet();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Packet * id_packet_ptr(Packet * p)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Packet * maybe_packet(Packet * maybe, Packet * fallback)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Packet * p = maybe;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Packet * cast_packet_ptr(uint8_t * raw)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Packet *)raw);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t read_value(Packet packet)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return packet.value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "packet.value = value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return packet.ptr;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return make_packet().value;") != null);
 }
 
 test "emits C assert trap" {
