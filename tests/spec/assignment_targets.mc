@@ -2,7 +2,7 @@
 // SPEC: milestone=assignment-targets
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_INVALID_ASSIGNMENT_TARGET,E_NO_IMPLICIT_CONVERSION,E_NO_IMPLICIT_POINTER_CONVERSION
+// SPEC: check=E_INVALID_ASSIGNMENT_TARGET,E_NO_IMPLICIT_CONVERSION,E_NO_IMPLICIT_POINTER_CONVERSION,E_RETURN_TYPE_MISMATCH
 
 fn source_value() -> u32;
 
@@ -27,6 +27,15 @@ fn accept_storage_assignment_targets(p: *mut u32, xs: []mut u32, i: usize, packe
     p.* = value;
     xs[i] = value;
     packet.value = value;
+}
+
+fn accept_member_read(packet: Packet) -> u32 {
+    return packet.value;
+}
+
+fn reject_member_read_return_type(packet: Packet) -> *mut u8 {
+    // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
+    return packet.value;
 }
 
 fn reject_member_assignment_bool(packet: Packet, flag: bool) -> void {

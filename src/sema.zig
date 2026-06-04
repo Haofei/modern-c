@@ -469,6 +469,7 @@ pub const Checker = struct {
                 if (base_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no fields in MC");
                 }
+                if (memberFieldType(node, ctx)) |field_ty| return classifyType(field_ty);
                 return .unknown;
             },
         };
