@@ -221,6 +221,7 @@ pub const Checker = struct {
                 if (isCVoidLayoutCall(node.callee.*, node.type_args)) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no size or alignment in MC");
                 }
+                if (trap_call) self.checkTrapKind(expr.span, node.args);
                 _ = self.checkExpr(node.callee.*, ctx);
                 for (node.type_args) |ty| self.checkType(ty, .normal);
                 for (node.args) |arg| _ = self.checkExpr(arg, ctx);
@@ -282,6 +283,23 @@ pub const Checker = struct {
 
     fn errorCode(self: *Checker, span: diagnostics.Span, code: []const u8, message: []const u8) void {
         self.reporter.err(span, "{s}: {s}", .{ code, message });
+    }
+
+    fn checkTrapKind(self: *Checker, span: diagnostics.Span, args: []ast.Expr) void {
+        if (args.len != 1) {
+            self.errorCode(span, "E_INVALID_TRAP_KIND", "trap expects exactly one language TrapKind");
+            return;
+        }
+        const kind = switch (args[0].kind) {
+            .enum_literal => |literal| literal,
+            else => {
+                self.errorCode(args[0].span, "E_INVALID_TRAP_KIND", "trap kind must be a language TrapKind enum literal");
+                return;
+            },
+        };
+        if (!isLanguageTrapKind(kind.text)) {
+            self.errorCode(kind.span, "E_INVALID_TRAP_KIND", "unknown language TrapKind");
+        }
     }
 };
 
@@ -467,6 +485,23 @@ fn isUnwrapCall(callee: ast.Expr) bool {
 
 fn isTrapCall(callee: ast.Expr) bool {
     return isIdentNamed(callee, "trap");
+}
+
+fn isLanguageTrapKind(name: []const u8) bool {
+    const names = [_][]const u8{
+        "Bounds",
+        "NullUnwrap",
+        "IntegerOverflow",
+        "DivideByZero",
+        "InvalidShift",
+        "InvalidRepresentation",
+        "Assert",
+        "Unreachable",
+    };
+    for (names) |known| {
+        if (std.mem.eql(u8, name, known)) return true;
+    }
+    return false;
 }
 
 fn isCAbiOpaqueBoundary(ty: ast.TypeExpr) bool {
