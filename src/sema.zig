@@ -530,7 +530,11 @@ pub const Checker = struct {
     }
 
     fn checkLocal(self: *Checker, local: ast.LocalDecl, ctx: Context, mutable: bool) void {
-        const kind = if (local.ty) |ty| classifyType(ty) else TypeClass.unknown;
+        var inferred_ty: ?ast.TypeExpr = local.ty;
+        if (inferred_ty == null) {
+            if (local.init) |expr| inferred_ty = exprResultType(expr, ctx);
+        }
+        const kind = if (inferred_ty) |ty| classifyType(ty) else TypeClass.unknown;
         var address_origin: AddressOrigin = .none;
         if (local.ty) |ty| self.checkType(ty, .normal);
         if (local.init) |expr| {
@@ -557,7 +561,7 @@ pub const Checker = struct {
             self.errorCode(local.names[0].span, "E_LOCAL_REQUIRES_INITIALIZER", "ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage");
         }
         if (ctx.scope) |scope| {
-            for (local.names) |name| scope.put(name.text, .{ .class = kind, .mutable = mutable, .ty = local.ty, .origin = .local, .address_origin = address_origin }) catch {};
+            for (local.names) |name| scope.put(name.text, .{ .class = kind, .mutable = mutable, .ty = inferred_ty, .origin = .local, .address_origin = address_origin }) catch {};
         }
     }
 

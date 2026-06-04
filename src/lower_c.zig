@@ -811,6 +811,7 @@ const CEmitter = struct {
                             }
                         } else if (local.init) |initializer| {
                             if (try self.emitSliceCallInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitEnumCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitMmioReadInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitMmioReadExprInferredLocalInit(name.text, initializer, locals)) continue;
                         }
@@ -2338,6 +2339,17 @@ const CEmitter = struct {
 
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(slice_ty, .typedef_name), name });
+        try self.emitExpr(initializer, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitEnumCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const enum_ty = self.enumReturnTypeForExpr(initializer) orelse return false;
+        try locals.put(name, try self.localInfoFromType(enum_ty));
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(enum_ty, .typedef_name), name });
         try self.emitExpr(initializer, locals);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
@@ -5678,6 +5690,14 @@ test "emits C for closed enum switch arms" {
         \\        .keyboard => { return 2; },
         \\    }
         \\}
+        \\
+        \\fn classify_local_irq() -> u32 {
+        \\    let irq = read_irq();
+        \\    switch irq {
+        \\        .timer => { return 1; },
+        \\        .keyboard => { return 2; },
+        \\    }
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_enum_switch.mc", source);
@@ -5704,6 +5724,8 @@ test "emits C for closed enum switch arms" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "case Irq_keyboard:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t classify_read_irq(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Irq mc_tmp0 = read_irq();\n    switch (mc_tmp0) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t classify_local_irq(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Irq irq = read_irq();\n    switch (irq) {") != null);
 }
 
 test "emits C for target-typed enum literals" {
