@@ -16,6 +16,17 @@ fn reject_c_void_deref(p: *mut c_void) -> u8 {
     return *p;
 }
 
+fn reject_c_void_deref_by_type(handle: *const c_void) -> u8 {
+    // EXPECT_ERROR: E_C_VOID_DEREF
+    return *handle;
+}
+
+fn reject_c_void_local_deref(src: *const c_void) -> u8 {
+    let handle: *const c_void = src;
+    // EXPECT_ERROR: E_C_VOID_DEREF
+    return *handle;
+}
+
 fn reject_c_void_layout() -> usize {
     // EXPECT_ERROR: E_C_VOID_NO_LAYOUT
     return size_of<c_void>();

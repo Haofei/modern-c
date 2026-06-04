@@ -162,10 +162,10 @@ pub const Checker = struct {
                 return .unknown;
             },
             .deref => |inner| {
-                if (isLikelyCVoidPointer(inner.*)) {
+                const inner_class = self.checkExpr(inner.*, ctx);
+                if (inner_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_DEREF", "c_void pointer cannot be dereferenced");
                 }
-                _ = self.checkExpr(inner.*, ctx);
                 return .unknown;
             },
             .member => |node| self.checkExpr(node.base.*, ctx),
@@ -218,6 +218,7 @@ const TypeClass = enum {
     checked_unsigned,
     checked_signed,
     wrap,
+    c_void_pointer,
 };
 
 const TypeMode = enum {
@@ -260,6 +261,8 @@ fn mergeArithmetic(left: TypeClass, right: TypeClass) TypeClass {
 fn classifyType(ty: ast.TypeExpr) TypeClass {
     return switch (ty.kind) {
         .name => |name| classifyTypeName(name.text),
+        .pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .unknown,
+        .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .unknown,
         .generic => |node| if (std.mem.eql(u8, node.base.text, "wrap")) .wrap else .unknown,
         else => .unknown,
     };
@@ -283,10 +286,6 @@ fn isUncheckedCall(expr: ast.Expr) bool {
 fn isCVoidLayoutCall(callee: ast.Expr, type_args: []ast.TypeExpr) bool {
     if (!isIdentNamed(callee, "size_of") and !isIdentNamed(callee, "sizeof") and !isIdentNamed(callee, "alignof")) return false;
     return type_args.len == 1 and isTypeName(type_args[0], "c_void");
-}
-
-fn isLikelyCVoidPointer(expr: ast.Expr) bool {
-    return isIdentNamed(expr, "p") or isIdentNamed(expr, "c_void");
 }
 
 fn isCAbiOpaqueBoundary(ty: ast.TypeExpr) bool {
