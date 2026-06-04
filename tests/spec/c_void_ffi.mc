@@ -2,13 +2,18 @@
 // SPEC: milestone=c-void-ffi
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_C_VOID_DEREF,E_C_VOID_NO_LAYOUT,E_MC_VOID_POINTER_FFI
+// SPEC: check=E_C_VOID_DEREF,E_C_VOID_NO_LAYOUT,E_C_VOID_CONVERSION,E_MC_VOID_POINTER_FFI
 
 extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
 
 fn accept_c_void_ffi(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
     // EXPECT: extern C opaque-object pointers are accepted and may cross the FFI boundary.
     return memcpy(dst, src, n);
+}
+
+fn accept_c_void_comparison(a: *mut c_void, b: *mut c_void) -> bool {
+    // EXPECT: opaque C object pointers may be compared without inspecting layout.
+    return a == b;
 }
 
 fn reject_c_void_deref(p: *mut c_void) -> u8 {
@@ -40,6 +45,16 @@ fn reject_c_void_alignment() -> usize {
 fn reject_c_void_field(p: *mut c_void) -> usize {
     // EXPECT_ERROR: E_C_VOID_NO_LAYOUT
     return p.field;
+}
+
+fn reject_c_void_to_typed_pointer(p: *mut c_void) -> *mut u8 {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return p as *mut u8;
+}
+
+fn reject_typed_pointer_to_c_void(p: *mut u8) -> *mut c_void {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return p as *mut c_void;
 }
 
 // EXPECT_ERROR: E_MC_VOID_POINTER_FFI

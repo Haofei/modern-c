@@ -179,9 +179,13 @@ pub const Checker = struct {
                 return mergeArithmetic(left, right);
             },
             .cast => |node| {
-                _ = self.checkExpr(node.value.*, ctx);
+                const source = self.checkExpr(node.value.*, ctx);
                 self.checkType(node.ty.*, .normal);
-                return classifyType(node.ty.*);
+                const target = classifyType(node.ty.*);
+                if ((source == .c_void_pointer) != (target == .c_void_pointer)) {
+                    self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
+                }
+                return target;
             },
             .call => |node| {
                 if (ctx.no_lang_trap and isTrapCall(node.callee.*)) {
