@@ -142,6 +142,7 @@ const CEmitter = struct {
     mmio_structs: std.StringHashMap(MmioStruct),
     packed_bits: std.StringHashMap(PackedBitsInfo),
     overlay_unions: std.StringHashMap(OverlayUnionInfo),
+    tagged_unions: std.StringHashMap(ast.UnionDecl),
     enums: std.StringHashMap(ast.EnumDecl),
     slice_types: std.StringHashMap(SliceInfo),
     result_types: std.StringHashMap(ResultInfo),
@@ -159,6 +160,7 @@ const CEmitter = struct {
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
             .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
             .overlay_unions = std.StringHashMap(OverlayUnionInfo).init(allocator),
+            .tagged_unions = std.StringHashMap(ast.UnionDecl).init(allocator),
             .enums = std.StringHashMap(ast.EnumDecl).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
@@ -175,6 +177,7 @@ const CEmitter = struct {
         while (packed_bits.next()) |bits| bits.fields.deinit();
         self.packed_bits.deinit();
         self.overlay_unions.deinit();
+        self.tagged_unions.deinit();
         var mmio_structs = self.mmio_structs.valueIterator();
         while (mmio_structs.next()) |mmio_struct| mmio_struct.fields.deinit();
         self.mmio_structs.deinit();
@@ -201,6 +204,7 @@ const CEmitter = struct {
                     }
                 },
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
+                .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
                 .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
                 .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
                 .fn_decl, .extern_fn => |fn_decl| {
@@ -213,6 +217,7 @@ const CEmitter = struct {
         try self.emitEnums();
         try self.emitPackedBitsTypes();
         try self.emitOverlayUnionTypes();
+        try self.emitTaggedUnionTypes(module);
         for (module.decls) |decl| {
             if (decl.kind == .extern_struct and self.mmio_structs.contains(decl.kind.extern_struct.name.text)) {
                 try self.emitMmioStruct(decl.kind.extern_struct);
@@ -302,6 +307,59 @@ const CEmitter = struct {
             self.indent -= 1;
             try self.out.print(self.allocator, "}} {s};\n\n", .{entry.key_ptr.*});
         }
+    }
+
+    fn emitTaggedUnionTypes(self: *CEmitter, module: ast.Module) !void {
+        for (module.decls) |decl| {
+            if (decl.kind != .union_decl) continue;
+            const union_decl = decl.kind.union_decl;
+            if (!self.tagged_unions.contains(union_decl.name.text)) continue;
+            try self.emitTaggedUnionType(union_decl);
+        }
+    }
+
+    fn emitTaggedUnionType(self: *CEmitter, union_decl: ast.UnionDecl) !void {
+        try self.out.print(self.allocator, "typedef enum {s}Tag {{\n", .{union_decl.name.text});
+        self.indent += 1;
+        for (union_decl.cases, 0..) |case, i| {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s}Tag_{s} = {d},\n", .{ union_decl.name.text, case.name.text, i });
+        }
+        self.indent -= 1;
+        try self.out.print(self.allocator, "}} {s}Tag;\n\n", .{union_decl.name.text});
+
+        try self.out.print(self.allocator, "typedef struct {s} {{\n", .{union_decl.name.text});
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s}Tag tag;\n", .{union_decl.name.text});
+
+        var has_payload = false;
+        for (union_decl.cases) |case| {
+            if (case.ty != null) {
+                has_payload = true;
+                break;
+            }
+        }
+
+        if (has_payload) {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "union {\n");
+            self.indent += 1;
+            for (union_decl.cases) |case| {
+                const payload_ty = case.ty orelse continue;
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s};\n", .{
+                    try self.cTypeFor(payload_ty, .typedef_name),
+                    try self.cPayloadFieldName(case.name.text),
+                });
+            }
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "} payload;\n");
+        }
+
+        self.indent -= 1;
+        try self.out.print(self.allocator, "}} {s};\n\n", .{union_decl.name.text});
     }
 
     fn emitEnumCaseValue(self: *CEmitter, value: ast.Expr) !void {
@@ -455,6 +513,7 @@ const CEmitter = struct {
             if (self.enums.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
             if (self.packed_bits.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
             if (self.overlay_unions.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
+            if (self.tagged_unions.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
             if (self.structs.contains(name)) {
                 if (style == .struct_tag) try out.appendSlice(self.scratch.allocator(), "struct ");
                 return out.appendSlice(self.scratch.allocator(), name);
@@ -486,6 +545,13 @@ const CEmitter = struct {
             try self.collectTypeArtifacts(field.ty);
         }
         try self.overlay_unions.put(overlay_union.name.text, .{ .size = size, .alignment = alignment });
+    }
+
+    fn collectTaggedUnion(self: *CEmitter, union_decl: ast.UnionDecl) !void {
+        for (union_decl.cases) |case| {
+            if (case.ty) |ty| try self.collectTypeArtifacts(ty);
+        }
+        try self.tagged_unions.put(union_decl.name.text, union_decl);
     }
 
     fn overlayFieldLayout(self: *CEmitter, ty: ast.TypeExpr) ?OverlayLayout {
@@ -1625,6 +1691,11 @@ const CEmitter = struct {
             else => null,
         };
     }
+
+    fn cPayloadFieldName(self: *CEmitter, name: []const u8) ![]const u8 {
+        if (!isCKeyword(name)) return name;
+        return std.fmt.allocPrint(self.scratch.allocator(), "{s}_", .{name});
+    }
 };
 
 const LocalInfo = struct {
@@ -2243,6 +2314,23 @@ fn typeName(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
+fn isCKeyword(name: []const u8) bool {
+    const keywords = [_][]const u8{
+        "auto",           "break",         "case",     "char",     "const",      "continue",
+        "default",        "do",            "double",   "else",     "enum",       "extern",
+        "float",          "for",           "goto",     "if",       "inline",     "int",
+        "long",           "register",      "restrict", "return",   "short",      "signed",
+        "sizeof",         "static",        "struct",   "switch",   "typedef",    "union",
+        "unsigned",       "void",          "volatile", "while",    "_Alignas",   "_Alignof",
+        "_Atomic",        "_Bool",         "_Complex", "_Generic", "_Imaginary", "_Noreturn",
+        "_Static_assert", "_Thread_local",
+    };
+    for (keywords) |keyword| {
+        if (std.mem.eql(u8, name, keyword)) return true;
+    }
+    return false;
+}
+
 fn cType(ty: ast.TypeExpr) []const u8 {
     switch (ty.kind) {
         .pointer => |node| return ptrCType(node.child.*, node.mutability),
@@ -2834,6 +2922,46 @@ test "emits C ABI for simple Result types" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_result_u32_Error pass_result(mc_result_u32_Error result)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return result;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(result);") != null);
+}
+
+test "emits C ABI for tagged unions" {
+    const source =
+        \\union Token {
+        \\    int: i64,
+        \\    eof,
+        \\}
+        \\
+        \\fn pass_token(token: Token) -> Token {
+        \\    return token;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_tagged_union_abi.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef enum TokenTag {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "TokenTag_int = 0,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "TokenTag_eof = 1,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "} TokenTag;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct Token {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "TokenTag tag;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "int64_t int_;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "} payload;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "} Token;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Token pass_token(Token token)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return token;") != null);
 }
 
 test "emits C for Result ok and err constructors" {
