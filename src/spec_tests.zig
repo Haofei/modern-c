@@ -1003,8 +1003,10 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
         return containsAll(output, &.{
             "lower ordinary_access fn=local_non_racing_access object=local access=load race_class=local strategy=plain_c c_plain_access=true",
             "lower ordinary_access fn=local_non_racing_access object=local access=store race_class=local strategy=plain_c c_plain_access=true",
-            "lower ordinary_access fn=possibly_racing_store object=shared_counter access=store race_class=possibly_shared strategy=race_helper c_plain_access=false",
-            "lower ordinary_access fn=possibly_racing_load object=shared_counter access=load race_class=possibly_shared strategy=race_helper c_plain_access=false",
+            "lower ordinary_access fn=possibly_racing_store object=shared_counter access=store race_class=possibly_shared strategy=race_helper helper=mc_race_store_u32 type=u32 width_bits=32 helper_required=true helper_available=true c_plain_access=false",
+            "lower race_backend fn=possibly_racing_store object=shared_counter access=store action=emit_helper helper=mc_race_store_u32 type=u32 width_bits=32 expr=mc_race_store_u32(&shared_counter, value) c_plain_access=false reject_if_helper_missing=true",
+            "lower ordinary_access fn=possibly_racing_load object=shared_counter access=load race_class=possibly_shared strategy=race_helper helper=mc_race_load_u32 type=u32 width_bits=32 helper_required=true helper_available=true c_plain_access=false",
+            "lower race_backend fn=possibly_racing_load object=shared_counter access=load action=emit_helper helper=mc_race_load_u32 type=u32 width_bits=32 expr=mc_race_load_u32(&shared_counter) c_plain_access=false reject_if_helper_missing=true",
             "lower non_atomic_rmw fn=racing_increment_is_not_atomic object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false c_data_race_ub_dependency=false",
         });
     }

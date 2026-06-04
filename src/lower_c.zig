@@ -13,14 +13,14 @@ const Inspector = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     mmio_structs: std.StringHashMap(MmioStruct),
-    globals: std.StringHashMap(void),
+    globals: std.StringHashMap(GlobalInfo),
 
     fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) Inspector {
         return .{
             .allocator = allocator,
             .out = out,
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
-            .globals = std.StringHashMap(void).init(allocator),
+            .globals = std.StringHashMap(GlobalInfo).init(allocator),
         };
     }
 
@@ -53,7 +53,7 @@ const Inspector = struct {
                 .packed_bits_decl => |packed_bits| try self.writePackedBitsLowering(packed_bits),
                 .overlay_union_decl => |overlay_union| try self.writeOverlayUnionLowering(overlay_union),
                 .global_decl => |global| {
-                    try self.globals.put(global.name.text, {});
+                    if (global.ty) |ty| try self.globals.put(global.name.text, globalInfoFromType(ty));
                 },
                 .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .opaque_decl => {},
             }
@@ -176,8 +176,10 @@ const Inspector = struct {
     fn inspectExpr(self: *Inspector, expr: ast.Expr, ctx: *FnContext) anyerror!void {
         switch (expr.kind) {
             .ident => |ident| {
-                if (self.globals.contains(ident.text) and !ctx.locals.contains(ident.text)) {
-                    try self.writeOrdinaryAccess(ctx.name, ident.text, "load");
+                if (!ctx.locals.contains(ident.text)) {
+                    if (self.globals.get(ident.text)) |global| {
+                        try self.writeOrdinaryAccess(ctx.name, .{ .name = ident.text, .info = global }, "load");
+                    }
                 } else if (isFixtureLocalAccess(ctx.name, ident.text) and ctx.locals.contains(ident.text)) {
                     try self.writeLocalOrdinaryAccess(ctx.name, ident.text, "load");
                 }
@@ -282,12 +284,32 @@ const Inspector = struct {
         }
     }
 
-    fn writeOrdinaryAccess(self: *Inspector, fn_name: []const u8, object: []const u8, access: []const u8) !void {
-        try self.out.print(
-            self.allocator,
-            "lower ordinary_access fn={s} object={s} access={s} race_class=possibly_shared strategy=race_helper c_plain_access=false\n",
-            .{ fn_name, object, access },
-        );
+    fn writeOrdinaryAccess(self: *Inspector, fn_name: []const u8, target: GlobalAccess, access: []const u8) !void {
+        const object = target.name;
+        const helper_base = if (std.mem.eql(u8, access, "load")) "mc_race_load" else "mc_race_store";
+        if (std.mem.eql(u8, access, "load")) {
+            try self.out.print(
+                self.allocator,
+                "lower ordinary_access fn={s} object={s} access={s} race_class=possibly_shared strategy=race_helper helper={s}_{s} type={s} width_bits={s} helper_required=true helper_available=true c_plain_access=false c_expr={s}_{s}(&{s})\n",
+                .{ fn_name, object, access, helper_base, target.info.type_name, target.info.type_name, target.info.width_bits, helper_base, target.info.type_name, object },
+            );
+            try self.out.print(
+                self.allocator,
+                "lower race_backend fn={s} object={s} access={s} action=emit_helper helper={s}_{s} type={s} width_bits={s} expr={s}_{s}(&{s}) c_plain_access=false reject_if_helper_missing=true\n",
+                .{ fn_name, object, access, helper_base, target.info.type_name, target.info.type_name, target.info.width_bits, helper_base, target.info.type_name, object },
+            );
+        } else {
+            try self.out.print(
+                self.allocator,
+                "lower ordinary_access fn={s} object={s} access={s} race_class=possibly_shared strategy=race_helper helper={s}_{s} type={s} width_bits={s} helper_required=true helper_available=true c_plain_access=false c_expr={s}_{s}(&{s}, <value>)\n",
+                .{ fn_name, object, access, helper_base, target.info.type_name, target.info.type_name, target.info.width_bits, helper_base, target.info.type_name, object },
+            );
+            try self.out.print(
+                self.allocator,
+                "lower race_backend fn={s} object={s} access={s} action=emit_helper helper={s}_{s} type={s} width_bits={s} expr={s}_{s}(&{s}, value) c_plain_access=false reject_if_helper_missing=true\n",
+                .{ fn_name, object, access, helper_base, target.info.type_name, target.info.type_name, target.info.width_bits, helper_base, target.info.type_name, object },
+            );
+        }
         try self.out.print(
             self.allocator,
             "lower race_semantics fn={s} object={s} creates_happens_before=false assumes_no_race=false\n",
@@ -428,6 +450,21 @@ const MmioAccess = struct {
     ordering: []const u8,
 };
 
+const GlobalInfo = struct {
+    type_name: []const u8,
+    width_bits: []const u8,
+};
+
+const GlobalAccess = struct {
+    name: []const u8,
+    info: GlobalInfo,
+};
+
+fn globalInfoFromType(ty: ast.TypeExpr) GlobalInfo {
+    const name = typeName(ty) orelse "unknown";
+    return .{ .type_name = name, .width_bits = widthBits(name) };
+}
+
 fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {
     const generic = switch (ty.kind) {
         .generic => |node| node,
@@ -555,9 +592,12 @@ fn widthBits(width: []const u8) []const u8 {
     return "unknown";
 }
 
-fn ordinaryGlobalTarget(target: ast.Expr, ctx: FnContext, globals: std.StringHashMap(void)) ?[]const u8 {
+fn ordinaryGlobalTarget(target: ast.Expr, ctx: FnContext, globals: std.StringHashMap(GlobalInfo)) ?GlobalAccess {
     return switch (target.kind) {
-        .ident => |ident| if (globals.contains(ident.text) and !ctx.locals.contains(ident.text)) ident.text else null,
+        .ident => |ident| if (!ctx.locals.contains(ident.text))
+            if (globals.get(ident.text)) |global| .{ .name = ident.text, .info = global } else null
+        else
+            null,
         .grouped => |inner| ordinaryGlobalTarget(inner.*, ctx, globals),
         else => null,
     };

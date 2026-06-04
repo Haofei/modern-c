@@ -15,11 +15,12 @@ fn local_non_racing_access() -> u32 {
 
 fn possibly_racing_store(x: u32) -> void {
     // EXPECT: ordinary store does not create synchronization.
-    // EXPECT: lower-c uses a race-tolerant helper or rejects emission if none exists.
+    // EXPECT: lower-c emits mc_race_store_u32(&shared_counter, value) or rejects emission if helper support is missing.
     shared_counter = x;
 }
 
 fn possibly_racing_load() -> u32 {
+    // EXPECT: lower-c emits mc_race_load_u32(&shared_counter) or rejects emission if helper support is missing.
     // EXPECT: ordinary load result is target-defined if racing.
     // EXPECT: racing load may tear according to target width/alignment.
     // EXPECT: no happens-before edge is inferred.
