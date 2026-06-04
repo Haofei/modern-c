@@ -1033,14 +1033,18 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
             "address_space=mmio",
             "lower mmio_access fn=read_status op=read register=Uart16550.lsr",
             "value_type=UartLsr",
+            "lower mmio_backend fn=putc op=write register=Uart16550.thr helper=mc_mmio_write_u8 value_type=u8 width_bits=8 volatile=true address_space=mmio",
+            "lower mmio_backend fn=read_status op=read register=Uart16550.lsr helper=mc_mmio_read_u8 value_type=UartLsr width_bits=8 volatile=true address_space=mmio",
         });
     }
     if (std.mem.eql(u8, check, "mmio-ordering-preserved")) {
         return containsAll(output, &.{
             "lower mmio_order fn=putc op=write register=Uart16550.thr ordering=release",
             "prevents_before_after=true",
+            "lower mmio_barrier fn=putc register=Uart16550.thr ordering=release placement=before helper=mc_barrier_release_before prevents_reorder=true",
             "lower mmio_order fn=read_status op=read register=Uart16550.lsr ordering=acquire",
             "prevents_after_before=true",
+            "lower mmio_barrier fn=read_status register=Uart16550.lsr ordering=acquire placement=after helper=mc_barrier_acquire_after prevents_reorder=true",
             "lower mmio_sequence fn=ordered_device_sequence edge=ordinary_before_release before=raw.store barrier=Uart16550.thr.write ordering=release prevents_reorder=true",
             "lower mmio_sequence fn=ordered_device_sequence edge=ordinary_after_acquire barrier=Uart16550.lsr.read ordering=acquire after=raw.store prevents_reorder=true",
         });

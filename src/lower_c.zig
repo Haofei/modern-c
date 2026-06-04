@@ -222,6 +222,7 @@ const Inspector = struct {
                         "lower mmio_access fn={s} op={s} register={s}.{s} value_type={s} register_width={s} emitted_width={s} volatile=true address_space=mmio ordering={s}\n",
                         .{ ctx.name, access.kind, access.struct_name, access.field, access.value_type, bits, bits, access.ordering },
                     );
+                    try self.writeMmioBackendAccess(ctx.name, access, bits);
                     if (std.mem.eql(u8, access.ordering, "release")) {
                         if (ctx.mmio_sequence.ordinary_store_seen) {
                             try self.out.print(
@@ -235,6 +236,7 @@ const Inspector = struct {
                             "lower mmio_order fn={s} op={s} register={s}.{s} ordering=release barrier_before=true prevents_before_after=true\n",
                             .{ ctx.name, access.kind, access.struct_name, access.field },
                         );
+                        try self.writeMmioBackendBarrier(ctx.name, access, "before", "mc_barrier_release_before");
                     } else if (std.mem.eql(u8, access.ordering, "acquire")) {
                         ctx.mmio_sequence.pending_acquire = access;
                         try self.out.print(
@@ -242,6 +244,7 @@ const Inspector = struct {
                             "lower mmio_order fn={s} op={s} register={s}.{s} ordering=acquire barrier_after=true prevents_after_before=true\n",
                             .{ ctx.name, access.kind, access.struct_name, access.field },
                         );
+                        try self.writeMmioBackendBarrier(ctx.name, access, "after", "mc_barrier_acquire_after");
                     }
                 }
                 if (isRawStoreCall(node.callee.*)) {
@@ -264,6 +267,31 @@ const Inspector = struct {
             },
             .member => |node| try self.inspectExpr(node.base.*, ctx),
         }
+    }
+
+    fn writeMmioBackendAccess(self: *Inspector, fn_name: []const u8, access: MmioAccess, bits: []const u8) !void {
+        const helper_base = if (std.mem.eql(u8, access.kind, "read")) "mc_mmio_read" else "mc_mmio_write";
+        if (std.mem.eql(u8, access.kind, "read")) {
+            try self.out.print(
+                self.allocator,
+                "lower mmio_backend fn={s} op=read register={s}.{s} helper={s}_{s} value_type={s} width_bits={s} volatile=true address_space=mmio c_expr={s}_{s}(&{s}.{s})\n",
+                .{ fn_name, access.struct_name, access.field, helper_base, access.width, access.value_type, bits, helper_base, access.width, access.struct_name, access.field },
+            );
+        } else {
+            try self.out.print(
+                self.allocator,
+                "lower mmio_backend fn={s} op=write register={s}.{s} helper={s}_{s} value_type={s} width_bits={s} volatile=true address_space=mmio c_expr={s}_{s}(&{s}.{s}, <value>)\n",
+                .{ fn_name, access.struct_name, access.field, helper_base, access.width, access.value_type, bits, helper_base, access.width, access.struct_name, access.field },
+            );
+        }
+    }
+
+    fn writeMmioBackendBarrier(self: *Inspector, fn_name: []const u8, access: MmioAccess, placement: []const u8, helper: []const u8) !void {
+        try self.out.print(
+            self.allocator,
+            "lower mmio_barrier fn={s} register={s}.{s} ordering={s} placement={s} helper={s} prevents_reorder=true\n",
+            .{ fn_name, access.struct_name, access.field, access.ordering, placement, helper },
+        );
     }
 
     fn writeCheckedArithmetic(self: *Inspector, ctx: *FnContext, op: CheckedOp, ty: []const u8, trap: TrapKind) !void {

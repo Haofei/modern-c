@@ -32,12 +32,12 @@ fn putc(uart: MmioPtr<Uart16550>, ch: u8) -> void {
         cpu.pause();
     }
 
-    // EXPECT: .release write preserves u8 width, volatility, address space, and release ordering.
+    // EXPECT: .release write emits mc_mmio_write_u8 and a release barrier before the access.
     uart.thr.write(ch, .release);
 }
 
 fn read_status(uart: MmioPtr<Uart16550>) -> UartLsr {
-    // EXPECT: .acquire read preserves u8 width and prevents later operations moving before it.
+    // EXPECT: .acquire read emits mc_mmio_read_u8 and an acquire barrier after the access.
     let status = uart.lsr.read(.acquire);
     unsafe {
         raw.store<u8>(phys(0x2000_0000), 1);
