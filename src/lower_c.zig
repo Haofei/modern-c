@@ -778,6 +778,8 @@ const CEmitter = struct {
                     if (local.names.len == 1) {
                         if (local.ty) |decl_ty| {
                             if (local.init) |initializer| {
+                                if (try self.emitResultTryExprLocalInit(name.text, decl_ty, initializer, locals, return_ty)) continue;
+                                if (try self.emitNullableTryExprLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitResultTryLocalInit(name.text, decl_ty, initializer, locals, return_ty)) continue;
                                 if (try self.emitDirectCallSliceIndexLocalInit(name.text, decl_ty, initializer, locals)) continue;
                             }
@@ -1907,6 +1909,35 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitResultTryExprLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const enclosing_return_ty = return_ty orelse return false;
+        if (resultPayloadTypeForTag(enclosing_return_ty, "err") == null) return false;
+
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectResultTryHoistsForLocalInit(initializer, locals, enclosing_return_ty, &replacements)) return false;
+
+        try self.writeIndent();
+        try self.emitDeclarator(decl_ty, name);
+        try self.out.appendSlice(self.allocator, " = ");
+        try self.emitResultTryExprWithReplacements(initializer, locals, decl_ty, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitNullableTryExprLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectNullableTryHoistsForReturn(initializer, locals, &replacements)) return false;
+
+        try self.writeIndent();
+        try self.emitDeclarator(decl_ty, name);
+        try self.out.appendSlice(self.allocator, " = ");
+        try self.emitNullableTryExprWithReplacements(initializer, locals, decl_ty, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
     fn emitResultTryReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
         const operand = switch (expr.kind) {
             .try_expr => |inner| inner.*,
@@ -2020,6 +2051,46 @@ const CEmitter = struct {
             .index => |node| return (try self.collectResultTryHoistsForReturn(node.base.*, locals, replacements)) or (try self.collectResultTryHoistsForReturn(node.index.*, locals, replacements)),
             .member => |node| return try self.collectResultTryHoistsForReturn(node.base.*, locals, replacements),
             .cast => |node| return try self.collectResultTryHoistsForReturn(node.value.*, locals, replacements),
+            else => return false,
+        }
+    }
+
+    fn collectResultTryHoistsForLocalInit(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr, replacements: *std.ArrayList(TryReplacement)) !bool {
+        switch (expr.kind) {
+            .try_expr => |inner| {
+                const operand_result_ty = self.resultTypeForExpr(inner.*, locals) orelse return false;
+                _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
+                _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
+                const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+                self.temp_index += 1;
+                try replacements.append(self.scratch.allocator(), .{ .span = expr.span, .temp_name = temp_name });
+
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(operand_result_ty, .typedef_name), temp_name });
+                try self.emitExpr(inner.*, locals);
+                try self.out.appendSlice(self.allocator, ";\n");
+
+                try self.writeIndent();
+                try self.out.print(self.allocator, "if (!{s}.is_ok) {{\n", .{temp_name});
+                self.indent += 1;
+                try self.writeIndent();
+                try self.out.print(self.allocator, "return (({s}){{ .is_ok = false, .payload.err = {s}.payload.err }});\n", .{ try self.cTypeFor(enclosing_return_ty, .typedef_name), temp_name });
+                self.indent -= 1;
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "}\n");
+                return true;
+            },
+            .grouped => |inner| return try self.collectResultTryHoistsForLocalInit(inner.*, locals, enclosing_return_ty, replacements),
+            .call => |node| {
+                var found = false;
+                for (node.args) |arg| found = (try self.collectResultTryHoistsForLocalInit(arg, locals, enclosing_return_ty, replacements)) or found;
+                return found;
+            },
+            .unary => |node| return try self.collectResultTryHoistsForLocalInit(node.expr.*, locals, enclosing_return_ty, replacements),
+            .binary => |node| return (try self.collectResultTryHoistsForLocalInit(node.left.*, locals, enclosing_return_ty, replacements)) or (try self.collectResultTryHoistsForLocalInit(node.right.*, locals, enclosing_return_ty, replacements)),
+            .index => |node| return (try self.collectResultTryHoistsForLocalInit(node.base.*, locals, enclosing_return_ty, replacements)) or (try self.collectResultTryHoistsForLocalInit(node.index.*, locals, enclosing_return_ty, replacements)),
+            .member => |node| return try self.collectResultTryHoistsForLocalInit(node.base.*, locals, enclosing_return_ty, replacements),
+            .cast => |node| return try self.collectResultTryHoistsForLocalInit(node.value.*, locals, enclosing_return_ty, replacements),
             else => return false,
         }
     }
@@ -4077,6 +4148,54 @@ test "emits C for nullable try in return call arguments" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return choose(mc_tmp2, mc_tmp3);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp4 = make_nullable_pointer();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(ptr_id(mc_tmp4));") != null);
+}
+
+test "emits C for try in local initializer call arguments" {
+    const source =
+        \\enum Error: u8 {
+        \\    denied = 1,
+        \\}
+        \\
+        \\extern fn make_result() -> Result<u32, Error>;
+        \\extern fn box_value(value: u32) -> u32;
+        \\extern fn make_nullable_pointer() -> ?*const u8;
+        \\extern fn ptr_id(ptr: *const u8) -> *const u8;
+        \\
+        \\fn local_result_try() -> Result<u32, Error> {
+        \\    let value: u32 = box_value(make_result()?);
+        \\    return ok(value);
+        \\}
+        \\
+        \\fn local_nullable_try() -> *const u8 {
+        \\    let ptr: *const u8 = ptr_id(make_nullable_pointer()?);
+        \\    return ptr;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_try_local_initializer.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_result_u32_Error local_result_try(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp0.is_ok) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = false, .payload.err = mc_tmp0.payload.err });") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value = box_value(mc_tmp0.payload.ok);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t const * local_nullable_try(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp1 = make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_tmp1 == NULL) mc_trap_NullUnwrap();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr = ptr_id(mc_tmp1);") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
