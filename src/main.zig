@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
+const ir = @import("ir.zig");
 const lexer = @import("lexer.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
@@ -99,6 +100,7 @@ fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
 
 test {
     _ = diagnostics;
+    _ = ir;
     _ = lexer;
     _ = parser;
     _ = sema;

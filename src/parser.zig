@@ -245,6 +245,14 @@ pub const Parser = struct {
             const end = try self.expectTok(.semicolon, "expected ';' after defer");
             return .{ .span = joinSpan(expr.span, end.span), .kind = .{ .@"defer" = expr } };
         }
+        if (self.match(.kw_assert)) {
+            const start = self.lxTokenBeforeCurrent();
+            try self.expect(.l_paren, "expected '(' after assert");
+            const expr = try self.parseExpr(0);
+            try self.expect(.r_paren, "expected ')' after assert expression");
+            const end = try self.expectTok(.semicolon, "expected ';' after assert");
+            return .{ .span = joinSpan(start, end.span), .kind = .{ .assert = expr } };
+        }
 
         const start = self.current.span;
         const target_or_expr = try self.parseExpr(0);
@@ -497,6 +505,7 @@ pub const Parser = struct {
         if (self.match(.kw_false)) return .{ .span = self.lxTokenBeforeCurrent(), .kind = .{ .bool_literal = false } };
         if (self.match(.kw_null)) return .{ .span = self.lxTokenBeforeCurrent(), .kind = .null_literal };
         if (self.match(.kw_uninit)) return .{ .span = self.lxTokenBeforeCurrent(), .kind = .uninit_literal };
+        if (self.match(.kw_unreachable)) return .{ .span = self.lxTokenBeforeCurrent(), .kind = .unreachable_expr };
         if (self.match(.dot)) {
             const dot = self.lxTokenBeforeCurrent();
             const name = try self.expectSymbol("expected enum literal name");

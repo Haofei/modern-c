@@ -83,6 +83,12 @@ pub const Checker = struct {
                 if (maybe) |expr| _ = self.checkExpr(expr, ctx);
             },
             .@"defer", .expr => |expr| _ = self.checkExpr(expr, ctx),
+            .assert => |expr| {
+                if (ctx.no_lang_trap) {
+                    self.errorCode(stmt.span, "E_NO_LANG_TRAP_EDGE", "assert may emit a language trap in #[no_lang_trap]");
+                }
+                _ = self.checkExpr(expr, ctx);
+            },
             .assignment => |node| {
                 if (isMemberExpr(node.target)) {
                     self.errorCode(stmt.span, "E_MMIO_DIRECT_ASSIGN", "MMIO registers must be accessed through typed read/write methods");
@@ -98,6 +104,12 @@ pub const Checker = struct {
             .ident => |ident| if (ctx.scope) |scope| scope.get(ident.text) orelse .unknown else .unknown,
             .int_literal => .checked_signed,
             .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal => .unknown,
+            .unreachable_expr => {
+                if (ctx.no_lang_trap) {
+                    self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "reachable unreachable emits a language trap in #[no_lang_trap]");
+                }
+                return .unknown;
+            },
             .grouped, .address_of, .try_expr => |inner| self.checkExpr(inner.*, ctx),
             .block => |block| {
                 self.checkBlock(block, ctx);

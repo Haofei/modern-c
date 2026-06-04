@@ -134,6 +134,7 @@ pub const Stmt = struct {
         block: Block,
         @"return": ?Expr,
         @"defer": Expr,
+        assert: Expr,
         assignment: struct {
             target: Expr,
             value: Expr,
@@ -215,6 +216,7 @@ pub const Expr = struct {
         bool_literal: bool,
         null_literal,
         uninit_literal,
+        unreachable_expr,
         void_literal,
         enum_literal: Ident,
         grouped: *Expr,
