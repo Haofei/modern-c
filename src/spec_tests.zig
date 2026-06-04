@@ -544,6 +544,8 @@ fn isIrFactCheck(check: []const u8) bool {
         "InvalidShift",
         "contract_region",
         "no-language-trap-edge",
+        "mmio-ir-width-preserved",
+        "mmio-ir-ordering-preserved",
     };
     return matchesAny(check, &names);
 }
@@ -656,6 +658,27 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             "fact checked_shift_trap fn=reject_right_shift",
             " op=shr ",
             " no_lang_trap=true ",
+        });
+    }
+    if (std.mem.eql(u8, check, "mmio-ir-width-preserved")) {
+        return containsAll(facts, &.{
+            "fact mmio_access fn=putc op=write register=Uart16550.thr",
+            "access_mode=write",
+            "value_type=u8",
+            "register_width=8 emitted_width=8",
+            "volatile=true",
+            "address_space=mmio",
+            "fact mmio_access fn=read_status op=read register=Uart16550.lsr",
+        });
+    }
+    if (std.mem.eql(u8, check, "mmio-ir-ordering-preserved")) {
+        return containsAll(facts, &.{
+            "fact mmio_order fn=putc op=write register=Uart16550.thr ordering=release",
+            "barrier_before=true",
+            "prevents_before_after=true",
+            "fact mmio_order fn=read_status op=read register=Uart16550.lsr ordering=acquire",
+            "barrier_after=true",
+            "prevents_after_before=true",
         });
     }
     return false;

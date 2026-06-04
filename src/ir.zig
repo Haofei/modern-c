@@ -23,12 +23,13 @@ pub const Collector = struct {
         module: ast.Module,
         out: *std.ArrayList(u8),
     ) anyerror!void {
-        var writer: ListFactWriter = .{ .allocator = allocator, .out = out };
-        try writeModuleFacts(module, &writer);
+        var collector = ModuleFactCollector.init(allocator);
+        try collector.appendFacts(module, out);
     }
 
     pub fn writeFacts(module: ast.Module, writer: anytype) !void {
-        try writeModuleFacts(module, writer);
+        var collector = ModuleFactCollector.init(std.heap.page_allocator);
+        try collector.writeFacts(module, writer);
     }
 };
 
@@ -48,6 +49,7 @@ const Context = struct {
     function_name: []const u8 = "",
     no_lang_trap: bool = false,
     unsafe_contract_depth: usize = 0,
+    mmio_params: ?*const std.StringHashMap([]const u8) = null,
 };
 
 const ListFactWriter = struct {
@@ -59,62 +61,204 @@ const ListFactWriter = struct {
     }
 };
 
-fn writeModuleFacts(module: ast.Module, writer: anytype) anyerror!void {
-    for (module.decls) |decl| try writeDeclFacts(decl, writer);
-}
+const ModuleFactCollector = struct {
+    allocator: std.mem.Allocator,
+    mmio_structs: std.StringHashMap(MmioStruct),
 
-fn writeDeclFacts(decl: ast.Decl, writer: anytype) anyerror!void {
-    switch (decl.kind) {
-        .fn_decl, .extern_fn => |fn_decl| {
-            if (fn_decl.body) |body| {
-                try writeBlockFacts(body, writer, .{
-                    .function_name = fn_decl.name.text,
-                    .no_lang_trap = hasNoLangTrap(decl.attrs),
-                });
-            }
-        },
-        .type_alias, .extern_struct, .opaque_decl => {},
+    fn init(allocator: std.mem.Allocator) ModuleFactCollector {
+        return .{
+            .allocator = allocator,
+            .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
+        };
     }
+
+    fn deinit(self: *ModuleFactCollector) void {
+        var structs = self.mmio_structs.valueIterator();
+        while (structs.next()) |mmio_struct| mmio_struct.fields.deinit();
+        self.mmio_structs.deinit();
+    }
+
+    fn appendFacts(self: *ModuleFactCollector, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
+        var writer: ListFactWriter = .{ .allocator = self.allocator, .out = out };
+        try self.writeFacts(module, &writer);
+    }
+
+    fn writeFacts(self: *ModuleFactCollector, module: ast.Module, writer: anytype) anyerror!void {
+        defer self.deinit();
+        try self.collectDeclFacts(module);
+        for (module.decls) |decl| try self.writeDeclFacts(decl, writer);
+    }
+
+    fn collectDeclFacts(self: *ModuleFactCollector, module: ast.Module) !void {
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .extern_struct => |struct_decl| {
+                    if (struct_decl.abi) |abi| {
+                        if (std.mem.eql(u8, abi, "mmio")) try self.collectMmioStruct(struct_decl);
+                    }
+                },
+                .fn_decl, .extern_fn, .type_alias, .opaque_decl => {},
+            }
+        }
+    }
+
+    fn collectMmioStruct(self: *ModuleFactCollector, struct_decl: ast.StructDecl) !void {
+        var fields = std.StringHashMap(MmioField).init(self.allocator);
+        errdefer fields.deinit();
+        for (struct_decl.fields) |field| {
+            if (mmioFieldFromType(field.ty)) |mmio_field| {
+                try fields.put(field.name.text, mmio_field);
+            }
+        }
+        try self.mmio_structs.put(struct_decl.name.text, .{ .fields = fields });
+    }
+
+    fn writeDeclFacts(self: *ModuleFactCollector, decl: ast.Decl, writer: anytype) anyerror!void {
+        switch (decl.kind) {
+            .fn_decl, .extern_fn => |fn_decl| {
+                if (fn_decl.body) |body| {
+                    var mmio_params = std.StringHashMap([]const u8).init(self.allocator);
+                    defer mmio_params.deinit();
+                    for (fn_decl.params) |param| {
+                        if (mmioPointee(param.ty)) |struct_name| try mmio_params.put(param.name.text, struct_name);
+                    }
+                    try writeBlockFacts(self, body, writer, .{
+                        .function_name = fn_decl.name.text,
+                        .no_lang_trap = hasNoLangTrap(decl.attrs),
+                        .mmio_params = &mmio_params,
+                    });
+                }
+            },
+            .type_alias, .extern_struct, .opaque_decl => {},
+        }
+    }
+
+    fn mmioAccess(self: *ModuleFactCollector, callee: ast.Expr, args: []ast.Expr, ctx: Context) ?MmioAccess {
+        const member = switch (callee.kind) {
+            .member => |node| node,
+            else => return null,
+        };
+        const kind: []const u8 = if (std.mem.eql(u8, member.name.text, "read"))
+            "read"
+        else if (std.mem.eql(u8, member.name.text, "write"))
+            "write"
+        else
+            return null;
+
+        const reg_member = switch (member.base.kind) {
+            .member => |node| node,
+            else => return null,
+        };
+        const param = switch (reg_member.base.kind) {
+            .ident => |ident| ident.text,
+            else => return null,
+        };
+        const mmio_params = ctx.mmio_params orelse return null;
+        const struct_name = mmio_params.get(param) orelse return null;
+        const mmio_struct = self.mmio_structs.get(struct_name) orelse return null;
+        const field = mmio_struct.fields.get(reg_member.name.text) orelse return null;
+        return .{
+            .kind = kind,
+            .struct_name = struct_name,
+            .field = reg_member.name.text,
+            .value_type = field.value_type,
+            .width = field.width,
+            .ordering = orderingArg(args),
+        };
+    }
+};
+
+const MmioStruct = struct {
+    fields: std.StringHashMap(MmioField),
+};
+
+const MmioField = struct {
+    value_type: []const u8,
+    width: []const u8,
+};
+
+const MmioAccess = struct {
+    kind: []const u8,
+    struct_name: []const u8,
+    field: []const u8,
+    value_type: []const u8,
+    width: []const u8,
+    ordering: []const u8,
+};
+
+fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {
+    const generic = switch (ty.kind) {
+        .generic => |node| node,
+        else => return null,
+    };
+    if (std.mem.eql(u8, generic.base.text, "Reg")) {
+        if (generic.args.len == 0) return null;
+        const width = typeName(generic.args[0]) orelse "unknown";
+        return .{ .value_type = width, .width = width };
+    }
+    if (std.mem.eql(u8, generic.base.text, "RegBits")) {
+        if (generic.args.len == 0) return null;
+        const width = typeName(generic.args[0]) orelse "unknown";
+        const value_type = if (generic.args.len > 1) typeName(generic.args[1]) orelse width else width;
+        return .{ .value_type = value_type, .width = width };
+    }
+    return null;
 }
 
-fn writeBlockFacts(block: ast.Block, writer: anytype, ctx: Context) anyerror!void {
-    for (block.items) |stmt| try writeStmtFacts(stmt, writer, ctx);
+fn typeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |name| name.text,
+        else => null,
+    };
 }
 
-fn writeStmtFacts(stmt: ast.Stmt, writer: anytype, ctx: Context) anyerror!void {
+fn mmioPointee(ty: ast.TypeExpr) ?[]const u8 {
+    const generic = switch (ty.kind) {
+        .generic => |node| node,
+        else => return null,
+    };
+    if (!std.mem.eql(u8, generic.base.text, "MmioPtr") or generic.args.len != 1) return null;
+    return typeName(generic.args[0]);
+}
+
+fn writeBlockFacts(collector: *ModuleFactCollector, block: ast.Block, writer: anytype, ctx: Context) anyerror!void {
+    for (block.items) |stmt| try writeStmtFacts(collector, stmt, writer, ctx);
+}
+
+fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anytype, ctx: Context) anyerror!void {
     switch (stmt.kind) {
         .let_decl, .var_decl => |local| {
-            if (local.init) |expr| try writeExprFacts(expr, writer, ctx);
+            if (local.init) |expr| try writeExprFacts(collector, expr, writer, ctx);
         },
         .loop => |node| {
-            if (node.iterable) |iterable| try writeExprFacts(iterable, writer, ctx);
-            try writeBlockFacts(node.body, writer, ctx);
+            if (node.iterable) |iterable| try writeExprFacts(collector, iterable, writer, ctx);
+            try writeBlockFacts(collector, node.body, writer, ctx);
         },
         .if_let => |node| {
-            try writeExprFacts(node.value, writer, ctx);
-            try writeBlockFacts(node.then_block, writer, ctx);
-            if (node.else_block) |else_block| try writeBlockFacts(else_block, writer, ctx);
+            try writeExprFacts(collector, node.value, writer, ctx);
+            try writeBlockFacts(collector, node.then_block, writer, ctx);
+            if (node.else_block) |else_block| try writeBlockFacts(collector, else_block, writer, ctx);
         },
         .@"switch" => |node| {
-            try writeExprFacts(node.subject, writer, ctx);
+            try writeExprFacts(collector, node.subject, writer, ctx);
             for (node.arms) |arm| switch (arm.body) {
-                .block => |body| try writeBlockFacts(body, writer, ctx),
-                .expr => |expr| try writeExprFacts(expr, writer, ctx),
+                .block => |body| try writeBlockFacts(collector, body, writer, ctx),
+                .expr => |expr| try writeExprFacts(collector, expr, writer, ctx),
             };
         },
-        .unsafe_block, .block => |body| try writeBlockFacts(body, writer, ctx),
+        .unsafe_block, .block => |body| try writeBlockFacts(collector, body, writer, ctx),
         .contract_block => |contract| {
             try writeContractBoundary(.unsafe_contract_begin, contract.attr, writer, ctx);
             var next = ctx;
             next.unsafe_contract_depth += 1;
-            try writeBlockFacts(contract.block, writer, next);
+            try writeBlockFacts(collector, contract.block, writer, next);
             try writeContractBoundary(.unsafe_contract_end, contract.attr, writer, ctx);
         },
         .asm_stmt => {},
         .@"return" => |maybe| {
-            if (maybe) |expr| try writeExprFacts(expr, writer, ctx);
+            if (maybe) |expr| try writeExprFacts(collector, expr, writer, ctx);
         },
-        .@"defer", .expr => |expr| try writeExprFacts(expr, writer, ctx),
+        .@"defer", .expr => |expr| try writeExprFacts(collector, expr, writer, ctx),
         .assert => |expr| {
             if (ctx.no_lang_trap) {
                 try writer.print(
@@ -122,7 +266,7 @@ fn writeStmtFacts(stmt: ast.Stmt, writer: anytype, ctx: Context) anyerror!void {
                     .{ ctx.function_name, ctx.unsafe_contract_depth, stmt.span.line, stmt.span.column },
                 );
             }
-            try writeExprFacts(expr, writer, ctx);
+            try writeExprFacts(collector, expr, writer, ctx);
         },
         .assignment => |node| {
             const kind: FactKind = if (isMemberExpr(node.target)) .direct_mmio_assignment else .assignment;
@@ -130,13 +274,13 @@ fn writeStmtFacts(stmt: ast.Stmt, writer: anytype, ctx: Context) anyerror!void {
             if (isStoreTarget(node.target)) {
                 try writeAssignmentFact(.store, stmt.span, node.target, writer, ctx);
             }
-            try writeExprFacts(node.target, writer, ctx);
-            try writeExprFacts(node.value, writer, ctx);
+            try writeExprFacts(collector, node.target, writer, ctx);
+            try writeExprFacts(collector, node.value, writer, ctx);
         },
     }
 }
 
-fn writeExprFacts(expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
+fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
     switch (expr.kind) {
         .ident,
         .int_literal,
@@ -156,7 +300,7 @@ fn writeExprFacts(expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
                 );
             }
         },
-        .grouped, .address_of, .deref => |inner| try writeExprFacts(inner.*, writer, ctx),
+        .grouped, .address_of, .deref => |inner| try writeExprFacts(collector, inner.*, writer, ctx),
         .try_expr => |inner| {
             if (ctx.no_lang_trap) {
                 try writer.print(
@@ -164,9 +308,9 @@ fn writeExprFacts(expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
                     .{ ctx.function_name, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
                 );
             }
-            try writeExprFacts(inner.*, writer, ctx);
+            try writeExprFacts(collector, inner.*, writer, ctx);
         },
-        .block => |body| try writeBlockFacts(body, writer, ctx),
+        .block => |body| try writeBlockFacts(collector, body, writer, ctx),
         .unary => |node| {
             if (node.op == .neg) {
                 try writer.print(
@@ -174,7 +318,7 @@ fn writeExprFacts(expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
                     .{ ctx.function_name, ctx.no_lang_trap, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
                 );
             }
-            try writeExprFacts(node.expr.*, writer, ctx);
+            try writeExprFacts(collector, node.expr.*, writer, ctx);
         },
         .binary => |node| {
             if (isCheckedTrapOp(node.op)) {
@@ -183,10 +327,10 @@ fn writeExprFacts(expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
             if (isShiftOp(node.op)) {
                 try writeShiftTrapFact(expr.span, node.op, writer, ctx);
             }
-            try writeExprFacts(node.left.*, writer, ctx);
-            try writeExprFacts(node.right.*, writer, ctx);
+            try writeExprFacts(collector, node.left.*, writer, ctx);
+            try writeExprFacts(collector, node.right.*, writer, ctx);
         },
-        .cast => |node| try writeExprFacts(node.value.*, writer, ctx),
+        .cast => |node| try writeExprFacts(collector, node.value.*, writer, ctx),
         .call => |node| {
             if (ctx.no_lang_trap) {
                 if (unwrapCalleeName(node.callee.*)) |callee_name| {
@@ -196,18 +340,18 @@ fn writeExprFacts(expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
                     );
                 }
             }
-            try writeCallFact(expr.span, node.callee.*, node.args, writer, ctx);
-            try writeExprFacts(node.callee.*, writer, ctx);
-            for (node.args) |arg| try writeExprFacts(arg, writer, ctx);
+            try writeCallFact(collector, expr.span, node.callee.*, node.args, writer, ctx);
+            try writeExprFacts(collector, node.callee.*, writer, ctx);
+            for (node.args) |arg| try writeExprFacts(collector, arg, writer, ctx);
         },
         .index => |node| {
             if (ctx.no_lang_trap) {
                 try writeIndexFact(expr.span, writer, ctx);
             }
-            try writeExprFacts(node.base.*, writer, ctx);
-            try writeExprFacts(node.index.*, writer, ctx);
+            try writeExprFacts(collector, node.base.*, writer, ctx);
+            try writeExprFacts(collector, node.index.*, writer, ctx);
         },
-        .member => |node| try writeExprFacts(node.base.*, writer, ctx),
+        .member => |node| try writeExprFacts(collector, node.base.*, writer, ctx),
     }
 }
 
@@ -243,7 +387,7 @@ fn writeContractBoundary(kind: FactKind, attr: ast.Attr, writer: anytype, ctx: C
     );
 }
 
-fn writeCallFact(span: ast.Span, callee: ast.Expr, args: []ast.Expr, writer: anytype, ctx: Context) anyerror!void {
+fn writeCallFact(collector: *ModuleFactCollector, span: ast.Span, callee: ast.Expr, args: []ast.Expr, writer: anytype, ctx: Context) anyerror!void {
     if (isUncheckedCall(callee)) {
         try writer.print(
             "fact unchecked_call fn={s} callee=",
@@ -269,6 +413,25 @@ fn writeCallFact(span: ast.Span, callee: ast.Expr, args: []ast.Expr, writer: any
             .{ ctx.unsafe_contract_depth, span.line, span.column },
         );
     }
+
+    if (collector.mmioAccess(callee, args, ctx)) |access| {
+        const bits = widthBits(access.width);
+        try writer.print(
+            "fact mmio_access fn={s} op={s} register={s}.{s} access_mode={s} value_type={s} register_width={s} emitted_width={s} volatile=true address_space=mmio ordering={s}\n",
+            .{ ctx.function_name, access.kind, access.struct_name, access.field, access.kind, access.value_type, bits, bits, access.ordering },
+        );
+        if (std.mem.eql(u8, access.ordering, "release")) {
+            try writer.print(
+                "fact mmio_order fn={s} op={s} register={s}.{s} ordering=release barrier_before=true prevents_before_after=true\n",
+                .{ ctx.function_name, access.kind, access.struct_name, access.field },
+            );
+        } else if (std.mem.eql(u8, access.ordering, "acquire")) {
+            try writer.print(
+                "fact mmio_order fn={s} op={s} register={s}.{s} ordering=acquire barrier_after=true prevents_after_before=true\n",
+                .{ ctx.function_name, access.kind, access.struct_name, access.field },
+            );
+        }
+    }
 }
 
 fn writeAssignmentFact(kind: FactKind, span: ast.Span, target: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
@@ -291,6 +454,19 @@ fn writeOrderingArg(args: []ast.Expr, writer: anytype) anyerror!void {
         }
     }
     try writer.print("unknown", .{});
+}
+
+fn orderingArg(args: []ast.Expr) []const u8 {
+    for (args) |arg| {
+        if (arg.kind == .enum_literal) return arg.kind.enum_literal.text;
+    }
+    return "unknown";
+}
+
+fn widthBits(width: []const u8) []const u8 {
+    if (width.len > 1 and (width[0] == 'u' or width[0] == 'i')) return width[1..];
+    if (std.mem.eql(u8, width, "bool")) return "1";
+    return "unknown";
 }
 
 fn unwrapCalleeName(callee: ast.Expr) ?[]const u8 {

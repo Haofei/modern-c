@@ -2,7 +2,7 @@
 // SPEC: milestone=mmio-ordering
 // SPEC: phase=sema,lower-c,lower-ir
 // SPEC: expect=pass,compile_error,inspect
-// SPEC: check=E_MMIO_DIRECT_ASSIGN,mmio-width-preserved,mmio-ordering-preserved
+// SPEC: check=E_MMIO_DIRECT_ASSIGN,mmio-width-preserved,mmio-ordering-preserved,mmio-ir-width-preserved,mmio-ir-ordering-preserved
 
 packed bits UartLsr: u8 {
     data_ready: bool,
