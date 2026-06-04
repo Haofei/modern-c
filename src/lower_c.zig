@@ -136,9 +136,11 @@ const CEmitter = struct {
     out: *std.ArrayList(u8),
     scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
+    functions: std.StringHashMap(FnInfo),
     structs: std.StringHashMap(ast.StructDecl),
     enums: std.StringHashMap(ast.EnumDecl),
     slice_types: std.StringHashMap(SliceInfo),
+    temp_index: usize,
     indent: usize,
 
     fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) CEmitter {
@@ -147,9 +149,11 @@ const CEmitter = struct {
             .out = out,
             .scratch = std.heap.ArenaAllocator.init(allocator),
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
+            .functions = std.StringHashMap(FnInfo).init(allocator),
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
             .enums = std.StringHashMap(ast.EnumDecl).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
+            .temp_index = 0,
             .indent = 0,
         };
     }
@@ -158,6 +162,7 @@ const CEmitter = struct {
         self.slice_types.deinit();
         self.enums.deinit();
         self.structs.deinit();
+        self.functions.deinit();
         self.globals.deinit();
         self.scratch.deinit();
     }
@@ -175,7 +180,10 @@ const CEmitter = struct {
                     if (!isMmioStructAbi(struct_decl)) for (struct_decl.fields) |field| try self.collectSliceType(field.ty);
                 },
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
-                .fn_decl, .extern_fn => |fn_decl| try self.collectFunctionSliceTypes(fn_decl),
+                .fn_decl, .extern_fn => |fn_decl| {
+                    try self.functions.put(fn_decl.name.text, .{ .return_type = fn_decl.return_type });
+                    try self.collectFunctionSliceTypes(fn_decl);
+                },
                 else => {},
             }
         }
@@ -497,6 +505,7 @@ const CEmitter = struct {
             .@"return" => |maybe| {
                 if (maybe) |expr| {
                     if (try self.emitNeverExprStmt(expr, locals)) return;
+                    if (try self.emitDirectCallSliceIndexReturn(expr, locals)) return;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "return ");
                     try self.emitExpr(expr, locals);
@@ -859,6 +868,43 @@ const CEmitter = struct {
         };
     }
 
+    fn emitDirectCallSliceIndexReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const index = switch (expr.kind) {
+            .index => |node| node,
+            .grouped => |inner| return try self.emitDirectCallSliceIndexReturn(inner.*, locals),
+            else => return false,
+        };
+        const call = switch (index.base.kind) {
+            .call => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .call => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const return_ty = self.sliceReturnTypeForCall(call) orelse return false;
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), temp_name });
+        try self.emitExpr(index.base.*, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s}.ptr[mc_check_index_usize(", .{temp_name});
+        try self.emitExpr(index.index.*, locals);
+        try self.out.print(self.allocator, ", {s}.len)];\n", .{temp_name});
+        return true;
+    }
+
+    fn sliceReturnTypeForCall(self: *CEmitter, call: anytype) ?ast.TypeExpr {
+        const fn_name = calleeIdentName(call.callee.*) orelse return null;
+        const info = self.functions.get(fn_name) orelse return null;
+        const return_ty = info.return_type orelse return null;
+        return if (return_ty.kind == .slice) return_ty else null;
+    }
+
     fn localInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !LocalInfo {
         const source_type_name = typeName(ty);
         return switch (ty.kind) {
@@ -894,6 +940,10 @@ const LocalInfo = struct {
     slice_ptr_field: ?[]const u8 = null,
     slice_len_field: ?[]const u8 = null,
     nullable_inner_c_type: ?[]const u8 = null,
+};
+
+const FnInfo = struct {
+    return_type: ?ast.TypeExpr,
 };
 
 const SliceAccess = struct {
@@ -1527,6 +1577,14 @@ fn sliceAccessForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?S
     };
 }
 
+fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| calleeIdentName(inner.*),
+        else => null,
+    };
+}
+
 fn unaryCOp(op: ast.UnaryOp) []const u8 {
     return switch (op) {
         .neg => "-",
@@ -1963,6 +2021,9 @@ test "emits C for fixed array indexing with bounds checks" {
 
 test "emits C for slice typedefs and indexing" {
     const source =
+        \\extern fn make_u8_slice() -> []const u8;
+        \\extern fn make_u32_slice() -> []const u32;
+        \\
         \\fn read_slice(xs: []const u8, i: usize) -> u8 {
         \\    return xs[i];
         \\}
@@ -1977,6 +2038,14 @@ test "emits C for slice typedefs and indexing" {
         \\
         \\fn same_slice(xs: []const u8) -> []const u8 {
         \\    return xs;
+        \\}
+        \\
+        \\fn read_direct_literal() -> u8 {
+        \\    return make_u8_slice()[0];
+        \\}
+        \\
+        \\fn read_direct_index(i: usize) -> u32 {
+        \\    return make_u32_slice()[i];
         \\}
     ;
 
@@ -1997,15 +2066,23 @@ test "emits C for slice typedefs and indexing" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_slice_const_u8 {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_slice_const_u32 {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t const * ptr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_slice_mut_u32 {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t * ptr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t len;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 make_u8_slice();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 make_u32_slice();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_slice(mc_slice_const_u8 xs, uintptr_t i)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.ptr[mc_check_index_usize(i, xs.len)];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.ptr[mc_check_index_usize(0, xs.len)];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void write_slice(mc_slice_mut_u32 xs, uintptr_t i, uint32_t value)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "xs.ptr[mc_check_index_usize(i, xs.len)] = value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_slice_const_u8 same_slice(mc_slice_const_u8 xs)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 mc_tmp0 = make_u8_slice();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0.ptr[mc_check_index_usize(0, mc_tmp0.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp1 = make_u32_slice();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp1.ptr[mc_check_index_usize(i, mc_tmp1.len)];") != null);
 }
 
 test "emits C checked u32 arithmetic helpers" {
