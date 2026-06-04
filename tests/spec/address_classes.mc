@@ -18,6 +18,11 @@ fn reject_user_ptr_deref(buf: UserPtr<u8>) -> u8 {
     return buf.*;
 }
 
+fn reject_const_user_ptr_deref(buf: UserPtr<const u8>) -> u8 {
+    // EXPECT_ERROR: E_USER_PTR_DEREF
+    return buf.*;
+}
+
 fn reject_mmio_ptr_deref(uart: MmioPtr<Uart16550>) -> Uart16550 {
     // EXPECT_ERROR: E_MMIO_PTR_DEREF
     return uart.*;

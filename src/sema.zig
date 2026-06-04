@@ -334,6 +334,7 @@ pub const Checker = struct {
             .enum_literal => {},
             .member => |node| self.checkType(node.base.*, .normal),
             .nullable => |child| self.checkType(child.*, mode),
+            .qualified => |node| self.checkType(node.child.*, mode),
             .pointer => |node| {
                 const child_mode: TypeMode = if (isCAbiOpaqueBoundary(node.child.*)) .ffi_opaque_pointer else .normal;
                 self.checkType(node.child.*, child_mode);
@@ -634,6 +635,7 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
         .raw_many_pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .raw_many_pointer,
         .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .slice,
         .nullable => |child| classifyNullableType(child.*),
+        .qualified => |node| classifyType(node.child.*),
         .generic => |node| classifyGenericTypeName(node.base.text),
         else => .unknown,
     };
@@ -877,6 +879,7 @@ fn mmioPointee(ty: ast.TypeExpr) ?[]const u8 {
 fn typeName(ty: ast.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .name => |name| name.text,
+        .qualified => |node| typeName(node.child.*),
         else => null,
     };
 }
@@ -934,6 +937,7 @@ fn isCAbiOpaqueBoundary(ty: ast.TypeExpr) bool {
 fn isTypeName(ty: ast.TypeExpr, name: []const u8) bool {
     return switch (ty.kind) {
         .name => |ident| std.mem.eql(u8, ident.text, name),
+        .qualified => |node| isTypeName(node.child.*, name),
         else => false,
     };
 }

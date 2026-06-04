@@ -403,6 +403,11 @@ pub const Parser = struct {
             const child = try ast.makePtr(self.allocator, try self.parseType());
             return .{ .span = joinSpan(start, child.span), .kind = .{ .nullable = child } };
         }
+        if (self.current.kind == .kw_mut or self.current.kind == .kw_const) {
+            const mutability = self.parseMutability();
+            const child = try ast.makePtr(self.allocator, try self.parseType());
+            return .{ .span = joinSpan(start, child.span), .kind = .{ .qualified = .{ .mutability = mutability, .child = child } } };
+        }
         if (self.match(.star)) {
             const mutability = self.parseMutability();
             const child = try ast.makePtr(self.allocator, try self.parseType());
@@ -745,4 +750,32 @@ test "parser covers MC declaration and statement examples" {
     try std.testing.expectEqual(std.meta.Tag(ast.Decl.Kind).global_decl, std.meta.activeTag(module.decls[1].kind));
     try std.testing.expect(module.decls[1].kind.global_decl.ty != null);
     try std.testing.expect(module.decls[1].kind.global_decl.init != null);
+}
+
+test "parser accepts qualified generic type arguments" {
+    const source = "fn read_user(buf: UserPtr<const u8>) -> void {}\n";
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "qualified_type.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = Parser.init(source, &reporter);
+    const module = try p.parseModule(allocator);
+    defer module.deinit(allocator);
+
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 1), module.decls.len);
+
+    const fn_decl = module.decls[0].kind.fn_decl;
+    try std.testing.expectEqual(@as(usize, 1), fn_decl.params.len);
+
+    const param_ty = fn_decl.params[0].ty.kind.generic;
+    try std.testing.expectEqualStrings("UserPtr", param_ty.base.text);
+    try std.testing.expectEqual(@as(usize, 1), param_ty.args.len);
+
+    const qualifier = param_ty.args[0].kind.qualified;
+    try std.testing.expectEqual(ast.Mutability.@"const", qualifier.mutability);
+    try std.testing.expectEqualStrings("u8", qualifier.child.kind.name.text);
 }

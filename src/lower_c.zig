@@ -426,6 +426,7 @@ fn mmioPointee(ty: ast.TypeExpr) ?[]const u8 {
 fn typeName(ty: ast.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .name => |name| name.text,
+        .qualified => |node| typeName(node.child.*),
         else => null,
     };
 }

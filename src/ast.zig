@@ -101,6 +101,10 @@ pub const TypeExpr = struct {
             field: Ident,
         },
         nullable: *TypeExpr,
+        qualified: struct {
+            mutability: Mutability,
+            child: *TypeExpr,
+        },
         pointer: struct {
             mutability: Mutability,
             child: *TypeExpr,

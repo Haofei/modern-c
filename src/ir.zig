@@ -257,6 +257,7 @@ fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {
 fn typeName(ty: ast.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .name => |name| name.text,
+        .qualified => |node| typeName(node.child.*),
         else => null,
     };
 }
