@@ -10,7 +10,7 @@ fn reject_unchecked_add_outside_contract(a: u32, b: u32) -> u32 {
 }
 
 fn allow_unchecked_add_inside_contract(xs: []const u32) -> u32 {
-    let sum: u32 = 0;
+    var sum: u32 = 0;
 
     #[unsafe_contract(no_overflow)]
     {

@@ -65,7 +65,7 @@ pub const Checker = struct {
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .normal);
-            scope.put(param.name.text, classifyType(param.ty)) catch {};
+            scope.put(param.name.text, .{ .class = classifyType(param.ty), .mutable = false }) catch {};
             if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {};
         }
         const return_kind = if (fn_decl.return_type) |ty| classifyType(ty) else TypeClass.void;
@@ -102,23 +102,11 @@ pub const Checker = struct {
 
     fn checkStmt(self: *Checker, stmt: ast.Stmt, ctx: Context) void {
         switch (stmt.kind) {
-            .let_decl, .var_decl => |local| {
-                const kind = if (local.ty) |ty| classifyType(ty) else TypeClass.unknown;
-                if (local.ty) |ty| self.checkType(ty, .normal);
-                if (local.init) |expr| {
-                    const initializer = self.checkExpr(expr, ctx);
-                    const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
-                    const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
-                    const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
-                    if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !canInitialize(kind, initializer)) {
-                        self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
-                    }
-                } else {
-                    self.errorCode(stmt.span, "E_LOCAL_REQUIRES_INITIALIZER", "ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage");
-                }
-                if (ctx.scope) |scope| {
-                    for (local.names) |name| scope.put(name.text, kind) catch {};
-                }
+            .let_decl => |local| {
+                self.checkLocal(local, ctx, false);
+            },
+            .var_decl => |local| {
+                self.checkLocal(local, ctx, true);
             },
             .loop => |loop| {
                 if (loop.iterable) |expr| {
@@ -207,15 +195,53 @@ pub const Checker = struct {
                 if (isMmioRegisterTarget(node.target, ctx)) {
                     self.errorCode(stmt.span, "E_MMIO_DIRECT_ASSIGN", "MMIO registers must be accessed through typed read/write methods");
                 }
+                self.checkAssignmentTarget(node.target, ctx);
                 _ = self.checkExpr(node.target, ctx);
                 _ = self.checkExpr(node.value, ctx);
             },
         }
     }
 
+    fn checkLocal(self: *Checker, local: ast.LocalDecl, ctx: Context, mutable: bool) void {
+        const kind = if (local.ty) |ty| classifyType(ty) else TypeClass.unknown;
+        if (local.ty) |ty| self.checkType(ty, .normal);
+        if (local.init) |expr| {
+            const initializer = self.checkExpr(expr, ctx);
+            const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
+            const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
+            const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
+            if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !canInitialize(kind, initializer)) {
+                self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
+            }
+        } else {
+            self.errorCode(local.names[0].span, "E_LOCAL_REQUIRES_INITIALIZER", "ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage");
+        }
+        if (ctx.scope) |scope| {
+            for (local.names) |name| scope.put(name.text, .{ .class = kind, .mutable = mutable }) catch {};
+        }
+    }
+
+    fn checkAssignmentTarget(self: *Checker, target: ast.Expr, ctx: Context) void {
+        switch (target.kind) {
+            .ident => |ident| {
+                const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+                if (binding) |entry| {
+                    if (!entry.mutable) {
+                        self.errorCode(target.span, "E_ASSIGN_TO_IMMUTABLE_LOCAL", "cannot assign to immutable local binding");
+                    }
+                }
+            },
+            .grouped => |inner| self.checkAssignmentTarget(inner.*, ctx),
+            else => {},
+        }
+    }
+
     fn checkExpr(self: *Checker, expr: ast.Expr, ctx: Context) TypeClass {
         return switch (expr.kind) {
-            .ident => |ident| if (ctx.scope) |scope| scope.get(ident.text) orelse .unknown else .unknown,
+            .ident => |ident| if (ctx.scope) |scope|
+                if (scope.get(ident.text)) |binding| binding.class else .unknown
+            else
+                .unknown,
             .int_literal => .int_literal,
             .void_literal => .void,
             .bool_literal => .bool,
@@ -544,7 +570,12 @@ const ContractKind = enum {
     noalias_contract,
 };
 
-const Scope = std.StringHashMap(TypeClass);
+const LocalInfo = struct {
+    class: TypeClass,
+    mutable: bool,
+};
+
+const Scope = std.StringHashMap(LocalInfo);
 
 const TypeClass = enum {
     unknown,
