@@ -1121,14 +1121,7 @@ const CEmitter = struct {
             var nested = try cloneLocals(self.allocator, locals.*);
             defer nested.deinit();
             self.indent += 1;
-            switch (arm.body) {
-                .block => |block| try self.emitBlockItems(block, &nested, return_ty),
-                .expr => |expr| {
-                    try self.writeIndent();
-                    try self.emitExpr(expr, &nested);
-                    try self.out.appendSlice(self.allocator, ";\n");
-                },
-            }
+            try self.emitSwitchBody(arm.body, &nested, return_ty);
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "break;\n");
             self.indent -= 1;
@@ -1276,6 +1269,7 @@ const CEmitter = struct {
         switch (body) {
             .block => |block| try self.emitBlockItems(block, locals, return_ty),
             .expr => |expr| {
+                if (try self.emitMmioReadExprStmt(expr, locals)) return;
                 try self.writeIndent();
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
@@ -5213,6 +5207,39 @@ test "hoists MMIO reads in switch subjects" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp0 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    switch (mc_tmp0) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp1 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    mc_barrier_acquire_after();\n    switch (mc_tmp1) {") != null);
+}
+
+test "hoists MMIO reads in switch arm expressions" {
+    const source =
+        \\extern mmio struct Device {
+        \\    raw: Reg<u32, .read>,
+        \\}
+        \\
+        \\fn switch_arm_expr(dev: MmioPtr<Device>, n: u32) -> void {
+        \\    switch n {
+        \\        0 => dev.raw.read(.acquire),
+        \\        _ => dev.raw.read(.relaxed),
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_mmio_read_switch_arm_expr.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp0 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n            mc_barrier_acquire_after();\n            (void)mc_tmp0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp1 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n            (void)mc_tmp1;") != null);
 }
 
 test "emits C for array and slice for loops" {
