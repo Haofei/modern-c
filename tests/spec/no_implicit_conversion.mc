@@ -2,7 +2,7 @@
 // SPEC: milestone=no-implicit-conversion
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_NO_IMPLICIT_CONVERSION,E_INTEGER_LITERAL_OUT_OF_RANGE
+// SPEC: check=E_NO_IMPLICIT_CONVERSION,E_INTEGER_LITERAL_OUT_OF_RANGE,E_SIGNED_UNSIGNED_MIX,E_NO_IMPLICIT_INTEGER_PROMOTION
 
 fn accept_context_typed_integer_literal() -> u32 {
     let x: u32 = 10;
@@ -42,6 +42,18 @@ fn accept_hex_u8_max_literal() -> u8 {
 fn accept_same_width_local_initializer(a: u32) -> u32 {
     let x: u32 = a;
     return x;
+}
+
+fn accept_same_type_arithmetic(a: u32, b: u32) -> u32 {
+    return a + b;
+}
+
+fn accept_context_typed_literal_arithmetic(a: u32) -> u32 {
+    return a + 1;
+}
+
+fn accept_same_type_comparison(a: i32, b: i32) -> bool {
+    return a == b;
 }
 
 fn reject_u8_out_of_range_literal() -> u8 {
@@ -108,4 +120,24 @@ fn reject_implicit_wrap_from_checked(a: u32) -> wrap<u32> {
     // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
     let x: wrap<u32> = a;
     return x;
+}
+
+fn reject_signed_unsigned_arithmetic(a: i32, b: u32) -> i32 {
+    // EXPECT_ERROR: E_SIGNED_UNSIGNED_MIX
+    return a + b;
+}
+
+fn reject_unsigned_signed_comparison(a: u32, b: i32) -> bool {
+    // EXPECT_ERROR: E_SIGNED_UNSIGNED_MIX
+    return a == b;
+}
+
+fn reject_integer_width_arithmetic(a: u16, b: u32) -> u16 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_INTEGER_PROMOTION
+    return a + b;
+}
+
+fn reject_signed_width_comparison(a: i16, b: i32) -> bool {
+    // EXPECT_ERROR: E_NO_IMPLICIT_INTEGER_PROMOTION
+    return a == b;
 }

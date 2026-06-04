@@ -319,6 +319,9 @@ pub const Checker = struct {
                 if (isArithmeticBinary(node.op) and ((left == .wrap and isCheckedInt(right)) or (right == .wrap and isCheckedInt(left)))) {
                     self.errorCode(expr.span, "E_ARITH_POLICY_MIX", "arithmetic domains do not implicitly mix");
                 }
+                if (isArithmeticBinary(node.op) or isComparisonBinary(node.op)) {
+                    self.checkCheckedIntegerBinaryOperands(expr.span, left, right);
+                }
                 if (isPointerArithmeticBinary(node.op) and (isSingleObjectPointerLike(left) or isSingleObjectPointerLike(right))) {
                     self.errorCode(expr.span, "E_POINTER_ARITH_SINGLE_OBJECT", "single-object pointers do not support arithmetic");
                 }
@@ -533,6 +536,16 @@ pub const Checker = struct {
             return true;
         }
         return false;
+    }
+
+    fn checkCheckedIntegerBinaryOperands(self: *Checker, span: diagnostics.Span, left: TypeClass, right: TypeClass) void {
+        if (!isCheckedInt(left) or !isCheckedInt(right)) return;
+        if (left == right) return;
+        if ((isCheckedSigned(left) and isCheckedUnsigned(right)) or (isCheckedUnsigned(left) and isCheckedSigned(right))) {
+            self.errorCode(span, "E_SIGNED_UNSIGNED_MIX", "signed and unsigned integers do not implicitly mix");
+            return;
+        }
+        self.errorCode(span, "E_NO_IMPLICIT_INTEGER_PROMOTION", "integer arithmetic requires matching types or an explicit conversion");
     }
 
     fn checkIfLetPattern(self: *Checker, pattern: ast.Pattern, value_class: TypeClass) void {
