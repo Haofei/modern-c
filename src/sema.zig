@@ -309,6 +309,9 @@ pub const Checker = struct {
                 if (inner_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_DEREF", "c_void pointer cannot be dereferenced");
                 }
+                if (isOpaqueAddressClass(inner_class)) {
+                    self.errorCode(expr.span, addressDerefDiagnostic(inner_class), addressDerefMessage(inner_class));
+                }
                 return .unknown;
             },
             .member => |node| {
@@ -495,6 +498,11 @@ const TypeClass = enum {
     c_void_pointer,
     nullable_pointer,
     nullable_c_void_pointer,
+    paddr,
+    dma_addr,
+    user_ptr,
+    mmio_ptr,
+    phys_ptr,
     result,
     never,
     void,
@@ -641,6 +649,9 @@ fn classifyNullableType(child: ast.TypeExpr) TypeClass {
 
 fn classifyGenericTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "Result")) return .result;
+    if (std.mem.eql(u8, name, "UserPtr")) return .user_ptr;
+    if (std.mem.eql(u8, name, "MmioPtr")) return .mmio_ptr;
+    if (std.mem.eql(u8, name, "PhysPtr")) return .phys_ptr;
     if (std.mem.eql(u8, name, "wrap")) return .wrap;
     if (std.mem.eql(u8, name, "sat")) return .sat;
     if (std.mem.eql(u8, name, "serial")) return .serial;
@@ -662,6 +673,8 @@ fn classifyTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "never")) return .never;
     if (std.mem.eql(u8, name, "void")) return .void;
     if (std.mem.eql(u8, name, "bool")) return .bool;
+    if (std.mem.eql(u8, name, "PAddr")) return .paddr;
+    if (std.mem.eql(u8, name, "DmaAddr")) return .dma_addr;
     return .unknown;
 }
 
@@ -769,6 +782,35 @@ fn isConditionType(kind: TypeClass) bool {
     return switch (kind) {
         .bool, .never, .unknown => true,
         else => false,
+    };
+}
+
+fn isOpaqueAddressClass(kind: TypeClass) bool {
+    return switch (kind) {
+        .paddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
+        else => false,
+    };
+}
+
+fn addressDerefDiagnostic(kind: TypeClass) []const u8 {
+    return switch (kind) {
+        .paddr => "E_PADDR_DEREF",
+        .dma_addr => "E_DMA_ADDR_DEREF",
+        .user_ptr => "E_USER_PTR_DEREF",
+        .mmio_ptr => "E_MMIO_PTR_DEREF",
+        .phys_ptr => "E_PHYS_PTR_DEREF",
+        else => "E_ADDRESS_CLASS_DEREF",
+    };
+}
+
+fn addressDerefMessage(kind: TypeClass) []const u8 {
+    return switch (kind) {
+        .paddr => "cannot dereference PAddr; map it into the current virtual address space first",
+        .dma_addr => "cannot dereference DmaAddr; convert through the appropriate DMA mapping API first",
+        .user_ptr => "cannot directly dereference UserPtr; use user.load or user.copy_from",
+        .mmio_ptr => "cannot directly dereference MmioPtr; use typed MMIO register accessors",
+        .phys_ptr => "cannot directly dereference PhysPtr; map it into the current virtual address space first",
+        else => "cannot directly dereference opaque address class",
     };
 }
 
