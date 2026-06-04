@@ -364,6 +364,10 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
         .enum_literal,
         => {},
         .unreachable_expr => {
+            try writer.print(
+                "fact trap_edge fn={s} kind=Unreachable source=unreachable no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
+                .{ ctx.function_name, ctx.no_lang_trap, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
+            );
             if (ctx.no_lang_trap) {
                 try writer.print(
                     "fact no_lang_trap_unreachable fn={s} unsafe_contract_depth={} line={} column={}\n",
@@ -403,6 +407,13 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
         },
         .cast => |node| try writeExprFacts(collector, node.value.*, writer, ctx),
         .call => |node| {
+            const trap_call = isTrapCall(node.callee.*);
+            if (trap_call) {
+                try writer.print(
+                    "fact trap_edge fn={s} kind={s} source=trap_call no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
+                    .{ ctx.function_name, trapKindName(node.args), ctx.no_lang_trap, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
+                );
+            }
             if (ctx.no_lang_trap) {
                 if (safeNoLangTrapCalleeName(node.callee.*)) |callee_name| {
                     try writer.print(
@@ -410,7 +421,7 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
                         .{ ctx.function_name, callee_name, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
                     );
                 }
-                if (isTrapCall(node.callee.*)) {
+                if (trap_call) {
                     try writer.print(
                         "fact no_lang_trap_explicit_trap fn={s} kind={s} unsafe_contract_depth={} line={} column={}\n",
                         .{ ctx.function_name, trapKindName(node.args), ctx.unsafe_contract_depth, expr.span.line, expr.span.column },

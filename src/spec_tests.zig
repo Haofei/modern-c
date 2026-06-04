@@ -635,6 +635,7 @@ fn isIrFactCheck(check: []const u8) bool {
         "InvalidShift",
         "contract_region",
         "no-language-trap-edge",
+        "trap-lowering",
         "mmio-ir-width-preserved",
         "mmio-ir-ordering-preserved",
         "race-ir-semantics",
@@ -793,6 +794,13 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             " no_lang_trap=true ",
             "fact no_lang_trap_safe_call fn=allow_wrapping_add callee=wrapping.add language_trap=false",
             "fact no_lang_trap_asm fn=allow_boot_asm opaque=true volatile=true language_trap=false target_fault_possible=true",
+        });
+    }
+    if (std.mem.eql(u8, check, "trap-lowering")) {
+        return containsAll(facts, &.{
+            "fact trap_edge fn=trap_as_value kind=Bounds source=trap_call no_lang_trap=false",
+            "fact trap_edge fn=unreachable_as_value kind=Unreachable source=unreachable no_lang_trap=false",
+            "fact trap_edge fn=never_returns_by_trap kind=Assert source=trap_call no_lang_trap=false",
         });
     }
     if (std.mem.eql(u8, check, "mmio-ir-width-preserved")) {

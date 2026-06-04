@@ -68,9 +68,13 @@ pub const Checker = struct {
             scope.put(param.name.text, classifyType(param.ty)) catch {};
             if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {};
         }
-        if (fn_decl.return_type) |ty| self.checkType(ty, .normal);
+        const returns_never = if (fn_decl.return_type) |ty| blk: {
+            self.checkType(ty, .normal);
+            break :blk isTypeName(ty, "never");
+        } else false;
         if (fn_decl.body) |body| self.checkBlock(body, .{
             .no_lang_trap = no_lang_trap,
+            .returns_never = returns_never,
             .unsafe_contracts = .{},
             .scope = &scope,
             .mmio_structs = mmio_structs,
@@ -116,7 +120,14 @@ pub const Checker = struct {
                 self.checkBlock(contract.block, next);
             },
             .@"return" => |maybe| {
-                if (maybe) |expr| _ = self.checkExpr(expr, ctx);
+                if (maybe) |expr| {
+                    const returned = self.checkExpr(expr, ctx);
+                    if (ctx.returns_never and returned != .never) {
+                        self.errorCode(stmt.span, "E_NEVER_RETURNS", "function declared -> never cannot return normally");
+                    }
+                } else if (ctx.returns_never) {
+                    self.errorCode(stmt.span, "E_NEVER_RETURNS", "function declared -> never cannot return normally");
+                }
             },
             .@"defer", .expr => |expr| _ = self.checkExpr(expr, ctx),
             .assert => |expr| {
@@ -144,7 +155,7 @@ pub const Checker = struct {
                 if (ctx.no_lang_trap) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "reachable unreachable emits a language trap in #[no_lang_trap]");
                 }
-                return .unknown;
+                return .never;
             },
             .grouped, .address_of => |inner| self.checkExpr(inner.*, ctx),
             .try_expr => |inner| {
@@ -188,6 +199,7 @@ pub const Checker = struct {
                 return target;
             },
             .call => |node| {
+                const trap_call = isTrapCall(node.callee.*);
                 if (ctx.no_lang_trap and isTrapCall(node.callee.*)) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "explicit trap emits a language trap in #[no_lang_trap]");
                 }
@@ -205,6 +217,7 @@ pub const Checker = struct {
                 _ = self.checkExpr(node.callee.*, ctx);
                 for (node.type_args) |ty| self.checkType(ty, .normal);
                 for (node.args) |arg| _ = self.checkExpr(arg, ctx);
+                if (trap_call) return .never;
                 return .unknown;
             },
             .index => |node| {
@@ -267,6 +280,7 @@ pub const Checker = struct {
 
 const Context = struct {
     no_lang_trap: bool = false,
+    returns_never: bool = false,
     unsafe_contracts: UnsafeContracts = .{},
     scope: ?*Scope = null,
     mmio_structs: ?*const std.StringHashMap(MmioStruct) = null,
@@ -314,6 +328,7 @@ const TypeClass = enum {
     checked_signed,
     wrap,
     c_void_pointer,
+    never,
 };
 
 const TypeMode = enum {
@@ -368,6 +383,7 @@ fn classifyTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "usize")) return .checked_unsigned;
     if (name.len >= 2 and name[0] == 'i' and std.ascii.isDigit(name[1])) return .checked_signed;
     if (std.mem.eql(u8, name, "isize")) return .checked_signed;
+    if (std.mem.eql(u8, name, "never")) return .never;
     return .unknown;
 }
 
