@@ -727,6 +727,8 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             "fact checked_shift_trap fn=reject_right_shift",
             " op=shr ",
             " no_lang_trap=true ",
+            "fact no_lang_trap_safe_call fn=allow_wrapping_add callee=wrapping.add language_trap=false",
+            "fact no_lang_trap_asm fn=allow_boot_asm opaque=true volatile=true language_trap=false target_fault_possible=true",
         });
     }
     if (std.mem.eql(u8, check, "mmio-ir-width-preserved")) {
