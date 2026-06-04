@@ -140,7 +140,7 @@ pub const Checker = struct {
         } else false;
         const returns_void = if (fn_decl.return_type) |ty| isTypeName(ty, "void") else false;
         if (fn_decl.body) |body| {
-            self.checkBlock(body, .{
+            const fn_ctx = Context{
                 .no_lang_trap = no_lang_trap,
                 .returns_never = returns_never,
                 .returns_void = returns_void,
@@ -153,8 +153,9 @@ pub const Checker = struct {
                 .structs = structs,
                 .functions = functions,
                 .globals = globals,
-            });
-            if (fallthroughSpan(body)) |span| {
+            };
+            self.checkBlock(body, fn_ctx);
+            if (fallthroughSpan(body, fn_ctx)) |span| {
                 if (returns_never) {
                     self.errorCode(span, "E_NEVER_FALLTHROUGH", "function declared -> never can fall off the end");
                 } else if (fn_decl.return_type != null and !returns_void) {
@@ -1956,50 +1957,65 @@ fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
     };
 }
 
-fn fallthroughSpan(block: ast.Block) ?diagnostics.Span {
+fn fallthroughSpan(block: ast.Block, ctx: Context) ?diagnostics.Span {
     if (block.items.len == 0) return block.span;
     const last = block.items[block.items.len - 1];
-    return if (stmtMayFallThrough(last)) last.span else null;
+    return if (stmtMayFallThrough(last, ctx)) last.span else null;
 }
 
-fn stmtMayFallThrough(stmt: ast.Stmt) bool {
+fn stmtMayFallThrough(stmt: ast.Stmt, ctx: Context) bool {
     return switch (stmt.kind) {
         .@"return", .@"break", .@"continue", .asm_stmt => false,
-        .expr => |expr| exprMayFallThrough(expr),
-        .block, .unsafe_block => |block| fallthroughSpan(block) != null,
-        .contract_block => |contract| fallthroughSpan(contract.block) != null,
+        .expr => |expr| exprMayFallThrough(expr, ctx),
+        .block, .unsafe_block => |block| fallthroughSpan(block, ctx) != null,
+        .contract_block => |contract| fallthroughSpan(contract.block, ctx) != null,
         .if_let => |node| node.else_block == null or
-            fallthroughSpan(node.then_block) != null or
-            fallthroughSpan(node.else_block.?) != null,
-        .@"switch" => |node| switchMayFallThrough(node),
+            fallthroughSpan(node.then_block, ctx) != null or
+            fallthroughSpan(node.else_block.?, ctx) != null,
+        .@"switch" => |node| switchMayFallThrough(node, ctx),
         else => true,
     };
 }
 
-fn switchMayFallThrough(node: ast.Switch) bool {
+fn switchMayFallThrough(node: ast.Switch, ctx: Context) bool {
     var has_wildcard = false;
+    var has_result_ok = false;
+    var has_result_err = false;
+    const subject_is_result = if (exprResultType(node.subject, ctx)) |ty| classifyType(ty) == .result else false;
     for (node.arms) |arm| {
         for (arm.patterns) |pattern| {
-            if (std.meta.activeTag(pattern.kind) == .wildcard) has_wildcard = true;
+            switch (pattern.kind) {
+                .wildcard => has_wildcard = true,
+                .tag, .tag_bind => {
+                    const tag = switch (pattern.kind) {
+                        .tag => |ident| ident.text,
+                        .tag_bind => |tag_bind| tag_bind.tag.text,
+                        else => unreachable,
+                    };
+                    if (subject_is_result and std.mem.eql(u8, tag, "ok")) has_result_ok = true;
+                    if (subject_is_result and std.mem.eql(u8, tag, "err")) has_result_err = true;
+                },
+                .literal, .bind => {},
+            }
         }
-        if (switchBodyMayFallThrough(arm.body)) return true;
+        if (switchBodyMayFallThrough(arm.body, ctx)) return true;
     }
-    return !has_wildcard;
+    return !has_wildcard and !(has_result_ok and has_result_err);
 }
 
-fn switchBodyMayFallThrough(body: ast.SwitchBody) bool {
+fn switchBodyMayFallThrough(body: ast.SwitchBody, ctx: Context) bool {
     return switch (body) {
-        .block => |block| fallthroughSpan(block) != null,
-        .expr => |expr| exprMayFallThrough(expr),
+        .block => |block| fallthroughSpan(block, ctx) != null,
+        .expr => |expr| exprMayFallThrough(expr, ctx),
     };
 }
 
-fn exprMayFallThrough(expr: ast.Expr) bool {
+fn exprMayFallThrough(expr: ast.Expr, ctx: Context) bool {
     return switch (expr.kind) {
         .unreachable_expr => false,
-        .grouped => |inner| exprMayFallThrough(inner.*),
+        .grouped => |inner| exprMayFallThrough(inner.*, ctx),
         .call => |node| !isTrapCall(node.callee.*),
-        .block => |block| fallthroughSpan(block) != null,
+        .block => |block| fallthroughSpan(block, ctx) != null,
         else => true,
     };
 }

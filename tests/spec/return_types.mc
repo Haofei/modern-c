@@ -56,11 +56,26 @@ fn accept_exhaustive_switch_return(n: u32) -> u32 {
     }
 }
 
+fn accept_result_switch_return(result: Result<u32, Error>) -> u32 {
+    switch result {
+        ok(v) => { return v; },
+        err(e) => { return 0; },
+    }
+}
+
 fn reject_exhaustive_switch_fallthrough_arm(n: u32) -> u32 {
     // EXPECT_ERROR: E_RETURN_MISSING
     switch n {
         0 => { return 0; },
         _ => { let fallback: u32 = 1; },
+    }
+}
+
+fn reject_result_switch_fallthrough_arm(result: Result<u32, Error>) -> u32 {
+    // EXPECT_ERROR: E_RETURN_MISSING
+    switch result {
+        ok(v) => { return v; },
+        err(e) => { let fallback: u32 = 0; },
     }
 }
 
