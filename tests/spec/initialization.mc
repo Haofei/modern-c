@@ -2,7 +2,11 @@
 // SPEC: milestone=local-initialization
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_LOCAL_REQUIRES_INITIALIZER
+// SPEC: check=E_LOCAL_REQUIRES_INITIALIZER,E_UNINIT_REQUIRES_STORAGE
+
+fn takes_u32(value: u32) -> u32 {
+    return value;
+}
 
 fn accept_initialized_local() -> u32 {
     var x: u32 = 1;
@@ -29,4 +33,38 @@ fn reject_uninitialized_let() -> u32 {
     // EXPECT_ERROR: E_LOCAL_REQUIRES_INITIALIZER
     let y: u32;
     return 0;
+}
+
+fn reject_uninit_let_initializer() -> u32 {
+    // EXPECT_ERROR: E_UNINIT_REQUIRES_STORAGE
+    let y: u32 = uninit;
+    return y;
+}
+
+fn reject_uninit_inferred_var_initializer() -> u32 {
+    // EXPECT_ERROR: E_UNINIT_REQUIRES_STORAGE
+    var x = uninit;
+    return 0;
+}
+
+fn reject_uninit_return() -> u32 {
+    // EXPECT_ERROR: E_UNINIT_REQUIRES_STORAGE
+    return uninit;
+}
+
+fn reject_grouped_uninit_return() -> u32 {
+    // EXPECT_ERROR: E_UNINIT_REQUIRES_STORAGE
+    return (uninit);
+}
+
+fn reject_uninit_assignment() -> u32 {
+    var x: u32 = 0;
+    // EXPECT_ERROR: E_UNINIT_REQUIRES_STORAGE
+    x = uninit;
+    return x;
+}
+
+fn reject_uninit_call_argument() -> u32 {
+    // EXPECT_ERROR: E_UNINIT_REQUIRES_STORAGE
+    return takes_u32(uninit);
 }

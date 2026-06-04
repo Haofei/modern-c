@@ -267,14 +267,20 @@ pub const Checker = struct {
         if (local.init) |expr| {
             const initializer = self.checkExpr(expr, ctx);
             address_origin = addressOrigin(expr, ctx);
-            const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
-            const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
-            const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
-            const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
-            const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
-            const address_checked = self.checkAddressOfInitializer(kind, expr);
-            if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(kind, initializer)) {
-                self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
+            if (isUninitLiteral(expr)) {
+                if (!mutable or local.ty == null) {
+                    self.errorCode(expr.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
+                }
+            } else {
+                const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
+                const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
+                const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
+                const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
+                const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
+                const address_checked = self.checkAddressOfInitializer(kind, expr);
+                if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(kind, initializer)) {
+                    self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
+                }
             }
         } else {
             self.errorCode(local.names[0].span, "E_LOCAL_REQUIRES_INITIALIZER", "ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage");
@@ -311,6 +317,10 @@ pub const Checker = struct {
 
     fn checkAssignmentValue(self: *Checker, target: ast.Expr, value_class: TypeClass, value: ast.Expr, ctx: Context) void {
         const target_ty = assignmentTargetType(target, ctx) orelse return;
+        if (isUninitLiteral(value)) {
+            self.errorCode(value.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
+            return;
+        }
         const target_class = classifyType(target_ty);
         const literal_checked = self.checkIntegerLiteralInitializer(target_class, target_ty, value);
         const null_checked = self.checkNullPointerInitializer(target_class, value);
@@ -615,6 +625,10 @@ pub const Checker = struct {
 
     fn checkReturnValue(self: *Checker, ctx: Context, returned: TypeClass, expr: ast.Expr) void {
         const target_ty = ctx.return_ty orelse return;
+        if (isUninitLiteral(expr)) {
+            self.errorCode(expr.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
+            return;
+        }
         const target = ctx.return_kind;
         const literal_checked = self.checkIntegerLiteralInitializer(target, target_ty, expr);
         const null_checked = self.checkNullPointerInitializer(target, expr);
@@ -646,6 +660,10 @@ pub const Checker = struct {
     }
 
     fn checkCallArgument(self: *Checker, target_ty: ast.TypeExpr, arg: ast.Expr, source: TypeClass, ctx: Context) void {
+        if (isUninitLiteral(arg)) {
+            self.errorCode(arg.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
+            return;
+        }
         const target = classifyType(target_ty);
         const literal_checked = self.checkIntegerLiteralInitializer(target, target_ty, arg);
         const null_checked = self.checkNullPointerInitializer(target, arg);
@@ -1178,6 +1196,14 @@ fn isNullLiteral(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .null_literal => true,
         .grouped => |inner| isNullLiteral(inner.*),
+        else => false,
+    };
+}
+
+fn isUninitLiteral(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .uninit_literal => true,
+        .grouped => |inner| isUninitLiteral(inner.*),
         else => false,
     };
 }
