@@ -933,6 +933,7 @@ const CEmitter = struct {
                 try self.writeIndent();
                 try self.out.appendSlice(self.allocator, "}\n");
             },
+            .comptime_block => {},
             .loop => |loop| {
                 if (loop.kind == .@"while") {
                     if (try self.emitMmioReadWhileLoop(loop, locals, return_ty)) return;
@@ -6474,6 +6475,43 @@ test "emits C unsafe contract blocks as scoped blocks" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    {\n        x = mc_checked_add_u32(x, 1);\n    }\n    return x;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unchecked_contract_add(uint32_t a, uint32_t b)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 0;\n    {\n        x = (a + b);\n    }\n    return x;") != null);
+}
+
+test "omits pure comptime blocks from C runtime output" {
+    const source =
+        \\fn accept_pure_comptime_block() -> u32 {
+        \\    comptime {
+        \\        let x: u32 = 1;
+        \\        assert(true);
+        \\    }
+        \\    return 1;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_comptime_block.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var checker = sema.Checker.init(&reporter);
+    checker.checkModule(module);
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_pure_comptime_block(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Assert") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(true))") == null);
 }
 
 test "emits C explicit traps and unreachable" {

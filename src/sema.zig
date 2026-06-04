@@ -606,7 +606,13 @@ pub const Checker = struct {
             self.errorCode(local.names[0].span, "E_LOCAL_REQUIRES_INITIALIZER", "ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage");
         }
         if (ctx.scope) |scope| {
-            for (local.names) |name| scope.put(name.text, .{ .class = kind, .mutable = mutable, .ty = inferred_ty, .origin = .local, .address_origin = address_origin }) catch {};
+            for (local.names) |name| {
+                if (scope.contains(name.text)) {
+                    self.errorCode(name.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
+                } else {
+                    scope.put(name.text, .{ .class = kind, .mutable = mutable, .ty = inferred_ty, .origin = .local, .address_origin = address_origin }) catch {};
+                }
+            }
         }
     }
 

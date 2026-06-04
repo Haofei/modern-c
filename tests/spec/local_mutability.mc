@@ -2,7 +2,7 @@
 // SPEC: milestone=local-mutability
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_ASSIGN_TO_IMMUTABLE_LOCAL,E_DUPLICATE_PARAMETER
+// SPEC: check=E_ASSIGN_TO_IMMUTABLE_LOCAL,E_DUPLICATE_PARAMETER,E_DUPLICATE_LOCAL
 
 fn accept_assign_to_var() -> u32 {
     var x: u32 = 1;
@@ -20,6 +20,13 @@ fn reject_assign_to_let() -> u32 {
 fn reject_assign_to_param(x: u32) -> u32 {
     // EXPECT_ERROR: E_ASSIGN_TO_IMMUTABLE_LOCAL
     x = 2;
+    return x;
+}
+
+fn reject_duplicate_local() -> u32 {
+    let x: u32 = 1;
+    // EXPECT_ERROR: E_DUPLICATE_LOCAL
+    let x: u32 = 2;
     return x;
 }
 
