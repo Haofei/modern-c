@@ -102,7 +102,8 @@ pub const Checker = struct {
                 if (local.ty) |ty| self.checkType(ty, .normal);
                 if (local.init) |expr| {
                     const initializer = self.checkExpr(expr, ctx);
-                    if (local.ty != null and !canInitialize(kind, initializer)) {
+                    const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
+                    if (local.ty != null and !literal_checked and !canInitialize(kind, initializer)) {
                         self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                     }
                 }
@@ -336,6 +337,24 @@ pub const Checker = struct {
             self.errorCode(kind.span, "E_INVALID_TRAP_KIND", "unknown language TrapKind");
         }
     }
+
+    fn checkIntegerLiteralInitializer(self: *Checker, target: TypeClass, target_ty: ast.TypeExpr, expr: ast.Expr) bool {
+        const literal = integerLiteralText(expr) orelse return false;
+        const value = parseIntegerLiteral(literal) orelse return false;
+        if (target == .wrap) {
+            const bounds = wrapInnerBounds(target_ty) orelse return false;
+            if (value > bounds.max) {
+                self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
+                return true;
+            }
+            return false;
+        }
+        const bounds = checkedIntBounds(target) orelse return false;
+        if (value > bounds.max) {
+            self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
+        }
+        return true;
+    }
 };
 
 const Context = struct {
@@ -522,6 +541,68 @@ fn canInitialize(target: TypeClass, initializer: TypeClass) bool {
     if (target == initializer) return true;
     if (isCheckedInt(target) and initializer == .int_literal) return true;
     return false;
+}
+
+const IntBounds = struct {
+    max: u128,
+};
+
+fn checkedIntBounds(kind: TypeClass) ?IntBounds {
+    return switch (kind) {
+        .checked_u8 => .{ .max = maxUnsigned(8) },
+        .checked_u16 => .{ .max = maxUnsigned(16) },
+        .checked_u32 => .{ .max = maxUnsigned(32) },
+        .checked_u64 => .{ .max = maxUnsigned(64) },
+        .checked_usize => .{ .max = maxUnsigned(64) },
+        .checked_i8 => .{ .max = maxSigned(8) },
+        .checked_i16 => .{ .max = maxSigned(16) },
+        .checked_i32 => .{ .max = maxSigned(32) },
+        .checked_i64 => .{ .max = maxSigned(64) },
+        .checked_isize => .{ .max = maxSigned(64) },
+        else => null,
+    };
+}
+
+fn wrapInnerBounds(ty: ast.TypeExpr) ?IntBounds {
+    const generic = switch (ty.kind) {
+        .generic => |node| node,
+        else => return null,
+    };
+    if (!std.mem.eql(u8, generic.base.text, "wrap") or generic.args.len != 1) return null;
+    return checkedIntBounds(classifyType(generic.args[0]));
+}
+
+fn maxUnsigned(bits: u7) u128 {
+    return (@as(u128, 1) << bits) - 1;
+}
+
+fn maxSigned(bits: u7) u128 {
+    return (@as(u128, 1) << (bits - 1)) - 1;
+}
+
+fn integerLiteralText(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .int_literal => |literal| literal,
+        .grouped => |inner| integerLiteralText(inner.*),
+        else => null,
+    };
+}
+
+fn parseIntegerLiteral(raw: []const u8) ?u128 {
+    var cleaned: [128]u8 = undefined;
+    if (raw.len > cleaned.len) return null;
+    var len: usize = 0;
+    var index: usize = 0;
+    while (index < raw.len) : (index += 1) {
+        const ch = raw[index];
+        if (ch == '_') {
+            if (index + 1 < raw.len and std.ascii.isAlphabetic(raw[index + 1])) break;
+            continue;
+        }
+        cleaned[len] = ch;
+        len += 1;
+    }
+    return std.fmt.parseInt(u128, cleaned[0..len], 0) catch null;
 }
 
 fn deinitMmioStructs(mmio_structs: *std.StringHashMap(MmioStruct)) void {
