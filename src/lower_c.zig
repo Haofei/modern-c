@@ -145,7 +145,31 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\    return *p;
         \\}
         \\
+        \\MC_UNUSED static inline uint16_t mc_mmio_read_u16(uint16_t volatile const *p) {
+        \\    return *p;
+        \\}
+        \\
+        \\MC_UNUSED static inline uint32_t mc_mmio_read_u32(uint32_t volatile const *p) {
+        \\    return *p;
+        \\}
+        \\
+        \\MC_UNUSED static inline uint64_t mc_mmio_read_u64(uint64_t volatile const *p) {
+        \\    return *p;
+        \\}
+        \\
         \\MC_UNUSED static inline void mc_mmio_write_u8(uint8_t volatile *p, uint8_t value) {
+        \\    *p = value;
+        \\}
+        \\
+        \\MC_UNUSED static inline void mc_mmio_write_u16(uint16_t volatile *p, uint16_t value) {
+        \\    *p = value;
+        \\}
+        \\
+        \\MC_UNUSED static inline void mc_mmio_write_u32(uint32_t volatile *p, uint32_t value) {
+        \\    *p = value;
+        \\}
+        \\
+        \\MC_UNUSED static inline void mc_mmio_write_u64(uint64_t volatile *p, uint64_t value) {
         \\    *p = value;
         \\}
         \\
@@ -1414,7 +1438,7 @@ const CEmitter = struct {
         };
         const access = self.mmioAccess(call.callee.*, call.args, locals) orelse return false;
         if (!std.mem.eql(u8, access.kind, "write")) return false;
-        if (!std.mem.eql(u8, access.width, "u8")) return error.UnsupportedCEmission;
+        if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
         if (call.args.len == 0) return error.UnsupportedCEmission;
 
         if (std.mem.eql(u8, access.ordering, "release")) {
@@ -1422,7 +1446,7 @@ const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "mc_barrier_release_before();\n");
         }
         try self.writeIndent();
-        try self.out.print(self.allocator, "mc_mmio_write_u8(&{s}->{s}, ", .{ access.param, access.field });
+        try self.out.print(self.allocator, "mc_mmio_write_{s}(&{s}->{s}, ", .{ access.width, access.param, access.field });
         try self.emitExpr(call.args[0], locals);
         try self.out.appendSlice(self.allocator, ");\n");
         return true;
@@ -1436,20 +1460,21 @@ const CEmitter = struct {
         };
         const access = self.mmioAccess(call.callee.*, call.args, locals) orelse return false;
         if (!std.mem.eql(u8, access.kind, "read")) return false;
-        if (!std.mem.eql(u8, access.width, "u8")) return error.UnsupportedCEmission;
+        if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
+        const value_c_type = self.cTypeForMmioValue(access.value_type);
 
         if (std.mem.eql(u8, access.ordering, "acquire")) {
             const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
             self.temp_index += 1;
             try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = mc_mmio_read_u8(&{s}->{s});\n", .{ self.cTypeForMmioValue(access.value_type), temp_name, access.param, access.field });
+            try self.out.print(self.allocator, "{s} {s} = ({s})mc_mmio_read_{s}(&{s}->{s});\n", .{ value_c_type, temp_name, value_c_type, access.width, access.param, access.field });
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "mc_barrier_acquire_after();\n");
             try self.writeIndent();
             try self.out.print(self.allocator, "return {s};\n", .{temp_name});
         } else {
             try self.writeIndent();
-            try self.out.print(self.allocator, "return mc_mmio_read_u8(&{s}->{s});\n", .{ access.param, access.field });
+            try self.out.print(self.allocator, "return ({s})mc_mmio_read_{s}(&{s}->{s});\n", .{ value_c_type, access.width, access.param, access.field });
         }
         return true;
     }
@@ -3671,7 +3696,13 @@ test "emits C support helpers used by lower-c evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_load_u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u16") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u64") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u16") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u64") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after") != null);
 }
@@ -3714,9 +3745,59 @@ test "emits C for simple MMIO register access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u8(&uart->thr, ch);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_lsr(Uart16550 volatile * uart)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp0 = mc_mmio_read_u8(&uart->lsr);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp0 = (uint8_t)mc_mmio_read_u8(&uart->lsr);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
+}
+
+test "emits C for wider MMIO register access" {
+    const source =
+        \\extern mmio struct Device {
+        \\    lo: Reg<u16, .read>,
+        \\    hi: Reg<u32, .write>,
+        \\    wide: Reg<u64, .read_write>,
+        \\}
+        \\
+        \\fn read_lo(dev: MmioPtr<Device>) -> u16 {
+        \\    return dev.lo.read(.relaxed);
+        \\}
+        \\
+        \\fn write_hi(dev: MmioPtr<Device>, value: u32) -> void {
+        \\    dev.hi.write(value, .release);
+        \\}
+        \\
+        \\fn read_wide(dev: MmioPtr<Device>) -> u64 {
+        \\    return dev.wide.read(.acquire);
+        \\}
+        \\
+        \\fn write_wide(dev: MmioPtr<Device>, value: u64) -> void {
+        \\    dev.wide.write(value, .relaxed);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_wide_mmio.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t volatile lo;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t volatile hi;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint64_t volatile wide;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (uint16_t)mc_mmio_read_u16(&dev->lo);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u32(&dev->hi, value);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint64_t mc_tmp0 = (uint64_t)mc_mmio_read_u64(&dev->wide);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u64(&dev->wide, value);") != null);
 }
 
 test "emits C for packed bits MMIO reads and field masks" {
@@ -3767,7 +3848,7 @@ test "emits C for packed bits MMIO reads and field masks" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef uint8_t UartLsr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static UartLsr read_status(Uart16550 volatile * uart)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "UartLsr mc_tmp0 = mc_mmio_read_u8(&uart->lsr);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "UartLsr mc_tmp0 = (UartLsr)mc_mmio_read_u8(&uart->lsr);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static bool ready(UartLsr status)") != null);
