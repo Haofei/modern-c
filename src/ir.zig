@@ -301,7 +301,7 @@ fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anyty
                 .expr => |expr| try writeExprFacts(collector, expr, writer, ctx),
             };
         },
-        .unsafe_block, .block => |body| try writeBlockFacts(collector, body, writer, ctx),
+        .unsafe_block, .comptime_block, .block => |body| try writeBlockFacts(collector, body, writer, ctx),
         .contract_block => |contract| {
             try writeContractBoundary(.unsafe_contract_begin, contract.attr, writer, ctx);
             var next = ctx;

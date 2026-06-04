@@ -258,6 +258,10 @@ pub const Parser = struct {
             const block = try self.parseBlock();
             return .{ .span = block.span, .kind = .{ .unsafe_block = block } };
         }
+        if (self.match(.kw_comptime)) {
+            const block = try self.parseBlock();
+            return .{ .span = block.span, .kind = .{ .comptime_block = block } };
+        }
         if (self.match(.kw_asm)) return self.parseAsmStmt();
         if (self.current.kind == .l_brace) {
             const block = try self.parseBlock();

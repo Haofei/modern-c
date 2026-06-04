@@ -113,7 +113,7 @@ const Inspector = struct {
                     .expr => |expr| try self.inspectExpr(expr, ctx),
                 };
             },
-            .unsafe_block, .block => |body| try self.inspectBlock(body, ctx),
+            .unsafe_block, .comptime_block, .block => |body| try self.inspectBlock(body, ctx),
             .contract_block => |contract| {
                 const name = contractName(contract.attr);
                 try self.out.print(

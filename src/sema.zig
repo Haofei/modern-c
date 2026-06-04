@@ -306,10 +306,18 @@ pub const Checker = struct {
                 next.in_unsafe = true;
                 self.checkBlock(block, next);
             },
+            .comptime_block => |block| {
+                var next = ctx;
+                next.in_comptime = true;
+                self.checkBlock(block, next);
+            },
             .block => |block| self.checkBlock(block, ctx),
             .asm_stmt => {
                 if (!ctx.in_unsafe) {
                     self.errorCode(stmt.span, "E_UNSAFE_REQUIRED", "operation requires unsafe context");
+                }
+                if (ctx.in_comptime) {
+                    self.errorCode(stmt.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
                 }
             },
             .contract_block => |contract| {
@@ -573,6 +581,9 @@ pub const Checker = struct {
                 }
                 if (isUnsafeOperationCall(node.callee.*) and !ctx.in_unsafe) {
                     self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "operation requires unsafe context");
+                }
+                if (ctx.in_comptime and isComptimeForbiddenCall(node.callee.*)) {
+                    self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
                 }
                 if (isCVoidLayoutCall(node.callee.*, node.type_args)) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no size or alignment in MC");
@@ -1051,6 +1062,7 @@ pub const Checker = struct {
 const Context = struct {
     no_lang_trap: bool = false,
     in_unsafe: bool = false,
+    in_comptime: bool = false,
     returns_never: bool = false,
     returns_void: bool = false,
     return_ty: ?ast.TypeExpr = null,
@@ -2126,6 +2138,10 @@ fn isUnsafeOperationCall(callee: ast.Expr) bool {
     };
 }
 
+fn isComptimeForbiddenCall(callee: ast.Expr) bool {
+    return isUnsafeOperationCall(callee);
+}
+
 fn isCVoidLayoutCall(callee: ast.Expr, type_args: []ast.TypeExpr) bool {
     if (!isIdentNamed(callee, "size_of") and
         !isIdentNamed(callee, "sizeof") and
@@ -2206,7 +2222,7 @@ fn stmtMayFallThrough(stmt: ast.Stmt, ctx: Context) bool {
     return switch (stmt.kind) {
         .@"return", .@"break", .@"continue", .asm_stmt => false,
         .expr => |expr| exprMayFallThrough(expr, ctx),
-        .block, .unsafe_block => |block| fallthroughSpan(block, ctx) != null,
+        .block, .unsafe_block, .comptime_block => |block| fallthroughSpan(block, ctx) != null,
         .contract_block => |contract| fallthroughSpan(contract.block, ctx) != null,
         .if_let => |node| node.else_block == null or
             fallthroughSpan(node.then_block, ctx) != null or
@@ -2298,7 +2314,7 @@ fn stmtContainsTry(stmt: ast.Stmt) bool {
         .if_let => |node| exprContainsTry(node.value) or blockContainsTry(node.then_block) or
             (if (node.else_block) |else_block| blockContainsTry(else_block) else false),
         .@"switch" => |node| switchContainsTry(node),
-        .unsafe_block, .block => |block| blockContainsTry(block),
+        .unsafe_block, .comptime_block, .block => |block| blockContainsTry(block),
         .contract_block => |contract| blockContainsTry(contract.block),
         .@"return" => |maybe| if (maybe) |expr| exprContainsTry(expr) else false,
         .@"break", .@"continue" => false,
@@ -2360,7 +2376,7 @@ fn stmtContainsDeferControlFlow(stmt: ast.Stmt, ctx: Context) bool {
             blockContainsDeferControlFlow(node.then_block, ctx) or
             (if (node.else_block) |else_block| blockContainsDeferControlFlow(else_block, ctx) else false),
         .@"switch" => |node| switchContainsDeferControlFlow(node, ctx),
-        .unsafe_block, .block => |block| blockContainsDeferControlFlow(block, ctx),
+        .unsafe_block, .comptime_block, .block => |block| blockContainsDeferControlFlow(block, ctx),
         .contract_block => |contract| blockContainsDeferControlFlow(contract.block, ctx),
         .@"defer", .expr, .assert => |expr| exprContainsDeferControlFlow(expr, ctx),
         .assignment => |node| exprContainsDeferControlFlow(node.target, ctx) or exprContainsDeferControlFlow(node.value, ctx),

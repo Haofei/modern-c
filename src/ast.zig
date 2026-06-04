@@ -157,6 +157,7 @@ pub const Stmt = struct {
         if_let: IfLet,
         @"switch": Switch,
         unsafe_block: Block,
+        comptime_block: Block,
         contract_block: ContractBlock,
         asm_stmt,
         block: Block,
