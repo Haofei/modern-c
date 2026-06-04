@@ -137,6 +137,7 @@ const CEmitter = struct {
     scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
     structs: std.StringHashMap(ast.StructDecl),
+    enums: std.StringHashMap(ast.EnumDecl),
     slice_types: std.StringHashMap(SliceInfo),
     indent: usize,
 
@@ -147,6 +148,7 @@ const CEmitter = struct {
             .scratch = std.heap.ArenaAllocator.init(allocator),
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
+            .enums = std.StringHashMap(ast.EnumDecl).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .indent = 0,
         };
@@ -154,6 +156,7 @@ const CEmitter = struct {
 
     fn deinit(self: *CEmitter) void {
         self.slice_types.deinit();
+        self.enums.deinit();
         self.structs.deinit();
         self.globals.deinit();
         self.scratch.deinit();
@@ -171,10 +174,12 @@ const CEmitter = struct {
                     if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
                     if (!isMmioStructAbi(struct_decl)) for (struct_decl.fields) |field| try self.collectSliceType(field.ty);
                 },
+                .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
                 .fn_decl, .extern_fn => |fn_decl| try self.collectFunctionSliceTypes(fn_decl),
                 else => {},
             }
         }
+        try self.emitEnums();
         for (module.decls) |decl| {
             if (decl.kind == .extern_struct and self.structs.contains(decl.kind.extern_struct.name.text)) {
                 try self.emitStruct(decl.kind.extern_struct);
@@ -213,6 +218,43 @@ const CEmitter = struct {
             try self.out.appendSlice(self.allocator, " = 0");
         }
         try self.out.appendSlice(self.allocator, ";\n\n");
+    }
+
+    fn emitEnums(self: *CEmitter) !void {
+        var it = self.enums.valueIterator();
+        while (it.next()) |enum_decl| {
+            try self.out.print(self.allocator, "typedef {s} {s};\n", .{ try self.enumReprCType(enum_decl.*), enum_decl.name.text });
+            try self.out.appendSlice(self.allocator, "enum {\n");
+            self.indent += 1;
+            for (enum_decl.cases, 0..) |case, i| {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s}_{s}", .{ enum_decl.name.text, case.name.text });
+                if (case.value) |value| {
+                    try self.out.appendSlice(self.allocator, " = ");
+                    try self.emitEnumCaseValue(value);
+                } else {
+                    try self.out.print(self.allocator, " = {d}", .{i});
+                }
+                try self.out.appendSlice(self.allocator, ",\n");
+            }
+            self.indent -= 1;
+            try self.out.appendSlice(self.allocator, "};\n\n");
+        }
+    }
+
+    fn enumReprCType(self: *CEmitter, enum_decl: ast.EnumDecl) ![]const u8 {
+        return if (enum_decl.repr) |repr| try self.cTypeFor(repr, .typedef_name) else "intptr_t";
+    }
+
+    fn emitEnumCaseValue(self: *CEmitter, value: ast.Expr) !void {
+        switch (value.kind) {
+            .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
+            .grouped => |inner| try self.emitEnumCaseValue(inner.*),
+            else => {
+                try self.out.print(self.allocator, "/* unsupported enum value: {s} */0", .{@tagName(value.kind)});
+                return error.UnsupportedCEmission;
+            },
+        }
     }
 
     fn emitStruct(self: *CEmitter, struct_decl: ast.StructDecl) !void {
@@ -318,6 +360,7 @@ const CEmitter = struct {
             else => {},
         }
         if (typeName(ty)) |name| {
+            if (self.enums.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
             if (self.structs.contains(name)) {
                 if (style == .struct_tag) try out.appendSlice(self.scratch.allocator(), "struct ");
                 return out.appendSlice(self.scratch.allocator(), name);
@@ -540,15 +583,18 @@ const CEmitter = struct {
     }
 
     fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+        const subject_enum_name = self.enumNameForExpr(node.subject, locals);
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "switch (");
         try self.emitExpr(node.subject, locals);
         try self.out.appendSlice(self.allocator, ") {\n");
 
         self.indent += 1;
+        var has_wildcard = false;
         for (node.arms) |arm| {
             for (arm.patterns) |pattern| {
-                try self.emitSwitchPatternLabel(pattern);
+                if (pattern.kind == .wildcard) has_wildcard = true;
+                try self.emitSwitchPatternLabel(pattern, subject_enum_name);
             }
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "{\n");
@@ -569,13 +615,21 @@ const CEmitter = struct {
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "}\n");
         }
+        if (subject_enum_name != null and !has_wildcard) {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "default:\n");
+            self.indent += 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "mc_trap_InvalidRepresentation();\n");
+            self.indent -= 1;
+        }
         self.indent -= 1;
 
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "}\n");
     }
 
-    fn emitSwitchPatternLabel(self: *CEmitter, pattern: ast.Pattern) !void {
+    fn emitSwitchPatternLabel(self: *CEmitter, pattern: ast.Pattern, subject_enum_name: ?[]const u8) !void {
         try self.writeIndent();
         switch (pattern.kind) {
             .literal => |expr| if (intLiteralText(expr)) |literal| {
@@ -585,6 +639,13 @@ const CEmitter = struct {
             } else {
                 try self.out.print(self.allocator, "/* unsupported switch pattern: {s} */\n", .{@tagName(pattern.kind)});
                 return error.UnsupportedCEmission;
+            },
+            .tag => |tag| {
+                const enum_name = subject_enum_name orelse {
+                    try self.out.print(self.allocator, "/* unsupported switch tag without enum subject: {s} */\n", .{tag.text});
+                    return error.UnsupportedCEmission;
+                };
+                try self.out.print(self.allocator, "case {s}_{s}:\n", .{ enum_name, tag.text });
             },
             .wildcard => try self.out.appendSlice(self.allocator, "default:\n"),
             else => {
@@ -783,19 +844,37 @@ const CEmitter = struct {
         };
     }
 
+    fn enumNameForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| {
+                if (locals) |local_set| {
+                    if (local_set.get(ident.text)) |info| {
+                        if (info.source_type_name) |name| if (self.enums.contains(name)) return name;
+                    }
+                }
+                return null;
+            },
+            .grouped => |inner| self.enumNameForExpr(inner.*, locals),
+            else => null,
+        };
+    }
+
     fn localInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !LocalInfo {
+        const source_type_name = typeName(ty);
         return switch (ty.kind) {
-            .array => |node| .{ .c_type = try self.cTypeFor(ty, .typedef_name), .array_len = intLiteralText(node.len) },
+            .array => |node| .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name, .array_len = intLiteralText(node.len) },
             .slice => .{
                 .c_type = try self.cTypeFor(ty, .typedef_name),
+                .source_type_name = source_type_name,
                 .slice_ptr_field = "ptr",
                 .slice_len_field = "len",
             },
             .nullable => |child| .{
                 .c_type = try self.cTypeFor(ty, .typedef_name),
+                .source_type_name = source_type_name,
                 .nullable_inner_c_type = try self.nullableInnerCType(child.*),
             },
-            else => .{ .c_type = try self.cTypeFor(ty, .typedef_name) },
+            else => .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name },
         };
     }
 
@@ -810,6 +889,7 @@ const CEmitter = struct {
 
 const LocalInfo = struct {
     c_type: ?[]const u8 = null,
+    source_type_name: ?[]const u8 = null,
     array_len: ?[]const u8 = null,
     slice_ptr_field: ?[]const u8 = null,
     slice_len_field: ?[]const u8 = null,
@@ -1999,6 +2079,45 @@ test "emits C for integer switch arms" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "default:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 10;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return 30;") != null);
+}
+
+test "emits C for closed enum switch arms" {
+    const source =
+        \\enum Irq: u8 {
+        \\    timer = 32,
+        \\    keyboard = 33,
+        \\}
+        \\
+        \\fn classify_irq(irq: Irq) -> u32 {
+        \\    switch irq {
+        \\        .timer => { return 1; },
+        \\        .keyboard => { return 2; },
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_enum_switch.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef uint8_t Irq;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Irq_timer = 32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Irq_keyboard = 33") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t classify_irq(Irq irq)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch (irq) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case Irq_timer:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case Irq_keyboard:") != null);
 }
 
 test "emits C for optional pointer if-let" {
