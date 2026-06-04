@@ -793,6 +793,7 @@ const CEmitter = struct {
                     if (try self.emitDirectCallSliceIndexReturn(expr, locals)) return;
                     if (try self.emitMmioReadReturn(expr, locals)) return;
                     if (try self.emitOverlayFieldReadReturn(expr, locals, return_ty)) return;
+                    if (try self.emitResultTryCallReturn(expr, locals)) return;
                     if (try self.emitResultTryReturn(expr, locals, return_ty)) return;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "return ");
@@ -1805,6 +1806,56 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitResultTryCallReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitResultTryCallReturn(inner.*, locals),
+            else => return false,
+        };
+
+        var replacements = try self.scratch.allocator().alloc(?[]const u8, call.args.len);
+        @memset(replacements, null);
+        var found_try = false;
+
+        for (call.args, 0..) |arg, i| {
+            const operand = resultTryOperand(arg) orelse continue;
+            const operand_result_ty = self.resultTypeForExpr(operand, locals) orelse return false;
+            _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
+            _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
+            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+            replacements[i] = temp_name;
+            found_try = true;
+
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(operand_result_ty, .typedef_name), temp_name });
+            try self.emitExpr(operand, locals);
+            try self.out.appendSlice(self.allocator, ";\n");
+
+            try self.writeIndent();
+            try self.out.print(self.allocator, "if (!{s}.is_ok) mc_trap_InvalidRepresentation();\n", .{temp_name});
+        }
+
+        if (!found_try) return false;
+
+        const fn_info = if (calleeIdentName(call.callee.*)) |name| self.functions.get(name) else null;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.emitExpr(call.callee.*, locals);
+        try self.out.appendSlice(self.allocator, "(");
+        for (call.args, 0..) |arg, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            if (replacements[i]) |temp_name| {
+                try self.out.print(self.allocator, "{s}.payload.ok", .{temp_name});
+            } else {
+                const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+                try self.emitExprWithTarget(arg, locals, target_ty);
+            }
+        }
+        try self.out.appendSlice(self.allocator, ");\n");
+        return true;
+    }
+
     fn sliceReturnTypeForCall(self: *CEmitter, call: anytype) ?ast.TypeExpr {
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
@@ -2723,6 +2774,14 @@ fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCase {
     return null;
 }
 
+fn resultTryOperand(expr: ast.Expr) ?ast.Expr {
+    return switch (expr.kind) {
+        .try_expr => |inner| inner.*,
+        .grouped => |inner| resultTryOperand(inner.*),
+        else => null,
+    };
+}
+
 fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| ident.text,
@@ -3455,6 +3514,49 @@ test "emits C for Result try in return statements" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0.payload.ok;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp1 = make_result();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp2 = (make_result());") != null);
+}
+
+test "emits C for Result try in return call arguments" {
+    const source =
+        \\enum Error: u8 {
+        \\    denied = 1,
+        \\}
+        \\
+        \\extern fn make_result() -> Result<u32, Error>;
+        \\extern fn consume(value: u32) -> u32;
+        \\extern fn combine(left: u32, right: u32) -> u32;
+        \\
+        \\fn arg_try() -> u32 {
+        \\    return consume(make_result()?);
+        \\}
+        \\
+        \\fn two_arg_try() -> u32 {
+        \\    return combine(make_result()?, make_result()?);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_try_call_args.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t arg_try(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp0.is_ok) mc_trap_InvalidRepresentation();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume(mc_tmp0.payload.ok);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp1 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp2 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return combine(mc_tmp1.payload.ok, mc_tmp2.payload.ok);") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
