@@ -808,6 +808,8 @@ const CEmitter = struct {
                                 if (try self.emitMmioReadLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitDirectCallSliceIndexLocalInit(name.text, decl_ty, initializer, locals)) continue;
                             }
+                        } else if (local.init) |initializer| {
+                            if (try self.emitMmioReadInferredLocalInit(name.text, initializer, locals)) continue;
                         }
                     }
                     try self.writeIndent();
@@ -836,6 +838,7 @@ const CEmitter = struct {
                 if (try self.emitOverlayFieldWriteStmt(node, locals)) return;
                 if (try self.emitResultTryAssignmentStmt(node, locals, return_ty)) return;
                 if (try self.emitNullableTryAssignmentStmt(node, locals)) return;
+                if (try self.emitMmioReadAssignmentStmt(node, locals)) return;
                 try self.writeIndent();
                 if (self.globalAssignmentTarget(node.target, locals)) |target| {
                     try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ", .{ target.info.type_name, target.name });
@@ -1555,6 +1558,46 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitMmioReadAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (assignment.value.kind) {
+            .call => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .call => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const access = self.mmioAccess(call.callee.*, call.args, locals) orelse return false;
+        if (!std.mem.eql(u8, access.kind, "read")) return false;
+        if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
+
+        const value_c_type = self.cTypeForMmioValue(access.value_type);
+        const global_target = self.globalAssignmentTarget(assignment.target, locals);
+        if (std.mem.eql(u8, access.ordering, "acquire") or global_target != null) {
+            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ({s})mc_mmio_read_{s}(&{s}->{s});\n", .{ value_c_type, temp_name, value_c_type, access.width, access.param, access.field });
+            if (std.mem.eql(u8, access.ordering, "acquire")) {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "mc_barrier_acquire_after();\n");
+            }
+            try self.writeIndent();
+            if (global_target) |target| {
+                try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ({s}){s});\n", .{ target.info.type_name, target.name, target.info.type_name, temp_name });
+            } else {
+                try self.emitExpr(assignment.target, locals);
+                try self.out.print(self.allocator, " = {s};\n", .{temp_name});
+            }
+            return true;
+        }
+
+        try self.writeIndent();
+        try self.emitExpr(assignment.target, locals);
+        try self.out.print(self.allocator, " = ({s})mc_mmio_read_{s}(&{s}->{s});\n", .{ value_c_type, access.width, access.param, access.field });
+        return true;
+    }
+
     fn emitMmioReadLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const call = switch (initializer.kind) {
             .call => |node| node,
@@ -1568,6 +1611,31 @@ const CEmitter = struct {
         try self.writeIndent();
         try self.emitDeclarator(decl_ty, name);
         try self.out.print(self.allocator, " = ({s})mc_mmio_read_{s}(&{s}->{s});\n", .{ try self.cTypeFor(decl_ty, .typedef_name), access.width, access.param, access.field });
+        if (std.mem.eql(u8, access.ordering, "acquire")) {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "mc_barrier_acquire_after();\n");
+        }
+        return true;
+    }
+
+    fn emitMmioReadInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (initializer.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitMmioReadInferredLocalInit(name, inner.*, locals),
+            else => return false,
+        };
+        const access = self.mmioAccess(call.callee.*, call.args, locals) orelse return false;
+        if (!std.mem.eql(u8, access.kind, "read")) return false;
+        if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
+
+        const value_c_type = self.cTypeForMmioValue(access.value_type);
+        try locals.put(name, .{
+            .c_type = value_c_type,
+            .source_type_name = access.value_type,
+        });
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ({s})mc_mmio_read_{s}(&{s}->{s});\n", .{ value_c_type, name, value_c_type, access.width, access.param, access.field });
         if (std.mem.eql(u8, access.ordering, "acquire")) {
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "mc_barrier_acquire_after();\n");
@@ -4072,6 +4140,17 @@ test "emits C for MMIO read local initializers" {
         \\    let status: Status = dev.flags.read(.relaxed);
         \\    return status;
         \\}
+        \\
+        \\fn read_inferred_bits_local(dev: MmioPtr<Device>) -> bool {
+        \\    let status = dev.flags.read(.acquire);
+        \\    return status.ready;
+        \\}
+        \\
+        \\fn assign_status(dev: MmioPtr<Device>) -> Status {
+        \\    var status: Status = dev.flags.read(.relaxed);
+        \\    status = dev.flags.read(.acquire);
+        \\    return status;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_mmio_read_local_init.mc", source);
@@ -4092,6 +4171,8 @@ test "emits C for MMIO read local initializers" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t value = (uint16_t)mc_mmio_read_u16(&dev->stat);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Status status = (Status)mc_mmio_read_u8(&dev->flags);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Status status = (Status)mc_mmio_read_u8(&dev->flags);\n    mc_barrier_acquire_after();\n    return ((status & UINT8_C(1)) != 0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Status mc_tmp0 = (Status)mc_mmio_read_u8(&dev->flags);\n    mc_barrier_acquire_after();\n    status = mc_tmp0;\n    return status;") != null);
 }
 
 test "emits C for packed bits MMIO reads and field masks" {
