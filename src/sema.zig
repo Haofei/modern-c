@@ -98,9 +98,14 @@ pub const Checker = struct {
     fn checkStmt(self: *Checker, stmt: ast.Stmt, ctx: Context) void {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
-                if (local.ty) |ty| self.checkType(ty, .normal);
-                if (local.init) |expr| _ = self.checkExpr(expr, ctx);
                 const kind = if (local.ty) |ty| classifyType(ty) else TypeClass.unknown;
+                if (local.ty) |ty| self.checkType(ty, .normal);
+                if (local.init) |expr| {
+                    const initializer = self.checkExpr(expr, ctx);
+                    if (local.ty != null and !canInitialize(kind, initializer)) {
+                        self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
+                    }
+                }
                 if (ctx.scope) |scope| {
                     for (local.names) |name| scope.put(name.text, kind) catch {};
                 }
@@ -160,9 +165,10 @@ pub const Checker = struct {
     fn checkExpr(self: *Checker, expr: ast.Expr, ctx: Context) TypeClass {
         return switch (expr.kind) {
             .ident => |ident| if (ctx.scope) |scope| scope.get(ident.text) orelse .unknown else .unknown,
-            .int_literal => .checked_signed,
+            .int_literal => .int_literal,
             .void_literal => .void,
-            .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .enum_literal => .unknown,
+            .bool_literal => .bool,
+            .string_literal, .char_literal, .null_literal, .uninit_literal, .enum_literal => .unknown,
             .unreachable_expr => {
                 if (ctx.no_lang_trap) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "reachable unreachable emits a language trap in #[no_lang_trap]");
@@ -185,7 +191,7 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "checked unary negation may trap in #[no_lang_trap]");
                 }
                 const inner = self.checkExpr(node.expr.*, ctx);
-                if (node.op == .neg and inner == .checked_unsigned) {
+                if (node.op == .neg and isCheckedUnsigned(inner)) {
                     self.errorCode(expr.span, "E_UNSIGNED_NEGATION", "unsigned checked integers do not support unary '-'");
                 }
                 return inner;
@@ -355,12 +361,22 @@ const Scope = std.StringHashMap(TypeClass);
 
 const TypeClass = enum {
     unknown,
-    checked_unsigned,
-    checked_signed,
+    checked_u8,
+    checked_u16,
+    checked_u32,
+    checked_u64,
+    checked_usize,
+    checked_i8,
+    checked_i16,
+    checked_i32,
+    checked_i64,
+    checked_isize,
     wrap,
     c_void_pointer,
     never,
     void,
+    bool,
+    int_literal,
 };
 
 const TypeMode = enum {
@@ -390,13 +406,29 @@ fn isArithmeticBinary(op: ast.BinaryOp) bool {
 }
 
 fn isCheckedInt(kind: TypeClass) bool {
-    return kind == .checked_unsigned or kind == .checked_signed;
+    return isCheckedUnsigned(kind) or isCheckedSigned(kind);
+}
+
+fn isCheckedUnsigned(kind: TypeClass) bool {
+    return switch (kind) {
+        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_usize => true,
+        else => false,
+    };
+}
+
+fn isCheckedSigned(kind: TypeClass) bool {
+    return switch (kind) {
+        .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_isize => true,
+        else => false,
+    };
 }
 
 fn mergeArithmetic(left: TypeClass, right: TypeClass) TypeClass {
     if (left == .wrap or right == .wrap) return .wrap;
-    if (left == .checked_signed or right == .checked_signed) return .checked_signed;
-    if (left == .checked_unsigned or right == .checked_unsigned) return .checked_unsigned;
+    if (isCheckedSigned(left)) return left;
+    if (isCheckedSigned(right)) return right;
+    if (isCheckedUnsigned(left)) return left;
+    if (isCheckedUnsigned(right)) return right;
     return .unknown;
 }
 
@@ -411,13 +443,28 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
 }
 
 fn classifyTypeName(name: []const u8) TypeClass {
-    if (name.len >= 2 and name[0] == 'u' and std.ascii.isDigit(name[1])) return .checked_unsigned;
-    if (std.mem.eql(u8, name, "usize")) return .checked_unsigned;
-    if (name.len >= 2 and name[0] == 'i' and std.ascii.isDigit(name[1])) return .checked_signed;
-    if (std.mem.eql(u8, name, "isize")) return .checked_signed;
+    if (std.mem.eql(u8, name, "u8")) return .checked_u8;
+    if (std.mem.eql(u8, name, "u16")) return .checked_u16;
+    if (std.mem.eql(u8, name, "u32")) return .checked_u32;
+    if (std.mem.eql(u8, name, "u64")) return .checked_u64;
+    if (std.mem.eql(u8, name, "usize")) return .checked_usize;
+    if (std.mem.eql(u8, name, "i8")) return .checked_i8;
+    if (std.mem.eql(u8, name, "i16")) return .checked_i16;
+    if (std.mem.eql(u8, name, "i32")) return .checked_i32;
+    if (std.mem.eql(u8, name, "i64")) return .checked_i64;
+    if (std.mem.eql(u8, name, "isize")) return .checked_isize;
     if (std.mem.eql(u8, name, "never")) return .never;
     if (std.mem.eql(u8, name, "void")) return .void;
+    if (std.mem.eql(u8, name, "bool")) return .bool;
     return .unknown;
+}
+
+fn canInitialize(target: TypeClass, initializer: TypeClass) bool {
+    if (target == .unknown or initializer == .unknown) return true;
+    if (initializer == .never) return true;
+    if (target == initializer) return true;
+    if (isCheckedInt(target) and initializer == .int_literal) return true;
+    return false;
 }
 
 fn deinitMmioStructs(mmio_structs: *std.StringHashMap(MmioStruct)) void {
