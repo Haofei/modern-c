@@ -1880,28 +1880,11 @@ const CEmitter = struct {
             else => return false,
         };
 
-        var replacements = try self.scratch.allocator().alloc(?[]const u8, call.args.len);
-        @memset(replacements, null);
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
         var found_try = false;
 
-        for (call.args, 0..) |arg, i| {
-            const operand = resultTryOperand(arg) orelse continue;
-            const operand_result_ty = self.resultTypeForExpr(operand, locals) orelse return false;
-            _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
-            _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
-            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
-            self.temp_index += 1;
-            replacements[i] = temp_name;
-            found_try = true;
-
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(operand_result_ty, .typedef_name), temp_name });
-            try self.emitExpr(operand, locals);
-            try self.out.appendSlice(self.allocator, ";\n");
-
-            try self.writeIndent();
-            try self.out.print(self.allocator, "if (!{s}.is_ok) mc_trap_InvalidRepresentation();\n", .{temp_name});
-        }
+        for (call.args) |arg| found_try = (try self.collectResultTryHoistsForReturn(arg, locals, &replacements)) or found_try;
 
         if (!found_try) return false;
 
@@ -1912,12 +1895,8 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "(");
         for (call.args, 0..) |arg, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            if (replacements[i]) |temp_name| {
-                try self.out.print(self.allocator, "{s}.payload.ok", .{temp_name});
-            } else {
-                const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
-                try self.emitExprWithTarget(arg, locals, target_ty);
-            }
+            const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+            try self.emitResultTryExprWithReplacements(arg, locals, target_ty, replacements.items);
         }
         try self.out.appendSlice(self.allocator, ");\n");
         return true;
@@ -1930,26 +1909,11 @@ const CEmitter = struct {
             else => return false,
         };
 
-        var replacements = try self.scratch.allocator().alloc(?[]const u8, call.args.len);
-        @memset(replacements, null);
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
         var found_try = false;
 
-        for (call.args, 0..) |arg, i| {
-            const operand = resultTryOperand(arg) orelse continue;
-            const inner_c_type = try self.nullableInnerCTypeForExpr(operand, locals) orelse return false;
-            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
-            self.temp_index += 1;
-            replacements[i] = temp_name;
-            found_try = true;
-
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ inner_c_type, temp_name });
-            try self.emitExpr(operand, locals);
-            try self.out.appendSlice(self.allocator, ";\n");
-
-            try self.writeIndent();
-            try self.out.print(self.allocator, "if ({s} == NULL) mc_trap_NullUnwrap();\n", .{temp_name});
-        }
+        for (call.args) |arg| found_try = (try self.collectNullableTryHoistsForReturn(arg, locals, &replacements)) or found_try;
 
         if (!found_try) return false;
 
@@ -1960,15 +1924,180 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "(");
         for (call.args, 0..) |arg, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            if (replacements[i]) |temp_name| {
-                try self.out.appendSlice(self.allocator, temp_name);
-            } else {
-                const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
-                try self.emitExprWithTarget(arg, locals, target_ty);
-            }
+            const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+            try self.emitNullableTryExprWithReplacements(arg, locals, target_ty, replacements.items);
         }
         try self.out.appendSlice(self.allocator, ");\n");
         return true;
+    }
+
+    fn collectResultTryHoistsForReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(TryReplacement)) !bool {
+        switch (expr.kind) {
+            .try_expr => |inner| {
+                const operand_result_ty = self.resultTypeForExpr(inner.*, locals) orelse return false;
+                _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
+                _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
+                const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+                self.temp_index += 1;
+                try replacements.append(self.scratch.allocator(), .{ .span = expr.span, .temp_name = temp_name });
+
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(operand_result_ty, .typedef_name), temp_name });
+                try self.emitExpr(inner.*, locals);
+                try self.out.appendSlice(self.allocator, ";\n");
+
+                try self.writeIndent();
+                try self.out.print(self.allocator, "if (!{s}.is_ok) mc_trap_InvalidRepresentation();\n", .{temp_name});
+                return true;
+            },
+            .grouped => |inner| return try self.collectResultTryHoistsForReturn(inner.*, locals, replacements),
+            .call => |node| {
+                var found = false;
+                for (node.args) |arg| found = (try self.collectResultTryHoistsForReturn(arg, locals, replacements)) or found;
+                return found;
+            },
+            .unary => |node| return try self.collectResultTryHoistsForReturn(node.expr.*, locals, replacements),
+            .binary => |node| return (try self.collectResultTryHoistsForReturn(node.left.*, locals, replacements)) or (try self.collectResultTryHoistsForReturn(node.right.*, locals, replacements)),
+            .index => |node| return (try self.collectResultTryHoistsForReturn(node.base.*, locals, replacements)) or (try self.collectResultTryHoistsForReturn(node.index.*, locals, replacements)),
+            .member => |node| return try self.collectResultTryHoistsForReturn(node.base.*, locals, replacements),
+            .cast => |node| return try self.collectResultTryHoistsForReturn(node.value.*, locals, replacements),
+            else => return false,
+        }
+    }
+
+    fn collectNullableTryHoistsForReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(TryReplacement)) !bool {
+        switch (expr.kind) {
+            .try_expr => |inner| {
+                const inner_c_type = try self.nullableInnerCTypeForExpr(inner.*, locals) orelse return false;
+                const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+                self.temp_index += 1;
+                try replacements.append(self.scratch.allocator(), .{ .span = expr.span, .temp_name = temp_name });
+
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = ", .{ inner_c_type, temp_name });
+                try self.emitExpr(inner.*, locals);
+                try self.out.appendSlice(self.allocator, ";\n");
+
+                try self.writeIndent();
+                try self.out.print(self.allocator, "if ({s} == NULL) mc_trap_NullUnwrap();\n", .{temp_name});
+                return true;
+            },
+            .grouped => |inner| return try self.collectNullableTryHoistsForReturn(inner.*, locals, replacements),
+            .call => |node| {
+                var found = false;
+                for (node.args) |arg| found = (try self.collectNullableTryHoistsForReturn(arg, locals, replacements)) or found;
+                return found;
+            },
+            .unary => |node| return try self.collectNullableTryHoistsForReturn(node.expr.*, locals, replacements),
+            .binary => |node| return (try self.collectNullableTryHoistsForReturn(node.left.*, locals, replacements)) or (try self.collectNullableTryHoistsForReturn(node.right.*, locals, replacements)),
+            .index => |node| return (try self.collectNullableTryHoistsForReturn(node.base.*, locals, replacements)) or (try self.collectNullableTryHoistsForReturn(node.index.*, locals, replacements)),
+            .member => |node| return try self.collectNullableTryHoistsForReturn(node.base.*, locals, replacements),
+            .cast => |node| return try self.collectNullableTryHoistsForReturn(node.value.*, locals, replacements),
+            else => return false,
+        }
+    }
+
+    fn emitResultTryExprWithReplacements(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const TryReplacement) !void {
+        if (!exprHasTryReplacement(expr, replacements)) return self.emitExprWithTarget(expr, locals, target_ty);
+        switch (expr.kind) {
+            .try_expr => {
+                const temp_name = tryReplacementForSpan(expr.span, replacements).?;
+                try self.out.print(self.allocator, "{s}.payload.ok", .{temp_name});
+            },
+            .grouped => |inner| {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitResultTryExprWithReplacements(inner.*, locals, target_ty, replacements);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .call => |node| {
+                const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
+                try self.emitExpr(node.callee.*, locals);
+                try self.out.appendSlice(self.allocator, "(");
+                for (node.args, 0..) |arg, i| {
+                    if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                    const arg_target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+                    try self.emitResultTryExprWithReplacements(arg, locals, arg_target_ty, replacements);
+                }
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .unary => |node| {
+                try self.out.appendSlice(self.allocator, unaryCOp(node.op));
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitResultTryExprWithReplacements(node.expr.*, locals, null, replacements);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .binary => |node| {
+                if (checkedU32Helper(node.op)) |helper| {
+                    try self.out.print(self.allocator, "{s}(", .{helper});
+                    try self.emitResultTryExprWithReplacements(node.left.*, locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ", ");
+                    try self.emitResultTryExprWithReplacements(node.right.*, locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ")");
+                } else {
+                    try self.out.appendSlice(self.allocator, "(");
+                    try self.emitResultTryExprWithReplacements(node.left.*, locals, null, replacements);
+                    try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
+                    try self.emitResultTryExprWithReplacements(node.right.*, locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ")");
+                }
+            },
+            .cast => |node| {
+                try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(node.ty.*, .typedef_name)});
+                try self.emitResultTryExprWithReplacements(node.value.*, locals, null, replacements);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            else => try self.emitExprWithTarget(expr, locals, target_ty),
+        }
+    }
+
+    fn emitNullableTryExprWithReplacements(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const TryReplacement) !void {
+        if (!exprHasTryReplacement(expr, replacements)) return self.emitExprWithTarget(expr, locals, target_ty);
+        switch (expr.kind) {
+            .try_expr => try self.out.appendSlice(self.allocator, tryReplacementForSpan(expr.span, replacements).?),
+            .grouped => |inner| {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitNullableTryExprWithReplacements(inner.*, locals, target_ty, replacements);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .call => |node| {
+                const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
+                try self.emitExpr(node.callee.*, locals);
+                try self.out.appendSlice(self.allocator, "(");
+                for (node.args, 0..) |arg, i| {
+                    if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                    const arg_target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+                    try self.emitNullableTryExprWithReplacements(arg, locals, arg_target_ty, replacements);
+                }
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .unary => |node| {
+                try self.out.appendSlice(self.allocator, unaryCOp(node.op));
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitNullableTryExprWithReplacements(node.expr.*, locals, null, replacements);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .binary => |node| {
+                if (checkedU32Helper(node.op)) |helper| {
+                    try self.out.print(self.allocator, "{s}(", .{helper});
+                    try self.emitNullableTryExprWithReplacements(node.left.*, locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ", ");
+                    try self.emitNullableTryExprWithReplacements(node.right.*, locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ")");
+                } else {
+                    try self.out.appendSlice(self.allocator, "(");
+                    try self.emitNullableTryExprWithReplacements(node.left.*, locals, null, replacements);
+                    try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
+                    try self.emitNullableTryExprWithReplacements(node.right.*, locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ")");
+                }
+            },
+            .cast => |node| {
+                try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(node.ty.*, .typedef_name)});
+                try self.emitNullableTryExprWithReplacements(node.value.*, locals, null, replacements);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            else => try self.emitExprWithTarget(expr, locals, target_ty),
+        }
     }
 
     fn emitNullableTryReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
@@ -2150,6 +2279,11 @@ const LocalInfo = struct {
 const FnInfo = struct {
     params: []const ast.Param,
     return_type: ?ast.TypeExpr,
+};
+
+const TryReplacement = struct {
+    span: ast.Span,
+    temp_name: []const u8,
 };
 
 const SliceAccess = struct {
@@ -2964,6 +3098,35 @@ fn resultTryOperand(expr: ast.Expr) ?ast.Expr {
     };
 }
 
+fn exprHasTryReplacement(expr: ast.Expr, replacements: []const TryReplacement) bool {
+    if (tryReplacementForSpan(expr.span, replacements) != null) return true;
+    return switch (expr.kind) {
+        .grouped, .address_of, .deref => |inner| exprHasTryReplacement(inner.*, replacements),
+        .unary => |node| exprHasTryReplacement(node.expr.*, replacements),
+        .try_expr => |inner| exprHasTryReplacement(inner.*, replacements),
+        .binary => |node| exprHasTryReplacement(node.left.*, replacements) or exprHasTryReplacement(node.right.*, replacements),
+        .call => |node| {
+            for (node.args) |arg| if (exprHasTryReplacement(arg, replacements)) return true;
+            return false;
+        },
+        .index => |node| exprHasTryReplacement(node.base.*, replacements) or exprHasTryReplacement(node.index.*, replacements),
+        .member => |node| exprHasTryReplacement(node.base.*, replacements),
+        .cast => |node| exprHasTryReplacement(node.value.*, replacements),
+        else => false,
+    };
+}
+
+fn tryReplacementForSpan(span: ast.Span, replacements: []const TryReplacement) ?[]const u8 {
+    for (replacements) |replacement| {
+        if (sameSpan(span, replacement.span)) return replacement.temp_name;
+    }
+    return null;
+}
+
+fn sameSpan(left: ast.Span, right: ast.Span) bool {
+    return left.offset == right.offset and left.len == right.len and left.line == right.line and left.column == right.column;
+}
+
 fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| ident.text,
@@ -3714,6 +3877,7 @@ test "emits C for Result try in return call arguments" {
         \\extern fn make_result() -> Result<u32, Error>;
         \\extern fn consume(value: u32) -> u32;
         \\extern fn combine(left: u32, right: u32) -> u32;
+        \\extern fn box_value(value: u32) -> u32;
         \\
         \\fn arg_try() -> u32 {
         \\    return consume(make_result()?);
@@ -3721,6 +3885,10 @@ test "emits C for Result try in return call arguments" {
         \\
         \\fn two_arg_try() -> u32 {
         \\    return combine(make_result()?, make_result()?);
+        \\}
+        \\
+        \\fn nested_arg_try() -> u32 {
+        \\    return consume(box_value(make_result()?));
         \\}
     ;
 
@@ -3746,6 +3914,8 @@ test "emits C for Result try in return call arguments" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp1 = make_result();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp2 = make_result();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return combine(mc_tmp1.payload.ok, mc_tmp2.payload.ok);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp3 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume(box_value(mc_tmp3.payload.ok));") != null);
 }
 
 test "emits C for nullable try in return statements" {
@@ -3793,6 +3963,7 @@ test "emits C for nullable try in return call arguments" {
         \\extern fn make_nullable_pointer() -> ?*const u8;
         \\extern fn consume_ptr(ptr: *const u8) -> u32;
         \\extern fn choose(left: *const u8, right: *const u8) -> u32;
+        \\extern fn ptr_id(ptr: *const u8) -> *const u8;
         \\
         \\fn arg_try(maybe: ?*const u8) -> u32 {
         \\    return consume_ptr(maybe?);
@@ -3804,6 +3975,10 @@ test "emits C for nullable try in return call arguments" {
         \\
         \\fn two_arg_try(maybe: ?*const u8) -> u32 {
         \\    return choose(maybe?, make_nullable_pointer()?);
+        \\}
+        \\
+        \\fn nested_arg_try() -> u32 {
+        \\    return consume_ptr(ptr_id(make_nullable_pointer()?));
         \\}
     ;
 
@@ -3831,6 +4006,8 @@ test "emits C for nullable try in return call arguments" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp2 = maybe;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp3 = make_nullable_pointer();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return choose(mc_tmp2, mc_tmp3);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp4 = make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(ptr_id(mc_tmp4));") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
