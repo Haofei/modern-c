@@ -107,7 +107,37 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\    return value;
         \\}
         \\
+        \\MC_UNUSED static inline uint8_t mc_race_load_u8(uint8_t const *p) {
+        \\    uint8_t value;
+        \\    __atomic_load(p, &value, __ATOMIC_RELAXED);
+        \\    return value;
+        \\}
+        \\
+        \\MC_UNUSED static inline uint16_t mc_race_load_u16(uint16_t const *p) {
+        \\    uint16_t value;
+        \\    __atomic_load(p, &value, __ATOMIC_RELAXED);
+        \\    return value;
+        \\}
+        \\
+        \\MC_UNUSED static inline uint64_t mc_race_load_u64(uint64_t const *p) {
+        \\    uint64_t value;
+        \\    __atomic_load(p, &value, __ATOMIC_RELAXED);
+        \\    return value;
+        \\}
+        \\
         \\MC_UNUSED static inline void mc_race_store_u32(uint32_t *p, uint32_t value) {
+        \\    __atomic_store(p, &value, __ATOMIC_RELAXED);
+        \\}
+        \\
+        \\MC_UNUSED static inline void mc_race_store_u8(uint8_t *p, uint8_t value) {
+        \\    __atomic_store(p, &value, __ATOMIC_RELAXED);
+        \\}
+        \\
+        \\MC_UNUSED static inline void mc_race_store_u16(uint16_t *p, uint16_t value) {
+        \\    __atomic_store(p, &value, __ATOMIC_RELAXED);
+        \\}
+        \\
+        \\MC_UNUSED static inline void mc_race_store_u64(uint64_t *p, uint64_t value) {
         \\    __atomic_store(p, &value, __ATOMIC_RELAXED);
         \\}
         \\
@@ -1617,6 +1647,19 @@ const CEmitter = struct {
         const info = self.packed_bits.get(base_ty) orelse return false;
         const field = info.fields.get(member.name.text) orelse return false;
         const mask = try self.packedBitsMaskLiteral(info, field.bit_index);
+        if (self.packedBitsGlobalBase(member.base.*, locals, base_ty)) |global_name| {
+            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ({s})mc_race_load_{s}(&{s});\n", .{ base_ty, temp_name, base_ty, info.repr_name, global_name });
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} = ({s})(({s} & ({s})~{s}) | (", .{ temp_name, base_ty, temp_name, base_ty, mask });
+            try self.emitExpr(assignment.value, locals);
+            try self.out.print(self.allocator, " ? {s} : ({s})0));\n", .{ mask, base_ty });
+            try self.writeIndent();
+            try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ({s}){s});\n", .{ info.repr_name, global_name, info.repr_c_type, temp_name });
+            return true;
+        }
 
         try self.writeIndent();
         try self.emitExpr(member.base.*, locals);
@@ -1630,8 +1673,24 @@ const CEmitter = struct {
 
     fn packedBitsNameForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
         return switch (expr.kind) {
-            .ident => |ident| if (locals) |local_set| if (local_set.get(ident.text)) |info| info.source_type_name else null else null,
+            .ident => |ident| if (locals) |local_set| blk: {
+                if (local_set.get(ident.text)) |info| break :blk info.source_type_name;
+                if (self.globals.get(ident.text)) |global| break :blk global.type_name;
+                break :blk null;
+            } else null,
             .grouped => |inner| self.packedBitsNameForExpr(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn packedBitsGlobalBase(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), base_ty: []const u8) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| {
+                if (locals.contains(ident.text)) return null;
+                const global = self.globals.get(ident.text) orelse return null;
+                return if (std.mem.eql(u8, global.type_name, base_ty)) ident.text else null;
+            },
+            .grouped => |inner| self.packedBitsGlobalBase(inner.*, locals, base_ty),
             else => null,
         };
     }
@@ -3521,6 +3580,8 @@ test "emits C for packed bits MMIO reads and field masks" {
         \\    tx_empty: bool,
         \\}
         \\
+        \\global status: UartLsr = 0;
+        \\
         \\extern mmio struct Uart16550 {
         \\    lsr: RegBits<u8, UartLsr, .read>,
         \\}
@@ -3536,6 +3597,10 @@ test "emits C for packed bits MMIO reads and field masks" {
         \\fn set_ready(status: UartLsr, flag: bool) -> UartLsr {
         \\    status.tx_empty = flag;
         \\    return status;
+        \\}
+        \\
+        \\fn set_global_ready(flag: bool) -> void {
+        \\    status.tx_empty = flag;
         \\}
     ;
 
@@ -3563,6 +3628,10 @@ test "emits C for packed bits MMIO reads and field masks" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((status & UINT8_C(2)) != 0);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static UartLsr set_ready(UartLsr status, bool flag)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "status = (UartLsr)((status & (UartLsr)~UINT8_C(2)) | (flag ? UINT8_C(2) : (UartLsr)0));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void set_global_ready(bool flag)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "UartLsr mc_tmp1 = (UartLsr)mc_race_load_u8(&status);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_tmp1 = (UartLsr)((mc_tmp1 & (UartLsr)~UINT8_C(2)) | (flag ? UINT8_C(2) : (UartLsr)0));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u8(&status, (uint8_t)mc_tmp1);") != null);
 }
 
 test "emits C ABI for simple Result types" {

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
+const parser = @import("parser.zig");
 
 pub const Checker = struct {
     reporter: *diagnostics.Reporter,
@@ -2113,6 +2114,8 @@ fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
         .grouped => |inner| return isMmioRegisterTarget(inner.*, ctx),
         else => return false,
     };
+    if (isMmioRegisterMember(target, ctx)) return true;
+    if (isMmioRegisterTarget(member.base.*, ctx)) return true;
     const base_name = switch (member.base.kind) {
         .ident => |ident| ident.text,
         else => return false,
@@ -2983,6 +2986,47 @@ fn callContainsDeferControlFlow(node: anytype, ctx: Context) bool {
     if (exprContainsDeferControlFlow(node.callee.*, ctx)) return true;
     for (node.args) |arg| {
         if (exprContainsDeferControlFlow(arg, ctx)) return true;
+    }
+    return false;
+}
+
+test "rejects nested MMIO register field assignment" {
+    const source =
+        \\packed bits UartLsr: u8 {
+        \\    data_ready: bool,
+        \\    tx_empty: bool,
+        \\}
+        \\
+        \\extern mmio struct Uart16550 {
+        \\    lsr: RegBits<u8, UartLsr, .read>,
+        \\}
+        \\
+        \\fn set_lsr(uart: MmioPtr<Uart16550>, flag: bool) -> void {
+        \\    uart.lsr.tx_empty = flag;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "nested_mmio_register_field_assignment.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var checker = Checker.init(&reporter);
+    checker.checkModule(module);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(hasDiagnosticCode(&reporter, "E_MMIO_DIRECT_ASSIGN"));
+}
+
+fn hasDiagnosticCode(reporter: *const diagnostics.Reporter, code: []const u8) bool {
+    for (reporter.diagnostics.items) |diagnostic| {
+        if (std.mem.indexOf(u8, diagnostic.message, code) != null) return true;
     }
     return false;
 }
