@@ -671,10 +671,10 @@ pub const Checker = struct {
                 return .unknown;
             },
             .unary => |node| {
-                if (ctx.no_lang_trap and node.op == .neg) {
+                const inner = self.checkExpr(node.expr.*, ctx);
+                if (ctx.no_lang_trap and node.op == .neg and isCheckedSigned(inner)) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "checked unary negation may trap in #[no_lang_trap]");
                 }
-                const inner = self.checkExpr(node.expr.*, ctx);
                 if (node.op == .neg and isCheckedUnsigned(inner)) {
                     self.errorCode(expr.span, "E_UNSIGNED_NEGATION", "unsigned checked integers do not support unary '-'");
                 }

@@ -1068,7 +1068,47 @@ const CEmitter = struct {
     }
 
     fn emitBlockItems(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        for (block.items) |stmt| try self.emitStmt(stmt, locals, return_ty);
+        var deferred: std.ArrayList(ast.Expr) = .empty;
+        defer deferred.deinit(self.scratch.allocator());
+
+        for (block.items) |stmt| {
+            switch (stmt.kind) {
+                .@"defer" => |expr| {
+                    try deferred.append(self.scratch.allocator(), expr);
+                    continue;
+                },
+                .@"return" => {
+                    var index = deferred.items.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try self.emitDeferredCleanup(deferred.items[index], locals, return_ty);
+                    }
+                },
+                else => {},
+            }
+            try self.emitStmt(stmt, locals, return_ty);
+        }
+    }
+
+    fn emitDeferredCleanup(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        switch (expr.kind) {
+            .block => |block| {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "{\n");
+                var nested = try cloneLocals(self.allocator, locals.*);
+                defer nested.deinit();
+                self.indent += 1;
+                try self.emitBlockItems(block, &nested, return_ty);
+                self.indent -= 1;
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "}\n");
+            },
+            else => {
+                try self.writeIndent();
+                try self.emitExpr(expr, locals);
+                try self.out.appendSlice(self.allocator, ";\n");
+            },
+        }
     }
 
     fn writeIndent(self: *CEmitter) !void {
@@ -6285,6 +6325,46 @@ test "emits C assert trap" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(flag)) mc_trap_Assert();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(((a == b) || (a != 0)))) mc_trap_Assert();") != null);
+}
+
+test "emits C lexical defer cleanup before return" {
+    const source =
+        \\extern fn close_a() -> void;
+        \\extern fn close_b() -> void;
+        \\
+        \\fn accept_lexical_cleanup() -> void {
+        \\    defer close_a();
+        \\    defer close_b();
+        \\    return;
+        \\}
+        \\
+        \\fn accept_block_cleanup() -> void {
+        \\    defer {
+        \\        close_a();
+        \\    };
+        \\    return;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_defer.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "void close_a(void);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "void close_b(void);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_lexical_cleanup(void) {\n    close_b();\n    close_a();\n    return;\n}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_block_cleanup(void) {\n    {\n        close_a();\n    }\n    return;\n}") != null);
 }
 
 test "emits C explicit traps and unreachable" {
