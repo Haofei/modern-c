@@ -197,6 +197,12 @@ pub const Checker = struct {
                 if (node.op == .bit_not and isCheckedSigned(inner)) {
                     self.errorCode(expr.span, "E_BITWISE_SIGNED_OPERAND", "bitwise operations are not defined on signed checked integers");
                 }
+                if (node.op == .bit_not and inner == .bool) {
+                    self.errorCode(expr.span, "E_BITWISE_BOOL_OPERAND", "bitwise operations are not defined on bool operands");
+                }
+                if (node.op == .bit_not and isPointerLike(inner)) {
+                    self.errorCode(expr.span, "E_BITWISE_POINTER_OPERAND", "bitwise operations are not defined on pointer operands");
+                }
                 return inner;
             },
             .binary => |node| {
@@ -210,6 +216,12 @@ pub const Checker = struct {
                 }
                 if (isBitwiseBinary(node.op) and (isCheckedSigned(left) or isCheckedSigned(right))) {
                     self.errorCode(expr.span, "E_BITWISE_SIGNED_OPERAND", "bitwise operations are not defined on signed checked integers");
+                }
+                if (isBitwiseBinary(node.op) and (left == .bool or right == .bool)) {
+                    self.errorCode(expr.span, "E_BITWISE_BOOL_OPERAND", "bitwise operations are not defined on bool operands");
+                }
+                if (isBitwiseBinary(node.op) and (isPointerLike(left) or isPointerLike(right))) {
+                    self.errorCode(expr.span, "E_BITWISE_POINTER_OPERAND", "bitwise operations are not defined on pointer operands");
                 }
                 return mergeArithmetic(left, right);
             },
@@ -378,6 +390,7 @@ const TypeClass = enum {
     checked_i64,
     checked_isize,
     wrap,
+    pointer,
     c_void_pointer,
     never,
     void,
@@ -436,6 +449,13 @@ fn isCheckedSigned(kind: TypeClass) bool {
     };
 }
 
+fn isPointerLike(kind: TypeClass) bool {
+    return switch (kind) {
+        .pointer, .c_void_pointer => true,
+        else => false,
+    };
+}
+
 fn mergeArithmetic(left: TypeClass, right: TypeClass) TypeClass {
     if (left == .wrap or right == .wrap) return .wrap;
     if (isCheckedSigned(left)) return left;
@@ -448,8 +468,8 @@ fn mergeArithmetic(left: TypeClass, right: TypeClass) TypeClass {
 fn classifyType(ty: ast.TypeExpr) TypeClass {
     return switch (ty.kind) {
         .name => |name| classifyTypeName(name.text),
-        .pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .unknown,
-        .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .unknown,
+        .pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .pointer,
+        .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .pointer,
         .generic => |node| if (std.mem.eql(u8, node.base.text, "wrap")) .wrap else .unknown,
         else => .unknown,
     };

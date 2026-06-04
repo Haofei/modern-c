@@ -2,7 +2,7 @@
 // SPEC: milestone=c-void-ffi
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_C_VOID_DEREF,E_C_VOID_NO_LAYOUT,E_C_VOID_CONVERSION,E_MC_VOID_POINTER_FFI
+// SPEC: check=E_C_VOID_DEREF,E_C_VOID_NO_LAYOUT,E_C_VOID_CONVERSION,E_MC_VOID_POINTER_FFI,E_BITWISE_POINTER_OPERAND
 
 extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
 
@@ -55,6 +55,11 @@ fn reject_c_void_to_typed_pointer(p: *mut c_void) -> *mut u8 {
 fn reject_typed_pointer_to_c_void(p: *mut u8) -> *mut c_void {
     // EXPECT_ERROR: E_C_VOID_CONVERSION
     return p as *mut c_void;
+}
+
+fn reject_c_void_bitwise(a: *mut c_void, b: *mut c_void) -> *mut c_void {
+    // EXPECT_ERROR: E_BITWISE_POINTER_OPERAND
+    return a & b;
 }
 
 // EXPECT_ERROR: E_MC_VOID_POINTER_FFI
