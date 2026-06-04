@@ -11,6 +11,13 @@ fn accept_lexical_cleanup() -> void {
     return;
 }
 
+fn accept_block_lexical_cleanup() -> void {
+    defer {
+        close_resource();
+    };
+    return;
+}
+
 fn reject_defer_trap() -> void {
     // EXPECT_ERROR: E_DEFER_CONTROL_FLOW
     defer trap(.Assert);
@@ -27,4 +34,39 @@ fn reject_defer_try(maybe: ?*const u8) -> void {
     // EXPECT_ERROR: E_DEFER_CONTROL_FLOW
     defer maybe?;
     return;
+}
+
+fn reject_defer_block_return() -> void {
+    // EXPECT_ERROR: E_DEFER_CONTROL_FLOW
+    defer {
+        return;
+    };
+}
+
+fn reject_defer_block_trap() -> void {
+    // EXPECT_ERROR: E_DEFER_CONTROL_FLOW
+    defer {
+        trap(.Assert);
+    };
+    return;
+}
+
+fn reject_defer_block_break(flag: bool) -> void {
+    while flag {
+        // EXPECT_ERROR: E_DEFER_CONTROL_FLOW
+        defer {
+            break;
+        };
+        break;
+    }
+}
+
+fn reject_defer_block_continue(flag: bool) -> void {
+    while flag {
+        // EXPECT_ERROR: E_DEFER_CONTROL_FLOW
+        defer {
+            continue;
+        };
+        break;
+    }
 }

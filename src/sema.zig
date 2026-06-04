@@ -260,7 +260,7 @@ pub const Checker = struct {
             },
             .@"defer" => |expr| {
                 const cleanup = self.checkExpr(expr, ctx);
-                if (cleanup == .never or exprContainsTry(expr)) {
+                if (cleanup == .never or exprContainsDeferControlFlow(expr, ctx)) {
                     self.errorCode(stmt.span, "E_DEFER_CONTROL_FLOW", "defer is lexical cleanup and must not alter control flow");
                 }
             },
@@ -2075,6 +2075,67 @@ fn callContainsTry(node: anytype) bool {
     if (exprContainsTry(node.callee.*)) return true;
     for (node.args) |arg| {
         if (exprContainsTry(arg)) return true;
+    }
+    return false;
+}
+
+fn blockContainsDeferControlFlow(block: ast.Block, ctx: Context) bool {
+    for (block.items) |stmt| {
+        if (stmtContainsDeferControlFlow(stmt, ctx)) return true;
+    }
+    return false;
+}
+
+fn stmtContainsDeferControlFlow(stmt: ast.Stmt, ctx: Context) bool {
+    return switch (stmt.kind) {
+        .@"return", .@"break", .@"continue" => true,
+        .let_decl, .var_decl => |local| if (local.init) |expr| exprContainsDeferControlFlow(expr, ctx) else false,
+        .loop => |node| (if (node.iterable) |iterable| exprContainsDeferControlFlow(iterable, ctx) else false) or
+            blockContainsDeferControlFlow(node.body, ctx),
+        .if_let => |node| exprContainsDeferControlFlow(node.value, ctx) or
+            blockContainsDeferControlFlow(node.then_block, ctx) or
+            (if (node.else_block) |else_block| blockContainsDeferControlFlow(else_block, ctx) else false),
+        .@"switch" => |node| switchContainsDeferControlFlow(node, ctx),
+        .unsafe_block, .block => |block| blockContainsDeferControlFlow(block, ctx),
+        .contract_block => |contract| blockContainsDeferControlFlow(contract.block, ctx),
+        .@"defer", .expr, .assert => |expr| exprContainsDeferControlFlow(expr, ctx),
+        .assignment => |node| exprContainsDeferControlFlow(node.target, ctx) or exprContainsDeferControlFlow(node.value, ctx),
+        .asm_stmt => false,
+    };
+}
+
+fn switchContainsDeferControlFlow(node: ast.Switch, ctx: Context) bool {
+    if (exprContainsDeferControlFlow(node.subject, ctx)) return true;
+    for (node.arms) |arm| {
+        const body_contains_control_flow = switch (arm.body) {
+            .block => |block| blockContainsDeferControlFlow(block, ctx),
+            .expr => |expr| exprContainsDeferControlFlow(expr, ctx),
+        };
+        if (body_contains_control_flow) return true;
+    }
+    return false;
+}
+
+fn exprContainsDeferControlFlow(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .try_expr, .unreachable_expr => true,
+        .grouped, .address_of, .deref => |inner| exprContainsDeferControlFlow(inner.*, ctx),
+        .block => |block| blockContainsDeferControlFlow(block, ctx),
+        .unary => |node| exprContainsDeferControlFlow(node.expr.*, ctx),
+        .binary => |node| exprContainsDeferControlFlow(node.left.*, ctx) or exprContainsDeferControlFlow(node.right.*, ctx),
+        .cast => |node| exprContainsDeferControlFlow(node.value.*, ctx),
+        .call => |node| callContainsDeferControlFlow(node, ctx),
+        .index => |node| exprContainsDeferControlFlow(node.base.*, ctx) or exprContainsDeferControlFlow(node.index.*, ctx),
+        .member => |node| exprContainsDeferControlFlow(node.base.*, ctx),
+        else => if (exprResultType(expr, ctx)) |ty| classifyType(ty) == .never else false,
+    };
+}
+
+fn callContainsDeferControlFlow(node: anytype, ctx: Context) bool {
+    if (isTrapCall(node.callee.*)) return true;
+    if (exprContainsDeferControlFlow(node.callee.*, ctx)) return true;
+    for (node.args) |arg| {
+        if (exprContainsDeferControlFlow(arg, ctx)) return true;
     }
     return false;
 }
