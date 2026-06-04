@@ -138,6 +138,7 @@ const CEmitter = struct {
     globals: std.StringHashMap(GlobalInfo),
     functions: std.StringHashMap(FnInfo),
     structs: std.StringHashMap(ast.StructDecl),
+    mmio_structs: std.StringHashMap(MmioStruct),
     enums: std.StringHashMap(ast.EnumDecl),
     slice_types: std.StringHashMap(SliceInfo),
     temp_index: usize,
@@ -151,6 +152,7 @@ const CEmitter = struct {
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
+            .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
             .enums = std.StringHashMap(ast.EnumDecl).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .temp_index = 0,
@@ -161,6 +163,9 @@ const CEmitter = struct {
     fn deinit(self: *CEmitter) void {
         self.slice_types.deinit();
         self.enums.deinit();
+        var mmio_structs = self.mmio_structs.valueIterator();
+        while (mmio_structs.next()) |mmio_struct| mmio_struct.fields.deinit();
+        self.mmio_structs.deinit();
         self.structs.deinit();
         self.functions.deinit();
         self.globals.deinit();
@@ -176,8 +181,12 @@ const CEmitter = struct {
                     if (global.ty) |ty| try self.collectSliceType(ty);
                 },
                 .extern_struct => |struct_decl| {
-                    if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
-                    if (!isMmioStructAbi(struct_decl)) for (struct_decl.fields) |field| try self.collectSliceType(field.ty);
+                    if (isMmioStructAbi(struct_decl)) {
+                        try self.collectMmioStruct(struct_decl);
+                    } else {
+                        try self.structs.put(struct_decl.name.text, struct_decl);
+                        for (struct_decl.fields) |field| try self.collectSliceType(field.ty);
+                    }
                 },
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
                 .fn_decl, .extern_fn => |fn_decl| {
@@ -188,6 +197,11 @@ const CEmitter = struct {
             }
         }
         try self.emitEnums();
+        for (module.decls) |decl| {
+            if (decl.kind == .extern_struct and self.mmio_structs.contains(decl.kind.extern_struct.name.text)) {
+                try self.emitMmioStruct(decl.kind.extern_struct);
+            }
+        }
         for (module.decls) |decl| {
             if (decl.kind == .extern_struct and self.structs.contains(decl.kind.extern_struct.name.text)) {
                 try self.emitStruct(decl.kind.extern_struct);
@@ -365,6 +379,15 @@ const CEmitter = struct {
             .array => |node| return self.appendPointerType(out, node.child.*, .none, style),
             .nullable => |child| return self.appendType(out, child.*, style),
             .qualified => |node| return self.appendType(out, node.child.*, style),
+            .generic => |node| {
+                if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1) {
+                    const pointee = typeName(node.args[0]) orelse return out.appendSlice(self.scratch.allocator(), "void *");
+                    if (self.mmio_structs.contains(pointee)) {
+                        try out.appendSlice(self.scratch.allocator(), pointee);
+                        return out.appendSlice(self.scratch.allocator(), " volatile *");
+                    }
+                }
+            },
             else => {},
         }
         if (typeName(ty)) |name| {
@@ -375,6 +398,31 @@ const CEmitter = struct {
             }
         }
         try out.appendSlice(self.scratch.allocator(), cType(ty));
+    }
+
+    fn collectMmioStruct(self: *CEmitter, struct_decl: ast.StructDecl) !void {
+        var fields = std.StringHashMap(MmioField).init(self.allocator);
+        errdefer fields.deinit();
+        for (struct_decl.fields) |field| {
+            if (mmioFieldFromType(field.ty)) |info| try fields.put(field.name.text, info);
+        }
+        try self.mmio_structs.put(struct_decl.name.text, .{ .fields = fields });
+    }
+
+    fn emitMmioStruct(self: *CEmitter, struct_decl: ast.StructDecl) !void {
+        try self.out.print(self.allocator, "typedef struct {s} {{\n", .{struct_decl.name.text});
+        self.indent += 1;
+        for (struct_decl.fields) |field| {
+            const info = mmioFieldFromType(field.ty) orelse {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "/* unsupported MMIO field: {s} */\n", .{field.name.text});
+                return error.UnsupportedCEmission;
+            };
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} volatile {s};\n", .{ primitiveCTypeName(info.width) orelse "void *", field.name.text });
+        }
+        self.indent -= 1;
+        try self.out.print(self.allocator, "}} {s};\n\n", .{struct_decl.name.text});
     }
 
     fn appendPointerType(self: *CEmitter, out: *std.ArrayList(u8), child: ast.TypeExpr, mutability: ast.Mutability, style: StructTypeStyle) anyerror!void {
@@ -517,6 +565,7 @@ const CEmitter = struct {
                 if (maybe) |expr| {
                     if (try self.emitNeverExprStmt(expr, locals)) return;
                     if (try self.emitDirectCallSliceIndexReturn(expr, locals)) return;
+                    if (try self.emitMmioReadReturn(expr, locals)) return;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "return ");
                     if (return_ty) |target_ty| {
@@ -540,6 +589,7 @@ const CEmitter = struct {
             },
             .expr => |expr| {
                 if (try self.emitNeverExprStmt(expr, locals)) return;
+                if (try self.emitMmioWriteStmt(expr, locals)) return;
                 try self.writeIndent();
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
@@ -754,6 +804,54 @@ const CEmitter = struct {
             .grouped => |inner| return try self.emitNeverExprStmt(inner.*, locals),
             else => return false,
         }
+    }
+
+    fn emitMmioWriteStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitMmioWriteStmt(inner.*, locals),
+            else => return false,
+        };
+        const access = self.mmioAccess(call.callee.*, call.args, locals) orelse return false;
+        if (!std.mem.eql(u8, access.kind, "write")) return false;
+        if (!std.mem.eql(u8, access.width, "u8")) return error.UnsupportedCEmission;
+        if (call.args.len == 0) return error.UnsupportedCEmission;
+
+        if (std.mem.eql(u8, access.ordering, "release")) {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "mc_barrier_release_before();\n");
+        }
+        try self.writeIndent();
+        try self.out.print(self.allocator, "mc_mmio_write_u8(&{s}->{s}, ", .{ access.param, access.field });
+        try self.emitExpr(call.args[0], locals);
+        try self.out.appendSlice(self.allocator, ");\n");
+        return true;
+    }
+
+    fn emitMmioReadReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitMmioReadReturn(inner.*, locals),
+            else => return false,
+        };
+        const access = self.mmioAccess(call.callee.*, call.args, locals) orelse return false;
+        if (!std.mem.eql(u8, access.kind, "read")) return false;
+        if (!std.mem.eql(u8, access.width, "u8")) return error.UnsupportedCEmission;
+
+        if (std.mem.eql(u8, access.ordering, "acquire")) {
+            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = mc_mmio_read_u8(&{s}->{s});\n", .{ primitiveCTypeName(access.value_type) orelse "uint8_t", temp_name, access.param, access.field });
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "mc_barrier_acquire_after();\n");
+            try self.writeIndent();
+            try self.out.print(self.allocator, "return {s};\n", .{temp_name});
+        } else {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "return mc_mmio_read_u8(&{s}->{s});\n", .{ access.param, access.field });
+        }
+        return true;
     }
 
     fn emitExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
@@ -979,22 +1077,59 @@ const CEmitter = struct {
         return if (return_ty.kind == .slice) return_ty else null;
     }
 
+    fn mmioAccess(self: *CEmitter, callee: ast.Expr, args: []ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
+        const member = switch (callee.kind) {
+            .member => |node| node,
+            else => return null,
+        };
+        const kind: []const u8 = if (std.mem.eql(u8, member.name.text, "read"))
+            "read"
+        else if (std.mem.eql(u8, member.name.text, "write"))
+            "write"
+        else
+            return null;
+
+        const reg_member = switch (member.base.kind) {
+            .member => |node| node,
+            else => return null,
+        };
+        const param = switch (reg_member.base.kind) {
+            .ident => |ident| ident.text,
+            else => return null,
+        };
+        const struct_name = if (locals.get(param)) |info| info.mmio_pointee orelse return null else return null;
+        const mmio_struct = self.mmio_structs.get(struct_name) orelse return null;
+        const field = mmio_struct.fields.get(reg_member.name.text) orelse return null;
+        return .{
+            .kind = kind,
+            .param = param,
+            .struct_name = struct_name,
+            .field = reg_member.name.text,
+            .value_type = field.value_type,
+            .width = field.width,
+            .ordering = orderingArg(args),
+        };
+    }
+
     fn localInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !LocalInfo {
         const source_type_name = typeName(ty);
+        const mmio_pointee = mmioPointee(ty);
         return switch (ty.kind) {
-            .array => |node| .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name, .array_len = intLiteralText(node.len) },
+            .array => |node| .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name, .array_len = intLiteralText(node.len), .mmio_pointee = mmio_pointee },
             .slice => .{
                 .c_type = try self.cTypeFor(ty, .typedef_name),
                 .source_type_name = source_type_name,
                 .slice_ptr_field = "ptr",
                 .slice_len_field = "len",
+                .mmio_pointee = mmio_pointee,
             },
             .nullable => |child| .{
                 .c_type = try self.cTypeFor(ty, .typedef_name),
                 .source_type_name = source_type_name,
                 .nullable_inner_c_type = try self.nullableInnerCType(child.*),
+                .mmio_pointee = mmio_pointee,
             },
-            else => .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name },
+            else => .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name, .mmio_pointee = mmio_pointee },
         };
     }
 
@@ -1014,6 +1149,7 @@ const LocalInfo = struct {
     slice_ptr_field: ?[]const u8 = null,
     slice_len_field: ?[]const u8 = null,
     nullable_inner_c_type: ?[]const u8 = null,
+    mmio_pointee: ?[]const u8 = null,
 };
 
 const FnInfo = struct {
@@ -1503,6 +1639,7 @@ const MmioField = struct {
 
 const MmioAccess = struct {
     kind: []const u8,
+    param: []const u8 = "",
     struct_name: []const u8,
     field: []const u8,
     value_type: []const u8,
@@ -1589,6 +1726,23 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "i64")) return "int64_t";
     if (std.mem.eql(u8, name, "isize")) return "intptr_t";
     return "void *";
+}
+
+fn primitiveCTypeName(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "void")) return "void";
+    if (std.mem.eql(u8, name, "never")) return "void";
+    if (std.mem.eql(u8, name, "bool")) return "bool";
+    if (std.mem.eql(u8, name, "u8")) return "uint8_t";
+    if (std.mem.eql(u8, name, "u16")) return "uint16_t";
+    if (std.mem.eql(u8, name, "u32")) return "uint32_t";
+    if (std.mem.eql(u8, name, "u64")) return "uint64_t";
+    if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
+    if (std.mem.eql(u8, name, "i8")) return "int8_t";
+    if (std.mem.eql(u8, name, "i16")) return "int16_t";
+    if (std.mem.eql(u8, name, "i32")) return "int32_t";
+    if (std.mem.eql(u8, name, "i64")) return "int64_t";
+    if (std.mem.eql(u8, name, "isize")) return "intptr_t";
+    return null;
 }
 
 fn ptrCType(child: ast.TypeExpr, mutability: ast.Mutability) []const u8 {
@@ -1985,6 +2139,49 @@ test "emits C support helpers used by lower-c evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u8") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after") != null);
+}
+
+test "emits C for simple MMIO register access" {
+    const source =
+        \\extern mmio struct Uart16550 {
+        \\    thr: Reg<u8, .write>,
+        \\    lsr: Reg<u8, .read>,
+        \\}
+        \\
+        \\fn putc(uart: MmioPtr<Uart16550>, ch: u8) -> void {
+        \\    uart.thr.write(ch, .release);
+        \\}
+        \\
+        \\fn read_lsr(uart: MmioPtr<Uart16550>) -> u8 {
+        \\    return uart.lsr.read(.acquire);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_mmio.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct Uart16550 {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t volatile thr;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t volatile lsr;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void putc(Uart16550 volatile * uart, uint8_t ch)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u8(&uart->thr, ch);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_lsr(Uart16550 volatile * uart)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp0 = mc_mmio_read_u8(&uart->lsr);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
