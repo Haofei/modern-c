@@ -805,6 +805,7 @@ const CEmitter = struct {
                                 if (try self.emitResultTryExprLocalInit(name.text, decl_ty, initializer, locals, return_ty)) continue;
                                 if (try self.emitNullableTryExprLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitResultTryLocalInit(name.text, decl_ty, initializer, locals, return_ty)) continue;
+                                if (try self.emitMmioReadLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitDirectCallSliceIndexLocalInit(name.text, decl_ty, initializer, locals)) continue;
                             }
                         }
@@ -1475,6 +1476,26 @@ const CEmitter = struct {
         } else {
             try self.writeIndent();
             try self.out.print(self.allocator, "return ({s})mc_mmio_read_{s}(&{s}->{s});\n", .{ value_c_type, access.width, access.param, access.field });
+        }
+        return true;
+    }
+
+    fn emitMmioReadLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (initializer.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitMmioReadLocalInit(name, decl_ty, inner.*, locals),
+            else => return false,
+        };
+        const access = self.mmioAccess(call.callee.*, call.args, locals) orelse return false;
+        if (!std.mem.eql(u8, access.kind, "read")) return false;
+        if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
+
+        try self.writeIndent();
+        try self.emitDeclarator(decl_ty, name);
+        try self.out.print(self.allocator, " = ({s})mc_mmio_read_{s}(&{s}->{s});\n", .{ try self.cTypeFor(decl_ty, .typedef_name), access.width, access.param, access.field });
+        if (std.mem.eql(u8, access.ordering, "acquire")) {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "mc_barrier_acquire_after();\n");
         }
         return true;
     }
@@ -3798,6 +3819,48 @@ test "emits C for wider MMIO register access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint64_t mc_tmp0 = (uint64_t)mc_mmio_read_u64(&dev->wide);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u64(&dev->wide, value);") != null);
+}
+
+test "emits C for MMIO read local initializers" {
+    const source =
+        \\packed bits Status: u8 {
+        \\    ready: bool,
+        \\}
+        \\
+        \\extern mmio struct Device {
+        \\    stat: Reg<u16, .read>,
+        \\    flags: RegBits<u8, Status, .read>,
+        \\}
+        \\
+        \\fn read_local(dev: MmioPtr<Device>) -> u16 {
+        \\    let value: u16 = dev.stat.read(.acquire);
+        \\    return value;
+        \\}
+        \\
+        \\fn read_bits_local(dev: MmioPtr<Device>) -> Status {
+        \\    let status: Status = dev.flags.read(.relaxed);
+        \\    return status;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_mmio_read_local_init.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t value = (uint16_t)mc_mmio_read_u16(&dev->stat);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Status status = (Status)mc_mmio_read_u8(&dev->flags);") != null);
 }
 
 test "emits C for packed bits MMIO reads and field masks" {
