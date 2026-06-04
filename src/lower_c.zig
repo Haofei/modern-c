@@ -775,6 +775,7 @@ const CEmitter = struct {
                 }
             },
             .assignment => |node| {
+                if (try self.emitOverlayFieldWriteStmt(node, locals)) return;
                 try self.writeIndent();
                 if (self.globalAssignmentTarget(node.target, locals)) |target| {
                     try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ", .{ target.info.type_name, target.name });
@@ -1682,6 +1683,45 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ".storage[mc_check_index_usize(");
                 try self.emitExpr(node.index.*, locals);
                 try self.out.print(self.allocator, ", {s})];\n", .{len});
+                return true;
+            },
+            else => return false,
+        }
+    }
+
+    fn emitOverlayFieldWriteStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        switch (assignment.target.kind) {
+            .grouped => |inner| return try self.emitOverlayFieldWriteStmt(.{ .target = inner.*, .value = assignment.value }, locals),
+            .member => |node| {
+                const access = self.overlayFieldAccess(node, locals) orelse return false;
+                if (access.field.byte_array_len != null) return false;
+                const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+                self.temp_index += 1;
+
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(access.field.ty, .typedef_name), temp_name });
+                try self.emitExprWithTarget(assignment.value, locals, access.field.ty);
+                try self.out.appendSlice(self.allocator, ";\n");
+
+                try self.writeIndent();
+                try self.out.print(self.allocator, "memcpy(", .{});
+                try self.emitExpr(access.base, locals);
+                try self.out.print(self.allocator, ".storage, &{s}, {d});\n", .{ temp_name, access.field.layout.size });
+                return true;
+            },
+            .index => |node| {
+                const member = overlayMemberFromIndexBase(node.base.*) orelse return false;
+                const access = self.overlayFieldAccess(member, locals) orelse return false;
+                const len = access.field.byte_array_len orelse return false;
+                const element_ty = overlayByteArrayElementType(access.field.ty) orelse return false;
+
+                try self.writeIndent();
+                try self.emitExpr(access.base, locals);
+                try self.out.appendSlice(self.allocator, ".storage[mc_check_index_usize(");
+                try self.emitExpr(node.index.*, locals);
+                try self.out.print(self.allocator, ", {s})] = ", .{len});
+                try self.emitExprWithTarget(assignment.value, locals, element_ty);
+                try self.out.appendSlice(self.allocator, ";\n");
                 return true;
             },
             else => return false,
@@ -2860,6 +2900,26 @@ fn overlayByteArrayLen(ty: ast.TypeExpr) ?[]const u8 {
             return intLiteralText(node.len);
         },
         .qualified => |node| overlayByteArrayLen(node.child.*),
+        else => null,
+    };
+}
+
+fn overlayByteArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .array => |node| {
+            const child_name = typeName(node.child.*) orelse return null;
+            if (!std.mem.eql(u8, child_name, "u8")) return null;
+            return node.child.*;
+        },
+        .qualified => |node| overlayByteArrayElementType(node.child.*),
+        else => null,
+    };
+}
+
+fn overlayMemberFromIndexBase(expr: ast.Expr) ?@TypeOf(expr.kind.member) {
+    return switch (expr.kind) {
+        .member => |member| member,
+        .grouped => |inner| overlayMemberFromIndexBase(inner.*),
         else => null,
     };
 }
@@ -4354,6 +4414,16 @@ test "emits C overlay unions as byte storage" {
         \\fn read_b0(word: Word) -> u8 {
         \\    return word.bytes[0];
         \\}
+        \\
+        \\fn write_u(word: Word, value: u32) -> Word {
+        \\    word.u = value;
+        \\    return word;
+        \\}
+        \\
+        \\fn write_b0(word: Word, value: u8) -> Word {
+        \\    word.bytes[0] = value;
+        \\    return word;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_overlay_union.mc", source);
@@ -4382,6 +4452,11 @@ test "emits C overlay unions as byte storage" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_b0(Word word)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return word.storage[mc_check_index_usize(0, 4)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Word write_u(Word word, uint32_t value)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp1 = value;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "memcpy(word.storage, &mc_tmp1, 4);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Word write_b0(Word word, uint8_t value)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "word.storage[mc_check_index_usize(0, 4)] = value;") != null);
 }
 
 test "emits C assert trap" {
