@@ -321,6 +321,7 @@ const CEmitter = struct {
                     try self.writeUnsupportedStmt(stmt);
                 }
             },
+            .@"switch" => |node| try self.emitSwitch(node, locals),
             else => try self.writeUnsupportedStmt(stmt),
         }
     }
@@ -341,6 +342,61 @@ const CEmitter = struct {
             .{@tagName(stmt.kind)},
         );
         return error.UnsupportedCEmission;
+    }
+
+    fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "switch (");
+        try self.emitExpr(node.subject, locals);
+        try self.out.appendSlice(self.allocator, ") {\n");
+
+        self.indent += 1;
+        for (node.arms) |arm| {
+            for (arm.patterns) |pattern| {
+                try self.emitSwitchPatternLabel(pattern);
+            }
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "{\n");
+            var nested = try cloneLocals(self.allocator, locals.*);
+            defer nested.deinit();
+            self.indent += 1;
+            switch (arm.body) {
+                .block => |block| try self.emitBlockItems(block, &nested),
+                .expr => |expr| {
+                    try self.writeIndent();
+                    try self.emitExpr(expr, &nested);
+                    try self.out.appendSlice(self.allocator, ";\n");
+                },
+            }
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "break;\n");
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "}\n");
+        }
+        self.indent -= 1;
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}\n");
+    }
+
+    fn emitSwitchPatternLabel(self: *CEmitter, pattern: ast.Pattern) !void {
+        try self.writeIndent();
+        switch (pattern.kind) {
+            .literal => |expr| if (intLiteralText(expr)) |literal| {
+                try self.out.appendSlice(self.allocator, "case ");
+                try appendCIntLiteral(self.allocator, self.out, literal);
+                try self.out.appendSlice(self.allocator, ":\n");
+            } else {
+                try self.out.print(self.allocator, "/* unsupported switch pattern: {s} */\n", .{@tagName(pattern.kind)});
+                return error.UnsupportedCEmission;
+            },
+            .wildcard => try self.out.appendSlice(self.allocator, "default:\n"),
+            else => {
+                try self.out.print(self.allocator, "/* unsupported switch pattern: {s} */\n", .{@tagName(pattern.kind)});
+                return error.UnsupportedCEmission;
+            },
+        }
     }
 
     fn emitExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
@@ -1485,4 +1541,42 @@ test "emits C checked u32 arithmetic helpers" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_mod_u32(out, b);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_shl_u32(out, n);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_shr_u32(out, n);") != null);
+}
+
+test "emits C for integer switch arms" {
+    const source =
+        \\fn classify(n: u32) -> u32 {
+        \\    switch n {
+        \\        0 => {
+        \\            let x: u32 = 10;
+        \\            return x;
+        \\        },
+        \\        1, 2 => { return 20; },
+        \\        _ => { return 30; },
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_switch.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch (n) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 0:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 1:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case 2:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "default:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 10;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 30;") != null);
 }
