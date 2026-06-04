@@ -52,10 +52,26 @@ fn reject_right_shift(a: u32, n: u32) -> u32 {
     return a >> n;
 }
 
+fn trapping_add(a: u32, b: u32) -> u32 {
+    return a + b;
+}
+
+#[no_lang_trap]
+fn reject_call_trapping_fn(a: u32, b: u32) -> u32 {
+    // EXPECT_ERROR: E_NO_LANG_TRAP_EDGE
+    return trapping_add(a, b);
+}
+
 #[no_lang_trap]
 fn allow_wrapping_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
     // EXPECT: verifier accepts because wrapping add has no language-trap edge.
     return wrapping.add(a, b);
+}
+
+#[no_lang_trap]
+fn allow_call_no_lang_trap_fn(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
+    // EXPECT: verifier accepts calls to functions also marked #[no_lang_trap].
+    return allow_wrapping_add(a, b);
 }
 
 #[naked]

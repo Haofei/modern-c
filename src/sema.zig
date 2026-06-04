@@ -139,7 +139,11 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .fn_decl, .extern_fn => |fn_decl| {
-                    if (!functions.contains(fn_decl.name.text)) functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_ty = fn_decl.return_type }) catch {};
+                    if (!functions.contains(fn_decl.name.text)) functions.put(fn_decl.name.text, .{
+                        .params = fn_decl.params,
+                        .return_ty = fn_decl.return_type,
+                        .no_lang_trap = hasNoLangTrap(decl.attrs),
+                    }) catch {};
                 },
                 .extern_struct, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
@@ -737,6 +741,9 @@ pub const Checker = struct {
                 for (node.type_args) |ty| self.checkType(ty, .normal);
                 const direct_function = if (!trap_call and node.type_args.len == 0) directCallFunction(node.callee.*, ctx) else null;
                 if (direct_function) |function| {
+                    if (ctx.no_lang_trap and !function.no_lang_trap) {
+                        self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "call target is not proven #[no_lang_trap]");
+                    }
                     if (node.args.len != function.params.len) {
                         self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match function declaration");
                     }
@@ -1392,6 +1399,7 @@ const UnionInfo = struct {
 const FunctionInfo = struct {
     params: []const ast.Param,
     return_ty: ?ast.TypeExpr,
+    no_lang_trap: bool = false,
 };
 
 const GlobalInfo = struct {
