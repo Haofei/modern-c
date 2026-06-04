@@ -40,11 +40,32 @@ pub const SafeNoTrapOp = struct {
     column: usize,
 };
 
+pub const ContractRegion = struct {
+    function_name: []const u8,
+    id: usize,
+    contract: []const u8,
+    begin_line: usize,
+    end_line: usize,
+    unchecked_calls: usize,
+    metadata_attached_after_region: bool,
+};
+
+pub const UncheckedCall = struct {
+    function_name: []const u8,
+    callee: []const u8,
+    contract: ?[]const u8,
+    contract_region_id: ?usize,
+    line: usize,
+    column: usize,
+};
+
 pub const FunctionIr = struct {
     name: []const u8,
     no_lang_trap: bool,
     trap_edges: []TrapEdge,
     safe_no_trap_ops: []SafeNoTrapOp,
+    contract_regions: []ContractRegion,
+    unchecked_calls: []UncheckedCall,
 };
 
 pub const ModuleIr = struct {
@@ -55,6 +76,8 @@ pub const ModuleIr = struct {
         for (self.functions) |function| {
             self.allocator.free(function.trap_edges);
             self.allocator.free(function.safe_no_trap_ops);
+            self.allocator.free(function.contract_regions);
+            self.allocator.free(function.unchecked_calls);
         }
         self.allocator.free(self.functions);
     }
@@ -66,6 +89,8 @@ pub fn buildModuleIr(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr
         for (functions.items) |function| {
             allocator.free(function.trap_edges);
             allocator.free(function.safe_no_trap_ops);
+            allocator.free(function.contract_regions);
+            allocator.free(function.unchecked_calls);
         }
         functions.deinit(allocator);
     }
@@ -93,9 +118,31 @@ pub fn appendLowerIr(allocator: std.mem.Allocator, module: ast.Module, out: *std
     for (module_ir.functions) |function| {
         try out.print(
             allocator,
-            "ir function name={s} no_lang_trap={} trap_edges={} safe_no_trap_ops={}\n",
-            .{ function.name, function.no_lang_trap, function.trap_edges.len, function.safe_no_trap_ops.len },
+            "ir function name={s} no_lang_trap={} trap_edges={} safe_no_trap_ops={} contract_regions={} unchecked_calls={}\n",
+            .{ function.name, function.no_lang_trap, function.trap_edges.len, function.safe_no_trap_ops.len, function.contract_regions.len, function.unchecked_calls.len },
         );
+        for (function.contract_regions) |region| {
+            try out.print(
+                allocator,
+                "ir contract_region fn={s} id={} contract={s} begin_line={} end_line={} unchecked_calls={} metadata_attached_after_region={}\n",
+                .{ region.function_name, region.id, region.contract, region.begin_line, region.end_line, region.unchecked_calls, region.metadata_attached_after_region },
+            );
+        }
+        for (function.unchecked_calls) |call| {
+            if (call.contract_region_id) |region_id| {
+                try out.print(
+                    allocator,
+                    "ir unchecked_call fn={s} callee={s} contract={s} contract_region_id={} line={} column={}\n",
+                    .{ call.function_name, call.callee, call.contract orelse "none", region_id, call.line, call.column },
+                );
+            } else {
+                try out.print(
+                    allocator,
+                    "ir unchecked_call fn={s} callee={s} contract={s} contract_region_id=none line={} column={}\n",
+                    .{ call.function_name, call.callee, call.contract orelse "none", call.line, call.column },
+                );
+            }
+        }
         for (function.trap_edges) |edge| {
             try out.print(
                 allocator,
@@ -119,6 +166,11 @@ const FunctionIrBuilder = struct {
     no_lang_trap: bool,
     trap_edges: std.ArrayList(TrapEdge),
     safe_no_trap_ops: std.ArrayList(SafeNoTrapOp),
+    contract_regions: std.ArrayList(ContractRegion),
+    unchecked_calls: std.ArrayList(UncheckedCall),
+    active_contract: ?[]const u8 = null,
+    active_contract_region_id: ?usize = null,
+    next_contract_region_id: usize = 1,
 
     fn init(allocator: std.mem.Allocator, function_name: []const u8, no_lang_trap: bool) FunctionIrBuilder {
         return .{
@@ -127,23 +179,33 @@ const FunctionIrBuilder = struct {
             .no_lang_trap = no_lang_trap,
             .trap_edges = .empty,
             .safe_no_trap_ops = .empty,
+            .contract_regions = .empty,
+            .unchecked_calls = .empty,
         };
     }
 
     fn deinit(self: *FunctionIrBuilder) void {
         self.trap_edges.deinit(self.allocator);
         self.safe_no_trap_ops.deinit(self.allocator);
+        self.contract_regions.deinit(self.allocator);
+        self.unchecked_calls.deinit(self.allocator);
     }
 
     fn finish(self: *FunctionIrBuilder) !FunctionIr {
         const trap_edges = try self.trap_edges.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(trap_edges);
         const safe_no_trap_ops = try self.safe_no_trap_ops.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(safe_no_trap_ops);
+        const contract_regions = try self.contract_regions.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(contract_regions);
+        const unchecked_calls = try self.unchecked_calls.toOwnedSlice(self.allocator);
         return .{
             .name = self.function_name,
             .no_lang_trap = self.no_lang_trap,
             .trap_edges = trap_edges,
             .safe_no_trap_ops = safe_no_trap_ops,
+            .contract_regions = contract_regions,
+            .unchecked_calls = unchecked_calls,
         };
     }
 
@@ -171,7 +233,7 @@ const FunctionIrBuilder = struct {
                 };
             },
             .unsafe_block, .comptime_block, .block => |body| try self.collectBlock(body),
-            .contract_block => |contract| try self.collectBlock(contract.block),
+            .contract_block => |contract| try self.collectContractBlock(contract),
             .asm_stmt => if (self.no_lang_trap) try self.addSafeOp("opaque_volatile_asm", stmt.span),
             .@"return" => |maybe| if (maybe) |expr| try self.collectExpr(expr),
             .@"break", .@"continue" => {},
@@ -229,6 +291,9 @@ const FunctionIrBuilder = struct {
                 } else if (safeNoLangTrapCalleeName(node.callee.*)) |callee_name| {
                     if (self.no_lang_trap) try self.addSafeOp(callee_name, expr.span);
                 }
+                if (isUncheckedCall(node.callee.*)) {
+                    try self.addUncheckedCall(node.callee.*, expr.span);
+                }
                 try self.collectExpr(node.callee.*);
                 for (node.args) |arg| try self.collectExpr(arg);
             },
@@ -239,6 +304,30 @@ const FunctionIrBuilder = struct {
             },
             .member => |node| try self.collectExpr(node.base.*),
         }
+    }
+
+    fn collectContractBlock(self: *FunctionIrBuilder, contract: ast.ContractBlock) !void {
+        const id = self.next_contract_region_id;
+        self.next_contract_region_id += 1;
+        const name = contractName(contract.attr);
+        const region_index = self.contract_regions.items.len;
+        try self.contract_regions.append(self.allocator, .{
+            .function_name = self.function_name,
+            .id = id,
+            .contract = name,
+            .begin_line = contract.attr.span.line,
+            .end_line = contract.attr.span.line,
+            .unchecked_calls = 0,
+            .metadata_attached_after_region = false,
+        });
+        const previous_contract = self.active_contract;
+        const previous_region_id = self.active_contract_region_id;
+        self.active_contract = name;
+        self.active_contract_region_id = id;
+        try self.collectBlock(contract.block);
+        self.active_contract = previous_contract;
+        self.active_contract_region_id = previous_region_id;
+        self.contract_regions.items[region_index].end_line = contract.attr.span.line;
     }
 
     fn addTrap(self: *FunctionIrBuilder, kind: TrapKind, source: TrapSource, span: ast.Span) !void {
@@ -259,6 +348,26 @@ const FunctionIrBuilder = struct {
             .line = span.line,
             .column = span.column,
         });
+    }
+
+    fn addUncheckedCall(self: *FunctionIrBuilder, callee: ast.Expr, span: ast.Span) !void {
+        const callee_name = uncheckedCalleeName(callee) orelse "unknown";
+        try self.unchecked_calls.append(self.allocator, .{
+            .function_name = self.function_name,
+            .callee = callee_name,
+            .contract = self.active_contract,
+            .contract_region_id = self.active_contract_region_id,
+            .line = span.line,
+            .column = span.column,
+        });
+        if (self.active_contract_region_id) |region_id| {
+            for (self.contract_regions.items) |*region| {
+                if (region.id == region_id) {
+                    region.unchecked_calls += 1;
+                    break;
+                }
+            }
+        }
     }
 };
 
@@ -1103,9 +1212,30 @@ fn bitwiseNoTrapOpName(op: ast.BinaryOp) ?[]const u8 {
 
 fn isUncheckedCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
-        .member => |node| isIdentNamed(node.base.*, "unchecked"),
+        .member => |node| isIdentNamed(node.base.*, "unchecked") or
+            (isIdentNamed(node.base.*, "compiler") and std.mem.eql(u8, node.name.text, "assume_noalias_unchecked")),
         .ident => |ident| std.mem.startsWith(u8, ident.text, "unchecked_"),
         else => false,
+    };
+}
+
+fn uncheckedCalleeName(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .member => |node| if (isIdentNamed(node.base.*, "unchecked"))
+            if (std.mem.eql(u8, node.name.text, "add")) "unchecked.add" else node.name.text
+        else if (isIdentNamed(node.base.*, "compiler") and std.mem.eql(u8, node.name.text, "assume_noalias_unchecked"))
+            "compiler.assume_noalias_unchecked"
+        else
+            null,
+        .ident => |ident| if (std.mem.startsWith(u8, ident.text, "unchecked_")) ident.text else null,
+        else => null,
+    };
+}
+
+fn contractName(attr: ast.Attr) []const u8 {
+    return switch (attr.kind) {
+        .unsafe_contract => |contract| contract.name.text,
+        .no_lang_trap, .named => "unknown",
     };
 }
 

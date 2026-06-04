@@ -533,7 +533,7 @@ test "tests/spec fixtures produce declared IR inspection facts" {
                 std.debug.print("{s}: expected IR fact evidence for {s}\nFacts:\n{s}", .{ path, check, facts.items });
                 try std.testing.expect(false);
             }
-            if (std.mem.eql(u8, check, "no-language-trap-edge")) {
+            if (std.mem.eql(u8, check, "no-language-trap-edge") or std.mem.eql(u8, check, "contract_region")) {
                 var module_ir = try ir.buildModuleIr(allocator, module);
                 defer module_ir.deinit();
                 if (!hasLowerIrEvidenceForCheck(module_ir, check)) {
@@ -878,6 +878,10 @@ fn hasLowerIrEvidenceForCheck(module_ir: ir.ModuleIr, check: []const u8) bool {
             lowerIrFunctionHasNoTrapsAndSafeOp(module_ir, "allow_wrapping_add", "wrapping.add") and
             lowerIrFunctionHasNoTrapsAndSafeOp(module_ir, "allow_boot_asm", "opaque_volatile_asm");
     }
+    if (std.mem.eql(u8, check, "contract_region")) {
+        return lowerIrFunctionHasContractRegion(module_ir, "allow_unchecked_add_inside_contract", "no_overflow", "unchecked.add") and
+            lowerIrFunctionHasContractRegion(module_ir, "noalias_contract_region", "noalias", "compiler.assume_noalias_unchecked");
+    }
     return false;
 }
 
@@ -895,6 +899,22 @@ fn lowerIrFunctionHasNoTrapsAndSafeOp(module_ir: ir.ModuleIr, name: []const u8, 
     if (!function.no_lang_trap or function.trap_edges.len != 0) return false;
     for (function.safe_no_trap_ops) |op| {
         if (std.mem.eql(u8, op.kind, op_kind)) return true;
+    }
+    return false;
+}
+
+fn lowerIrFunctionHasContractRegion(module_ir: ir.ModuleIr, name: []const u8, contract: []const u8, callee: []const u8) bool {
+    const function = lowerIrFunctionByName(module_ir, name) orelse return false;
+    var region_id: ?usize = null;
+    for (function.contract_regions) |region| {
+        if (std.mem.eql(u8, region.contract, contract) and region.unchecked_calls > 0 and !region.metadata_attached_after_region) {
+            region_id = region.id;
+            break;
+        }
+    }
+    const expected_region_id = region_id orelse return false;
+    for (function.unchecked_calls) |call| {
+        if (std.mem.eql(u8, call.callee, callee) and call.contract_region_id != null and call.contract_region_id.? == expected_region_id) return true;
     }
     return false;
 }
