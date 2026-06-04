@@ -107,6 +107,10 @@ pub const Checker = struct {
         const ty = global.ty orelse return;
         const target = classifyType(ty);
         const source = self.checkExpr(initializer, ctx);
+        if (isUninitLiteral(initializer)) {
+            self.errorCode(initializer.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
+            return;
+        }
         const literal_checked = self.checkIntegerLiteralInitializer(target, ty, initializer);
         const null_checked = self.checkNullPointerInitializer(target, initializer);
         const array_decay_checked = self.checkArrayDecayInitializer(target, source, initializer);
