@@ -87,9 +87,10 @@ pub const Parser = struct {
 
         if (self.matchIdentifierText("global")) {
             const name = try self.expectName("expected global name");
-            while (self.current.kind != .semicolon and self.current.kind != .eof) self.advance();
-            _ = self.match(.semicolon);
-            return .{ .span = joinSpan(start, name.span), .attrs = attrs, .kind = .{ .opaque_decl = name } };
+            const ty = if (self.match(.colon)) try self.parseType() else null;
+            const initializer = if (self.match(.equal)) try self.parseExpr(0) else null;
+            const semi = try self.expectTok(.semicolon, "expected ';' after global declaration");
+            return .{ .span = joinSpan(start, semi.span), .attrs = attrs, .kind = .{ .global_decl = .{ .name = name, .ty = ty, .init = initializer } } };
         }
 
         return self.fail("expected top-level fn, type, or extern declaration");
@@ -705,6 +706,7 @@ fn joinSpan(first: diagnostics.Span, last: diagnostics.Span) diagnostics.Span {
 test "parser covers MC declaration and statement examples" {
     const source =
         \\extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
+        \\global shared_counter: u32 = 0;
         \\extern struct Timespec { sec: i64, nsec: i64, }
         \\type LoadResult = Result<Module, LoadError>;
         \\#[no_lang_trap]
@@ -732,5 +734,8 @@ test "parser covers MC declaration and statement examples" {
     const module = try p.parseModule(allocator);
     defer module.deinit(allocator);
     try std.testing.expect(!reporter.has_errors);
-    try std.testing.expectEqual(@as(usize, 5), module.decls.len);
+    try std.testing.expectEqual(@as(usize, 6), module.decls.len);
+    try std.testing.expectEqual(std.meta.Tag(ast.Decl.Kind).global_decl, std.meta.activeTag(module.decls[1].kind));
+    try std.testing.expect(module.decls[1].kind.global_decl.ty != null);
+    try std.testing.expect(module.decls[1].kind.global_decl.init != null);
 }

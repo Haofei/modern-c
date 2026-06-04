@@ -23,6 +23,10 @@ pub const Checker = struct {
             },
             .type_alias => |alias| self.checkType(alias.ty, .normal),
             .opaque_decl => {},
+            .global_decl => |global| {
+                if (global.ty) |ty| self.checkType(ty, .normal);
+                if (global.init) |initializer| _ = self.checkExpr(initializer, .{});
+            },
         }
     }
 

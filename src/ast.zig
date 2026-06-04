@@ -43,6 +43,7 @@ pub const Decl = struct {
         extern_fn: FnDecl,
         extern_struct: StructDecl,
         opaque_decl: Ident,
+        global_decl: GlobalDecl,
     };
 };
 
@@ -69,6 +70,12 @@ pub const StructDecl = struct {
     name: Ident,
     abi: ?[]const u8,
     fields: []Field,
+};
+
+pub const GlobalDecl = struct {
+    name: Ident,
+    ty: ?TypeExpr,
+    init: ?Expr,
 };
 
 pub const Field = struct {

@@ -37,7 +37,7 @@ const Inspector = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .fn_decl, .extern_fn => |fn_decl| if (fn_decl.body) |body| try self.inspectFn(fn_decl, body),
-                .type_alias, .extern_struct, .opaque_decl => {},
+                .type_alias, .extern_struct, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -50,10 +50,10 @@ const Inspector = struct {
                         if (std.mem.eql(u8, abi, "mmio")) try self.collectMmioStruct(struct_decl);
                     }
                 },
-                .opaque_decl => |name| {
-                    try self.globals.put(name.text, {});
+                .global_decl => |global| {
+                    try self.globals.put(global.name.text, {});
                 },
-                .fn_decl, .extern_fn, .type_alias => {},
+                .fn_decl, .extern_fn, .type_alias, .opaque_decl => {},
             }
         }
     }
