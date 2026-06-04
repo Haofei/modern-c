@@ -113,11 +113,21 @@ pub const Checker = struct {
                     const condition = self.checkExpr(expr, ctx);
                     if (loop.kind == .@"while" and !isConditionType(condition)) {
                         self.errorCode(expr.span, "E_CONDITION_NOT_BOOL", "condition must be bool");
+                    } else if (loop.kind == .@"for" and !isForIterableBase(condition)) {
+                        self.errorCode(expr.span, "E_FOR_BASE_NOT_ARRAY_OR_SLICE", "for loops iterate over arrays and slices");
                     }
                 }
                 var next = ctx;
                 next.loop_depth += 1;
-                self.checkBlock(loop.body, next);
+                if (loop.kind == .@"for") {
+                    if (ctx.scope) |scope| {
+                        self.checkForBody(loop, next, scope);
+                    } else {
+                        self.checkBlock(loop.body, next);
+                    }
+                } else {
+                    self.checkBlock(loop.body, next);
+                }
             },
             .if_let => |node| {
                 const value_class = self.checkExpr(node.value, ctx);
@@ -651,6 +661,34 @@ pub const Checker = struct {
             .wildcard, .tag, .literal => {},
         }
     }
+
+    fn addForBinding(self: *Checker, loop: ast.Loop, ctx: Context, scope: *Scope) void {
+        _ = self;
+        const label = loop.label orelse return;
+        const iterable = loop.iterable orelse return;
+        const element_ty = if (exprStorageType(iterable, ctx)) |ty| iterableElementType(ty) else null;
+        scope.put(label.text, .{
+            .class = if (element_ty) |ty| classifyType(ty) else .unknown,
+            .mutable = false,
+            .ty = element_ty,
+            .origin = .local,
+        }) catch {};
+    }
+
+    fn checkForBody(self: *Checker, loop: ast.Loop, ctx: Context, scope: *Scope) void {
+        const label = loop.label orelse {
+            self.checkBlock(loop.body, ctx);
+            return;
+        };
+        const previous = scope.get(label.text);
+        self.addForBinding(loop, ctx, scope);
+        self.checkBlock(loop.body, ctx);
+        if (previous) |entry| {
+            scope.put(label.text, entry) catch {};
+        } else {
+            _ = scope.remove(label.text);
+        }
+    }
 };
 
 const Context = struct {
@@ -922,6 +960,15 @@ fn resultPayloadType(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
     };
 }
 
+fn iterableElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .slice => |node| node.child.*,
+        .array => |node| node.child.*,
+        .qualified => |node| iterableElementType(node.child.*),
+        else => null,
+    };
+}
+
 fn classifyGenericTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "Result")) return .result;
     if (std.mem.eql(u8, name, "UserPtr")) return .user_ptr;
@@ -1062,6 +1109,13 @@ fn isIndexType(kind: TypeClass) bool {
 }
 
 fn isIndexableBase(kind: TypeClass) bool {
+    return switch (kind) {
+        .array, .slice, .never, .unknown => true,
+        else => false,
+    };
+}
+
+fn isForIterableBase(kind: TypeClass) bool {
     return switch (kind) {
         .array, .slice, .never, .unknown => true,
         else => false,
