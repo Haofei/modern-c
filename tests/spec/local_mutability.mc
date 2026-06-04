@@ -27,6 +27,8 @@ extern struct LocalPacket {
     value: u32,
 }
 
+extern fn local_array() -> [4]u32;
+
 fn accept_assign_to_var_field(packet: LocalPacket) -> u32 {
     var local: LocalPacket = packet;
     local.value = 2;
@@ -44,6 +46,13 @@ fn reject_assign_to_let_field(packet: LocalPacket) -> u32 {
     // EXPECT_ERROR: E_ASSIGN_TO_IMMUTABLE_LOCAL
     local.value = 2;
     return local.value;
+}
+
+fn reject_assign_to_let_array_element(i: usize, value: u32) -> u32 {
+    let xs = local_array();
+    // EXPECT_ERROR: E_ASSIGN_TO_IMMUTABLE_LOCAL
+    xs[i] = value;
+    return xs[i];
 }
 
 fn reject_duplicate_local() -> u32 {

@@ -934,6 +934,7 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, "}\n");
             },
             .comptime_block => {},
+            .asm_stmt => |asm_stmt| try self.emitAsmStmt(asm_stmt),
             .loop => |loop| {
                 if (loop.kind == .@"while") {
                     if (try self.emitMmioReadWhileLoop(loop, locals, return_ty)) return;
@@ -962,6 +963,37 @@ const CEmitter = struct {
             .if_let => |node| try self.emitIfLet(node, locals, return_ty),
             else => try self.writeUnsupportedStmt(stmt),
         }
+    }
+
+    fn emitAsmStmt(self: *CEmitter, asm_stmt: ast.AsmStmt) !void {
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, if (asm_stmt.is_volatile) "__asm__ __volatile__(" else "__asm__(");
+        if (asm_stmt.templates.len == 0) {
+            try self.out.appendSlice(self.allocator, "\"\"");
+        } else {
+            for (asm_stmt.templates, 0..) |template, index| {
+                if (index > 0) try self.out.appendSlice(self.allocator, " \"\\n\\t\" ");
+                try self.out.appendSlice(self.allocator, template);
+            }
+        }
+        try self.out.appendSlice(self.allocator, " ::: ");
+        if (asm_stmt.clobbers.len == 0) {
+            try self.out.appendSlice(self.allocator, "\"memory\"");
+        } else {
+            for (asm_stmt.clobbers, 0..) |clobber, index| {
+                if (index > 0) try self.out.appendSlice(self.allocator, ", ");
+                try self.out.appendSlice(self.allocator, clobber);
+            }
+        }
+        try self.out.appendSlice(self.allocator, ");\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#else\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#error \"inline asm emission requires compiler support\"\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#endif\n");
     }
 
     fn emitMmioReadAssert(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
@@ -6637,6 +6669,48 @@ test "emits C unsafe blocks as scoped blocks" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unsafe_block(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    {\n        x = mc_checked_add_u32(x, 1);\n    }\n    return x;") != null);
+}
+
+test "emits C for opaque volatile asm" {
+    const source =
+        \\fn asm_in_unsafe() -> void {
+        \\    unsafe {
+        \\        asm opaque volatile {
+        \\            "pause"
+        \\            clobber("memory")
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\fn boot_asm() -> void {
+        \\    unsafe {
+        \\        asm opaque volatile {
+        \\            "cli"
+        \\            "hlt"
+        \\        }
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_asm.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void asm_in_unsafe(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"pause\" ::: \"memory\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"cli\" \"\\n\\t\" \"hlt\" ::: \"memory\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "#error \"inline asm emission requires compiler support\"") != null);
 }
 
 test "emits C unsafe contract blocks as scoped blocks" {

@@ -333,21 +333,40 @@ pub const Parser = struct {
 
     fn parseAsmStmt(self: *Parser) anyerror!ast.Stmt {
         const start = self.lxTokenBeforeCurrent();
-        while (self.current.kind != .l_brace and self.current.kind != .eof) self.advance();
-        var depth: usize = 0;
-        while (self.current.kind != .eof) {
-            if (self.match(.l_brace)) {
-                depth += 1;
+        var is_volatile = false;
+        while (self.current.kind != .l_brace and self.current.kind != .eof) {
+            if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "volatile")) is_volatile = true;
+            self.advance();
+        }
+        try self.expect(.l_brace, "expected '{' after asm modifiers");
+
+        var templates: std.ArrayList([]const u8) = .empty;
+        errdefer templates.deinit(self.allocator);
+        var clobbers: std.ArrayList([]const u8) = .empty;
+        errdefer clobbers.deinit(self.allocator);
+
+        while (self.current.kind != .r_brace and self.current.kind != .eof) {
+            if (self.match(.string_literal)) {
+                try templates.append(self.allocator, self.previousLexeme());
                 continue;
             }
-            if (self.match(.r_brace)) {
-                depth -= 1;
-                if (depth == 0) break;
+            if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "clobber")) {
+                self.advance();
+                try self.expect(.l_paren, "expected '(' after clobber");
+                const clobber = try self.expectTok(.string_literal, "expected clobber string");
+                try clobbers.append(self.allocator, clobber.lexeme);
+                try self.expect(.r_paren, "expected ')' after clobber");
+                _ = self.match(.comma) or self.match(.semicolon);
                 continue;
             }
             self.advance();
         }
-        return .{ .span = joinSpan(start, self.lxTokenBeforeCurrent()), .kind = .asm_stmt };
+        const end = try self.expectTok(.r_brace, "expected '}' after asm block");
+        return .{ .span = joinSpan(start, end.span), .kind = .{ .asm_stmt = .{
+            .is_volatile = is_volatile,
+            .templates = try templates.toOwnedSlice(self.allocator),
+            .clobbers = try clobbers.toOwnedSlice(self.allocator),
+        } } };
     }
 
     fn parseFor(self: *Parser) anyerror!ast.Stmt {

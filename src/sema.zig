@@ -639,6 +639,9 @@ pub const Checker = struct {
                 if (constStorageBase(node.base.*, ctx)) {
                     self.errorCode(target.span, "E_ASSIGN_THROUGH_CONST_VIEW", "cannot assign through a const pointer or view");
                 }
+                if (immutableIndexedValueStorageBase(node.base.*, ctx)) {
+                    self.errorCode(target.span, "E_ASSIGN_TO_IMMUTABLE_LOCAL", "cannot assign to immutable local binding");
+                }
             },
             .member => |node| {
                 if (constStorageBase(node.base.*, ctx)) {
@@ -2283,6 +2286,20 @@ fn immutableValueStorageBase(expr: ast.Expr, ctx: Context) bool {
         },
         .member => |node| immutableValueStorageBase(node.base.*, ctx),
         .grouped => |inner| immutableValueStorageBase(inner.*, ctx),
+        else => false,
+    };
+}
+
+fn immutableIndexedValueStorageBase(expr: ast.Expr, ctx: Context) bool {
+    const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return false;
+    if (!isArrayType(ty)) return false;
+    return immutableValueStorageBase(expr, ctx);
+}
+
+fn isArrayType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .array => true,
+        .qualified => |node| isArrayType(node.child.*),
         else => false,
     };
 }

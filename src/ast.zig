@@ -183,7 +183,7 @@ pub const Stmt = struct {
         unsafe_block: Block,
         comptime_block: Block,
         contract_block: ContractBlock,
-        asm_stmt,
+        asm_stmt: AsmStmt,
         block: Block,
         @"return": ?Expr,
         @"break",
@@ -196,6 +196,12 @@ pub const Stmt = struct {
         },
         expr: Expr,
     };
+};
+
+pub const AsmStmt = struct {
+    is_volatile: bool,
+    templates: []const []const u8,
+    clobbers: []const []const u8,
 };
 
 pub const LocalDecl = struct {
