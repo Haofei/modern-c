@@ -592,9 +592,7 @@ pub const Checker = struct {
                 if (ctx.in_comptime and isMmioRegisterAccessCall(node.callee.*, ctx)) {
                     self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
                 }
-                if (isCVoidLayoutCall(node.callee.*, node.type_args)) {
-                    self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no size or alignment in MC");
-                }
+                const reflection_class = self.checkReflectionCall(expr.span, node, ctx);
                 if (trap_call) self.checkTrapKind(expr.span, node.args);
                 _ = self.checkExpr(node.callee.*, ctx);
                 for (node.type_args) |ty| self.checkType(ty, .normal);
@@ -612,6 +610,7 @@ pub const Checker = struct {
                 }
                 if (trap_call) return .never;
                 if (self.checkEnumRawCall(expr.span, node.callee.*, node.args, ctx)) |class| return class;
+                if (reflection_class) |class| return class;
                 if (directCallReturnClass(node.callee.*, ctx)) |class| return class;
                 return .unknown;
             },
@@ -707,6 +706,58 @@ pub const Checker = struct {
         };
         if (!isLanguageTrapKind(kind.text)) {
             self.errorCode(kind.span, "E_INVALID_TRAP_KIND", "unknown language TrapKind");
+        }
+    }
+
+    fn checkReflectionCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) ?TypeClass {
+        const kind = reflectionKind(call.callee.*) orelse return null;
+        if (call.type_args.len != 1) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "reflection builtin requires exactly one reflected type");
+            return reflectionReturnClass(kind);
+        }
+
+        const reflected_ty = call.type_args[0];
+        if (isTypeName(reflected_ty, "c_void")) {
+            self.errorCode(span, "E_C_VOID_NO_LAYOUT", "c_void has no size or alignment in MC");
+            return reflectionReturnClass(kind);
+        }
+        self.checkReflectedType(reflected_ty, ctx);
+
+        if (reflectionRequiresField(kind)) {
+            if (call.args.len != 1) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "field reflection requires exactly one enum-literal field name");
+                return reflectionReturnClass(kind);
+            }
+            const field = enumLiteralName(call.args[0]) orelse {
+                self.errorCode(call.args[0].span, "E_REFLECTION_FIELD_LITERAL", "field reflection requires an enum-literal field name");
+                return reflectionReturnClass(kind);
+            };
+            self.checkReflectedField(reflected_ty, field, ctx);
+        } else if (call.args.len != 0) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "type reflection builtin does not take runtime arguments");
+        }
+
+        return reflectionReturnClass(kind);
+    }
+
+    fn checkReflectedType(self: *Checker, ty: ast.TypeExpr, ctx: Context) void {
+        self.checkType(ty, .normal);
+        if (isKnownLayoutType(ty, ctx)) return;
+        self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "reflection requires a known layout-capable type");
+    }
+
+    fn checkReflectedField(self: *Checker, ty: ast.TypeExpr, field: ast.Ident, ctx: Context) void {
+        const name = typeName(ty) orelse {
+            self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "field reflection requires a known struct type");
+            return;
+        };
+        const structs = ctx.structs orelse return;
+        const info = structs.get(name) orelse {
+            self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "field reflection requires a known struct type");
+            return;
+        };
+        if (!info.fields.contains(field.text)) {
+            self.errorCode(field.span, "E_UNKNOWN_STRUCT_FIELD", "struct has no field with this name");
         }
     }
 
@@ -2186,18 +2237,91 @@ fn isComptimeForbiddenCall(callee: ast.Expr) bool {
     return isUnsafeOperationCall(callee);
 }
 
-fn isCVoidLayoutCall(callee: ast.Expr, type_args: []ast.TypeExpr) bool {
-    if (!isIdentNamed(callee, "size_of") and
-        !isIdentNamed(callee, "sizeof") and
-        !isIdentNamed(callee, "alignof") and
-        !isIdentNamed(callee, "field_offset") and
-        !isIdentNamed(callee, "field_type") and
-        !isIdentNamed(callee, "bit_offset") and
-        !isIdentNamed(callee, "repr_of"))
+const ReflectionKind = enum {
+    size,
+    alignment,
+    field_offset,
+    field_type,
+    bit_offset,
+    repr,
+};
+
+fn reflectionKind(callee: ast.Expr) ?ReflectionKind {
+    return switch (callee.kind) {
+        .ident => |ident| {
+            if (std.mem.eql(u8, ident.text, "size_of") or std.mem.eql(u8, ident.text, "sizeof")) return .size;
+            if (std.mem.eql(u8, ident.text, "alignof")) return .alignment;
+            if (std.mem.eql(u8, ident.text, "field_offset")) return .field_offset;
+            if (std.mem.eql(u8, ident.text, "field_type")) return .field_type;
+            if (std.mem.eql(u8, ident.text, "bit_offset")) return .bit_offset;
+            if (std.mem.eql(u8, ident.text, "repr_of")) return .repr;
+            return null;
+        },
+        .grouped => |inner| return reflectionKind(inner.*),
+        else => null,
+    };
+}
+
+fn reflectionRequiresField(kind: ReflectionKind) bool {
+    return switch (kind) {
+        .field_offset, .field_type, .bit_offset => true,
+        .size, .alignment, .repr => false,
+    };
+}
+
+fn reflectionReturnClass(kind: ReflectionKind) TypeClass {
+    return switch (kind) {
+        .size, .alignment, .field_offset, .bit_offset => .checked_usize,
+        .field_type, .repr => .unknown,
+    };
+}
+
+fn isKnownLayoutType(ty: ast.TypeExpr, ctx: Context) bool {
+    return switch (ty.kind) {
+        .name => |name| isPrimitiveLayoutType(name.text) or
+            knownStructName(name.text, ctx) or
+            knownEnumName(name.text, ctx),
+        .pointer, .raw_many_pointer, .slice, .array, .nullable => true,
+        .qualified => |node| isKnownLayoutType(node.child.*, ctx),
+        .generic => |node| isKnownLayoutGeneric(node, ctx),
+        .member, .enum_literal => false,
+    };
+}
+
+fn isPrimitiveLayoutType(name: []const u8) bool {
+    return classifyTypeName(name) != .unknown;
+}
+
+fn knownStructName(name: []const u8, ctx: Context) bool {
+    const structs = ctx.structs orelse return false;
+    return structs.contains(name);
+}
+
+fn knownEnumName(name: []const u8, ctx: Context) bool {
+    const enums = ctx.enums orelse return false;
+    return enums.contains(name);
+}
+
+fn isKnownLayoutGeneric(node: anytype, ctx: Context) bool {
+    if (std.mem.eql(u8, node.base.text, "Reg") or
+        std.mem.eql(u8, node.base.text, "RegBits") or
+        std.mem.eql(u8, node.base.text, "MmioPtr") or
+        std.mem.eql(u8, node.base.text, "UserPtr") or
+        std.mem.eql(u8, node.base.text, "PhysPtr") or
+        std.mem.eql(u8, node.base.text, "DmaBuf") or
+        std.mem.eql(u8, node.base.text, "Result") or
+        std.mem.eql(u8, node.base.text, "wrap") or
+        std.mem.eql(u8, node.base.text, "sat") or
+        std.mem.eql(u8, node.base.text, "serial") or
+        std.mem.eql(u8, node.base.text, "counter"))
     {
-        return false;
+        for (node.args) |arg| {
+            if (arg.kind == .enum_literal) continue;
+            if (!isKnownLayoutType(arg, ctx)) return false;
+        }
+        return true;
     }
-    return type_args.len == 1 and isTypeName(type_args[0], "c_void");
+    return false;
 }
 
 fn isUnwrapCall(callee: ast.Expr) bool {
