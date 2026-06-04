@@ -158,7 +158,15 @@ fn writeExprFacts(expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
         },
         .grouped, .address_of, .deref, .try_expr => |inner| try writeExprFacts(inner.*, writer, ctx),
         .block => |body| try writeBlockFacts(body, writer, ctx),
-        .unary => |node| try writeExprFacts(node.expr.*, writer, ctx),
+        .unary => |node| {
+            if (node.op == .neg) {
+                try writer.print(
+                    "fact checked_arithmetic_trap fn={s} op=neg no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
+                    .{ ctx.function_name, ctx.no_lang_trap, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
+                );
+            }
+            try writeExprFacts(node.expr.*, writer, ctx);
+        },
         .binary => |node| {
             if (isCheckedTrapOp(node.op)) {
                 try writeCheckedArithmeticFact(expr.span, node.op, writer, ctx);
@@ -318,6 +326,7 @@ test "writes early inspection facts for parser AST" {
 
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "fact no_lang_trap_assert") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "fact checked_arithmetic_trap") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "op=add") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "fact no_lang_trap_index") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "fact unsafe_contract_begin") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "fact unchecked_call") != null);

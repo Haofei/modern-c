@@ -615,6 +615,7 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             " op=mul ",
             " op=div ",
             " op=mod ",
+            " op=neg ",
         });
     }
     if (std.mem.eql(u8, check, "DivideByZero")) {
@@ -715,6 +716,9 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
             "trap=IntegerOverflow",
             "strategy=helper",
             "emits_plain_c_overflow=false",
+            "lower checked_arith fn=signed_div_min_overflow op=div type=i32 trap=IntegerOverflow",
+            "lower checked_arith fn=signed_rem_min_overflow op=mod type=i32 trap=IntegerOverflow",
+            "lower checked_arith fn=signed_neg_min_overflow op=neg type=i32 trap=IntegerOverflow",
         });
     }
     if (std.mem.eql(u8, check, "metadata-contained")) {

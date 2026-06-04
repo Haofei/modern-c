@@ -75,6 +75,7 @@ const Inspector = struct {
 
         for (fn_decl.params) |param| {
             try ctx.locals.put(param.name.text, {});
+            if (typeName(param.ty)) |name| try ctx.local_types.put(param.name.text, name);
             if (mmioPointee(param.ty)) |struct_name| try ctx.mmio_params.put(param.name.text, struct_name);
         }
 
@@ -88,7 +89,12 @@ const Inspector = struct {
     fn inspectStmt(self: *Inspector, stmt: ast.Stmt, ctx: *FnContext) anyerror!void {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
-                for (local.names) |name| try ctx.locals.put(name.text, {});
+                for (local.names) |name| {
+                    try ctx.locals.put(name.text, {});
+                    if (local.ty) |ty| {
+                        if (typeName(ty)) |ty_name| try ctx.local_types.put(name.text, ty_name);
+                    }
+                }
                 if (local.init) |expr| try self.inspectExpr(expr, ctx);
             },
             .loop => |node| {
@@ -144,9 +150,20 @@ const Inspector = struct {
             .int_literal, .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal, .unreachable_expr => {},
             .grouped, .address_of, .deref, .try_expr => |inner| try self.inspectExpr(inner.*, ctx),
             .block => |body| try self.inspectBlock(body, ctx),
-            .unary => |node| try self.inspectExpr(node.expr.*, ctx),
+            .unary => |node| {
+                if (node.op == .neg) {
+                    if (exprType(node.expr.*, ctx)) |ty| {
+                        try self.writeCheckedArithmetic(ctx.name, .neg, ty, .integer_overflow);
+                    }
+                }
+                try self.inspectExpr(node.expr.*, ctx);
+            },
             .binary => |node| {
-                try self.writeCheckedArithmetic(ctx.name, node.op);
+                const op = CheckedOp{ .binary = node.op };
+                if (checkedOpName(op)) |_| {
+                    const ty = exprType(node.left.*, ctx) orelse "unknown";
+                    try self.writeCheckedArithmetic(ctx.name, op, ty, trapKindForBinary(node, ty));
+                }
                 try self.inspectExpr(node.left.*, ctx);
                 try self.inspectExpr(node.right.*, ctx);
             },
@@ -184,13 +201,12 @@ const Inspector = struct {
         }
     }
 
-    fn writeCheckedArithmetic(self: *Inspector, fn_name: []const u8, op: ast.BinaryOp) !void {
+    fn writeCheckedArithmetic(self: *Inspector, fn_name: []const u8, op: CheckedOp, ty: []const u8, trap: TrapKind) !void {
         const op_name = checkedOpName(op) orelse return;
-        const trap = if (op == .div or op == .mod) "DivideByZero" else "IntegerOverflow";
         try self.out.print(
             self.allocator,
-            "lower checked_arith fn={s} op={s} type=unknown trap={s} strategy=helper emits_plain_c_overflow=false\n",
-            .{ fn_name, op_name, trap },
+            "lower checked_arith fn={s} op={s} type={s} trap={s} strategy=helper emits_plain_c_overflow=false\n",
+            .{ fn_name, op_name, ty, trap.text() },
         );
     }
 
@@ -248,18 +264,21 @@ const Inspector = struct {
 const FnContext = struct {
     name: []const u8,
     locals: std.StringHashMap(void),
+    local_types: std.StringHashMap([]const u8),
     mmio_params: std.StringHashMap([]const u8),
 
     fn init(allocator: std.mem.Allocator, name: []const u8) FnContext {
         return .{
             .name = name,
             .locals = std.StringHashMap(void).init(allocator),
+            .local_types = std.StringHashMap([]const u8).init(allocator),
             .mmio_params = std.StringHashMap([]const u8).init(allocator),
         };
     }
 
     fn deinit(self: *FnContext) void {
         self.locals.deinit();
+        self.local_types.deinit();
         self.mmio_params.deinit();
     }
 };
@@ -313,15 +332,68 @@ fn orderingArg(args: []ast.Expr) []const u8 {
     return "none";
 }
 
-fn checkedOpName(op: ast.BinaryOp) ?[]const u8 {
+const CheckedOp = union(enum) {
+    binary: ast.BinaryOp,
+    neg,
+};
+
+const TrapKind = enum {
+    integer_overflow,
+    divide_by_zero,
+
+    fn text(self: TrapKind) []const u8 {
+        return switch (self) {
+            .integer_overflow => "IntegerOverflow",
+            .divide_by_zero => "DivideByZero",
+        };
+    }
+};
+
+fn checkedOpName(op: CheckedOp) ?[]const u8 {
     return switch (op) {
-        .add => "add",
-        .sub => "sub",
-        .mul => "mul",
-        .div => "div",
-        .mod => "mod",
-        .shl => "shl",
+        .neg => "neg",
+        .binary => |binary| switch (binary) {
+            .add => "add",
+            .sub => "sub",
+            .mul => "mul",
+            .div => "div",
+            .mod => "mod",
+            .shl => "shl",
+            else => null,
+        },
+    };
+}
+
+fn trapKindForBinary(node: anytype, ty: []const u8) TrapKind {
+    if ((node.op == .div or node.op == .mod) and isSignedIntType(ty) and isNegativeOne(node.right.*)) return .integer_overflow;
+    if (node.op == .div or node.op == .mod) return .divide_by_zero;
+    return .integer_overflow;
+}
+
+fn exprType(expr: ast.Expr, ctx: *FnContext) ?[]const u8 {
+    return switch (expr.kind) {
+        .ident => |ident| ctx.local_types.get(ident.text),
+        .grouped => |inner| exprType(inner.*, ctx),
+        .unary => |node| exprType(node.expr.*, ctx),
         else => null,
+    };
+}
+
+fn isSignedIntType(ty: []const u8) bool {
+    return ty.len >= 2 and ty[0] == 'i' and std.ascii.isDigit(ty[1]);
+}
+
+fn isNegativeOne(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .unary => |node| node.op == .neg and isIntLiteral(node.expr.*, "1"),
+        else => false,
+    };
+}
+
+fn isIntLiteral(expr: ast.Expr, value: []const u8) bool {
+    return switch (expr.kind) {
+        .int_literal => |literal| std.mem.eql(u8, literal, value),
+        else => false,
     };
 }
 
