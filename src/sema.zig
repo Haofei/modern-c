@@ -113,7 +113,12 @@ pub const Checker = struct {
                 }
             },
             .loop => |loop| {
-                if (loop.iterable) |expr| _ = self.checkExpr(expr, ctx);
+                if (loop.iterable) |expr| {
+                    const condition = self.checkExpr(expr, ctx);
+                    if (loop.kind == .@"while" and !isConditionType(condition)) {
+                        self.errorCode(expr.span, "E_CONDITION_NOT_BOOL", "condition must be bool");
+                    }
+                }
                 self.checkBlock(loop.body, ctx);
             },
             .if_let => |node| {
@@ -153,7 +158,10 @@ pub const Checker = struct {
                 if (ctx.no_lang_trap) {
                     self.errorCode(stmt.span, "E_NO_LANG_TRAP_EDGE", "assert may emit a language trap in #[no_lang_trap]");
                 }
-                _ = self.checkExpr(expr, ctx);
+                const condition = self.checkExpr(expr, ctx);
+                if (!isConditionType(condition)) {
+                    self.errorCode(expr.span, "E_CONDITION_NOT_BOOL", "condition must be bool");
+                }
             },
             .assignment => |node| {
                 if (isMmioRegisterTarget(node.target, ctx)) {
@@ -210,6 +218,12 @@ pub const Checker = struct {
                 if (node.op == .bit_not and isForbiddenBitwisePolicy(inner)) {
                     self.errorCode(expr.span, "E_BITWISE_ARITH_DOMAIN_OPERAND", "bitwise operations are not defined on this arithmetic domain");
                 }
+                if (node.op == .logical_not) {
+                    if (!isConditionType(inner)) {
+                        self.errorCode(expr.span, "E_BOOL_OPERATOR_OPERAND", "boolean operators are defined only for bool operands");
+                    }
+                    return .bool;
+                }
                 return inner;
             },
             .binary => |node| {
@@ -236,6 +250,13 @@ pub const Checker = struct {
                 if (isBitwiseBinary(node.op) and (isForbiddenBitwisePolicy(left) or isForbiddenBitwisePolicy(right))) {
                     self.errorCode(expr.span, "E_BITWISE_ARITH_DOMAIN_OPERAND", "bitwise operations are not defined on this arithmetic domain");
                 }
+                if (isLogicalBinary(node.op)) {
+                    if (!isConditionType(left) or !isConditionType(right)) {
+                        self.errorCode(expr.span, "E_BOOL_OPERATOR_OPERAND", "boolean operators are defined only for bool operands");
+                    }
+                    return .bool;
+                }
+                if (isComparisonBinary(node.op)) return .bool;
                 return mergeArithmetic(left, right);
             },
             .cast => |node| {
@@ -515,6 +536,20 @@ fn isBitwiseBinary(op: ast.BinaryOp) bool {
     };
 }
 
+fn isLogicalBinary(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .logical_and, .logical_or => true,
+        else => false,
+    };
+}
+
+fn isComparisonBinary(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .eq, .ne, .lt, .le, .gt, .ge => true,
+        else => false,
+    };
+}
+
 fn isCheckedInt(kind: TypeClass) bool {
     return isCheckedUnsigned(kind) or isCheckedSigned(kind);
 }
@@ -711,6 +746,13 @@ fn isNullableValue(kind: TypeClass) bool {
 fn isIndexType(kind: TypeClass) bool {
     return switch (kind) {
         .checked_usize, .int_literal, .never, .unknown => true,
+        else => false,
+    };
+}
+
+fn isConditionType(kind: TypeClass) bool {
+    return switch (kind) {
+        .bool, .never, .unknown => true,
         else => false,
     };
 }
