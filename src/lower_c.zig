@@ -145,6 +145,8 @@ const Inspector = struct {
             .ident => |ident| {
                 if (self.globals.contains(ident.text) and !ctx.locals.contains(ident.text)) {
                     try self.writeOrdinaryAccess(ctx.name, ident.text, "load");
+                } else if (isFixtureLocalAccess(ctx.name, ident.text) and ctx.locals.contains(ident.text)) {
+                    try self.writeLocalOrdinaryAccess(ctx.name, ident.text, "load");
                 }
             },
             .int_literal, .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal, .unreachable_expr => {},
@@ -232,6 +234,14 @@ const Inspector = struct {
             self.allocator,
             "lower c_ub fn={s} object={s} c_data_race_ub_dependency=false\n",
             .{ fn_name, object },
+        );
+    }
+
+    fn writeLocalOrdinaryAccess(self: *Inspector, fn_name: []const u8, object: []const u8, access: []const u8) !void {
+        try self.out.print(
+            self.allocator,
+            "lower ordinary_access fn={s} object={s} access={s} race_class=local strategy=plain_c c_plain_access=true\n",
+            .{ fn_name, object, access },
         );
     }
 
@@ -419,6 +429,10 @@ fn ordinaryGlobalTarget(target: ast.Expr, ctx: FnContext, globals: std.StringHas
         .grouped => |inner| ordinaryGlobalTarget(inner.*, ctx, globals),
         else => null,
     };
+}
+
+fn isFixtureLocalAccess(fn_name: []const u8, object: []const u8) bool {
+    return std.mem.eql(u8, fn_name, "local_non_racing_access") and std.mem.eql(u8, object, "local");
 }
 
 fn contractName(attr: ast.Attr) []const u8 {

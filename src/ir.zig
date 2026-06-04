@@ -50,6 +50,7 @@ const Context = struct {
     no_lang_trap: bool = false,
     unsafe_contract_depth: usize = 0,
     mmio_params: ?*const std.StringHashMap([]const u8) = null,
+    locals: ?*std.StringHashMap(void) = null,
 };
 
 const ListFactWriter = struct {
@@ -64,11 +65,13 @@ const ListFactWriter = struct {
 const ModuleFactCollector = struct {
     allocator: std.mem.Allocator,
     mmio_structs: std.StringHashMap(MmioStruct),
+    globals: std.StringHashMap(void),
 
     fn init(allocator: std.mem.Allocator) ModuleFactCollector {
         return .{
             .allocator = allocator,
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
+            .globals = std.StringHashMap(void).init(allocator),
         };
     }
 
@@ -76,6 +79,7 @@ const ModuleFactCollector = struct {
         var structs = self.mmio_structs.valueIterator();
         while (structs.next()) |mmio_struct| mmio_struct.fields.deinit();
         self.mmio_structs.deinit();
+        self.globals.deinit();
     }
 
     fn appendFacts(self: *ModuleFactCollector, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
@@ -97,7 +101,8 @@ const ModuleFactCollector = struct {
                         if (std.mem.eql(u8, abi, "mmio")) try self.collectMmioStruct(struct_decl);
                     }
                 },
-                .fn_decl, .extern_fn, .type_alias, .opaque_decl => {},
+                .opaque_decl => |name| try self.globals.put(name.text, {}),
+                .fn_decl, .extern_fn, .type_alias => {},
             }
         }
     }
@@ -119,13 +124,17 @@ const ModuleFactCollector = struct {
                 if (fn_decl.body) |body| {
                     var mmio_params = std.StringHashMap([]const u8).init(self.allocator);
                     defer mmio_params.deinit();
+                    var locals = std.StringHashMap(void).init(self.allocator);
+                    defer locals.deinit();
                     for (fn_decl.params) |param| {
+                        try locals.put(param.name.text, {});
                         if (mmioPointee(param.ty)) |struct_name| try mmio_params.put(param.name.text, struct_name);
                     }
                     try writeBlockFacts(self, body, writer, .{
                         .function_name = fn_decl.name.text,
                         .no_lang_trap = hasNoLangTrap(decl.attrs),
                         .mmio_params = &mmio_params,
+                        .locals = &locals,
                     });
                 }
             },
@@ -165,6 +174,22 @@ const ModuleFactCollector = struct {
             .width = field.width,
             .ordering = orderingArg(args),
         };
+    }
+
+    fn ordinaryGlobalTarget(self: *ModuleFactCollector, target: ast.Expr, ctx: Context) ?[]const u8 {
+        return switch (target.kind) {
+            .ident => |ident| if (self.isOrdinaryGlobalLoad(ident.text, ctx)) ident.text else null,
+            .grouped => |inner| self.ordinaryGlobalTarget(inner.*, ctx),
+            else => null,
+        };
+    }
+
+    fn isOrdinaryGlobalLoad(self: *ModuleFactCollector, name: []const u8, ctx: Context) bool {
+        if (!self.globals.contains(name)) return false;
+        if (ctx.locals) |locals| {
+            if (locals.contains(name)) return false;
+        }
+        return true;
     }
 };
 
@@ -228,6 +253,11 @@ fn writeBlockFacts(collector: *ModuleFactCollector, block: ast.Block, writer: an
 fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anytype, ctx: Context) anyerror!void {
     switch (stmt.kind) {
         .let_decl, .var_decl => |local| {
+            if (ctx.locals) |locals| {
+                for (local.names) |name| {
+                    try locals.put(name.text, {});
+                }
+            }
             if (local.init) |expr| try writeExprFacts(collector, expr, writer, ctx);
         },
         .loop => |node| {
@@ -271,10 +301,16 @@ fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anyty
         .assignment => |node| {
             const kind: FactKind = if (isMemberExpr(node.target)) .direct_mmio_assignment else .assignment;
             try writeAssignmentFact(kind, stmt.span, node.target, writer, ctx);
+            const ordinary_store = collector.ordinaryGlobalTarget(node.target, ctx);
+            if (ordinary_store) |target| {
+                try writeOrdinaryAccessFact(stmt.span, target, "store", writer, ctx);
+            }
             if (isStoreTarget(node.target)) {
                 try writeAssignmentFact(.store, stmt.span, node.target, writer, ctx);
             }
-            try writeExprFacts(collector, node.target, writer, ctx);
+            if (ordinary_store == null) {
+                try writeExprFacts(collector, node.target, writer, ctx);
+            }
             try writeExprFacts(collector, node.value, writer, ctx);
         },
     }
@@ -282,7 +318,11 @@ fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anyty
 
 fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
     switch (expr.kind) {
-        .ident,
+        .ident => |ident| {
+            if (collector.isOrdinaryGlobalLoad(ident.text, ctx)) {
+                try writeOrdinaryAccessFact(expr.span, ident.text, "load", writer, ctx);
+            }
+        },
         .int_literal,
         .string_literal,
         .char_literal,
@@ -373,6 +413,13 @@ fn writeShiftTrapFact(span: ast.Span, op: ast.BinaryOp, writer: anytype, ctx: Co
     try writer.print(
         "fact checked_shift_trap fn={s} op={s} trap=InvalidShift no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
         .{ ctx.function_name, @tagName(op), ctx.no_lang_trap, ctx.unsafe_contract_depth, span.line, span.column },
+    );
+}
+
+fn writeOrdinaryAccessFact(span: ast.Span, object: []const u8, access: []const u8, writer: anytype, ctx: Context) anyerror!void {
+    try writer.print(
+        "fact ordinary_access fn={s} object={s} access={s} race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false line={} column={}\n",
+        .{ ctx.function_name, object, access, span.line, span.column },
     );
 }
 

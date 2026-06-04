@@ -2,7 +2,7 @@
 // SPEC: milestone=ordinary-data-races
 // SPEC: phase=sema,lower-c,lower-ir
 // SPEC: expect=pass,inspect,reject
-// SPEC: check=race-tolerant-lowering,no-happens-before,no-c-data-race-ub
+// SPEC: check=race-tolerant-lowering,no-happens-before,no-c-data-race-ub,race-ir-semantics,race-ir-no-ub
 
 global shared_counter: u32 = 0;
 

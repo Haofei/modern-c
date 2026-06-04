@@ -546,6 +546,8 @@ fn isIrFactCheck(check: []const u8) bool {
         "no-language-trap-edge",
         "mmio-ir-width-preserved",
         "mmio-ir-ordering-preserved",
+        "race-ir-semantics",
+        "race-ir-no-ub",
     };
     return matchesAny(check, &names);
 }
@@ -681,6 +683,22 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             "prevents_after_before=true",
         });
     }
+    if (std.mem.eql(u8, check, "race-ir-semantics")) {
+        return containsAll(facts, &.{
+            "fact ordinary_access fn=possibly_racing_store object=shared_counter access=store",
+            "race_class=possibly_shared",
+            "creates_happens_before=false",
+            "assumes_no_race=false",
+            "fact ordinary_access fn=possibly_racing_load object=shared_counter access=load",
+        });
+    }
+    if (std.mem.eql(u8, check, "race-ir-no-ub")) {
+        return containsAll(facts, &.{
+            "fact ordinary_access",
+            "object=shared_counter",
+            "optimizer_license_ub=false",
+        });
+    }
     return false;
 }
 
@@ -774,6 +792,10 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
     }
     if (std.mem.eql(u8, check, "race-tolerant-lowering")) {
         return containsAll(output, &.{
+            "lower ordinary_access fn=local_non_racing_access object=local access=load",
+            "race_class=local",
+            "strategy=plain_c",
+            "c_plain_access=true",
             "lower ordinary_access fn=possibly_racing_store object=shared_counter access=store",
             "strategy=race_helper",
             "c_plain_access=false",
