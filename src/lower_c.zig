@@ -43,6 +43,18 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\    __builtin_trap();
         \\}
         \\
+        \\MC_NORETURN MC_UNUSED static inline void mc_trap_NullUnwrap(void) {
+        \\    __builtin_trap();
+        \\}
+        \\
+        \\MC_NORETURN MC_UNUSED static inline void mc_trap_InvalidRepresentation(void) {
+        \\    __builtin_trap();
+        \\}
+        \\
+        \\MC_NORETURN MC_UNUSED static inline void mc_trap_Unreachable(void) {
+        \\    __builtin_trap();
+        \\}
+        \\
         \\MC_UNUSED static inline uintptr_t mc_check_index_usize(uintptr_t index, uintptr_t len) {
         \\    if (index >= len) mc_trap_Bounds();
         \\    return index;
@@ -273,13 +285,16 @@ const CEmitter = struct {
                 }
             },
             .@"return" => |maybe| {
-                try self.writeIndent();
-                try self.out.appendSlice(self.allocator, "return");
                 if (maybe) |expr| {
-                    try self.out.appendSlice(self.allocator, " ");
+                    if (try self.emitNeverExprStmt(expr, locals)) return;
+                    try self.writeIndent();
+                    try self.out.appendSlice(self.allocator, "return ");
                     try self.emitExpr(expr, locals);
+                    try self.out.appendSlice(self.allocator, ";\n");
+                } else {
+                    try self.writeIndent();
+                    try self.out.appendSlice(self.allocator, "return;\n");
                 }
-                try self.out.appendSlice(self.allocator, ";\n");
             },
             .@"break" => {
                 try self.writeIndent();
@@ -290,6 +305,7 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, "continue;\n");
             },
             .expr => |expr| {
+                if (try self.emitNeverExprStmt(expr, locals)) return;
                 try self.writeIndent();
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
@@ -468,6 +484,26 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "\n");
     }
 
+    fn emitNeverExprStmt(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+        switch (expr.kind) {
+            .unreachable_expr => {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "mc_trap_Unreachable();\n");
+                return true;
+            },
+            .call => |node| {
+                if (trapHelperForCall(node)) |helper| {
+                    try self.writeIndent();
+                    try self.out.print(self.allocator, "{s}();\n", .{helper});
+                    return true;
+                }
+                return false;
+            },
+            .grouped => |inner| return try self.emitNeverExprStmt(inner.*, locals),
+            else => return false,
+        }
+    }
+
     fn emitExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         switch (expr.kind) {
             .ident => |ident| {
@@ -489,6 +525,7 @@ const CEmitter = struct {
                 try self.emitExpr(inner.*, locals);
                 try self.out.appendSlice(self.allocator, ")");
             },
+            .unreachable_expr => try self.out.appendSlice(self.allocator, "mc_trap_Unreachable()"),
             .unary => |node| {
                 try self.out.appendSlice(self.allocator, unaryCOp(node.op));
                 try self.out.appendSlice(self.allocator, "(");
@@ -511,6 +548,10 @@ const CEmitter = struct {
                 }
             },
             .call => |node| {
+                if (trapHelperForCall(node)) |helper| {
+                    try self.out.print(self.allocator, "{s}()", .{helper});
+                    return;
+                }
                 try self.emitExpr(node.callee.*, locals);
                 try self.out.appendSlice(self.allocator, "(");
                 for (node.args, 0..) |arg, i| {
@@ -1120,6 +1161,7 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     }
     const name = typeName(ty) orelse return "void *";
     if (std.mem.eql(u8, name, "void")) return "void";
+    if (std.mem.eql(u8, name, "never")) return "void";
     if (std.mem.eql(u8, name, "bool")) return "bool";
     if (std.mem.eql(u8, name, "u8")) return "uint8_t";
     if (std.mem.eql(u8, name, "u16")) return "uint16_t";
@@ -1230,6 +1272,34 @@ fn checkedU32Helper(op: ast.BinaryOp) ?[]const u8 {
         .shr => "mc_checked_shr_u32",
         else => null,
     };
+}
+
+fn trapHelperForCall(call: anytype) ?[]const u8 {
+    if (!isTrapCallee(call.callee.*) or call.args.len != 1) return null;
+    return switch (call.args[0].kind) {
+        .enum_literal => |literal| trapHelperForKind(literal.text),
+        else => null,
+    };
+}
+
+fn isTrapCallee(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, "trap"),
+        .grouped => |inner| isTrapCallee(inner.*),
+        else => false,
+    };
+}
+
+fn trapHelperForKind(kind: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, kind, "Bounds")) return "mc_trap_Bounds";
+    if (std.mem.eql(u8, kind, "NullUnwrap")) return "mc_trap_NullUnwrap";
+    if (std.mem.eql(u8, kind, "IntegerOverflow")) return "mc_trap_IntegerOverflow";
+    if (std.mem.eql(u8, kind, "DivideByZero")) return "mc_trap_DivideByZero";
+    if (std.mem.eql(u8, kind, "InvalidShift")) return "mc_trap_InvalidShift";
+    if (std.mem.eql(u8, kind, "InvalidRepresentation")) return "mc_trap_InvalidRepresentation";
+    if (std.mem.eql(u8, kind, "Assert")) return "mc_trap_Assert";
+    if (std.mem.eql(u8, kind, "Unreachable")) return "mc_trap_Unreachable";
+    return null;
 }
 
 fn orderingArg(args: []ast.Expr) []const u8 {
@@ -1468,6 +1538,9 @@ test "emits C support helpers used by lower-c evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidShift") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Bounds") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Assert") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_NullUnwrap") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidRepresentation") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Unreachable") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_check_index_usize") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_sub_u32") != null);
@@ -1735,4 +1808,41 @@ test "emits C assert trap" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(flag)) mc_trap_Assert();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(((a == b) || (a != 0)))) mc_trap_Assert();") != null);
+}
+
+test "emits C explicit traps and unreachable" {
+    const source =
+        \\fn trap_as_value() -> u32 {
+        \\    return trap(.Bounds);
+        \\}
+        \\
+        \\fn unreachable_as_value() -> u32 {
+        \\    return unreachable;
+        \\}
+        \\
+        \\fn never_returns_by_trap() -> never {
+        \\    return trap(.Assert);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_traps.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t trap_as_value()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Bounds();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Unreachable();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void never_returns_by_trap()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Assert();") != null);
 }
