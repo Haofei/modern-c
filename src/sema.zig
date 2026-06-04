@@ -102,7 +102,7 @@ pub const Checker = struct {
         for (enum_decl.cases) |case| {
             if (!cases.contains(case.name.text)) cases.put(case.name.text, {}) catch {};
         }
-        enums.put(enum_decl.name.text, .{ .cases = cases, .is_open = enum_decl.is_open }) catch {
+        enums.put(enum_decl.name.text, .{ .cases = cases, .is_open = enum_decl.is_open, .repr = enum_decl.repr }) catch {
             cases.deinit();
         };
     }
@@ -197,7 +197,7 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(ty, initializer, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(ty, initializer, ctx);
         const address_checked = self.checkAddressOfInitializer(target, ty, initializer, ctx);
-        const enum_checked = self.checkExpectedEnumValue(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
+        const enum_checked = self.checkEnumValueCompatibility(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(target, source)) {
             self.errorCode(initializer.span, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         }
@@ -394,7 +394,7 @@ pub const Checker = struct {
                 const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
                 const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
                 const address_checked = if (local.ty) |ty| self.checkAddressOfInitializer(kind, ty, expr, ctx) else false;
-                const enum_checked = if (local.ty) |ty| self.checkExpectedEnumValue(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
+                const enum_checked = if (local.ty) |ty| self.checkEnumValueCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(kind, initializer)) {
                     self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                 }
@@ -445,7 +445,7 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, value, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, value, ctx);
         const address_checked = self.checkAddressOfInitializer(target_class, target_ty, value, ctx);
-        const enum_checked = self.checkExpectedEnumValue(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
+        const enum_checked = self.checkEnumValueCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
@@ -555,6 +555,7 @@ pub const Checker = struct {
                 if ((source == .c_void_pointer) != (target == .c_void_pointer)) {
                     self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
                 }
+                self.checkEnumCast(expr.span, node.value.*, source, node.ty.*, target, ctx);
                 return target;
             },
             .call => |node| {
@@ -592,6 +593,7 @@ pub const Checker = struct {
                     }
                 }
                 if (trap_call) return .never;
+                if (self.checkEnumRawCall(expr.span, node.callee.*, node.args, ctx)) |class| return class;
                 if (directCallReturnClass(node.callee.*, ctx)) |class| return class;
                 return .unknown;
             },
@@ -762,7 +764,7 @@ pub const Checker = struct {
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, expr, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, expr, ctx);
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
-        const enum_checked = self.checkExpectedEnumValue(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
+        const enum_checked = self.checkEnumValueCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !local_escape_checked and !enum_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
@@ -798,25 +800,73 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, arg, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, arg, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, arg, ctx);
-        const enum_checked = self.checkExpectedEnumValue(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
+        const enum_checked = self.checkEnumValueCompatibility(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         }
     }
 
-    fn checkExpectedEnumValue(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
-        const enum_info = enumInfoForType(target_ty, ctx) orelse return false;
+    fn checkEnumValueCompatibility(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
+        const target_enum = enumInfoForType(target_ty, ctx);
         if (enumLiteralName(expr)) |literal| {
+            const enum_info = target_enum orelse {
+                self.errorCode(expr.span, code, message);
+                return true;
+            };
             if (!enum_info.cases.contains(literal.text)) {
                 self.errorCode(literal.span, "E_UNKNOWN_ENUM_CASE", "enum has no case with this name");
             }
             return true;
         }
         if (exprResultType(expr, ctx)) |source_ty| {
-            if (sameTypeSyntax(target_ty, source_ty)) return true;
+            const source_is_enum = enumInfoForType(source_ty, ctx) != null;
+            if (target_enum != null or source_is_enum) {
+                if (sameTypeSyntax(target_ty, source_ty)) return true;
+                self.errorCode(expr.span, code, message);
+                return true;
+            }
         }
-        self.errorCode(expr.span, code, message);
-        return true;
+        if (target_enum != null) {
+            self.errorCode(expr.span, code, message);
+            return true;
+        }
+        return false;
+    }
+
+    fn checkEnumCast(self: *Checker, span: diagnostics.Span, value: ast.Expr, source_class: TypeClass, target_ty: ast.TypeExpr, target_class: TypeClass, ctx: Context) void {
+        if (enumInfoForType(target_ty, ctx)) |target_enum| {
+            if (isIntegerLike(source_class)) {
+                if (!target_enum.is_open) {
+                    self.errorCode(span, "E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION", "integer-to-closed-enum conversion must use a checked conversion path");
+                }
+                return;
+            }
+        }
+
+        const source_ty = exprResultType(value, ctx) orelse return;
+        if (enumInfoForType(source_ty, ctx) != null and isCheckedInt(target_class)) {
+            self.errorCode(span, "E_ENUM_RAW_REQUIRES_OPEN_ENUM", "use .raw() to extract the representation value of an open enum");
+        }
+    }
+
+    fn checkEnumRawCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []const ast.Expr, ctx: Context) ?TypeClass {
+        const member = switch (callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| return self.checkEnumRawCall(span, inner.*, args, ctx),
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "raw")) return null;
+        const base_ty = exprResultType(member.base.*, ctx) orelse return null;
+        const enum_info = enumInfoForType(base_ty, ctx) orelse return null;
+        if (args.len != 0) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "call argument count does not match function declaration");
+        }
+        if (!enum_info.is_open) {
+            self.errorCode(member.name.span, "E_ENUM_RAW_REQUIRES_OPEN_ENUM", "raw enum representation access is valid only on open enums");
+            return .unknown;
+        }
+        const repr = enum_info.repr orelse return .unknown;
+        return classifyType(repr);
     }
 
     fn checkLocalAddressReturn(self: *Checker, target: TypeClass, expr: ast.Expr, ctx: Context) bool {
@@ -1027,6 +1077,7 @@ const StructInfo = struct {
 const EnumInfo = struct {
     cases: std.StringHashMap(void),
     is_open: bool,
+    repr: ?ast.TypeExpr,
 };
 
 const FunctionInfo = struct {
@@ -1197,6 +1248,10 @@ fn isComparisonBinary(op: ast.BinaryOp) bool {
 
 fn isCheckedInt(kind: TypeClass) bool {
     return isCheckedUnsigned(kind) or isCheckedSigned(kind);
+}
+
+fn isIntegerLike(kind: TypeClass) bool {
+    return isCheckedInt(kind) or kind == .int_literal;
 }
 
 fn isCheckedUnsigned(kind: TypeClass) bool {
