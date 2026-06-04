@@ -541,6 +541,7 @@ fn isIrFactCheck(check: []const u8) bool {
     const names = [_][]const u8{
         "IntegerOverflow",
         "DivideByZero",
+        "InvalidShift",
         "contract_region",
         "no-language-trap-edge",
     };
@@ -624,6 +625,14 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             " op=div ",
         });
     }
+    if (std.mem.eql(u8, check, "InvalidShift")) {
+        return containsAll(facts, &.{
+            "fact checked_shift_trap",
+            " op=shl ",
+            " op=shr ",
+            " trap=InvalidShift ",
+        });
+    }
     if (std.mem.eql(u8, check, "contract_region")) {
         return containsAll(facts, &.{
             "fact unsafe_contract_begin",
@@ -644,6 +653,9 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             " form=postfix_question ",
             " form=call ",
             " callee=unwrap ",
+            "fact checked_shift_trap fn=reject_right_shift",
+            " op=shr ",
+            " no_lang_trap=true ",
         });
     }
     return false;
@@ -723,6 +735,9 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
             "lower checked_arith fn=signed_div_min_overflow op=div type=i32 trap=IntegerOverflow",
             "lower checked_arith fn=signed_rem_min_overflow op=mod type=i32 trap=IntegerOverflow",
             "lower checked_arith fn=signed_neg_min_overflow op=neg type=i32 trap=IntegerOverflow",
+            "lower checked_arith fn=left_shift_invalid_count op=shl type=u32 trap=InvalidShift",
+            "lower checked_arith fn=left_shift_overflow op=shl type=u32 trap=IntegerOverflow",
+            "lower checked_arith fn=right_shift_invalid_count op=shr type=u32 trap=InvalidShift",
         });
     }
     if (std.mem.eql(u8, check, "metadata-contained")) {

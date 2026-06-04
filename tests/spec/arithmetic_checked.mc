@@ -2,7 +2,7 @@
 // SPEC: milestone=arithmetic-semantics
 // SPEC: phase=run,sema,lower-c
 // SPEC: expect=trap,compile_error,inspect
-// SPEC: check=IntegerOverflow,DivideByZero,E_UNSIGNED_NEGATION,E_ARITH_POLICY_MIX,checked-arithmetic-lowering
+// SPEC: check=IntegerOverflow,DivideByZero,InvalidShift,E_UNSIGNED_NEGATION,E_ARITH_POLICY_MIX,checked-arithmetic-lowering
 
 fn add_overflow_u32(a: u32) -> u32 {
     return a + 1;
@@ -35,6 +35,18 @@ fn signed_neg_min_overflow() -> i32 {
     return -x;
 }
 
+fn left_shift_invalid_count(x: u32, n: u32) -> u32 {
+    return x << n;
+}
+
+fn left_shift_overflow(x: u32, n: u32) -> u32 {
+    return x << n;
+}
+
+fn right_shift_invalid_count(x: u32, n: u32) -> u32 {
+    return x >> n;
+}
+
 // EXPECT: run add_overflow_u32(4294967295) traps .IntegerOverflow.
 // EXPECT: run sub_underflow_u32(0) traps .IntegerOverflow.
 // EXPECT: run mul_overflow_u32(2147483648) traps .IntegerOverflow.
@@ -42,6 +54,9 @@ fn signed_neg_min_overflow() -> i32 {
 // EXPECT: run signed_div_min_overflow() traps .IntegerOverflow before target division.
 // EXPECT: run signed_rem_min_overflow() traps .IntegerOverflow before target remainder.
 // EXPECT: run signed_neg_min_overflow() traps .IntegerOverflow before target negation.
+// EXPECT: run left_shift_invalid_count(1, 32) traps .InvalidShift.
+// EXPECT: run left_shift_overflow(0x8000_0000, 1) traps .IntegerOverflow.
+// EXPECT: run right_shift_invalid_count(1, 32) traps .InvalidShift.
 // EXPECT: lower-c for checked + uses an overflow helper/check, not plain wrapping arithmetic alone.
 
 fn reject_unsigned_negation(x: u32) -> u32 {

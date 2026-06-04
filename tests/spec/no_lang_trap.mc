@@ -41,6 +41,12 @@ fn reject_unwrap_call(maybe: ?*const u8) -> *const u8 {
 }
 
 #[no_lang_trap]
+fn reject_right_shift(a: u32, n: u32) -> u32 {
+    // EXPECT_ERROR: E_NO_LANG_TRAP_EDGE
+    return a >> n;
+}
+
+#[no_lang_trap]
 fn allow_wrapping_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
     // EXPECT: verifier accepts because wrapping add has no language-trap edge.
     return wrapping.add(a, b);

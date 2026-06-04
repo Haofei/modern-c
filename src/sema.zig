@@ -275,7 +275,7 @@ fn hasNoLangTrap(attrs: []ast.Attr) bool {
 
 fn isTrapBinary(op: ast.BinaryOp) bool {
     return switch (op) {
-        .add, .sub, .mul, .div, .mod, .shl => true,
+        .add, .sub, .mul, .div, .mod, .shl, .shr => true,
         else => false,
     };
 }

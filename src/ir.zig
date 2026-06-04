@@ -180,6 +180,9 @@ fn writeExprFacts(expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
             if (isCheckedTrapOp(node.op)) {
                 try writeCheckedArithmeticFact(expr.span, node.op, writer, ctx);
             }
+            if (isShiftOp(node.op)) {
+                try writeShiftTrapFact(expr.span, node.op, writer, ctx);
+            }
             try writeExprFacts(node.left.*, writer, ctx);
             try writeExprFacts(node.right.*, writer, ctx);
         },
@@ -219,6 +222,13 @@ fn writeIndexFact(span: ast.Span, writer: anytype, ctx: Context) anyerror!void {
     try writer.print(
         "fact no_lang_trap_index fn={s} unsafe_contract_depth={} line={} column={}\n",
         .{ ctx.function_name, ctx.unsafe_contract_depth, span.line, span.column },
+    );
+}
+
+fn writeShiftTrapFact(span: ast.Span, op: ast.BinaryOp, writer: anytype, ctx: Context) anyerror!void {
+    try writer.print(
+        "fact checked_shift_trap fn={s} op={s} trap=InvalidShift no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
+        .{ ctx.function_name, @tagName(op), ctx.no_lang_trap, ctx.unsafe_contract_depth, span.line, span.column },
     );
 }
 
@@ -369,6 +379,13 @@ fn hasNoLangTrap(attrs: []ast.Attr) bool {
 fn isCheckedTrapOp(op: ast.BinaryOp) bool {
     return switch (op) {
         .add, .sub, .mul, .div, .mod, .shl => true,
+        else => false,
+    };
+}
+
+fn isShiftOp(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .shl, .shr => true,
         else => false,
     };
 }

@@ -160,7 +160,14 @@ const Inspector = struct {
             },
             .binary => |node| {
                 const op = CheckedOp{ .binary = node.op };
-                if (checkedOpName(op)) |_| {
+                if (node.op == .shl) {
+                    const ty = exprType(node.left.*, ctx) orelse "unknown";
+                    try self.writeCheckedArithmetic(ctx.name, op, ty, .invalid_shift);
+                    try self.writeCheckedArithmetic(ctx.name, op, ty, .integer_overflow);
+                } else if (node.op == .shr) {
+                    const ty = exprType(node.left.*, ctx) orelse "unknown";
+                    try self.writeCheckedArithmetic(ctx.name, op, ty, .invalid_shift);
+                } else if (checkedOpName(op)) |_| {
                     const ty = exprType(node.left.*, ctx) orelse "unknown";
                     try self.writeCheckedArithmetic(ctx.name, op, ty, trapKindForBinary(node, ty));
                 }
@@ -340,11 +347,13 @@ const CheckedOp = union(enum) {
 const TrapKind = enum {
     integer_overflow,
     divide_by_zero,
+    invalid_shift,
 
     fn text(self: TrapKind) []const u8 {
         return switch (self) {
             .integer_overflow => "IntegerOverflow",
             .divide_by_zero => "DivideByZero",
+            .invalid_shift => "InvalidShift",
         };
     }
 };
@@ -359,6 +368,7 @@ fn checkedOpName(op: CheckedOp) ?[]const u8 {
             .div => "div",
             .mod => "mod",
             .shl => "shl",
+            .shr => "shr",
             else => null,
         },
     };
