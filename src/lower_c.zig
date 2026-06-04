@@ -775,6 +775,7 @@ const CEmitter = struct {
                 }
             },
             .assignment => |node| {
+                if (try self.emitPackedBitsFieldWriteStmt(node, locals)) return;
                 if (try self.emitOverlayFieldWriteStmt(node, locals)) return;
                 try self.writeIndent();
                 if (self.globalAssignmentTarget(node.target, locals)) |target| {
@@ -1600,6 +1601,30 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "((");
         try self.emitExpr(node.base.*, locals);
         try self.out.print(self.allocator, " & {s}) != 0)", .{try self.packedBitsMaskLiteral(info, field.bit_index)});
+        return true;
+    }
+
+    fn emitPackedBitsFieldWriteStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (assignment.target.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const base_ty = self.packedBitsNameForExpr(member.base.*, locals) orelse return false;
+        const info = self.packed_bits.get(base_ty) orelse return false;
+        const field = info.fields.get(member.name.text) orelse return false;
+        const mask = try self.packedBitsMaskLiteral(info, field.bit_index);
+
+        try self.writeIndent();
+        try self.emitExpr(member.base.*, locals);
+        try self.out.print(self.allocator, " = ({s})((", .{base_ty});
+        try self.emitExpr(member.base.*, locals);
+        try self.out.print(self.allocator, " & ({s})~{s}) | (", .{ base_ty, mask });
+        try self.emitExpr(assignment.value, locals);
+        try self.out.print(self.allocator, " ? {s} : ({s})0));\n", .{ mask, base_ty });
         return true;
     }
 
@@ -3344,6 +3369,11 @@ test "emits C for packed bits MMIO reads and field masks" {
         \\fn ready(status: UartLsr) -> bool {
         \\    return status.tx_empty;
         \\}
+        \\
+        \\fn set_ready(status: UartLsr, flag: bool) -> UartLsr {
+        \\    status.tx_empty = flag;
+        \\    return status;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_packed_bits_mmio.mc", source);
@@ -3368,6 +3398,8 @@ test "emits C for packed bits MMIO reads and field masks" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static bool ready(UartLsr status)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((status & UINT8_C(2)) != 0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static UartLsr set_ready(UartLsr status, bool flag)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "status = (UartLsr)((status & (UartLsr)~UINT8_C(2)) | (flag ? UINT8_C(2) : (UartLsr)0));") != null);
 }
 
 test "emits C ABI for simple Result types" {
