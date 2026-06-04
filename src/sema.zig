@@ -373,7 +373,11 @@ pub const Checker = struct {
                     self.errorCode(node.target.span, "E_INVALID_ASSIGNMENT_TARGET", "assignment target must be assignable storage");
                 }
                 if (isMmioRegisterTarget(node.target, ctx)) {
-                    self.errorCode(stmt.span, "E_MMIO_DIRECT_ASSIGN", "MMIO registers must be accessed through typed read/write methods");
+                    if (ctx.in_comptime) {
+                        self.errorCode(stmt.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
+                    } else {
+                        self.errorCode(stmt.span, "E_MMIO_DIRECT_ASSIGN", "MMIO registers must be accessed through typed read/write methods");
+                    }
                 }
                 self.checkAssignmentTarget(node.target, ctx);
                 _ = self.checkExpr(node.target, ctx);
@@ -585,6 +589,9 @@ pub const Checker = struct {
                 if (ctx.in_comptime and isComptimeForbiddenCall(node.callee.*)) {
                     self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
                 }
+                if (ctx.in_comptime and isMmioRegisterAccessCall(node.callee.*, ctx)) {
+                    self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
+                }
                 if (isCVoidLayoutCall(node.callee.*, node.type_args)) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no size or alignment in MC");
                 }
@@ -625,6 +632,9 @@ pub const Checker = struct {
             },
             .deref => |inner| {
                 const inner_class = self.checkExpr(inner.*, ctx);
+                if (ctx.in_comptime and isRuntimePointerDerefClass(inner_class)) {
+                    self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
+                }
                 if (inner_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_DEREF", "c_void pointer cannot be dereferenced");
                 }
@@ -1287,6 +1297,13 @@ fn isPointerLike(kind: TypeClass) bool {
     };
 }
 
+fn isRuntimePointerDerefClass(kind: TypeClass) bool {
+    return switch (kind) {
+        .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer, .paddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
+        else => false,
+    };
+}
+
 fn isNonNullPointerLike(kind: TypeClass) bool {
     return switch (kind) {
         .pointer, .raw_many_pointer, .c_void_pointer => true,
@@ -1725,6 +1742,33 @@ fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
     const member = switch (target.kind) {
         .member => |node| node,
         .grouped => |inner| return isMmioRegisterTarget(inner.*, ctx),
+        else => return false,
+    };
+    const base_name = switch (member.base.kind) {
+        .ident => |ident| ident.text,
+        else => return false,
+    };
+    const mmio_params = ctx.mmio_params orelse return false;
+    const struct_name = mmio_params.get(base_name) orelse return false;
+    const mmio_structs = ctx.mmio_structs orelse return false;
+    const mmio_struct = mmio_structs.get(struct_name) orelse return false;
+    return mmio_struct.fields.contains(member.name.text);
+}
+
+fn isMmioRegisterAccessCall(callee: ast.Expr, ctx: Context) bool {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return isMmioRegisterAccessCall(inner.*, ctx),
+        else => return false,
+    };
+    if (!std.mem.eql(u8, member.name.text, "read") and !std.mem.eql(u8, member.name.text, "write")) return false;
+    return isMmioRegisterMember(member.base.*, ctx);
+}
+
+fn isMmioRegisterMember(expr: ast.Expr, ctx: Context) bool {
+    const member = switch (expr.kind) {
+        .member => |node| node,
+        .grouped => |inner| return isMmioRegisterMember(inner.*, ctx),
         else => return false,
     };
     const base_name = switch (member.base.kind) {

@@ -6,6 +6,7 @@
 
 extern mmio struct Uart16550 {
     thr: Reg<u8, .write>,
+    lsr: Reg<u8, .read>,
 }
 
 fn accept_pure_comptime_block() -> u32 {
@@ -42,5 +43,33 @@ fn reject_comptime_asm() -> void {
                 "cli"
             }
         }
+    }
+}
+
+fn reject_comptime_pointer_deref(p: *const u32) -> u32 {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_FORBIDS_RUNTIME_EFFECT
+        return p.*;
+    }
+}
+
+fn reject_comptime_mmio_read(uart: MmioPtr<Uart16550>) -> u8 {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_FORBIDS_RUNTIME_EFFECT
+        return uart.lsr.read(.acquire);
+    }
+}
+
+fn reject_comptime_mmio_write(uart: MmioPtr<Uart16550>, ch: u8) -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_FORBIDS_RUNTIME_EFFECT
+        uart.thr.write(ch, .release);
+    }
+}
+
+fn reject_comptime_direct_mmio_assign(uart: MmioPtr<Uart16550>, ch: u8) -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_FORBIDS_RUNTIME_EFFECT
+        uart.thr = ch;
     }
 }
