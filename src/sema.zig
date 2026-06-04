@@ -130,8 +130,12 @@ pub const Checker = struct {
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .normal);
-            scope.put(param.name.text, .{ .class = classifyType(param.ty), .mutable = false, .ty = param.ty, .origin = .param }) catch {};
-            if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {};
+            if (scope.contains(param.name.text)) {
+                self.errorCode(param.name.span, "E_DUPLICATE_PARAMETER", "function parameter names must be unique");
+            } else {
+                scope.put(param.name.text, .{ .class = classifyType(param.ty), .mutable = false, .ty = param.ty, .origin = .param }) catch {};
+                if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {};
+            }
         }
         const return_kind = if (fn_decl.return_type) |ty| classifyType(ty) else TypeClass.void;
         const returns_never = if (fn_decl.return_type) |ty| blk: {
