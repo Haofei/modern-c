@@ -665,6 +665,9 @@ pub const Parser = struct {
     }
 
     fn finishCall(self: *Parser, callee_expr: ast.Expr, type_args: []ast.TypeExpr) anyerror!ast.Expr {
+        if (type_args.len == 0 and self.isReflectionBuiltinCallee(callee_expr) and self.startsTypeExpr(self.current.kind)) {
+            return self.finishReflectionSpecCall(callee_expr);
+        }
         var args: std.ArrayList(ast.Expr) = .empty;
         errdefer args.deinit(self.allocator);
         if (self.current.kind != .r_paren) {
@@ -676,6 +679,59 @@ pub const Parser = struct {
         const end = try self.expectTok(.r_paren, "expected ')' after call");
         const callee = try ast.makePtr(self.allocator, callee_expr);
         return .{ .span = joinSpan(callee.span, end.span), .kind = .{ .call = .{ .callee = callee, .type_args = type_args, .args = try args.toOwnedSlice(self.allocator) } } };
+    }
+
+    fn finishReflectionSpecCall(self: *Parser, callee_expr: ast.Expr) anyerror!ast.Expr {
+        var type_args: std.ArrayList(ast.TypeExpr) = .empty;
+        errdefer type_args.deinit(self.allocator);
+        try type_args.append(self.allocator, try self.parseType());
+
+        var args: std.ArrayList(ast.Expr) = .empty;
+        errdefer args.deinit(self.allocator);
+        if (self.match(.comma) and self.current.kind != .r_paren) {
+            while (true) {
+                try args.append(self.allocator, try self.parseExpr(0));
+                if (!self.match(.comma) or self.current.kind == .r_paren) break;
+            }
+        }
+        const end = try self.expectTok(.r_paren, "expected ')' after reflection call");
+        const callee = try ast.makePtr(self.allocator, callee_expr);
+        return .{ .span = joinSpan(callee.span, end.span), .kind = .{ .call = .{ .callee = callee, .type_args = try type_args.toOwnedSlice(self.allocator), .args = try args.toOwnedSlice(self.allocator) } } };
+    }
+
+    fn isReflectionBuiltinCallee(self: *Parser, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .ident => |name| std.mem.eql(u8, name.text, "size_of") or
+                std.mem.eql(u8, name.text, "sizeof") or
+                std.mem.eql(u8, name.text, "alignof") or
+                std.mem.eql(u8, name.text, "field_offset") or
+                std.mem.eql(u8, name.text, "field_type") or
+                std.mem.eql(u8, name.text, "bit_offset") or
+                std.mem.eql(u8, name.text, "repr_of"),
+            .grouped => |inner| return self.isReflectionBuiltinCallee(inner.*),
+            else => false,
+        };
+    }
+
+    fn startsTypeExpr(_: *Parser, kind: token.Kind) bool {
+        return switch (kind) {
+            .identifier,
+            .kw_bool,
+            .kw_never,
+            .kw_void,
+            .kw_wrap,
+            .kw_sat,
+            .kw_serial,
+            .kw_atomic,
+            .dot,
+            .question,
+            .kw_mut,
+            .kw_const,
+            .star,
+            .l_bracket,
+            => true,
+            else => false,
+        };
     }
 
     fn expectName(self: *Parser, message: []const u8) anyerror!ast.Ident {

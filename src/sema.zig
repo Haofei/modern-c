@@ -734,12 +734,8 @@ pub const Checker = struct {
 
     fn checkReflectionCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) ?TypeClass {
         const kind = reflectionKind(call.callee.*) orelse return null;
-        if (call.type_args.len != 1) {
-            self.errorCode(span, "E_CALL_ARG_COUNT", "reflection builtin requires exactly one reflected type");
-            return reflectionReturnClass(kind);
-        }
-
-        const reflected_ty = call.type_args[0];
+        const target = self.reflectionTarget(span, call) orelse return reflectionReturnClass(kind);
+        const reflected_ty = target.ty;
         if (isTypeName(reflected_ty, "c_void")) {
             self.errorCode(span, "E_C_VOID_NO_LAYOUT", "c_void has no size or alignment in MC");
             return reflectionReturnClass(kind);
@@ -747,20 +743,39 @@ pub const Checker = struct {
         self.checkReflectedType(reflected_ty, ctx);
 
         if (reflectionRequiresField(kind)) {
-            if (call.args.len != 1) {
+            if (target.args.len != 1) {
                 self.errorCode(span, "E_CALL_ARG_COUNT", "field reflection requires exactly one enum-literal field name");
                 return reflectionReturnClass(kind);
             }
-            const field = enumLiteralName(call.args[0]) orelse {
-                self.errorCode(call.args[0].span, "E_REFLECTION_FIELD_LITERAL", "field reflection requires an enum-literal field name");
+            const field = enumLiteralName(target.args[0]) orelse {
+                self.errorCode(target.args[0].span, "E_REFLECTION_FIELD_LITERAL", "field reflection requires an enum-literal field name");
                 return reflectionReturnClass(kind);
             };
             self.checkReflectedField(reflected_ty, field, ctx);
-        } else if (call.args.len != 0) {
+        } else if (target.args.len != 0) {
             self.errorCode(span, "E_CALL_ARG_COUNT", "type reflection builtin does not take runtime arguments");
         }
 
         return reflectionReturnClass(kind);
+    }
+
+    fn reflectionTarget(self: *Checker, span: diagnostics.Span, call: anytype) ?ReflectionTarget {
+        if (call.type_args.len > 0) {
+            if (call.type_args.len != 1) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "reflection builtin requires exactly one reflected type");
+                return null;
+            }
+            return .{ .ty = call.type_args[0], .args = call.args };
+        }
+        if (call.args.len == 0) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "reflection builtin requires a reflected type");
+            return null;
+        }
+        const ty = reflectionTypeExprFromArg(call.args[0]) orelse {
+            self.errorCode(call.args[0].span, "E_REFLECTION_TYPE_ARG", "reflection type argument must be a type name");
+            return null;
+        };
+        return .{ .ty = ty, .args = call.args[1..] };
     }
 
     fn checkReflectedType(self: *Checker, ty: ast.TypeExpr, ctx: Context) void {
@@ -2288,6 +2303,11 @@ const ReflectionKind = enum {
     repr,
 };
 
+const ReflectionTarget = struct {
+    ty: ast.TypeExpr,
+    args: []const ast.Expr,
+};
+
 fn reflectionKind(callee: ast.Expr) ?ReflectionKind {
     return switch (callee.kind) {
         .ident => |ident| {
@@ -2300,6 +2320,14 @@ fn reflectionKind(callee: ast.Expr) ?ReflectionKind {
             return null;
         },
         .grouped => |inner| return reflectionKind(inner.*),
+        else => null,
+    };
+}
+
+fn reflectionTypeExprFromArg(expr: ast.Expr) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .ident => |ident| .{ .span = ident.span, .kind = .{ .name = ident } },
+        .grouped => |inner| reflectionTypeExprFromArg(inner.*),
         else => null,
     };
 }
