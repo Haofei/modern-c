@@ -5,6 +5,7 @@
 // SPEC: check=E_NO_IMPLICIT_CONVERSION,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY,E_NO_IMPLICIT_POINTER_CONVERSION,E_CALL_ARG_COUNT
 
 global shared_value: u32 = 0;
+global copied_value: u32 = shared_value;
 
 fn make_bool() -> bool {
     return true;

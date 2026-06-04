@@ -98,8 +98,23 @@ pub const Checker = struct {
             .opaque_decl => {},
             .global_decl => |global| {
                 if (global.ty) |ty| self.checkType(ty, .normal);
-                if (global.init) |initializer| _ = self.checkExpr(initializer, .{ .globals = globals });
+                if (global.init) |initializer| self.checkGlobalInitializer(global, initializer, .{ .structs = structs, .functions = functions, .globals = globals });
             },
+        }
+    }
+
+    fn checkGlobalInitializer(self: *Checker, global: ast.GlobalDecl, initializer: ast.Expr, ctx: Context) void {
+        const ty = global.ty orelse return;
+        const target = classifyType(ty);
+        const source = self.checkExpr(initializer, ctx);
+        const literal_checked = self.checkIntegerLiteralInitializer(target, ty, initializer);
+        const null_checked = self.checkNullPointerInitializer(target, initializer);
+        const array_decay_checked = self.checkArrayDecayInitializer(target, source, initializer);
+        const pointer_conversion_checked = self.checkPointerViewInitializer(ty, initializer, ctx);
+        const c_void_conversion_checked = self.checkCVoidPointerConversion(ty, initializer, ctx);
+        const address_checked = self.checkAddressOfInitializer(target, ty, initializer, ctx);
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(target, source)) {
+            self.errorCode(initializer.span, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         }
     }
 
