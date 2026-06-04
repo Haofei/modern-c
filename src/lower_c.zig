@@ -810,6 +810,7 @@ const CEmitter = struct {
                                 if (try self.emitDirectCallSliceIndexLocalInit(name.text, decl_ty, initializer, locals)) continue;
                             }
                         } else if (local.init) |initializer| {
+                            if (try self.emitSliceCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitMmioReadInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitMmioReadExprInferredLocalInit(name.text, initializer, locals)) continue;
                         }
@@ -2264,6 +2265,25 @@ const CEmitter = struct {
         try self.out.print(self.allocator, " = {s}.ptr[mc_check_index_usize(", .{temp_name});
         try self.emitExpr(index.index.*, locals);
         try self.out.print(self.allocator, ", {s}.len)];\n", .{temp_name});
+        return true;
+    }
+
+    fn emitSliceCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (initializer.kind) {
+            .call => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .call => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const slice_ty = self.sliceReturnTypeForCall(call) orelse return false;
+        try locals.put(name, try self.localInfoFromType(slice_ty));
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(slice_ty, .typedef_name), name });
+        try self.emitExpr(initializer, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
         return true;
     }
 
@@ -5323,6 +5343,15 @@ test "emits C for array and slice for loops" {
         \\    }
         \\    return sum;
         \\}
+        \\
+        \\fn sum_inferred_slice() -> u32 {
+        \\    let xs = make_slice();
+        \\    var sum: u32 = 0;
+        \\    for x in xs {
+        \\        sum = sum + x;
+        \\    }
+        \\    return sum;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_for_loops.mc", source);
@@ -5348,6 +5377,8 @@ test "emits C for array and slice for loops" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs[mc_i1];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp2 = make_slice();\n    for (uintptr_t mc_i3 = 0; mc_i3 < mc_tmp2.len; mc_i3 += 1) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp2.ptr[mc_i3];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 xs = make_slice();\n    uint32_t sum = 0;\n    for (uintptr_t mc_i4 = 0; mc_i4 < xs.len; mc_i4 += 1) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs.ptr[mc_i4];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "sum = mc_checked_add_u32(sum, x);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return sum;") != null);
 }
@@ -5412,6 +5443,11 @@ test "emits C for slice typedefs and indexing" {
         \\    return make_u32_slice()[i];
         \\}
         \\
+        \\fn read_inferred_slice(i: usize) -> u32 {
+        \\    let xs = make_u32_slice();
+        \\    return xs[i];
+        \\}
+        \\
         \\fn local_direct_literal() -> u8 {
         \\    let x: u8 = make_u8_slice()[0];
         \\    return x;
@@ -5457,6 +5493,7 @@ test "emits C for slice typedefs and indexing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0.ptr[mc_check_index_usize(0, mc_tmp0.len)];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp1 = make_u32_slice();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp1.ptr[mc_check_index_usize(i, mc_tmp1.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 xs = make_u32_slice();\n    return xs.ptr[mc_check_index_usize(i, xs.len)];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 mc_tmp2 = make_u8_slice();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t x = mc_tmp2.ptr[mc_check_index_usize(0, mc_tmp2.len)];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp3 = make_u32_slice();") != null);
