@@ -2,7 +2,7 @@
 // SPEC: milestone=bitwise-semantics
 // SPEC: phase=sema,mir
 // SPEC: expect=pass,compile_error,inspect
-// SPEC: check=E_BITWISE_SIGNED_OPERAND,E_BITWISE_BOOL_OPERAND,E_BITWISE_POINTER_OPERAND,bitwise-no-trap
+// SPEC: check=E_BITWISE_SIGNED_OPERAND,E_BITWISE_BOOL_OPERAND,E_BITWISE_POINTER_OPERAND,E_BITWISE_ARITH_DOMAIN_OPERAND,bitwise-no-trap
 
 fn accept_unsigned_and(a: u32, b: u32) -> u32 {
     return a & b;
@@ -22,6 +22,10 @@ fn accept_unsigned_not(a: u32) -> u32 {
 
 fn accept_unsigned_shift(a: u32, n: u32) -> u32 {
     return a << n;
+}
+
+fn accept_wrap_and(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
+    return a & b;
 }
 
 fn reject_signed_and(a: i32, b: i32) -> i32 {
@@ -72,4 +76,19 @@ fn reject_pointer_and(a: *mut u8, b: *mut u8) -> *mut u8 {
 fn reject_pointer_shift(a: *mut u8, n: u32) -> *mut u8 {
     // EXPECT_ERROR: E_BITWISE_POINTER_OPERAND
     return a << n;
+}
+
+fn reject_sat_and(a: sat<u32>, b: sat<u32>) -> sat<u32> {
+    // EXPECT_ERROR: E_BITWISE_ARITH_DOMAIN_OPERAND
+    return a & b;
+}
+
+fn reject_serial_xor(a: serial<u32>, b: serial<u32>) -> serial<u32> {
+    // EXPECT_ERROR: E_BITWISE_ARITH_DOMAIN_OPERAND
+    return a ^ b;
+}
+
+fn reject_counter_not(a: counter<u32>) -> counter<u32> {
+    // EXPECT_ERROR: E_BITWISE_ARITH_DOMAIN_OPERAND
+    return ~a;
 }

@@ -203,6 +203,9 @@ pub const Checker = struct {
                 if (node.op == .bit_not and isPointerLike(inner)) {
                     self.errorCode(expr.span, "E_BITWISE_POINTER_OPERAND", "bitwise operations are not defined on pointer operands");
                 }
+                if (node.op == .bit_not and isForbiddenBitwisePolicy(inner)) {
+                    self.errorCode(expr.span, "E_BITWISE_ARITH_DOMAIN_OPERAND", "bitwise operations are not defined on this arithmetic domain");
+                }
                 return inner;
             },
             .binary => |node| {
@@ -222,6 +225,9 @@ pub const Checker = struct {
                 }
                 if (isBitwiseBinary(node.op) and (isPointerLike(left) or isPointerLike(right))) {
                     self.errorCode(expr.span, "E_BITWISE_POINTER_OPERAND", "bitwise operations are not defined on pointer operands");
+                }
+                if (isBitwiseBinary(node.op) and (isForbiddenBitwisePolicy(left) or isForbiddenBitwisePolicy(right))) {
+                    self.errorCode(expr.span, "E_BITWISE_ARITH_DOMAIN_OPERAND", "bitwise operations are not defined on this arithmetic domain");
                 }
                 return mergeArithmetic(left, right);
             },
@@ -390,6 +396,9 @@ const TypeClass = enum {
     checked_i64,
     checked_isize,
     wrap,
+    sat,
+    serial,
+    counter,
     pointer,
     c_void_pointer,
     never,
@@ -456,6 +465,13 @@ fn isPointerLike(kind: TypeClass) bool {
     };
 }
 
+fn isForbiddenBitwisePolicy(kind: TypeClass) bool {
+    return switch (kind) {
+        .sat, .serial, .counter => true,
+        else => false,
+    };
+}
+
 fn mergeArithmetic(left: TypeClass, right: TypeClass) TypeClass {
     if (left == .wrap or right == .wrap) return .wrap;
     if (isCheckedSigned(left)) return left;
@@ -470,9 +486,17 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
         .name => |name| classifyTypeName(name.text),
         .pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .pointer,
         .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .pointer,
-        .generic => |node| if (std.mem.eql(u8, node.base.text, "wrap")) .wrap else .unknown,
+        .generic => |node| classifyGenericTypeName(node.base.text),
         else => .unknown,
     };
+}
+
+fn classifyGenericTypeName(name: []const u8) TypeClass {
+    if (std.mem.eql(u8, name, "wrap")) return .wrap;
+    if (std.mem.eql(u8, name, "sat")) return .sat;
+    if (std.mem.eql(u8, name, "serial")) return .serial;
+    if (std.mem.eql(u8, name, "counter")) return .counter;
+    return .unknown;
 }
 
 fn classifyTypeName(name: []const u8) TypeClass {

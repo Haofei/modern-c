@@ -638,7 +638,7 @@ pub const Parser = struct {
 
     fn isSymbol(_: *Parser, kind: token.Kind) bool {
         return switch (kind) {
-            .identifier, .kw_ok, .kw_err, .kw_open, .kw_never, .kw_void, .kw_bool, .kw_wrap, .kw_sat, .kw_atomic, .kw_sizeof, .kw_alignof => true,
+            .identifier, .kw_ok, .kw_err, .kw_open, .kw_never, .kw_void, .kw_bool, .kw_wrap, .kw_sat, .kw_serial, .kw_atomic, .kw_sizeof, .kw_alignof => true,
             else => false,
         };
     }
