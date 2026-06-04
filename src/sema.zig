@@ -192,6 +192,9 @@ pub const Checker = struct {
                 }
             },
             .assignment => |node| {
+                if (!isAssignableTarget(node.target)) {
+                    self.errorCode(node.target.span, "E_INVALID_ASSIGNMENT_TARGET", "assignment target must be assignable storage");
+                }
                 if (isMmioRegisterTarget(node.target, ctx)) {
                     self.errorCode(stmt.span, "E_MMIO_DIRECT_ASSIGN", "MMIO registers must be accessed through typed read/write methods");
                 }
@@ -976,6 +979,14 @@ fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
     const mmio_structs = ctx.mmio_structs orelse return false;
     const mmio_struct = mmio_structs.get(struct_name) orelse return false;
     return mmio_struct.fields.contains(member.name.text);
+}
+
+fn isAssignableTarget(target: ast.Expr) bool {
+    return switch (target.kind) {
+        .ident, .deref, .index, .member => true,
+        .grouped => |inner| isAssignableTarget(inner.*),
+        else => false,
+    };
 }
 
 fn isMmioRegisterType(ty: ast.TypeExpr) bool {
