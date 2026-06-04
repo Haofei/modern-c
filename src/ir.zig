@@ -393,6 +393,9 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
                     .{ ctx.function_name, ctx.no_lang_trap, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
                 );
             }
+            if (node.op == .bit_not) {
+                try writeBitwiseNoTrapFact(expr.span, "bit_not", writer, ctx);
+            }
             try writeExprFacts(collector, node.expr.*, writer, ctx);
         },
         .binary => |node| {
@@ -401,6 +404,9 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
             }
             if (isShiftOp(node.op)) {
                 try writeShiftTrapFact(expr.span, node.op, writer, ctx);
+            }
+            if (bitwiseNoTrapOpName(node.op)) |op_name| {
+                try writeBitwiseNoTrapFact(expr.span, op_name, writer, ctx);
             }
             try writeExprFacts(collector, node.left.*, writer, ctx);
             try writeExprFacts(collector, node.right.*, writer, ctx);
@@ -467,6 +473,13 @@ fn writeShiftTrapFact(span: ast.Span, op: ast.BinaryOp, writer: anytype, ctx: Co
     try writer.print(
         "fact checked_shift_trap fn={s} op={s} trap=InvalidShift no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
         .{ ctx.function_name, @tagName(op), ctx.no_lang_trap, ctx.unsafe_contract_depth, span.line, span.column },
+    );
+}
+
+fn writeBitwiseNoTrapFact(span: ast.Span, op_name: []const u8, writer: anytype, ctx: Context) anyerror!void {
+    try writer.print(
+        "fact bitwise_no_trap fn={s} op={s} language_trap=false overflow_trap=false no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
+        .{ ctx.function_name, op_name, ctx.no_lang_trap, ctx.unsafe_contract_depth, span.line, span.column },
     );
 }
 
@@ -746,6 +759,15 @@ fn isShiftOp(op: ast.BinaryOp) bool {
     return switch (op) {
         .shl, .shr => true,
         else => false,
+    };
+}
+
+fn bitwiseNoTrapOpName(op: ast.BinaryOp) ?[]const u8 {
+    return switch (op) {
+        .bit_and => "bit_and",
+        .bit_or => "bit_or",
+        .bit_xor => "bit_xor",
+        else => null,
     };
 }
 

@@ -1,8 +1,8 @@
 // SPEC: section=6,D.1
 // SPEC: milestone=bitwise-semantics
-// SPEC: phase=sema
-// SPEC: expect=pass,compile_error
-// SPEC: check=E_BITWISE_SIGNED_OPERAND
+// SPEC: phase=sema,mir
+// SPEC: expect=pass,compile_error,inspect
+// SPEC: check=E_BITWISE_SIGNED_OPERAND,bitwise-no-trap
 
 fn accept_unsigned_and(a: u32, b: u32) -> u32 {
     return a & b;

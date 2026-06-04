@@ -636,6 +636,7 @@ fn isIrFactCheck(check: []const u8) bool {
         "contract_region",
         "no-language-trap-edge",
         "trap-lowering",
+        "bitwise-no-trap",
         "mmio-ir-width-preserved",
         "mmio-ir-ordering-preserved",
         "race-ir-semantics",
@@ -801,6 +802,14 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             "fact trap_edge fn=trap_as_value kind=Bounds source=trap_call no_lang_trap=false",
             "fact trap_edge fn=unreachable_as_value kind=Unreachable source=unreachable no_lang_trap=false",
             "fact trap_edge fn=never_returns_by_trap kind=Assert source=trap_call no_lang_trap=false",
+        });
+    }
+    if (std.mem.eql(u8, check, "bitwise-no-trap")) {
+        return containsAll(facts, &.{
+            "fact bitwise_no_trap fn=accept_unsigned_and op=bit_and language_trap=false overflow_trap=false",
+            "fact bitwise_no_trap fn=accept_unsigned_or op=bit_or language_trap=false overflow_trap=false",
+            "fact bitwise_no_trap fn=accept_unsigned_xor op=bit_xor language_trap=false overflow_trap=false",
+            "fact bitwise_no_trap fn=accept_unsigned_not op=bit_not language_trap=false overflow_trap=false",
         });
     }
     if (std.mem.eql(u8, check, "mmio-ir-width-preserved")) {
