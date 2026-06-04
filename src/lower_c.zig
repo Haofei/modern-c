@@ -39,6 +39,10 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\    __builtin_trap();
         \\}
         \\
+        \\MC_NORETURN MC_UNUSED static inline void mc_trap_Assert(void) {
+        \\    __builtin_trap();
+        \\}
+        \\
         \\MC_UNUSED static inline uintptr_t mc_check_index_usize(uintptr_t index, uintptr_t len) {
         \\    if (index >= len) mc_trap_Bounds();
         \\    return index;
@@ -289,6 +293,12 @@ const CEmitter = struct {
                 try self.writeIndent();
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
+            },
+            .assert => |expr| {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "if (!(");
+                try self.emitExpr(expr, locals);
+                try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
             },
             .block => |block| {
                 try self.writeIndent();
@@ -1457,6 +1467,7 @@ test "emits C support helpers used by lower-c evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_DivideByZero") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidShift") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Bounds") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Assert") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_check_index_usize") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_sub_u32") != null);
@@ -1694,4 +1705,34 @@ test "emits C for optional pointer if-let" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * p = maybe;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return *p;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return fallback;") != null);
+}
+
+test "emits C assert trap" {
+    const source =
+        \\fn require_flag(flag: bool) -> void {
+        \\    assert(flag);
+        \\}
+        \\
+        \\fn require_expr(a: u32, b: u32) -> void {
+        \\    assert(a == b || a != 0);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_assert.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(flag)) mc_trap_Assert();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(((a == b) || (a != 0)))) mc_trap_Assert();") != null);
 }
