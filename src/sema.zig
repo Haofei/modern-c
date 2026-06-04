@@ -15,6 +15,10 @@ pub const Checker = struct {
         defer deinitMmioStructs(&mmio_structs);
         var structs = std.StringHashMap(StructInfo).init(self.reporter.allocator);
         defer deinitStructs(&structs);
+        var packed_bits = std.StringHashMap(LayoutFieldInfo).init(self.reporter.allocator);
+        defer deinitLayoutFieldInfos(&packed_bits);
+        var overlay_unions = std.StringHashMap(LayoutFieldInfo).init(self.reporter.allocator);
+        defer deinitLayoutFieldInfos(&overlay_unions);
         var enums = std.StringHashMap(EnumInfo).init(self.reporter.allocator);
         defer deinitEnums(&enums);
         var functions = std.StringHashMap(FunctionInfo).init(self.reporter.allocator);
@@ -24,11 +28,13 @@ pub const Checker = struct {
         self.checkTopLevelNames(module);
         self.collectMmioStructs(module, &mmio_structs);
         self.collectStructs(module, &structs);
+        self.collectPackedBits(module, &packed_bits);
+        self.collectOverlayUnions(module, &overlay_unions);
         self.collectEnums(module, &enums);
         self.collectFunctions(module, &functions);
         self.collectGlobals(module, &globals);
 
-        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &enums, &functions, &globals);
+        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &enums, &functions, &globals);
     }
 
     fn collectMmioStructs(self: *Checker, module: ast.Module, mmio_structs: *std.StringHashMap(MmioStruct)) void {
@@ -39,7 +45,7 @@ pub const Checker = struct {
                         if (std.mem.eql(u8, abi, "mmio")) self.collectMmioStruct(struct_decl, mmio_structs);
                     }
                 },
-                .fn_decl, .extern_fn, .type_alias, .enum_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -59,7 +65,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .extern_struct => |struct_decl| self.collectStruct(struct_decl, structs),
-                .fn_decl, .extern_fn, .type_alias, .enum_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -75,6 +81,35 @@ pub const Checker = struct {
         };
     }
 
+    fn collectPackedBits(self: *Checker, module: ast.Module, packed_bits: *std.StringHashMap(LayoutFieldInfo)) void {
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .packed_bits_decl => |packed_bits_decl| self.collectLayoutFields(packed_bits_decl.name.text, packed_bits_decl.fields, packed_bits),
+                .fn_decl, .extern_fn, .type_alias, .extern_struct, .enum_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+            }
+        }
+    }
+
+    fn collectOverlayUnions(self: *Checker, module: ast.Module, overlay_unions: *std.StringHashMap(LayoutFieldInfo)) void {
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .overlay_union_decl => |overlay_union_decl| self.collectLayoutFields(overlay_union_decl.name.text, overlay_union_decl.fields, overlay_unions),
+                .fn_decl, .extern_fn, .type_alias, .extern_struct, .enum_decl, .packed_bits_decl, .opaque_decl, .global_decl => {},
+            }
+        }
+    }
+
+    fn collectLayoutFields(self: *Checker, name: []const u8, fields_in: []const ast.Field, infos: *std.StringHashMap(LayoutFieldInfo)) void {
+        if (infos.contains(name)) return;
+        var fields = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
+        for (fields_in) |field| {
+            if (!fields.contains(field.name.text)) fields.put(field.name.text, field.ty) catch {};
+        }
+        infos.put(name, .{ .fields = fields }) catch {
+            fields.deinit();
+        };
+    }
+
     fn collectFunctions(self: *Checker, module: ast.Module, functions: *std.StringHashMap(FunctionInfo)) void {
         _ = self;
         for (module.decls) |decl| {
@@ -82,7 +117,7 @@ pub const Checker = struct {
                 .fn_decl, .extern_fn => |fn_decl| {
                     if (!functions.contains(fn_decl.name.text)) functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_ty = fn_decl.return_type }) catch {};
                 },
-                .extern_struct, .type_alias, .enum_decl, .opaque_decl, .global_decl => {},
+                .extern_struct, .type_alias, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -91,7 +126,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .enum_decl => |enum_decl| self.collectEnum(enum_decl, enums),
-                .fn_decl, .extern_fn, .type_alias, .extern_struct, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .extern_struct, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -114,7 +149,7 @@ pub const Checker = struct {
                 .global_decl => |global| if (global.ty) |ty| {
                     if (!globals.contains(global.name.text)) globals.put(global.name.text, .{ .ty = ty }) catch {};
                 },
-                .fn_decl, .extern_fn, .extern_struct, .type_alias, .enum_decl, .opaque_decl => {},
+                .fn_decl, .extern_fn, .extern_struct, .type_alias, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
             }
         }
     }
@@ -133,17 +168,19 @@ pub const Checker = struct {
         }
     }
 
-    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
+    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
         switch (decl.kind) {
-            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, enums, functions, globals),
+            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, packed_bits, overlay_unions, enums, functions, globals),
             .extern_struct => |struct_decl| self.checkStruct(struct_decl),
             .enum_decl => |enum_decl| self.checkEnum(enum_decl),
+            .packed_bits_decl => |packed_bits_decl| self.checkPackedBits(packed_bits_decl),
+            .overlay_union_decl => |overlay_union_decl| self.checkOverlayUnion(overlay_union_decl),
             .type_alias => |alias| self.checkType(alias.ty, .normal),
             .opaque_decl => {},
             .global_decl => |global| {
                 if (global.ty) |ty| self.checkType(ty, .normal);
-                if (global.init) |initializer| self.checkGlobalInitializer(global, initializer, .{ .structs = structs, .enums = enums, .functions = functions, .globals = globals });
+                if (global.init) |initializer| self.checkGlobalInitializer(global, initializer, .{ .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .enums = enums, .functions = functions, .globals = globals });
             },
         }
     }
@@ -206,6 +243,40 @@ pub const Checker = struct {
         }
     }
 
+    fn checkPackedBits(self: *Checker, packed_bits: ast.PackedBitsDecl) void {
+        self.checkType(packed_bits.repr, .normal);
+        if (!isCheckedInt(classifyType(packed_bits.repr))) {
+            self.errorCode(packed_bits.repr.span, "E_PACKED_BITS_REPR_NOT_INTEGER", "packed bits representation type must be an integer type");
+        }
+
+        var fields = std.StringHashMap(void).init(self.reporter.allocator);
+        defer fields.deinit();
+        for (packed_bits.fields) |field| {
+            self.checkType(field.ty, .normal);
+            if (!isTypeName(field.ty, "bool")) {
+                self.errorCode(field.ty.span, "E_PACKED_BITS_FIELD_NOT_BOOL", "packed bits fields must be bool");
+            }
+            if (fields.contains(field.name.text)) {
+                self.errorCode(field.name.span, "E_DUPLICATE_PACKED_BITS_FIELD", "packed bits field names must be unique");
+            } else {
+                fields.put(field.name.text, {}) catch {};
+            }
+        }
+    }
+
+    fn checkOverlayUnion(self: *Checker, overlay_union: ast.OverlayUnionDecl) void {
+        var fields = std.StringHashMap(void).init(self.reporter.allocator);
+        defer fields.deinit();
+        for (overlay_union.fields) |field| {
+            self.checkType(field.ty, .normal);
+            if (fields.contains(field.name.text)) {
+                self.errorCode(field.name.span, "E_DUPLICATE_OVERLAY_FIELD", "overlay union field names must be unique");
+            } else {
+                fields.put(field.name.text, {}) catch {};
+            }
+        }
+    }
+
     fn checkGlobalInitializer(self: *Checker, global: ast.GlobalDecl, initializer: ast.Expr, ctx: Context) void {
         const ty = global.ty orelse return;
         const target = classifyType(ty);
@@ -226,7 +297,7 @@ pub const Checker = struct {
         }
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
         var scope = Scope.init(self.reporter.allocator);
         defer scope.deinit();
         var mmio_params = std.StringHashMap([]const u8).init(self.reporter.allocator);
@@ -259,6 +330,8 @@ pub const Checker = struct {
                 .mmio_structs = mmio_structs,
                 .mmio_params = &mmio_params,
                 .structs = structs,
+                .packed_bits = packed_bits,
+                .overlay_unions = overlay_unions,
                 .enums = enums,
                 .functions = functions,
                 .globals = globals,
@@ -786,16 +859,15 @@ pub const Checker = struct {
 
     fn checkReflectedField(self: *Checker, ty: ast.TypeExpr, field: ast.Ident, ctx: Context) void {
         const name = typeName(ty) orelse {
-            self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "field reflection requires a known struct type");
+            self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "field reflection requires a known field-bearing layout type");
             return;
         };
-        const structs = ctx.structs orelse return;
-        const info = structs.get(name) orelse {
-            self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "field reflection requires a known struct type");
-            return;
-        };
-        if (!info.fields.contains(field.text)) {
-            self.errorCode(field.span, "E_UNKNOWN_STRUCT_FIELD", "struct has no field with this name");
+        if (layoutFieldInfo(name, ctx)) |info| {
+            if (!info.fields.contains(field.text)) {
+                self.errorCode(field.span, "E_UNKNOWN_STRUCT_FIELD", "layout type has no field with this name");
+            }
+        } else {
+            self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "field reflection requires a known field-bearing layout type");
         }
     }
 
@@ -1172,6 +1244,8 @@ const Context = struct {
     mmio_structs: ?*const std.StringHashMap(MmioStruct) = null,
     mmio_params: ?*const std.StringHashMap([]const u8) = null,
     structs: ?*const std.StringHashMap(StructInfo) = null,
+    packed_bits: ?*const std.StringHashMap(LayoutFieldInfo) = null,
+    overlay_unions: ?*const std.StringHashMap(LayoutFieldInfo) = null,
     enums: ?*const std.StringHashMap(EnumInfo) = null,
     functions: ?*const std.StringHashMap(FunctionInfo) = null,
     globals: ?*const std.StringHashMap(GlobalInfo) = null,
@@ -1182,6 +1256,10 @@ const MmioStruct = struct {
 };
 
 const StructInfo = struct {
+    fields: std.StringHashMap(ast.TypeExpr),
+};
+
+const LayoutFieldInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
 };
 
@@ -1262,6 +1340,8 @@ fn declName(decl: ast.Decl) ast.Ident {
         .type_alias => |alias| alias.name,
         .extern_struct => |struct_decl| struct_decl.name,
         .enum_decl => |enum_decl| enum_decl.name,
+        .packed_bits_decl => |packed_bits| packed_bits.name,
+        .overlay_union_decl => |overlay_union| overlay_union.name,
         .opaque_decl => |name| name,
         .global_decl => |global| global.name,
     };
@@ -1840,6 +1920,12 @@ fn deinitStructs(structs: *std.StringHashMap(StructInfo)) void {
     structs.deinit();
 }
 
+fn deinitLayoutFieldInfos(infos: *std.StringHashMap(LayoutFieldInfo)) void {
+    var values = infos.valueIterator();
+    while (values.next()) |info| info.fields.deinit();
+    infos.deinit();
+}
+
 fn deinitEnums(enums: *std.StringHashMap(EnumInfo)) void {
     var values = enums.valueIterator();
     while (values.next()) |enum_info| enum_info.cases.deinit();
@@ -2350,6 +2436,8 @@ fn isKnownLayoutType(ty: ast.TypeExpr, ctx: Context) bool {
     return switch (ty.kind) {
         .name => |name| isPrimitiveLayoutType(name.text) or
             knownStructName(name.text, ctx) or
+            knownPackedBitsName(name.text, ctx) or
+            knownOverlayUnionName(name.text, ctx) or
             knownEnumName(name.text, ctx),
         .pointer, .raw_many_pointer, .slice, .array, .nullable => true,
         .qualified => |node| isKnownLayoutType(node.child.*, ctx),
@@ -2365,6 +2453,29 @@ fn isPrimitiveLayoutType(name: []const u8) bool {
 fn knownStructName(name: []const u8, ctx: Context) bool {
     const structs = ctx.structs orelse return false;
     return structs.contains(name);
+}
+
+fn knownPackedBitsName(name: []const u8, ctx: Context) bool {
+    const packed_bits = ctx.packed_bits orelse return false;
+    return packed_bits.contains(name);
+}
+
+fn knownOverlayUnionName(name: []const u8, ctx: Context) bool {
+    const overlay_unions = ctx.overlay_unions orelse return false;
+    return overlay_unions.contains(name);
+}
+
+fn layoutFieldInfo(name: []const u8, ctx: Context) ?LayoutFieldInfo {
+    if (ctx.structs) |structs| {
+        if (structs.get(name)) |info| return .{ .fields = info.fields };
+    }
+    if (ctx.packed_bits) |packed_bits| {
+        if (packed_bits.get(name)) |info| return info;
+    }
+    if (ctx.overlay_unions) |overlay_unions| {
+        if (overlay_unions.get(name)) |info| return info;
+    }
+    return null;
 }
 
 fn knownEnumName(name: []const u8, ctx: Context) bool {

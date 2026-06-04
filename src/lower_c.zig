@@ -37,7 +37,7 @@ const Inspector = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .fn_decl, .extern_fn => |fn_decl| if (fn_decl.body) |body| try self.inspectFn(fn_decl, body),
-                .type_alias, .extern_struct, .enum_decl, .opaque_decl, .global_decl => {},
+                .type_alias, .extern_struct, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -53,7 +53,7 @@ const Inspector = struct {
                 .global_decl => |global| {
                     try self.globals.put(global.name.text, {});
                 },
-                .fn_decl, .extern_fn, .type_alias, .enum_decl, .opaque_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
             }
         }
     }

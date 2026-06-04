@@ -43,6 +43,8 @@ pub const Decl = struct {
         extern_fn: FnDecl,
         extern_struct: StructDecl,
         enum_decl: EnumDecl,
+        packed_bits_decl: PackedBitsDecl,
+        overlay_union_decl: OverlayUnionDecl,
         opaque_decl: Ident,
         global_decl: GlobalDecl,
     };
@@ -70,6 +72,17 @@ pub const TypeAlias = struct {
 pub const StructDecl = struct {
     name: Ident,
     abi: ?[]const u8,
+    fields: []Field,
+};
+
+pub const PackedBitsDecl = struct {
+    name: Ident,
+    repr: TypeExpr,
+    fields: []Field,
+};
+
+pub const OverlayUnionDecl = struct {
+    name: Ident,
     fields: []Field,
 };
 

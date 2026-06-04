@@ -85,10 +85,15 @@ pub const Parser = struct {
 
         if (self.match(.kw_packed)) {
             if (self.matchIdentifierText("bits")) {
-                const name = try self.expectName("expected packed bits name");
-                try self.skipOptionalTypeAndBody();
-                return .{ .span = joinSpan(start, name.span), .attrs = attrs, .kind = .{ .opaque_decl = name } };
+                const packed_bits = try self.finishPackedBitsDecl();
+                return .{ .span = joinSpan(start, packed_bits.name.span), .attrs = attrs, .kind = .{ .packed_bits_decl = packed_bits } };
             }
+        }
+
+        if (self.match(.kw_overlay)) {
+            try self.expect(.kw_union, "expected 'union' after overlay");
+            const overlay_union = try self.finishOverlayUnionDecl();
+            return .{ .span = joinSpan(start, overlay_union.name.span), .attrs = attrs, .kind = .{ .overlay_union_decl = overlay_union } };
         }
 
         if (self.matchIdentifierText("global")) {
@@ -105,26 +110,6 @@ pub const Parser = struct {
         }
 
         return self.fail("expected top-level fn, type, or extern declaration");
-    }
-
-    fn skipOptionalTypeAndBody(self: *Parser) anyerror!void {
-        while (self.current.kind != .l_brace and self.current.kind != .semicolon and self.current.kind != .eof) self.advance();
-        if (self.match(.semicolon)) return;
-        if (self.current.kind == .l_brace) {
-            var depth: usize = 0;
-            while (self.current.kind != .eof) {
-                if (self.match(.l_brace)) {
-                    depth += 1;
-                    continue;
-                }
-                if (self.match(.r_brace)) {
-                    depth -= 1;
-                    if (depth == 0) return;
-                    continue;
-                }
-                self.advance();
-            }
-        }
     }
 
     fn finishFnDecl(self: *Parser, abi: ?[]const u8, is_const: bool) anyerror!ast.FnDecl {
@@ -162,7 +147,26 @@ pub const Parser = struct {
 
     fn finishStructDecl(self: *Parser, abi: ?[]const u8) anyerror!ast.StructDecl {
         const name = try self.expectName("expected struct name");
-        try self.expect(.l_brace, "expected '{' after struct name");
+        const fields = try self.finishFieldList("expected '{' after struct name", "expected '}' after struct fields");
+        return .{ .name = name, .abi = abi, .fields = fields };
+    }
+
+    fn finishPackedBitsDecl(self: *Parser) anyerror!ast.PackedBitsDecl {
+        const name = try self.expectName("expected packed bits name");
+        try self.expect(.colon, "expected ':' before packed bits representation type");
+        const repr = try self.parseType();
+        const fields = try self.finishFieldList("expected '{' after packed bits representation type", "expected '}' after packed bits fields");
+        return .{ .name = name, .repr = repr, .fields = fields };
+    }
+
+    fn finishOverlayUnionDecl(self: *Parser) anyerror!ast.OverlayUnionDecl {
+        const name = try self.expectName("expected overlay union name");
+        const fields = try self.finishFieldList("expected '{' after overlay union name", "expected '}' after overlay union fields");
+        return .{ .name = name, .fields = fields };
+    }
+
+    fn finishFieldList(self: *Parser, open_message: []const u8, close_message: []const u8) anyerror![]ast.Field {
+        try self.expect(.l_brace, open_message);
         var fields: std.ArrayList(ast.Field) = .empty;
         errdefer fields.deinit(self.allocator);
         while (self.current.kind != .r_brace and self.current.kind != .eof) {
@@ -172,8 +176,8 @@ pub const Parser = struct {
             _ = self.match(.comma) or self.match(.semicolon);
             try fields.append(self.allocator, .{ .name = field_name, .ty = ty });
         }
-        try self.expect(.r_brace, "expected '}' after struct fields");
-        return .{ .name = name, .abi = abi, .fields = try fields.toOwnedSlice(self.allocator) };
+        try self.expect(.r_brace, close_message);
+        return fields.toOwnedSlice(self.allocator);
     }
 
     fn finishEnumDecl(self: *Parser, is_open: bool) anyerror!ast.EnumDecl {
