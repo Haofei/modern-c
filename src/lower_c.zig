@@ -1144,7 +1144,19 @@ const CEmitter = struct {
     }
 
     fn emitResultSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
-        const subject = self.resultSubjectForExpr(node.subject, locals) orelse return false;
+        const subject = if (self.resultSubjectForExpr(node.subject, locals)) |subject|
+            subject
+        else blk: {
+            const result_ty = self.resultTypeForExpr(node.subject, locals) orelse return false;
+            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(result_ty, .typedef_name), temp_name });
+            try self.emitExpr(node.subject, locals);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try locals.put(temp_name, try self.localInfoFromType(result_ty));
+            break :blk self.resultSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp_name, .span = node.subject.span } }, .span = node.subject.span }, locals).?;
+        };
         var emitted_any = false;
         var seen_ok = false;
         var seen_err = false;
@@ -1204,7 +1216,19 @@ const CEmitter = struct {
     }
 
     fn emitTaggedUnionSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
-        const subject = self.taggedUnionSubjectForExpr(node.subject, locals) orelse return false;
+        const subject = if (self.taggedUnionSubjectForExpr(node.subject, locals)) |subject|
+            subject
+        else blk: {
+            const union_ty = self.taggedUnionReturnTypeForExpr(node.subject) orelse return false;
+            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(union_ty, .typedef_name), temp_name });
+            try self.emitExpr(node.subject, locals);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try locals.put(temp_name, try self.localInfoFromType(union_ty));
+            break :blk self.taggedUnionSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp_name, .span = node.subject.span } }, .span = node.subject.span }, locals).?;
+        };
         var emitted_any = false;
         var has_wildcard = false;
         for (node.arms) |arm| {
@@ -1331,6 +1355,20 @@ const CEmitter = struct {
         const type_name = info.source_type_name orelse return null;
         const union_decl = self.tagged_unions.get(type_name) orelse return null;
         return .{ .name = name, .type_name = type_name, .decl = union_decl };
+    }
+
+    fn taggedUnionReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .call => |node| blk: {
+                const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
+                const info = self.functions.get(fn_name) orelse break :blk null;
+                const ret_ty = info.return_type orelse break :blk null;
+                const type_name = typeName(ret_ty) orelse break :blk null;
+                break :blk if (self.tagged_unions.contains(type_name)) ret_ty else null;
+            },
+            .grouped => |inner| self.taggedUnionReturnTypeForExpr(inner.*),
+            else => null,
+        };
     }
 
     fn taggedUnionSwitchBranch(self: *CEmitter, pattern: ast.Pattern, subject: TaggedUnionSwitchSubject) !?TaggedUnionSwitchBranch {
@@ -4559,6 +4597,15 @@ test "emits C for tagged union switch narrowing" {
         \\        .eof => { return 0; },
         \\    }
         \\}
+        \\
+        \\extern fn make_token() -> Token;
+        \\
+        \\fn token_call_value() -> i64 {
+        \\    switch make_token() {
+        \\        int(v) => { return v; },
+        \\        .eof => { return 0; },
+        \\    }
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_tagged_union_switch.mc", source);
@@ -4585,6 +4632,10 @@ test "emits C for tagged union switch narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t token_kind(Token token)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return 0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static int64_t token_call_value(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token mc_tmp0 = make_token();\n    if (mc_tmp0.tag == TokenTag_int) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "int64_t v = mc_tmp0.payload.int_;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "else if (mc_tmp0.tag == TokenTag_eof) {") != null);
 }
 
 test "emits C for tagged union constructors" {
@@ -5785,6 +5836,15 @@ test "emits C for Result switch narrowing" {
         \\        err(e) => { return e != 0; },
         \\    }
         \\}
+        \\
+        \\extern fn make_result() -> Result<u32, Error>;
+        \\
+        \\fn result_call_nonzero() -> bool {
+        \\    switch make_result() {
+        \\        ok(v) => { return v != 0; },
+        \\        err(e) => { return e != 0; },
+        \\    }
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_switch.mc", source);
@@ -5810,6 +5870,9 @@ test "emits C for Result switch narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "else {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Error e = result.payload.err;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return (e != 0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();\n    if (mc_tmp0.is_ok) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t v = mc_tmp0.payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Error e = mc_tmp0.payload.err;") != null);
 }
 
 test "emits C extern structs and member access" {

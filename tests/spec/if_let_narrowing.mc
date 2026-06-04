@@ -140,6 +140,14 @@ fn reject_switch_unknown_result_tag(result: Result<u32, Error>) -> u32 {
     }
 }
 
+fn reject_switch_payloadless_unknown_result_tag(result: Result<u32, Error>) -> u32 {
+    switch result {
+        // EXPECT_ERROR: E_SWITCH_RESULT_TAG
+        .ready => { return 1; },
+        _ => { return 0; },
+    }
+}
+
 fn reject_switch_result_binding_from_non_result(maybe: ?*mut u8) -> u32 {
     switch maybe {
         // EXPECT_ERROR: E_SWITCH_RESULT_REQUIRED

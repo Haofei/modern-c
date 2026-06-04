@@ -1293,11 +1293,12 @@ pub const Checker = struct {
                         if (!enum_info.cases.contains(tag.text)) {
                             self.errorCode(tag.span, "E_UNKNOWN_ENUM_CASE", "enum has no case with this name");
                         }
-                    }
-                    if (subject_union) |union_info| {
+                    } else if (subject_union) |union_info| {
                         if (!union_info.cases.contains(tag.text)) {
                             self.errorCode(tag.span, "E_UNKNOWN_UNION_CASE", "union has no case with this name");
                         }
+                    } else if (subject_class == .result and !isResultNarrowingTag(tag.text)) {
+                        self.errorCode(tag.span, "E_SWITCH_RESULT_TAG", "switch result patterns support only ok or err tags");
                     }
                 },
                 .tag_bind => |node| {
