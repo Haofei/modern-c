@@ -103,7 +103,8 @@ pub const Checker = struct {
                 if (local.init) |expr| {
                     const initializer = self.checkExpr(expr, ctx);
                     const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
-                    if (local.ty != null and !literal_checked and !canInitialize(kind, initializer)) {
+                    const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
+                    if (local.ty != null and !literal_checked and !null_checked and !canInitialize(kind, initializer)) {
                         self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                     }
                 }
@@ -169,7 +170,8 @@ pub const Checker = struct {
             .int_literal => .int_literal,
             .void_literal => .void,
             .bool_literal => .bool,
-            .string_literal, .char_literal, .null_literal, .uninit_literal, .enum_literal => .unknown,
+            .null_literal => .null_literal,
+            .string_literal, .char_literal, .uninit_literal, .enum_literal => .unknown,
             .unreachable_expr => {
                 if (ctx.no_lang_trap) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "reachable unreachable emits a language trap in #[no_lang_trap]");
@@ -363,6 +365,16 @@ pub const Checker = struct {
         }
         return true;
     }
+
+    fn checkNullPointerInitializer(self: *Checker, target: TypeClass, expr: ast.Expr) bool {
+        if (!isNullLiteral(expr)) return false;
+        if (isNullablePointerLike(target)) return true;
+        if (isSingleObjectPointerLike(target)) {
+            self.errorCode(expr.span, "E_NULL_NON_NULL_POINTER", "null cannot initialize a non-null pointer");
+            return true;
+        }
+        return false;
+    }
 };
 
 const Context = struct {
@@ -429,9 +441,12 @@ const TypeClass = enum {
     pointer,
     slice,
     c_void_pointer,
+    nullable_pointer,
+    nullable_c_void_pointer,
     never,
     void,
     bool,
+    null_literal,
     int_literal,
 };
 
@@ -495,7 +510,7 @@ fn isCheckedSigned(kind: TypeClass) bool {
 
 fn isPointerLike(kind: TypeClass) bool {
     return switch (kind) {
-        .pointer, .slice, .c_void_pointer => true,
+        .pointer, .slice, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer => true,
         else => false,
     };
 }
@@ -503,6 +518,13 @@ fn isPointerLike(kind: TypeClass) bool {
 fn isSingleObjectPointerLike(kind: TypeClass) bool {
     return switch (kind) {
         .pointer, .c_void_pointer => true,
+        else => false,
+    };
+}
+
+fn isNullablePointerLike(kind: TypeClass) bool {
+    return switch (kind) {
+        .nullable_pointer, .nullable_c_void_pointer => true,
         else => false,
     };
 }
@@ -528,7 +550,16 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
         .name => |name| classifyTypeName(name.text),
         .pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .pointer,
         .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .slice,
+        .nullable => |child| classifyNullableType(child.*),
         .generic => |node| classifyGenericTypeName(node.base.text),
+        else => .unknown,
+    };
+}
+
+fn classifyNullableType(child: ast.TypeExpr) TypeClass {
+    return switch (classifyType(child)) {
+        .c_void_pointer => .nullable_c_void_pointer,
+        .pointer => .nullable_pointer,
         else => .unknown,
     };
 }
@@ -562,6 +593,7 @@ fn canInitialize(target: TypeClass, initializer: TypeClass) bool {
     if (target == .unknown or initializer == .unknown) return true;
     if (initializer == .never) return true;
     if (target == initializer) return true;
+    if (isNullablePointerLike(target) and initializer == .null_literal) return true;
     if (isCheckedInt(target) and initializer == .int_literal) return true;
     return false;
 }
@@ -632,6 +664,14 @@ fn integerLiteralValue(expr: ast.Expr) ?LiteralValue {
             return .{ .negative = true, .magnitude = literal.magnitude };
         },
         else => null,
+    };
+}
+
+fn isNullLiteral(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .null_literal => true,
+        .grouped => |inner| isNullLiteral(inner.*),
+        else => false,
     };
 }
 
