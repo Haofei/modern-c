@@ -15,6 +15,7 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\#include <stdbool.h>
         \\#include <stddef.h>
         \\#include <stdalign.h>
+        \\#include <string.h>
         \\
         \\#if defined(__GNUC__) || defined(__clang__)
         \\#define MC_NORETURN __attribute__((noreturn))
@@ -176,6 +177,8 @@ const CEmitter = struct {
         var packed_bits = self.packed_bits.valueIterator();
         while (packed_bits.next()) |bits| bits.fields.deinit();
         self.packed_bits.deinit();
+        var overlay_unions = self.overlay_unions.valueIterator();
+        while (overlay_unions.next()) |overlay_union| overlay_union.fields.deinit();
         self.overlay_unions.deinit();
         self.tagged_unions.deinit();
         var mmio_structs = self.mmio_structs.valueIterator();
@@ -538,13 +541,20 @@ const CEmitter = struct {
     fn collectOverlayUnion(self: *CEmitter, overlay_union: ast.OverlayUnionDecl) !void {
         var size: usize = 1;
         var alignment: usize = 1;
+        var fields = std.StringHashMap(OverlayFieldInfo).init(self.allocator);
+        errdefer fields.deinit();
         for (overlay_union.fields) |field| {
             const layout = self.overlayFieldLayout(field.ty) orelse return error.UnsupportedCEmission;
             size = @max(size, layout.size);
             alignment = @max(alignment, layout.alignment);
             try self.collectTypeArtifacts(field.ty);
+            try fields.put(field.name.text, .{
+                .ty = field.ty,
+                .layout = layout,
+                .byte_array_len = overlayByteArrayLen(field.ty),
+            });
         }
-        try self.overlay_unions.put(overlay_union.name.text, .{ .size = size, .alignment = alignment });
+        try self.overlay_unions.put(overlay_union.name.text, .{ .size = size, .alignment = alignment, .fields = fields });
     }
 
     fn collectTaggedUnion(self: *CEmitter, union_decl: ast.UnionDecl) !void {
@@ -778,6 +788,7 @@ const CEmitter = struct {
                     if (try self.emitNeverExprStmt(expr, locals)) return;
                     if (try self.emitDirectCallSliceIndexReturn(expr, locals)) return;
                     if (try self.emitMmioReadReturn(expr, locals)) return;
+                    if (try self.emitOverlayFieldReadReturn(expr, locals, return_ty)) return;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "return ");
                     if (return_ty) |target_ty| {
@@ -1500,6 +1511,50 @@ const CEmitter = struct {
         };
     }
 
+    fn emitOverlayFieldReadReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        switch (expr.kind) {
+            .grouped => |inner| return try self.emitOverlayFieldReadReturn(inner.*, locals, return_ty),
+            .member => |node| {
+                const access = self.overlayFieldAccess(node, locals) orelse return false;
+                if (access.field.byte_array_len != null) return false;
+                const temp_ty = if (return_ty) |ty| ty else access.field.ty;
+                const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+                self.temp_index += 1;
+
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s};\n", .{ try self.cTypeFor(temp_ty, .typedef_name), temp_name });
+                try self.writeIndent();
+                try self.out.print(self.allocator, "memcpy(&{s}, ", .{temp_name});
+                try self.emitExpr(access.base, locals);
+                try self.out.print(self.allocator, ".storage, {d});\n", .{access.field.layout.size});
+                try self.writeIndent();
+                try self.out.print(self.allocator, "return {s};\n", .{temp_name});
+                return true;
+            },
+            .index => |node| {
+                const member = switch (node.base.kind) {
+                    .member => |member| member,
+                    .grouped => |inner| switch (inner.kind) {
+                        .member => |member| member,
+                        else => return false,
+                    },
+                    else => return false,
+                };
+                const access = self.overlayFieldAccess(member, locals) orelse return false;
+                const len = access.field.byte_array_len orelse return false;
+
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "return ");
+                try self.emitExpr(access.base, locals);
+                try self.out.appendSlice(self.allocator, ".storage[mc_check_index_usize(");
+                try self.emitExpr(node.index.*, locals);
+                try self.out.print(self.allocator, ", {s})];\n", .{len});
+                return true;
+            },
+            else => return false,
+        }
+    }
+
     fn emitDirectCallSliceIndexReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const index = switch (expr.kind) {
             .index => |node| node,
@@ -1696,6 +1751,13 @@ const CEmitter = struct {
         if (!isCKeyword(name)) return name;
         return std.fmt.allocPrint(self.scratch.allocator(), "{s}_", .{name});
     }
+
+    fn overlayFieldAccess(self: *CEmitter, member: anytype, locals: *std.StringHashMap(LocalInfo)) ?OverlayFieldAccess {
+        const name = overlayUnionNameForExpr(member.base.*, locals) orelse return null;
+        const info = self.overlay_unions.get(name) orelse return null;
+        const field = info.fields.get(member.name.text) orelse return null;
+        return .{ .base = member.base.*, .field = field };
+    }
 };
 
 const LocalInfo = struct {
@@ -1739,6 +1801,18 @@ const PackedBitsField = struct {
 const OverlayUnionInfo = struct {
     size: usize,
     alignment: usize,
+    fields: std.StringHashMap(OverlayFieldInfo),
+};
+
+const OverlayFieldInfo = struct {
+    ty: ast.TypeExpr,
+    layout: OverlayLayout,
+    byte_array_len: ?[]const u8,
+};
+
+const OverlayFieldAccess = struct {
+    base: ast.Expr,
+    field: OverlayFieldInfo,
 };
 
 const OverlayLayout = struct {
@@ -2444,6 +2518,26 @@ fn sliceAccessForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?S
         else
             null,
         .grouped => |inner| sliceAccessForExpr(inner.*, locals),
+        else => null,
+    };
+}
+
+fn overlayUnionNameForExpr(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?[]const u8 {
+    return switch (expr.kind) {
+        .ident => |ident| if (locals.get(ident.text)) |info| info.source_type_name else null,
+        .grouped => |inner| overlayUnionNameForExpr(inner.*, locals),
+        else => null,
+    };
+}
+
+fn overlayByteArrayLen(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .array => |node| {
+            const child_name = typeName(node.child.*) orelse return null;
+            if (!std.mem.eql(u8, child_name, "u8")) return null;
+            return intLiteralText(node.len);
+        },
+        .qualified => |node| overlayByteArrayLen(node.child.*),
         else => null,
     };
 }
@@ -3646,6 +3740,14 @@ test "emits C overlay unions as byte storage" {
         \\fn pass_word(word: Word) -> Word {
         \\    return word;
         \\}
+        \\
+        \\fn read_u(word: Word) -> u32 {
+        \\    return word.u;
+        \\}
+        \\
+        \\fn read_b0(word: Word) -> u8 {
+        \\    return word.bytes[0];
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_overlay_union.mc", source);
@@ -3668,6 +3770,12 @@ test "emits C overlay unions as byte storage" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "} Word;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Word pass_word(Word word)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return word;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t read_u(Word word)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "memcpy(&mc_tmp0, word.storage, 4);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_b0(Word word)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return word.storage[mc_check_index_usize(0, 4)];") != null);
 }
 
 test "emits C assert trap" {
