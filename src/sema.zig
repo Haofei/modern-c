@@ -349,6 +349,7 @@ pub const Checker = struct {
                 if (!isTryOperand(operand)) {
                     self.errorCode(expr.span, "E_TRY_REQUIRES_RESULT_OR_NULLABLE", "postfix '?' requires a Result or nullable operand");
                 }
+                if (tryPayloadType(inner.*, ctx)) |payload_ty| return classifyType(payload_ty);
                 return tryResultType(operand);
             },
             .block => |block| {
@@ -1030,6 +1031,11 @@ fn resultPayloadType(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
         .qualified => |node| resultPayloadType(node.child.*, tag),
         else => null,
     };
+}
+
+fn tryPayloadType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const ty = exprStorageType(expr, ctx) orelse return null;
+    return nullableInnerType(ty) orelse resultPayloadType(ty, "ok");
 }
 
 fn iterableElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
