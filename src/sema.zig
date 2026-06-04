@@ -17,11 +17,14 @@ pub const Checker = struct {
         defer deinitStructs(&structs);
         var functions = std.StringHashMap(FunctionInfo).init(self.reporter.allocator);
         defer functions.deinit();
+        var globals = std.StringHashMap(GlobalInfo).init(self.reporter.allocator);
+        defer globals.deinit();
         self.collectMmioStructs(module, &mmio_structs);
         self.collectStructs(module, &structs);
         self.collectFunctions(module, &functions);
+        self.collectGlobals(module, &globals);
 
-        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &functions);
+        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &functions, &globals);
     }
 
     fn collectMmioStructs(self: *Checker, module: ast.Module, mmio_structs: *std.StringHashMap(MmioStruct)) void {
@@ -74,10 +77,20 @@ pub const Checker = struct {
         }
     }
 
-    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), functions: *const std.StringHashMap(FunctionInfo)) void {
+    fn collectGlobals(self: *Checker, module: ast.Module, globals: *std.StringHashMap(GlobalInfo)) void {
+        _ = self;
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .global_decl => |global| if (global.ty) |ty| globals.put(global.name.text, .{ .ty = ty }) catch {},
+                .fn_decl, .extern_fn, .extern_struct, .type_alias, .opaque_decl => {},
+            }
+        }
+    }
+
+    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
         switch (decl.kind) {
-            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, functions),
+            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, functions, globals),
             .extern_struct => |struct_decl| {
                 for (struct_decl.fields) |field| self.checkType(field.ty, .normal);
             },
@@ -85,12 +98,12 @@ pub const Checker = struct {
             .opaque_decl => {},
             .global_decl => |global| {
                 if (global.ty) |ty| self.checkType(ty, .normal);
-                if (global.init) |initializer| _ = self.checkExpr(initializer, .{});
+                if (global.init) |initializer| _ = self.checkExpr(initializer, .{ .globals = globals });
             },
         }
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), functions: *const std.StringHashMap(FunctionInfo)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
         var scope = Scope.init(self.reporter.allocator);
         defer scope.deinit();
         var mmio_params = std.StringHashMap([]const u8).init(self.reporter.allocator);
@@ -120,6 +133,7 @@ pub const Checker = struct {
                 .mmio_params = &mmio_params,
                 .structs = structs,
                 .functions = functions,
+                .globals = globals,
             });
             if (fallthroughSpan(body)) |span| {
                 if (returns_never) {
@@ -793,6 +807,7 @@ const Context = struct {
     mmio_params: ?*const std.StringHashMap([]const u8) = null,
     structs: ?*const std.StringHashMap(StructInfo) = null,
     functions: ?*const std.StringHashMap(FunctionInfo) = null,
+    globals: ?*const std.StringHashMap(GlobalInfo) = null,
 };
 
 const MmioStruct = struct {
@@ -806,6 +821,10 @@ const StructInfo = struct {
 const FunctionInfo = struct {
     params: []const ast.Param,
     return_ty: ?ast.TypeExpr,
+};
+
+const GlobalInfo = struct {
+    ty: ast.TypeExpr,
 };
 
 const UnsafeContracts = struct {
@@ -1237,7 +1256,9 @@ fn addressableStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| return entry.ty;
-            return null;
+            const globals = ctx.globals orelse return null;
+            const global = globals.get(ident.text) orelse return null;
+            return global.ty;
         },
         .deref => |inner| if (exprStorageType(inner.*, ctx)) |ty| storageElementType(ty) else null,
         .index => |node| if (exprStorageType(node.base.*, ctx)) |ty| storageElementType(ty) else null,
@@ -1263,6 +1284,8 @@ fn addressableStorageIsMutable(expr: ast.Expr, ctx: Context) bool {
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| return entry.mutable;
+            const globals = ctx.globals orelse return true;
+            if (globals.contains(ident.text)) return true;
             return true;
         },
         .deref => |inner| !constStorageBase(inner.*, ctx),

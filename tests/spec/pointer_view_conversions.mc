@@ -8,6 +8,8 @@ extern fn make_mut_u8_pointer() -> *mut u8;
 extern fn make_mut_u32_pointer() -> *mut u32;
 extern fn takes_mut_u16_pointer(p: *mut u16) -> void;
 
+global shared_byte: u8 = 0;
+
 fn accept_same_mut_pointer(p: *mut u32) -> *mut u32 {
     let q: *mut u32 = p;
     return q;
@@ -186,4 +188,10 @@ fn reject_address_of_element_mismatch_argument() -> void {
     var buf: [4]u8 = uninit;
     // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
     takes_mut_u16_pointer(&buf[0]);
+}
+
+fn reject_address_of_global_element_mismatch() -> *mut u16 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    let q: *mut u16 = &shared_byte;
+    return q;
 }
