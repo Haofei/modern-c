@@ -172,7 +172,7 @@ pub const Checker = struct {
                 var then_ctx = ctx;
                 if (ctx.scope) |scope| {
                     copyScope(scope, &then_scope) catch {};
-                    self.addIfLetBinding(node.pattern, node.value, value_class, &then_scope);
+                    self.addIfLetBinding(node.pattern, node.value, value_class, &then_scope, ctx);
                     then_ctx.scope = &then_scope;
                 }
                 self.checkBlock(node.then_block, then_ctx);
@@ -715,12 +715,14 @@ pub const Checker = struct {
         }
     }
 
-    fn addIfLetBinding(self: *Checker, pattern: ast.Pattern, value: ast.Expr, value_class: TypeClass, scope: *Scope) void {
+    fn addIfLetBinding(self: *Checker, pattern: ast.Pattern, value: ast.Expr, value_class: TypeClass, scope: *Scope, ctx: Context) void {
         _ = self;
+        var binding_ctx = ctx;
+        binding_ctx.scope = scope;
         switch (pattern.kind) {
             .bind => |ident| {
                 if (!isNullableValue(value_class)) return;
-                const narrowed_ty = if (exprStorageType(value, .{ .scope = scope })) |ty| nullableInnerType(ty) else null;
+                const narrowed_ty = if (exprResultType(value, binding_ctx)) |ty| nullableInnerType(ty) else null;
                 scope.put(ident.text, .{
                     .class = tryResultType(value_class),
                     .mutable = false,
@@ -730,7 +732,7 @@ pub const Checker = struct {
             },
             .tag_bind => |node| {
                 if (!isResultNarrowingTag(node.tag.text) or value_class != .result) return;
-                const narrowed_ty = if (exprStorageType(value, .{ .scope = scope })) |ty| resultPayloadType(ty, node.tag.text) else null;
+                const narrowed_ty = if (exprResultType(value, binding_ctx)) |ty| resultPayloadType(ty, node.tag.text) else null;
                 scope.put(node.binding.text, .{
                     .class = if (narrowed_ty) |ty| classifyType(ty) else .unknown,
                     .mutable = false,
