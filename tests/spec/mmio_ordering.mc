@@ -23,6 +23,10 @@ extern mmio struct Uart16550 {
     lsr: RegBits<u8, UartLsr, .read>,
 }
 
+extern struct Packet {
+    value: u8,
+}
+
 fn putc(uart: MmioPtr<Uart16550>, ch: u8) -> void {
     while !uart.lsr.read(.acquire).tx_empty {
         cpu.pause();
@@ -42,6 +46,11 @@ fn read_status(uart: MmioPtr<Uart16550>) -> UartLsr {
 fn reject_direct_mmio_assign(uart: MmioPtr<Uart16550>, ch: u8) -> void {
     // EXPECT_ERROR: E_MMIO_DIRECT_ASSIGN
     uart.thr = ch;
+}
+
+fn allow_plain_member_assign(packet: Packet, value: u8) -> void {
+    // EXPECT: ordinary struct fields are not MMIO registers.
+    packet.value = value;
 }
 
 fn ordered_device_sequence(uart: MmioPtr<Uart16550>, ch: u8) -> void {

@@ -184,6 +184,22 @@ const ModuleFactCollector = struct {
         };
     }
 
+    fn mmioRegisterTarget(self: *ModuleFactCollector, target: ast.Expr, ctx: Context) bool {
+        const member = switch (target.kind) {
+            .member => |node| node,
+            .grouped => |inner| return self.mmioRegisterTarget(inner.*, ctx),
+            else => return false,
+        };
+        const base_name = switch (member.base.kind) {
+            .ident => |ident| ident.text,
+            else => return false,
+        };
+        const mmio_params = ctx.mmio_params orelse return false;
+        const struct_name = mmio_params.get(base_name) orelse return false;
+        const mmio_struct = self.mmio_structs.get(struct_name) orelse return false;
+        return mmio_struct.fields.contains(member.name.text);
+    }
+
     fn isOrdinaryGlobalLoad(self: *ModuleFactCollector, name: []const u8, ctx: Context) bool {
         if (!self.globals.contains(name)) return false;
         if (ctx.locals) |locals| {
@@ -299,7 +315,7 @@ fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anyty
             try writeExprFacts(collector, expr, writer, ctx);
         },
         .assignment => |node| {
-            const kind: FactKind = if (isMemberExpr(node.target)) .direct_mmio_assignment else .assignment;
+            const kind: FactKind = if (collector.mmioRegisterTarget(node.target, ctx)) .direct_mmio_assignment else .assignment;
             try writeAssignmentFact(kind, stmt.span, node.target, writer, ctx);
             const ordinary_store = collector.ordinaryGlobalTarget(node.target, ctx);
             if (ordinary_store) |target| {
@@ -555,6 +571,10 @@ test "writes early inspection facts for parser AST" {
         \\fn trap_edges(buf: []const u8, i: usize, flag: bool) -> u8 {
         \\    assert(flag);
         \\    return buf[i + 1];
+        \\}
+        \\
+        \\extern mmio struct Uart16550 {
+        \\    thr: Reg<u8, .write>,
         \\}
         \\
         \\fn contracts(uart: MmioPtr<Uart16550>, ch: u8) -> void {

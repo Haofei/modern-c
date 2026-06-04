@@ -11,13 +11,40 @@ pub const Checker = struct {
     }
 
     pub fn checkModule(self: *Checker, module: ast.Module) void {
-        for (module.decls) |decl| self.checkDecl(decl);
+        var mmio_structs = std.StringHashMap(MmioStruct).init(self.reporter.allocator);
+        defer deinitMmioStructs(&mmio_structs);
+        self.collectMmioStructs(module, &mmio_structs);
+
+        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs);
     }
 
-    fn checkDecl(self: *Checker, decl: ast.Decl) void {
+    fn collectMmioStructs(self: *Checker, module: ast.Module, mmio_structs: *std.StringHashMap(MmioStruct)) void {
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .extern_struct => |struct_decl| {
+                    if (struct_decl.abi) |abi| {
+                        if (std.mem.eql(u8, abi, "mmio")) self.collectMmioStruct(struct_decl, mmio_structs);
+                    }
+                },
+                .fn_decl, .extern_fn, .type_alias, .opaque_decl, .global_decl => {},
+            }
+        }
+    }
+
+    fn collectMmioStruct(self: *Checker, struct_decl: ast.StructDecl, mmio_structs: *std.StringHashMap(MmioStruct)) void {
+        var fields = std.StringHashMap(void).init(self.reporter.allocator);
+        for (struct_decl.fields) |field| {
+            if (isMmioRegisterType(field.ty)) fields.put(field.name.text, {}) catch {};
+        }
+        mmio_structs.put(struct_decl.name.text, .{ .fields = fields }) catch {
+            fields.deinit();
+        };
+    }
+
+    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct)) void {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
         switch (decl.kind) {
-            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap),
+            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs),
             .extern_struct => |struct_decl| {
                 for (struct_decl.fields) |field| self.checkType(field.ty, .normal);
             },
@@ -30,19 +57,24 @@ pub const Checker = struct {
         }
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct)) void {
         var scope = Scope.init(self.reporter.allocator);
         defer scope.deinit();
+        var mmio_params = std.StringHashMap([]const u8).init(self.reporter.allocator);
+        defer mmio_params.deinit();
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .normal);
             scope.put(param.name.text, classifyType(param.ty)) catch {};
+            if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {};
         }
         if (fn_decl.return_type) |ty| self.checkType(ty, .normal);
         if (fn_decl.body) |body| self.checkBlock(body, .{
             .no_lang_trap = no_lang_trap,
             .unsafe_contracts = .{},
             .scope = &scope,
+            .mmio_structs = mmio_structs,
+            .mmio_params = &mmio_params,
         });
     }
 
@@ -94,7 +126,7 @@ pub const Checker = struct {
                 _ = self.checkExpr(expr, ctx);
             },
             .assignment => |node| {
-                if (isMemberExpr(node.target)) {
+                if (isMmioRegisterTarget(node.target, ctx)) {
                     self.errorCode(stmt.span, "E_MMIO_DIRECT_ASSIGN", "MMIO registers must be accessed through typed read/write methods");
                 }
                 _ = self.checkExpr(node.target, ctx);
@@ -224,6 +256,12 @@ const Context = struct {
     no_lang_trap: bool = false,
     unsafe_contracts: UnsafeContracts = .{},
     scope: ?*Scope = null,
+    mmio_structs: ?*const std.StringHashMap(MmioStruct) = null,
+    mmio_params: ?*const std.StringHashMap([]const u8) = null,
+};
+
+const MmioStruct = struct {
+    fields: std.StringHashMap(void),
 };
 
 const UnsafeContracts = struct {
@@ -320,6 +358,52 @@ fn classifyTypeName(name: []const u8) TypeClass {
     return .unknown;
 }
 
+fn deinitMmioStructs(mmio_structs: *std.StringHashMap(MmioStruct)) void {
+    var structs = mmio_structs.valueIterator();
+    while (structs.next()) |mmio_struct| mmio_struct.fields.deinit();
+    mmio_structs.deinit();
+}
+
+fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
+    const member = switch (target.kind) {
+        .member => |node| node,
+        .grouped => |inner| return isMmioRegisterTarget(inner.*, ctx),
+        else => return false,
+    };
+    const base_name = switch (member.base.kind) {
+        .ident => |ident| ident.text,
+        else => return false,
+    };
+    const mmio_params = ctx.mmio_params orelse return false;
+    const struct_name = mmio_params.get(base_name) orelse return false;
+    const mmio_structs = ctx.mmio_structs orelse return false;
+    const mmio_struct = mmio_structs.get(struct_name) orelse return false;
+    return mmio_struct.fields.contains(member.name.text);
+}
+
+fn isMmioRegisterType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .generic => |node| std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits"),
+        else => false,
+    };
+}
+
+fn mmioPointee(ty: ast.TypeExpr) ?[]const u8 {
+    const generic = switch (ty.kind) {
+        .generic => |node| node,
+        else => return null,
+    };
+    if (!std.mem.eql(u8, generic.base.text, "MmioPtr") or generic.args.len != 1) return null;
+    return typeName(generic.args[0]);
+}
+
+fn typeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |name| name.text,
+        else => null,
+    };
+}
+
 fn uncheckedRequirement(expr: ast.Expr) ?ContractKind {
     return switch (expr.kind) {
         .member => |node| {
@@ -359,13 +443,6 @@ fn isTypeName(ty: ast.TypeExpr, name: []const u8) bool {
 fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, name),
-        else => false,
-    };
-}
-
-fn isMemberExpr(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .member => true,
         else => false,
     };
 }
