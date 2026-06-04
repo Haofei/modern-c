@@ -5,6 +5,7 @@
 // SPEC: check=E_RETURN_TYPE_MISMATCH,E_RETURN_REQUIRES_VALUE,E_RETURN_MISSING,E_INTEGER_LITERAL_OUT_OF_RANGE,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY
 
 extern fn get_count() -> u32;
+global shared_count: u32 = 0;
 
 fn returns_u32() -> u32 {
     return 1;
@@ -20,6 +21,10 @@ fn accept_call_return_type() -> u32 {
 
 fn accept_extern_call_return_type() -> u32 {
     return get_count();
+}
+
+fn accept_global_return_type() -> u32 {
+    return shared_count;
 }
 
 fn accept_context_integer_literal() -> u8 {
@@ -72,6 +77,11 @@ fn reject_bool_return(flag: bool) -> u32 {
 fn reject_call_return_type() -> bool {
     // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
     return returns_u32();
+}
+
+fn reject_global_return_type() -> bool {
+    // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
+    return shared_count;
 }
 
 fn reject_out_of_range_literal_return() -> u8 {

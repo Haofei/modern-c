@@ -195,3 +195,8 @@ fn reject_address_of_global_element_mismatch() -> *mut u16 {
     let q: *mut u16 = &shared_byte;
     return q;
 }
+
+fn reject_address_of_global_return_element_mismatch() -> *mut u16 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return &shared_byte;
+}

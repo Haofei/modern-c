@@ -350,9 +350,9 @@ pub const Checker = struct {
     fn checkExpr(self: *Checker, expr: ast.Expr, ctx: Context) TypeClass {
         return switch (expr.kind) {
             .ident => |ident| if (ctx.scope) |scope|
-                if (scope.get(ident.text)) |binding| binding.class else .unknown
+                if (scope.get(ident.text)) |binding| binding.class else globalClass(ident.text, ctx) orelse .unknown
             else
-                .unknown,
+                globalClass(ident.text, ctx) orelse .unknown,
             .int_literal => .int_literal,
             .void_literal => .void,
             .bool_literal => .bool,
@@ -655,8 +655,9 @@ pub const Checker = struct {
         const array_decay_checked = self.checkArrayDecayInitializer(target, returned, expr);
         const pointer_conversion_checked = self.checkPointerViewReturn(target_ty, expr, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, expr, ctx);
+        const address_checked = self.checkAddressOfInitializer(target, target_ty, expr, ctx);
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !local_escape_checked and !canInitialize(target, returned)) {
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !local_escape_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
@@ -1256,9 +1257,7 @@ fn addressableStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| return entry.ty;
-            const globals = ctx.globals orelse return null;
-            const global = globals.get(ident.text) orelse return null;
-            return global.ty;
+            return globalType(ident.text, ctx);
         },
         .deref => |inner| if (exprStorageType(inner.*, ctx)) |ty| storageElementType(ty) else null,
         .index => |node| if (exprStorageType(node.base.*, ctx)) |ty| storageElementType(ty) else null,
@@ -1456,11 +1455,22 @@ fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| return entry.ty;
-            return null;
+            return globalType(ident.text, ctx);
         },
         .grouped => |inner| exprStorageType(inner.*, ctx),
         else => null,
     };
+}
+
+fn globalType(name: []const u8, ctx: Context) ?ast.TypeExpr {
+    const globals = ctx.globals orelse return null;
+    const global = globals.get(name) orelse return null;
+    return global.ty;
+}
+
+fn globalClass(name: []const u8, ctx: Context) ?TypeClass {
+    const ty = globalType(name, ctx) orelse return null;
+    return classifyType(ty);
 }
 
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
@@ -1484,7 +1494,7 @@ fn assignmentTargetType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
                 if (!entry.mutable) return null;
                 return entry.ty;
             }
-            return null;
+            return globalType(ident.text, ctx);
         },
         .deref => |inner| if (exprStorageType(inner.*, ctx)) |ty| storageElementType(ty) else null,
         .index => |node| if (exprStorageType(node.base.*, ctx)) |ty| storageElementType(ty) else null,

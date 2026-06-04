@@ -4,6 +4,8 @@
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_NO_IMPLICIT_CONVERSION,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY,E_NO_IMPLICIT_POINTER_CONVERSION,E_CALL_ARG_COUNT
 
+global shared_value: u32 = 0;
+
 fn make_bool() -> bool {
     return true;
 }
@@ -42,6 +44,17 @@ fn accept_same_pointer_assignment(p: *mut u32) -> *mut u32 {
     var q: *mut u32 = p;
     q = p;
     return q;
+}
+
+fn accept_global_assignment(value: u32) -> u32 {
+    shared_value = value;
+    return shared_value;
+}
+
+fn accept_local_shadows_global_assignment() -> bool {
+    var shared_value: bool = false;
+    shared_value = true;
+    return shared_value;
 }
 
 fn reject_integer_widening_assignment(value: u32) -> u64 {
@@ -97,6 +110,12 @@ fn reject_call_assignment_value_type() -> u32 {
     // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
     x = make_bool();
     return x;
+}
+
+fn reject_global_assignment_value_type(flag: bool) -> u32 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
+    shared_value = flag;
+    return shared_value;
 }
 
 fn reject_null_to_nonnull_pointer_assignment() -> *mut u8 {
