@@ -2,7 +2,7 @@
 // SPEC: milestone=c-void-ffi
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_C_VOID_DEREF,E_C_VOID_NO_LAYOUT,E_C_VOID_CONVERSION,E_MC_VOID_POINTER_FFI,E_BITWISE_POINTER_OPERAND
+// SPEC: check=E_C_VOID_DEREF,E_C_VOID_NO_LAYOUT,E_C_VOID_CONVERSION,E_MC_VOID_POINTER_FFI,E_BITWISE_POINTER_OPERAND,E_CALL_ARG_COUNT
 
 extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
 extern "C" fn takes_c_void(handle: *mut c_void) -> void;
@@ -11,6 +11,11 @@ extern "C" fn takes_typed_pointer(ptr: *mut u8) -> void;
 fn accept_c_void_ffi(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
     // EXPECT: extern C opaque-object pointers are accepted and may cross the FFI boundary.
     return memcpy(dst, src, n);
+}
+
+fn reject_c_void_ffi_arg_count(dst: *mut c_void, src: *const c_void) -> *mut c_void {
+    // EXPECT_ERROR: E_CALL_ARG_COUNT
+    return memcpy(dst, src);
 }
 
 fn accept_c_void_comparison(a: *mut c_void, b: *mut c_void) -> bool {

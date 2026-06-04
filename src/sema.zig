@@ -450,7 +450,12 @@ pub const Checker = struct {
                 if (trap_call) self.checkTrapKind(expr.span, node.args);
                 _ = self.checkExpr(node.callee.*, ctx);
                 for (node.type_args) |ty| self.checkType(ty, .normal);
-                const direct_function = directCallFunction(node.callee.*, ctx);
+                const direct_function = if (!trap_call and node.type_args.len == 0) directCallFunction(node.callee.*, ctx) else null;
+                if (direct_function) |function| {
+                    if (node.args.len != function.params.len) {
+                        self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match function declaration");
+                    }
+                }
                 for (node.args, 0..) |arg, index| {
                     const source = self.checkExpr(arg, ctx);
                     if (direct_function) |function| {

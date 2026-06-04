@@ -2,7 +2,7 @@
 // SPEC: milestone=assignment-values-no-implicit-conversion
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_NO_IMPLICIT_CONVERSION,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY,E_NO_IMPLICIT_POINTER_CONVERSION
+// SPEC: check=E_NO_IMPLICIT_CONVERSION,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY,E_NO_IMPLICIT_POINTER_CONVERSION,E_CALL_ARG_COUNT
 
 fn make_bool() -> bool {
     return true;
@@ -80,6 +80,16 @@ fn reject_call_argument_bool_to_integer(flag: bool) -> u32 {
 fn reject_call_argument_pointer_conversion(p: *const u8, fallback: *mut u8) -> *mut u8 {
     // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
     return takes_mut_u8_pointer(p);
+}
+
+fn reject_call_missing_argument() -> u32 {
+    // EXPECT_ERROR: E_CALL_ARG_COUNT
+    return takes_u32();
+}
+
+fn reject_call_extra_argument(value: u32) -> u32 {
+    // EXPECT_ERROR: E_CALL_ARG_COUNT
+    return takes_u32(value, value);
 }
 
 fn reject_call_assignment_value_type() -> u32 {
