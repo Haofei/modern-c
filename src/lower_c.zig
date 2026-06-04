@@ -1363,6 +1363,7 @@ const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "/* unsupported for loop without iterable */\n");
             return error.UnsupportedCEmission;
         };
+        if (try self.emitForLoopCallIterable(loop, binding, iterable, locals, return_ty)) return;
         const element_c_type = iterableElementCTypeForExpr(iterable, locals) orelse {
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "/* unsupported for iterable */\n");
@@ -1402,6 +1403,36 @@ const CEmitter = struct {
         self.indent -= 1;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "}\n");
+    }
+
+    fn emitForLoopCallIterable(self: *CEmitter, loop: ast.Loop, binding: ast.Ident, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        _ = binding;
+        const call = switch (iterable.kind) {
+            .call => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .call => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const slice_ty = self.sliceReturnTypeForCall(call) orelse return false;
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(slice_ty, .typedef_name), temp_name });
+        try self.emitExpr(iterable, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+
+        var loop_locals = try cloneLocals(self.allocator, locals.*);
+        defer loop_locals.deinit();
+        try loop_locals.put(temp_name, try self.localInfoFromType(slice_ty));
+
+        var rewritten = loop;
+        const ident = ast.Expr{ .span = iterable.span, .kind = .{ .ident = .{ .span = iterable.span, .text = temp_name } } };
+        rewritten.iterable = ident;
+        try self.emitForLoop(rewritten, &loop_locals, return_ty);
+        return true;
     }
 
     fn emitSwitchPatternLabel(self: *CEmitter, pattern: ast.Pattern, subject_enum_name: ?[]const u8) !void {
@@ -5267,6 +5298,8 @@ test "hoists MMIO reads in switch arm expressions" {
 
 test "emits C for array and slice for loops" {
     const source =
+        \\extern fn make_slice() -> []const u32;
+        \\
         \\fn sum_slice(xs: []const u32) -> u32 {
         \\    var sum: u32 = 0;
         \\    for x in xs {
@@ -5278,6 +5311,14 @@ test "emits C for array and slice for loops" {
         \\fn sum_array(xs: [4]u32) -> u32 {
         \\    var sum: u32 = 0;
         \\    for x in xs {
+        \\        sum = sum + x;
+        \\    }
+        \\    return sum;
+        \\}
+        \\
+        \\fn sum_call_slice() -> u32 {
+        \\    var sum: u32 = 0;
+        \\    for x in make_slice() {
         \\        sum = sum + x;
         \\    }
         \\    return sum;
@@ -5305,6 +5346,8 @@ test "emits C for array and slice for loops" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t sum_array(uint32_t xs[4])") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "for (uintptr_t mc_i1 = 0; mc_i1 < 4; mc_i1 += 1) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs[mc_i1];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp2 = make_slice();\n    for (uintptr_t mc_i3 = 0; mc_i3 < mc_tmp2.len; mc_i3 += 1) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp2.ptr[mc_i3];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "sum = mc_checked_add_u32(sum, x);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return sum;") != null);
 }
