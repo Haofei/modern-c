@@ -810,11 +810,13 @@ const CEmitter = struct {
                                 if (try self.emitDirectCallSliceIndexLocalInit(name.text, decl_ty, initializer, locals)) continue;
                             }
                         } else if (local.init) |initializer| {
+                            if (try self.emitArrayCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitSliceCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitEnumCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitTaggedUnionCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitResultCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitNullableCallInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitMmioReadInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitMmioReadExprInferredLocalInit(name.text, initializer, locals)) continue;
                         }
@@ -2328,6 +2330,17 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitArrayCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const array_ty = self.arrayReturnTypeForExpr(initializer) orelse return false;
+        try locals.put(name, try self.localInfoFromType(array_ty));
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(array_ty, .typedef_name), name });
+        try self.emitExpr(initializer, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
     fn emitSliceCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const call = switch (initializer.kind) {
             .call => |node| node,
@@ -2386,6 +2399,18 @@ const CEmitter = struct {
 
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(nullable_ty, .typedef_name), name });
+        try self.emitExpr(initializer, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const return_ty = self.callReturnTypeForExpr(initializer) orelse return false;
+        if (isCVoidType(return_ty)) return false;
+        try locals.put(name, try self.localInfoFromType(return_ty));
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), name });
         try self.emitExpr(initializer, locals);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
@@ -2952,6 +2977,19 @@ const CEmitter = struct {
         return if (return_ty.kind == .slice) return_ty else null;
     }
 
+    fn arrayReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .call => |node| blk: {
+                const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
+                const info = self.functions.get(fn_name) orelse break :blk null;
+                const ret_ty = info.return_type orelse break :blk null;
+                break :blk if (ret_ty.kind == .array) ret_ty else null;
+            },
+            .grouped => |inner| self.arrayReturnTypeForExpr(inner.*),
+            else => null,
+        };
+    }
+
     fn resultTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         return switch (expr.kind) {
             .ident => |ident| blk: {
@@ -2992,6 +3030,18 @@ const CEmitter = struct {
                 break :blk if (ret_ty.kind == .nullable) ret_ty else null;
             },
             .grouped => |inner| self.nullableReturnTypeForExpr(inner.*),
+            else => null,
+        };
+    }
+
+    fn callReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .call => |node| blk: {
+                const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
+                const info = self.functions.get(fn_name) orelse break :blk null;
+                break :blk info.return_type;
+            },
+            .grouped => |inner| self.callReturnTypeForExpr(inner.*),
             else => null,
         };
     }
@@ -3774,6 +3824,11 @@ fn typeName(ty: ast.TypeExpr) ?[]const u8 {
         .qualified => |node| typeName(node.child.*),
         else => null,
     };
+}
+
+fn isCVoidType(ty: ast.TypeExpr) bool {
+    const name = typeName(ty) orelse return false;
+    return std.mem.eql(u8, name, "void") or std.mem.eql(u8, name, "never");
 }
 
 fn isCKeyword(name: []const u8) bool {
@@ -5474,6 +5529,7 @@ test "hoists MMIO reads in switch arm expressions" {
 test "emits C for array and slice for loops" {
     const source =
         \\extern fn make_slice() -> []const u32;
+        \\extern fn make_array() -> [4]u32;
         \\
         \\fn sum_slice(xs: []const u32) -> u32 {
         \\    var sum: u32 = 0;
@@ -5507,6 +5563,15 @@ test "emits C for array and slice for loops" {
         \\    }
         \\    return sum;
         \\}
+        \\
+        \\fn sum_inferred_array() -> u32 {
+        \\    let xs = make_array();
+        \\    var sum: u32 = 0;
+        \\    for x in xs {
+        \\        sum = sum + x;
+        \\    }
+        \\    return sum;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_for_loops.mc", source);
@@ -5534,6 +5599,8 @@ test "emits C for array and slice for loops" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp2.ptr[mc_i3];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 xs = make_slice();\n    uint32_t sum = 0;\n    for (uintptr_t mc_i4 = 0; mc_i4 < xs.len; mc_i4 += 1) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs.ptr[mc_i4];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t * xs = make_array();\n    uint32_t sum = 0;\n    for (uintptr_t mc_i5 = 0; mc_i5 < 4; mc_i5 += 1) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs[mc_i5];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "sum = mc_checked_add_u32(sum, x);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return sum;") != null);
 }
@@ -6031,6 +6098,7 @@ test "emits C extern structs and member access" {
         \\}
         \\
         \\fn make_packet() -> Packet;
+        \\extern fn make_ptr() -> *mut u8;
         \\
         \\fn id_packet_ptr(p: *mut Packet) -> *mut Packet {
         \\    return p;
@@ -6062,6 +6130,11 @@ test "emits C extern structs and member access" {
         \\
         \\fn read_direct() -> u32 {
         \\    return make_packet().value;
+        \\}
+        \\
+        \\fn inferred_pointer_return() -> *mut u8 {
+        \\    let p = make_ptr();
+        \\    return p;
         \\}
     ;
 
@@ -6095,6 +6168,9 @@ test "emits C extern structs and member access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "packet.value = value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return packet.ptr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return make_packet().value;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * make_ptr(void);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t * inferred_pointer_return(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = make_ptr();\n    return p;") != null);
 }
 
 test "emits C overlay unions as byte storage" {

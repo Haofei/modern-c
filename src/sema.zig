@@ -499,7 +499,12 @@ pub const Checker = struct {
                     self.errorCode(stmt.span, "E_DEFER_CONTROL_FLOW", "defer is lexical cleanup and must not alter control flow");
                 }
             },
-            .expr => |expr| _ = self.checkExpr(expr, ctx),
+            .expr => |expr| {
+                const value = self.checkExpr(expr, ctx);
+                if (value == .result) {
+                    self.errorCode(expr.span, "E_UNHANDLED_RESULT", "Result expression statements must be handled or propagated");
+                }
+            },
             .assert => |expr| {
                 if (ctx.no_lang_trap) {
                     self.errorCode(stmt.span, "E_NO_LANG_TRAP_EDGE", "assert may emit a language trap in #[no_lang_trap]");

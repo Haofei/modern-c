@@ -2,7 +2,7 @@
 // SPEC: milestone=try-propagation
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_TRY_REQUIRES_RESULT_OR_NULLABLE,E_RETURN_TYPE_MISMATCH,E_CALL_ARG_COUNT,E_NO_IMPLICIT_POINTER_CONVERSION
+// SPEC: check=E_TRY_REQUIRES_RESULT_OR_NULLABLE,E_RETURN_TYPE_MISMATCH,E_CALL_ARG_COUNT,E_NO_IMPLICIT_POINTER_CONVERSION,E_UNHANDLED_RESULT
 
 extern fn make_result_u32() -> Result<u32, Error>;
 extern fn make_result_pointer(p: *mut u8) -> Result<*mut u8, Error>;
@@ -40,6 +40,11 @@ fn accept_direct_call_nullable_try() -> *const u8 {
 
 fn accept_direct_call_nullable_mut_pointer_try() -> *mut u8 {
     return make_nullable_mut_pointer()?;
+}
+
+fn reject_unhandled_result_statement() -> void {
+    // EXPECT_ERROR: E_UNHANDLED_RESULT
+    make_result_u32();
 }
 
 fn reject_result_try_return_type(result: Result<u32, Error>) -> *mut u8 {
