@@ -7,9 +7,10 @@
 global shared_counter: u32 = 0;
 
 fn local_non_racing_access() -> u32 {
-    let local: u32 = 1;
+    var local: u32 = 1;
+    local = local + 1;
     // EXPECT: lower-c may use normal C load/store because the object is proven local.
-    return local + 1;
+    return local;
 }
 
 fn possibly_racing_store(x: u32) -> void {

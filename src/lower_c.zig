@@ -147,6 +147,8 @@ const Inspector = struct {
             .assignment => |node| {
                 if (ordinaryGlobalTarget(node.target, ctx.*, self.globals)) |target| {
                     try self.writeOrdinaryAccess(ctx.name, target, "store");
+                } else if (localOrdinaryTarget(node.target, ctx.*)) |target| {
+                    try self.writeLocalOrdinaryAccess(ctx.name, target, "store");
                 }
                 try self.inspectExpr(node.value, ctx);
             },
@@ -539,6 +541,14 @@ fn ordinaryGlobalTarget(target: ast.Expr, ctx: FnContext, globals: std.StringHas
     return switch (target.kind) {
         .ident => |ident| if (globals.contains(ident.text) and !ctx.locals.contains(ident.text)) ident.text else null,
         .grouped => |inner| ordinaryGlobalTarget(inner.*, ctx, globals),
+        else => null,
+    };
+}
+
+fn localOrdinaryTarget(target: ast.Expr, ctx: FnContext) ?[]const u8 {
+    return switch (target.kind) {
+        .ident => |ident| if (ctx.locals.contains(ident.text)) ident.text else null,
+        .grouped => |inner| localOrdinaryTarget(inner.*, ctx),
         else => null,
     };
 }

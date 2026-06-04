@@ -949,6 +949,7 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
     if (std.mem.eql(u8, check, "race-tolerant-lowering")) {
         return containsAll(output, &.{
             "lower ordinary_access fn=local_non_racing_access object=local access=load race_class=local strategy=plain_c c_plain_access=true",
+            "lower ordinary_access fn=local_non_racing_access object=local access=store race_class=local strategy=plain_c c_plain_access=true",
             "lower ordinary_access fn=possibly_racing_store object=shared_counter access=store race_class=possibly_shared strategy=race_helper c_plain_access=false",
             "lower ordinary_access fn=possibly_racing_load object=shared_counter access=load race_class=possibly_shared strategy=race_helper c_plain_access=false",
             "lower non_atomic_rmw fn=racing_increment_is_not_atomic object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false c_data_race_ub_dependency=false",
