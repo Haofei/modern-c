@@ -1390,6 +1390,7 @@ fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |node| if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .try_expr => |inner| tryPayloadType(inner.*, ctx),
         .deref => |inner| derefResultType(inner.*, ctx),
         .index => |node| indexResultType(node, ctx),
         .member => |node| memberResultFieldType(node, ctx),

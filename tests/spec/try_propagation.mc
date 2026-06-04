@@ -2,11 +2,12 @@
 // SPEC: milestone=try-propagation
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_TRY_REQUIRES_RESULT_OR_NULLABLE,E_RETURN_TYPE_MISMATCH,E_CALL_ARG_COUNT
+// SPEC: check=E_TRY_REQUIRES_RESULT_OR_NULLABLE,E_RETURN_TYPE_MISMATCH,E_CALL_ARG_COUNT,E_NO_IMPLICIT_POINTER_CONVERSION
 
 extern fn make_result_u32() -> Result<u32, Error>;
 extern fn make_result_pointer(p: *mut u8) -> Result<*mut u8, Error>;
 extern fn make_nullable_pointer() -> ?*const u8;
+extern fn make_nullable_mut_pointer() -> ?*mut u8;
 extern fn make_void() -> void;
 
 fn accept_nullable_try(maybe: ?*const u8) -> *const u8 {
@@ -37,6 +38,10 @@ fn accept_direct_call_nullable_try() -> *const u8 {
     return make_nullable_pointer()?;
 }
 
+fn accept_direct_call_nullable_mut_pointer_try() -> *mut u8 {
+    return make_nullable_mut_pointer()?;
+}
+
 fn reject_result_try_return_type(result: Result<u32, Error>) -> *mut u8 {
     // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
     return result?;
@@ -55,6 +60,16 @@ fn reject_direct_call_result_try_return_type() -> *mut u8 {
 fn reject_direct_call_nullable_try_return_type() -> u32 {
     // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
     return make_nullable_pointer()?;
+}
+
+fn reject_direct_call_result_pointer_try_return_conversion(p: *mut u8) -> *const u8 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return make_result_pointer(p)?;
+}
+
+fn reject_direct_call_nullable_pointer_try_return_conversion() -> *const u8 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return make_nullable_mut_pointer()?;
 }
 
 fn reject_void_direct_call_try() -> void {
