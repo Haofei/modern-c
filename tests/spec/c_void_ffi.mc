@@ -2,7 +2,7 @@
 // SPEC: milestone=c-void-ffi
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_C_VOID_DEREF,E_C_VOID_NO_LAYOUT,E_C_VOID_CONVERSION,E_MC_VOID_POINTER_FFI,E_BITWISE_POINTER_OPERAND,E_CALL_ARG_COUNT
+// SPEC: check=E_C_VOID_DEREF,E_C_VOID_NO_LAYOUT,E_C_VOID_CONVERSION,E_MC_VOID_POINTER_FFI,E_BITWISE_POINTER_OPERAND,E_CALL_ARG_COUNT,E_NO_IMPLICIT_POINTER_CONVERSION
 
 extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
 extern "C" fn takes_c_void(handle: *mut c_void) -> void;
@@ -113,6 +113,21 @@ fn reject_c_void_to_typed_pointer_return(p: *mut c_void) -> *mut u8 {
 
 fn reject_typed_pointer_to_c_void_return(p: *mut u8) -> *mut c_void {
     // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return p;
+}
+
+fn reject_c_void_pointer_to_raw_many_return(p: *mut c_void) -> [*]mut c_void {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return p;
+}
+
+fn reject_c_void_raw_many_to_pointer_return(p: [*]mut c_void) -> *mut c_void {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return p;
+}
+
+fn reject_c_void_const_to_mut_return(p: *const c_void) -> *mut c_void {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
     return p;
 }
 

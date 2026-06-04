@@ -1669,7 +1669,9 @@ fn viewType(ty: ast.TypeExpr) ?ViewType {
 fn implicitPointerViewConversion(target: ast.TypeExpr, source: ast.TypeExpr) bool {
     _ = viewType(target) orelse return false;
     _ = viewType(source) orelse return false;
-    if (classifyType(target) == .c_void_pointer or classifyType(source) == .c_void_pointer) return false;
+    const target_is_c_void = isCVoidPointerClass(classifyType(target));
+    const source_is_c_void = isCVoidPointerClass(classifyType(source));
+    if (target_is_c_void != source_is_c_void) return false;
     return !sameTypeSyntax(target, source);
 }
 
