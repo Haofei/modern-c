@@ -212,11 +212,7 @@ pub const Checker = struct {
                 if (node.else_block) |else_block| self.checkBlock(else_block, ctx);
             },
             .@"switch" => |node| {
-                _ = self.checkExpr(node.subject, ctx);
-                for (node.arms) |arm| switch (arm.body) {
-                    .block => |block| self.checkBlock(block, ctx),
-                    .expr => |expr| _ = self.checkExpr(expr, ctx),
-                };
+                self.checkSwitch(node, ctx);
             },
             .unsafe_block => |block| {
                 var next = ctx;
@@ -809,6 +805,69 @@ pub const Checker = struct {
             scope.put(label.text, entry) catch {};
         } else {
             _ = scope.remove(label.text);
+        }
+    }
+
+    fn checkSwitch(self: *Checker, node: ast.Switch, ctx: Context) void {
+        const subject_class = self.checkExpr(node.subject, ctx);
+        for (node.arms) |arm| {
+            self.checkSwitchArmPatterns(arm.patterns, subject_class);
+            var arm_scope = Scope.init(self.reporter.allocator);
+            defer arm_scope.deinit();
+            var arm_ctx = ctx;
+            if (ctx.scope) |scope| {
+                copyScope(scope, &arm_scope) catch {};
+                self.addSwitchArmBindings(arm.patterns, node.subject, subject_class, &arm_scope, ctx);
+                arm_ctx.scope = &arm_scope;
+            }
+            switch (arm.body) {
+                .block => |block| self.checkBlock(block, arm_ctx),
+                .expr => |expr| _ = self.checkExpr(expr, arm_ctx),
+            }
+        }
+    }
+
+    fn checkSwitchArmPatterns(self: *Checker, patterns: []const ast.Pattern, subject_class: TypeClass) void {
+        var binding_pattern_count: usize = 0;
+        for (patterns) |pattern| {
+            switch (pattern.kind) {
+                .tag_bind => |node| {
+                    binding_pattern_count += 1;
+                    if (!isResultNarrowingTag(node.tag.text)) {
+                        self.errorCode(node.tag.span, "E_SWITCH_RESULT_TAG", "switch result binding supports only ok(...) or err(...)");
+                    } else if (subject_class != .result) {
+                        self.errorCode(pattern.span, "E_SWITCH_RESULT_REQUIRED", "switch ok(...) or err(...) binding requires a Result value");
+                    }
+                },
+                .wildcard, .tag, .literal, .bind => {},
+            }
+        }
+        if (binding_pattern_count > 1) {
+            self.errorCode(patterns[0].span, "E_SWITCH_MULTI_BINDING_ARM", "switch arms with multiple patterns cannot introduce bindings");
+        }
+    }
+
+    fn addSwitchArmBindings(self: *Checker, patterns: []const ast.Pattern, subject: ast.Expr, subject_class: TypeClass, scope: *Scope, ctx: Context) void {
+        _ = self;
+        if (subject_class != .result) return;
+        if (patterns.len != 1) return;
+        var binding_ctx = ctx;
+        binding_ctx.scope = scope;
+        const subject_ty = exprResultType(subject, binding_ctx) orelse return;
+        for (patterns) |pattern| {
+            switch (pattern.kind) {
+                .tag_bind => |node| {
+                    if (!isResultNarrowingTag(node.tag.text)) continue;
+                    const narrowed_ty = resultPayloadType(subject_ty, node.tag.text) orelse continue;
+                    scope.put(node.binding.text, .{
+                        .class = classifyType(narrowed_ty),
+                        .mutable = false,
+                        .ty = narrowed_ty,
+                        .origin = .local,
+                    }) catch {};
+                },
+                .wildcard, .tag, .literal, .bind => {},
+            }
         }
     }
 };

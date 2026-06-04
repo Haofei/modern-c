@@ -2,7 +2,7 @@
 // SPEC: milestone=if-let-narrowing
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_IF_LET_OPTIONAL_REQUIRED,E_IF_LET_RESULT_REQUIRED,E_IF_LET_RESULT_TAG,E_IF_LET_NARROW_PATTERN,E_RETURN_TYPE_MISMATCH
+// SPEC: check=E_IF_LET_OPTIONAL_REQUIRED,E_IF_LET_RESULT_REQUIRED,E_IF_LET_RESULT_TAG,E_IF_LET_NARROW_PATTERN,E_RETURN_TYPE_MISMATCH,E_SWITCH_RESULT_TAG,E_SWITCH_RESULT_REQUIRED,E_SWITCH_MULTI_BINDING_ARM
 
 extern fn make_nullable_pointer() -> ?*mut u8;
 extern fn make_result_u32() -> Result<u32, Error>;
@@ -103,6 +103,57 @@ fn reject_direct_call_result_err_binding_return_type() -> u32 {
         return e;
     }
     return 0;
+}
+
+fn accept_switch_result_ok_binding_type(result: Result<u32, Error>) -> u32 {
+    switch result {
+        ok(v) => { return v; },
+        _ => { return 0; },
+    }
+}
+
+fn reject_switch_result_ok_binding_return_type(result: Result<u32, Error>, fallback: *mut u8) -> *mut u8 {
+    switch result {
+        ok(v) => {
+            // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
+            return v;
+        },
+        _ => { return fallback; },
+    }
+}
+
+fn reject_switch_result_err_binding_return_type(result: Result<u32, *mut u8>) -> u32 {
+    switch result {
+        err(e) => {
+            // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
+            return e;
+        },
+        _ => { return 0; },
+    }
+}
+
+fn reject_switch_unknown_result_tag(result: Result<u32, Error>) -> u32 {
+    switch result {
+        // EXPECT_ERROR: E_SWITCH_RESULT_TAG
+        ready(v) => { return 1; },
+        _ => { return 0; },
+    }
+}
+
+fn reject_switch_result_binding_from_non_result(maybe: ?*mut u8) -> u32 {
+    switch maybe {
+        // EXPECT_ERROR: E_SWITCH_RESULT_REQUIRED
+        ok(v) => { return 1; },
+        _ => { return 0; },
+    }
+}
+
+fn reject_switch_multi_pattern_binding(result: Result<u32, Error>) -> u32 {
+    switch result {
+        // EXPECT_ERROR: E_SWITCH_MULTI_BINDING_ARM
+        ok(v), err(e) => { return 1; },
+        _ => { return 0; },
+    }
 }
 
 fn reject_plain_binding_from_non_nullable(n: u32) -> u32 {
