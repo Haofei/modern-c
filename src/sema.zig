@@ -86,9 +86,11 @@ pub const Checker = struct {
                 .mmio_structs = mmio_structs,
                 .mmio_params = &mmio_params,
             });
-            if (returns_never) {
-                if (fallthroughSpan(body)) |span| {
+            if (fallthroughSpan(body)) |span| {
+                if (returns_never) {
                     self.errorCode(span, "E_NEVER_FALLTHROUGH", "function declared -> never can fall off the end");
+                } else if (fn_decl.return_type != null and !returns_void) {
+                    self.errorCode(span, "E_RETURN_MISSING", "function return type requires all paths to return a value");
                 }
             }
         }
@@ -1048,15 +1050,10 @@ fn stmtMayFallThrough(stmt: ast.Stmt) bool {
 }
 
 fn switchMayFallThrough(node: ast.Switch) bool {
-    if (node.arms.len == 0) return true;
-    for (node.arms) |arm| {
-        const arm_falls_through = switch (arm.body) {
-            .block => |block| fallthroughSpan(block) != null,
-            .expr => |expr| exprMayFallThrough(expr),
-        };
-        if (arm_falls_through) return true;
-    }
-    return false;
+    // Exhaustiveness is not modeled yet, so a switch can still fall through after
+    // all listed arms unless there is an explicit else/default arm in the future.
+    _ = node;
+    return true;
 }
 
 fn exprMayFallThrough(expr: ast.Expr) bool {
