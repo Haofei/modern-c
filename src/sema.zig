@@ -1457,7 +1457,9 @@ fn constStorageBase(expr: ast.Expr, ctx: Context) bool {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| {
                 if (entry.ty) |ty| return isConstStorageType(ty);
+                return false;
             }
+            if (globalType(ident.text, ctx)) |ty| return isConstStorageType(ty);
             return false;
         },
         .grouped => |inner| constStorageBase(inner.*, ctx),

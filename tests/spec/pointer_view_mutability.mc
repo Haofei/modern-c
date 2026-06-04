@@ -4,8 +4,25 @@
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_ASSIGN_THROUGH_CONST_VIEW,E_INDEX_BASE_NOT_ARRAY_OR_SLICE,E_NO_IMPLICIT_CONVERSION,E_NO_IMPLICIT_POINTER_CONVERSION
 
+global shared_cell: u32 = 0;
+global global_const_ptr: *const u32 = &shared_cell;
+global global_mut_ptr: *mut u32 = &shared_cell;
+
 fn accept_assign_through_mut_pointer(p: *mut u32, value: u32) -> void {
     p.* = value;
+}
+
+fn accept_assign_through_global_mut_pointer(value: u32) -> void {
+    global_mut_ptr.* = value;
+}
+
+fn accept_local_shadow_global_const_pointer(global_const_ptr: *mut u32, value: u32) -> void {
+    global_const_ptr.* = value;
+}
+
+fn accept_inferred_local_shadow_global_const_pointer(p: *mut u32, value: u32) -> void {
+    let global_const_ptr = p;
+    global_const_ptr.* = value;
 }
 
 fn reject_index_assign_through_mut_raw_many(p: [*]mut u32, value: u32) -> void {
@@ -46,6 +63,11 @@ fn reject_assign_pointer_conversion_through_mut_slice(xs: []mut *mut u8, i: usiz
 fn reject_assign_through_const_pointer(p: *const u32, value: u32) -> void {
     // EXPECT_ERROR: E_ASSIGN_THROUGH_CONST_VIEW
     p.* = value;
+}
+
+fn reject_assign_through_global_const_pointer(value: u32) -> void {
+    // EXPECT_ERROR: E_ASSIGN_THROUGH_CONST_VIEW
+    global_const_ptr.* = value;
 }
 
 fn reject_assign_through_const_raw_many(p: [*]const u32, value: u32) -> void {
