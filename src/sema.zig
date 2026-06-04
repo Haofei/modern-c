@@ -65,7 +65,7 @@ pub const Checker = struct {
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .normal);
-            scope.put(param.name.text, .{ .class = classifyType(param.ty), .mutable = false }) catch {};
+            scope.put(param.name.text, .{ .class = classifyType(param.ty), .mutable = false, .ty = param.ty }) catch {};
             if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {};
         }
         const return_kind = if (fn_decl.return_type) |ty| classifyType(ty) else TypeClass.void;
@@ -220,7 +220,7 @@ pub const Checker = struct {
             self.errorCode(local.names[0].span, "E_LOCAL_REQUIRES_INITIALIZER", "ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage");
         }
         if (ctx.scope) |scope| {
-            for (local.names) |name| scope.put(name.text, .{ .class = kind, .mutable = mutable }) catch {};
+            for (local.names) |name| scope.put(name.text, .{ .class = kind, .mutable = mutable, .ty = local.ty }) catch {};
         }
     }
 
@@ -232,6 +232,16 @@ pub const Checker = struct {
                     if (!entry.mutable) {
                         self.errorCode(target.span, "E_ASSIGN_TO_IMMUTABLE_LOCAL", "cannot assign to immutable local binding");
                     }
+                }
+            },
+            .deref => |inner| {
+                if (constStorageBase(inner.*, ctx)) {
+                    self.errorCode(target.span, "E_ASSIGN_THROUGH_CONST_VIEW", "cannot assign through a const pointer or view");
+                }
+            },
+            .index => |node| {
+                if (constStorageBase(node.base.*, ctx)) {
+                    self.errorCode(target.span, "E_ASSIGN_THROUGH_CONST_VIEW", "cannot assign through a const pointer or view");
                 }
             },
             .grouped => |inner| self.checkAssignmentTarget(inner.*, ctx),
@@ -576,6 +586,7 @@ const ContractKind = enum {
 const LocalInfo = struct {
     class: TypeClass,
     mutable: bool,
+    ty: ?ast.TypeExpr,
 };
 
 const Scope = std.StringHashMap(LocalInfo);
@@ -985,6 +996,31 @@ fn isAssignableTarget(target: ast.Expr) bool {
     return switch (target.kind) {
         .ident, .deref, .index, .member => true,
         .grouped => |inner| isAssignableTarget(inner.*),
+        else => false,
+    };
+}
+
+fn constStorageBase(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| {
+                if (entry.ty) |ty| return isConstStorageType(ty);
+            }
+            return false;
+        },
+        .grouped => |inner| constStorageBase(inner.*, ctx),
+        else => false,
+    };
+}
+
+fn isConstStorageType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .pointer => |node| node.mutability == .@"const",
+        .raw_many_pointer => |node| node.mutability == .@"const",
+        .slice => |node| node.mutability == .@"const",
+        .nullable => |child| isConstStorageType(child.*),
+        .qualified => |node| isConstStorageType(node.child.*),
         else => false,
     };
 }
