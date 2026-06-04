@@ -105,6 +105,10 @@ pub const TypeExpr = struct {
             mutability: Mutability,
             child: *TypeExpr,
         },
+        raw_many_pointer: struct {
+            mutability: Mutability,
+            child: *TypeExpr,
+        },
         slice: struct {
             mutability: Mutability,
             child: *TypeExpr,

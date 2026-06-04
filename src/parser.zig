@@ -409,6 +409,12 @@ pub const Parser = struct {
             return .{ .span = joinSpan(start, child.span), .kind = .{ .pointer = .{ .mutability = mutability, .child = child } } };
         }
         if (self.match(.l_bracket)) {
+            if (self.match(.star)) {
+                try self.expect(.r_bracket, "expected ']' after raw many pointer marker");
+                const mutability = self.parseMutability();
+                const child = try ast.makePtr(self.allocator, try self.parseType());
+                return .{ .span = joinSpan(start, child.span), .kind = .{ .raw_many_pointer = .{ .mutability = mutability, .child = child } } };
+            }
             if (self.match(.r_bracket)) {
                 const mutability = self.parseMutability();
                 const child = try ast.makePtr(self.allocator, try self.parseType());
@@ -709,6 +715,7 @@ test "parser covers MC declaration and statement examples" {
         \\global shared_counter: u32 = 0;
         \\extern struct Timespec { sec: i64, nsec: i64, }
         \\type LoadResult = Result<Module, LoadError>;
+        \\type RawUart = [*]mut Uart16550;
         \\#[no_lang_trap]
         \\fn boot_entry() -> never { return trap(.Unreachable); }
         \\fn exercise(pa: PAddr, maybe: ?*mut Node, status: Status) -> u32 {
@@ -734,7 +741,7 @@ test "parser covers MC declaration and statement examples" {
     const module = try p.parseModule(allocator);
     defer module.deinit(allocator);
     try std.testing.expect(!reporter.has_errors);
-    try std.testing.expectEqual(@as(usize, 6), module.decls.len);
+    try std.testing.expectEqual(@as(usize, 7), module.decls.len);
     try std.testing.expectEqual(std.meta.Tag(ast.Decl.Kind).global_decl, std.meta.activeTag(module.decls[1].kind));
     try std.testing.expect(module.decls[1].kind.global_decl.ty != null);
     try std.testing.expect(module.decls[1].kind.global_decl.init != null);

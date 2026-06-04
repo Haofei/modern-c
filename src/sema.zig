@@ -335,6 +335,10 @@ pub const Checker = struct {
                 const child_mode: TypeMode = if (isCAbiOpaqueBoundary(node.child.*)) .ffi_opaque_pointer else .normal;
                 self.checkType(node.child.*, child_mode);
             },
+            .raw_many_pointer => |node| {
+                const child_mode: TypeMode = if (isCAbiOpaqueBoundary(node.child.*)) .ffi_opaque_pointer else .normal;
+                self.checkType(node.child.*, child_mode);
+            },
             .slice => |node| {
                 const child_mode: TypeMode = if (isCAbiOpaqueBoundary(node.child.*)) .ffi_opaque_pointer else .normal;
                 self.checkType(node.child.*, child_mode);
@@ -396,7 +400,7 @@ pub const Checker = struct {
     fn checkNullPointerInitializer(self: *Checker, target: TypeClass, expr: ast.Expr) bool {
         if (!isNullLiteral(expr)) return false;
         if (isNullablePointerLike(target)) return true;
-        if (isSingleObjectPointerLike(target)) {
+        if (isNonNullPointerLike(target)) {
             self.errorCode(expr.span, "E_NULL_NON_NULL_POINTER", "null cannot initialize a non-null pointer");
             return true;
         }
@@ -486,6 +490,7 @@ const TypeClass = enum {
     serial,
     counter,
     pointer,
+    raw_many_pointer,
     slice,
     c_void_pointer,
     nullable_pointer,
@@ -572,7 +577,14 @@ fn isCheckedSigned(kind: TypeClass) bool {
 
 fn isPointerLike(kind: TypeClass) bool {
     return switch (kind) {
-        .pointer, .slice, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer => true,
+        .pointer, .raw_many_pointer, .slice, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer => true,
+        else => false,
+    };
+}
+
+fn isNonNullPointerLike(kind: TypeClass) bool {
+    return switch (kind) {
+        .pointer, .raw_many_pointer, .c_void_pointer => true,
         else => false,
     };
 }
@@ -611,6 +623,7 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
     return switch (ty.kind) {
         .name => |name| classifyTypeName(name.text),
         .pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .pointer,
+        .raw_many_pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .raw_many_pointer,
         .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .slice,
         .nullable => |child| classifyNullableType(child.*),
         .generic => |node| classifyGenericTypeName(node.base.text),
@@ -621,7 +634,7 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
 fn classifyNullableType(child: ast.TypeExpr) TypeClass {
     return switch (classifyType(child)) {
         .c_void_pointer => .nullable_c_void_pointer,
-        .pointer => .nullable_pointer,
+        .pointer, .raw_many_pointer => .nullable_pointer,
         else => .unknown,
     };
 }
