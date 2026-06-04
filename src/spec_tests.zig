@@ -267,6 +267,41 @@ test "tests/spec check entries are classified" {
     try std.testing.expectEqual(@as(usize, 0), summary.unsupported);
 }
 
+test "tests/spec phase and expectation metadata values are supported" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var dir = try std.Io.Dir.cwd().openDir(io, "tests/spec", .{ .iterate = true });
+    defer dir.close(io);
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var all_supported = true;
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".mc")) continue;
+
+        const source = try dir.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024));
+        defer allocator.free(source);
+
+        var metadata = try parseLeadingMetadata(allocator, source);
+        defer metadata.deinit(allocator);
+
+        const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
+        defer allocator.free(path);
+
+        if (metadata.valueFor("phase")) |phase_value| {
+            if (!allMetadataValuesSupported(path, "phase", phase_value, isSupportedPhase)) all_supported = false;
+        }
+        if (metadata.valueFor("expect")) |expect_value| {
+            if (!allMetadataValuesSupported(path, "expect", expect_value, isSupportedExpectation)) all_supported = false;
+        }
+    }
+
+    try std.testing.expect(all_supported);
+}
+
 test "tests/spec fixtures produce declared semantic error codes" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -646,6 +681,42 @@ fn matchesAny(check: []const u8, names: []const []const u8) bool {
         if (std.mem.eql(u8, check, name)) return true;
     }
     return false;
+}
+
+fn allMetadataValuesSupported(path: []const u8, key: []const u8, value: []const u8, supported: fn ([]const u8) bool) bool {
+    var ok = true;
+    var entries = std.mem.splitScalar(u8, value, ',');
+    while (entries.next()) |raw_entry| {
+        const entry = trimCheck(raw_entry);
+        if (entry.len == 0 or supported(entry)) continue;
+        std.debug.print("{s}: unsupported SPEC {s} value '{s}'\n", .{ path, key, entry });
+        ok = false;
+    }
+    return ok;
+}
+
+fn isSupportedPhase(phase: []const u8) bool {
+    const names = [_][]const u8{
+        "parse",
+        "sema",
+        "verifier",
+        "mir",
+        "lower-ir",
+        "lower-c",
+        "run",
+    };
+    return matchesAny(phase, &names);
+}
+
+fn isSupportedExpectation(expectation: []const u8) bool {
+    const names = [_][]const u8{
+        "pass",
+        "compile_error",
+        "trap",
+        "reject",
+        "inspect",
+    };
+    return matchesAny(expectation, &names);
 }
 
 fn hasDiagnosticCode(reporter: diagnostics.Reporter, code: []const u8) bool {
