@@ -213,7 +213,8 @@ pub const Checker = struct {
             const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
             const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
             const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
-            if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !canInitialize(kind, initializer)) {
+            const const_drop_checked = if (local.ty) |ty| self.checkConstDropInitializer(ty, expr, ctx) else false;
+            if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !const_drop_checked and !canInitialize(kind, initializer)) {
                 self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
             }
         } else {
@@ -499,6 +500,15 @@ pub const Checker = struct {
         if (initializer != .array) return false;
         if (isPointerLike(target)) {
             self.errorCode(expr.span, "E_ARRAY_TO_POINTER_DECAY", "arrays do not implicitly decay to pointers");
+            return true;
+        }
+        return false;
+    }
+
+    fn checkConstDropInitializer(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
+        const source = exprStorageType(expr, ctx) orelse return false;
+        if (dropsConstView(target, source)) {
+            self.errorCode(expr.span, "E_DISCARD_CONST_VIEW", "initializer cannot discard const from a pointer or view");
             return true;
         }
         return false;
@@ -1014,6 +1024,18 @@ fn constStorageBase(expr: ast.Expr, ctx: Context) bool {
     };
 }
 
+fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| return entry.ty;
+            return null;
+        },
+        .grouped => |inner| exprStorageType(inner.*, ctx),
+        else => null,
+    };
+}
+
 fn isConstStorageType(ty: ast.TypeExpr) bool {
     return switch (ty.kind) {
         .pointer => |node| node.mutability == .@"const",
@@ -1023,6 +1045,42 @@ fn isConstStorageType(ty: ast.TypeExpr) bool {
         .qualified => |node| isConstStorageType(node.child.*),
         else => false,
     };
+}
+
+const ViewKind = enum {
+    pointer,
+    raw_many_pointer,
+    slice,
+};
+
+const ViewType = struct {
+    kind: ViewKind,
+    mutability: ast.Mutability,
+    nullable: bool = false,
+};
+
+fn viewType(ty: ast.TypeExpr) ?ViewType {
+    return switch (ty.kind) {
+        .pointer => |node| .{ .kind = .pointer, .mutability = node.mutability },
+        .raw_many_pointer => |node| .{ .kind = .raw_many_pointer, .mutability = node.mutability },
+        .slice => |node| .{ .kind = .slice, .mutability = node.mutability },
+        .nullable => |child| {
+            var view = viewType(child.*) orelse return null;
+            view.nullable = true;
+            return view;
+        },
+        .qualified => |node| viewType(node.child.*),
+        else => null,
+    };
+}
+
+fn dropsConstView(target: ast.TypeExpr, source: ast.TypeExpr) bool {
+    const target_view = viewType(target) orelse return false;
+    const source_view = viewType(source) orelse return false;
+    return target_view.kind == source_view.kind and
+        target_view.nullable == source_view.nullable and
+        target_view.mutability == .mut and
+        source_view.mutability == .@"const";
 }
 
 fn isMmioRegisterType(ty: ast.TypeExpr) bool {
