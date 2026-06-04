@@ -1448,10 +1448,23 @@ const CEmitter = struct {
                 else => null,
             },
             else => null,
-        } orelse {
+        } orelse blk: {
+            const temp_ty = try self.nullableInnerCTypeForExpr(node.value, locals) orelse {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "/* unsupported if-let value: {s} */\n", .{@tagName(node.value.kind)});
+                return error.UnsupportedCEmission;
+            };
+            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
             try self.writeIndent();
-            try self.out.print(self.allocator, "/* unsupported if-let value: {s} */\n", .{@tagName(node.value.kind)});
-            return error.UnsupportedCEmission;
+            try self.out.print(self.allocator, "{s} {s} = ", .{ temp_ty, temp_name });
+            try self.emitExpr(node.value, locals);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try locals.put(temp_name, .{
+                .c_type = temp_ty,
+                .nullable_inner_c_type = temp_ty,
+            });
+            break :blk temp_name;
         };
         const source_info = locals.get(source_name) orelse {
             try self.writeIndent();
@@ -1510,10 +1523,20 @@ const CEmitter = struct {
                 else => null,
             },
             else => null,
-        } orelse {
+        } orelse blk: {
+            const result_ty = self.resultTypeForExpr(node.value, locals) orelse {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "/* unsupported result if-let value: {s} */\n", .{@tagName(node.value.kind)});
+                return error.UnsupportedCEmission;
+            };
+            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
             try self.writeIndent();
-            try self.out.print(self.allocator, "/* unsupported result if-let value: {s} */\n", .{@tagName(node.value.kind)});
-            return error.UnsupportedCEmission;
+            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(result_ty, .typedef_name), temp_name });
+            try self.emitExpr(node.value, locals);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try locals.put(temp_name, try self.localInfoFromType(result_ty));
+            break :blk temp_name;
         };
         const source_info = locals.get(source_name) orelse {
             try self.writeIndent();
@@ -5558,6 +5581,9 @@ test "emits C for target-typed enum literals" {
 
 test "emits C for optional pointer if-let" {
     const source =
+        \\extern fn maybe_ptr() -> ?*mut u8;
+        \\extern fn ptr_value(p: *mut u8) -> u32;
+        \\
         \\fn unwrap_or(maybe: ?*mut u8, fallback: *mut u8) -> *mut u8 {
         \\    if let p = maybe {
         \\        return p;
@@ -5572,6 +5598,13 @@ test "emits C for optional pointer if-let" {
         \\    } else {
         \\        return 0;
         \\    }
+        \\}
+        \\
+        \\fn unwrap_call_or_zero() -> u32 {
+        \\    if let p = maybe_ptr() {
+        \\        return ptr_value(p);
+        \\    }
+        \\    return 0;
         \\}
     ;
 
@@ -5597,6 +5630,8 @@ test "emits C for optional pointer if-let" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * p = maybe;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return *p;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return fallback;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp0 = maybe_ptr();\n    if (mc_tmp0 != NULL) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = mc_tmp0;") != null);
 }
 
 test "emits C for Result if-let narrowing" {
@@ -5604,6 +5639,8 @@ test "emits C for Result if-let narrowing" {
         \\enum Error: u8 {
         \\    denied = 1,
         \\}
+        \\
+        \\extern fn make_result() -> Result<u32, Error>;
         \\
         \\fn unwrap_or_zero(result: Result<u32, Error>) -> u32 {
         \\    if let ok(v) = result {
@@ -5618,6 +5655,13 @@ test "emits C for Result if-let narrowing" {
         \\        return e != 0;
         \\    }
         \\    return false;
+        \\}
+        \\
+        \\fn unwrap_call_or_zero() -> u32 {
+        \\    if let ok(v) = make_result() {
+        \\        return v;
+        \\    }
+        \\    return 0;
         \\}
     ;
 
@@ -5645,6 +5689,8 @@ test "emits C for Result if-let narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!result.is_ok) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Error e = result.payload.err;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return (e != 0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();\n    if (mc_tmp0.is_ok) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t v = mc_tmp0.payload.ok;") != null);
 }
 
 test "emits C for Result switch narrowing" {
