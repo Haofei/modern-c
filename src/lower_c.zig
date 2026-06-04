@@ -199,18 +199,37 @@ const Inspector = struct {
                         .{ ctx.name, access.kind, access.struct_name, access.field, access.width, bits, bits, access.ordering },
                     );
                     if (std.mem.eql(u8, access.ordering, "release")) {
+                        if (ctx.mmio_sequence.ordinary_store_seen) {
+                            try self.out.print(
+                                self.allocator,
+                                "lower mmio_sequence fn={s} edge=ordinary_before_release before=raw.store barrier={s}.{s}.{s} ordering=release prevents_reorder=true\n",
+                                .{ ctx.name, access.struct_name, access.field, access.kind },
+                            );
+                        }
                         try self.out.print(
                             self.allocator,
                             "lower mmio_order fn={s} op={s} register={s}.{s} ordering=release barrier_before=true prevents_before_after=true\n",
                             .{ ctx.name, access.kind, access.struct_name, access.field },
                         );
                     } else if (std.mem.eql(u8, access.ordering, "acquire")) {
+                        ctx.mmio_sequence.pending_acquire = access;
                         try self.out.print(
                             self.allocator,
                             "lower mmio_order fn={s} op={s} register={s}.{s} ordering=acquire barrier_after=true prevents_after_before=true\n",
                             .{ ctx.name, access.kind, access.struct_name, access.field },
                         );
                     }
+                }
+                if (isRawStoreCall(node.callee.*)) {
+                    if (ctx.mmio_sequence.pending_acquire) |access| {
+                        try self.out.print(
+                            self.allocator,
+                            "lower mmio_sequence fn={s} edge=ordinary_after_acquire barrier={s}.{s}.{s} ordering=acquire after=raw.store prevents_reorder=true\n",
+                            .{ ctx.name, access.struct_name, access.field, access.kind },
+                        );
+                        ctx.mmio_sequence.pending_acquire = null;
+                    }
+                    ctx.mmio_sequence.ordinary_store_seen = true;
                 }
                 try self.inspectExpr(node.callee.*, ctx);
                 for (node.args) |arg| try self.inspectExpr(arg, ctx);
@@ -328,6 +347,7 @@ const FnContext = struct {
     mmio_params: std.StringHashMap([]const u8),
     active_contract: ?[]const u8 = null,
     ended_contract: ?[]const u8 = null,
+    mmio_sequence: MmioSequenceState = .{},
 
     fn init(allocator: std.mem.Allocator, name: []const u8) FnContext {
         return .{
@@ -343,6 +363,11 @@ const FnContext = struct {
         self.local_types.deinit();
         self.mmio_params.deinit();
     }
+};
+
+const MmioSequenceState = struct {
+    ordinary_store_seen: bool = false,
+    pending_acquire: ?MmioAccess = null,
 };
 
 const MmioStruct = struct {
@@ -512,6 +537,20 @@ fn contractMatchesCallee(contract: []const u8, callee: []const u8) bool {
     if (std.mem.eql(u8, contract, "no_overflow")) return std.mem.startsWith(u8, callee, "unchecked.");
     if (std.mem.eql(u8, contract, "noalias")) return std.mem.eql(u8, callee, "compiler.assume_noalias_unchecked");
     return false;
+}
+
+fn isRawStoreCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "store") and isIdentNamed(member.base.*, "raw"),
+        else => false,
+    };
+}
+
+fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, name),
+        else => false,
+    };
 }
 
 fn contractName(attr: ast.Attr) []const u8 {

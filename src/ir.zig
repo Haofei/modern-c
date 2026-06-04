@@ -51,6 +51,12 @@ const Context = struct {
     unsafe_contract_depth: usize = 0,
     mmio_params: ?*const std.StringHashMap([]const u8) = null,
     locals: ?*std.StringHashMap(void) = null,
+    mmio_sequence: ?*MmioSequenceState = null,
+};
+
+const MmioSequenceState = struct {
+    ordinary_store_seen: bool = false,
+    pending_acquire: ?MmioAccess = null,
 };
 
 const ListFactWriter = struct {
@@ -126,6 +132,7 @@ const ModuleFactCollector = struct {
                     defer mmio_params.deinit();
                     var locals = std.StringHashMap(void).init(self.allocator);
                     defer locals.deinit();
+                    var mmio_sequence = MmioSequenceState{};
                     for (fn_decl.params) |param| {
                         try locals.put(param.name.text, {});
                         if (mmioPointee(param.ty)) |struct_name| try mmio_params.put(param.name.text, struct_name);
@@ -135,6 +142,7 @@ const ModuleFactCollector = struct {
                         .no_lang_trap = hasNoLangTrap(decl.attrs),
                         .mmio_params = &mmio_params,
                         .locals = &locals,
+                        .mmio_sequence = &mmio_sequence,
                     });
                 }
             },
@@ -512,15 +520,39 @@ fn writeCallFact(collector: *ModuleFactCollector, span: ast.Span, callee: ast.Ex
             .{ ctx.function_name, access.kind, access.struct_name, access.field, access.kind, access.value_type, bits, bits, access.ordering },
         );
         if (std.mem.eql(u8, access.ordering, "release")) {
+            if (ctx.mmio_sequence) |sequence| {
+                if (sequence.ordinary_store_seen) {
+                    try writer.print(
+                        "fact mmio_sequence fn={s} edge=ordinary_before_release before=raw.store barrier={s}.{s}.{s} ordering=release prevents_reorder=true\n",
+                        .{ ctx.function_name, access.struct_name, access.field, access.kind },
+                    );
+                }
+            }
             try writer.print(
                 "fact mmio_order fn={s} op={s} register={s}.{s} ordering=release barrier_before=true prevents_before_after=true\n",
                 .{ ctx.function_name, access.kind, access.struct_name, access.field },
             );
         } else if (std.mem.eql(u8, access.ordering, "acquire")) {
+            if (ctx.mmio_sequence) |sequence| {
+                sequence.pending_acquire = access;
+            }
             try writer.print(
                 "fact mmio_order fn={s} op={s} register={s}.{s} ordering=acquire barrier_after=true prevents_after_before=true\n",
                 .{ ctx.function_name, access.kind, access.struct_name, access.field },
             );
+        }
+    }
+
+    if (isRawStoreCall(callee)) {
+        if (ctx.mmio_sequence) |sequence| {
+            if (sequence.pending_acquire) |access| {
+                try writer.print(
+                    "fact mmio_sequence fn={s} edge=ordinary_after_acquire barrier={s}.{s}.{s} ordering=acquire after=raw.store prevents_reorder=true\n",
+                    .{ ctx.function_name, access.struct_name, access.field, access.kind },
+                );
+                sequence.pending_acquire = null;
+            }
+            sequence.ordinary_store_seen = true;
         }
     }
 }
@@ -677,6 +709,13 @@ fn isUncheckedCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |node| isIdentNamed(node.base.*, "unchecked"),
         .ident => |ident| std.mem.startsWith(u8, ident.text, "unchecked_"),
+        else => false,
+    };
+}
+
+fn isRawStoreCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |node| std.mem.eql(u8, node.name.text, "store") and isIdentNamed(node.base.*, "raw"),
         else => false,
     };
 }

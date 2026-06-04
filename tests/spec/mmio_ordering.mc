@@ -54,9 +54,11 @@ fn allow_plain_member_assign(packet: Packet, value: u8) -> void {
 }
 
 fn ordered_device_sequence(uart: MmioPtr<Uart16550>, ch: u8) -> void {
+    // EXPECT: ordinary store cannot move after the release MMIO write.
     raw.store<u8>(phys(0x2000_0000), ch);
     uart.thr.write(ch, .release);
     let status = uart.lsr.read(.acquire);
+    // EXPECT: ordinary store cannot move before the acquire MMIO read.
     raw.store<u8>(phys(0x2000_0001), status.tx_empty as u8);
     // EXPECT: lower-c/IR contains barriers or ordering markers that prevent reordering across release/acquire.
 }

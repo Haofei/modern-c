@@ -748,6 +748,8 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             "fact mmio_order fn=read_status op=read register=Uart16550.lsr ordering=acquire",
             "barrier_after=true",
             "prevents_after_before=true",
+            "fact mmio_sequence fn=ordered_device_sequence edge=ordinary_before_release before=raw.store barrier=Uart16550.thr.write ordering=release prevents_reorder=true",
+            "fact mmio_sequence fn=ordered_device_sequence edge=ordinary_after_acquire barrier=Uart16550.lsr.read ordering=acquire after=raw.store prevents_reorder=true",
         });
     }
     if (std.mem.eql(u8, check, "race-ir-semantics")) {
@@ -981,6 +983,8 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
             "prevents_before_after=true",
             "lower mmio_order fn=read_status op=read register=Uart16550.lsr ordering=acquire",
             "prevents_after_before=true",
+            "lower mmio_sequence fn=ordered_device_sequence edge=ordinary_before_release before=raw.store barrier=Uart16550.thr.write ordering=release prevents_reorder=true",
+            "lower mmio_sequence fn=ordered_device_sequence edge=ordinary_after_acquire barrier=Uart16550.lsr.read ordering=acquire after=raw.store prevents_reorder=true",
         });
     }
     return false;
