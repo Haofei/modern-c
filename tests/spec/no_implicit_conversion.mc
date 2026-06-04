@@ -19,6 +19,21 @@ fn accept_i8_max_literal() -> i8 {
     return x;
 }
 
+fn accept_i8_min_literal() -> i8 {
+    let x: i8 = -128;
+    return x;
+}
+
+fn accept_grouped_i8_min_literal() -> i8 {
+    let x: i8 = (-128);
+    return x;
+}
+
+fn accept_negative_hex_i8_min_literal() -> i8 {
+    let x: i8 = -0x80;
+    return x;
+}
+
 fn accept_hex_u8_max_literal() -> u8 {
     let x: u8 = 0xff;
     return x;
@@ -38,6 +53,24 @@ fn reject_u8_out_of_range_literal() -> u8 {
 fn reject_i8_out_of_range_literal() -> i8 {
     // EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE
     let y: i8 = 128;
+    return y;
+}
+
+fn reject_i8_below_range_literal() -> i8 {
+    // EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE
+    let y: i8 = -129;
+    return y;
+}
+
+fn reject_negative_hex_i8_out_of_range_literal() -> i8 {
+    // EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE
+    let y: i8 = -0x81;
+    return y;
+}
+
+fn reject_u8_negative_literal() -> u8 {
+    // EXPECT_ERROR: E_INTEGER_LITERAL_OUT_OF_RANGE
+    let y: u8 = -1;
     return y;
 }
 

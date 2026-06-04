@@ -339,18 +339,23 @@ pub const Checker = struct {
     }
 
     fn checkIntegerLiteralInitializer(self: *Checker, target: TypeClass, target_ty: ast.TypeExpr, expr: ast.Expr) bool {
-        const literal = integerLiteralText(expr) orelse return false;
-        const value = parseIntegerLiteral(literal) orelse return false;
+        const value = integerLiteralValue(expr) orelse return false;
         if (target == .wrap) {
             const bounds = wrapInnerBounds(target_ty) orelse return false;
-            if (value > bounds.max) {
+            if (value.negative or value.magnitude > bounds.max) {
                 self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
                 return true;
             }
             return false;
         }
         const bounds = checkedIntBounds(target) orelse return false;
-        if (value > bounds.max) {
+        if (value.negative) {
+            if (!bounds.signed or value.magnitude > bounds.min_abs) {
+                self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
+            }
+            return true;
+        }
+        if (value.magnitude > bounds.max) {
             self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
         }
         return true;
@@ -544,21 +549,23 @@ fn canInitialize(target: TypeClass, initializer: TypeClass) bool {
 }
 
 const IntBounds = struct {
+    signed: bool,
     max: u128,
+    min_abs: u128 = 0,
 };
 
 fn checkedIntBounds(kind: TypeClass) ?IntBounds {
     return switch (kind) {
-        .checked_u8 => .{ .max = maxUnsigned(8) },
-        .checked_u16 => .{ .max = maxUnsigned(16) },
-        .checked_u32 => .{ .max = maxUnsigned(32) },
-        .checked_u64 => .{ .max = maxUnsigned(64) },
-        .checked_usize => .{ .max = maxUnsigned(64) },
-        .checked_i8 => .{ .max = maxSigned(8) },
-        .checked_i16 => .{ .max = maxSigned(16) },
-        .checked_i32 => .{ .max = maxSigned(32) },
-        .checked_i64 => .{ .max = maxSigned(64) },
-        .checked_isize => .{ .max = maxSigned(64) },
+        .checked_u8 => .{ .signed = false, .max = maxUnsigned(8) },
+        .checked_u16 => .{ .signed = false, .max = maxUnsigned(16) },
+        .checked_u32 => .{ .signed = false, .max = maxUnsigned(32) },
+        .checked_u64 => .{ .signed = false, .max = maxUnsigned(64) },
+        .checked_usize => .{ .signed = false, .max = maxUnsigned(64) },
+        .checked_i8 => signedBounds(8),
+        .checked_i16 => signedBounds(16),
+        .checked_i32 => signedBounds(32),
+        .checked_i64 => signedBounds(64),
+        .checked_isize => signedBounds(64),
         else => null,
     };
 }
@@ -580,10 +587,32 @@ fn maxSigned(bits: u7) u128 {
     return (@as(u128, 1) << (bits - 1)) - 1;
 }
 
-fn integerLiteralText(expr: ast.Expr) ?[]const u8 {
+fn signedBounds(bits: u7) IntBounds {
+    return .{
+        .signed = true,
+        .max = maxSigned(bits),
+        .min_abs = @as(u128, 1) << (bits - 1),
+    };
+}
+
+const LiteralValue = struct {
+    negative: bool,
+    magnitude: u128,
+};
+
+fn integerLiteralValue(expr: ast.Expr) ?LiteralValue {
     return switch (expr.kind) {
-        .int_literal => |literal| literal,
-        .grouped => |inner| integerLiteralText(inner.*),
+        .int_literal => |literal| if (parseIntegerLiteral(literal)) |magnitude| .{
+            .negative = false,
+            .magnitude = magnitude,
+        } else null,
+        .grouped => |inner| integerLiteralValue(inner.*),
+        .unary => |node| {
+            if (node.op != .neg) return null;
+            const literal = integerLiteralValue(node.expr.*) orelse return null;
+            if (literal.negative) return null;
+            return .{ .negative = true, .magnitude = literal.magnitude };
+        },
         else => null,
     };
 }
