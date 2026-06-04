@@ -68,6 +68,7 @@ pub const Checker = struct {
             scope.put(param.name.text, classifyType(param.ty)) catch {};
             if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {};
         }
+        const return_kind = if (fn_decl.return_type) |ty| classifyType(ty) else TypeClass.void;
         const returns_never = if (fn_decl.return_type) |ty| blk: {
             self.checkType(ty, .normal);
             break :blk isTypeName(ty, "never");
@@ -78,6 +79,8 @@ pub const Checker = struct {
                 .no_lang_trap = no_lang_trap,
                 .returns_never = returns_never,
                 .returns_void = returns_void,
+                .return_ty = fn_decl.return_type,
+                .return_kind = return_kind,
                 .unsafe_contracts = .{},
                 .scope = &scope,
                 .mmio_structs = mmio_structs,
@@ -155,11 +158,14 @@ pub const Checker = struct {
             },
             .@"return" => |maybe| {
                 if (maybe) |expr| {
+                    const error_count = self.reporter.diagnostics.items.len;
                     const returned = self.checkExpr(expr, ctx);
                     if (ctx.returns_never and returned != .never) {
                         self.errorCode(stmt.span, "E_NEVER_RETURNS", "function declared -> never cannot return normally");
                     } else if (ctx.returns_void and returned != .void and returned != .never) {
                         self.errorCode(stmt.span, "E_VOID_RETURNS_VALUE", "function declared -> void cannot return a value");
+                    } else if (!ctx.returns_never and !ctx.returns_void and self.reporter.diagnostics.items.len == error_count) {
+                        self.checkReturnValue(ctx, returned, expr);
                     }
                 } else if (ctx.returns_never) {
                     self.errorCode(stmt.span, "E_NEVER_RETURNS", "function declared -> never cannot return normally");
@@ -437,6 +443,17 @@ pub const Checker = struct {
         return false;
     }
 
+    fn checkReturnValue(self: *Checker, ctx: Context, returned: TypeClass, expr: ast.Expr) void {
+        const target_ty = ctx.return_ty orelse return;
+        const target = ctx.return_kind;
+        const literal_checked = self.checkIntegerLiteralInitializer(target, target_ty, expr);
+        const null_checked = self.checkNullPointerInitializer(target, expr);
+        const array_decay_checked = self.checkArrayDecayInitializer(target, returned, expr);
+        if (!literal_checked and !null_checked and !array_decay_checked and !canInitialize(target, returned)) {
+            self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
+        }
+    }
+
     fn checkIfLetPattern(self: *Checker, pattern: ast.Pattern, value_class: TypeClass) void {
         switch (pattern.kind) {
             .bind => {
@@ -463,6 +480,8 @@ const Context = struct {
     in_unsafe: bool = false,
     returns_never: bool = false,
     returns_void: bool = false,
+    return_ty: ?ast.TypeExpr = null,
+    return_kind: TypeClass = .void,
     unsafe_contracts: UnsafeContracts = .{},
     scope: ?*Scope = null,
     mmio_structs: ?*const std.StringHashMap(MmioStruct) = null,
