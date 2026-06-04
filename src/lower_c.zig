@@ -861,6 +861,7 @@ const CEmitter = struct {
                     if (try self.emitNullableTryCallReturn(expr, locals)) return;
                     if (try self.emitResultTryReturn(expr, locals, return_ty)) return;
                     if (try self.emitNullableTryReturn(expr, locals)) return;
+                    if (try self.emitMmioReadExprReturn(expr, locals, return_ty)) return;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "return ");
                     if (return_ty) |target_ty| {
@@ -887,6 +888,7 @@ const CEmitter = struct {
                 if (try self.emitMmioWriteStmt(expr, locals)) return;
                 if (try self.emitResultTryExprStmt(expr, locals, return_ty)) return;
                 if (try self.emitNullableTryExprStmt(expr, locals)) return;
+                if (try self.emitMmioReadExprStmt(expr, locals)) return;
                 try self.writeIndent();
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
@@ -961,6 +963,49 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "if (!(");
         try self.emitMmioReadExprWithReplacements(expr, &nested, null, replacements.items);
         try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
+        return true;
+    }
+
+    fn emitMmioReadExprStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        var replacements: std.ArrayList(MmioReadReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectMmioReadHoistsForExpr(expr, locals, &replacements)) return false;
+
+        for (replacements.items) |replacement| {
+            try self.emitMmioReadReplacement(replacement);
+        }
+
+        var nested = try cloneLocals(self.allocator, locals.*);
+        defer nested.deinit();
+        try addMmioReadReplacementLocals(&nested, replacements.items);
+
+        try self.writeIndent();
+        if (mmioReadReplacementForSpan(expr.span, replacements.items)) |replacement| {
+            try self.out.print(self.allocator, "(void){s};\n", .{replacement.temp_name});
+        } else {
+            try self.emitMmioReadExprWithReplacements(expr, &nested, null, replacements.items);
+            try self.out.appendSlice(self.allocator, ";\n");
+        }
+        return true;
+    }
+
+    fn emitMmioReadExprReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        var replacements: std.ArrayList(MmioReadReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectMmioReadHoistsForExpr(expr, locals, &replacements)) return false;
+
+        for (replacements.items) |replacement| {
+            try self.emitMmioReadReplacement(replacement);
+        }
+
+        var nested = try cloneLocals(self.allocator, locals.*);
+        defer nested.deinit();
+        try addMmioReadReplacementLocals(&nested, replacements.items);
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.emitMmioReadExprWithReplacements(expr, &nested, return_ty, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
         return true;
     }
 
@@ -2887,6 +2932,15 @@ fn cloneLocals(allocator: std.mem.Allocator, locals: std.StringHashMap(LocalInfo
     var it = locals.iterator();
     while (it.next()) |entry| try cloned.put(entry.key_ptr.*, entry.value_ptr.*);
     return cloned;
+}
+
+fn addMmioReadReplacementLocals(locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
+    for (replacements) |replacement| {
+        try locals.put(replacement.temp_name, .{
+            .c_type = replacement.c_type,
+            .source_type_name = replacement.source_type_name,
+        });
+    }
 }
 
 const Inspector = struct {
@@ -4934,6 +4988,52 @@ test "hoists MMIO reads in while conditions" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!((mc_tmp1 == 0))) break;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Status mc_tmp2 = (Status)mc_mmio_read_u8(&dev->stat);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(((mc_tmp2 & UINT8_C(1)) != 0))) mc_trap_Assert();") != null);
+}
+
+test "hoists MMIO reads in return and expression statements" {
+    const source =
+        \\packed bits Status: u8 {
+        \\    ready: bool,
+        \\}
+        \\
+        \\extern mmio struct Device {
+        \\    stat: RegBits<u8, Status, .read>,
+        \\    raw: Reg<u32, .read>,
+        \\}
+        \\
+        \\extern fn observe(status: Status) -> void;
+        \\
+        \\fn observe_status(dev: MmioPtr<Device>) -> void {
+        \\    observe(dev.stat.read(.acquire));
+        \\}
+        \\
+        \\fn read_plus(dev: MmioPtr<Device>, extra: u32) -> u32 {
+        \\    return dev.raw.read(.relaxed) + extra;
+        \\}
+        \\
+        \\fn read_side_effect(dev: MmioPtr<Device>) -> void {
+        \\    dev.raw.read(.acquire);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_mmio_read_exprs.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Status mc_tmp0 = (Status)mc_mmio_read_u8(&dev->stat);\n    mc_barrier_acquire_after();\n    observe(mc_tmp0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp1 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    return mc_checked_add_u32(mc_tmp1, extra);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp2 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    mc_barrier_acquire_after();\n    (void)mc_tmp2;") != null);
 }
 
 test "emits C for array and slice for loops" {
