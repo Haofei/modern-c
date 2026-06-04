@@ -1034,7 +1034,7 @@ fn resultPayloadType(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
 }
 
 fn tryPayloadType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
-    const ty = exprStorageType(expr, ctx) orelse return null;
+    const ty = exprResultType(expr, ctx) orelse return null;
     return nullableInnerType(ty) orelse resultPayloadType(ty, "ok");
 }
 
@@ -1354,6 +1354,14 @@ fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     };
 }
 
+fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .call => |node| if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .grouped => |inner| exprResultType(inner.*, ctx),
+        else => exprStorageType(expr, ctx),
+    };
+}
+
 fn assignmentTargetType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
         .ident => |ident| {
@@ -1384,6 +1392,11 @@ fn directCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
     const function = directCallFunction(callee, ctx) orelse return null;
     const return_ty = function.return_ty orelse return .void;
     return classifyType(return_ty);
+}
+
+fn directCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const function = directCallFunction(callee, ctx) orelse return null;
+    return function.return_ty;
 }
 
 fn directCallFunction(callee: ast.Expr, ctx: Context) ?FunctionInfo {
