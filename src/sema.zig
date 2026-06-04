@@ -1208,8 +1208,14 @@ pub const Checker = struct {
     fn checkSwitch(self: *Checker, node: ast.Switch, ctx: Context) void {
         const subject_class = self.checkExpr(node.subject, ctx);
         const subject_ty = exprResultType(node.subject, ctx);
+        const subject_enum = if (subject_ty) |ty| enumInfoForType(ty, ctx) else null;
+        var enum_cases_seen = std.StringHashMap(void).init(self.reporter.allocator);
+        defer enum_cases_seen.deinit();
         for (node.arms) |arm| {
             self.checkSwitchArmPatterns(arm.patterns, subject_class, subject_ty, ctx);
+            if (subject_enum) |enum_info| {
+                self.checkDuplicateSwitchEnumCases(arm.patterns, enum_info, &enum_cases_seen);
+            }
             var arm_scope = Scope.init(self.reporter.allocator);
             defer arm_scope.deinit();
             var arm_ctx = ctx;
@@ -1221,6 +1227,28 @@ pub const Checker = struct {
             switch (arm.body) {
                 .block => |block| self.checkBlock(block, arm_ctx),
                 .expr => |expr| _ = self.checkExpr(expr, arm_ctx),
+            }
+        }
+        if (subject_ty) |ty| {
+            if (closedEnumInfoForType(ty, ctx)) |enum_info| {
+                if (!switchCoversAllEnumCases(node, enum_info)) {
+                    self.errorCode(node.subject.span, "E_CLOSED_ENUM_SWITCH_EXHAUSTIVE", "switch over closed enum must cover every case or use '_'");
+                }
+            }
+        }
+    }
+
+    fn checkDuplicateSwitchEnumCases(self: *Checker, patterns: []const ast.Pattern, enum_info: EnumInfo, seen: *std.StringHashMap(void)) void {
+        for (patterns) |pattern| {
+            const tag = switch (pattern.kind) {
+                .tag => |tag| tag,
+                else => continue,
+            };
+            if (!enum_info.cases.contains(tag.text)) continue;
+            if (seen.contains(tag.text)) {
+                self.errorCode(tag.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
+            } else {
+                seen.put(tag.text, {}) catch {};
             }
         }
     }

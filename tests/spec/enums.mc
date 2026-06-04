@@ -2,7 +2,7 @@
 // SPEC: milestone=enum-declarations
 // SPEC: phase=parse,sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_DUPLICATE_ENUM_CASE,E_ENUM_REPR_NOT_INTEGER,E_ENUM_CASE_VALUE_NOT_INTEGER,E_ENUM_CASE_VALUE_OUT_OF_RANGE,E_DUPLICATE_ENUM_VALUE,E_UNKNOWN_ENUM_CASE,E_NO_IMPLICIT_CONVERSION,E_RETURN_TYPE_MISMATCH,E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION,E_ENUM_RAW_REQUIRES_OPEN_ENUM,E_CALL_ARG_COUNT
+// SPEC: check=E_DUPLICATE_ENUM_CASE,E_ENUM_REPR_NOT_INTEGER,E_ENUM_CASE_VALUE_NOT_INTEGER,E_ENUM_CASE_VALUE_OUT_OF_RANGE,E_DUPLICATE_ENUM_VALUE,E_UNKNOWN_ENUM_CASE,E_NO_IMPLICIT_CONVERSION,E_RETURN_TYPE_MISMATCH,E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION,E_ENUM_RAW_REQUIRES_OPEN_ENUM,E_CALL_ARG_COUNT,E_CLOSED_ENUM_SWITCH_EXHAUSTIVE,E_DUPLICATE_SWITCH_CASE
 
 enum OpenError {
     not_found,
@@ -183,6 +183,45 @@ fn reject_closed_enum_raw(irq: Irq) -> u8 {
 fn reject_enum_cast_to_integer(irq: Irq) -> u8 {
     // EXPECT_ERROR: E_ENUM_RAW_REQUIRES_OPEN_ENUM
     return irq as u8;
+}
+
+fn accept_closed_enum_exhaustive_switch(irq: Irq) -> void {
+    switch irq {
+        .timer => {},
+        .keyboard => {},
+    }
+}
+
+fn accept_closed_enum_switch_wildcard(irq: Irq) -> void {
+    switch irq {
+        .timer => {},
+        _ => {},
+    }
+}
+
+fn reject_closed_enum_nonexhaustive_switch(irq: Irq) -> void {
+    // EXPECT_ERROR: E_CLOSED_ENUM_SWITCH_EXHAUSTIVE
+    switch irq {
+        .timer => {},
+    }
+}
+
+fn reject_duplicate_enum_switch_case_across_arms(irq: Irq) -> void {
+    switch irq {
+        .timer => {},
+        // EXPECT_ERROR: E_DUPLICATE_SWITCH_CASE
+        .timer => {},
+        .keyboard => {},
+    }
+}
+
+fn reject_duplicate_enum_switch_case_in_arm(irq: Irq) -> void {
+    switch irq {
+        .timer,
+        // EXPECT_ERROR: E_DUPLICATE_SWITCH_CASE
+        .timer => {},
+        .keyboard => {},
+    }
 }
 
 enum RejectDuplicateEnumCase: u8 {

@@ -2,7 +2,7 @@
 // SPEC: milestone=return-type-checking
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_RETURN_TYPE_MISMATCH,E_RETURN_REQUIRES_VALUE,E_RETURN_MISSING,E_INTEGER_LITERAL_OUT_OF_RANGE,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY
+// SPEC: check=E_RETURN_TYPE_MISMATCH,E_RETURN_REQUIRES_VALUE,E_RETURN_MISSING,E_INTEGER_LITERAL_OUT_OF_RANGE,E_NULL_NON_NULL_POINTER,E_ARRAY_TO_POINTER_DECAY,E_CLOSED_ENUM_SWITCH_EXHAUSTIVE
 
 extern fn get_count() -> u32;
 global shared_count: u32 = 0;
@@ -85,6 +85,7 @@ fn accept_closed_enum_switch_return(light: TrafficLight) -> u32 {
 
 fn reject_closed_enum_switch_missing_case(light: TrafficLight) -> u32 {
     // EXPECT_ERROR: E_RETURN_MISSING
+    // EXPECT_ERROR: E_CLOSED_ENUM_SWITCH_EXHAUSTIVE
     switch light {
         .red => { return 0; },
         .yellow => { return 1; },
