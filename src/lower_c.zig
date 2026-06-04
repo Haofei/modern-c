@@ -137,6 +137,7 @@ const CEmitter = struct {
     scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
     structs: std.StringHashMap(ast.StructDecl),
+    slice_types: std.StringHashMap(SliceInfo),
     indent: usize,
 
     fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) CEmitter {
@@ -146,11 +147,13 @@ const CEmitter = struct {
             .scratch = std.heap.ArenaAllocator.init(allocator),
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
+            .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .indent = 0,
         };
     }
 
     fn deinit(self: *CEmitter) void {
+        self.slice_types.deinit();
         self.structs.deinit();
         self.globals.deinit();
         self.scratch.deinit();
@@ -162,10 +165,13 @@ const CEmitter = struct {
             switch (decl.kind) {
                 .global_decl => |global| {
                     if (global.ty) |ty| try self.globals.put(global.name.text, globalInfoFromType(ty));
+                    if (global.ty) |ty| try self.collectSliceType(ty);
                 },
                 .extern_struct => |struct_decl| {
                     if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
+                    if (!isMmioStructAbi(struct_decl)) for (struct_decl.fields) |field| try self.collectSliceType(field.ty);
                 },
+                .fn_decl, .extern_fn => |fn_decl| try self.collectFunctionSliceTypes(fn_decl),
                 else => {},
             }
         }
@@ -174,6 +180,7 @@ const CEmitter = struct {
                 try self.emitStruct(decl.kind.extern_struct);
             }
         }
+        try self.emitSliceTypes();
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .global_decl => |global| try self.emitGlobal(global),
@@ -218,6 +225,20 @@ const CEmitter = struct {
         }
         self.indent -= 1;
         try self.out.print(self.allocator, "}} {s};\n\n", .{struct_decl.name.text});
+    }
+
+    fn emitSliceTypes(self: *CEmitter) !void {
+        var it = self.slice_types.valueIterator();
+        while (it.next()) |slice| {
+            try self.out.print(self.allocator, "typedef struct {s} {{\n", .{slice.name});
+            self.indent += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} ptr;\n", .{slice.ptr_type});
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "uintptr_t len;\n");
+            self.indent -= 1;
+            try self.out.print(self.allocator, "}} {s};\n\n", .{slice.name});
+        }
     }
 
     fn emitFunctionPrototype(self: *CEmitter, fn_decl: ast.FnDecl) !void {
@@ -290,7 +311,7 @@ const CEmitter = struct {
         switch (ty.kind) {
             .pointer => |node| return self.appendPointerType(out, node.child.*, node.mutability, style),
             .raw_many_pointer => |node| return self.appendPointerType(out, node.child.*, node.mutability, style),
-            .slice => |node| return self.appendPointerType(out, node.child.*, node.mutability, style),
+            .slice => |node| return out.appendSlice(self.scratch.allocator(), try self.sliceTypeName(node.child.*, node.mutability)),
             .array => |node| return self.appendPointerType(out, node.child.*, .none, style),
             .nullable => |child| return self.appendType(out, child.*, style),
             .qualified => |node| return self.appendType(out, node.child.*, style),
@@ -312,6 +333,78 @@ const CEmitter = struct {
         } else {
             try out.appendSlice(self.scratch.allocator(), " *");
         }
+    }
+
+    fn collectFunctionSliceTypes(self: *CEmitter, fn_decl: ast.FnDecl) !void {
+        for (fn_decl.params) |param| try self.collectSliceType(param.ty);
+        if (fn_decl.return_type) |ret| try self.collectSliceType(ret);
+        if (fn_decl.body) |body| try self.collectBlockSliceTypes(body);
+    }
+
+    fn collectBlockSliceTypes(self: *CEmitter, block: ast.Block) anyerror!void {
+        for (block.items) |stmt| switch (stmt.kind) {
+            .let_decl, .var_decl => |local| if (local.ty) |ty| try self.collectSliceType(ty),
+            .loop => |node| try self.collectBlockSliceTypes(node.body),
+            .if_let => |node| {
+                try self.collectBlockSliceTypes(node.then_block);
+                if (node.else_block) |else_block| try self.collectBlockSliceTypes(else_block);
+            },
+            .@"switch" => |node| for (node.arms) |arm| switch (arm.body) {
+                .block => |arm_block| try self.collectBlockSliceTypes(arm_block),
+                .expr => {},
+            },
+            .unsafe_block, .comptime_block, .block => |nested| try self.collectBlockSliceTypes(nested),
+            .contract_block => |contract| try self.collectBlockSliceTypes(contract.block),
+            else => {},
+        };
+    }
+
+    fn collectSliceType(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
+        switch (ty.kind) {
+            .slice => |node| {
+                try self.collectSliceType(node.child.*);
+                const name = try self.sliceTypeName(node.child.*, node.mutability);
+                if (!self.slice_types.contains(name)) {
+                    const ptr_type = try self.pointerTypeForSliceElement(node.child.*, node.mutability);
+                    try self.slice_types.put(name, .{ .name = name, .ptr_type = ptr_type });
+                }
+            },
+            .pointer => |node| try self.collectSliceType(node.child.*),
+            .raw_many_pointer => |node| try self.collectSliceType(node.child.*),
+            .nullable => |child| try self.collectSliceType(child.*),
+            .qualified => |node| try self.collectSliceType(node.child.*),
+            .array => |node| try self.collectSliceType(node.child.*),
+            .generic => |node| for (node.args) |arg| try self.collectSliceType(arg),
+            .member => |node| try self.collectSliceType(node.base.*),
+            else => {},
+        }
+    }
+
+    fn sliceTypeName(self: *CEmitter, child: ast.TypeExpr, mutability: ast.Mutability) ![]const u8 {
+        const prefix = if (mutability == .mut) "mc_slice_mut_" else "mc_slice_const_";
+        return std.fmt.allocPrint(self.scratch.allocator(), "{s}{s}", .{ prefix, try self.typeSuffix(child) });
+    }
+
+    fn pointerTypeForSliceElement(self: *CEmitter, child: ast.TypeExpr, mutability: ast.Mutability) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        try self.appendPointerType(&out, child, if (mutability == .mut) .mut else .@"const", .typedef_name);
+        return out.toOwnedSlice(self.scratch.allocator());
+    }
+
+    fn typeSuffix(self: *CEmitter, ty: ast.TypeExpr) ![]const u8 {
+        if (typeName(ty)) |name| {
+            if (self.structs.contains(name)) return std.fmt.allocPrint(self.scratch.allocator(), "struct_{s}", .{name});
+            return name;
+        }
+        return switch (ty.kind) {
+            .pointer => |node| std.fmt.allocPrint(self.scratch.allocator(), "ptr_{s}", .{try self.typeSuffix(node.child.*)}),
+            .raw_many_pointer => |node| std.fmt.allocPrint(self.scratch.allocator(), "manyptr_{s}", .{try self.typeSuffix(node.child.*)}),
+            .slice => |node| std.fmt.allocPrint(self.scratch.allocator(), "slice_{s}", .{try self.typeSuffix(node.child.*)}),
+            .array => |node| std.fmt.allocPrint(self.scratch.allocator(), "array_{s}", .{try self.typeSuffix(node.child.*)}),
+            .nullable => |child| std.fmt.allocPrint(self.scratch.allocator(), "nullable_{s}", .{try self.typeSuffix(child.*)}),
+            .qualified => |node| self.typeSuffix(node.child.*),
+            else => "unknown",
+        };
     }
 
     fn emitArrayLen(self: *CEmitter, expr: ast.Expr) !void {
@@ -635,16 +728,25 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .index => |node| {
-                try self.emitExpr(node.base.*, locals);
-                try self.out.appendSlice(self.allocator, "[");
-                if (arrayLenForExpr(node.base.*, locals)) |len| {
-                    try self.out.appendSlice(self.allocator, "mc_check_index_usize(");
+                if (sliceAccessForExpr(node.base.*, locals)) |slice| {
+                    try self.emitExpr(node.base.*, locals);
+                    try self.out.print(self.allocator, ".{s}[mc_check_index_usize(", .{slice.ptr_field});
                     try self.emitExpr(node.index.*, locals);
-                    try self.out.print(self.allocator, ", {s})", .{len});
+                    try self.out.appendSlice(self.allocator, ", ");
+                    try self.emitExpr(node.base.*, locals);
+                    try self.out.print(self.allocator, ".{s})]", .{slice.len_field});
                 } else {
-                    try self.emitExpr(node.index.*, locals);
+                    try self.emitExpr(node.base.*, locals);
+                    try self.out.appendSlice(self.allocator, "[");
+                    if (arrayLenForExpr(node.base.*, locals)) |len| {
+                        try self.out.appendSlice(self.allocator, "mc_check_index_usize(");
+                        try self.emitExpr(node.index.*, locals);
+                        try self.out.print(self.allocator, ", {s})", .{len});
+                    } else {
+                        try self.emitExpr(node.index.*, locals);
+                    }
+                    try self.out.appendSlice(self.allocator, "]");
                 }
-                try self.out.appendSlice(self.allocator, "]");
             },
             .address_of => |inner| {
                 try self.out.appendSlice(self.allocator, "&");
@@ -684,6 +786,11 @@ const CEmitter = struct {
     fn localInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !LocalInfo {
         return switch (ty.kind) {
             .array => |node| .{ .c_type = try self.cTypeFor(ty, .typedef_name), .array_len = intLiteralText(node.len) },
+            .slice => .{
+                .c_type = try self.cTypeFor(ty, .typedef_name),
+                .slice_ptr_field = "ptr",
+                .slice_len_field = "len",
+            },
             .nullable => |child| .{
                 .c_type = try self.cTypeFor(ty, .typedef_name),
                 .nullable_inner_c_type = try self.nullableInnerCType(child.*),
@@ -704,7 +811,19 @@ const CEmitter = struct {
 const LocalInfo = struct {
     c_type: ?[]const u8 = null,
     array_len: ?[]const u8 = null,
+    slice_ptr_field: ?[]const u8 = null,
+    slice_len_field: ?[]const u8 = null,
     nullable_inner_c_type: ?[]const u8 = null,
+};
+
+const SliceAccess = struct {
+    ptr_field: []const u8,
+    len_field: []const u8,
+};
+
+const SliceInfo = struct {
+    name: []const u8,
+    ptr_type: []const u8,
 };
 
 const StructTypeStyle = enum { typedef_name, struct_tag };
@@ -1313,6 +1432,21 @@ fn arrayLenForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]co
     };
 }
 
+fn sliceAccessForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?SliceAccess {
+    const local_set = locals orelse return null;
+    return switch (expr.kind) {
+        .ident => |ident| if (local_set.get(ident.text)) |info|
+            if (info.slice_ptr_field) |ptr_field|
+                if (info.slice_len_field) |len_field| .{ .ptr_field = ptr_field, .len_field = len_field } else null
+            else
+                null
+        else
+            null,
+        .grouped => |inner| sliceAccessForExpr(inner.*, locals),
+        else => null,
+    };
+}
+
 fn unaryCOp(op: ast.UnaryOp) []const u8 {
     return switch (op) {
         .neg => "-",
@@ -1745,6 +1879,53 @@ test "emits C for fixed array indexing with bounds checks" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t xs[4]") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t xs[4]") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs[mc_check_index_usize(i, 4)];") != null);
+}
+
+test "emits C for slice typedefs and indexing" {
+    const source =
+        \\fn read_slice(xs: []const u8, i: usize) -> u8 {
+        \\    return xs[i];
+        \\}
+        \\
+        \\fn read_literal(xs: []const u8) -> u8 {
+        \\    return xs[0];
+        \\}
+        \\
+        \\fn write_slice(xs: []mut u32, i: usize, value: u32) -> void {
+        \\    xs[i] = value;
+        \\}
+        \\
+        \\fn same_slice(xs: []const u8) -> []const u8 {
+        \\    return xs;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_slices.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_slice_const_u8 {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_slice_mut_u32 {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t * ptr;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t len;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_slice(mc_slice_const_u8 xs, uintptr_t i)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.ptr[mc_check_index_usize(i, xs.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.ptr[mc_check_index_usize(0, xs.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void write_slice(mc_slice_mut_u32 xs, uintptr_t i, uint32_t value)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "xs.ptr[mc_check_index_usize(i, xs.len)] = value;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_slice_const_u8 same_slice(mc_slice_const_u8 xs)") != null);
 }
 
 test "emits C checked u32 arithmetic helpers" {
