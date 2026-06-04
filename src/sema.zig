@@ -538,6 +538,7 @@ pub const Checker = struct {
                 if (base_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no fields in MC");
                 }
+                self.checkKnownStructField(expr.span, node.base.*, node.name.text, ctx);
                 if (memberResultFieldType(node, ctx)) |field_ty| return classifyType(field_ty);
                 return .unknown;
             },
@@ -730,6 +731,16 @@ pub const Checker = struct {
             return;
         }
         self.errorCode(span, "E_NO_IMPLICIT_INTEGER_PROMOTION", "integer arithmetic requires matching types or an explicit conversion");
+    }
+
+    fn checkKnownStructField(self: *Checker, span: diagnostics.Span, base: ast.Expr, field_name: []const u8, ctx: Context) void {
+        const base_ty = exprResultType(base, ctx) orelse return;
+        const struct_name = structTypeName(base_ty) orelse return;
+        const structs = ctx.structs orelse return;
+        const struct_info = structs.get(struct_name) orelse return;
+        if (!struct_info.fields.contains(field_name)) {
+            self.errorCode(span, "E_UNKNOWN_STRUCT_FIELD", "struct has no field with this name");
+        }
     }
 
     fn checkIfLetPattern(self: *Checker, pattern: ast.Pattern, value_class: TypeClass) void {

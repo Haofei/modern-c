@@ -2,7 +2,7 @@
 // SPEC: milestone=assignment-targets
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_INVALID_ASSIGNMENT_TARGET,E_NO_IMPLICIT_CONVERSION,E_NO_IMPLICIT_POINTER_CONVERSION,E_RETURN_TYPE_MISMATCH
+// SPEC: check=E_INVALID_ASSIGNMENT_TARGET,E_NO_IMPLICIT_CONVERSION,E_NO_IMPLICIT_POINTER_CONVERSION,E_RETURN_TYPE_MISMATCH,E_UNKNOWN_STRUCT_FIELD
 
 fn source_value() -> u32;
 fn make_packet() -> Packet;
@@ -59,9 +59,29 @@ fn reject_direct_call_member_pointer_return_conversion() -> *const u8 {
     return make_packet().ptr;
 }
 
+fn reject_missing_member_read(packet: Packet) -> u32 {
+    // EXPECT_ERROR: E_UNKNOWN_STRUCT_FIELD
+    return packet.missing;
+}
+
+fn reject_direct_call_missing_member_read() -> u32 {
+    // EXPECT_ERROR: E_UNKNOWN_STRUCT_FIELD
+    return make_packet().missing;
+}
+
+fn reject_missing_member_call(packet: Packet) -> void {
+    // EXPECT_ERROR: E_UNKNOWN_STRUCT_FIELD
+    packet.missing();
+}
+
 fn reject_member_assignment_bool(packet: Packet, flag: bool) -> void {
     // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
     packet.value = flag;
+}
+
+fn reject_missing_member_assignment(packet: Packet, value: u32) -> void {
+    // EXPECT_ERROR: E_UNKNOWN_STRUCT_FIELD
+    packet.missing = value;
 }
 
 fn reject_member_assignment_wide_integer(packet: Packet, value: u64) -> void {
