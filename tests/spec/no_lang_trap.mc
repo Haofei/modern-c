@@ -29,6 +29,18 @@ fn reject_reachable_unreachable() -> never {
 }
 
 #[no_lang_trap]
+fn reject_nullable_try(maybe: ?*const u8) -> *const u8 {
+    // EXPECT_ERROR: E_NO_LANG_TRAP_EDGE
+    return maybe?;
+}
+
+#[no_lang_trap]
+fn reject_unwrap_call(maybe: ?*const u8) -> *const u8 {
+    // EXPECT_ERROR: E_NO_LANG_TRAP_EDGE
+    return unwrap(maybe);
+}
+
+#[no_lang_trap]
 fn allow_wrapping_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
     // EXPECT: verifier accepts because wrapping add has no language-trap edge.
     return wrapping.add(a, b);

@@ -640,6 +640,10 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             "fact no_lang_trap_index",
             "fact no_lang_trap_assert",
             "fact no_lang_trap_unreachable",
+            "fact no_lang_trap_unwrap",
+            " form=postfix_question ",
+            " form=call ",
+            " callee=unwrap ",
         });
     }
     return false;

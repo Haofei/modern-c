@@ -110,7 +110,13 @@ pub const Checker = struct {
                 }
                 return .unknown;
             },
-            .grouped, .address_of, .try_expr => |inner| self.checkExpr(inner.*, ctx),
+            .grouped, .address_of => |inner| self.checkExpr(inner.*, ctx),
+            .try_expr => |inner| {
+                if (ctx.no_lang_trap) {
+                    self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "unwrap may emit a language trap in #[no_lang_trap]");
+                }
+                return self.checkExpr(inner.*, ctx);
+            },
             .block => |block| {
                 self.checkBlock(block, ctx);
                 return .unknown;
@@ -142,6 +148,9 @@ pub const Checker = struct {
                 return classifyType(node.ty.*);
             },
             .call => |node| {
+                if (ctx.no_lang_trap and isUnwrapCall(node.callee.*)) {
+                    self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "unwrap may emit a language trap in #[no_lang_trap]");
+                }
                 if (uncheckedRequirement(node.callee.*)) |required| {
                     if (!ctx.unsafe_contracts.has(required)) {
                         self.errorCode(expr.span, "E_UNCHECKED_OUTSIDE_CONTRACT", "unchecked operation requires matching #[unsafe_contract]");
@@ -322,6 +331,14 @@ fn uncheckedRequirement(expr: ast.Expr) ?ContractKind {
 fn isCVoidLayoutCall(callee: ast.Expr, type_args: []ast.TypeExpr) bool {
     if (!isIdentNamed(callee, "size_of") and !isIdentNamed(callee, "sizeof") and !isIdentNamed(callee, "alignof")) return false;
     return type_args.len == 1 and isTypeName(type_args[0], "c_void");
+}
+
+fn isUnwrapCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, "unwrap"),
+        .member => |node| std.mem.eql(u8, node.name.text, "unwrap"),
+        else => false,
+    };
 }
 
 fn isCAbiOpaqueBoundary(ty: ast.TypeExpr) bool {

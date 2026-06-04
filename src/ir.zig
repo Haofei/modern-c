@@ -156,7 +156,16 @@ fn writeExprFacts(expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
                 );
             }
         },
-        .grouped, .address_of, .deref, .try_expr => |inner| try writeExprFacts(inner.*, writer, ctx),
+        .grouped, .address_of, .deref => |inner| try writeExprFacts(inner.*, writer, ctx),
+        .try_expr => |inner| {
+            if (ctx.no_lang_trap) {
+                try writer.print(
+                    "fact no_lang_trap_unwrap fn={s} form=postfix_question unsafe_contract_depth={} line={} column={}\n",
+                    .{ ctx.function_name, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
+                );
+            }
+            try writeExprFacts(inner.*, writer, ctx);
+        },
         .block => |body| try writeBlockFacts(body, writer, ctx),
         .unary => |node| {
             if (node.op == .neg) {
@@ -176,6 +185,14 @@ fn writeExprFacts(expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
         },
         .cast => |node| try writeExprFacts(node.value.*, writer, ctx),
         .call => |node| {
+            if (ctx.no_lang_trap) {
+                if (unwrapCalleeName(node.callee.*)) |callee_name| {
+                    try writer.print(
+                        "fact no_lang_trap_unwrap fn={s} form=call callee={s} unsafe_contract_depth={} line={} column={}\n",
+                        .{ ctx.function_name, callee_name, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
+                    );
+                }
+            }
             try writeCallFact(expr.span, node.callee.*, node.args, writer, ctx);
             try writeExprFacts(node.callee.*, writer, ctx);
             for (node.args) |arg| try writeExprFacts(arg, writer, ctx);
@@ -264,6 +281,14 @@ fn writeOrderingArg(args: []ast.Expr, writer: anytype) anyerror!void {
         }
     }
     try writer.print("unknown", .{});
+}
+
+fn unwrapCalleeName(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .ident => |ident| if (std.mem.eql(u8, ident.text, "unwrap")) ident.text else null,
+        .member => |node| if (std.mem.eql(u8, node.name.text, "unwrap")) node.name.text else null,
+        else => null,
+    };
 }
 
 fn writeExprName(expr: ast.Expr, writer: anytype) anyerror!void {
