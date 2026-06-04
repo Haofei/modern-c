@@ -218,8 +218,9 @@ pub const Checker = struct {
             const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
             const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
             const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
+            const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
             const address_checked = self.checkAddressOfInitializer(kind, expr);
-            if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !address_checked and !canInitialize(kind, initializer)) {
+            if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(kind, initializer)) {
                 self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
             }
         } else {
@@ -262,8 +263,9 @@ pub const Checker = struct {
         const null_checked = self.checkNullPointerInitializer(target_class, value);
         const array_decay_checked = self.checkArrayDecayInitializer(target_class, value_class, value);
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, value, ctx);
+        const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, value, ctx);
         const address_checked = self.checkAddressOfInitializer(target_class, value);
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !address_checked and !canInitialize(target_class, value_class)) {
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
     }
@@ -548,8 +550,9 @@ pub const Checker = struct {
         const null_checked = self.checkNullPointerInitializer(target, expr);
         const array_decay_checked = self.checkArrayDecayInitializer(target, returned, expr);
         const pointer_conversion_checked = self.checkPointerViewReturn(target_ty, expr, ctx);
+        const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, expr, ctx);
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !local_escape_checked and !canInitialize(target, returned)) {
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !local_escape_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
@@ -558,6 +561,15 @@ pub const Checker = struct {
         const source = exprStorageType(expr, ctx) orelse return false;
         if (implicitPointerViewConversion(target, source)) {
             self.errorCode(expr.span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer and view conversions must be explicit");
+            return true;
+        }
+        return false;
+    }
+
+    fn checkCVoidPointerConversion(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
+        const source = exprStorageType(expr, ctx) orelse return false;
+        if (implicitCVoidPointerConversion(target, source)) {
+            self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
             return true;
         }
         return false;
@@ -1226,6 +1238,21 @@ fn implicitPointerViewConversion(target: ast.TypeExpr, source: ast.TypeExpr) boo
     _ = viewType(source) orelse return false;
     if (classifyType(target) == .c_void_pointer or classifyType(source) == .c_void_pointer) return false;
     return !sameTypeSyntax(target, source);
+}
+
+fn implicitCVoidPointerConversion(target: ast.TypeExpr, source: ast.TypeExpr) bool {
+    _ = viewType(target) orelse return false;
+    _ = viewType(source) orelse return false;
+    const target_is_c_void = isCVoidPointerClass(classifyType(target));
+    const source_is_c_void = isCVoidPointerClass(classifyType(source));
+    return target_is_c_void != source_is_c_void;
+}
+
+fn isCVoidPointerClass(kind: TypeClass) bool {
+    return switch (kind) {
+        .c_void_pointer, .nullable_c_void_pointer => true,
+        else => false,
+    };
 }
 
 fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {

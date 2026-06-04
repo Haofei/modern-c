@@ -57,6 +57,42 @@ fn reject_typed_pointer_to_c_void(p: *mut u8) -> *mut c_void {
     return p as *mut c_void;
 }
 
+fn reject_c_void_to_typed_pointer_initializer(p: *mut c_void) -> *mut u8 {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    let typed: *mut u8 = p;
+    return typed;
+}
+
+fn reject_typed_pointer_to_c_void_initializer(p: *mut u8) -> *mut c_void {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    let handle: *mut c_void = p;
+    return handle;
+}
+
+fn reject_c_void_to_typed_pointer_assignment(p: *mut c_void, fallback: *mut u8) -> *mut u8 {
+    var typed: *mut u8 = fallback;
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    typed = p;
+    return typed;
+}
+
+fn reject_typed_pointer_to_c_void_assignment(p: *mut u8, fallback: *mut c_void) -> *mut c_void {
+    var handle: *mut c_void = fallback;
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    handle = p;
+    return handle;
+}
+
+fn reject_c_void_to_typed_pointer_return(p: *mut c_void) -> *mut u8 {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return p;
+}
+
+fn reject_typed_pointer_to_c_void_return(p: *mut u8) -> *mut c_void {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return p;
+}
+
 fn reject_c_void_bitwise(a: *mut c_void, b: *mut c_void) -> *mut c_void {
     // EXPECT_ERROR: E_BITWISE_POINTER_OPERAND
     return a & b;
