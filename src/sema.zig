@@ -36,7 +36,7 @@ pub const Checker = struct {
                         if (std.mem.eql(u8, abi, "mmio")) self.collectMmioStruct(struct_decl, mmio_structs);
                     }
                 },
-                .fn_decl, .extern_fn, .type_alias, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -56,7 +56,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .extern_struct => |struct_decl| self.collectStruct(struct_decl, structs),
-                .fn_decl, .extern_fn, .type_alias, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -79,7 +79,7 @@ pub const Checker = struct {
                 .fn_decl, .extern_fn => |fn_decl| {
                     if (!functions.contains(fn_decl.name.text)) functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_ty = fn_decl.return_type }) catch {};
                 },
-                .extern_struct, .type_alias, .opaque_decl, .global_decl => {},
+                .extern_struct, .type_alias, .enum_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -91,7 +91,7 @@ pub const Checker = struct {
                 .global_decl => |global| if (global.ty) |ty| {
                     if (!globals.contains(global.name.text)) globals.put(global.name.text, .{ .ty = ty }) catch {};
                 },
-                .fn_decl, .extern_fn, .extern_struct, .type_alias, .opaque_decl => {},
+                .fn_decl, .extern_fn, .extern_struct, .type_alias, .enum_decl, .opaque_decl => {},
             }
         }
     }
@@ -115,12 +115,34 @@ pub const Checker = struct {
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, functions, globals),
             .extern_struct => |struct_decl| self.checkStruct(struct_decl),
+            .enum_decl => |enum_decl| self.checkEnum(enum_decl),
             .type_alias => |alias| self.checkType(alias.ty, .normal),
             .opaque_decl => {},
             .global_decl => |global| {
                 if (global.ty) |ty| self.checkType(ty, .normal);
                 if (global.init) |initializer| self.checkGlobalInitializer(global, initializer, .{ .structs = structs, .functions = functions, .globals = globals });
             },
+        }
+    }
+
+    fn checkEnum(self: *Checker, enum_decl: ast.EnumDecl) void {
+        if (enum_decl.repr) |repr| {
+            self.checkType(repr, .normal);
+            if (!isCheckedInt(classifyType(repr))) {
+                self.errorCode(repr.span, "E_ENUM_REPR_NOT_INTEGER", "enum representation type must be an integer type");
+            }
+        }
+
+        var cases = std.StringHashMap(void).init(self.reporter.allocator);
+        defer cases.deinit();
+
+        for (enum_decl.cases) |case| {
+            if (cases.contains(case.name.text)) {
+                self.errorCode(case.name.span, "E_DUPLICATE_ENUM_CASE", "enum case names must be unique");
+            } else {
+                cases.put(case.name.text, {}) catch {};
+            }
+            if (case.value) |value| _ = self.checkExpr(value, .{});
         }
     }
 
@@ -1018,6 +1040,7 @@ fn declName(decl: ast.Decl) ast.Ident {
         .fn_decl, .extern_fn => |fn_decl| fn_decl.name,
         .type_alias => |alias| alias.name,
         .extern_struct => |struct_decl| struct_decl.name,
+        .enum_decl => |enum_decl| enum_decl.name,
         .opaque_decl => |name| name,
         .global_decl => |global| global.name,
     };
@@ -1965,7 +1988,16 @@ fn isUnsafeOperationCall(callee: ast.Expr) bool {
 }
 
 fn isCVoidLayoutCall(callee: ast.Expr, type_args: []ast.TypeExpr) bool {
-    if (!isIdentNamed(callee, "size_of") and !isIdentNamed(callee, "sizeof") and !isIdentNamed(callee, "alignof")) return false;
+    if (!isIdentNamed(callee, "size_of") and
+        !isIdentNamed(callee, "sizeof") and
+        !isIdentNamed(callee, "alignof") and
+        !isIdentNamed(callee, "field_offset") and
+        !isIdentNamed(callee, "field_type") and
+        !isIdentNamed(callee, "bit_offset") and
+        !isIdentNamed(callee, "repr_of"))
+    {
+        return false;
+    }
     return type_args.len == 1 and isTypeName(type_args[0], "c_void");
 }
 

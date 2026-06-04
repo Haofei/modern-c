@@ -29,6 +29,15 @@ extern struct RejectDuplicateStruct {
     second: u8,
 }
 
+enum RejectDuplicateEnum {
+    first,
+}
+
+// EXPECT_ERROR: E_DUPLICATE_DECLARATION
+enum RejectDuplicateEnum {
+    second,
+}
+
 extern struct RejectDuplicateField {
     value: u32,
     // EXPECT_ERROR: E_DUPLICATE_STRUCT_FIELD

@@ -55,6 +55,26 @@ fn reject_c_void_alignment() -> usize {
     return alignof<c_void>();
 }
 
+fn reject_c_void_field_offset() -> usize {
+    // EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+    return field_offset<c_void>(.field);
+}
+
+fn reject_c_void_field_type() -> usize {
+    // EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+    return field_type<c_void>(.field);
+}
+
+fn reject_c_void_bit_offset() -> usize {
+    // EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+    return bit_offset<c_void>(.field);
+}
+
+fn reject_c_void_repr() -> usize {
+    // EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+    return repr_of<c_void>();
+}
+
 fn reject_c_void_field(p: *mut c_void) -> usize {
     // EXPECT_ERROR: E_C_VOID_NO_LAYOUT
     return p.field;

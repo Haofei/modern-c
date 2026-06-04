@@ -42,6 +42,7 @@ pub const Decl = struct {
         type_alias: TypeAlias,
         extern_fn: FnDecl,
         extern_struct: StructDecl,
+        enum_decl: EnumDecl,
         opaque_decl: Ident,
         global_decl: GlobalDecl,
     };
@@ -76,6 +77,18 @@ pub const GlobalDecl = struct {
     name: Ident,
     ty: ?TypeExpr,
     init: ?Expr,
+};
+
+pub const EnumDecl = struct {
+    name: Ident,
+    repr: ?TypeExpr,
+    cases: []EnumCase,
+    is_open: bool,
+};
+
+pub const EnumCase = struct {
+    name: Ident,
+    value: ?Expr,
 };
 
 pub const Field = struct {

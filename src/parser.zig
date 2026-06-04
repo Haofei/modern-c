@@ -61,6 +61,12 @@ pub const Parser = struct {
             return self.fail("expected extern fn or extern struct");
         }
 
+        if (self.match(.kw_open)) {
+            try self.expect(.kw_enum, "expected 'enum' after open");
+            const enum_decl = try self.finishEnumDecl(true);
+            return .{ .span = joinSpan(start, enum_decl.name.span), .attrs = attrs, .kind = .{ .enum_decl = enum_decl } };
+        }
+
         _ = self.match(.kw_export);
         const is_const = self.match(.kw_const);
         if (self.match(.kw_fn)) {
@@ -91,6 +97,11 @@ pub const Parser = struct {
             const initializer = if (self.match(.equal)) try self.parseExpr(0) else null;
             const semi = try self.expectTok(.semicolon, "expected ';' after global declaration");
             return .{ .span = joinSpan(start, semi.span), .attrs = attrs, .kind = .{ .global_decl = .{ .name = name, .ty = ty, .init = initializer } } };
+        }
+
+        if (self.match(.kw_enum)) {
+            const enum_decl = try self.finishEnumDecl(false);
+            return .{ .span = joinSpan(start, enum_decl.name.span), .attrs = attrs, .kind = .{ .enum_decl = enum_decl } };
         }
 
         return self.fail("expected top-level fn, type, or extern declaration");
@@ -163,6 +174,22 @@ pub const Parser = struct {
         }
         try self.expect(.r_brace, "expected '}' after struct fields");
         return .{ .name = name, .abi = abi, .fields = try fields.toOwnedSlice(self.allocator) };
+    }
+
+    fn finishEnumDecl(self: *Parser, is_open: bool) anyerror!ast.EnumDecl {
+        const name = try self.expectName("expected enum name");
+        const repr = if (self.match(.colon)) try self.parseType() else null;
+        try self.expect(.l_brace, "expected '{' after enum name");
+        var cases: std.ArrayList(ast.EnumCase) = .empty;
+        errdefer cases.deinit(self.allocator);
+        while (self.current.kind != .r_brace and self.current.kind != .eof) {
+            const case_name = try self.expectSymbol("expected enum case name");
+            const value = if (self.match(.equal)) try self.parseExpr(0) else null;
+            _ = self.match(.comma) or self.match(.semicolon);
+            try cases.append(self.allocator, .{ .name = case_name, .value = value });
+        }
+        try self.expect(.r_brace, "expected '}' after enum cases");
+        return .{ .name = name, .repr = repr, .cases = try cases.toOwnedSlice(self.allocator), .is_open = is_open };
     }
 
     fn parseAttrs(self: *Parser) anyerror![]ast.Attr {
