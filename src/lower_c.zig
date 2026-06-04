@@ -851,6 +851,8 @@ const CEmitter = struct {
     }
 
     fn emitIfLet(self: *CEmitter, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        if (node.pattern.kind == .tag_bind) return self.emitResultIfLet(node, locals, return_ty);
+
         const binding = switch (node.pattern.kind) {
             .bind => |ident| ident,
             else => {
@@ -890,6 +892,69 @@ const CEmitter = struct {
         self.indent += 1;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ bind_ty, binding.text, source_name });
+        try self.emitBlockItems(node.then_block, &then_locals, return_ty);
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}");
+        if (node.else_block) |else_block| {
+            try self.out.appendSlice(self.allocator, " else {\n");
+            var else_locals = try cloneLocals(self.allocator, locals.*);
+            defer else_locals.deinit();
+            self.indent += 1;
+            try self.emitBlockItems(else_block, &else_locals, return_ty);
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "}");
+        }
+        try self.out.appendSlice(self.allocator, "\n");
+    }
+
+    fn emitResultIfLet(self: *CEmitter, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        const tag_bind = switch (node.pattern.kind) {
+            .tag_bind => |tag_bind| tag_bind,
+            else => unreachable,
+        };
+        const is_ok = if (std.mem.eql(u8, tag_bind.tag.text, "ok"))
+            true
+        else if (std.mem.eql(u8, tag_bind.tag.text, "err"))
+            false
+        else {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "/* unsupported result if-let tag: {s} */\n", .{tag_bind.tag.text});
+            return error.UnsupportedCEmission;
+        };
+        const source_name = switch (node.value.kind) {
+            .ident => |ident| ident.text,
+            .grouped => |inner| switch (inner.kind) {
+                .ident => |ident| ident.text,
+                else => null,
+            },
+            else => null,
+        } orelse {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "/* unsupported result if-let value: {s} */\n", .{@tagName(node.value.kind)});
+            return error.UnsupportedCEmission;
+        };
+        const source_info = locals.get(source_name) orelse {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "/* unsupported result if-let source: {s} */\n", .{source_name});
+            return error.UnsupportedCEmission;
+        };
+        const bind_ty = (if (is_ok) source_info.result_ok_c_type else source_info.result_err_c_type) orelse {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "/* unsupported result if-let source type: {s} */\n", .{source_name});
+            return error.UnsupportedCEmission;
+        };
+        const payload_field = if (is_ok) "ok" else "err";
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "if ({s}{s}.is_ok) {{\n", .{ if (is_ok) "" else "!", source_name });
+        var then_locals = try cloneLocals(self.allocator, locals.*);
+        defer then_locals.deinit();
+        try then_locals.put(tag_bind.binding.text, .{ .c_type = bind_ty });
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s}.payload.{s};\n", .{ bind_ty, tag_bind.binding.text, source_name, payload_field });
         try self.emitBlockItems(node.then_block, &then_locals, return_ty);
         self.indent -= 1;
         try self.writeIndent();
@@ -1318,6 +1383,13 @@ const CEmitter = struct {
                 .nullable_inner_c_type = try self.nullableInnerCType(child.*),
                 .mmio_pointee = mmio_pointee,
             },
+            .generic => |node| .{
+                .c_type = try self.cTypeFor(ty, .typedef_name),
+                .source_type_name = source_type_name,
+                .result_ok_c_type = if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) try self.cTypeFor(node.args[0], .typedef_name) else null,
+                .result_err_c_type = if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) try self.cTypeFor(node.args[1], .typedef_name) else null,
+                .mmio_pointee = mmio_pointee,
+            },
             else => .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name, .mmio_pointee = mmio_pointee },
         };
     }
@@ -1339,6 +1411,8 @@ const LocalInfo = struct {
     slice_len_field: ?[]const u8 = null,
     iterable_element_c_type: ?[]const u8 = null,
     nullable_inner_c_type: ?[]const u8 = null,
+    result_ok_c_type: ?[]const u8 = null,
+    result_err_c_type: ?[]const u8 = null,
     mmio_pointee: ?[]const u8 = null,
 };
 
@@ -2955,6 +3029,54 @@ test "emits C for optional pointer if-let" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * p = maybe;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return *p;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return fallback;") != null);
+}
+
+test "emits C for Result if-let narrowing" {
+    const source =
+        \\enum Error: u8 {
+        \\    denied = 1,
+        \\}
+        \\
+        \\fn unwrap_or_zero(result: Result<u32, Error>) -> u32 {
+        \\    if let ok(v) = result {
+        \\        return v;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
+        \\
+        \\fn has_err(result: Result<u32, Error>) -> bool {
+        \\    if let err(e) = result {
+        \\        return e != 0;
+        \\    }
+        \\    return false;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_if_let.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t unwrap_or_zero(mc_result_u32_Error result)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (result.is_ok) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t v = result.payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return v;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "} else {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static bool has_err(mc_result_u32_Error result)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!result.is_ok) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Error e = result.payload.err;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (e != 0);") != null);
 }
 
 test "emits C extern structs and member access" {
