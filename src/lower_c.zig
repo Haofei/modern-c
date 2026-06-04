@@ -794,6 +794,7 @@ const CEmitter = struct {
                     if (try self.emitMmioReadReturn(expr, locals)) return;
                     if (try self.emitOverlayFieldReadReturn(expr, locals, return_ty)) return;
                     if (try self.emitResultTryCallReturn(expr, locals)) return;
+                    if (try self.emitNullableTryCallReturn(expr, locals)) return;
                     if (try self.emitResultTryReturn(expr, locals, return_ty)) return;
                     if (try self.emitNullableTryReturn(expr, locals)) return;
                     try self.writeIndent();
@@ -1848,6 +1849,54 @@ const CEmitter = struct {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             if (replacements[i]) |temp_name| {
                 try self.out.print(self.allocator, "{s}.payload.ok", .{temp_name});
+            } else {
+                const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
+                try self.emitExprWithTarget(arg, locals, target_ty);
+            }
+        }
+        try self.out.appendSlice(self.allocator, ");\n");
+        return true;
+    }
+
+    fn emitNullableTryCallReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitNullableTryCallReturn(inner.*, locals),
+            else => return false,
+        };
+
+        var replacements = try self.scratch.allocator().alloc(?[]const u8, call.args.len);
+        @memset(replacements, null);
+        var found_try = false;
+
+        for (call.args, 0..) |arg, i| {
+            const operand = resultTryOperand(arg) orelse continue;
+            const inner_c_type = try self.nullableInnerCTypeForExpr(operand, locals) orelse return false;
+            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+            replacements[i] = temp_name;
+            found_try = true;
+
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ inner_c_type, temp_name });
+            try self.emitExpr(operand, locals);
+            try self.out.appendSlice(self.allocator, ";\n");
+
+            try self.writeIndent();
+            try self.out.print(self.allocator, "if ({s} == NULL) mc_trap_NullUnwrap();\n", .{temp_name});
+        }
+
+        if (!found_try) return false;
+
+        const fn_info = if (calleeIdentName(call.callee.*)) |name| self.functions.get(name) else null;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.emitExpr(call.callee.*, locals);
+        try self.out.appendSlice(self.allocator, "(");
+        for (call.args, 0..) |arg, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            if (replacements[i]) |temp_name| {
+                try self.out.appendSlice(self.allocator, temp_name);
             } else {
                 const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
                 try self.emitExprWithTarget(arg, locals, target_ty);
@@ -3645,6 +3694,51 @@ test "emits C for nullable try in return statements" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp1 = make_nullable_pointer();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp2 = (make_nullable_mut_pointer());") != null);
+}
+
+test "emits C for nullable try in return call arguments" {
+    const source =
+        \\extern fn make_nullable_pointer() -> ?*const u8;
+        \\extern fn consume_ptr(ptr: *const u8) -> u32;
+        \\extern fn choose(left: *const u8, right: *const u8) -> u32;
+        \\
+        \\fn arg_try(maybe: ?*const u8) -> u32 {
+        \\    return consume_ptr(maybe?);
+        \\}
+        \\
+        \\fn direct_arg_try() -> u32 {
+        \\    return consume_ptr(make_nullable_pointer()?);
+        \\}
+        \\
+        \\fn two_arg_try(maybe: ?*const u8) -> u32 {
+        \\    return choose(maybe?, make_nullable_pointer()?);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_nullable_try_call_args.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t arg_try(uint8_t const * maybe)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp0 = maybe;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_tmp0 == NULL) mc_trap_NullUnwrap();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(mc_tmp0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp1 = make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(mc_tmp1);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp2 = maybe;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp3 = make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return choose(mc_tmp2, mc_tmp3);") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
