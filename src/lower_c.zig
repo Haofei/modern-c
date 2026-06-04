@@ -63,7 +63,7 @@ const Inspector = struct {
         errdefer fields.deinit();
         for (struct_decl.fields) |field| {
             if (mmioFieldFromType(field.ty)) |mmio_field| {
-                try fields.put(field.name.text, mmio_field);
+                if (!fields.contains(field.name.text)) try fields.put(field.name.text, mmio_field);
             }
         }
         try self.mmio_structs.put(struct_decl.name.text, .{ .fields = fields });

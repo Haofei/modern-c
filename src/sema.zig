@@ -19,6 +19,7 @@ pub const Checker = struct {
         defer functions.deinit();
         var globals = std.StringHashMap(GlobalInfo).init(self.reporter.allocator);
         defer globals.deinit();
+        self.checkTopLevelNames(module);
         self.collectMmioStructs(module, &mmio_structs);
         self.collectStructs(module, &structs);
         self.collectFunctions(module, &functions);
@@ -41,9 +42,10 @@ pub const Checker = struct {
     }
 
     fn collectMmioStruct(self: *Checker, struct_decl: ast.StructDecl, mmio_structs: *std.StringHashMap(MmioStruct)) void {
+        if (mmio_structs.contains(struct_decl.name.text)) return;
         var fields = std.StringHashMap(void).init(self.reporter.allocator);
         for (struct_decl.fields) |field| {
-            if (isMmioRegisterType(field.ty)) fields.put(field.name.text, {}) catch {};
+            if (isMmioRegisterType(field.ty) and !fields.contains(field.name.text)) fields.put(field.name.text, {}) catch {};
         }
         mmio_structs.put(struct_decl.name.text, .{ .fields = fields }) catch {
             fields.deinit();
@@ -60,8 +62,11 @@ pub const Checker = struct {
     }
 
     fn collectStruct(self: *Checker, struct_decl: ast.StructDecl, structs: *std.StringHashMap(StructInfo)) void {
+        if (structs.contains(struct_decl.name.text)) return;
         var fields = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
-        for (struct_decl.fields) |field| fields.put(field.name.text, field.ty) catch {};
+        for (struct_decl.fields) |field| {
+            if (!fields.contains(field.name.text)) fields.put(field.name.text, field.ty) catch {};
+        }
         structs.put(struct_decl.name.text, .{ .fields = fields }) catch {
             fields.deinit();
         };
@@ -71,7 +76,9 @@ pub const Checker = struct {
         _ = self;
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .fn_decl, .extern_fn => |fn_decl| functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_ty = fn_decl.return_type }) catch {},
+                .fn_decl, .extern_fn => |fn_decl| {
+                    if (!functions.contains(fn_decl.name.text)) functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_ty = fn_decl.return_type }) catch {};
+                },
                 .extern_struct, .type_alias, .opaque_decl, .global_decl => {},
             }
         }
@@ -81,8 +88,24 @@ pub const Checker = struct {
         _ = self;
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .global_decl => |global| if (global.ty) |ty| globals.put(global.name.text, .{ .ty = ty }) catch {},
+                .global_decl => |global| if (global.ty) |ty| {
+                    if (!globals.contains(global.name.text)) globals.put(global.name.text, .{ .ty = ty }) catch {};
+                },
                 .fn_decl, .extern_fn, .extern_struct, .type_alias, .opaque_decl => {},
+            }
+        }
+    }
+
+    fn checkTopLevelNames(self: *Checker, module: ast.Module) void {
+        var names = std.StringHashMap(void).init(self.reporter.allocator);
+        defer names.deinit();
+
+        for (module.decls) |decl| {
+            const name = declName(decl);
+            if (names.contains(name.text)) {
+                self.errorCode(name.span, "E_DUPLICATE_DECLARATION", "top-level declarations must have unique names");
+            } else {
+                names.put(name.text, {}) catch {};
             }
         }
     }
@@ -91,15 +114,27 @@ pub const Checker = struct {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, functions, globals),
-            .extern_struct => |struct_decl| {
-                for (struct_decl.fields) |field| self.checkType(field.ty, .normal);
-            },
+            .extern_struct => |struct_decl| self.checkStruct(struct_decl),
             .type_alias => |alias| self.checkType(alias.ty, .normal),
             .opaque_decl => {},
             .global_decl => |global| {
                 if (global.ty) |ty| self.checkType(ty, .normal);
                 if (global.init) |initializer| self.checkGlobalInitializer(global, initializer, .{ .structs = structs, .functions = functions, .globals = globals });
             },
+        }
+    }
+
+    fn checkStruct(self: *Checker, struct_decl: ast.StructDecl) void {
+        var fields = std.StringHashMap(void).init(self.reporter.allocator);
+        defer fields.deinit();
+
+        for (struct_decl.fields) |field| {
+            self.checkType(field.ty, .normal);
+            if (fields.contains(field.name.text)) {
+                self.errorCode(field.name.span, "E_DUPLICATE_STRUCT_FIELD", "struct field names must be unique");
+            } else {
+                fields.put(field.name.text, {}) catch {};
+            }
         }
     }
 
@@ -976,6 +1011,16 @@ fn copyScope(source: *const Scope, dest: *Scope) !void {
     while (it.next()) |entry| {
         try dest.put(entry.key_ptr.*, entry.value_ptr.*);
     }
+}
+
+fn declName(decl: ast.Decl) ast.Ident {
+    return switch (decl.kind) {
+        .fn_decl, .extern_fn => |fn_decl| fn_decl.name,
+        .type_alias => |alias| alias.name,
+        .extern_struct => |struct_decl| struct_decl.name,
+        .opaque_decl => |name| name,
+        .global_decl => |global| global.name,
+    };
 }
 
 const TypeClass = enum {
