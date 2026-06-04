@@ -1778,10 +1778,21 @@ fn stmtMayFallThrough(stmt: ast.Stmt) bool {
 }
 
 fn switchMayFallThrough(node: ast.Switch) bool {
-    // Exhaustiveness is not modeled yet, so a switch can still fall through after
-    // all listed arms unless there is an explicit else/default arm in the future.
-    _ = node;
-    return true;
+    var has_wildcard = false;
+    for (node.arms) |arm| {
+        for (arm.patterns) |pattern| {
+            if (std.meta.activeTag(pattern.kind) == .wildcard) has_wildcard = true;
+        }
+        if (switchBodyMayFallThrough(arm.body)) return true;
+    }
+    return !has_wildcard;
+}
+
+fn switchBodyMayFallThrough(body: ast.SwitchBody) bool {
+    return switch (body) {
+        .block => |block| fallthroughSpan(block) != null,
+        .expr => |expr| exprMayFallThrough(expr),
+    };
 }
 
 fn exprMayFallThrough(expr: ast.Expr) bool {
