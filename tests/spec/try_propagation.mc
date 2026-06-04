@@ -57,6 +57,27 @@ fn accept_handled_result_local() -> u32 {
     return result?;
 }
 
+fn reject_overwrite_unhandled_result() -> u32 {
+    var result = make_result_u32();
+    // EXPECT_ERROR: E_UNHANDLED_RESULT
+    result = make_result_u32();
+    return result?;
+}
+
+fn reject_assignment_unhandled_result() -> void {
+    var result: Result<u32, Error> = make_result_u32();
+    result?;
+    // EXPECT_ERROR: E_UNHANDLED_RESULT
+    result = make_result_u32();
+}
+
+fn accept_assignment_handled_later() -> u32 {
+    var result: Result<u32, Error> = make_result_u32();
+    result?;
+    result = make_result_u32();
+    return result?;
+}
+
 fn reject_defer_unhandled_result() -> void {
     // EXPECT_ERROR: E_UNHANDLED_RESULT
     defer make_result_u32();

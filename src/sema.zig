@@ -413,6 +413,24 @@ pub const Checker = struct {
                 }
             }
         }
+
+        for (block.items, 0..) |stmt, i| {
+            const assignment = switch (stmt.kind) {
+                .assignment => |assignment| assignment,
+                else => continue,
+            };
+            const target_name = assignmentResultLocalName(assignment.target, ctx) orelse continue;
+            const value_ty = exprResultType(assignment.value, ctx) orelse continue;
+            if (classifyType(value_ty) != .result) continue;
+
+            const prior_stmts = block.items[0..i];
+            if (resultLocalHasPendingValueBefore(target_name.text, prior_stmts, ctx)) {
+                self.errorCode(assignment.target.span, "E_UNHANDLED_RESULT", "Result local must be handled before reassignment");
+            }
+            if (!resultLocalHandledLater(target_name.text, block.items[i + 1 ..])) {
+                self.errorCode(assignment.value.span, "E_UNHANDLED_RESULT", "assigned Result must be handled or propagated");
+            }
+        }
     }
 
     fn checkStmt(self: *Checker, stmt: ast.Stmt, ctx: Context) void {
@@ -2968,6 +2986,53 @@ fn exprContainsTry(expr: ast.Expr) bool {
 fn resultLocalHandledLater(name: []const u8, stmts: []const ast.Stmt) bool {
     for (stmts) |stmt| {
         if (stmtHandlesResultLocal(name, stmt)) return true;
+    }
+    return false;
+}
+
+fn resultLocalHasPendingValueBefore(name: []const u8, stmts: []const ast.Stmt, ctx: Context) bool {
+    var pending = false;
+    for (stmts) |stmt| {
+        if (stmtHandlesResultLocal(name, stmt)) {
+            pending = false;
+            continue;
+        }
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| {
+                if (!localDeclaresName(local, name)) continue;
+                const local_ty = local.ty orelse if (local.init) |expr| exprResultType(expr, ctx) else null;
+                const ty = local_ty orelse continue;
+                if (classifyType(ty) == .result and local.init != null) pending = true;
+            },
+            .assignment => |assignment| {
+                if (!exprIsIdentNamed(assignment.target, name)) continue;
+                const value_ty = exprResultType(assignment.value, ctx) orelse continue;
+                pending = classifyType(value_ty) == .result;
+            },
+            else => {},
+        }
+    }
+    return pending;
+}
+
+fn assignmentResultLocalName(target: ast.Expr, ctx: Context) ?ast.Ident {
+    return switch (target.kind) {
+        .ident => |ident| {
+            const scope = ctx.scope orelse return null;
+            const binding = scope.get(ident.text) orelse return null;
+            if (binding.origin != .local or !binding.mutable) return null;
+            const ty = binding.ty orelse return null;
+            if (classifyType(ty) != .result) return null;
+            return ident;
+        },
+        .grouped => |inner| assignmentResultLocalName(inner.*, ctx),
+        else => null,
+    };
+}
+
+fn localDeclaresName(local: ast.LocalDecl, name: []const u8) bool {
+    for (local.names) |ident| {
+        if (std.mem.eql(u8, ident.text, name)) return true;
     }
     return false;
 }

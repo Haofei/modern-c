@@ -910,7 +910,7 @@ const CEmitter = struct {
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
             },
-            .block => |block| {
+            .block, .unsafe_block => |block| {
                 try self.writeIndent();
                 try self.out.appendSlice(self.allocator, "{\n");
                 var nested = try cloneLocals(self.allocator, locals.*);
@@ -6365,6 +6365,36 @@ test "emits C lexical defer cleanup before return" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "void close_b(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_lexical_cleanup(void) {\n    close_b();\n    close_a();\n    return;\n}") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_block_cleanup(void) {\n    {\n        close_a();\n    }\n    return;\n}") != null);
+}
+
+test "emits C unsafe blocks as scoped blocks" {
+    const source =
+        \\fn accept_unsafe_block() -> u32 {
+        \\    var x: u32 = 1;
+        \\    unsafe {
+        \\        x = x + 1;
+        \\    }
+        \\    return x;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_unsafe_block.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unsafe_block(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    {\n        x = mc_checked_add_u32(x, 1);\n    }\n    return x;") != null);
 }
 
 test "emits C explicit traps and unreachable" {
