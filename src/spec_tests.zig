@@ -91,6 +91,12 @@ const CheckSummary = struct {
     }
 };
 
+const ExpectedError = struct {
+    code: []const u8,
+    comment_line: usize,
+    target_line: usize,
+};
+
 pub fn parseLeadingMetadata(allocator: std.mem.Allocator, source: []const u8) !FixtureMetadata {
     var metadata = FixtureMetadata.init();
     errdefer metadata.deinit(allocator);
@@ -301,6 +307,91 @@ test "tests/spec fixtures produce declared semantic error codes" {
     }
 }
 
+test "tests/spec inline EXPECT_ERROR comments match diagnostic lines" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var dir = try std.Io.Dir.cwd().openDir(io, "tests/spec", .{ .iterate = true });
+    defer dir.close(io);
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var found_expectation = false;
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".mc")) continue;
+
+        const source = try dir.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024));
+        defer allocator.free(source);
+
+        var expected_errors = try parseExpectedErrors(allocator, source);
+        defer expected_errors.deinit(allocator);
+        if (expected_errors.items.len == 0) continue;
+        found_expectation = true;
+
+        const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
+        defer allocator.free(path);
+
+        var reporter = diagnostics.Reporter.init(allocator, path, source);
+        defer reporter.deinit();
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const parse_allocator = arena.allocator();
+
+        var p = parser.Parser.init(source, &reporter);
+        const module = try p.parseModule(parse_allocator);
+        defer module.deinit(parse_allocator);
+
+        var checker = sema.Checker.init(&reporter);
+        checker.checkModule(module);
+
+        for (expected_errors.items) |expected| {
+            if (!hasDiagnosticCodeOnLine(reporter, expected.code, expected.target_line)) {
+                std.debug.print(
+                    "{s}:{d}: expected {s} on line {d}\n",
+                    .{ path, expected.comment_line, expected.code, expected.target_line },
+                );
+                try std.testing.expect(false);
+            }
+        }
+        for (reporter.diagnostics.items) |diag| {
+            if (diag.severity != .error_ or !isCompilerErrorCodeMessage(diag.message)) continue;
+            if (!hasExpectedErrorForDiagnostic(expected_errors.items, diag)) {
+                std.debug.print(
+                    "{s}:{d}: unexpected diagnostic {s}; add an EXPECT_ERROR comment on the target line\n",
+                    .{ path, diag.span.line, diag.message },
+                );
+                try std.testing.expect(false);
+            }
+        }
+    }
+
+    try std.testing.expect(found_expectation);
+}
+
+test "parse inline EXPECT_ERROR comments to target lines" {
+    const source =
+        \\fn before() -> void {
+        \\    // EXPECT_ERROR: E_BEFORE
+        \\    fail_before();
+        \\    fail_trailing(); // EXPECT_ERROR: E_TRAILING
+        \\}
+    ;
+
+    var expected = try parseExpectedErrors(std.testing.allocator, source);
+    defer expected.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), expected.items.len);
+    try std.testing.expectEqualStrings("E_BEFORE", expected.items[0].code);
+    try std.testing.expectEqual(@as(usize, 2), expected.items[0].comment_line);
+    try std.testing.expectEqual(@as(usize, 3), expected.items[0].target_line);
+    try std.testing.expectEqualStrings("E_TRAILING", expected.items[1].code);
+    try std.testing.expectEqual(@as(usize, 4), expected.items[1].comment_line);
+    try std.testing.expectEqual(@as(usize, 4), expected.items[1].target_line);
+}
+
 test "tests/spec fixtures produce declared IR inspection facts" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -493,6 +584,28 @@ fn hasDiagnosticCode(reporter: diagnostics.Reporter, code: []const u8) bool {
     return false;
 }
 
+fn hasDiagnosticCodeOnLine(reporter: diagnostics.Reporter, code: []const u8, line: usize) bool {
+    for (reporter.diagnostics.items) |diag| {
+        if (diag.severity == .error_ and diag.span.line == line and isDiagnosticCodeMessage(diag.message, code)) return true;
+    }
+    return false;
+}
+
+fn isDiagnosticCodeMessage(message: []const u8, code: []const u8) bool {
+    return std.mem.startsWith(u8, message, code) and message.len > code.len and message[code.len] == ':';
+}
+
+fn isCompilerErrorCodeMessage(message: []const u8) bool {
+    return std.mem.startsWith(u8, message, "E_") and std.mem.indexOfScalar(u8, message, ':') != null;
+}
+
+fn hasExpectedErrorForDiagnostic(expected_errors: []ExpectedError, diag: diagnostics.Diagnostic) bool {
+    for (expected_errors) |expected| {
+        if (expected.target_line == diag.span.line and isDiagnosticCodeMessage(diag.message, expected.code)) return true;
+    }
+    return false;
+}
+
 fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
     if (std.mem.eql(u8, check, "IntegerOverflow")) {
         return containsAll(facts, &.{
@@ -536,6 +649,63 @@ fn containsAll(haystack: []const u8, needles: []const []const u8) bool {
         if (std.mem.indexOf(u8, haystack, needle) == null) return false;
     }
     return true;
+}
+
+fn parseExpectedErrors(allocator: std.mem.Allocator, source: []const u8) !std.ArrayList(ExpectedError) {
+    var out: std.ArrayList(ExpectedError) = .empty;
+    errdefer out.deinit(allocator);
+
+    var pending: std.ArrayList(struct { code: []const u8, line: usize }) = .empty;
+    defer pending.deinit(allocator);
+
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    var line_no: usize = 1;
+    while (lines.next()) |raw_line| : (line_no += 1) {
+        const line = std.mem.trim(u8, raw_line, "\r");
+        const trimmed = std.mem.trim(u8, line, " \t");
+
+        const comment_start = std.mem.indexOf(u8, line, "//");
+        const code_part = if (comment_start) |idx| std.mem.trim(u8, line[0..idx], " \t") else trimmed;
+        const comment_part = if (comment_start) |idx| std.mem.trim(u8, line[idx + 2 ..], " \t") else "";
+
+        if (expectedErrorCodeFromComment(comment_part)) |code| {
+            if (isCodeLine(code_part)) {
+                try out.append(allocator, .{ .code = code, .comment_line = line_no, .target_line = line_no });
+                continue;
+            }
+            try pending.append(allocator, .{ .code = code, .line = line_no });
+            continue;
+        }
+
+        if (isCodeLine(code_part)) {
+            for (pending.items) |item| {
+                try out.append(allocator, .{ .code = item.code, .comment_line = item.line, .target_line = line_no });
+            }
+            pending.clearRetainingCapacity();
+        }
+    }
+
+    if (pending.items.len > 0) {
+        return error.ExpectedErrorWithoutCodeLine;
+    }
+
+    return out;
+}
+
+fn expectedErrorCode(trimmed_line: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, trimmed_line, "//")) return null;
+    const comment = std.mem.trim(u8, trimmed_line[2..], " \t");
+    return expectedErrorCodeFromComment(comment);
+}
+
+fn expectedErrorCodeFromComment(comment: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, comment, "EXPECT_ERROR:")) return null;
+    const code = std.mem.trim(u8, comment["EXPECT_ERROR:".len..], " \t\r");
+    return if (code.len == 0) null else code;
+}
+
+fn isCodeLine(trimmed_line: []const u8) bool {
+    return trimmed_line.len != 0 and !std.mem.startsWith(u8, trimmed_line, "//");
 }
 
 fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
