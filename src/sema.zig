@@ -3041,7 +3041,7 @@ fn stmtHandlesResultLocal(name: []const u8, stmt: ast.Stmt) bool {
     return switch (stmt.kind) {
         .let_decl, .var_decl => |local| if (local.init) |expr| exprHandlesResultLocal(name, expr) else false,
         .loop => |node| if (node.iterable) |iterable| exprHandlesResultLocal(name, iterable) else false,
-        .if_let => |node| exprIsIdentNamed(node.value, name) or exprHandlesResultLocal(name, node.value),
+        .if_let => |node| resultIfLetHandlesLocal(name, node) or exprHandlesResultLocal(name, node.value),
         .@"switch" => |node| exprIsIdentNamed(node.subject, name) or exprHandlesResultLocal(name, node.subject),
         .unsafe_block, .comptime_block, .block => false,
         .contract_block => false,
@@ -3049,6 +3049,14 @@ fn stmtHandlesResultLocal(name: []const u8, stmt: ast.Stmt) bool {
         .@"break", .@"continue", .asm_stmt => false,
         .@"defer", .expr, .assert => |expr| exprHandlesResultLocal(name, expr),
         .assignment => |node| exprHandlesResultLocal(name, node.target) or exprHandlesResultLocal(name, node.value),
+    };
+}
+
+fn resultIfLetHandlesLocal(name: []const u8, node: ast.IfLet) bool {
+    if (node.else_block == null or !exprIsIdentNamed(node.value, name)) return false;
+    return switch (node.pattern.kind) {
+        .tag_bind => |tag_bind| isResultNarrowingTag(tag_bind.tag.text),
+        else => false,
     };
 }
 

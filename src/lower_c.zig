@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
+const sema = @import("sema.zig");
 
 pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);
@@ -917,6 +918,17 @@ const CEmitter = struct {
                 defer nested.deinit();
                 self.indent += 1;
                 try self.emitBlockItems(block, &nested, return_ty);
+                self.indent -= 1;
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "}\n");
+            },
+            .contract_block => |contract| {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "{\n");
+                var nested = try cloneLocals(self.allocator, locals.*);
+                defer nested.deinit();
+                self.indent += 1;
+                try self.emitBlockItems(contract.block, &nested, return_ty);
                 self.indent -= 1;
                 try self.writeIndent();
                 try self.out.appendSlice(self.allocator, "}\n");
@@ -1994,6 +2006,7 @@ const CEmitter = struct {
                     try self.out.print(self.allocator, "{s}()", .{helper});
                     return;
                 }
+                if (try self.emitUncheckedCall(node, locals)) return;
                 const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
                 try self.emitExpr(node.callee.*, locals);
                 try self.out.appendSlice(self.allocator, "(");
@@ -2048,6 +2061,26 @@ const CEmitter = struct {
                 return error.UnsupportedCEmission;
             },
         }
+    }
+
+    fn emitUncheckedCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!isIdentNamed(member.base.*, "unchecked") or !std.mem.eql(u8, member.name.text, "add")) return false;
+        if (call.args.len != 2) return error.UnsupportedCEmission;
+
+        try self.out.appendSlice(self.allocator, "(");
+        try self.emitExpr(call.args[0], locals);
+        try self.out.appendSlice(self.allocator, " + ");
+        try self.emitExpr(call.args[1], locals);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
     }
 
     fn emitExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
@@ -6395,6 +6428,52 @@ test "emits C unsafe blocks as scoped blocks" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unsafe_block(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    {\n        x = mc_checked_add_u32(x, 1);\n    }\n    return x;") != null);
+}
+
+test "emits C unsafe contract blocks as scoped blocks" {
+    const source =
+        \\fn accept_plain_contract_scope() -> u32 {
+        \\    var x: u32 = 1;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        x = x + 1;
+        \\    }
+        \\    return x;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_add(a: u32, b: u32) -> u32 {
+        \\    var x: u32 = 0;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        x = unchecked.add(a, b);
+        \\    }
+        \\    return x;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_contract_block.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var checker = sema.Checker.init(&reporter);
+    checker.checkModule(module);
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_plain_contract_scope(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    {\n        x = mc_checked_add_u32(x, 1);\n    }\n    return x;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unchecked_contract_add(uint32_t a, uint32_t b)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 0;\n    {\n        x = (a + b);\n    }\n    return x;") != null);
 }
 
 test "emits C explicit traps and unreachable" {

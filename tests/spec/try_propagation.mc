@@ -78,6 +78,23 @@ fn accept_assignment_handled_later() -> u32 {
     return result?;
 }
 
+fn reject_partial_if_let_result() -> void {
+    // EXPECT_ERROR: E_UNHANDLED_RESULT
+    let result = make_result_u32();
+    if let ok(value) = result {
+        let copy: u32 = value;
+    }
+}
+
+fn accept_if_let_else_result() -> void {
+    let result = make_result_u32();
+    if let ok(value) = result {
+        let copy: u32 = value;
+    } else {
+        let fallback: u32 = 0;
+    }
+}
+
 fn reject_defer_unhandled_result() -> void {
     // EXPECT_ERROR: E_UNHANDLED_RESULT
     defer make_result_u32();
