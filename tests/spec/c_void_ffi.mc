@@ -32,5 +32,10 @@ fn reject_c_void_layout() -> usize {
     return size_of<c_void>();
 }
 
+fn reject_c_void_field(p: *mut c_void) -> usize {
+    // EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+    return p.field;
+}
+
 // EXPECT_ERROR: E_MC_VOID_POINTER_FFI
 extern "C" fn reject_mut_void_pointer(dst: *mut void) -> void;

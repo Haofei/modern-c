@@ -215,7 +215,13 @@ pub const Checker = struct {
                 }
                 return .unknown;
             },
-            .member => |node| self.checkExpr(node.base.*, ctx),
+            .member => |node| {
+                const base_class = self.checkExpr(node.base.*, ctx);
+                if (base_class == .c_void_pointer) {
+                    self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no fields in MC");
+                }
+                return .unknown;
+            },
         };
     }
 
