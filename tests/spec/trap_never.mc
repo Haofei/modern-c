@@ -2,7 +2,7 @@
 // SPEC: milestone=trap-never
 // SPEC: phase=sema,mir
 // SPEC: expect=pass,compile_error,inspect
-// SPEC: check=trap-lowering,E_NEVER_RETURNS
+// SPEC: check=trap-lowering,E_NEVER_RETURNS,E_NEVER_FALLTHROUGH
 
 fn trap_as_value() -> u32 {
     // EXPECT: trap(.Bounds) has type never and coerces to the u32 return position.
@@ -27,4 +27,9 @@ fn reject_empty_return_from_never() -> never {
 fn reject_value_return_from_never() -> never {
     // EXPECT_ERROR: E_NEVER_RETURNS
     return 0;
+}
+
+fn reject_fallthrough_from_never() -> never {
+    // EXPECT_ERROR: E_NEVER_FALLTHROUGH
+    let code: u32 = 0;
 }

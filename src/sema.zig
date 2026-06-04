@@ -72,14 +72,21 @@ pub const Checker = struct {
             self.checkType(ty, .normal);
             break :blk isTypeName(ty, "never");
         } else false;
-        if (fn_decl.body) |body| self.checkBlock(body, .{
-            .no_lang_trap = no_lang_trap,
-            .returns_never = returns_never,
-            .unsafe_contracts = .{},
-            .scope = &scope,
-            .mmio_structs = mmio_structs,
-            .mmio_params = &mmio_params,
-        });
+        if (fn_decl.body) |body| {
+            self.checkBlock(body, .{
+                .no_lang_trap = no_lang_trap,
+                .returns_never = returns_never,
+                .unsafe_contracts = .{},
+                .scope = &scope,
+                .mmio_structs = mmio_structs,
+                .mmio_params = &mmio_params,
+            });
+            if (returns_never) {
+                if (fallthroughSpan(body)) |span| {
+                    self.errorCode(span, "E_NEVER_FALLTHROUGH", "function declared -> never can fall off the end");
+                }
+            }
+        }
     }
 
     fn checkBlock(self: *Checker, block: ast.Block, ctx: Context) void {
@@ -477,5 +484,47 @@ fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, name),
         else => false,
+    };
+}
+
+fn fallthroughSpan(block: ast.Block) ?diagnostics.Span {
+    if (block.items.len == 0) return block.span;
+    const last = block.items[block.items.len - 1];
+    return if (stmtMayFallThrough(last)) last.span else null;
+}
+
+fn stmtMayFallThrough(stmt: ast.Stmt) bool {
+    return switch (stmt.kind) {
+        .@"return", .asm_stmt => false,
+        .expr => |expr| exprMayFallThrough(expr),
+        .block, .unsafe_block => |block| fallthroughSpan(block) != null,
+        .contract_block => |contract| fallthroughSpan(contract.block) != null,
+        .if_let => |node| node.else_block == null or
+            fallthroughSpan(node.then_block) != null or
+            fallthroughSpan(node.else_block.?) != null,
+        .@"switch" => |node| switchMayFallThrough(node),
+        else => true,
+    };
+}
+
+fn switchMayFallThrough(node: ast.Switch) bool {
+    if (node.arms.len == 0) return true;
+    for (node.arms) |arm| {
+        const arm_falls_through = switch (arm.body) {
+            .block => |block| fallthroughSpan(block) != null,
+            .expr => |expr| exprMayFallThrough(expr),
+        };
+        if (arm_falls_through) return true;
+    }
+    return false;
+}
+
+fn exprMayFallThrough(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .unreachable_expr => false,
+        .grouped => |inner| exprMayFallThrough(inner.*),
+        .call => |node| !isTrapCall(node.callee.*),
+        .block => |block| fallthroughSpan(block) != null,
+        else => true,
     };
 }
