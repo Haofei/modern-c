@@ -370,7 +370,7 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
         .unary => |node| {
             if (node.op == .neg) {
                 try writer.print(
-                    "fact checked_arithmetic_trap fn={s} op=neg no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
+                    "fact checked_arithmetic_trap fn={s} op=neg trap=IntegerOverflow no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
                     .{ ctx.function_name, ctx.no_lang_trap, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
                 );
             }
@@ -378,7 +378,7 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
         },
         .binary => |node| {
             if (isCheckedTrapOp(node.op)) {
-                try writeCheckedArithmeticFact(expr.span, node.op, writer, ctx);
+                try writeCheckedArithmeticFact(expr.span, node, writer, ctx);
             }
             if (isShiftOp(node.op)) {
                 try writeShiftTrapFact(expr.span, node.op, writer, ctx);
@@ -417,10 +417,10 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
     }
 }
 
-fn writeCheckedArithmeticFact(span: ast.Span, op: ast.BinaryOp, writer: anytype, ctx: Context) anyerror!void {
+fn writeCheckedArithmeticFact(span: ast.Span, node: anytype, writer: anytype, ctx: Context) anyerror!void {
     try writer.print(
-        "fact checked_arithmetic_trap fn={s} op={s} no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
-        .{ ctx.function_name, @tagName(op), ctx.no_lang_trap, ctx.unsafe_contract_depth, span.line, span.column },
+        "fact checked_arithmetic_trap fn={s} op={s} trap={s} no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
+        .{ ctx.function_name, @tagName(node.op), arithmeticTrapKind(node), ctx.no_lang_trap, ctx.unsafe_contract_depth, span.line, span.column },
     );
 }
 
@@ -436,6 +436,28 @@ fn writeShiftTrapFact(span: ast.Span, op: ast.BinaryOp, writer: anytype, ctx: Co
         "fact checked_shift_trap fn={s} op={s} trap=InvalidShift no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
         .{ ctx.function_name, @tagName(op), ctx.no_lang_trap, ctx.unsafe_contract_depth, span.line, span.column },
     );
+}
+
+fn arithmeticTrapKind(node: anytype) []const u8 {
+    return switch (node.op) {
+        .div, .mod => if (isNegativeOne(node.right.*)) "IntegerOverflow" else "DivideByZero",
+        .add, .sub, .mul, .shl => "IntegerOverflow",
+        else => "Unknown",
+    };
+}
+
+fn isNegativeOne(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .unary => |node| node.op == .neg and isIntLiteral(node.expr.*, "1"),
+        else => false,
+    };
+}
+
+fn isIntLiteral(expr: ast.Expr, value: []const u8) bool {
+    return switch (expr.kind) {
+        .int_literal => |literal| std.mem.eql(u8, literal, value),
+        else => false,
+    };
 }
 
 fn writeOrdinaryAccessFact(span: ast.Span, object: []const u8, access: []const u8, writer: anytype, ctx: Context) anyerror!void {
