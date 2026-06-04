@@ -1,0 +1,285 @@
+const std = @import("std");
+const diagnostics = @import("diagnostics.zig");
+
+pub const Span = diagnostics.Span;
+
+pub const Ident = struct {
+    text: []const u8,
+    span: Span,
+};
+
+pub const Module = struct {
+    decls: []Decl,
+
+    pub fn deinit(self: Module, allocator: std.mem.Allocator) void {
+        allocator.free(self.decls);
+    }
+};
+
+pub const Attr = struct {
+    span: Span,
+    kind: Kind,
+
+    pub const Kind = union(enum) {
+        unsafe_contract: UnsafeContract,
+        no_lang_trap,
+        named: Ident,
+    };
+};
+
+pub const UnsafeContract = struct {
+    name: Ident,
+    args: []Expr,
+};
+
+pub const Decl = struct {
+    span: Span,
+    attrs: []Attr,
+    kind: Kind,
+
+    pub const Kind = union(enum) {
+        fn_decl: FnDecl,
+        type_alias: TypeAlias,
+        extern_fn: FnDecl,
+        extern_struct: StructDecl,
+        opaque_decl: Ident,
+    };
+};
+
+pub const FnDecl = struct {
+    name: Ident,
+    abi: ?[]const u8,
+    params: []Param,
+    return_type: ?TypeExpr,
+    body: ?Block,
+    is_const: bool,
+};
+
+pub const Param = struct {
+    name: Ident,
+    ty: TypeExpr,
+};
+
+pub const TypeAlias = struct {
+    name: Ident,
+    ty: TypeExpr,
+};
+
+pub const StructDecl = struct {
+    name: Ident,
+    abi: ?[]const u8,
+    fields: []Field,
+};
+
+pub const Field = struct {
+    name: Ident,
+    ty: TypeExpr,
+};
+
+pub const Mutability = enum {
+    none,
+    mut,
+    @"const",
+};
+
+pub const TypeExpr = struct {
+    span: Span,
+    kind: Kind,
+
+    pub const Kind = union(enum) {
+        name: Ident,
+        enum_literal: Ident,
+        member: struct {
+            base: *TypeExpr,
+            field: Ident,
+        },
+        nullable: *TypeExpr,
+        pointer: struct {
+            mutability: Mutability,
+            child: *TypeExpr,
+        },
+        slice: struct {
+            mutability: Mutability,
+            child: *TypeExpr,
+        },
+        array: struct {
+            len: Expr,
+            child: *TypeExpr,
+        },
+        generic: struct {
+            base: Ident,
+            args: []TypeExpr,
+        },
+    };
+};
+
+pub const Block = struct {
+    span: Span,
+    items: []Stmt,
+};
+
+pub const Stmt = struct {
+    span: Span,
+    kind: Kind,
+
+    pub const Kind = union(enum) {
+        let_decl: LocalDecl,
+        var_decl: LocalDecl,
+        loop: Loop,
+        if_let: IfLet,
+        @"switch": Switch,
+        unsafe_block: Block,
+        contract_block: ContractBlock,
+        asm_stmt,
+        block: Block,
+        @"return": ?Expr,
+        @"defer": Expr,
+        assignment: struct {
+            target: Expr,
+            value: Expr,
+        },
+        expr: Expr,
+    };
+};
+
+pub const LocalDecl = struct {
+    names: []Ident,
+    ty: ?TypeExpr,
+    init: ?Expr,
+};
+
+pub const Loop = struct {
+    kind: Kind,
+    label: ?Ident,
+    iterable: ?Expr,
+    body: Block,
+
+    pub const Kind = enum {
+        @"for",
+        @"while",
+    };
+};
+
+pub const IfLet = struct {
+    pattern: Pattern,
+    value: Expr,
+    then_block: Block,
+    else_block: ?Block,
+};
+
+pub const Switch = struct {
+    subject: Expr,
+    arms: []SwitchArm,
+};
+
+pub const SwitchArm = struct {
+    patterns: []Pattern,
+    body: SwitchBody,
+};
+
+pub const SwitchBody = union(enum) {
+    block: Block,
+    expr: Expr,
+};
+
+pub const ContractBlock = struct {
+    attr: Attr,
+    block: Block,
+};
+
+pub const Pattern = struct {
+    span: Span,
+    kind: Kind,
+
+    pub const Kind = union(enum) {
+        wildcard,
+        bind: Ident,
+        tag: Ident,
+        tag_bind: struct {
+            tag: Ident,
+            binding: Ident,
+        },
+        literal: Expr,
+    };
+};
+
+pub const Expr = struct {
+    span: Span,
+    kind: Kind,
+
+    pub const Kind = union(enum) {
+        ident: Ident,
+        int_literal: []const u8,
+        string_literal: []const u8,
+        char_literal: []const u8,
+        bool_literal: bool,
+        null_literal,
+        uninit_literal,
+        void_literal,
+        enum_literal: Ident,
+        grouped: *Expr,
+        block: Block,
+        unary: struct {
+            op: UnaryOp,
+            expr: *Expr,
+        },
+        binary: struct {
+            op: BinaryOp,
+            left: *Expr,
+            right: *Expr,
+        },
+        cast: struct {
+            value: *Expr,
+            ty: *TypeExpr,
+        },
+        address_of: *Expr,
+        call: struct {
+            callee: *Expr,
+            type_args: []TypeExpr,
+            args: []Expr,
+        },
+        index: struct {
+            base: *Expr,
+            index: *Expr,
+        },
+        deref: *Expr,
+        member: struct {
+            base: *Expr,
+            name: Ident,
+        },
+        try_expr: *Expr,
+    };
+};
+
+pub const UnaryOp = enum {
+    neg,
+    bit_not,
+    logical_not,
+};
+
+pub const BinaryOp = enum {
+    logical_or,
+    logical_and,
+    eq,
+    ne,
+    lt,
+    le,
+    gt,
+    ge,
+    bit_or,
+    bit_xor,
+    bit_and,
+    shl,
+    shr,
+    add,
+    sub,
+    mul,
+    div,
+    mod,
+};
+
+pub fn makePtr(allocator: std.mem.Allocator, value: anytype) !*@TypeOf(value) {
+    const ptr = try allocator.create(@TypeOf(value));
+    ptr.* = value;
+    return ptr;
+}
