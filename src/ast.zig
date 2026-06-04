@@ -43,6 +43,7 @@ pub const Decl = struct {
         extern_fn: FnDecl,
         extern_struct: StructDecl,
         enum_decl: EnumDecl,
+        union_decl: UnionDecl,
         packed_bits_decl: PackedBitsDecl,
         overlay_union_decl: OverlayUnionDecl,
         opaque_decl: Ident,
@@ -102,6 +103,16 @@ pub const EnumDecl = struct {
 pub const EnumCase = struct {
     name: Ident,
     value: ?Expr,
+};
+
+pub const UnionDecl = struct {
+    name: Ident,
+    cases: []UnionCase,
+};
+
+pub const UnionCase = struct {
+    name: Ident,
+    ty: ?TypeExpr,
 };
 
 pub const Field = struct {

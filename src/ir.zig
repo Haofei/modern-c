@@ -108,7 +108,7 @@ const ModuleFactCollector = struct {
                     }
                 },
                 .global_decl => |global| try self.globals.put(global.name.text, {}),
-                .fn_decl, .extern_fn, .type_alias, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
             }
         }
     }
@@ -146,7 +146,7 @@ const ModuleFactCollector = struct {
                     });
                 }
             },
-            .type_alias, .extern_struct, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+            .type_alias, .extern_struct, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
         }
     }
 

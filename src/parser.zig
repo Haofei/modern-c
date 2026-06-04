@@ -96,6 +96,11 @@ pub const Parser = struct {
             return .{ .span = joinSpan(start, overlay_union.name.span), .attrs = attrs, .kind = .{ .overlay_union_decl = overlay_union } };
         }
 
+        if (self.match(.kw_union)) {
+            const union_decl = try self.finishUnionDecl();
+            return .{ .span = joinSpan(start, union_decl.name.span), .attrs = attrs, .kind = .{ .union_decl = union_decl } };
+        }
+
         if (self.matchIdentifierText("global")) {
             const name = try self.expectName("expected global name");
             const ty = if (self.match(.colon)) try self.parseType() else null;
@@ -163,6 +168,21 @@ pub const Parser = struct {
         const name = try self.expectName("expected overlay union name");
         const fields = try self.finishFieldList("expected '{' after overlay union name", "expected '}' after overlay union fields");
         return .{ .name = name, .fields = fields };
+    }
+
+    fn finishUnionDecl(self: *Parser) anyerror!ast.UnionDecl {
+        const name = try self.expectName("expected union name");
+        try self.expect(.l_brace, "expected '{' after union name");
+        var cases: std.ArrayList(ast.UnionCase) = .empty;
+        errdefer cases.deinit(self.allocator);
+        while (self.current.kind != .r_brace and self.current.kind != .eof) {
+            const case_name = try self.expectSymbol("expected union case name");
+            const ty = if (self.match(.colon)) try self.parseType() else null;
+            _ = self.match(.comma) or self.match(.semicolon);
+            try cases.append(self.allocator, .{ .name = case_name, .ty = ty });
+        }
+        try self.expect(.r_brace, "expected '}' after union cases");
+        return .{ .name = name, .cases = try cases.toOwnedSlice(self.allocator) };
     }
 
     fn finishFieldList(self: *Parser, open_message: []const u8, close_message: []const u8) anyerror![]ast.Field {
