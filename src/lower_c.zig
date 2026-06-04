@@ -34,6 +34,15 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\    __builtin_trap();
         \\}
         \\
+        \\MC_NORETURN MC_UNUSED static inline void mc_trap_Bounds(void) {
+        \\    __builtin_trap();
+        \\}
+        \\
+        \\MC_UNUSED static inline uintptr_t mc_check_index_usize(uintptr_t index, uintptr_t len) {
+        \\    if (index >= len) mc_trap_Bounds();
+        \\    return index;
+        \\}
+        \\
         \\MC_UNUSED static inline uint32_t mc_checked_add_u32(uint32_t a, uint32_t b) {
         \\    uint32_t out;
         \\    if (__builtin_add_overflow(a, b, &out)) mc_trap_IntegerOverflow();
@@ -110,15 +119,23 @@ const CEmitter = struct {
     }
 
     fn emitGlobal(self: *CEmitter, global: ast.GlobalDecl) !void {
-        const ty = if (global.ty) |global_ty| cType(global_ty) else "uint32_t";
-        try self.out.print(self.allocator, "static {s} {s}", .{ ty, global.name.text });
+        try self.out.appendSlice(self.allocator, "static ");
+        if (global.ty) |global_ty| {
+            try self.emitDeclarator(global_ty, global.name.text);
+        } else {
+            try self.out.print(self.allocator, "uint32_t {s}", .{global.name.text});
+        }
         if (global.init) |initializer| {
             if (isStaticCInitializer(initializer)) {
                 try self.out.appendSlice(self.allocator, " = ");
                 try self.emitExpr(initializer, null);
+            } else if (global.ty != null and global.ty.?.kind == .array) {
+                try self.out.appendSlice(self.allocator, " = {0}");
             } else {
                 try self.out.appendSlice(self.allocator, " = 0");
             }
+        } else if (global.ty != null and global.ty.?.kind == .array) {
+            try self.out.appendSlice(self.allocator, " = {0}");
         } else {
             try self.out.appendSlice(self.allocator, " = 0");
         }
@@ -134,9 +151,9 @@ const CEmitter = struct {
         try self.emitFunctionSignature(fn_decl, true);
         try self.out.appendSlice(self.allocator, " {\n");
 
-        var locals = std.StringHashMap(void).init(self.allocator);
+        var locals = std.StringHashMap(LocalInfo).init(self.allocator);
         defer locals.deinit();
-        for (fn_decl.params) |param| try locals.put(param.name.text, {});
+        for (fn_decl.params) |param| try locals.put(param.name.text, localInfoFromType(param.ty));
 
         self.indent += 1;
         try self.emitBlockItems(body, &locals);
@@ -153,22 +170,51 @@ const CEmitter = struct {
         }
         for (fn_decl.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            try self.out.print(self.allocator, "{s} {s}", .{ cType(param.ty), param.name.text });
+            try self.emitParamDecl(param.ty, param.name.text);
         }
         try self.out.appendSlice(self.allocator, ")");
     }
 
-    fn emitStmt(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(void)) anyerror!void {
+    fn emitParamDecl(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
+        try self.emitDeclarator(ty, name);
+    }
+
+    fn emitDeclarator(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
+        switch (ty.kind) {
+            .array => |node| {
+                try self.out.print(self.allocator, "{s} {s}[", .{ cType(node.child.*), name });
+                try self.emitArrayLen(node.len);
+                try self.out.appendSlice(self.allocator, "]");
+            },
+            else => try self.out.print(self.allocator, "{s} {s}", .{ cType(ty), name }),
+        }
+    }
+
+    fn emitArrayLen(self: *CEmitter, expr: ast.Expr) !void {
+        if (intLiteralText(expr)) |literal| {
+            try appendCIntLiteral(self.allocator, self.out, literal);
+        } else {
+            try self.out.appendSlice(self.allocator, "0");
+        }
+    }
+
+    fn emitStmt(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
                 for (local.names) |name| {
-                    try locals.put(name.text, {});
-                    const ty = if (local.ty) |decl_ty| cType(decl_ty) else "uint32_t";
+                    const info = if (local.ty) |decl_ty| localInfoFromType(decl_ty) else LocalInfo{};
+                    try locals.put(name.text, info);
                     try self.writeIndent();
-                    try self.out.print(self.allocator, "{s} {s}", .{ ty, name.text });
+                    if (local.ty) |decl_ty| {
+                        try self.emitDeclarator(decl_ty, name.text);
+                    } else {
+                        try self.out.print(self.allocator, "uint32_t {s}", .{name.text});
+                    }
                     if (local.init) |initializer| {
                         try self.out.appendSlice(self.allocator, " = ");
                         try self.emitExpr(initializer, locals);
+                    } else if (local.ty != null and local.ty.?.kind == .array) {
+                        try self.out.appendSlice(self.allocator, " = {0}");
                     } else {
                         try self.out.appendSlice(self.allocator, " = 0");
                     }
@@ -246,7 +292,7 @@ const CEmitter = struct {
         }
     }
 
-    fn emitBlockItems(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(void)) anyerror!void {
+    fn emitBlockItems(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
         for (block.items) |stmt| try self.emitStmt(stmt, locals);
     }
 
@@ -264,7 +310,7 @@ const CEmitter = struct {
         return error.UnsupportedCEmission;
     }
 
-    fn emitExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(void)) anyerror!void {
+    fn emitExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         switch (expr.kind) {
             .ident => |ident| {
                 if (locals) |local_set| {
@@ -315,6 +361,18 @@ const CEmitter = struct {
                 }
                 try self.out.appendSlice(self.allocator, ")");
             },
+            .index => |node| {
+                try self.emitExpr(node.base.*, locals);
+                try self.out.appendSlice(self.allocator, "[");
+                if (arrayLenForExpr(node.base.*, locals)) |len| {
+                    try self.out.appendSlice(self.allocator, "mc_check_index_usize(");
+                    try self.emitExpr(node.index.*, locals);
+                    try self.out.print(self.allocator, ", {s})", .{len});
+                } else {
+                    try self.emitExpr(node.index.*, locals);
+                }
+                try self.out.appendSlice(self.allocator, "]");
+            },
             .address_of => |inner| {
                 try self.out.appendSlice(self.allocator, "&");
                 try self.emitExpr(inner.*, locals);
@@ -339,7 +397,7 @@ const CEmitter = struct {
         }
     }
 
-    fn globalAssignmentTarget(self: *CEmitter, target: ast.Expr, locals: *std.StringHashMap(void)) ?GlobalAccess {
+    fn globalAssignmentTarget(self: *CEmitter, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
         return switch (target.kind) {
             .ident => |ident| if (!locals.contains(ident.text))
                 if (self.globals.get(ident.text)) |global| .{ .name = ident.text, .info = global } else null
@@ -351,11 +409,22 @@ const CEmitter = struct {
     }
 };
 
-fn cloneLocals(allocator: std.mem.Allocator, locals: std.StringHashMap(void)) !std.StringHashMap(void) {
-    var cloned = std.StringHashMap(void).init(allocator);
+const LocalInfo = struct {
+    array_len: ?[]const u8 = null,
+};
+
+fn localInfoFromType(ty: ast.TypeExpr) LocalInfo {
+    return switch (ty.kind) {
+        .array => |node| .{ .array_len = intLiteralText(node.len) },
+        else => .{},
+    };
+}
+
+fn cloneLocals(allocator: std.mem.Allocator, locals: std.StringHashMap(LocalInfo)) !std.StringHashMap(LocalInfo) {
+    var cloned = std.StringHashMap(LocalInfo).init(allocator);
     errdefer cloned.deinit();
-    var it = locals.keyIterator();
-    while (it.next()) |name| try cloned.put(name.*, {});
+    var it = locals.iterator();
+    while (it.next()) |entry| try cloned.put(entry.key_ptr.*, entry.value_ptr.*);
     return cloned;
 }
 
@@ -880,6 +949,13 @@ fn typeName(ty: ast.TypeExpr) ?[]const u8 {
 }
 
 fn cType(ty: ast.TypeExpr) []const u8 {
+    switch (ty.kind) {
+        .pointer => |node| return ptrCType(node.child.*),
+        .raw_many_pointer => |node| return ptrCType(node.child.*),
+        .slice => |node| return ptrCType(node.child.*),
+        .array => |node| return ptrCType(node.child.*),
+        else => {},
+    }
     const name = typeName(ty) orelse return "void *";
     if (std.mem.eql(u8, name, "void")) return "void";
     if (std.mem.eql(u8, name, "bool")) return "bool";
@@ -896,6 +972,20 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     return "void *";
 }
 
+fn ptrCType(child: ast.TypeExpr) []const u8 {
+    const child_ty = cType(child);
+    if (std.mem.eql(u8, child_ty, "uint8_t")) return "uint8_t *";
+    if (std.mem.eql(u8, child_ty, "uint16_t")) return "uint16_t *";
+    if (std.mem.eql(u8, child_ty, "uint32_t")) return "uint32_t *";
+    if (std.mem.eql(u8, child_ty, "uint64_t")) return "uint64_t *";
+    if (std.mem.eql(u8, child_ty, "int8_t")) return "int8_t *";
+    if (std.mem.eql(u8, child_ty, "int16_t")) return "int16_t *";
+    if (std.mem.eql(u8, child_ty, "int32_t")) return "int32_t *";
+    if (std.mem.eql(u8, child_ty, "int64_t")) return "int64_t *";
+    if (std.mem.eql(u8, child_ty, "bool")) return "bool *";
+    return "void *";
+}
+
 fn isStaticCInitializer(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .int_literal, .bool_literal, .null_literal, .void_literal => true,
@@ -908,6 +998,23 @@ fn appendCIntLiteral(allocator: std.mem.Allocator, out: *std.ArrayList(u8), lite
     for (literal) |ch| {
         if (ch != '_') try out.append(allocator, ch);
     }
+}
+
+fn intLiteralText(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .int_literal => |literal| literal,
+        .grouped => |inner| intLiteralText(inner.*),
+        else => null,
+    };
+}
+
+fn arrayLenForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    const local_set = locals orelse return null;
+    return switch (expr.kind) {
+        .ident => |ident| if (local_set.get(ident.text)) |info| info.array_len else null,
+        .grouped => |inner| arrayLenForExpr(inner.*, locals),
+        else => null,
+    };
 }
 
 fn unaryCOp(op: ast.UnaryOp) []const u8 {
@@ -1175,6 +1282,8 @@ test "emits C support helpers used by lower-c evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_IntegerOverflow") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_DivideByZero") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidShift") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Bounds") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_check_index_usize") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_load_u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32") != null);
@@ -1258,4 +1367,35 @@ test "emits C for while loops and loop control" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "break;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "continue;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return out;") != null);
+}
+
+test "emits C for fixed array indexing with bounds checks" {
+    const source =
+        \\fn pick_u8(xs: [4]u8, i: usize) -> u8 {
+        \\    return xs[i];
+        \\}
+        \\
+        \\fn pick_u32(xs: [4]u32, i: usize) -> u32 {
+        \\    return xs[i];
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_arrays.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t xs[4]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t xs[4]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs[mc_check_index_usize(i, 4)];") != null);
 }
