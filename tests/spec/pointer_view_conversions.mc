@@ -143,3 +143,19 @@ fn reject_direct_call_argument_element_mismatch() -> void {
     // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
     takes_mut_u16_pointer(make_mut_u8_pointer());
 }
+
+fn reject_cast_result_return_mut_to_const_pointer(p: *mut u8) -> *const u8 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return p as *mut u8;
+}
+
+fn reject_cast_result_initializer_element_mismatch(p: *mut u8) -> *mut u16 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    let q: *mut u16 = p as *mut u8;
+    return q;
+}
+
+fn reject_cast_result_argument_element_mismatch(p: *mut u8) -> void {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    takes_mut_u16_pointer(p as *mut u8);
+}
