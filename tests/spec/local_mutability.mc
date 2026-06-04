@@ -30,6 +30,15 @@ fn reject_duplicate_local() -> u32 {
     return x;
 }
 
+fn reject_for_binding_shadows_local(xs: []const u32) -> u32 {
+    let x: u32 = 1;
+    // EXPECT_ERROR: E_DUPLICATE_LOCAL
+    for x in xs {
+        let y: u32 = x;
+    }
+    return x;
+}
+
 // EXPECT_ERROR: E_DUPLICATE_PARAMETER
 fn reject_duplicate_parameter(x: u32, x: bool) -> u32 {
     return x;

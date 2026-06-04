@@ -1542,18 +1542,18 @@ const CEmitter = struct {
             },
             else => return false,
         };
-        const slice_ty = self.sliceReturnTypeForCall(call) orelse return false;
+        const iterable_ty = self.sliceReturnTypeForCall(call) orelse self.arrayReturnTypeForExpr(iterable) orelse return false;
         const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
         self.temp_index += 1;
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(slice_ty, .typedef_name), temp_name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(iterable_ty, .typedef_name), temp_name });
         try self.emitExpr(iterable, locals);
         try self.out.appendSlice(self.allocator, ";\n");
 
         var loop_locals = try cloneLocals(self.allocator, locals.*);
         defer loop_locals.deinit();
-        try loop_locals.put(temp_name, try self.localInfoFromType(slice_ty));
+        try loop_locals.put(temp_name, try self.localInfoFromType(iterable_ty));
 
         var rewritten = loop;
         const ident = ast.Expr{ .span = iterable.span, .kind = .{ .ident = .{ .span = iterable.span, .text = temp_name } } };
@@ -5640,6 +5640,13 @@ test "emits C for array and slice for loops" {
         \\    return sum;
         \\}
         \\
+        \\fn first_call_array() -> u32 {
+        \\    for x in make_array() {
+        \\        return x;
+        \\    }
+        \\    return 0;
+        \\}
+        \\
         \\fn sum_inferred_slice() -> u32 {
         \\    let xs = make_slice();
         \\    var sum: u32 = 0;
@@ -5682,10 +5689,12 @@ test "emits C for array and slice for loops" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs[mc_i1];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp2 = make_slice();\n    for (uintptr_t mc_i3 = 0; mc_i3 < mc_tmp2.len; mc_i3 += 1) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp2.ptr[mc_i3];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 xs = make_slice();\n    uint32_t sum = 0;\n    for (uintptr_t mc_i4 = 0; mc_i4 < xs.len; mc_i4 += 1) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs.ptr[mc_i4];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t * xs = make_array();\n    uint32_t sum = 0;\n    for (uintptr_t mc_i5 = 0; mc_i5 < 4; mc_i5 += 1) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs[mc_i5];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t * mc_tmp4 = make_array();\n    for (uintptr_t mc_i5 = 0; mc_i5 < 4; mc_i5 += 1) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp4[mc_i5];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 xs = make_slice();\n    uint32_t sum = 0;\n    for (uintptr_t mc_i6 = 0; mc_i6 < xs.len; mc_i6 += 1) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs.ptr[mc_i6];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t * xs = make_array();\n    uint32_t sum = 0;\n    for (uintptr_t mc_i7 = 0; mc_i7 < 4; mc_i7 += 1) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs[mc_i7];") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "sum = mc_checked_add_u32(sum, x);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return sum;") != null);
 }

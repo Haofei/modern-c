@@ -1244,9 +1244,12 @@ pub const Checker = struct {
     }
 
     fn addForBinding(self: *Checker, loop: ast.Loop, ctx: Context, scope: *Scope) void {
-        _ = self;
         const label = loop.label orelse return;
         const iterable = loop.iterable orelse return;
+        if (scope.contains(label.text)) {
+            self.errorCode(label.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
+            return;
+        }
         const element_ty = if (exprResultType(iterable, ctx)) |ty| iterableElementType(ty) else null;
         scope.put(label.text, .{
             .class = if (element_ty) |ty| classifyType(ty) else .unknown,
