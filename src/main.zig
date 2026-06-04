@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
+const eval = @import("eval.zig");
 const ir = @import("ir.zig");
 const lexer = @import("lexer.zig");
 const lower_c = @import("lower_c.zig");
@@ -13,6 +14,7 @@ const usage =
     \\usage:
     \\  mcc lex <file.mc>
     \\  mcc check <file.mc>
+    \\  mcc run-trap <file.mc>
     \\  mcc facts <file.mc>
     \\  mcc lower-c <file.mc>
     \\
@@ -36,6 +38,8 @@ pub fn main(init: std.process.Init) !void {
         try runLex(allocator, path, source);
     } else if (std.mem.eql(u8, command, "check")) {
         try runCheck(allocator, path, source);
+    } else if (std.mem.eql(u8, command, "run-trap")) {
+        try runTrap(allocator, path, source);
     } else if (std.mem.eql(u8, command, "facts")) {
         try runFacts(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-c")) {
@@ -124,6 +128,45 @@ fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     std.debug.print("{s}", .{facts.items});
 }
 
+fn runTrap(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.RunTrapFailed;
+    }
+
+    var expectations = try eval.parseRunTrapExpectations(allocator, source);
+    defer eval.freeRunTrapExpectations(allocator, &expectations);
+    if (expectations.items.len == 0) {
+        std.debug.print("{s}: no inline run trap expectations found\n", .{path});
+        return error.RunTrapFailed;
+    }
+
+    for (expectations.items) |expectation| {
+        const actual = try eval.runTrapExpectation(allocator, module, expectation.function_name, expectation.args);
+        if (actual == null or actual.? != expectation.trap) {
+            std.debug.print(
+                "{s}:{d}: expected run {s}(...) to trap .{s}, got {s}\n",
+                .{ path, expectation.line, expectation.function_name, @tagName(expectation.trap), if (actual) |trap| @tagName(trap) else "no trap" },
+            );
+            return error.RunTrapFailed;
+        }
+        std.debug.print(
+            "run_trap fn={s} trap={s} reached=true line={d}\n",
+            .{ expectation.function_name, @tagName(expectation.trap), expectation.line },
+        );
+    }
+}
+
 fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
@@ -156,6 +199,7 @@ fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *
 
 test {
     _ = diagnostics;
+    _ = eval;
     _ = ast;
     _ = ir;
     _ = lexer;
