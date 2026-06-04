@@ -298,7 +298,7 @@ pub const Parser = struct {
     fn parseFor(self: *Parser) anyerror!ast.Stmt {
         const start = self.lxTokenBeforeCurrent();
         const label = try self.expectName("expected loop binding after for");
-        try self.expect(.identifier, "expected 'in' after for binding");
+        try self.expectIdentifierText("in", "expected 'in' after for binding");
         const iterable = try self.parseExpr(0);
         const body = try self.parseBlock();
         return .{
@@ -661,6 +661,11 @@ pub const Parser = struct {
         return out;
     }
 
+    fn expectIdentifierText(self: *Parser, text: []const u8, message: []const u8) anyerror!void {
+        if (self.current.kind != .identifier or !std.mem.eql(u8, self.current.lexeme, text)) return self.fail(message);
+        self.advance();
+    }
+
     fn expect(self: *Parser, kind: token.Kind, message: []const u8) anyerror!void {
         _ = try self.expectTok(kind, message);
     }
@@ -860,4 +865,30 @@ test "parser distinguishes relational operators from generic calls" {
 
     const call = module.decls[4].kind.fn_decl.body.?.items[0].kind.expr.kind.call;
     try std.testing.expectEqual(@as(usize, 1), call.type_args.len);
+}
+
+test "parser requires in after for binding" {
+    const good_source = "fn good(xs: []const u32) -> void { for x in xs { } }\n";
+    var good_reporter = diagnostics.Reporter.init(std.testing.allocator, "for_good.mc", good_source);
+    defer good_reporter.deinit();
+
+    var good_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer good_arena.deinit();
+
+    var good_parser = Parser.init(good_source, &good_reporter);
+    const good_module = try good_parser.parseModule(good_arena.allocator());
+    defer good_module.deinit(good_arena.allocator());
+    try std.testing.expect(!good_reporter.has_errors);
+
+    const bad_source = "fn bad(xs: []const u32) -> void { for x over xs { } }\n";
+    var bad_reporter = diagnostics.Reporter.init(std.testing.allocator, "for_bad.mc", bad_source);
+    defer bad_reporter.deinit();
+
+    var bad_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer bad_arena.deinit();
+
+    var bad_parser = Parser.init(bad_source, &bad_reporter);
+    try std.testing.expectError(error.ParseFailed, bad_parser.parseModule(bad_arena.allocator()));
+    try std.testing.expect(bad_reporter.has_errors);
+    try std.testing.expectEqualStrings("expected 'in' after for binding", bad_reporter.diagnostics.items[0].message);
 }
