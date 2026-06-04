@@ -1079,6 +1079,12 @@ const CEmitter = struct {
 
     fn emitExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
         switch (expr.kind) {
+            .call => |node| {
+                if (target_ty) |ty| {
+                    if (try self.emitResultConstructor(node, locals, ty)) return;
+                }
+                try self.emitExpr(expr, locals);
+            },
             .enum_literal => |literal| {
                 const enum_name = if (target_ty) |ty| self.enumNameForType(ty) else null;
                 if (enum_name) |name| return self.emitEnumLiteral(literal, name);
@@ -1092,6 +1098,20 @@ const CEmitter = struct {
             },
             else => try self.emitExpr(expr, locals),
         }
+    }
+
+    fn emitResultConstructor(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+        const tag = calleeIdentName(call.callee.*) orelse return false;
+        if (!std.mem.eql(u8, tag, "ok") and !std.mem.eql(u8, tag, "err")) return false;
+        if (call.args.len != 1) return error.UnsupportedCEmission;
+        const payload_ty = resultPayloadTypeForTag(target_ty, tag) orelse return false;
+        const result_ty = try self.cTypeFor(target_ty, .typedef_name);
+
+        try self.out.print(self.allocator, "(({s}){{ .is_ok = ", .{result_ty});
+        try self.out.appendSlice(self.allocator, if (std.mem.eql(u8, tag, "ok")) "true, .payload.ok = " else "false, .payload.err = ");
+        try self.emitExprWithTarget(call.args[0], locals, payload_ty);
+        try self.out.appendSlice(self.allocator, " })");
+        return true;
     }
 
     fn enumNameForType(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
@@ -1818,6 +1838,19 @@ fn mmioPointee(ty: ast.TypeExpr) ?[]const u8 {
     return typeName(generic.args[0]);
 }
 
+fn resultPayloadTypeForTag(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .generic => |node| {
+            if (!std.mem.eql(u8, node.base.text, "Result") or node.args.len != 2) return null;
+            if (std.mem.eql(u8, tag, "ok")) return node.args[0];
+            if (std.mem.eql(u8, tag, "err")) return node.args[1];
+            return null;
+        },
+        .qualified => |node| resultPayloadTypeForTag(node.child.*, tag),
+        else => null,
+    };
+}
+
 fn isMmioStructAbi(struct_decl: ast.StructDecl) bool {
     return if (struct_decl.abi) |abi| std.mem.eql(u8, abi, "mmio") else false;
 }
@@ -2364,6 +2397,47 @@ test "emits C ABI for simple Result types" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_result_u32_Error pass_result(mc_result_u32_Error result)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return result;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(result);") != null);
+}
+
+test "emits C for Result ok and err constructors" {
+    const source =
+        \\enum Error: u8 {
+        \\    denied = 1,
+        \\}
+        \\
+        \\extern fn consume_result(result: Result<u32, Error>) -> void;
+        \\
+        \\fn make_ok(value: u32) -> Result<u32, Error> {
+        \\    return ok(value);
+        \\}
+        \\
+        \\fn make_err() -> Result<u32, Error> {
+        \\    return err(.denied);
+        \\}
+        \\
+        \\fn send_ok() -> void {
+        \\    consume_result(ok(7));
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_constructors.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = true, .payload.ok = value });") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = false, .payload.err = Error_denied });") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(((mc_result_u32_Error){ .is_ok = true, .payload.ok = 7 }));") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
