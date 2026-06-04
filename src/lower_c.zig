@@ -589,6 +589,7 @@ const CEmitter = struct {
                     if (local.names.len == 1) {
                         if (local.ty) |decl_ty| {
                             if (local.init) |initializer| {
+                                if (try self.emitResultTryLocalInit(name.text, decl_ty, initializer, locals, return_ty)) continue;
                                 if (try self.emitDirectCallSliceIndexLocalInit(name.text, decl_ty, initializer, locals)) continue;
                             }
                         }
@@ -1210,11 +1211,58 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitResultTryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const operand = switch (initializer.kind) {
+            .try_expr => |inner| inner.*,
+            .grouped => |inner| return try self.emitResultTryLocalInit(name, decl_ty, inner.*, locals, return_ty),
+            else => return false,
+        };
+        const enclosing_return_ty = return_ty orelse return false;
+        if (resultPayloadTypeForTag(enclosing_return_ty, "err") == null) return false;
+        const operand_result_ty = self.resultTypeForExpr(operand, locals) orelse return false;
+        _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
+        _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(operand_result_ty, .typedef_name), temp_name });
+        try self.emitExpr(operand, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "if (!{s}.is_ok) {{\n", .{temp_name});
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return (({s}){{ .is_ok = false, .payload.err = {s}.payload.err }});\n", .{ try self.cTypeFor(enclosing_return_ty, .typedef_name), temp_name });
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}\n");
+
+        try self.writeIndent();
+        try self.emitDeclarator(decl_ty, name);
+        try self.out.print(self.allocator, " = {s}.payload.ok;\n", .{temp_name});
+        return true;
+    }
+
     fn sliceReturnTypeForCall(self: *CEmitter, call: anytype) ?ast.TypeExpr {
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
         const return_ty = info.return_type orelse return null;
         return if (return_ty.kind == .slice) return_ty else null;
+    }
+
+    fn resultTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .call => |node| blk: {
+                const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
+                const info = self.functions.get(fn_name) orelse break :blk null;
+                const ret_ty = info.return_type orelse break :blk null;
+                break :blk if (resultPayloadTypeForTag(ret_ty, "ok") != null and resultPayloadTypeForTag(ret_ty, "err") != null) ret_ty else null;
+            },
+            .grouped => |inner| self.resultTypeForExpr(inner.*, locals),
+            else => null,
+        };
     }
 
     fn mmioAccess(self: *CEmitter, callee: ast.Expr, args: []ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
@@ -2438,6 +2486,42 @@ test "emits C for Result ok and err constructors" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = true, .payload.ok = value });") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = false, .payload.err = Error_denied });") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(((mc_result_u32_Error){ .is_ok = true, .payload.ok = 7 }));") != null);
+}
+
+test "emits C for Result try in local initializers" {
+    const source =
+        \\enum Error: u8 {
+        \\    denied = 1,
+        \\}
+        \\
+        \\extern fn make_result() -> Result<u32, Error>;
+        \\
+        \\fn add_one() -> Result<u32, Error> {
+        \\    let value: u32 = make_result()?;
+        \\    return ok(value + 1);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_try.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp0.is_ok) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = false, .payload.err = mc_tmp0.payload.err });") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value = mc_tmp0.payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = true, .payload.ok = mc_checked_add_u32(value, 1) });") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
