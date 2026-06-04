@@ -5,6 +5,7 @@
 // SPEC: check=E_INVALID_ASSIGNMENT_TARGET,E_NO_IMPLICIT_CONVERSION,E_NO_IMPLICIT_POINTER_CONVERSION,E_RETURN_TYPE_MISMATCH
 
 fn source_value() -> u32;
+fn make_packet() -> Packet;
 
 fn accept_identifier_assignment() -> u32 {
     var x: u32 = 1;
@@ -33,9 +34,18 @@ fn accept_member_read(packet: Packet) -> u32 {
     return packet.value;
 }
 
+fn accept_direct_call_member_read() -> u32 {
+    return make_packet().value;
+}
+
 fn reject_member_read_return_type(packet: Packet) -> *mut u8 {
     // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
     return packet.value;
+}
+
+fn reject_direct_call_member_read_return_type() -> *mut u8 {
+    // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
+    return make_packet().value;
 }
 
 fn reject_member_assignment_bool(packet: Packet, flag: bool) -> void {
@@ -62,6 +72,12 @@ fn reject_literal_assignment(value: u32) -> u32 {
 fn reject_call_assignment(value: u32) -> u32 {
     // EXPECT_ERROR: E_INVALID_ASSIGNMENT_TARGET
     source_value() = value;
+    return value;
+}
+
+fn reject_direct_call_member_assignment(value: u32) -> u32 {
+    // EXPECT_ERROR: E_INVALID_ASSIGNMENT_TARGET
+    make_packet().value = value;
     return value;
 }
 

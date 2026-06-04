@@ -506,7 +506,7 @@ pub const Checker = struct {
                 if (base_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no fields in MC");
                 }
-                if (memberFieldType(node, ctx)) |field_ty| return classifyType(field_ty);
+                if (memberResultFieldType(node, ctx)) |field_ty| return classifyType(field_ty);
                 return .unknown;
             },
         };
@@ -1350,7 +1350,8 @@ fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
 
 fn isAssignableTarget(target: ast.Expr) bool {
     return switch (target.kind) {
-        .ident, .deref, .index, .member => true,
+        .ident, .deref, .index => true,
+        .member => |node| isAssignableTarget(node.base.*),
         .grouped => |inner| isAssignableTarget(inner.*),
         else => false,
     };
@@ -1410,10 +1411,19 @@ fn assignmentTargetType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
 
 fn memberFieldType(member: anytype, ctx: Context) ?ast.TypeExpr {
     const base_ty = exprStorageType(member.base.*, ctx) orelse return null;
+    return structFieldType(base_ty, member.name.text, ctx);
+}
+
+fn memberResultFieldType(member: anytype, ctx: Context) ?ast.TypeExpr {
+    const base_ty = exprResultType(member.base.*, ctx) orelse return null;
+    return structFieldType(base_ty, member.name.text, ctx);
+}
+
+fn structFieldType(base_ty: ast.TypeExpr, field_name: []const u8, ctx: Context) ?ast.TypeExpr {
     const struct_name = structTypeName(base_ty) orelse return null;
     const structs = ctx.structs orelse return null;
     const struct_info = structs.get(struct_name) orelse return null;
-    return struct_info.fields.get(member.name.text);
+    return struct_info.fields.get(field_name);
 }
 
 fn directCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
