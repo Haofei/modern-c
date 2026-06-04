@@ -277,7 +277,7 @@ pub const Checker = struct {
                 const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
                 const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
                 const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
-                const address_checked = self.checkAddressOfInitializer(kind, expr);
+                const address_checked = if (local.ty) |ty| self.checkAddressOfInitializer(kind, ty, expr, ctx) else false;
                 if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(kind, initializer)) {
                     self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                 }
@@ -327,7 +327,7 @@ pub const Checker = struct {
         const array_decay_checked = self.checkArrayDecayInitializer(target_class, value_class, value);
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, value, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, value, ctx);
-        const address_checked = self.checkAddressOfInitializer(target_class, value);
+        const address_checked = self.checkAddressOfInitializer(target_class, target_ty, value, ctx);
         if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
@@ -610,10 +610,14 @@ pub const Checker = struct {
         return false;
     }
 
-    fn checkAddressOfInitializer(self: *Checker, target: TypeClass, expr: ast.Expr) bool {
-        _ = self;
+    fn checkAddressOfInitializer(self: *Checker, target: TypeClass, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         if (!isNonNullPointerLike(target)) return false;
-        return isAddressOfExpr(expr);
+        const operand = addressOfOperand(expr) orelse return false;
+        const source_ty = addressableStorageType(operand.*, ctx) orelse return true;
+        if (!addressOfMatchesPointerTarget(target_ty, source_ty, operand.*, ctx)) {
+            self.errorCode(expr.span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer and view conversions must be explicit");
+        }
+        return true;
     }
 
     fn checkPointerViewInitializer(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
@@ -672,7 +676,7 @@ pub const Checker = struct {
         const array_decay_checked = self.checkArrayDecayInitializer(target, source, arg);
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, arg, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, arg, ctx);
-        const address_checked = self.checkAddressOfInitializer(target, arg);
+        const address_checked = self.checkAddressOfInitializer(target, target_ty, arg, ctx);
         if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         }
@@ -1216,6 +1220,55 @@ fn isAddressOfExpr(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .address_of => true,
         .grouped => |inner| isAddressOfExpr(inner.*),
+        else => false,
+    };
+}
+
+fn addressOfOperand(expr: ast.Expr) ?*ast.Expr {
+    return switch (expr.kind) {
+        .address_of => |inner| inner,
+        .grouped => |inner| addressOfOperand(inner.*),
+        else => null,
+    };
+}
+
+fn addressableStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| return entry.ty;
+            return null;
+        },
+        .deref => |inner| if (exprStorageType(inner.*, ctx)) |ty| storageElementType(ty) else null,
+        .index => |node| if (exprStorageType(node.base.*, ctx)) |ty| storageElementType(ty) else null,
+        .member => |node| memberFieldType(node, ctx),
+        .grouped => |inner| addressableStorageType(inner.*, ctx),
+        else => null,
+    };
+}
+
+fn addressOfMatchesPointerTarget(target: ast.TypeExpr, source_child: ast.TypeExpr, operand: ast.Expr, ctx: Context) bool {
+    return switch (target.kind) {
+        .pointer => |node| {
+            if (node.mutability == .mut and !addressableStorageIsMutable(operand, ctx)) return false;
+            return sameTypeSyntax(node.child.*, source_child);
+        },
+        .qualified => |node| addressOfMatchesPointerTarget(node.child.*, source_child, operand, ctx),
+        else => false,
+    };
+}
+
+fn addressableStorageIsMutable(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| return entry.mutable;
+            return true;
+        },
+        .deref => |inner| !constStorageBase(inner.*, ctx),
+        .index => |node| !constStorageBase(node.base.*, ctx),
+        .member => |node| addressableStorageIsMutable(node.base.*, ctx),
+        .grouped => |inner| addressableStorageIsMutable(inner.*, ctx),
         else => false,
     };
 }

@@ -159,3 +159,31 @@ fn reject_cast_result_argument_element_mismatch(p: *mut u8) -> void {
     // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
     takes_mut_u16_pointer(p as *mut u8);
 }
+
+fn reject_address_of_element_mismatch_initializer() -> *mut u16 {
+    var buf: [4]u8 = uninit;
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    let q: *mut u16 = &buf[0];
+    return q;
+}
+
+fn reject_address_of_immutable_local_to_mut_pointer(fallback: *mut u32) -> *mut u32 {
+    let x: u32 = 1;
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    let q: *mut u32 = &x;
+    return fallback;
+}
+
+fn reject_address_of_element_mismatch_assignment(fallback: *mut u16) -> *mut u16 {
+    var buf: [4]u8 = uninit;
+    var q: *mut u16 = fallback;
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    q = &buf[0];
+    return q;
+}
+
+fn reject_address_of_element_mismatch_argument() -> void {
+    var buf: [4]u8 = uninit;
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    takes_mut_u16_pointer(&buf[0]);
+}
