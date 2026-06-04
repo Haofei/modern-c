@@ -14,6 +14,7 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\#include <stdint.h>
         \\#include <stdbool.h>
         \\#include <stddef.h>
+        \\#include <stdalign.h>
         \\
         \\#if defined(__GNUC__) || defined(__clang__)
         \\#define MC_NORETURN __attribute__((noreturn))
@@ -140,6 +141,7 @@ const CEmitter = struct {
     structs: std.StringHashMap(ast.StructDecl),
     mmio_structs: std.StringHashMap(MmioStruct),
     packed_bits: std.StringHashMap(PackedBitsInfo),
+    overlay_unions: std.StringHashMap(OverlayUnionInfo),
     enums: std.StringHashMap(ast.EnumDecl),
     slice_types: std.StringHashMap(SliceInfo),
     result_types: std.StringHashMap(ResultInfo),
@@ -156,6 +158,7 @@ const CEmitter = struct {
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
             .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
+            .overlay_unions = std.StringHashMap(OverlayUnionInfo).init(allocator),
             .enums = std.StringHashMap(ast.EnumDecl).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
@@ -171,6 +174,7 @@ const CEmitter = struct {
         var packed_bits = self.packed_bits.valueIterator();
         while (packed_bits.next()) |bits| bits.fields.deinit();
         self.packed_bits.deinit();
+        self.overlay_unions.deinit();
         var mmio_structs = self.mmio_structs.valueIterator();
         while (mmio_structs.next()) |mmio_struct| mmio_struct.fields.deinit();
         self.mmio_structs.deinit();
@@ -198,6 +202,7 @@ const CEmitter = struct {
                 },
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
                 .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
+                .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
                 .fn_decl, .extern_fn => |fn_decl| {
                     try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type });
                     try self.collectFunctionSliceTypes(fn_decl);
@@ -207,6 +212,7 @@ const CEmitter = struct {
         }
         try self.emitEnums();
         try self.emitPackedBitsTypes();
+        try self.emitOverlayUnionTypes();
         for (module.decls) |decl| {
             if (decl.kind == .extern_struct and self.mmio_structs.contains(decl.kind.extern_struct.name.text)) {
                 try self.emitMmioStruct(decl.kind.extern_struct);
@@ -283,6 +289,18 @@ const CEmitter = struct {
         var it = self.packed_bits.iterator();
         while (it.next()) |entry| {
             try self.out.print(self.allocator, "typedef {s} {s};\n\n", .{ entry.value_ptr.repr_c_type, entry.key_ptr.* });
+        }
+    }
+
+    fn emitOverlayUnionTypes(self: *CEmitter) !void {
+        var it = self.overlay_unions.iterator();
+        while (it.next()) |entry| {
+            try self.out.print(self.allocator, "typedef struct {s} {{\n", .{entry.key_ptr.*});
+            self.indent += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "alignas({d}) unsigned char storage[{d}];\n", .{ entry.value_ptr.alignment, entry.value_ptr.size });
+            self.indent -= 1;
+            try self.out.print(self.allocator, "}} {s};\n\n", .{entry.key_ptr.*});
         }
     }
 
@@ -436,6 +454,7 @@ const CEmitter = struct {
         if (typeName(ty)) |name| {
             if (self.enums.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
             if (self.packed_bits.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
+            if (self.overlay_unions.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
             if (self.structs.contains(name)) {
                 if (style == .struct_tag) try out.appendSlice(self.scratch.allocator(), "struct ");
                 return out.appendSlice(self.scratch.allocator(), name);
@@ -455,6 +474,38 @@ const CEmitter = struct {
             .repr_c_type = try self.cTypeFor(packed_bits.repr, .typedef_name),
             .fields = fields,
         });
+    }
+
+    fn collectOverlayUnion(self: *CEmitter, overlay_union: ast.OverlayUnionDecl) !void {
+        var size: usize = 1;
+        var alignment: usize = 1;
+        for (overlay_union.fields) |field| {
+            const layout = self.overlayFieldLayout(field.ty) orelse return error.UnsupportedCEmission;
+            size = @max(size, layout.size);
+            alignment = @max(alignment, layout.alignment);
+            try self.collectTypeArtifacts(field.ty);
+        }
+        try self.overlay_unions.put(overlay_union.name.text, .{ .size = size, .alignment = alignment });
+    }
+
+    fn overlayFieldLayout(self: *CEmitter, ty: ast.TypeExpr) ?OverlayLayout {
+        switch (ty.kind) {
+            .array => |node| {
+                const child = self.overlayFieldLayout(node.child.*) orelse return null;
+                const len_text = intLiteralText(node.len) orelse return null;
+                const len = parseUsizeLiteral(len_text) orelse return null;
+                return .{ .size = child.size * len, .alignment = child.alignment };
+            },
+            .qualified => |node| return self.overlayFieldLayout(node.child.*),
+            else => {},
+        }
+        const name = typeName(ty) orelse return null;
+        if (std.mem.eql(u8, name, "bool")) return .{ .size = 1, .alignment = 1 };
+        if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) return .{ .size = 1, .alignment = 1 };
+        if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) return .{ .size = 2, .alignment = 2 };
+        if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return .{ .size = 4, .alignment = 4 };
+        if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return .{ .size = 8, .alignment = 8 };
+        return null;
     }
 
     fn collectMmioStruct(self: *CEmitter, struct_decl: ast.StructDecl) !void {
@@ -1614,6 +1665,16 @@ const PackedBitsField = struct {
     bit_index: usize,
 };
 
+const OverlayUnionInfo = struct {
+    size: usize,
+    alignment: usize,
+};
+
+const OverlayLayout = struct {
+    size: usize,
+    alignment: usize,
+};
+
 const ResultInfo = struct {
     name: []const u8,
     ok_ty: ast.TypeExpr,
@@ -2260,6 +2321,19 @@ fn intLiteralText(expr: ast.Expr) ?[]const u8 {
         .grouped => |inner| intLiteralText(inner.*),
         else => null,
     };
+}
+
+fn parseUsizeLiteral(raw: []const u8) ?usize {
+    var cleaned: [128]u8 = undefined;
+    if (raw.len > cleaned.len) return null;
+    var len: usize = 0;
+    for (raw) |ch| {
+        if (ch != '_') {
+            cleaned[len] = ch;
+            len += 1;
+        }
+    }
+    return std.fmt.parseInt(usize, cleaned[0..len], 10) catch null;
 }
 
 fn arrayLenForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
@@ -3432,6 +3506,40 @@ test "emits C extern structs and member access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "packet.value = value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return packet.ptr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return make_packet().value;") != null);
+}
+
+test "emits C overlay unions as byte storage" {
+    const source =
+        \\overlay union Word {
+        \\    u: u32,
+        \\    bytes: [4]u8,
+        \\}
+        \\
+        \\fn pass_word(word: Word) -> Word {
+        \\    return word;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_overlay_union.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct Word {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "alignas(4) unsigned char storage[4];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "} Word;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Word pass_word(Word word)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return word;") != null);
 }
 
 test "emits C assert trap" {
