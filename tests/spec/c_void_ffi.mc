@@ -9,6 +9,10 @@ extern "C" fn takes_c_void(handle: *mut c_void) -> void;
 extern "C" fn takes_typed_pointer(ptr: *mut u8) -> void;
 extern fn make_typed_pointer() -> *mut u8;
 extern fn make_c_void_pointer() -> *mut c_void;
+extern fn make_result_typed_pointer() -> Result<*mut u8, Error>;
+extern fn make_result_c_void_pointer() -> Result<*mut c_void, Error>;
+extern fn make_nullable_typed_pointer() -> ?*mut u8;
+extern fn make_nullable_c_void_pointer() -> ?*mut c_void;
 
 fn accept_c_void_ffi(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
     // EXPECT: extern C opaque-object pointers are accepted and may cross the FFI boundary.
@@ -138,6 +142,26 @@ fn reject_direct_call_typed_pointer_to_c_void_assignment(fallback: *mut c_void) 
 fn reject_direct_call_typed_pointer_to_c_void_call_arg() -> void {
     // EXPECT_ERROR: E_C_VOID_CONVERSION
     takes_c_void(make_typed_pointer());
+}
+
+fn reject_try_payload_c_void_to_typed_pointer_return() -> *mut u8 {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return make_result_c_void_pointer()?;
+}
+
+fn reject_try_payload_typed_pointer_to_c_void_return() -> *mut c_void {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return make_result_typed_pointer()?;
+}
+
+fn reject_nullable_try_payload_c_void_to_typed_pointer_return() -> *mut u8 {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return make_nullable_c_void_pointer()?;
+}
+
+fn reject_nullable_try_payload_typed_pointer_to_c_void_return() -> *mut c_void {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    return make_nullable_typed_pointer()?;
 }
 
 fn reject_c_void_bitwise(a: *mut c_void, b: *mut c_void) -> *mut c_void {
