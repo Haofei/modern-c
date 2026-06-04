@@ -694,6 +694,8 @@ const CEmitter = struct {
                     self.indent -= 1;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "}\n");
+                } else if (loop.kind == .@"for") {
+                    try self.emitForLoop(loop, locals, return_ty);
                 } else {
                     try self.writeUnsupportedStmt(stmt);
                 }
@@ -765,6 +767,58 @@ const CEmitter = struct {
         }
         self.indent -= 1;
 
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}\n");
+    }
+
+    fn emitForLoop(self: *CEmitter, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        const binding = loop.label orelse {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "/* unsupported for loop without binding */\n");
+            return error.UnsupportedCEmission;
+        };
+        const iterable = loop.iterable orelse {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "/* unsupported for loop without iterable */\n");
+            return error.UnsupportedCEmission;
+        };
+        const element_c_type = iterableElementCTypeForExpr(iterable, locals) orelse {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "/* unsupported for iterable */\n");
+            return error.UnsupportedCEmission;
+        };
+        const index_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_i{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "for (uintptr_t {s} = 0; {s} < ", .{ index_name, index_name });
+        if (sliceAccessForExpr(iterable, locals)) |slice| {
+            try self.emitExpr(iterable, locals);
+            try self.out.print(self.allocator, ".{s}", .{slice.len_field});
+        } else if (arrayLenForExpr(iterable, locals)) |len| {
+            try self.out.appendSlice(self.allocator, len);
+        } else {
+            try self.out.appendSlice(self.allocator, "0");
+        }
+        try self.out.print(self.allocator, "; {s} += 1) {{\n", .{index_name});
+
+        var nested = try cloneLocals(self.allocator, locals.*);
+        defer nested.deinit();
+        try nested.put(binding.text, .{ .c_type = element_c_type });
+
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ element_c_type, binding.text });
+        if (sliceAccessForExpr(iterable, locals)) |slice| {
+            try self.emitExpr(iterable, locals);
+            try self.out.print(self.allocator, ".{s}[{s}]", .{ slice.ptr_field, index_name });
+        } else {
+            try self.emitExpr(iterable, locals);
+            try self.out.print(self.allocator, "[{s}]", .{index_name});
+        }
+        try self.out.appendSlice(self.allocator, ";\n");
+        try self.emitBlockItems(loop.body, &nested, return_ty);
+        self.indent -= 1;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "}\n");
     }
@@ -1181,12 +1235,13 @@ const CEmitter = struct {
         const source_type_name = typeName(ty);
         const mmio_pointee = mmioPointee(ty);
         return switch (ty.kind) {
-            .array => |node| .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name, .array_len = intLiteralText(node.len), .mmio_pointee = mmio_pointee },
-            .slice => .{
+            .array => |node| .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name, .array_len = intLiteralText(node.len), .iterable_element_c_type = try self.cTypeFor(node.child.*, .typedef_name), .mmio_pointee = mmio_pointee },
+            .slice => |node| .{
                 .c_type = try self.cTypeFor(ty, .typedef_name),
                 .source_type_name = source_type_name,
                 .slice_ptr_field = "ptr",
                 .slice_len_field = "len",
+                .iterable_element_c_type = try self.cTypeFor(node.child.*, .typedef_name),
                 .mmio_pointee = mmio_pointee,
             },
             .nullable => |child| .{
@@ -1214,6 +1269,7 @@ const LocalInfo = struct {
     array_len: ?[]const u8 = null,
     slice_ptr_field: ?[]const u8 = null,
     slice_len_field: ?[]const u8 = null,
+    iterable_element_c_type: ?[]const u8 = null,
     nullable_inner_c_type: ?[]const u8 = null,
     mmio_pointee: ?[]const u8 = null,
 };
@@ -2025,6 +2081,15 @@ fn exprType(expr: ast.Expr, ctx: *FnContext) ?[]const u8 {
     };
 }
 
+fn iterableElementCTypeForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    const local_set = locals orelse return null;
+    return switch (expr.kind) {
+        .ident => |ident| if (local_set.get(ident.text)) |info| info.iterable_element_c_type else null,
+        .grouped => |inner| iterableElementCTypeForExpr(inner.*, locals),
+        else => null,
+    };
+}
+
 fn isSignedIntType(ty: []const u8) bool {
     return ty.len >= 2 and ty[0] == 'i' and std.ascii.isDigit(ty[1]);
 }
@@ -2375,6 +2440,50 @@ test "emits C for while loops and loop control" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "break;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "continue;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return out;") != null);
+}
+
+test "emits C for array and slice for loops" {
+    const source =
+        \\fn sum_slice(xs: []const u32) -> u32 {
+        \\    var sum: u32 = 0;
+        \\    for x in xs {
+        \\        sum = sum + x;
+        \\    }
+        \\    return sum;
+        \\}
+        \\
+        \\fn sum_array(xs: [4]u32) -> u32 {
+        \\    var sum: u32 = 0;
+        \\    for x in xs {
+        \\        sum = sum + x;
+        \\    }
+        \\    return sum;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_for_loops.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t sum_slice(mc_slice_const_u32 xs)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "for (uintptr_t mc_i0 = 0; mc_i0 < xs.len; mc_i0 += 1) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs.ptr[mc_i0];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t sum_array(uint32_t xs[4])") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "for (uintptr_t mc_i1 = 0; mc_i1 < 4; mc_i1 += 1) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs[mc_i1];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "sum = mc_checked_add_u32(sum, x);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return sum;") != null);
 }
 
 test "emits C for fixed array indexing with bounds checks" {
