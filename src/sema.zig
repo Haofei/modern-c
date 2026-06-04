@@ -2455,9 +2455,17 @@ fn localStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
             }
             return null;
         },
+        .member => |node| localStorageRoot(node.base.*, ctx),
+        .index => |node| indexedLocalArrayStorageRoot(node.base.*, ctx),
         .grouped => |inner| localStorageRoot(inner.*, ctx),
         else => null,
     };
+}
+
+fn indexedLocalArrayStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
+    const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
+    if (!isArrayType(ty)) return null;
+    return localStorageRoot(expr, ctx);
 }
 
 fn isConstStorageType(ty: ast.TypeExpr) bool {

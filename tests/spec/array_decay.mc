@@ -4,10 +4,11 @@
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_ARRAY_TO_POINTER_DECAY
 
-fn accept_array_element_address() -> *mut u8 {
+extern fn consume_pointer(p: *mut u8) -> void;
+
+fn accept_array_element_address() -> void {
     var buf: [4]u8 = uninit;
-    let p: *mut u8 = &buf[0];
-    return p;
+    consume_pointer(&buf[0]);
 }
 
 fn reject_array_to_single_pointer() -> *mut u8 {

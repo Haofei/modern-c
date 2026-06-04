@@ -6,6 +6,10 @@
 
 global shared_counter: u32 = 0;
 
+extern struct Packet {
+    value: u32,
+}
+
 fn accept_return_parameter_pointer(p: *mut u32) -> *mut u32 {
     return p;
 }
@@ -31,6 +35,10 @@ fn accept_return_const_parameter_pointer_alias(p: *const u32) -> *const u32 {
 fn accept_return_global_address_alias() -> *mut u32 {
     let p: *mut u32 = &shared_counter;
     return p;
+}
+
+fn accept_return_slice_element_address(xs: []mut u32, i: usize) -> *mut u32 {
+    return &xs[i];
 }
 
 fn accept_cleared_local_pointer_alias(p: *mut u32) -> *mut u32 {
@@ -88,6 +96,18 @@ fn reject_return_grouped_local_address() -> *mut u32 {
     var x: u32 = 1;
     // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
     return &(x);
+}
+
+fn reject_return_local_field_address() -> *mut u32 {
+    var packet: Packet = uninit;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return &packet.value;
+}
+
+fn reject_return_local_array_element_address(i: usize) -> *mut u32 {
+    var xs: [4]u32 = uninit;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return &xs[i];
 }
 
 fn reject_return_local_pointer_to_var() -> *mut u32 {

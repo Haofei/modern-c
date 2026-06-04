@@ -166,6 +166,7 @@ fn reject_address_of_element_mismatch_initializer() -> *mut u16 {
     var buf: [4]u8 = uninit;
     // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
     let q: *mut u16 = &buf[0];
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
     return q;
 }
 
@@ -181,6 +182,7 @@ fn reject_address_of_element_mismatch_assignment(fallback: *mut u16) -> *mut u16
     var q: *mut u16 = fallback;
     // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
     q = &buf[0];
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
     return q;
 }
 
