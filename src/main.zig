@@ -233,6 +233,13 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
         return error.EmitCFailed;
     }
 
+    var checker = sema.Checker.init(&diag);
+    checker.checkModule(module);
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitCFailed;
+    }
+
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_c.appendC(allocator, module, &output);

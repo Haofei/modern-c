@@ -49,6 +49,39 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\    return out;
         \\}
         \\
+        \\MC_UNUSED static inline uint32_t mc_checked_sub_u32(uint32_t a, uint32_t b) {
+        \\    uint32_t out;
+        \\    if (__builtin_sub_overflow(a, b, &out)) mc_trap_IntegerOverflow();
+        \\    return out;
+        \\}
+        \\
+        \\MC_UNUSED static inline uint32_t mc_checked_mul_u32(uint32_t a, uint32_t b) {
+        \\    uint32_t out;
+        \\    if (__builtin_mul_overflow(a, b, &out)) mc_trap_IntegerOverflow();
+        \\    return out;
+        \\}
+        \\
+        \\MC_UNUSED static inline uint32_t mc_checked_div_u32(uint32_t a, uint32_t b) {
+        \\    if (b == 0u) mc_trap_DivideByZero();
+        \\    return a / b;
+        \\}
+        \\
+        \\MC_UNUSED static inline uint32_t mc_checked_mod_u32(uint32_t a, uint32_t b) {
+        \\    if (b == 0u) mc_trap_DivideByZero();
+        \\    return a % b;
+        \\}
+        \\
+        \\MC_UNUSED static inline uint32_t mc_checked_shl_u32(uint32_t a, uint32_t b) {
+        \\    if (b >= 32u) mc_trap_InvalidShift();
+        \\    if (a > (UINT32_MAX >> b)) mc_trap_IntegerOverflow();
+        \\    return a << b;
+        \\}
+        \\
+        \\MC_UNUSED static inline uint32_t mc_checked_shr_u32(uint32_t a, uint32_t b) {
+        \\    if (b >= 32u) mc_trap_InvalidShift();
+        \\    return a >> b;
+        \\}
+        \\
         \\MC_UNUSED static inline uint32_t mc_race_load_u32(uint32_t const *p) {
         \\    uint32_t value;
         \\    __atomic_load(p, &value, __ATOMIC_RELAXED);
@@ -338,8 +371,8 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .binary => |node| {
-                if (node.op == .add) {
-                    try self.out.appendSlice(self.allocator, "mc_checked_add_u32(");
+                if (checkedU32Helper(node.op)) |helper| {
+                    try self.out.print(self.allocator, "{s}(", .{helper});
                     try self.emitExpr(node.left.*, locals);
                     try self.out.appendSlice(self.allocator, ", ");
                     try self.emitExpr(node.right.*, locals);
@@ -1048,6 +1081,19 @@ fn binaryCOp(op: ast.BinaryOp) []const u8 {
     };
 }
 
+fn checkedU32Helper(op: ast.BinaryOp) ?[]const u8 {
+    return switch (op) {
+        .add => "mc_checked_add_u32",
+        .sub => "mc_checked_sub_u32",
+        .mul => "mc_checked_mul_u32",
+        .div => "mc_checked_div_u32",
+        .mod => "mc_checked_mod_u32",
+        .shl => "mc_checked_shl_u32",
+        .shr => "mc_checked_shr_u32",
+        else => null,
+    };
+}
+
 fn orderingArg(args: []ast.Expr) []const u8 {
     for (args) |arg| {
         if (arg.kind == .enum_literal) return arg.kind.enum_literal.text;
@@ -1285,6 +1331,12 @@ test "emits C support helpers used by lower-c evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Bounds") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_check_index_usize") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_sub_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mul_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_div_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mod_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_shl_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_shr_u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_load_u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u8") != null);
@@ -1398,4 +1450,39 @@ test "emits C for fixed array indexing with bounds checks" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t xs[4]") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t xs[4]") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs[mc_check_index_usize(i, 4)];") != null);
+}
+
+test "emits C checked u32 arithmetic helpers" {
+    const source =
+        \\fn checked_ops(a: u32, b: u32, n: u32) -> u32 {
+        \\    var out: u32 = a - b;
+        \\    out = out * b;
+        \\    out = out / b;
+        \\    out = out % b;
+        \\    out = out << n;
+        \\    return out >> n;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_checked_ops.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t out = mc_checked_sub_u32(a, b);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_mul_u32(out, b);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_div_u32(out, b);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_mod_u32(out, b);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_shl_u32(out, n);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_shr_u32(out, n);") != null);
 }
