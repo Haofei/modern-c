@@ -149,15 +149,19 @@ pub const Checker = struct {
     }
 
     fn checkEnum(self: *Checker, enum_decl: ast.EnumDecl) void {
+        const repr_class = if (enum_decl.repr) |repr| classifyType(repr) else .checked_isize;
+        const repr_bounds = checkedIntBounds(repr_class);
         if (enum_decl.repr) |repr| {
             self.checkType(repr, .normal);
-            if (!isCheckedInt(classifyType(repr))) {
+            if (!isCheckedInt(repr_class)) {
                 self.errorCode(repr.span, "E_ENUM_REPR_NOT_INTEGER", "enum representation type must be an integer type");
             }
         }
 
         var cases = std.StringHashMap(void).init(self.reporter.allocator);
         defer cases.deinit();
+        var values = std.AutoHashMap(EnumValueKey, void).init(self.reporter.allocator);
+        defer values.deinit();
 
         for (enum_decl.cases) |case| {
             if (cases.contains(case.name.text)) {
@@ -165,7 +169,26 @@ pub const Checker = struct {
             } else {
                 cases.put(case.name.text, {}) catch {};
             }
-            if (case.value) |value| _ = self.checkExpr(value, .{});
+            if (case.value) |value| self.checkEnumCaseValue(value, repr_bounds, &values);
+        }
+    }
+
+    fn checkEnumCaseValue(self: *Checker, value: ast.Expr, repr_bounds: ?IntBounds, values: *std.AutoHashMap(EnumValueKey, void)) void {
+        _ = self.checkExpr(value, .{});
+        const literal = integerLiteralValue(value) orelse {
+            self.errorCode(value.span, "E_ENUM_CASE_VALUE_NOT_INTEGER", "enum representation values must be integer literals");
+            return;
+        };
+        const key = enumValueKey(literal);
+        if (repr_bounds) |bounds| {
+            if (!enumValueFits(key, bounds)) {
+                self.errorCode(value.span, "E_ENUM_CASE_VALUE_OUT_OF_RANGE", "enum case value is outside the representation type range");
+            }
+        }
+        if (values.contains(key)) {
+            self.errorCode(value.span, "E_DUPLICATE_ENUM_VALUE", "enum case representation values must be unique");
+        } else {
+            values.put(key, {}) catch {};
         }
     }
 
@@ -1577,6 +1600,25 @@ const LiteralValue = struct {
     negative: bool,
     magnitude: u128,
 };
+
+const EnumValueKey = struct {
+    negative: bool,
+    magnitude: u128,
+};
+
+fn enumValueKey(value: LiteralValue) EnumValueKey {
+    return .{
+        .negative = value.negative and value.magnitude != 0,
+        .magnitude = value.magnitude,
+    };
+}
+
+fn enumValueFits(value: EnumValueKey, bounds: IntBounds) bool {
+    if (value.negative) {
+        return bounds.signed and value.magnitude <= bounds.min_abs;
+    }
+    return value.magnitude <= bounds.max;
+}
 
 fn integerLiteralValue(expr: ast.Expr) ?LiteralValue {
     return switch (expr.kind) {

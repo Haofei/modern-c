@@ -2,7 +2,7 @@
 // SPEC: milestone=enum-declarations
 // SPEC: phase=parse,sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_DUPLICATE_ENUM_CASE,E_ENUM_REPR_NOT_INTEGER,E_UNKNOWN_ENUM_CASE,E_NO_IMPLICIT_CONVERSION,E_RETURN_TYPE_MISMATCH,E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION,E_ENUM_RAW_REQUIRES_OPEN_ENUM,E_CALL_ARG_COUNT
+// SPEC: check=E_DUPLICATE_ENUM_CASE,E_ENUM_REPR_NOT_INTEGER,E_ENUM_CASE_VALUE_NOT_INTEGER,E_ENUM_CASE_VALUE_OUT_OF_RANGE,E_DUPLICATE_ENUM_VALUE,E_UNKNOWN_ENUM_CASE,E_NO_IMPLICIT_CONVERSION,E_RETURN_TYPE_MISMATCH,E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION,E_ENUM_RAW_REQUIRES_OPEN_ENUM,E_CALL_ARG_COUNT
 
 enum OpenError {
     not_found,
@@ -141,6 +141,11 @@ enum Irq: u8 {
     keyboard = 33,
 }
 
+enum SignedIrq: i8 {
+    negative = -1,
+    zero = 0,
+}
+
 open enum DeviceState: u8 {
     idle = 0,
     busy = 1,
@@ -184,6 +189,27 @@ enum RejectDuplicateEnumCase: u8 {
     ready = 1,
     // EXPECT_ERROR: E_DUPLICATE_ENUM_CASE
     ready = 2,
+}
+
+enum RejectNonIntegerEnumValue: u8 {
+    // EXPECT_ERROR: E_ENUM_CASE_VALUE_NOT_INTEGER
+    bad = true,
+}
+
+enum RejectEnumValueOutOfRange: u8 {
+    // EXPECT_ERROR: E_ENUM_CASE_VALUE_OUT_OF_RANGE
+    bad = 256,
+}
+
+enum RejectSignedEnumValueOutOfRange: i8 {
+    // EXPECT_ERROR: E_ENUM_CASE_VALUE_OUT_OF_RANGE
+    bad = -129,
+}
+
+enum RejectDuplicateEnumValue: u8 {
+    first = 1,
+    // EXPECT_ERROR: E_DUPLICATE_ENUM_VALUE
+    second = 1,
 }
 
 // EXPECT_ERROR: E_ENUM_REPR_NOT_INTEGER
