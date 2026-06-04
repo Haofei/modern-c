@@ -207,21 +207,24 @@ pub const Checker = struct {
 
     fn checkLocal(self: *Checker, local: ast.LocalDecl, ctx: Context, mutable: bool) void {
         const kind = if (local.ty) |ty| classifyType(ty) else TypeClass.unknown;
+        var address_origin: AddressOrigin = .none;
         if (local.ty) |ty| self.checkType(ty, .normal);
         if (local.init) |expr| {
             const initializer = self.checkExpr(expr, ctx);
+            if (!mutable) address_origin = addressOrigin(expr, ctx);
             const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
             const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
             const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
             const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
-            if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !canInitialize(kind, initializer)) {
+            const address_checked = self.checkAddressOfInitializer(kind, expr);
+            if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !address_checked and !canInitialize(kind, initializer)) {
                 self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
             }
         } else {
             self.errorCode(local.names[0].span, "E_LOCAL_REQUIRES_INITIALIZER", "ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage");
         }
         if (ctx.scope) |scope| {
-            for (local.names) |name| scope.put(name.text, .{ .class = kind, .mutable = mutable, .ty = local.ty, .origin = .local }) catch {};
+            for (local.names) |name| scope.put(name.text, .{ .class = kind, .mutable = mutable, .ty = local.ty, .origin = .local, .address_origin = address_origin }) catch {};
         }
     }
 
@@ -508,6 +511,12 @@ pub const Checker = struct {
         return false;
     }
 
+    fn checkAddressOfInitializer(self: *Checker, target: TypeClass, expr: ast.Expr) bool {
+        _ = self;
+        if (!isNonNullPointerLike(target)) return false;
+        return isAddressOfExpr(expr);
+    }
+
     fn checkPointerViewInitializer(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         const source = exprStorageType(expr, ctx) orelse return false;
         if (implicitPointerViewConversion(target, source)) {
@@ -631,10 +640,16 @@ const LocalInfo = struct {
     mutable: bool,
     ty: ?ast.TypeExpr,
     origin: BindingOrigin,
+    address_origin: AddressOrigin = .none,
 };
 
 const BindingOrigin = enum {
     param,
+    local,
+};
+
+const AddressOrigin = enum {
+    none,
     local,
 };
 
@@ -931,6 +946,14 @@ fn isNullLiteral(expr: ast.Expr) bool {
     };
 }
 
+fn isAddressOfExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .address_of => true,
+        .grouped => |inner| isAddressOfExpr(inner.*),
+        else => false,
+    };
+}
+
 fn isNullableValue(kind: TypeClass) bool {
     return switch (kind) {
         .nullable_pointer, .nullable_c_void_pointer => true,
@@ -1078,8 +1101,28 @@ fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
 fn localAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
     return switch (expr.kind) {
         .address_of => |inner| localStorageRoot(inner.*, ctx),
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| {
+                if (entry.address_origin == .local) return expr.span;
+            }
+            return null;
+        },
         .grouped => |inner| localAddressRoot(inner.*, ctx),
         else => null,
+    };
+}
+
+fn addressOrigin(expr: ast.Expr, ctx: Context) AddressOrigin {
+    return switch (expr.kind) {
+        .address_of => |inner| if (localStorageRoot(inner.*, ctx) != null) .local else .none,
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| return entry.address_origin;
+            return .none;
+        },
+        .grouped => |inner| addressOrigin(inner.*, ctx),
+        else => .none,
     };
 }
 
