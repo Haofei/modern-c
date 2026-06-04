@@ -139,6 +139,7 @@ const CEmitter = struct {
     functions: std.StringHashMap(FnInfo),
     structs: std.StringHashMap(ast.StructDecl),
     mmio_structs: std.StringHashMap(MmioStruct),
+    packed_bits: std.StringHashMap(PackedBitsInfo),
     enums: std.StringHashMap(ast.EnumDecl),
     slice_types: std.StringHashMap(SliceInfo),
     result_types: std.StringHashMap(ResultInfo),
@@ -154,6 +155,7 @@ const CEmitter = struct {
             .functions = std.StringHashMap(FnInfo).init(allocator),
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
+            .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
             .enums = std.StringHashMap(ast.EnumDecl).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
@@ -166,6 +168,9 @@ const CEmitter = struct {
         self.result_types.deinit();
         self.slice_types.deinit();
         self.enums.deinit();
+        var packed_bits = self.packed_bits.valueIterator();
+        while (packed_bits.next()) |bits| bits.fields.deinit();
+        self.packed_bits.deinit();
         var mmio_structs = self.mmio_structs.valueIterator();
         while (mmio_structs.next()) |mmio_struct| mmio_struct.fields.deinit();
         self.mmio_structs.deinit();
@@ -192,6 +197,7 @@ const CEmitter = struct {
                     }
                 },
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
+                .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
                 .fn_decl, .extern_fn => |fn_decl| {
                     try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type });
                     try self.collectFunctionSliceTypes(fn_decl);
@@ -200,6 +206,7 @@ const CEmitter = struct {
             }
         }
         try self.emitEnums();
+        try self.emitPackedBitsTypes();
         for (module.decls) |decl| {
             if (decl.kind == .extern_struct and self.mmio_structs.contains(decl.kind.extern_struct.name.text)) {
                 try self.emitMmioStruct(decl.kind.extern_struct);
@@ -270,6 +277,13 @@ const CEmitter = struct {
 
     fn enumReprCType(self: *CEmitter, enum_decl: ast.EnumDecl) ![]const u8 {
         return if (enum_decl.repr) |repr| try self.cTypeFor(repr, .typedef_name) else "intptr_t";
+    }
+
+    fn emitPackedBitsTypes(self: *CEmitter) !void {
+        var it = self.packed_bits.iterator();
+        while (it.next()) |entry| {
+            try self.out.print(self.allocator, "typedef {s} {s};\n\n", .{ entry.value_ptr.repr_c_type, entry.key_ptr.* });
+        }
     }
 
     fn emitEnumCaseValue(self: *CEmitter, value: ast.Expr) !void {
@@ -421,12 +435,26 @@ const CEmitter = struct {
         }
         if (typeName(ty)) |name| {
             if (self.enums.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
+            if (self.packed_bits.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
             if (self.structs.contains(name)) {
                 if (style == .struct_tag) try out.appendSlice(self.scratch.allocator(), "struct ");
                 return out.appendSlice(self.scratch.allocator(), name);
             }
         }
         try out.appendSlice(self.scratch.allocator(), cType(ty));
+    }
+
+    fn collectPackedBits(self: *CEmitter, packed_bits: ast.PackedBitsDecl) !void {
+        var fields = std.StringHashMap(PackedBitsField).init(self.allocator);
+        errdefer fields.deinit();
+        for (packed_bits.fields, 0..) |field, bit_index| {
+            try fields.put(field.name.text, .{ .bit_index = bit_index });
+        }
+        try self.packed_bits.put(packed_bits.name.text, .{
+            .repr_name = typeName(packed_bits.repr) orelse "unknown",
+            .repr_c_type = try self.cTypeFor(packed_bits.repr, .typedef_name),
+            .fields = fields,
+        });
     }
 
     fn collectMmioStruct(self: *CEmitter, struct_decl: ast.StructDecl) !void {
@@ -1028,7 +1056,7 @@ const CEmitter = struct {
             const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
             self.temp_index += 1;
             try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = mc_mmio_read_u8(&{s}->{s});\n", .{ primitiveCTypeName(access.value_type) orelse "uint8_t", temp_name, access.param, access.field });
+            try self.out.print(self.allocator, "{s} {s} = mc_mmio_read_u8(&{s}->{s});\n", .{ self.cTypeForMmioValue(access.value_type), temp_name, access.param, access.field });
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "mc_barrier_acquire_after();\n");
             try self.writeIndent();
@@ -1128,6 +1156,7 @@ const CEmitter = struct {
                 try self.emitExpr(inner.*, locals);
             },
             .member => |node| {
+                if (try self.emitPackedBitsMember(node, locals)) return;
                 try self.emitExpr(node.base.*, locals);
                 try self.out.print(self.allocator, ".{s}", .{node.name.text});
             },
@@ -1187,6 +1216,32 @@ const CEmitter = struct {
 
     fn emitEnumLiteral(self: *CEmitter, literal: ast.Ident, enum_name: []const u8) !void {
         try self.out.print(self.allocator, "{s}_{s}", .{ enum_name, literal.text });
+    }
+
+    fn emitPackedBitsMember(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const base_ty = self.packedBitsNameForExpr(node.base.*, locals) orelse return false;
+        const info = self.packed_bits.get(base_ty) orelse return false;
+        const field = info.fields.get(node.name.text) orelse return false;
+        try self.out.appendSlice(self.allocator, "((");
+        try self.emitExpr(node.base.*, locals);
+        try self.out.print(self.allocator, " & {s}) != 0)", .{try self.packedBitsMaskLiteral(info, field.bit_index)});
+        return true;
+    }
+
+    fn packedBitsNameForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| if (locals) |local_set| if (local_set.get(ident.text)) |info| info.source_type_name else null else null,
+            .grouped => |inner| self.packedBitsNameForExpr(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn packedBitsMaskLiteral(self: *CEmitter, info: PackedBitsInfo, bit_index: usize) ![]const u8 {
+        if (std.mem.eql(u8, info.repr_name, "u8")) return std.fmt.allocPrint(self.scratch.allocator(), "UINT8_C({d})", .{@as(u64, 1) << @intCast(bit_index)});
+        if (std.mem.eql(u8, info.repr_name, "u16")) return std.fmt.allocPrint(self.scratch.allocator(), "UINT16_C({d})", .{@as(u64, 1) << @intCast(bit_index)});
+        if (std.mem.eql(u8, info.repr_name, "u32")) return std.fmt.allocPrint(self.scratch.allocator(), "UINT32_C({d})", .{@as(u64, 1) << @intCast(bit_index)});
+        if (std.mem.eql(u8, info.repr_name, "u64")) return std.fmt.allocPrint(self.scratch.allocator(), "UINT64_C({d})", .{@as(u64, 1) << @intCast(bit_index)});
+        return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{@as(u64, 1) << @intCast(bit_index)});
     }
 
     fn globalAssignmentTarget(self: *CEmitter, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
@@ -1364,6 +1419,11 @@ const CEmitter = struct {
         };
     }
 
+    fn cTypeForMmioValue(self: *CEmitter, value_type: []const u8) []const u8 {
+        if (self.packed_bits.contains(value_type)) return value_type;
+        return primitiveCTypeName(value_type) orelse "uint8_t";
+    }
+
     fn localInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !LocalInfo {
         const source_type_name = typeName(ty);
         const mmio_pointee = mmioPointee(ty);
@@ -1429,6 +1489,16 @@ const SliceAccess = struct {
 const SliceInfo = struct {
     name: []const u8,
     ptr_type: []const u8,
+};
+
+const PackedBitsInfo = struct {
+    repr_name: []const u8,
+    repr_c_type: []const u8,
+    fields: std.StringHashMap(PackedBitsField),
+};
+
+const PackedBitsField = struct {
+    bit_index: usize,
 };
 
 const ResultInfo = struct {
@@ -2474,6 +2544,50 @@ test "emits C for simple MMIO register access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp0 = mc_mmio_read_u8(&uart->lsr);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
+}
+
+test "emits C for packed bits MMIO reads and field masks" {
+    const source =
+        \\packed bits UartLsr: u8 {
+        \\    data_ready: bool,
+        \\    tx_empty: bool,
+        \\}
+        \\
+        \\extern mmio struct Uart16550 {
+        \\    lsr: RegBits<u8, UartLsr, .read>,
+        \\}
+        \\
+        \\fn read_status(uart: MmioPtr<Uart16550>) -> UartLsr {
+        \\    return uart.lsr.read(.acquire);
+        \\}
+        \\
+        \\fn ready(status: UartLsr) -> bool {
+        \\    return status.tx_empty;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_packed_bits_mmio.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef uint8_t UartLsr;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static UartLsr read_status(Uart16550 volatile * uart)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "UartLsr mc_tmp0 = mc_mmio_read_u8(&uart->lsr);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static bool ready(UartLsr status)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((status & UINT8_C(2)) != 0);") != null);
 }
 
 test "emits C ABI for simple Result types" {
