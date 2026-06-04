@@ -104,7 +104,8 @@ pub const Checker = struct {
                     const initializer = self.checkExpr(expr, ctx);
                     const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
                     const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
-                    if (local.ty != null and !literal_checked and !null_checked and !canInitialize(kind, initializer)) {
+                    const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
+                    if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !canInitialize(kind, initializer)) {
                         self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                     }
                 } else {
@@ -415,6 +416,15 @@ pub const Checker = struct {
         return false;
     }
 
+    fn checkArrayDecayInitializer(self: *Checker, target: TypeClass, initializer: TypeClass, expr: ast.Expr) bool {
+        if (initializer != .array) return false;
+        if (isPointerLike(target)) {
+            self.errorCode(expr.span, "E_ARRAY_TO_POINTER_DECAY", "arrays do not implicitly decay to pointers");
+            return true;
+        }
+        return false;
+    }
+
     fn checkIfLetPattern(self: *Checker, pattern: ast.Pattern, value_class: TypeClass) void {
         switch (pattern.kind) {
             .bind => {
@@ -500,6 +510,7 @@ const TypeClass = enum {
     pointer,
     raw_many_pointer,
     slice,
+    array,
     c_void_pointer,
     nullable_pointer,
     nullable_c_void_pointer,
@@ -638,6 +649,7 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
         .pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .pointer,
         .raw_many_pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .raw_many_pointer,
         .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .slice,
+        .array => .array,
         .nullable => |child| classifyNullableType(child.*),
         .qualified => |node| classifyType(node.child.*),
         .generic => |node| classifyGenericTypeName(node.base.text),
