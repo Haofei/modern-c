@@ -550,9 +550,10 @@ pub const Parser = struct {
     fn parsePostfix(self: *Parser, input: ast.Expr) anyerror!ast.Expr {
         var expr = input;
         while (true) {
-            if (self.match(.less)) {
+            if (self.current.kind == .less and self.lessStartsGenericCall()) {
+                self.advance();
                 const type_args = try self.finishTypeArgsAfterLess();
-                if (!self.match(.l_paren)) return self.fail("generic expression must be a call in this parser slice");
+                try self.expect(.l_paren, "expected '(' after generic call type arguments");
                 expr = try self.finishCall(expr, type_args);
                 continue;
             }
@@ -586,6 +587,37 @@ pub const Parser = struct {
             break;
         }
         return expr;
+    }
+
+    fn lessStartsGenericCall(self: *Parser) bool {
+        if (self.current.kind != .less) return false;
+        var lx = self.lx;
+        var depth: usize = 0;
+        var saw_type_token = false;
+
+        while (true) {
+            const tok = lx.next();
+            switch (tok.kind) {
+                .eof, .semicolon, .l_brace, .r_brace, .fat_arrow, .equal => return false,
+                .less => {
+                    depth += 1;
+                    saw_type_token = false;
+                },
+                .greater => {
+                    if (depth == 0) {
+                        return saw_type_token and lx.next().kind == .l_paren;
+                    }
+                    depth -= 1;
+                    saw_type_token = true;
+                },
+                .comma => {
+                    if (!saw_type_token) return false;
+                    saw_type_token = false;
+                },
+                .l_paren => return false,
+                else => saw_type_token = true,
+            }
+        }
     }
 
     fn finishTypeArgsAfterLess(self: *Parser) anyerror![]ast.TypeExpr {
@@ -788,4 +820,44 @@ test "parser accepts qualified generic type arguments" {
     const qualifier = param_ty.args[0].kind.qualified;
     try std.testing.expectEqual(ast.Mutability.@"const", qualifier.mutability);
     try std.testing.expectEqualStrings("u8", qualifier.child.kind.name.text);
+}
+
+test "parser distinguishes relational operators from generic calls" {
+    const source =
+        \\fn compare(a: u32, b: u32) -> bool { return a < b; }
+        \\fn compare_equal(a: u32, b: u32) -> bool { return a >= b; }
+        \\fn generic_then_compare(a: u32, b: u32, limit: u32) -> bool { return min<u32>(a, b) < limit; }
+        \\fn compare_then_generic(a: u32, b: u32, limit: u32) -> bool { return limit > max<u32>(a, b); }
+        \\fn call_generic(pa: PAddr, value: u64) -> void { raw.store<u64>(pa, value); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "relational_vs_generic.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = Parser.init(source, &reporter);
+    const module = try p.parseModule(allocator);
+    defer module.deinit(allocator);
+
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 5), module.decls.len);
+
+    const lt = module.decls[0].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.binary;
+    try std.testing.expectEqual(ast.BinaryOp.lt, lt.op);
+
+    const ge = module.decls[1].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.binary;
+    try std.testing.expectEqual(ast.BinaryOp.ge, ge.op);
+
+    const generic_lt = module.decls[2].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.binary;
+    try std.testing.expectEqual(ast.BinaryOp.lt, generic_lt.op);
+    try std.testing.expectEqual(@as(usize, 1), generic_lt.left.kind.call.type_args.len);
+
+    const gt_generic = module.decls[3].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.binary;
+    try std.testing.expectEqual(ast.BinaryOp.gt, gt_generic.op);
+    try std.testing.expectEqual(@as(usize, 1), gt_generic.right.kind.call.type_args.len);
+
+    const call = module.decls[4].kind.fn_decl.body.?.items[0].kind.expr.kind.call;
+    try std.testing.expectEqual(@as(usize, 1), call.type_args.len);
 }

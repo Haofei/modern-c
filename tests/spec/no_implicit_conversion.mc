@@ -53,7 +53,7 @@ fn accept_context_typed_literal_arithmetic(a: u32) -> u32 {
 }
 
 fn accept_same_type_comparison(a: i32, b: i32) -> bool {
-    return a == b;
+    return a < b;
 }
 
 fn reject_u8_out_of_range_literal() -> u8 {
@@ -129,7 +129,7 @@ fn reject_signed_unsigned_arithmetic(a: i32, b: u32) -> i32 {
 
 fn reject_unsigned_signed_comparison(a: u32, b: i32) -> bool {
     // EXPECT_ERROR: E_SIGNED_UNSIGNED_MIX
-    return a == b;
+    return a < b;
 }
 
 fn reject_integer_width_arithmetic(a: u16, b: u32) -> u16 {
