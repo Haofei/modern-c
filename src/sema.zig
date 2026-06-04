@@ -13,9 +13,12 @@ pub const Checker = struct {
     pub fn checkModule(self: *Checker, module: ast.Module) void {
         var mmio_structs = std.StringHashMap(MmioStruct).init(self.reporter.allocator);
         defer deinitMmioStructs(&mmio_structs);
+        var structs = std.StringHashMap(StructInfo).init(self.reporter.allocator);
+        defer deinitStructs(&structs);
         self.collectMmioStructs(module, &mmio_structs);
+        self.collectStructs(module, &structs);
 
-        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs);
+        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs);
     }
 
     fn collectMmioStructs(self: *Checker, module: ast.Module, mmio_structs: *std.StringHashMap(MmioStruct)) void {
@@ -41,10 +44,27 @@ pub const Checker = struct {
         };
     }
 
-    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct)) void {
+    fn collectStructs(self: *Checker, module: ast.Module, structs: *std.StringHashMap(StructInfo)) void {
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .extern_struct => |struct_decl| self.collectStruct(struct_decl, structs),
+                .fn_decl, .extern_fn, .type_alias, .opaque_decl, .global_decl => {},
+            }
+        }
+    }
+
+    fn collectStruct(self: *Checker, struct_decl: ast.StructDecl, structs: *std.StringHashMap(StructInfo)) void {
+        var fields = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
+        for (struct_decl.fields) |field| fields.put(field.name.text, field.ty) catch {};
+        structs.put(struct_decl.name.text, .{ .fields = fields }) catch {
+            fields.deinit();
+        };
+    }
+
+    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo)) void {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
         switch (decl.kind) {
-            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs),
+            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs),
             .extern_struct => |struct_decl| {
                 for (struct_decl.fields) |field| self.checkType(field.ty, .normal);
             },
@@ -57,7 +77,7 @@ pub const Checker = struct {
         }
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo)) void {
         var scope = Scope.init(self.reporter.allocator);
         defer scope.deinit();
         var mmio_params = std.StringHashMap([]const u8).init(self.reporter.allocator);
@@ -85,6 +105,7 @@ pub const Checker = struct {
                 .scope = &scope,
                 .mmio_structs = mmio_structs,
                 .mmio_params = &mmio_params,
+                .structs = structs,
             });
             if (fallthroughSpan(body)) |span| {
                 if (returns_never) {
@@ -703,10 +724,15 @@ const Context = struct {
     scope: ?*Scope = null,
     mmio_structs: ?*const std.StringHashMap(MmioStruct) = null,
     mmio_params: ?*const std.StringHashMap([]const u8) = null,
+    structs: ?*const std.StringHashMap(StructInfo) = null,
 };
 
 const MmioStruct = struct {
     fields: std.StringHashMap(void),
+};
+
+const StructInfo = struct {
+    fields: std.StringHashMap(ast.TypeExpr),
 };
 
 const UnsafeContracts = struct {
@@ -979,6 +1005,14 @@ fn storageElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
+fn structTypeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |name| name.text,
+        .qualified => |node| structTypeName(node.child.*),
+        else => null,
+    };
+}
+
 fn classifyGenericTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "Result")) return .result;
     if (std.mem.eql(u8, name, "UserPtr")) return .user_ptr;
@@ -1211,6 +1245,12 @@ fn deinitMmioStructs(mmio_structs: *std.StringHashMap(MmioStruct)) void {
     mmio_structs.deinit();
 }
 
+fn deinitStructs(structs: *std.StringHashMap(StructInfo)) void {
+    var values = structs.valueIterator();
+    while (values.next()) |struct_info| struct_info.fields.deinit();
+    structs.deinit();
+}
+
 fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
     const member = switch (target.kind) {
         .member => |node| node,
@@ -1274,9 +1314,18 @@ fn assignmentTargetType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         },
         .deref => |inner| if (exprStorageType(inner.*, ctx)) |ty| storageElementType(ty) else null,
         .index => |node| if (exprStorageType(node.base.*, ctx)) |ty| storageElementType(ty) else null,
+        .member => |node| if (isMmioRegisterTarget(expr, ctx)) null else memberFieldType(node, ctx),
         .grouped => |inner| assignmentTargetType(inner.*, ctx),
         else => null,
     };
+}
+
+fn memberFieldType(member: anytype, ctx: Context) ?ast.TypeExpr {
+    const base_ty = exprStorageType(member.base.*, ctx) orelse return null;
+    const struct_name = structTypeName(base_ty) orelse return null;
+    const structs = ctx.structs orelse return null;
+    const struct_info = structs.get(struct_name) orelse return null;
+    return struct_info.fields.get(member.name.text);
 }
 
 fn updateAssignmentAddressOrigin(target: ast.Expr, value: ast.Expr, ctx: Context) void {
