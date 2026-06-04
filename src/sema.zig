@@ -291,8 +291,9 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(ty, initializer, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(ty, initializer, ctx);
         const address_checked = self.checkAddressOfInitializer(target, ty, initializer, ctx);
+        const address_class_checked = checkAddressClassConversion(self, initializer.span, target, source);
         const enum_checked = self.checkEnumValueCompatibility(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(target, source)) {
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !canInitialize(target, source)) {
             self.errorCode(initializer.span, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         }
     }
@@ -502,8 +503,9 @@ pub const Checker = struct {
                 const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
                 const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
                 const address_checked = if (local.ty) |ty| self.checkAddressOfInitializer(kind, ty, expr, ctx) else false;
+                const address_class_checked = if (local.ty != null) checkAddressClassConversion(self, expr.span, kind, initializer) else false;
                 const enum_checked = if (local.ty) |ty| self.checkEnumValueCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
-                if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(kind, initializer)) {
+                if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !canInitialize(kind, initializer)) {
                     self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                 }
             }
@@ -553,8 +555,9 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, value, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, value, ctx);
         const address_checked = self.checkAddressOfInitializer(target_class, target_ty, value, ctx);
+        const address_class_checked = checkAddressClassConversion(self, value.span, target_class, value_class);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(target_class, value_class)) {
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
     }
@@ -853,6 +856,10 @@ pub const Checker = struct {
 
     fn checkReflectedType(self: *Checker, ty: ast.TypeExpr, ctx: Context) void {
         self.checkType(ty, .normal);
+        if (reflectionGenericHasWrongArity(ty)) {
+            self.errorCode(ty.span, "E_REFLECTION_GENERIC_ARG_COUNT", "reflection generic type has the wrong number of type arguments");
+            return;
+        }
         if (isKnownLayoutType(ty, ctx)) return;
         self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "reflection requires a known layout-capable type");
     }
@@ -945,9 +952,10 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewReturn(target_ty, expr, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, expr, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, expr, ctx);
+        const address_class_checked = checkAddressClassConversion(self, expr.span, target, returned);
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !local_escape_checked and !enum_checked and !canInitialize(target, returned)) {
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !local_escape_checked and !enum_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
@@ -982,8 +990,9 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, arg, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, arg, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, arg, ctx);
+        const address_class_checked = checkAddressClassConversion(self, arg.span, target, source);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(target, source)) {
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         }
     }
@@ -1371,6 +1380,7 @@ const TypeClass = enum {
     nullable_pointer,
     nullable_c_void_pointer,
     paddr,
+    vaddr,
     dma_addr,
     user_ptr,
     mmio_ptr,
@@ -1468,7 +1478,7 @@ fn isPointerLike(kind: TypeClass) bool {
 
 fn isRuntimePointerDerefClass(kind: TypeClass) bool {
     return switch (kind) {
-        .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer, .paddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
+        .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer, .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
         else => false,
     };
 }
@@ -1631,6 +1641,7 @@ fn classifyTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "void")) return .void;
     if (std.mem.eql(u8, name, "bool")) return .bool;
     if (std.mem.eql(u8, name, "PAddr")) return .paddr;
+    if (std.mem.eql(u8, name, "VAddr")) return .vaddr;
     if (std.mem.eql(u8, name, "DmaAddr")) return .dma_addr;
     return .unknown;
 }
@@ -1860,14 +1871,41 @@ fn tryResultType(kind: TypeClass) TypeClass {
 
 fn isOpaqueAddressClass(kind: TypeClass) bool {
     return switch (kind) {
-        .paddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
+        .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
         else => false,
     };
+}
+
+fn isAddressClass(kind: TypeClass) bool {
+    return switch (kind) {
+        .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
+        else => false,
+    };
+}
+
+fn checkAddressClassConversion(self: *Checker, span: diagnostics.Span, target: TypeClass, source: TypeClass) bool {
+    if (!isAddressClass(target) or !isAddressClass(source)) return false;
+    if (target == source) return false;
+    self.errorCode(span, addressClassMismatchDiagnostic(target, source), addressClassMismatchMessage(target, source));
+    return true;
+}
+
+fn addressClassMismatchDiagnostic(target: TypeClass, source: TypeClass) []const u8 {
+    if (source == .dma_addr and target == .paddr) return "E_DMA_ADDR_NOT_PADDR";
+    if (source == .dma_addr and target == .vaddr) return "E_DMA_ADDR_NOT_VADDR";
+    return "E_ADDRESS_CLASS_MISMATCH";
+}
+
+fn addressClassMismatchMessage(target: TypeClass, source: TypeClass) []const u8 {
+    if (source == .dma_addr and target == .paddr) return "DmaAddr is not PAddr";
+    if (source == .dma_addr and target == .vaddr) return "DmaAddr is not VAddr";
+    return "opaque address classes are not implicitly interchangeable";
 }
 
 fn addressDerefDiagnostic(kind: TypeClass) []const u8 {
     return switch (kind) {
         .paddr => "E_PADDR_DEREF",
+        .vaddr => "E_VADDR_DEREF",
         .dma_addr => "E_DMA_ADDR_DEREF",
         .user_ptr => "E_USER_PTR_DEREF",
         .mmio_ptr => "E_MMIO_PTR_DEREF",
@@ -1879,6 +1917,7 @@ fn addressDerefDiagnostic(kind: TypeClass) []const u8 {
 fn addressDerefMessage(kind: TypeClass) []const u8 {
     return switch (kind) {
         .paddr => "cannot dereference PAddr; map it into the current virtual address space first",
+        .vaddr => "cannot dereference VAddr; convert it to a typed virtual pointer first",
         .dma_addr => "cannot dereference DmaAddr; convert through the appropriate DMA mapping API first",
         .user_ptr => "cannot directly dereference UserPtr; use user.load or user.copy_from",
         .mmio_ptr => "cannot directly dereference MmioPtr; use typed MMIO register accessors",
@@ -2484,25 +2523,36 @@ fn knownEnumName(name: []const u8, ctx: Context) bool {
 }
 
 fn isKnownLayoutGeneric(node: anytype, ctx: Context) bool {
-    if (std.mem.eql(u8, node.base.text, "Reg") or
-        std.mem.eql(u8, node.base.text, "RegBits") or
-        std.mem.eql(u8, node.base.text, "MmioPtr") or
-        std.mem.eql(u8, node.base.text, "UserPtr") or
-        std.mem.eql(u8, node.base.text, "PhysPtr") or
-        std.mem.eql(u8, node.base.text, "DmaBuf") or
-        std.mem.eql(u8, node.base.text, "Result") or
-        std.mem.eql(u8, node.base.text, "wrap") or
-        std.mem.eql(u8, node.base.text, "sat") or
-        std.mem.eql(u8, node.base.text, "serial") or
-        std.mem.eql(u8, node.base.text, "counter"))
-    {
-        for (node.args) |arg| {
-            if (arg.kind == .enum_literal) continue;
-            if (!isKnownLayoutType(arg, ctx)) return false;
-        }
-        return true;
+    const expected = reflectionGenericExpectedArgs(node.base.text) orelse return false;
+    if (node.args.len != expected) return false;
+    for (node.args) |arg| {
+        if (arg.kind == .enum_literal) continue;
+        if (!isKnownLayoutType(arg, ctx)) return false;
     }
-    return false;
+    return true;
+}
+
+fn reflectionGenericHasWrongArity(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .generic => |node| if (reflectionGenericExpectedArgs(node.base.text)) |expected| node.args.len != expected else false,
+        .qualified => |node| reflectionGenericHasWrongArity(node.child.*),
+        else => false,
+    };
+}
+
+fn reflectionGenericExpectedArgs(name: []const u8) ?usize {
+    if (std.mem.eql(u8, name, "Reg")) return 2;
+    if (std.mem.eql(u8, name, "RegBits")) return 3;
+    if (std.mem.eql(u8, name, "MmioPtr")) return 1;
+    if (std.mem.eql(u8, name, "UserPtr")) return 1;
+    if (std.mem.eql(u8, name, "PhysPtr")) return 1;
+    if (std.mem.eql(u8, name, "DmaBuf")) return 2;
+    if (std.mem.eql(u8, name, "Result")) return 2;
+    if (std.mem.eql(u8, name, "wrap")) return 1;
+    if (std.mem.eql(u8, name, "sat")) return 1;
+    if (std.mem.eql(u8, name, "serial")) return 1;
+    if (std.mem.eql(u8, name, "counter")) return 1;
+    return null;
 }
 
 fn isUnwrapCall(callee: ast.Expr) bool {
