@@ -29,6 +29,12 @@ fn reject_reachable_unreachable() -> never {
 }
 
 #[no_lang_trap]
+fn reject_explicit_trap() -> never {
+    // EXPECT_ERROR: E_NO_LANG_TRAP_EDGE
+    return trap(.Assert);
+}
+
+#[no_lang_trap]
 fn reject_nullable_try(maybe: ?*const u8) -> *const u8 {
     // EXPECT_ERROR: E_NO_LANG_TRAP_EDGE
     return maybe?;

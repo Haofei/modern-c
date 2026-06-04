@@ -389,6 +389,12 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
         .cast => |node| try writeExprFacts(collector, node.value.*, writer, ctx),
         .call => |node| {
             if (ctx.no_lang_trap) {
+                if (isTrapCall(node.callee.*)) {
+                    try writer.print(
+                        "fact no_lang_trap_explicit_trap fn={s} kind={s} unsafe_contract_depth={} line={} column={}\n",
+                        .{ ctx.function_name, trapKindName(node.args), ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
+                    );
+                }
                 if (unwrapCalleeName(node.callee.*)) |callee_name| {
                     try writer.print(
                         "fact no_lang_trap_unwrap fn={s} form=call callee={s} unsafe_contract_depth={} line={} column={}\n",
@@ -537,6 +543,18 @@ fn unwrapCalleeName(callee: ast.Expr) ?[]const u8 {
         .ident => |ident| if (std.mem.eql(u8, ident.text, "unwrap")) ident.text else null,
         .member => |node| if (std.mem.eql(u8, node.name.text, "unwrap")) node.name.text else null,
         else => null,
+    };
+}
+
+fn isTrapCall(callee: ast.Expr) bool {
+    return isIdentNamed(callee, "trap");
+}
+
+fn trapKindName(args: []ast.Expr) []const u8 {
+    if (args.len == 0) return "unknown";
+    return switch (args[0].kind) {
+        .enum_literal => |literal| literal.text,
+        else => "unknown",
     };
 }
 

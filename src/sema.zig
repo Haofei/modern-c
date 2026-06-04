@@ -184,6 +184,9 @@ pub const Checker = struct {
                 return classifyType(node.ty.*);
             },
             .call => |node| {
+                if (ctx.no_lang_trap and isTrapCall(node.callee.*)) {
+                    self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "explicit trap emits a language trap in #[no_lang_trap]");
+                }
                 if (ctx.no_lang_trap and isUnwrapCall(node.callee.*)) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "unwrap may emit a language trap in #[no_lang_trap]");
                 }
@@ -433,6 +436,10 @@ fn isUnwrapCall(callee: ast.Expr) bool {
         .member => |node| std.mem.eql(u8, node.name.text, "unwrap"),
         else => false,
     };
+}
+
+fn isTrapCall(callee: ast.Expr) bool {
+    return isIdentNamed(callee, "trap");
 }
 
 fn isCAbiOpaqueBoundary(ty: ast.TypeExpr) bool {
