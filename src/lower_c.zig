@@ -883,6 +883,7 @@ const CEmitter = struct {
 
     fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         if (try self.emitResultSwitch(node, locals, return_ty)) return;
+        if (try self.emitTaggedUnionSwitch(node, locals, return_ty)) return;
 
         const subject_enum_name = self.enumNameForExpr(node.subject, locals);
         try self.writeIndent();
@@ -990,6 +991,69 @@ const CEmitter = struct {
         return emitted_any;
     }
 
+    fn emitTaggedUnionSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+        const subject = self.taggedUnionSubjectForExpr(node.subject, locals) orelse return false;
+        var emitted_any = false;
+        var has_wildcard = false;
+        for (node.arms) |arm| {
+            if (arm.patterns.len != 1) {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "/* unsupported tagged union switch multi-pattern arm */\n");
+                return error.UnsupportedCEmission;
+            }
+            const pattern = arm.patterns[0];
+            const branch = (try self.taggedUnionSwitchBranch(pattern, subject)) orelse {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "/* unsupported tagged union switch pattern: {s} */\n", .{@tagName(pattern.kind)});
+                return error.UnsupportedCEmission;
+            };
+            if (pattern.kind == .wildcard) has_wildcard = true;
+
+            try self.writeIndent();
+            if (!emitted_any) {
+                if (branch.condition) |condition| {
+                    try self.out.print(self.allocator, "if ({s}) {{\n", .{condition});
+                } else {
+                    try self.out.appendSlice(self.allocator, "{\n");
+                }
+            } else if (branch.condition) |condition| {
+                try self.out.print(self.allocator, "else if ({s}) {{\n", .{condition});
+            } else {
+                try self.out.appendSlice(self.allocator, "else {\n");
+            }
+            emitted_any = true;
+
+            var nested = try cloneLocals(self.allocator, locals.*);
+            defer nested.deinit();
+            self.indent += 1;
+            if (branch.binding_name) |binding_name| {
+                try nested.put(binding_name, .{ .c_type = branch.binding_type.? });
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = {s}.payload.{s};\n", .{
+                    branch.binding_type.?,
+                    binding_name,
+                    subject.name,
+                    try self.cPayloadFieldName(branch.payload_field.?),
+                });
+            }
+            try self.emitSwitchBody(arm.body, &nested, return_ty);
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "}\n");
+        }
+        if (!has_wildcard) {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "else {\n");
+            self.indent += 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "mc_trap_InvalidRepresentation();\n");
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "}\n");
+        }
+        return emitted_any;
+    }
+
     fn emitSwitchBody(self: *CEmitter, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         switch (body) {
             .block => |block| try self.emitBlockItems(block, locals, return_ty),
@@ -1035,6 +1099,41 @@ const CEmitter = struct {
                     .payload_field = "err",
                 };
                 break :blk null;
+            },
+            .wildcard => .{ .condition = null },
+            else => null,
+        };
+    }
+
+    fn taggedUnionSubjectForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?TaggedUnionSwitchSubject {
+        const name = switch (expr.kind) {
+            .ident => |ident| ident.text,
+            .grouped => |inner| switch (inner.kind) {
+                .ident => |ident| ident.text,
+                else => return null,
+            },
+            else => return null,
+        };
+        const info = locals.get(name) orelse return null;
+        const type_name = info.source_type_name orelse return null;
+        const union_decl = self.tagged_unions.get(type_name) orelse return null;
+        return .{ .name = name, .type_name = type_name, .decl = union_decl };
+    }
+
+    fn taggedUnionSwitchBranch(self: *CEmitter, pattern: ast.Pattern, subject: TaggedUnionSwitchSubject) !?TaggedUnionSwitchBranch {
+        return switch (pattern.kind) {
+            .tag => |tag| .{
+                .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.tag == {s}Tag_{s}", .{ subject.name, subject.type_name, tag.text }),
+            },
+            .tag_bind => |tag_bind| blk: {
+                const case = taggedUnionCase(subject.decl, tag_bind.tag.text) orelse break :blk null;
+                const payload_ty = case.ty orelse break :blk null;
+                break :blk .{
+                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.tag == {s}Tag_{s}", .{ subject.name, subject.type_name, tag_bind.tag.text }),
+                    .binding_name = tag_bind.binding.text,
+                    .binding_type = try self.cTypeFor(payload_ty, .typedef_name),
+                    .payload_field = tag_bind.tag.text,
+                };
             },
             .wildcard => .{ .condition = null },
             else => null,
@@ -1840,6 +1939,19 @@ const ResultSwitchBranch = struct {
     payload_field: ?[]const u8 = null,
 };
 
+const TaggedUnionSwitchSubject = struct {
+    name: []const u8,
+    type_name: []const u8,
+    decl: ast.UnionDecl,
+};
+
+const TaggedUnionSwitchBranch = struct {
+    condition: ?[]const u8 = null,
+    binding_name: ?[]const u8 = null,
+    binding_type: ?[]const u8 = null,
+    payload_field: ?[]const u8 = null,
+};
+
 const StructTypeStyle = enum { typedef_name, struct_tag };
 
 fn cloneLocals(allocator: std.mem.Allocator, locals: std.StringHashMap(LocalInfo)) !std.StringHashMap(LocalInfo) {
@@ -2542,6 +2654,13 @@ fn overlayByteArrayLen(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
+fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCase {
+    for (union_decl.cases) |case| {
+        if (std.mem.eql(u8, case.name.text, name)) return case;
+    }
+    return null;
+}
+
 fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| ident.text,
@@ -3056,6 +3175,54 @@ test "emits C ABI for tagged unions" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "} Token;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static Token pass_token(Token token)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return token;") != null);
+}
+
+test "emits C for tagged union switch narrowing" {
+    const source =
+        \\union Token {
+        \\    int: i64,
+        \\    eof,
+        \\}
+        \\
+        \\fn token_value(token: Token) -> i64 {
+        \\    switch token {
+        \\        int(v) => { return v; },
+        \\        .eof => { return 0; },
+        \\    }
+        \\}
+        \\
+        \\fn token_kind(token: Token) -> u32 {
+        \\    switch token {
+        \\        .int => { return 1; },
+        \\        .eof => { return 0; },
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_tagged_union_switch.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static int64_t token_value(Token token)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (token.tag == TokenTag_int) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "int64_t v = token.payload.int_;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return v;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "else if (token.tag == TokenTag_eof) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidRepresentation();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t token_kind(Token token)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 0;") != null);
 }
 
 test "emits C for Result ok and err constructors" {
