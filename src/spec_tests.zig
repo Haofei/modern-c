@@ -2,6 +2,7 @@ const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
 const ir = @import("ir.zig");
+const lower_c = @import("lower_c.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
@@ -53,6 +54,7 @@ const required_keys = [_]RequiredKey{ .section, .phase, .expect, .check };
 const CheckKind = enum {
     diagnostic,
     ir_fact,
+    lower_c,
     future_trap,
     future_lowering,
     unsupported,
@@ -61,6 +63,7 @@ const CheckKind = enum {
         return switch (self) {
             .diagnostic => "diagnostic",
             .ir_fact => "IR fact",
+            .lower_c => "lower-c",
             .future_trap => "future trap",
             .future_lowering => "future lowering",
             .unsupported => "unsupported",
@@ -71,6 +74,7 @@ const CheckKind = enum {
 const CheckSummary = struct {
     diagnostics: usize = 0,
     ir_facts: usize = 0,
+    lower_c: usize = 0,
     future_traps: usize = 0,
     future_lowering: usize = 0,
     unsupported: usize = 0,
@@ -79,6 +83,7 @@ const CheckSummary = struct {
         switch (kind) {
             .diagnostic => self.diagnostics += 1,
             .ir_fact => self.ir_facts += 1,
+            .lower_c => self.lower_c += 1,
             .future_trap => self.future_traps += 1,
             .future_lowering => self.future_lowering += 1,
             .unsupported => self.unsupported += 1,
@@ -155,8 +160,8 @@ test "classify SPEC check entries" {
     try std.testing.expectEqual(CheckKind.diagnostic, classifyCheck("E_C_VOID_DEREF"));
     try std.testing.expectEqual(CheckKind.ir_fact, classifyCheck("IntegerOverflow"));
     try std.testing.expectEqual(CheckKind.ir_fact, classifyCheck("DivideByZero"));
-    try std.testing.expectEqual(CheckKind.future_lowering, classifyCheck("checked-arithmetic-lowering"));
-    try std.testing.expectEqual(CheckKind.future_lowering, classifyCheck("mmio-width-preserved"));
+    try std.testing.expectEqual(CheckKind.lower_c, classifyCheck("checked-arithmetic-lowering"));
+    try std.testing.expectEqual(CheckKind.lower_c, classifyCheck("mmio-width-preserved"));
     try std.testing.expectEqual(CheckKind.unsupported, classifyCheck("needs-new-harness-mode"));
 }
 
@@ -236,12 +241,13 @@ test "tests/spec check entries are classified" {
 
     if (summary.unsupported > 0) {
         std.debug.print(
-            "SPEC check summary: {d} diagnostic, {d} IR fact, {d} future trap, {d} future lowering, {d} unsupported\n",
-            .{ summary.diagnostics, summary.ir_facts, summary.future_traps, summary.future_lowering, summary.unsupported },
+            "SPEC check summary: {d} diagnostic, {d} IR fact, {d} lower-c, {d} future trap, {d} future lowering, {d} unsupported\n",
+            .{ summary.diagnostics, summary.ir_facts, summary.lower_c, summary.future_traps, summary.future_lowering, summary.unsupported },
         );
     }
     try std.testing.expect(summary.diagnostics > 0);
     try std.testing.expect(summary.ir_facts > 0);
+    try std.testing.expect(summary.lower_c > 0);
 }
 
 test "tests/spec fixtures produce declared semantic error codes" {
@@ -347,6 +353,58 @@ test "tests/spec fixtures produce declared IR inspection facts" {
     }
 }
 
+test "tests/spec fixtures produce declared lower-c inspection markers" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var dir = try std.Io.Dir.cwd().openDir(io, "tests/spec", .{ .iterate = true });
+    defer dir.close(io);
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".mc")) continue;
+
+        const source = try dir.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024));
+        defer allocator.free(source);
+
+        var metadata = try parseLeadingMetadata(allocator, source);
+        defer metadata.deinit(allocator);
+
+        const check_value = metadata.valueFor("check") orelse continue;
+        if (!hasExpectedLowerCCheck(check_value)) continue;
+
+        const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
+        defer allocator.free(path);
+
+        var reporter = diagnostics.Reporter.init(allocator, path, source);
+        defer reporter.deinit();
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const parse_allocator = arena.allocator();
+
+        var p = parser.Parser.init(source, &reporter);
+        const module = try p.parseModule(parse_allocator);
+        defer module.deinit(parse_allocator);
+
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(allocator);
+        try lower_c.appendInspection(allocator, module, &output);
+
+        var checks = std.mem.splitScalar(u8, check_value, ',');
+        while (checks.next()) |raw_check| {
+            const check = trimCheck(raw_check);
+            if (classifyCheck(check) != .lower_c) continue;
+            if (!hasLowerCEvidenceForCheck(output.items, check)) {
+                std.debug.print("{s}: expected lower-c evidence for {s}\nLowering:\n{s}", .{ path, check, output.items });
+                try std.testing.expect(false);
+            }
+        }
+    }
+}
+
 fn hasExpectedDiagnosticCode(check_value: []const u8) bool {
     var checks = std.mem.splitScalar(u8, check_value, ',');
     while (checks.next()) |raw_check| {
@@ -363,9 +421,18 @@ fn hasExpectedIrFactCheck(check_value: []const u8) bool {
     return false;
 }
 
+fn hasExpectedLowerCCheck(check_value: []const u8) bool {
+    var checks = std.mem.splitScalar(u8, check_value, ',');
+    while (checks.next()) |raw_check| {
+        if (classifyCheck(trimCheck(raw_check)) == .lower_c) return true;
+    }
+    return false;
+}
+
 fn classifyCheck(check: []const u8) CheckKind {
     if (isDiagnosticCode(check)) return .diagnostic;
     if (isIrFactCheck(check)) return .ir_fact;
+    if (isLowerCCheck(check)) return .lower_c;
     if (isFutureTrapCheck(check)) return .future_trap;
     if (isFutureLoweringCheck(check)) return .future_lowering;
     return .unsupported;
@@ -389,12 +456,7 @@ fn isIrFactCheck(check: []const u8) bool {
     return matchesAny(check, &names);
 }
 
-fn isFutureTrapCheck(check: []const u8) bool {
-    const names = [_][]const u8{};
-    return matchesAny(check, &names);
-}
-
-fn isFutureLoweringCheck(check: []const u8) bool {
+fn isLowerCCheck(check: []const u8) bool {
     const names = [_][]const u8{
         "checked-arithmetic-lowering",
         "metadata-contained",
@@ -404,6 +466,16 @@ fn isFutureLoweringCheck(check: []const u8) bool {
         "mmio-width-preserved",
         "mmio-ordering-preserved",
     };
+    return matchesAny(check, &names);
+}
+
+fn isFutureTrapCheck(check: []const u8) bool {
+    const names = [_][]const u8{};
+    return matchesAny(check, &names);
+}
+
+fn isFutureLoweringCheck(check: []const u8) bool {
+    const names = [_][]const u8{};
     return matchesAny(check, &names);
 }
 
@@ -464,4 +536,63 @@ fn containsAll(haystack: []const u8, needles: []const []const u8) bool {
         if (std.mem.indexOf(u8, haystack, needle) == null) return false;
     }
     return true;
+}
+
+fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
+    if (std.mem.eql(u8, check, "checked-arithmetic-lowering")) {
+        return containsAll(output, &.{
+            "lower checked_arith fn=add_overflow_u32 op=add",
+            "trap=IntegerOverflow",
+            "strategy=helper",
+            "emits_plain_c_overflow=false",
+        });
+    }
+    if (std.mem.eql(u8, check, "metadata-contained")) {
+        return containsAll(output, &.{
+            "lower contract_scope fn=allow_unchecked_add_inside_contract contract=no_overflow",
+            "metadata_begin=1",
+            "metadata_end=1",
+            "contained=true",
+            "lower contract_scope fn=noalias_contract_region contract=noalias",
+        });
+    }
+    if (std.mem.eql(u8, check, "race-tolerant-lowering")) {
+        return containsAll(output, &.{
+            "lower ordinary_access fn=possibly_racing_store object=shared_counter access=store",
+            "strategy=race_helper",
+            "c_plain_access=false",
+        });
+    }
+    if (std.mem.eql(u8, check, "no-happens-before")) {
+        return containsAll(output, &.{
+            "lower race_semantics fn=possibly_racing_load object=shared_counter",
+            "creates_happens_before=false",
+            "assumes_no_race=false",
+        });
+    }
+    if (std.mem.eql(u8, check, "no-c-data-race-ub")) {
+        return containsAll(output, &.{
+            "lower c_ub",
+            "object=shared_counter",
+            "c_data_race_ub_dependency=false",
+        });
+    }
+    if (std.mem.eql(u8, check, "mmio-width-preserved")) {
+        return containsAll(output, &.{
+            "lower mmio_access fn=putc op=write register=Uart16550.thr",
+            "register_width=8 emitted_width=8",
+            "volatile=true",
+            "address_space=mmio",
+            "lower mmio_access fn=read_status op=read register=Uart16550.lsr",
+        });
+    }
+    if (std.mem.eql(u8, check, "mmio-ordering-preserved")) {
+        return containsAll(output, &.{
+            "lower mmio_order fn=putc op=write register=Uart16550.thr ordering=release",
+            "prevents_before_after=true",
+            "lower mmio_order fn=read_status op=read register=Uart16550.lsr ordering=acquire",
+            "prevents_after_before=true",
+        });
+    }
+    return false;
 }

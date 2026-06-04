@@ -47,7 +47,7 @@ pub const Parser = struct {
             } else null;
             if (self.matchIdentifierText("mmio")) {
                 try self.expect(.kw_struct, "expected 'struct' after extern mmio");
-                const struct_decl = try self.finishStructDecl(abi);
+                const struct_decl = try self.finishStructDecl("mmio");
                 return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .extern_struct = struct_decl } };
             }
             if (self.match(.kw_fn)) {

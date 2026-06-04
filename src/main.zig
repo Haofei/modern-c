@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const ir = @import("ir.zig");
 const lexer = @import("lexer.zig");
+const lower_c = @import("lower_c.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 const spec_tests = @import("spec_tests.zig");
@@ -13,6 +14,7 @@ const usage =
     \\  mcc lex <file.mc>
     \\  mcc check <file.mc>
     \\  mcc facts <file.mc>
+    \\  mcc lower-c <file.mc>
     \\
 ;
 
@@ -36,6 +38,8 @@ pub fn main(init: std.process.Init) !void {
         try runCheck(allocator, path, source);
     } else if (std.mem.eql(u8, command, "facts")) {
         try runFacts(allocator, path, source);
+    } else if (std.mem.eql(u8, command, "lower-c")) {
+        try runLowerC(allocator, path, source);
     } else {
         return failUsage();
     }
@@ -120,6 +124,28 @@ fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     std.debug.print("{s}", .{facts.items});
 }
 
+fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.LowerCFailed;
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    try lower_c.appendInspection(allocator, module, &output);
+    std.debug.print("{s}", .{output.items});
+}
+
 fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {
     var p = parser.Parser.init(source, diag);
     return p.parseModule(allocator) catch |err| {
@@ -133,6 +159,7 @@ test {
     _ = ast;
     _ = ir;
     _ = lexer;
+    _ = lower_c;
     _ = parser;
     _ = sema;
     _ = spec_tests;
