@@ -76,12 +76,14 @@ const CEmitter = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     globals: std.StringHashMap(GlobalInfo),
+    indent: usize,
 
     fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) CEmitter {
         return .{
             .allocator = allocator,
             .out = out,
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
+            .indent = 0,
         };
     }
 
@@ -136,7 +138,9 @@ const CEmitter = struct {
         defer locals.deinit();
         for (fn_decl.params) |param| try locals.put(param.name.text, {});
 
-        for (body.items) |stmt| try self.emitStmt(stmt, &locals);
+        self.indent += 1;
+        try self.emitBlockItems(body, &locals);
+        self.indent -= 1;
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
@@ -160,7 +164,8 @@ const CEmitter = struct {
                 for (local.names) |name| {
                     try locals.put(name.text, {});
                     const ty = if (local.ty) |decl_ty| cType(decl_ty) else "uint32_t";
-                    try self.out.print(self.allocator, "    {s} {s}", .{ ty, name.text });
+                    try self.writeIndent();
+                    try self.out.print(self.allocator, "{s} {s}", .{ ty, name.text });
                     if (local.init) |initializer| {
                         try self.out.appendSlice(self.allocator, " = ");
                         try self.emitExpr(initializer, locals);
@@ -171,7 +176,7 @@ const CEmitter = struct {
                 }
             },
             .assignment => |node| {
-                try self.out.appendSlice(self.allocator, "    ");
+                try self.writeIndent();
                 if (self.globalAssignmentTarget(node.target, locals)) |target| {
                     try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ", .{ target.info.type_name, target.name });
                     try self.emitExpr(node.value, locals);
@@ -184,24 +189,79 @@ const CEmitter = struct {
                 }
             },
             .@"return" => |maybe| {
-                try self.out.appendSlice(self.allocator, "    return");
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "return");
                 if (maybe) |expr| {
                     try self.out.appendSlice(self.allocator, " ");
                     try self.emitExpr(expr, locals);
                 }
                 try self.out.appendSlice(self.allocator, ";\n");
             },
+            .@"break" => {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "break;\n");
+            },
+            .@"continue" => {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "continue;\n");
+            },
             .expr => |expr| {
-                try self.out.appendSlice(self.allocator, "    ");
+                try self.writeIndent();
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
             },
-            else => try self.out.print(
-                self.allocator,
-                "    /* unsupported statement for C emission: {s} */\n",
-                .{@tagName(stmt.kind)},
-            ),
+            .block => |block| {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "{\n");
+                var nested = try cloneLocals(self.allocator, locals.*);
+                defer nested.deinit();
+                self.indent += 1;
+                try self.emitBlockItems(block, &nested);
+                self.indent -= 1;
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "}\n");
+            },
+            .loop => |loop| {
+                if (loop.kind == .@"while") {
+                    try self.writeIndent();
+                    try self.out.appendSlice(self.allocator, "while (");
+                    if (loop.iterable) |condition| {
+                        try self.emitExpr(condition, locals);
+                    } else {
+                        try self.out.appendSlice(self.allocator, "true");
+                    }
+                    try self.out.appendSlice(self.allocator, ") {\n");
+                    var nested = try cloneLocals(self.allocator, locals.*);
+                    defer nested.deinit();
+                    self.indent += 1;
+                    try self.emitBlockItems(loop.body, &nested);
+                    self.indent -= 1;
+                    try self.writeIndent();
+                    try self.out.appendSlice(self.allocator, "}\n");
+                } else {
+                    try self.writeUnsupportedStmt(stmt);
+                }
+            },
+            else => try self.writeUnsupportedStmt(stmt),
         }
+    }
+
+    fn emitBlockItems(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(void)) anyerror!void {
+        for (block.items) |stmt| try self.emitStmt(stmt, locals);
+    }
+
+    fn writeIndent(self: *CEmitter) !void {
+        for (0..self.indent) |_| try self.out.appendSlice(self.allocator, "    ");
+    }
+
+    fn writeUnsupportedStmt(self: *CEmitter, stmt: ast.Stmt) !void {
+        try self.writeIndent();
+        try self.out.print(
+            self.allocator,
+            "/* unsupported statement for C emission: {s} */\n",
+            .{@tagName(stmt.kind)},
+        );
+        return error.UnsupportedCEmission;
     }
 
     fn emitExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(void)) anyerror!void {
@@ -272,7 +332,10 @@ const CEmitter = struct {
                 try self.emitExpr(node.value.*, locals);
                 try self.out.appendSlice(self.allocator, ")");
             },
-            else => try self.out.print(self.allocator, "/* unsupported expr: {s} */0", .{@tagName(expr.kind)}),
+            else => {
+                try self.out.print(self.allocator, "/* unsupported expr: {s} */0", .{@tagName(expr.kind)});
+                return error.UnsupportedCEmission;
+            },
         }
     }
 
@@ -287,6 +350,14 @@ const CEmitter = struct {
         };
     }
 };
+
+fn cloneLocals(allocator: std.mem.Allocator, locals: std.StringHashMap(void)) !std.StringHashMap(void) {
+    var cloned = std.StringHashMap(void).init(allocator);
+    errdefer cloned.deinit();
+    var it = locals.keyIterator();
+    while (it.next()) |name| try cloned.put(name.*, {});
+    return cloned;
+}
 
 const Inspector = struct {
     allocator: std.mem.Allocator,
@@ -1150,4 +1221,41 @@ test "emits C for simple functions and race-safe globals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_add_u32(a, b);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_counter, x);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_race_load_u32(&shared_counter);") != null);
+}
+
+test "emits C for while loops and loop control" {
+    const source =
+        \\fn loop_once(flag: bool) -> u32 {
+        \\    var out: u32 = 0;
+        \\    while flag {
+        \\        {
+        \\            out = out + 1;
+        \\        }
+        \\        break;
+        \\        continue;
+        \\    }
+        \\    return out;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_loops.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "while (flag) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_add_u32(out, 1);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "break;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "continue;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return out;") != null);
 }
