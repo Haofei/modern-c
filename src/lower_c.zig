@@ -1141,6 +1141,7 @@ const CEmitter = struct {
     fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         if (try self.emitResultSwitch(node, locals, return_ty)) return;
         if (try self.emitTaggedUnionSwitch(node, locals, return_ty)) return;
+        if (try self.emitNullableSwitch(node, locals, return_ty)) return;
         if (try self.emitEnumCallSwitch(node, locals, return_ty)) return;
 
         var replacements: std.ArrayList(MmioReadReplacement) = .empty;
@@ -1292,6 +1293,55 @@ const CEmitter = struct {
         return emitted_any;
     }
 
+    fn emitNullableSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+        const subject = if (try self.nullableSwitchSubjectForExpr(node.subject, locals)) |subject|
+            subject
+        else
+            return false;
+
+        var emitted_any = false;
+        for (node.arms) |arm| {
+            if (arm.patterns.len != 1) return false;
+            const pattern = arm.patterns[0];
+            const branch = switch (pattern.kind) {
+                .bind => |binding| NullableSwitchBranch{
+                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s} != NULL", .{subject.name}),
+                    .binding_name = binding.text,
+                },
+                .wildcard => NullableSwitchBranch{ .condition = null },
+                else => return false,
+            };
+
+            try self.writeIndent();
+            if (!emitted_any) {
+                if (branch.condition) |condition| {
+                    try self.out.print(self.allocator, "if ({s}) {{\n", .{condition});
+                } else {
+                    try self.out.appendSlice(self.allocator, "{\n");
+                }
+            } else if (branch.condition) |condition| {
+                try self.out.print(self.allocator, "else if ({s}) {{\n", .{condition});
+            } else {
+                try self.out.appendSlice(self.allocator, "else {\n");
+            }
+            emitted_any = true;
+
+            var nested = try cloneLocals(self.allocator, locals.*);
+            defer nested.deinit();
+            self.indent += 1;
+            if (branch.binding_name) |binding_name| {
+                try nested.put(binding_name, .{ .c_type = subject.inner_c_type });
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ subject.inner_c_type, binding_name, subject.name });
+            }
+            try self.emitSwitchBody(arm.body, &nested, return_ty);
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "}\n");
+        }
+        return emitted_any;
+    }
+
     fn emitTaggedUnionSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
         const subject = if (self.taggedUnionSubjectForExpr(node.subject, locals)) |subject|
             subject
@@ -1309,18 +1359,12 @@ const CEmitter = struct {
         var emitted_any = false;
         var has_wildcard = false;
         for (node.arms) |arm| {
-            if (arm.patterns.len != 1) {
+            const branch = (try self.taggedUnionSwitchBranch(arm.patterns, subject)) orelse {
                 try self.writeIndent();
-                try self.out.appendSlice(self.allocator, "/* unsupported tagged union switch multi-pattern arm */\n");
-                return error.UnsupportedCEmission;
-            }
-            const pattern = arm.patterns[0];
-            const branch = (try self.taggedUnionSwitchBranch(pattern, subject)) orelse {
-                try self.writeIndent();
-                try self.out.print(self.allocator, "/* unsupported tagged union switch pattern: {s} */\n", .{@tagName(pattern.kind)});
+                try self.out.appendSlice(self.allocator, "/* unsupported tagged union switch pattern */\n");
                 return error.UnsupportedCEmission;
             };
-            if (pattern.kind == .wildcard) has_wildcard = true;
+            if (branch.is_wildcard) has_wildcard = true;
 
             try self.writeIndent();
             if (!emitted_any) {
@@ -1445,6 +1489,33 @@ const CEmitter = struct {
         return .{ .name = name, .type_name = type_name, .decl = union_decl };
     }
 
+    fn nullableSwitchSubjectForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?NullableSwitchSubject {
+        const source_name = switch (expr.kind) {
+            .ident => |ident| ident.text,
+            .grouped => |inner| switch (inner.kind) {
+                .ident => |ident| ident.text,
+                else => null,
+            },
+            else => null,
+        } orelse blk: {
+            const inner_c_type = try self.nullableInnerCTypeForExpr(expr, locals) orelse return null;
+            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ inner_c_type, temp_name });
+            try self.emitExpr(expr, locals);
+            try self.out.appendSlice(self.allocator, ";\n");
+            try locals.put(temp_name, .{
+                .c_type = inner_c_type,
+                .nullable_inner_c_type = inner_c_type,
+            });
+            break :blk temp_name;
+        };
+        const source_info = locals.get(source_name) orelse return null;
+        const inner_c_type = source_info.nullable_inner_c_type orelse return null;
+        return .{ .name = source_name, .inner_c_type = inner_c_type };
+    }
+
     fn taggedUnionReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
             .call => |node| blk: {
@@ -1459,24 +1530,41 @@ const CEmitter = struct {
         };
     }
 
-    fn taggedUnionSwitchBranch(self: *CEmitter, pattern: ast.Pattern, subject: TaggedUnionSwitchSubject) !?TaggedUnionSwitchBranch {
-        return switch (pattern.kind) {
-            .tag => |tag| .{
-                .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.tag == {s}Tag_{s}", .{ subject.name, subject.type_name, tag.text }),
-            },
-            .tag_bind => |tag_bind| blk: {
-                const case = taggedUnionCase(subject.decl, tag_bind.tag.text) orelse break :blk null;
-                const payload_ty = case.ty orelse break :blk null;
-                break :blk .{
-                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.tag == {s}Tag_{s}", .{ subject.name, subject.type_name, tag_bind.tag.text }),
-                    .binding_name = tag_bind.binding.text,
-                    .binding_type = try self.cTypeFor(payload_ty, .typedef_name),
-                    .payload_field = tag_bind.tag.text,
-                };
-            },
-            .wildcard => .{ .condition = null },
-            else => null,
-        };
+    fn taggedUnionSwitchBranch(self: *CEmitter, patterns: []const ast.Pattern, subject: TaggedUnionSwitchSubject) !?TaggedUnionSwitchBranch {
+        if (patterns.len == 0) return null;
+        if (patterns.len == 1) {
+            return switch (patterns[0].kind) {
+                .tag => |tag| .{
+                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.tag == {s}Tag_{s}", .{ subject.name, subject.type_name, tag.text }),
+                },
+                .tag_bind => |tag_bind| blk: {
+                    const case = taggedUnionCase(subject.decl, tag_bind.tag.text) orelse break :blk null;
+                    const payload_ty = case.ty orelse break :blk null;
+                    break :blk .{
+                        .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.tag == {s}Tag_{s}", .{ subject.name, subject.type_name, tag_bind.tag.text }),
+                        .binding_name = tag_bind.binding.text,
+                        .binding_type = try self.cTypeFor(payload_ty, .typedef_name),
+                        .payload_field = tag_bind.tag.text,
+                    };
+                },
+                .wildcard => .{ .condition = null, .is_wildcard = true },
+                else => null,
+            };
+        }
+
+        var condition: std.ArrayList(u8) = .empty;
+        for (patterns, 0..) |pattern, index| {
+            const tag = switch (pattern.kind) {
+                .tag => |tag| tag,
+                else => return null,
+            };
+            if (index > 0) try condition.appendSlice(self.scratch.allocator(), " || ");
+            try condition.appendSlice(
+                self.scratch.allocator(),
+                try std.fmt.allocPrint(self.scratch.allocator(), "{s}.tag == {s}Tag_{s}", .{ subject.name, subject.type_name, tag.text }),
+            );
+        }
+        return .{ .condition = try condition.toOwnedSlice(self.scratch.allocator()) };
     }
 
     fn emitForLoop(self: *CEmitter, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
@@ -3341,6 +3429,16 @@ const ResultSwitchBranch = struct {
     payload_field: ?[]const u8 = null,
 };
 
+const NullableSwitchSubject = struct {
+    name: []const u8,
+    inner_c_type: []const u8,
+};
+
+const NullableSwitchBranch = struct {
+    condition: ?[]const u8 = null,
+    binding_name: ?[]const u8 = null,
+};
+
 const TaggedUnionSwitchSubject = struct {
     name: []const u8,
     type_name: []const u8,
@@ -3349,6 +3447,7 @@ const TaggedUnionSwitchSubject = struct {
 
 const TaggedUnionSwitchBranch = struct {
     condition: ?[]const u8 = null,
+    is_wildcard: bool = false,
     binding_name: ?[]const u8 = null,
     binding_type: ?[]const u8 = null,
     payload_field: ?[]const u8 = null,
@@ -4815,6 +4914,7 @@ test "emits C for tagged union switch narrowing" {
         \\union Token {
         \\    int: i64,
         \\    eof,
+        \\    space,
         \\}
         \\
         \\fn token_value(token: Token) -> i64 {
@@ -4827,7 +4927,7 @@ test "emits C for tagged union switch narrowing" {
         \\fn token_kind(token: Token) -> u32 {
         \\    switch token {
         \\        .int => { return 1; },
-        \\        .eof => { return 0; },
+        \\        .eof, .space => { return 0; },
         \\    }
         \\}
         \\
@@ -4871,6 +4971,8 @@ test "emits C for tagged union switch narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "else if (token.tag == TokenTag_eof) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidRepresentation();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t token_kind(Token token)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (token.tag == TokenTag_int) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "else if (token.tag == TokenTag_eof || token.tag == TokenTag_space) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return 0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static int64_t token_call_value(void)") != null);
@@ -6060,6 +6162,50 @@ test "emits C for optional pointer if-let" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t unwrap_local_or_zero(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * maybe = maybe_ptr();\n    if (maybe != NULL) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = maybe;") != null);
+}
+
+test "emits C for nullable switch binding" {
+    const source =
+        \\extern fn maybe_ptr() -> ?*mut u8;
+        \\extern fn ptr_value(p: *mut u8) -> u32;
+        \\
+        \\fn nullable_switch(maybe: ?*mut u8) -> u32 {
+        \\    switch maybe {
+        \\        p => { return ptr_value(p); },
+        \\        _ => { return 0; },
+        \\    }
+        \\}
+        \\
+        \\fn nullable_call_switch() -> u32 {
+        \\    switch maybe_ptr() {
+        \\        p => { return ptr_value(p); },
+        \\        _ => { return 0; },
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_nullable_switch.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t nullable_switch(uint8_t * maybe)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (maybe != NULL) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = maybe;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ptr_value(p);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "else {\n        return 0;\n    }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp0 = maybe_ptr();\n    if (mc_tmp0 != NULL) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = mc_tmp0;") != null);
 }
 
 test "emits C for Result if-let narrowing" {

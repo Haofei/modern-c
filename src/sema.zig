@@ -607,13 +607,17 @@ pub const Checker = struct {
         }
         if (ctx.scope) |scope| {
             for (local.names) |name| {
-                if (scope.contains(name.text)) {
-                    self.errorCode(name.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
-                } else {
-                    scope.put(name.text, .{ .class = kind, .mutable = mutable, .ty = inferred_ty, .origin = .local, .address_origin = address_origin }) catch {};
-                }
+                self.addLocalBinding(scope, name, .{ .class = kind, .mutable = mutable, .ty = inferred_ty, .origin = .local, .address_origin = address_origin });
             }
         }
+    }
+
+    fn addLocalBinding(self: *Checker, scope: *Scope, name: ast.Ident, info: LocalInfo) void {
+        if (scope.contains(name.text)) {
+            self.errorCode(name.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
+            return;
+        }
+        scope.put(name.text, info) catch {};
     }
 
     fn checkAssignmentTarget(self: *Checker, target: ast.Expr, ctx: Context) void {
@@ -1215,29 +1219,28 @@ pub const Checker = struct {
     }
 
     fn addIfLetBinding(self: *Checker, pattern: ast.Pattern, value: ast.Expr, value_class: TypeClass, scope: *Scope, ctx: Context) void {
-        _ = self;
         var binding_ctx = ctx;
         binding_ctx.scope = scope;
         switch (pattern.kind) {
             .bind => |ident| {
                 if (!isNullableValue(value_class)) return;
                 const narrowed_ty = if (exprResultType(value, binding_ctx)) |ty| nullableInnerType(ty) else null;
-                scope.put(ident.text, .{
+                self.addLocalBinding(scope, ident, .{
                     .class = tryResultType(value_class),
                     .mutable = false,
                     .ty = narrowed_ty,
                     .origin = .local,
-                }) catch {};
+                });
             },
             .tag_bind => |node| {
                 if (!isResultNarrowingTag(node.tag.text) or value_class != .result) return;
                 const narrowed_ty = if (exprResultType(value, binding_ctx)) |ty| resultPayloadType(ty, node.tag.text) else null;
-                scope.put(node.binding.text, .{
+                self.addLocalBinding(scope, node.binding, .{
                     .class = if (narrowed_ty) |ty| classifyType(ty) else .unknown,
                     .mutable = false,
                     .ty = narrowed_ty,
                     .origin = .local,
-                }) catch {};
+                });
             },
             .wildcard, .tag, .literal => {},
         }
@@ -1246,17 +1249,13 @@ pub const Checker = struct {
     fn addForBinding(self: *Checker, loop: ast.Loop, ctx: Context, scope: *Scope) void {
         const label = loop.label orelse return;
         const iterable = loop.iterable orelse return;
-        if (scope.contains(label.text)) {
-            self.errorCode(label.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
-            return;
-        }
         const element_ty = if (exprResultType(iterable, ctx)) |ty| iterableElementType(ty) else null;
-        scope.put(label.text, .{
+        self.addLocalBinding(scope, label, .{
             .class = if (element_ty) |ty| classifyType(ty) else .unknown,
             .mutable = false,
             .ty = element_ty,
             .origin = .local,
-        }) catch {};
+        });
     }
 
     fn checkForBody(self: *Checker, loop: ast.Loop, ctx: Context, scope: *Scope) void {
@@ -1379,7 +1378,10 @@ pub const Checker = struct {
                         self.errorCode(pattern.span, "E_SWITCH_RESULT_REQUIRED", "switch ok(...) or err(...) binding requires a Result value");
                     }
                 },
-                .wildcard, .literal, .bind => {},
+                .bind => {
+                    binding_pattern_count += 1;
+                },
+                .wildcard, .literal => {},
             }
         }
         if (binding_pattern_count > 1) {
@@ -1388,7 +1390,6 @@ pub const Checker = struct {
     }
 
     fn addSwitchArmBindings(self: *Checker, patterns: []const ast.Pattern, subject: ast.Expr, subject_class: TypeClass, scope: *Scope, ctx: Context) void {
-        _ = self;
         if (patterns.len != 1) return;
         var binding_ctx = ctx;
         binding_ctx.scope = scope;
@@ -1404,14 +1405,24 @@ pub const Checker = struct {
                     else
                         null;
                     const ty = narrowed_ty orelse continue;
-                    scope.put(node.binding.text, .{
+                    self.addLocalBinding(scope, node.binding, .{
                         .class = classifyType(ty),
                         .mutable = false,
                         .ty = ty,
                         .origin = .local,
-                    }) catch {};
+                    });
                 },
-                .wildcard, .tag, .literal, .bind => {},
+                .bind => |ident| {
+                    if (!isNullableValue(subject_class)) continue;
+                    const narrowed_ty = nullableInnerType(subject_ty) orelse continue;
+                    self.addLocalBinding(scope, ident, .{
+                        .class = classifyType(narrowed_ty),
+                        .mutable = false,
+                        .ty = narrowed_ty,
+                        .origin = .local,
+                    });
+                },
+                .wildcard, .tag, .literal => {},
             }
         }
     }

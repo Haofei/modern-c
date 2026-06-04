@@ -39,6 +39,62 @@ fn reject_for_binding_shadows_local(xs: []const u32) -> u32 {
     return x;
 }
 
+fn reject_if_let_binding_shadows_local(maybe: ?*mut u8, fallback: *mut u8) -> *mut u8 {
+    let p: *mut u8 = fallback;
+    // EXPECT_ERROR: E_DUPLICATE_LOCAL
+    if let p = maybe {
+        return p;
+    }
+    return p;
+}
+
+enum LocalError: u8 {
+    denied = 1,
+}
+
+extern fn local_result() -> Result<u32, LocalError>;
+
+fn reject_result_if_let_binding_shadows_local() -> u32 {
+    let v: u32 = 1;
+    // EXPECT_ERROR: E_DUPLICATE_LOCAL
+    if let ok(v) = local_result() {
+        return v;
+    }
+    return v;
+}
+
+union LocalToken {
+    int: u32,
+    eof,
+}
+
+fn reject_switch_binding_shadows_local(token: LocalToken) -> u32 {
+    let v: u32 = 1;
+    switch token {
+        // EXPECT_ERROR: E_DUPLICATE_LOCAL
+        int(v) => { return v; },
+        _ => { return v; },
+    }
+}
+
+fn reject_nullable_switch_binding_shadows_local(maybe: ?*mut u8, fallback: *mut u8) -> *mut u8 {
+    let p: *mut u8 = fallback;
+    switch maybe {
+        // EXPECT_ERROR: E_DUPLICATE_LOCAL
+        p => { return p; },
+        _ => { return fallback; },
+    }
+}
+
+fn reject_result_switch_binding_shadows_local(result: Result<u32, LocalError>) -> u32 {
+    let v: u32 = 1;
+    switch result {
+        // EXPECT_ERROR: E_DUPLICATE_LOCAL
+        ok(v) => { return v; },
+        err(e) => { return 0; },
+    }
+}
+
 // EXPECT_ERROR: E_DUPLICATE_PARAMETER
 fn reject_duplicate_parameter(x: u32, x: bool) -> u32 {
     return x;
