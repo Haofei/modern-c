@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const ir = @import("ir.zig");
 const lexer = @import("lexer.zig");
@@ -11,6 +12,7 @@ const usage =
     \\usage:
     \\  mcc lex <file.mc>
     \\  mcc check <file.mc>
+    \\  mcc facts <file.mc>
     \\
 ;
 
@@ -32,6 +34,8 @@ pub fn main(init: std.process.Init) !void {
         try runLex(allocator, path, source);
     } else if (std.mem.eql(u8, command, "check")) {
         try runCheck(allocator, path, source);
+    } else if (std.mem.eql(u8, command, "facts")) {
+        try runFacts(allocator, path, source);
     } else {
         return failUsage();
     }
@@ -76,11 +80,7 @@ fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    var p = parser.Parser.init(source, &diag);
-    const module = p.parseModule(parse_allocator) catch |err| {
-        diag.render();
-        return err;
-    };
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
     defer module.deinit(parse_allocator);
 
     if (diag.has_errors) {
@@ -98,8 +98,39 @@ fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     std.debug.print("parsed {d} top-level declarations\n", .{module.decls.len});
 }
 
+fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.FactsFailed;
+    }
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(allocator);
+    try ir.appendFacts(allocator, module, &facts);
+    std.debug.print("{s}", .{facts.items});
+}
+
+fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {
+    var p = parser.Parser.init(source, diag);
+    return p.parseModule(allocator) catch |err| {
+        diag.render();
+        return err;
+    };
+}
+
 test {
     _ = diagnostics;
+    _ = ast;
     _ = ir;
     _ = lexer;
     _ = parser;
