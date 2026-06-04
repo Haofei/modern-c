@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
+const ir = @import("ir.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
@@ -51,6 +52,7 @@ const required_keys = [_]RequiredKey{ .section, .phase, .expect, .check };
 
 const CheckKind = enum {
     diagnostic,
+    ir_fact,
     future_trap,
     future_lowering,
     unsupported,
@@ -58,6 +60,7 @@ const CheckKind = enum {
     fn label(self: CheckKind) []const u8 {
         return switch (self) {
             .diagnostic => "diagnostic",
+            .ir_fact => "IR fact",
             .future_trap => "future trap",
             .future_lowering => "future lowering",
             .unsupported => "unsupported",
@@ -67,6 +70,7 @@ const CheckKind = enum {
 
 const CheckSummary = struct {
     diagnostics: usize = 0,
+    ir_facts: usize = 0,
     future_traps: usize = 0,
     future_lowering: usize = 0,
     unsupported: usize = 0,
@@ -74,6 +78,7 @@ const CheckSummary = struct {
     fn add(self: *CheckSummary, kind: CheckKind) void {
         switch (kind) {
             .diagnostic => self.diagnostics += 1,
+            .ir_fact => self.ir_facts += 1,
             .future_trap => self.future_traps += 1,
             .future_lowering => self.future_lowering += 1,
             .unsupported => self.unsupported += 1,
@@ -148,8 +153,8 @@ test "parse leading SPEC metadata records" {
 
 test "classify SPEC check entries" {
     try std.testing.expectEqual(CheckKind.diagnostic, classifyCheck("E_C_VOID_DEREF"));
-    try std.testing.expectEqual(CheckKind.future_trap, classifyCheck("IntegerOverflow"));
-    try std.testing.expectEqual(CheckKind.future_trap, classifyCheck("DivideByZero"));
+    try std.testing.expectEqual(CheckKind.ir_fact, classifyCheck("IntegerOverflow"));
+    try std.testing.expectEqual(CheckKind.ir_fact, classifyCheck("DivideByZero"));
     try std.testing.expectEqual(CheckKind.future_lowering, classifyCheck("checked-arithmetic-lowering"));
     try std.testing.expectEqual(CheckKind.future_lowering, classifyCheck("mmio-width-preserved"));
     try std.testing.expectEqual(CheckKind.unsupported, classifyCheck("needs-new-harness-mode"));
@@ -231,11 +236,12 @@ test "tests/spec check entries are classified" {
 
     if (summary.unsupported > 0) {
         std.debug.print(
-            "SPEC check summary: {d} diagnostic, {d} future trap, {d} future lowering, {d} unsupported\n",
-            .{ summary.diagnostics, summary.future_traps, summary.future_lowering, summary.unsupported },
+            "SPEC check summary: {d} diagnostic, {d} IR fact, {d} future trap, {d} future lowering, {d} unsupported\n",
+            .{ summary.diagnostics, summary.ir_facts, summary.future_traps, summary.future_lowering, summary.unsupported },
         );
     }
     try std.testing.expect(summary.diagnostics > 0);
+    try std.testing.expect(summary.ir_facts > 0);
 }
 
 test "tests/spec fixtures produce declared semantic error codes" {
@@ -289,6 +295,58 @@ test "tests/spec fixtures produce declared semantic error codes" {
     }
 }
 
+test "tests/spec fixtures produce declared IR inspection facts" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var dir = try std.Io.Dir.cwd().openDir(io, "tests/spec", .{ .iterate = true });
+    defer dir.close(io);
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".mc")) continue;
+
+        const source = try dir.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024));
+        defer allocator.free(source);
+
+        var metadata = try parseLeadingMetadata(allocator, source);
+        defer metadata.deinit(allocator);
+
+        const check_value = metadata.valueFor("check") orelse continue;
+        if (!hasExpectedIrFactCheck(check_value)) continue;
+
+        const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
+        defer allocator.free(path);
+
+        var reporter = diagnostics.Reporter.init(allocator, path, source);
+        defer reporter.deinit();
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const parse_allocator = arena.allocator();
+
+        var p = parser.Parser.init(source, &reporter);
+        const module = try p.parseModule(parse_allocator);
+        defer module.deinit(parse_allocator);
+
+        var facts: std.ArrayList(u8) = .empty;
+        defer facts.deinit(allocator);
+        try ir.appendFacts(allocator, module, &facts);
+
+        var checks = std.mem.splitScalar(u8, check_value, ',');
+        while (checks.next()) |raw_check| {
+            const check = trimCheck(raw_check);
+            if (classifyCheck(check) != .ir_fact) continue;
+            if (!hasIrEvidenceForCheck(facts.items, check)) {
+                std.debug.print("{s}: expected IR fact evidence for {s}\nFacts:\n{s}", .{ path, check, facts.items });
+                try std.testing.expect(false);
+            }
+        }
+    }
+}
+
 fn hasExpectedDiagnosticCode(check_value: []const u8) bool {
     var checks = std.mem.splitScalar(u8, check_value, ',');
     while (checks.next()) |raw_check| {
@@ -297,8 +355,17 @@ fn hasExpectedDiagnosticCode(check_value: []const u8) bool {
     return false;
 }
 
+fn hasExpectedIrFactCheck(check_value: []const u8) bool {
+    var checks = std.mem.splitScalar(u8, check_value, ',');
+    while (checks.next()) |raw_check| {
+        if (classifyCheck(trimCheck(raw_check)) == .ir_fact) return true;
+    }
+    return false;
+}
+
 fn classifyCheck(check: []const u8) CheckKind {
     if (isDiagnosticCode(check)) return .diagnostic;
+    if (isIrFactCheck(check)) return .ir_fact;
     if (isFutureTrapCheck(check)) return .future_trap;
     if (isFutureLoweringCheck(check)) return .future_lowering;
     return .unsupported;
@@ -312,19 +379,24 @@ fn isDiagnosticCode(check: []const u8) bool {
     return std.mem.startsWith(u8, check, "E_");
 }
 
-fn isFutureTrapCheck(check: []const u8) bool {
+fn isIrFactCheck(check: []const u8) bool {
     const names = [_][]const u8{
         "IntegerOverflow",
         "DivideByZero",
+        "contract_region",
         "no-language-trap-edge",
     };
+    return matchesAny(check, &names);
+}
+
+fn isFutureTrapCheck(check: []const u8) bool {
+    const names = [_][]const u8{};
     return matchesAny(check, &names);
 }
 
 fn isFutureLoweringCheck(check: []const u8) bool {
     const names = [_][]const u8{
         "checked-arithmetic-lowering",
-        "contract_region",
         "metadata-contained",
         "race-tolerant-lowering",
         "no-happens-before",
@@ -347,4 +419,49 @@ fn hasDiagnosticCode(reporter: diagnostics.Reporter, code: []const u8) bool {
         if (std.mem.startsWith(u8, diag.message, code) and diag.message.len > code.len and diag.message[code.len] == ':') return true;
     }
     return false;
+}
+
+fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
+    if (std.mem.eql(u8, check, "IntegerOverflow")) {
+        return containsAll(facts, &.{
+            "fact checked_arithmetic_trap",
+            " op=add ",
+            " op=sub ",
+            " op=mul ",
+            " op=div ",
+            " op=mod ",
+        });
+    }
+    if (std.mem.eql(u8, check, "DivideByZero")) {
+        return containsAll(facts, &.{
+            "fact checked_arithmetic_trap",
+            " op=div ",
+        });
+    }
+    if (std.mem.eql(u8, check, "contract_region")) {
+        return containsAll(facts, &.{
+            "fact unsafe_contract_begin",
+            " contract=no_overflow ",
+            "fact unsafe_contract_end",
+            "fact unchecked_call",
+            " unsafe_contract_depth=1 ",
+        });
+    }
+    if (std.mem.eql(u8, check, "no-language-trap-edge")) {
+        return containsAll(facts, &.{
+            "fact checked_arithmetic_trap fn=reject_checked_add",
+            " no_lang_trap=true ",
+            "fact no_lang_trap_index",
+            "fact no_lang_trap_assert",
+            "fact no_lang_trap_unreachable",
+        });
+    }
+    return false;
+}
+
+fn containsAll(haystack: []const u8, needles: []const []const u8) bool {
+    for (needles) |needle| {
+        if (std.mem.indexOf(u8, haystack, needle) == null) return false;
+    }
+    return true;
 }
