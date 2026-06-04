@@ -1082,6 +1082,7 @@ const CEmitter = struct {
     fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         if (try self.emitResultSwitch(node, locals, return_ty)) return;
         if (try self.emitTaggedUnionSwitch(node, locals, return_ty)) return;
+        if (try self.emitEnumCallSwitch(node, locals, return_ty)) return;
 
         var replacements: std.ArrayList(MmioReadReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
@@ -1097,6 +1098,23 @@ const CEmitter = struct {
         }
 
         try self.emitGenericSwitch(node, locals, return_ty, &[_]MmioReadReplacement{});
+    }
+
+    fn emitEnumCallSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+        const enum_ty = self.enumReturnTypeForExpr(node.subject) orelse return false;
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(enum_ty, .typedef_name), temp_name });
+        try self.emitExpr(node.subject, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+
+        var switch_locals = try cloneLocals(self.allocator, locals.*);
+        defer switch_locals.deinit();
+        try switch_locals.put(temp_name, try self.localInfoFromType(enum_ty));
+        const temp_subject = ast.Expr{ .kind = .{ .ident = .{ .text = temp_name, .span = node.subject.span } }, .span = node.subject.span };
+        try self.emitGenericSwitch(.{ .subject = temp_subject, .arms = node.arms }, &switch_locals, return_ty, &[_]MmioReadReplacement{});
+        return true;
     }
 
     fn emitGenericSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_replacements: []const MmioReadReplacement) anyerror!void {
@@ -2899,6 +2917,20 @@ const CEmitter = struct {
                 break :blk if (resultPayloadTypeForTag(ret_ty, "ok") != null and resultPayloadTypeForTag(ret_ty, "err") != null) ret_ty else null;
             },
             .grouped => |inner| self.resultTypeForExpr(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn enumReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .call => |node| blk: {
+                const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
+                const info = self.functions.get(fn_name) orelse break :blk null;
+                const ret_ty = info.return_type orelse break :blk null;
+                const enum_name = typeName(ret_ty) orelse break :blk null;
+                break :blk if (self.enums.contains(enum_name)) ret_ty else null;
+            },
+            .grouped => |inner| self.enumReturnTypeForExpr(inner.*),
             else => null,
         };
     }
@@ -5637,6 +5669,15 @@ test "emits C for closed enum switch arms" {
         \\        .keyboard => { return 2; },
         \\    }
         \\}
+        \\
+        \\extern fn read_irq() -> Irq;
+        \\
+        \\fn classify_read_irq() -> u32 {
+        \\    switch read_irq() {
+        \\        .timer => { return 1; },
+        \\        .keyboard => { return 2; },
+        \\    }
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_enum_switch.mc", source);
@@ -5661,6 +5702,8 @@ test "emits C for closed enum switch arms" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "switch (irq) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "case Irq_timer:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "case Irq_keyboard:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t classify_read_irq(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Irq mc_tmp0 = read_irq();\n    switch (mc_tmp0) {") != null);
 }
 
 test "emits C for target-typed enum literals" {

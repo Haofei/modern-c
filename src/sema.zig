@@ -1144,7 +1144,11 @@ pub const Checker = struct {
             },
             .tag_bind => |node| {
                 if (!isResultNarrowingTag(node.tag.text)) {
-                    self.errorCode(node.tag.span, "E_IF_LET_RESULT_TAG", "if let result narrowing supports only ok(...) or err(...)");
+                    if (value_class == .result) {
+                        self.errorCode(node.tag.span, "E_IF_LET_RESULT_TAG", "if let result narrowing supports only ok(...) or err(...)");
+                    } else {
+                        self.errorCode(pattern.span, "E_IF_LET_NARROW_PATTERN", "if let supports only optional bindings and Result ok(...) or err(...) bindings");
+                    }
                 } else if (value_class != .result) {
                     self.errorCode(pattern.span, "E_IF_LET_RESULT_REQUIRED", "if let ok(...) or err(...) requires a Result value");
                 }

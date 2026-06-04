@@ -195,3 +195,16 @@ fn reject_general_if_pattern(status: Status) -> u32 {
     }
     return 0;
 }
+
+union Token {
+    int: u32,
+    eof,
+}
+
+fn reject_if_let_union_payload(token: Token) -> u32 {
+    // EXPECT_ERROR: E_IF_LET_NARROW_PATTERN
+    if let int(v) = token {
+        return v;
+    }
+    return 0;
+}
