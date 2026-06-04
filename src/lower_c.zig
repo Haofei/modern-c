@@ -809,6 +809,8 @@ const CEmitter = struct {
             .assignment => |node| {
                 if (try self.emitPackedBitsFieldWriteStmt(node, locals)) return;
                 if (try self.emitOverlayFieldWriteStmt(node, locals)) return;
+                if (try self.emitResultTryAssignmentStmt(node, locals, return_ty)) return;
+                if (try self.emitNullableTryAssignmentStmt(node, locals)) return;
                 try self.writeIndent();
                 if (self.globalAssignmentTarget(node.target, locals)) |target| {
                     try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ", .{ target.info.type_name, target.name });
@@ -855,6 +857,8 @@ const CEmitter = struct {
             .expr => |expr| {
                 if (try self.emitNeverExprStmt(expr, locals)) return;
                 if (try self.emitMmioWriteStmt(expr, locals)) return;
+                if (try self.emitResultTryExprStmt(expr, locals, return_ty)) return;
+                if (try self.emitNullableTryExprStmt(expr, locals)) return;
                 try self.writeIndent();
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
@@ -1938,6 +1942,68 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitResultTryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectResultTryHoistsForStmt(assignment.value, locals, return_ty, &replacements)) return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ", .{ target.info.type_name, target.name });
+            try self.emitResultTryExprWithReplacements(assignment.value, locals, null, replacements.items);
+            try self.out.appendSlice(self.allocator, ");\n");
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.appendSlice(self.allocator, " = ");
+            try self.emitResultTryExprWithReplacements(assignment.value, locals, null, replacements.items);
+            try self.out.appendSlice(self.allocator, ";\n");
+        }
+        return true;
+    }
+
+    fn emitNullableTryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectNullableTryHoistsForReturn(assignment.value, locals, &replacements)) return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ", .{ target.info.type_name, target.name });
+            try self.emitNullableTryExprWithReplacements(assignment.value, locals, null, replacements.items);
+            try self.out.appendSlice(self.allocator, ");\n");
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.appendSlice(self.allocator, " = ");
+            try self.emitNullableTryExprWithReplacements(assignment.value, locals, null, replacements.items);
+            try self.out.appendSlice(self.allocator, ";\n");
+        }
+        return true;
+    }
+
+    fn emitResultTryExprStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectResultTryHoistsForStmt(expr, locals, return_ty, &replacements)) return false;
+        if (resultTryOperand(expr) != null) return true;
+
+        try self.writeIndent();
+        try self.emitResultTryExprWithReplacements(expr, locals, null, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitNullableTryExprStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectNullableTryHoistsForReturn(expr, locals, &replacements)) return false;
+        if (resultTryOperand(expr) != null) return true;
+
+        try self.writeIndent();
+        try self.emitNullableTryExprWithReplacements(expr, locals, null, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
     fn emitResultTryReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
         const operand = switch (expr.kind) {
             .try_expr => |inner| inner.*,
@@ -2053,6 +2119,15 @@ const CEmitter = struct {
             .cast => |node| return try self.collectResultTryHoistsForReturn(node.value.*, locals, replacements),
             else => return false,
         }
+    }
+
+    fn collectResultTryHoistsForStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, replacements: *std.ArrayList(TryReplacement)) !bool {
+        if (return_ty) |ty| {
+            if (resultPayloadTypeForTag(ty, "err") != null) {
+                return try self.collectResultTryHoistsForLocalInit(expr, locals, ty, replacements);
+            }
+        }
+        return try self.collectResultTryHoistsForReturn(expr, locals, replacements);
     }
 
     fn collectResultTryHoistsForLocalInit(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr, replacements: *std.ArrayList(TryReplacement)) !bool {
@@ -4196,6 +4271,77 @@ test "emits C for try in local initializer call arguments" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp1 = make_nullable_pointer();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_tmp1 == NULL) mc_trap_NullUnwrap();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr = ptr_id(mc_tmp1);") != null);
+}
+
+test "emits C for try in assignment and expression statements" {
+    const source =
+        \\enum Error: u8 {
+        \\    denied = 1,
+        \\}
+        \\
+        \\global shared_value: u32 = 0;
+        \\
+        \\extern fn make_result() -> Result<u32, Error>;
+        \\extern fn consume(value: u32) -> void;
+        \\extern fn make_nullable_pointer() -> ?*const u8;
+        \\extern fn consume_ptr(ptr: *const u8) -> void;
+        \\
+        \\fn assign_result_try() -> Result<u32, Error> {
+        \\    var value: u32 = 0;
+        \\    value = make_result()?;
+        \\    shared_value = make_result()?;
+        \\    return ok(value);
+        \\}
+        \\
+        \\fn expr_result_try() -> Result<u32, Error> {
+        \\    make_result()?;
+        \\    consume(make_result()?);
+        \\    return ok(1);
+        \\}
+        \\
+        \\fn assign_nullable_try() -> *const u8 {
+        \\    var ptr: *const u8 = make_nullable_pointer()?;
+        \\    ptr = make_nullable_pointer()?;
+        \\    return ptr;
+        \\}
+        \\
+        \\fn expr_nullable_try() -> void {
+        \\    make_nullable_pointer()?;
+        \\    consume_ptr(make_nullable_pointer()?);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_try_assignment_expr_stmt.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "value = mc_tmp0.payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp1 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_value, mc_tmp1.payload.ok);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp2 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp2.is_ok) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp3 = make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume(mc_tmp3.payload.ok);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp4 = make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr = mc_tmp4;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp5 = make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "ptr = mc_tmp5;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp6 = make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_tmp6 == NULL) mc_trap_NullUnwrap();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp7 = make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_ptr(mc_tmp7);") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
