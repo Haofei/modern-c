@@ -275,7 +275,10 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "indexing may trap in #[no_lang_trap]");
                 }
                 _ = self.checkExpr(node.base.*, ctx);
-                _ = self.checkExpr(node.index.*, ctx);
+                const index_class = self.checkExpr(node.index.*, ctx);
+                if (!isIndexType(index_class)) {
+                    self.errorCode(node.index.span, "E_INDEX_NOT_USIZE", "array and slice indices must be checked usize");
+                }
                 return .unknown;
             },
             .deref => |inner| {
@@ -701,6 +704,13 @@ fn isNullLiteral(expr: ast.Expr) bool {
 fn isNullableValue(kind: TypeClass) bool {
     return switch (kind) {
         .nullable_pointer, .nullable_c_void_pointer => true,
+        else => false,
+    };
+}
+
+fn isIndexType(kind: TypeClass) bool {
+    return switch (kind) {
+        .checked_usize, .int_literal, .never, .unknown => true,
         else => false,
     };
 }
