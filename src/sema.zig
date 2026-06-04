@@ -175,7 +175,13 @@ pub const Checker = struct {
                     self.errorCode(stmt.span, "E_RETURN_REQUIRES_VALUE", "function return type requires a value");
                 }
             },
-            .@"defer", .expr => |expr| _ = self.checkExpr(expr, ctx),
+            .@"defer" => |expr| {
+                const cleanup = self.checkExpr(expr, ctx);
+                if (cleanup == .never or exprContainsTry(expr)) {
+                    self.errorCode(stmt.span, "E_DEFER_CONTROL_FLOW", "defer is lexical cleanup and must not alter control flow");
+                }
+            },
+            .expr => |expr| _ = self.checkExpr(expr, ctx),
             .assert => |expr| {
                 if (ctx.no_lang_trap) {
                     self.errorCode(stmt.span, "E_NO_LANG_TRAP_EDGE", "assert may emit a language trap in #[no_lang_trap]");
@@ -1064,4 +1070,62 @@ fn exprMayFallThrough(expr: ast.Expr) bool {
         .block => |block| fallthroughSpan(block) != null,
         else => true,
     };
+}
+
+fn blockContainsTry(block: ast.Block) bool {
+    for (block.items) |stmt| {
+        if (stmtContainsTry(stmt)) return true;
+    }
+    return false;
+}
+
+fn stmtContainsTry(stmt: ast.Stmt) bool {
+    return switch (stmt.kind) {
+        .let_decl, .var_decl => |local| if (local.init) |expr| exprContainsTry(expr) else false,
+        .loop => |node| (if (node.iterable) |iterable| exprContainsTry(iterable) else false) or blockContainsTry(node.body),
+        .if_let => |node| exprContainsTry(node.value) or blockContainsTry(node.then_block) or
+            (if (node.else_block) |else_block| blockContainsTry(else_block) else false),
+        .@"switch" => |node| switchContainsTry(node),
+        .unsafe_block, .block => |block| blockContainsTry(block),
+        .contract_block => |contract| blockContainsTry(contract.block),
+        .@"return" => |maybe| if (maybe) |expr| exprContainsTry(expr) else false,
+        .@"defer", .expr, .assert => |expr| exprContainsTry(expr),
+        .assignment => |node| exprContainsTry(node.target) or exprContainsTry(node.value),
+        .asm_stmt => false,
+    };
+}
+
+fn switchContainsTry(node: ast.Switch) bool {
+    if (exprContainsTry(node.subject)) return true;
+    for (node.arms) |arm| {
+        const body_contains_try = switch (arm.body) {
+            .block => |block| blockContainsTry(block),
+            .expr => |expr| exprContainsTry(expr),
+        };
+        if (body_contains_try) return true;
+    }
+    return false;
+}
+
+fn exprContainsTry(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .try_expr => true,
+        .grouped, .address_of, .deref => |inner| exprContainsTry(inner.*),
+        .block => |block| blockContainsTry(block),
+        .unary => |node| exprContainsTry(node.expr.*),
+        .binary => |node| exprContainsTry(node.left.*) or exprContainsTry(node.right.*),
+        .cast => |node| exprContainsTry(node.value.*),
+        .call => |node| callContainsTry(node),
+        .index => |node| exprContainsTry(node.base.*) or exprContainsTry(node.index.*),
+        .member => |node| exprContainsTry(node.base.*),
+        else => false,
+    };
+}
+
+fn callContainsTry(node: anytype) bool {
+    if (exprContainsTry(node.callee.*)) return true;
+    for (node.args) |arg| {
+        if (exprContainsTry(arg)) return true;
+    }
+    return false;
 }
