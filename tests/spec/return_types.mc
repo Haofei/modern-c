@@ -1,4 +1,4 @@
-// SPEC: section=3,5
+// SPEC: section=3,5,13
 // SPEC: milestone=return-type-checking
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
@@ -6,6 +6,18 @@
 
 extern fn get_count() -> u32;
 global shared_count: u32 = 0;
+
+enum TrafficLight: u8 {
+    red = 0,
+    yellow = 1,
+    green = 2,
+}
+
+open enum OpenTrafficLight: u8 {
+    red = 0,
+    yellow = 1,
+    green = 2,
+}
 
 fn returns_u32() -> u32 {
     return 1;
@@ -60,6 +72,49 @@ fn accept_result_switch_return(result: Result<u32, Error>) -> u32 {
     switch result {
         ok(v) => { return v; },
         err(e) => { return 0; },
+    }
+}
+
+fn accept_closed_enum_switch_return(light: TrafficLight) -> u32 {
+    switch light {
+        .red => { return 0; },
+        .yellow => { return 1; },
+        .green => { return 2; },
+    }
+}
+
+fn reject_closed_enum_switch_missing_case(light: TrafficLight) -> u32 {
+    // EXPECT_ERROR: E_RETURN_MISSING
+    switch light {
+        .red => { return 0; },
+        .yellow => { return 1; },
+    }
+}
+
+fn reject_closed_enum_switch_fallthrough_arm(light: TrafficLight) -> u32 {
+    // EXPECT_ERROR: E_RETURN_MISSING
+    switch light {
+        .red => { return 0; },
+        .yellow => { return 1; },
+        .green => { let fallback: u32 = 2; },
+    }
+}
+
+fn reject_open_enum_switch_without_wildcard(light: OpenTrafficLight) -> u32 {
+    // EXPECT_ERROR: E_RETURN_MISSING
+    switch light {
+        .red => { return 0; },
+        .yellow => { return 1; },
+        .green => { return 2; },
+    }
+}
+
+fn accept_open_enum_switch_with_wildcard(light: OpenTrafficLight) -> u32 {
+    switch light {
+        .red => { return 0; },
+        .yellow => { return 1; },
+        .green => { return 2; },
+        _ => { return 3; },
     }
 }
 

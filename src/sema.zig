@@ -15,6 +15,8 @@ pub const Checker = struct {
         defer deinitMmioStructs(&mmio_structs);
         var structs = std.StringHashMap(StructInfo).init(self.reporter.allocator);
         defer deinitStructs(&structs);
+        var enums = std.StringHashMap(EnumInfo).init(self.reporter.allocator);
+        defer deinitEnums(&enums);
         var functions = std.StringHashMap(FunctionInfo).init(self.reporter.allocator);
         defer functions.deinit();
         var globals = std.StringHashMap(GlobalInfo).init(self.reporter.allocator);
@@ -22,10 +24,11 @@ pub const Checker = struct {
         self.checkTopLevelNames(module);
         self.collectMmioStructs(module, &mmio_structs);
         self.collectStructs(module, &structs);
+        self.collectEnums(module, &enums);
         self.collectFunctions(module, &functions);
         self.collectGlobals(module, &globals);
 
-        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &functions, &globals);
+        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &enums, &functions, &globals);
     }
 
     fn collectMmioStructs(self: *Checker, module: ast.Module, mmio_structs: *std.StringHashMap(MmioStruct)) void {
@@ -84,6 +87,26 @@ pub const Checker = struct {
         }
     }
 
+    fn collectEnums(self: *Checker, module: ast.Module, enums: *std.StringHashMap(EnumInfo)) void {
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .enum_decl => |enum_decl| self.collectEnum(enum_decl, enums),
+                .fn_decl, .extern_fn, .type_alias, .extern_struct, .opaque_decl, .global_decl => {},
+            }
+        }
+    }
+
+    fn collectEnum(self: *Checker, enum_decl: ast.EnumDecl, enums: *std.StringHashMap(EnumInfo)) void {
+        if (enums.contains(enum_decl.name.text)) return;
+        var cases = std.StringHashMap(void).init(self.reporter.allocator);
+        for (enum_decl.cases) |case| {
+            if (!cases.contains(case.name.text)) cases.put(case.name.text, {}) catch {};
+        }
+        enums.put(enum_decl.name.text, .{ .cases = cases, .is_open = enum_decl.is_open }) catch {
+            cases.deinit();
+        };
+    }
+
     fn collectGlobals(self: *Checker, module: ast.Module, globals: *std.StringHashMap(GlobalInfo)) void {
         _ = self;
         for (module.decls) |decl| {
@@ -110,17 +133,17 @@ pub const Checker = struct {
         }
     }
 
-    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
+    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
         switch (decl.kind) {
-            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, functions, globals),
+            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, enums, functions, globals),
             .extern_struct => |struct_decl| self.checkStruct(struct_decl),
             .enum_decl => |enum_decl| self.checkEnum(enum_decl),
             .type_alias => |alias| self.checkType(alias.ty, .normal),
             .opaque_decl => {},
             .global_decl => |global| {
                 if (global.ty) |ty| self.checkType(ty, .normal);
-                if (global.init) |initializer| self.checkGlobalInitializer(global, initializer, .{ .structs = structs, .functions = functions, .globals = globals });
+                if (global.init) |initializer| self.checkGlobalInitializer(global, initializer, .{ .structs = structs, .enums = enums, .functions = functions, .globals = globals });
             },
         }
     }
@@ -174,12 +197,13 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(ty, initializer, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(ty, initializer, ctx);
         const address_checked = self.checkAddressOfInitializer(target, ty, initializer, ctx);
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(target, source)) {
+        const enum_checked = self.checkExpectedEnumValue(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(target, source)) {
             self.errorCode(initializer.span, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         }
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
         var scope = Scope.init(self.reporter.allocator);
         defer scope.deinit();
         var mmio_params = std.StringHashMap([]const u8).init(self.reporter.allocator);
@@ -212,6 +236,7 @@ pub const Checker = struct {
                 .mmio_structs = mmio_structs,
                 .mmio_params = &mmio_params,
                 .structs = structs,
+                .enums = enums,
                 .functions = functions,
                 .globals = globals,
             };
@@ -369,7 +394,8 @@ pub const Checker = struct {
                 const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
                 const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
                 const address_checked = if (local.ty) |ty| self.checkAddressOfInitializer(kind, ty, expr, ctx) else false;
-                if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(kind, initializer)) {
+                const enum_checked = if (local.ty) |ty| self.checkExpectedEnumValue(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
+                if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(kind, initializer)) {
                     self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                 }
             }
@@ -419,7 +445,8 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, value, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, value, ctx);
         const address_checked = self.checkAddressOfInitializer(target_class, target_ty, value, ctx);
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(target_class, value_class)) {
+        const enum_checked = self.checkExpectedEnumValue(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
     }
@@ -735,7 +762,8 @@ pub const Checker = struct {
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, expr, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, expr, ctx);
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !local_escape_checked and !canInitialize(target, returned)) {
+        const enum_checked = self.checkExpectedEnumValue(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !local_escape_checked and !enum_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
@@ -770,9 +798,25 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, arg, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, arg, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, arg, ctx);
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(target, source)) {
+        const enum_checked = self.checkExpectedEnumValue(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !enum_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         }
+    }
+
+    fn checkExpectedEnumValue(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
+        const enum_info = enumInfoForType(target_ty, ctx) orelse return false;
+        if (enumLiteralName(expr)) |literal| {
+            if (!enum_info.cases.contains(literal.text)) {
+                self.errorCode(literal.span, "E_UNKNOWN_ENUM_CASE", "enum has no case with this name");
+            }
+            return true;
+        }
+        if (exprResultType(expr, ctx)) |source_ty| {
+            if (sameTypeSyntax(target_ty, source_ty)) return true;
+        }
+        self.errorCode(expr.span, code, message);
+        return true;
     }
 
     fn checkLocalAddressReturn(self: *Checker, target: TypeClass, expr: ast.Expr, ctx: Context) bool {
@@ -883,8 +927,9 @@ pub const Checker = struct {
 
     fn checkSwitch(self: *Checker, node: ast.Switch, ctx: Context) void {
         const subject_class = self.checkExpr(node.subject, ctx);
+        const subject_ty = exprResultType(node.subject, ctx);
         for (node.arms) |arm| {
-            self.checkSwitchArmPatterns(arm.patterns, subject_class);
+            self.checkSwitchArmPatterns(arm.patterns, subject_class, subject_ty, ctx);
             var arm_scope = Scope.init(self.reporter.allocator);
             defer arm_scope.deinit();
             var arm_ctx = ctx;
@@ -900,10 +945,18 @@ pub const Checker = struct {
         }
     }
 
-    fn checkSwitchArmPatterns(self: *Checker, patterns: []const ast.Pattern, subject_class: TypeClass) void {
+    fn checkSwitchArmPatterns(self: *Checker, patterns: []const ast.Pattern, subject_class: TypeClass, subject_ty: ?ast.TypeExpr, ctx: Context) void {
         var binding_pattern_count: usize = 0;
+        const subject_enum = if (subject_ty) |ty| enumInfoForType(ty, ctx) else null;
         for (patterns) |pattern| {
             switch (pattern.kind) {
+                .tag => |tag| {
+                    if (subject_enum) |enum_info| {
+                        if (!enum_info.cases.contains(tag.text)) {
+                            self.errorCode(tag.span, "E_UNKNOWN_ENUM_CASE", "enum has no case with this name");
+                        }
+                    }
+                },
                 .tag_bind => |node| {
                     binding_pattern_count += 1;
                     if (!isResultNarrowingTag(node.tag.text)) {
@@ -912,7 +965,7 @@ pub const Checker = struct {
                         self.errorCode(pattern.span, "E_SWITCH_RESULT_REQUIRED", "switch ok(...) or err(...) binding requires a Result value");
                     }
                 },
-                .wildcard, .tag, .literal, .bind => {},
+                .wildcard, .literal, .bind => {},
             }
         }
         if (binding_pattern_count > 1) {
@@ -958,6 +1011,7 @@ const Context = struct {
     mmio_structs: ?*const std.StringHashMap(MmioStruct) = null,
     mmio_params: ?*const std.StringHashMap([]const u8) = null,
     structs: ?*const std.StringHashMap(StructInfo) = null,
+    enums: ?*const std.StringHashMap(EnumInfo) = null,
     functions: ?*const std.StringHashMap(FunctionInfo) = null,
     globals: ?*const std.StringHashMap(GlobalInfo) = null,
 };
@@ -968,6 +1022,11 @@ const MmioStruct = struct {
 
 const StructInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
+};
+
+const EnumInfo = struct {
+    cases: std.StringHashMap(void),
+    is_open: bool,
 };
 
 const FunctionInfo = struct {
@@ -1273,6 +1332,25 @@ fn structTypeName(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
+fn enumTypeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |name| name.text,
+        .qualified => |node| enumTypeName(node.child.*),
+        else => null,
+    };
+}
+
+fn enumInfoForType(ty: ast.TypeExpr, ctx: Context) ?EnumInfo {
+    const name = enumTypeName(ty) orelse return null;
+    const enums = ctx.enums orelse return null;
+    return enums.get(name);
+}
+
+fn closedEnumInfoForType(ty: ast.TypeExpr, ctx: Context) ?EnumInfo {
+    const enum_info = enumInfoForType(ty, ctx) orelse return null;
+    return if (enum_info.is_open) null else enum_info;
+}
+
 fn classifyGenericTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "Result")) return .result;
     if (std.mem.eql(u8, name, "UserPtr")) return .user_ptr;
@@ -1568,6 +1646,12 @@ fn deinitStructs(structs: *std.StringHashMap(StructInfo)) void {
     var values = structs.valueIterator();
     while (values.next()) |struct_info| struct_info.fields.deinit();
     structs.deinit();
+}
+
+fn deinitEnums(enums: *std.StringHashMap(EnumInfo)) void {
+    var values = enums.valueIterator();
+    while (values.next()) |enum_info| enum_info.cases.deinit();
+    enums.deinit();
 }
 
 fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
@@ -2042,6 +2126,14 @@ fn isTypeName(ty: ast.TypeExpr, name: []const u8) bool {
     };
 }
 
+fn enumLiteralName(expr: ast.Expr) ?ast.Ident {
+    return switch (expr.kind) {
+        .enum_literal => |literal| literal,
+        .grouped => |inner| enumLiteralName(inner.*),
+        else => null,
+    };
+}
+
 fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, name),
@@ -2074,6 +2166,7 @@ fn switchMayFallThrough(node: ast.Switch, ctx: Context) bool {
     var has_result_ok = false;
     var has_result_err = false;
     const subject_is_result = if (exprResultType(node.subject, ctx)) |ty| classifyType(ty) == .result else false;
+    const closed_enum = if (exprResultType(node.subject, ctx)) |ty| closedEnumInfoForType(ty, ctx) else null;
     for (node.arms) |arm| {
         for (arm.patterns) |pattern| {
             switch (pattern.kind) {
@@ -2092,7 +2185,31 @@ fn switchMayFallThrough(node: ast.Switch, ctx: Context) bool {
         }
         if (switchBodyMayFallThrough(arm.body, ctx)) return true;
     }
+    if (closed_enum) |enum_info| {
+        return !has_wildcard and !switchCoversAllEnumCases(node, enum_info);
+    }
     return !has_wildcard and !(has_result_ok and has_result_err);
+}
+
+fn switchCoversAllEnumCases(node: ast.Switch, enum_info: EnumInfo) bool {
+    var cases = enum_info.cases.keyIterator();
+    while (cases.next()) |case_name| {
+        if (!switchCoversEnumCase(node, case_name.*)) return false;
+    }
+    return true;
+}
+
+fn switchCoversEnumCase(node: ast.Switch, case_name: []const u8) bool {
+    for (node.arms) |arm| {
+        for (arm.patterns) |pattern| {
+            switch (pattern.kind) {
+                .tag => |tag| if (std.mem.eql(u8, tag.text, case_name)) return true,
+                .wildcard => return true,
+                .tag_bind, .literal, .bind => {},
+            }
+        }
+    }
+    return false;
 }
 
 fn switchBodyMayFallThrough(body: ast.SwitchBody, ctx: Context) bool {
