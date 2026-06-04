@@ -1307,6 +1307,8 @@ pub const Checker = struct {
                         }
                     } else if (subject_class == .result and !isResultNarrowingTag(tag.text)) {
                         self.errorCode(tag.span, "E_SWITCH_RESULT_TAG", "switch result patterns support only ok or err tags");
+                    } else if (subject_class != .result and isResultNarrowingTag(tag.text)) {
+                        self.errorCode(tag.span, "E_SWITCH_RESULT_REQUIRED", "switch ok or err patterns require a Result value");
                     }
                 },
                 .tag_bind => |node| {

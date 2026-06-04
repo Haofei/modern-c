@@ -812,6 +812,9 @@ const CEmitter = struct {
                         } else if (local.init) |initializer| {
                             if (try self.emitSliceCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitEnumCallInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitTaggedUnionCallInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitResultCallInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitNullableCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitMmioReadInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitMmioReadExprInferredLocalInit(name.text, initializer, locals)) continue;
                         }
@@ -2355,6 +2358,39 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitTaggedUnionCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const union_ty = self.taggedUnionReturnTypeForExpr(initializer) orelse return false;
+        try locals.put(name, try self.localInfoFromType(union_ty));
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(union_ty, .typedef_name), name });
+        try self.emitExpr(initializer, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitResultCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const result_ty = self.resultTypeForExpr(initializer, locals) orelse return false;
+        try locals.put(name, try self.localInfoFromType(result_ty));
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(result_ty, .typedef_name), name });
+        try self.emitExpr(initializer, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitNullableCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const nullable_ty = self.nullableReturnTypeForExpr(initializer) orelse return false;
+        try locals.put(name, try self.localInfoFromType(nullable_ty));
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(nullable_ty, .typedef_name), name });
+        try self.emitExpr(initializer, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
     fn emitResultTryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
         const operand = switch (initializer.kind) {
             .try_expr => |inner| inner.*,
@@ -2943,6 +2979,19 @@ const CEmitter = struct {
                 break :blk if (self.enums.contains(enum_name)) ret_ty else null;
             },
             .grouped => |inner| self.enumReturnTypeForExpr(inner.*),
+            else => null,
+        };
+    }
+
+    fn nullableReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .call => |node| blk: {
+                const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
+                const info = self.functions.get(fn_name) orelse break :blk null;
+                const ret_ty = info.return_type orelse break :blk null;
+                break :blk if (ret_ty.kind == .nullable) ret_ty else null;
+            },
+            .grouped => |inner| self.nullableReturnTypeForExpr(inner.*),
             else => null,
         };
     }
@@ -4650,6 +4699,14 @@ test "emits C for tagged union switch narrowing" {
         \\        .eof => { return 0; },
         \\    }
         \\}
+        \\
+        \\fn token_local_value() -> i64 {
+        \\    let token = make_token();
+        \\    switch token {
+        \\        int(v) => { return v; },
+        \\        .eof => { return 0; },
+        \\    }
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_tagged_union_switch.mc", source);
@@ -4680,6 +4737,9 @@ test "emits C for tagged union switch narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Token mc_tmp0 = make_token();\n    if (mc_tmp0.tag == TokenTag_int) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "int64_t v = mc_tmp0.payload.int_;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "else if (mc_tmp0.tag == TokenTag_eof) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static int64_t token_local_value(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token token = make_token();\n    if (token.tag == TokenTag_int) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "int64_t v = token.payload.int_;") != null);
 }
 
 test "emits C for tagged union constructors" {
@@ -5802,6 +5862,14 @@ test "emits C for optional pointer if-let" {
         \\    }
         \\    return 0;
         \\}
+        \\
+        \\fn unwrap_local_or_zero() -> u32 {
+        \\    let maybe = maybe_ptr();
+        \\    if let p = maybe {
+        \\        return ptr_value(p);
+        \\    }
+        \\    return 0;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_if_let.mc", source);
@@ -5828,6 +5896,9 @@ test "emits C for optional pointer if-let" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return fallback;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp0 = maybe_ptr();\n    if (mc_tmp0 != NULL) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = mc_tmp0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t unwrap_local_or_zero(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * maybe = maybe_ptr();\n    if (maybe != NULL) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = maybe;") != null);
 }
 
 test "emits C for Result if-let narrowing" {
@@ -5910,6 +5981,14 @@ test "emits C for Result switch narrowing" {
         \\        err(e) => { return e != 0; },
         \\    }
         \\}
+        \\
+        \\fn result_local_nonzero() -> bool {
+        \\    let result = make_result();
+        \\    switch result {
+        \\        ok(v) => { return v != 0; },
+        \\        err(e) => { return e != 0; },
+        \\    }
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_switch.mc", source);
@@ -5938,6 +6017,9 @@ test "emits C for Result switch narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();\n    if (mc_tmp0.is_ok) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t v = mc_tmp0.payload.ok;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Error e = mc_tmp0.payload.err;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static bool result_local_nonzero(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error result = make_result();\n    if (result.is_ok) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t v = result.payload.ok;") != null);
 }
 
 test "emits C extern structs and member access" {

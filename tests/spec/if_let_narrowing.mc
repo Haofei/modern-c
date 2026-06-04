@@ -156,6 +156,14 @@ fn reject_switch_result_binding_from_non_result(maybe: ?*mut u8) -> u32 {
     }
 }
 
+fn reject_switch_payloadless_result_tag_from_non_result(n: u32) -> u32 {
+    switch n {
+        // EXPECT_ERROR: E_SWITCH_RESULT_REQUIRED
+        .ok => { return 1; },
+        _ => { return 0; },
+    }
+}
+
 fn reject_switch_multi_pattern_binding(result: Result<u32, Error>) -> u32 {
     switch result {
         // EXPECT_ERROR: E_SWITCH_MULTI_BINDING_ARM
