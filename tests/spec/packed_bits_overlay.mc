@@ -1,8 +1,8 @@
 // SPEC: section=6.3,14,22,I.11,I.12
 // SPEC: milestone=packed-bits-overlay-declarations
-// SPEC: phase=parse,sema
-// SPEC: expect=pass,compile_error
-// SPEC: check=E_PACKED_BITS_REPR_NOT_INTEGER,E_PACKED_BITS_FIELD_NOT_BOOL,E_DUPLICATE_PACKED_BITS_FIELD,E_DUPLICATE_OVERLAY_FIELD,E_UNKNOWN_STRUCT_FIELD
+// SPEC: phase=parse,sema,lower-c
+// SPEC: expect=pass,compile_error,inspect
+// SPEC: check=E_PACKED_BITS_REPR_NOT_INTEGER,E_PACKED_BITS_FIELD_NOT_BOOL,E_DUPLICATE_PACKED_BITS_FIELD,E_DUPLICATE_OVERLAY_FIELD,E_UNKNOWN_STRUCT_FIELD,packed-bits-no-c-bitfields,overlay-union-byte-storage
 
 packed bits UartLsr: u8 {
     data_ready: bool,

@@ -169,6 +169,8 @@ test "classify SPEC check entries" {
     try std.testing.expectEqual(CheckKind.ir_fact, classifyCheck("DivideByZero"));
     try std.testing.expectEqual(CheckKind.lower_c, classifyCheck("checked-arithmetic-lowering"));
     try std.testing.expectEqual(CheckKind.lower_c, classifyCheck("mmio-width-preserved"));
+    try std.testing.expectEqual(CheckKind.lower_c, classifyCheck("packed-bits-no-c-bitfields"));
+    try std.testing.expectEqual(CheckKind.lower_c, classifyCheck("overlay-union-byte-storage"));
     try std.testing.expectEqual(CheckKind.unsupported, classifyCheck("needs-new-harness-mode"));
 }
 
@@ -654,6 +656,8 @@ fn isLowerCCheck(check: []const u8) bool {
         "no-c-data-race-ub",
         "mmio-width-preserved",
         "mmio-ordering-preserved",
+        "packed-bits-no-c-bitfields",
+        "overlay-union-byte-storage",
     };
     return matchesAny(check, &names);
 }
@@ -988,6 +992,22 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
             "prevents_after_before=true",
             "lower mmio_sequence fn=ordered_device_sequence edge=ordinary_before_release before=raw.store barrier=Uart16550.thr.write ordering=release prevents_reorder=true",
             "lower mmio_sequence fn=ordered_device_sequence edge=ordinary_after_acquire barrier=Uart16550.lsr.read ordering=acquire after=raw.store prevents_reorder=true",
+        });
+    }
+    if (std.mem.eql(u8, check, "packed-bits-no-c-bitfields")) {
+        return containsAll(output, &.{
+            "lower packed_bits name=UartLsr",
+            "strategy=mask_shift",
+            "c_bitfields=false",
+            "semantic_source=mc_bits",
+        });
+    }
+    if (std.mem.eql(u8, check, "overlay-union-byte-storage")) {
+        return containsAll(output, &.{
+            "lower overlay_union name=Word",
+            "strategy=byte_storage",
+            "c_union=false",
+            "semantic_source=mc_bytes",
         });
     }
     return false;

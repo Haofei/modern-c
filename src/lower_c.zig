@@ -50,12 +50,30 @@ const Inspector = struct {
                         if (std.mem.eql(u8, abi, "mmio")) try self.collectMmioStruct(struct_decl);
                     }
                 },
+                .packed_bits_decl => |packed_bits| try self.writePackedBitsLowering(packed_bits),
+                .overlay_union_decl => |overlay_union| try self.writeOverlayUnionLowering(overlay_union),
                 .global_decl => |global| {
                     try self.globals.put(global.name.text, {});
                 },
-                .fn_decl, .extern_fn, .type_alias, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .opaque_decl => {},
             }
         }
+    }
+
+    fn writePackedBitsLowering(self: *Inspector, packed_bits: ast.PackedBitsDecl) !void {
+        try self.out.print(
+            self.allocator,
+            "lower packed_bits name={s} repr={s} strategy=mask_shift c_bitfields=false semantic_source=mc_bits\n",
+            .{ packed_bits.name.text, typeName(packed_bits.repr) orelse "unknown" },
+        );
+    }
+
+    fn writeOverlayUnionLowering(self: *Inspector, overlay_union: ast.OverlayUnionDecl) !void {
+        try self.out.print(
+            self.allocator,
+            "lower overlay_union name={s} strategy=byte_storage c_union=false semantic_source=mc_bytes\n",
+            .{overlay_union.name.text},
+        );
     }
 
     fn collectMmioStruct(self: *Inspector, struct_decl: ast.StructDecl) !void {
