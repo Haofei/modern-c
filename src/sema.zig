@@ -213,7 +213,7 @@ pub const Checker = struct {
         if (local.ty) |ty| self.checkType(ty, .normal);
         if (local.init) |expr| {
             const initializer = self.checkExpr(expr, ctx);
-            if (!mutable) address_origin = addressOrigin(expr, ctx);
+            address_origin = addressOrigin(expr, ctx);
             const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
             const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
             const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;

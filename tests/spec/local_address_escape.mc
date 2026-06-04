@@ -119,6 +119,28 @@ fn reject_return_copied_local_pointer() -> *mut u32 {
     return q;
 }
 
+fn reject_return_var_pointer_initialized_local_address() -> *mut u32 {
+    var x: u32 = 1;
+    var p: *mut u32 = &x;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return p;
+}
+
+fn reject_return_grouped_var_pointer_initialized_local_address() -> *mut u32 {
+    var x: u32 = 1;
+    var p: *mut u32 = &(x);
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return (p);
+}
+
+fn reject_return_copied_var_pointer_initialized_local_address() -> *mut u32 {
+    var x: u32 = 1;
+    var p: *mut u32 = &x;
+    let q: *mut u32 = p;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return q;
+}
+
 fn reject_return_assigned_local_pointer(fallback: *mut u32) -> *mut u32 {
     var x: u32 = 1;
     var out: *mut u32 = fallback;
