@@ -202,6 +202,7 @@ pub const Checker = struct {
                 _ = self.checkExpr(node.target, ctx);
                 const value_class = self.checkExpr(node.value, ctx);
                 self.checkAssignmentValue(node.target, value_class, node.value, ctx);
+                updateAssignmentAddressOrigin(node.target, node.value, ctx);
             },
         }
     }
@@ -1125,6 +1126,19 @@ fn assignmentTargetType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .grouped => |inner| assignmentTargetType(inner.*, ctx),
         else => null,
     };
+}
+
+fn updateAssignmentAddressOrigin(target: ast.Expr, value: ast.Expr, ctx: Context) void {
+    switch (target.kind) {
+        .ident => |ident| {
+            const scope = ctx.scope orelse return;
+            const entry = scope.getPtr(ident.text) orelse return;
+            if (!entry.mutable) return;
+            entry.address_origin = addressOrigin(value, ctx);
+        },
+        .grouped => |inner| updateAssignmentAddressOrigin(inner.*, value, ctx),
+        else => {},
+    }
 }
 
 fn localAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {

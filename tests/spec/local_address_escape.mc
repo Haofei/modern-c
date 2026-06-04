@@ -33,6 +33,45 @@ fn accept_return_global_address_alias() -> *mut u32 {
     return p;
 }
 
+fn accept_cleared_local_pointer_alias(p: *mut u32) -> *mut u32 {
+    var x: u32 = 1;
+    var out: *mut u32 = &x;
+    out = p;
+    return out;
+}
+
+fn accept_cleared_assigned_local_pointer_alias(p: *mut u32) -> *mut u32 {
+    var x: u32 = 1;
+    var out: *mut u32 = p;
+    out = &x;
+    out = p;
+    return out;
+}
+
+fn accept_copied_after_cleared_local_pointer_alias(p: *mut u32) -> *mut u32 {
+    var x: u32 = 1;
+    var out: *mut u32 = p;
+    out = &x;
+    out = p;
+    let q: *mut u32 = out;
+    return q;
+}
+
+fn accept_cleared_local_pointer_with_global() -> *mut u32 {
+    var x: u32 = 1;
+    var out: *mut u32 = &x;
+    out = &shared_counter;
+    return out;
+}
+
+fn accept_copied_after_cleared_local_pointer_with_global() -> *mut u32 {
+    var x: u32 = 1;
+    var out: *mut u32 = &x;
+    out = &shared_counter;
+    let q: *mut u32 = out;
+    return q;
+}
+
 fn reject_return_var_local_address() -> *mut u32 {
     var x: u32 = 1;
     // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
@@ -76,6 +115,58 @@ fn reject_return_copied_local_pointer() -> *mut u32 {
     var x: u32 = 1;
     let p: *mut u32 = &x;
     let q: *mut u32 = p;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return q;
+}
+
+fn reject_return_assigned_local_pointer(fallback: *mut u32) -> *mut u32 {
+    var x: u32 = 1;
+    var out: *mut u32 = fallback;
+    out = &x;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return out;
+}
+
+fn reject_return_assigned_grouped_local_pointer(fallback: *mut u32) -> *mut u32 {
+    var x: u32 = 1;
+    var out: *mut u32 = fallback;
+    (out) = &x;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return out;
+}
+
+fn reject_return_assigned_grouped_address_local_pointer(fallback: *mut u32) -> *mut u32 {
+    var x: u32 = 1;
+    var out: *mut u32 = fallback;
+    out = &(x);
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return (out);
+}
+
+fn reject_return_assigned_copied_local_pointer(fallback: *mut u32) -> *mut u32 {
+    var x: u32 = 1;
+    let p: *mut u32 = &x;
+    var out: *mut u32 = fallback;
+    out = p;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return out;
+}
+
+fn reject_return_copied_after_assigned_local_pointer(fallback: *mut u32) -> *mut u32 {
+    var x: u32 = 1;
+    var out: *mut u32 = fallback;
+    out = &x;
+    let q: *mut u32 = out;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return q;
+}
+
+fn reject_return_var_copied_after_assigned_local_pointer(fallback: *mut u32) -> *mut u32 {
+    var x: u32 = 1;
+    var out: *mut u32 = fallback;
+    out = &x;
+    var q: *mut u32 = fallback;
+    q = out;
     // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
     return q;
 }
