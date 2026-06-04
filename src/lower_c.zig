@@ -13,6 +13,7 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
     try out.appendSlice(allocator,
         \\#include <stdint.h>
         \\#include <stdbool.h>
+        \\#include <stddef.h>
         \\
         \\#if defined(__GNUC__) || defined(__clang__)
         \\#define MC_NORETURN __attribute__((noreturn))
@@ -322,6 +323,7 @@ const CEmitter = struct {
                 }
             },
             .@"switch" => |node| try self.emitSwitch(node, locals),
+            .if_let => |node| try self.emitIfLet(node, locals),
             else => try self.writeUnsupportedStmt(stmt),
         }
     }
@@ -397,6 +399,63 @@ const CEmitter = struct {
                 return error.UnsupportedCEmission;
             },
         }
+    }
+
+    fn emitIfLet(self: *CEmitter, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+        const binding = switch (node.pattern.kind) {
+            .bind => |ident| ident,
+            else => {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "/* unsupported if-let pattern: {s} */\n", .{@tagName(node.pattern.kind)});
+                return error.UnsupportedCEmission;
+            },
+        };
+        const source_name = switch (node.value.kind) {
+            .ident => |ident| ident.text,
+            .grouped => |inner| switch (inner.kind) {
+                .ident => |ident| ident.text,
+                else => null,
+            },
+            else => null,
+        } orelse {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "/* unsupported if-let value: {s} */\n", .{@tagName(node.value.kind)});
+            return error.UnsupportedCEmission;
+        };
+        const source_info = locals.get(source_name) orelse {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "/* unsupported if-let source: {s} */\n", .{source_name});
+            return error.UnsupportedCEmission;
+        };
+        const bind_ty = source_info.nullable_inner_c_type orelse {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "/* unsupported if-let source type: {s} */\n", .{source_name});
+            return error.UnsupportedCEmission;
+        };
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "if ({s} != NULL) {{\n", .{source_name});
+        var then_locals = try cloneLocals(self.allocator, locals.*);
+        defer then_locals.deinit();
+        try then_locals.put(binding.text, .{ .c_type = bind_ty });
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ bind_ty, binding.text, source_name });
+        try self.emitBlockItems(node.then_block, &then_locals);
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}");
+        if (node.else_block) |else_block| {
+            try self.out.appendSlice(self.allocator, " else {\n");
+            var else_locals = try cloneLocals(self.allocator, locals.*);
+            defer else_locals.deinit();
+            self.indent += 1;
+            try self.emitBlockItems(else_block, &else_locals);
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "}");
+        }
+        try self.out.appendSlice(self.allocator, "\n");
     }
 
     fn emitExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
@@ -499,13 +558,16 @@ const CEmitter = struct {
 };
 
 const LocalInfo = struct {
+    c_type: ?[]const u8 = null,
     array_len: ?[]const u8 = null,
+    nullable_inner_c_type: ?[]const u8 = null,
 };
 
 fn localInfoFromType(ty: ast.TypeExpr) LocalInfo {
     return switch (ty.kind) {
-        .array => |node| .{ .array_len = intLiteralText(node.len) },
-        else => .{},
+        .array => |node| .{ .c_type = cType(ty), .array_len = intLiteralText(node.len) },
+        .nullable => |child| .{ .c_type = cType(ty), .nullable_inner_c_type = nullableInnerCType(child.*) },
+        else => .{ .c_type = cType(ty) },
     };
 }
 
@@ -1039,10 +1101,11 @@ fn typeName(ty: ast.TypeExpr) ?[]const u8 {
 
 fn cType(ty: ast.TypeExpr) []const u8 {
     switch (ty.kind) {
-        .pointer => |node| return ptrCType(node.child.*),
-        .raw_many_pointer => |node| return ptrCType(node.child.*),
-        .slice => |node| return ptrCType(node.child.*),
-        .array => |node| return ptrCType(node.child.*),
+        .pointer => |node| return ptrCType(node.child.*, node.mutability),
+        .raw_many_pointer => |node| return ptrCType(node.child.*, node.mutability),
+        .slice => |node| return ptrCType(node.child.*, node.mutability),
+        .array => |node| return ptrCType(node.child.*, .none),
+        .nullable => |child| return cType(child.*),
         else => {},
     }
     const name = typeName(ty) orelse return "void *";
@@ -1061,17 +1124,26 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     return "void *";
 }
 
-fn ptrCType(child: ast.TypeExpr) []const u8 {
+fn nullableInnerCType(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .pointer, .raw_many_pointer => cType(ty),
+        .qualified => |node| nullableInnerCType(node.child.*),
+        else => null,
+    };
+}
+
+fn ptrCType(child: ast.TypeExpr, mutability: ast.Mutability) []const u8 {
     const child_ty = cType(child);
-    if (std.mem.eql(u8, child_ty, "uint8_t")) return "uint8_t *";
-    if (std.mem.eql(u8, child_ty, "uint16_t")) return "uint16_t *";
-    if (std.mem.eql(u8, child_ty, "uint32_t")) return "uint32_t *";
-    if (std.mem.eql(u8, child_ty, "uint64_t")) return "uint64_t *";
-    if (std.mem.eql(u8, child_ty, "int8_t")) return "int8_t *";
-    if (std.mem.eql(u8, child_ty, "int16_t")) return "int16_t *";
-    if (std.mem.eql(u8, child_ty, "int32_t")) return "int32_t *";
-    if (std.mem.eql(u8, child_ty, "int64_t")) return "int64_t *";
-    if (std.mem.eql(u8, child_ty, "bool")) return "bool *";
+    const is_const = mutability == .@"const";
+    if (std.mem.eql(u8, child_ty, "uint8_t")) return if (is_const) "uint8_t const *" else "uint8_t *";
+    if (std.mem.eql(u8, child_ty, "uint16_t")) return if (is_const) "uint16_t const *" else "uint16_t *";
+    if (std.mem.eql(u8, child_ty, "uint32_t")) return if (is_const) "uint32_t const *" else "uint32_t *";
+    if (std.mem.eql(u8, child_ty, "uint64_t")) return if (is_const) "uint64_t const *" else "uint64_t *";
+    if (std.mem.eql(u8, child_ty, "int8_t")) return if (is_const) "int8_t const *" else "int8_t *";
+    if (std.mem.eql(u8, child_ty, "int16_t")) return if (is_const) "int16_t const *" else "int16_t *";
+    if (std.mem.eql(u8, child_ty, "int32_t")) return if (is_const) "int32_t const *" else "int32_t *";
+    if (std.mem.eql(u8, child_ty, "int64_t")) return if (is_const) "int64_t const *" else "int64_t *";
+    if (std.mem.eql(u8, child_ty, "bool")) return if (is_const) "bool const *" else "bool *";
     return "void *";
 }
 
@@ -1579,4 +1651,47 @@ test "emits C for integer switch arms" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "default:") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 10;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return 30;") != null);
+}
+
+test "emits C for optional pointer if-let" {
+    const source =
+        \\fn unwrap_or(maybe: ?*mut u8, fallback: *mut u8) -> *mut u8 {
+        \\    if let p = maybe {
+        \\        return p;
+        \\    } else {
+        \\        return fallback;
+        \\    }
+        \\}
+        \\
+        \\fn read_const(maybe: ?*const u8) -> u8 {
+        \\    if let p = maybe {
+        \\        return p.*;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_if_let.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t * unwrap_or(uint8_t * maybe, uint8_t * fallback)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (maybe != NULL) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = maybe;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_const(uint8_t const * maybe)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * p = maybe;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return *p;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return fallback;") != null);
 }
