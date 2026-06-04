@@ -1344,6 +1344,17 @@ const CEmitter = struct {
 
     fn resultSwitchBranch(self: *CEmitter, pattern: ast.Pattern, subject: ResultSwitchSubject) !?ResultSwitchBranch {
         return switch (pattern.kind) {
+            .tag => |tag| blk: {
+                if (std.mem.eql(u8, tag.text, "ok")) break :blk .{
+                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name}),
+                    .tag = "ok",
+                };
+                if (std.mem.eql(u8, tag.text, "err")) break :blk .{
+                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "!{s}.is_ok", .{subject.name}),
+                    .tag = "err",
+                };
+                break :blk null;
+            },
             .tag_bind => |tag_bind| blk: {
                 if (std.mem.eql(u8, tag_bind.tag.text, "ok")) break :blk .{
                     .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name}),
@@ -6056,6 +6067,14 @@ test "emits C for Result switch narrowing" {
         \\        err(e) => { return e != 0; },
         \\    }
         \\}
+        \\
+        \\fn result_payloadless_switch() -> u32 {
+        \\    let result = make_result();
+        \\    switch result {
+        \\        .ok => { return 1; },
+        \\        .err => { return 0; },
+        \\    }
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_result_switch.mc", source);
@@ -6087,6 +6106,8 @@ test "emits C for Result switch narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static bool result_local_nonzero(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error result = make_result();\n    if (result.is_ok) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t v = result.payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t result_payloadless_switch(void)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error result = make_result();\n    if (result.is_ok) {\n        return 1;\n    }\n    else {\n        return 0;\n    }") != null);
 }
 
 test "emits C extern structs and member access" {

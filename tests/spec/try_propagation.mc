@@ -47,6 +47,21 @@ fn reject_unhandled_result_statement() -> void {
     make_result_u32();
 }
 
+fn reject_unhandled_result_local() -> void {
+    // EXPECT_ERROR: E_UNHANDLED_RESULT
+    let result = make_result_u32();
+}
+
+fn accept_handled_result_local() -> u32 {
+    let result = make_result_u32();
+    return result?;
+}
+
+fn reject_defer_unhandled_result() -> void {
+    // EXPECT_ERROR: E_UNHANDLED_RESULT
+    defer make_result_u32();
+}
+
 fn reject_result_try_return_type(result: Result<u32, Error>) -> *mut u8 {
     // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
     return result?;

@@ -394,6 +394,25 @@ pub const Checker = struct {
 
     fn checkBlock(self: *Checker, block: ast.Block, ctx: Context) void {
         for (block.items) |stmt| self.checkStmt(stmt, ctx);
+        self.checkUnhandledResultLocals(block, ctx);
+    }
+
+    fn checkUnhandledResultLocals(self: *Checker, block: ast.Block, ctx: Context) void {
+        for (block.items, 0..) |stmt, i| {
+            const local = switch (stmt.kind) {
+                .let_decl, .var_decl => |local| local,
+                else => continue,
+            };
+            if (local.init == null) continue;
+            const local_ty = local.ty orelse exprResultType(local.init.?, ctx);
+            const ty = local_ty orelse continue;
+            if (classifyType(ty) != .result) continue;
+            for (local.names) |name| {
+                if (!resultLocalHandledLater(name.text, block.items[i + 1 ..])) {
+                    self.errorCode(name.span, "E_UNHANDLED_RESULT", "Result local must be handled or propagated");
+                }
+            }
+        }
     }
 
     fn checkStmt(self: *Checker, stmt: ast.Stmt, ctx: Context) void {
@@ -495,6 +514,9 @@ pub const Checker = struct {
             },
             .@"defer" => |expr| {
                 const cleanup = self.checkExpr(expr, ctx);
+                if (cleanup == .result) {
+                    self.errorCode(expr.span, "E_UNHANDLED_RESULT", "Result defer cleanup must be handled or propagated");
+                }
                 if (cleanup == .never or exprContainsDeferControlFlow(expr, ctx)) {
                     self.errorCode(stmt.span, "E_DEFER_CONTROL_FLOW", "defer is lexical cleanup and must not alter control flow");
                 }
@@ -2939,6 +2961,59 @@ fn exprContainsTry(expr: ast.Expr) bool {
         .call => |node| callContainsTry(node),
         .index => |node| exprContainsTry(node.base.*) or exprContainsTry(node.index.*),
         .member => |node| exprContainsTry(node.base.*),
+        else => false,
+    };
+}
+
+fn resultLocalHandledLater(name: []const u8, stmts: []const ast.Stmt) bool {
+    for (stmts) |stmt| {
+        if (stmtHandlesResultLocal(name, stmt)) return true;
+    }
+    return false;
+}
+
+fn stmtHandlesResultLocal(name: []const u8, stmt: ast.Stmt) bool {
+    return switch (stmt.kind) {
+        .let_decl, .var_decl => |local| if (local.init) |expr| exprHandlesResultLocal(name, expr) else false,
+        .loop => |node| if (node.iterable) |iterable| exprHandlesResultLocal(name, iterable) else false,
+        .if_let => |node| exprIsIdentNamed(node.value, name) or exprHandlesResultLocal(name, node.value),
+        .@"switch" => |node| exprIsIdentNamed(node.subject, name) or exprHandlesResultLocal(name, node.subject),
+        .unsafe_block, .comptime_block, .block => false,
+        .contract_block => false,
+        .@"return" => |maybe| if (maybe) |expr| exprHandlesResultLocal(name, expr) else false,
+        .@"break", .@"continue", .asm_stmt => false,
+        .@"defer", .expr, .assert => |expr| exprHandlesResultLocal(name, expr),
+        .assignment => |node| exprHandlesResultLocal(name, node.target) or exprHandlesResultLocal(name, node.value),
+    };
+}
+
+fn exprHandlesResultLocal(name: []const u8, expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .try_expr => |inner| exprIsIdentNamed(inner.*, name) or exprHandlesResultLocal(name, inner.*),
+        .grouped, .address_of, .deref => |inner| exprHandlesResultLocal(name, inner.*),
+        .block => false,
+        .unary => |node| exprHandlesResultLocal(name, node.expr.*),
+        .binary => |node| exprHandlesResultLocal(name, node.left.*) or exprHandlesResultLocal(name, node.right.*),
+        .cast => |node| exprHandlesResultLocal(name, node.value.*),
+        .call => |node| callHandlesResultLocal(name, node),
+        .index => |node| exprHandlesResultLocal(name, node.base.*) or exprHandlesResultLocal(name, node.index.*),
+        .member => |node| exprHandlesResultLocal(name, node.base.*),
+        else => false,
+    };
+}
+
+fn callHandlesResultLocal(name: []const u8, node: anytype) bool {
+    if (exprHandlesResultLocal(name, node.callee.*)) return true;
+    for (node.args) |arg| {
+        if (exprHandlesResultLocal(name, arg)) return true;
+    }
+    return false;
+}
+
+fn exprIsIdentNamed(expr: ast.Expr, name: []const u8) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, name),
+        .grouped => |inner| exprIsIdentNamed(inner.*, name),
         else => false,
     };
 }
