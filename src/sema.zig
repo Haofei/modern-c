@@ -1121,10 +1121,9 @@ pub const Checker = struct {
 
     fn checkKnownStructField(self: *Checker, span: diagnostics.Span, base: ast.Expr, field_name: []const u8, ctx: Context) void {
         const base_ty = exprResultType(base, ctx) orelse return;
-        const struct_name = structTypeName(base_ty) orelse return;
-        const structs = ctx.structs orelse return;
-        const struct_info = structs.get(struct_name) orelse return;
-        if (!struct_info.fields.contains(field_name)) {
+        const layout_name = structTypeName(base_ty) orelse return;
+        const layout_info = layoutFieldInfo(layout_name, ctx) orelse return;
+        if (!layout_info.fields.contains(field_name)) {
             self.errorCode(span, "E_UNKNOWN_STRUCT_FIELD", "struct has no field with this name");
         }
     }
@@ -2256,10 +2255,9 @@ fn memberResultFieldType(member: anytype, ctx: Context) ?ast.TypeExpr {
 }
 
 fn structFieldType(base_ty: ast.TypeExpr, field_name: []const u8, ctx: Context) ?ast.TypeExpr {
-    const struct_name = structTypeName(base_ty) orelse return null;
-    const structs = ctx.structs orelse return null;
-    const struct_info = structs.get(struct_name) orelse return null;
-    return struct_info.fields.get(field_name);
+    const layout_name = structTypeName(base_ty) orelse return null;
+    const layout_info = layoutFieldInfo(layout_name, ctx) orelse return null;
+    return layout_info.fields.get(field_name);
 }
 
 fn directCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
@@ -3022,6 +3020,63 @@ test "rejects nested MMIO register field assignment" {
 
     try std.testing.expect(reporter.has_errors);
     try std.testing.expect(hasDiagnosticCode(&reporter, "E_MMIO_DIRECT_ASSIGN"));
+}
+
+test "type checks packed bits fields as bool" {
+    const source =
+        \\packed bits Status: u8 {
+        \\    ready: bool,
+        \\}
+        \\
+        \\fn read_ready(status: Status) -> bool {
+        \\    return status.ready;
+        \\}
+        \\
+        \\fn write_ready(status: Status, flag: bool) -> Status {
+        \\    var next: Status = status;
+        \\    next.ready = flag;
+        \\    return next;
+        \\}
+        \\
+        \\fn reject_read_ready_as_u32(status: Status) -> u32 {
+        \\    return status.ready;
+        \\}
+        \\
+        \\fn reject_unknown(status: Status) -> bool {
+        \\    return status.missing;
+        \\}
+        \\
+        \\fn reject_write_u32(status: Status, value: u32) -> Status {
+        \\    var next: Status = status;
+        \\    next.ready = value;
+        \\    return next;
+        \\}
+        \\
+        \\fn reject_write_literal(status: Status) -> Status {
+        \\    var next: Status = status;
+        \\    next.ready = 1;
+        \\    return next;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "packed_bits_field_typing.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var checker = Checker.init(&reporter);
+    checker.checkModule(module);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(hasDiagnosticCode(&reporter, "E_RETURN_TYPE_MISMATCH"));
+    try std.testing.expect(hasDiagnosticCode(&reporter, "E_UNKNOWN_STRUCT_FIELD"));
+    try std.testing.expect(hasDiagnosticCode(&reporter, "E_NO_IMPLICIT_CONVERSION"));
 }
 
 fn hasDiagnosticCode(reporter: *const diagnostics.Reporter, code: []const u8) bool {
