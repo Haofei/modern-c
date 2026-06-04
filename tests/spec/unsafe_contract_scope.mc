@@ -24,6 +24,14 @@ fn allow_unchecked_add_inside_contract(xs: []const u32) -> u32 {
     return sum;
 }
 
+fn reject_unchecked_add_inside_noalias_contract(a: u32, b: u32) -> u32 {
+    #[unsafe_contract(noalias)]
+    {
+        // EXPECT_ERROR: E_UNCHECKED_OUTSIDE_CONTRACT
+        return unchecked.add(a, b);
+    }
+}
+
 fn noalias_contract_region(p: *mut u8, n: usize) -> void {
     #[unsafe_contract(noalias)]
     {
@@ -33,4 +41,12 @@ fn noalias_contract_region(p: *mut u8, n: usize) -> void {
 
     // EXPECT: noalias metadata from the contract is stripped or ended at region exit.
     raw.store<u8>(p, 2);
+}
+
+fn reject_noalias_assume_inside_no_overflow_contract(p: *mut u8, n: usize) -> void {
+    #[unsafe_contract(no_overflow)]
+    {
+        // EXPECT_ERROR: E_UNCHECKED_OUTSIDE_CONTRACT
+        let a = compiler.assume_noalias_unchecked(p, n);
+    }
 }

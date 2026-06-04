@@ -37,7 +37,7 @@ pub const Checker = struct {
         if (fn_decl.return_type) |ty| self.checkType(ty, .normal);
         if (fn_decl.body) |body| self.checkBlock(body, .{
             .no_lang_trap = no_lang_trap,
-            .unsafe_contract_depth = 0,
+            .unsafe_contracts = .{},
             .scope = &scope,
         });
     }
@@ -76,7 +76,7 @@ pub const Checker = struct {
             .asm_stmt => {},
             .contract_block => |contract| {
                 var next = ctx;
-                next.unsafe_contract_depth += 1;
+                next.unsafe_contracts = next.unsafe_contracts.with(contract.attr);
                 self.checkBlock(contract.block, next);
             },
             .@"return" => |maybe| {
@@ -142,8 +142,10 @@ pub const Checker = struct {
                 return classifyType(node.ty.*);
             },
             .call => |node| {
-                if (isUncheckedCall(node.callee.*) and ctx.unsafe_contract_depth == 0) {
-                    self.errorCode(expr.span, "E_UNCHECKED_OUTSIDE_CONTRACT", "unchecked operation requires #[unsafe_contract]");
+                if (uncheckedRequirement(node.callee.*)) |required| {
+                    if (!ctx.unsafe_contracts.has(required)) {
+                        self.errorCode(expr.span, "E_UNCHECKED_OUTSIDE_CONTRACT", "unchecked operation requires matching #[unsafe_contract]");
+                    }
                 }
                 if (isCVoidLayoutCall(node.callee.*, node.type_args)) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no size or alignment in MC");
@@ -207,8 +209,37 @@ pub const Checker = struct {
 
 const Context = struct {
     no_lang_trap: bool = false,
-    unsafe_contract_depth: usize = 0,
+    unsafe_contracts: UnsafeContracts = .{},
     scope: ?*Scope = null,
+};
+
+const UnsafeContracts = struct {
+    no_overflow: bool = false,
+    noalias_contract: bool = false,
+
+    fn with(self: UnsafeContracts, attr: ast.Attr) UnsafeContracts {
+        var next = self;
+        switch (attr.kind) {
+            .unsafe_contract => |contract| {
+                if (std.mem.eql(u8, contract.name.text, "no_overflow")) next.no_overflow = true;
+                if (std.mem.eql(u8, contract.name.text, "noalias")) next.noalias_contract = true;
+            },
+            .no_lang_trap, .named => {},
+        }
+        return next;
+    }
+
+    fn has(self: UnsafeContracts, required: ContractKind) bool {
+        return switch (required) {
+            .no_overflow => self.no_overflow,
+            .noalias_contract => self.noalias_contract,
+        };
+    }
+};
+
+const ContractKind = enum {
+    no_overflow,
+    noalias_contract,
 };
 
 const Scope = std.StringHashMap(TypeClass);
@@ -276,10 +307,15 @@ fn classifyTypeName(name: []const u8) TypeClass {
     return .unknown;
 }
 
-fn isUncheckedCall(expr: ast.Expr) bool {
+fn uncheckedRequirement(expr: ast.Expr) ?ContractKind {
     return switch (expr.kind) {
-        .member => |node| isIdentNamed(node.base.*, "unchecked"),
-        else => false,
+        .member => |node| {
+            if (isIdentNamed(node.base.*, "unchecked")) return .no_overflow;
+            if (isIdentNamed(node.base.*, "compiler") and std.mem.eql(u8, node.name.text, "assume_noalias_unchecked")) return .noalias_contract;
+            return null;
+        },
+        .ident => |ident| if (std.mem.eql(u8, ident.text, "assume_noalias_unchecked")) .noalias_contract else null,
+        else => null,
     };
 }
 
