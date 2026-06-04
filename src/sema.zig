@@ -1209,12 +1209,18 @@ pub const Checker = struct {
         const subject_class = self.checkExpr(node.subject, ctx);
         const subject_ty = exprResultType(node.subject, ctx);
         const subject_enum = if (subject_ty) |ty| enumInfoForType(ty, ctx) else null;
+        const subject_union = if (subject_ty) |ty| unionInfoForType(ty, ctx) else null;
         var enum_cases_seen = std.StringHashMap(void).init(self.reporter.allocator);
         defer enum_cases_seen.deinit();
+        var union_cases_seen = std.StringHashMap(void).init(self.reporter.allocator);
+        defer union_cases_seen.deinit();
         for (node.arms) |arm| {
             self.checkSwitchArmPatterns(arm.patterns, subject_class, subject_ty, ctx);
             if (subject_enum) |enum_info| {
                 self.checkDuplicateSwitchEnumCases(arm.patterns, enum_info, &enum_cases_seen);
+            }
+            if (subject_union) |union_info| {
+                self.checkDuplicateSwitchUnionCases(arm.patterns, union_info, &union_cases_seen);
             }
             var arm_scope = Scope.init(self.reporter.allocator);
             defer arm_scope.deinit();
@@ -1253,9 +1259,26 @@ pub const Checker = struct {
         }
     }
 
+    fn checkDuplicateSwitchUnionCases(self: *Checker, patterns: []const ast.Pattern, union_info: UnionInfo, seen: *std.StringHashMap(void)) void {
+        for (patterns) |pattern| {
+            const tag = switch (pattern.kind) {
+                .tag => |tag| tag,
+                .tag_bind => |node| node.tag,
+                else => continue,
+            };
+            if (!union_info.cases.contains(tag.text)) continue;
+            if (seen.contains(tag.text)) {
+                self.errorCode(tag.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
+            } else {
+                seen.put(tag.text, {}) catch {};
+            }
+        }
+    }
+
     fn checkSwitchArmPatterns(self: *Checker, patterns: []const ast.Pattern, subject_class: TypeClass, subject_ty: ?ast.TypeExpr, ctx: Context) void {
         var binding_pattern_count: usize = 0;
         const subject_enum = if (subject_ty) |ty| enumInfoForType(ty, ctx) else null;
+        const subject_union = if (subject_ty) |ty| unionInfoForType(ty, ctx) else null;
         for (patterns) |pattern| {
             switch (pattern.kind) {
                 .tag => |tag| {
@@ -1264,10 +1287,21 @@ pub const Checker = struct {
                             self.errorCode(tag.span, "E_UNKNOWN_ENUM_CASE", "enum has no case with this name");
                         }
                     }
+                    if (subject_union) |union_info| {
+                        if (!union_info.cases.contains(tag.text)) {
+                            self.errorCode(tag.span, "E_UNKNOWN_UNION_CASE", "union has no case with this name");
+                        }
+                    }
                 },
                 .tag_bind => |node| {
                     binding_pattern_count += 1;
-                    if (!isResultNarrowingTag(node.tag.text)) {
+                    if (subject_union) |union_info| {
+                        if (!union_info.cases.contains(node.tag.text)) {
+                            self.errorCode(node.tag.span, "E_UNKNOWN_UNION_CASE", "union has no case with this name");
+                        } else if (unionCasePayloadType(union_info, node.tag.text) == null) {
+                            self.errorCode(pattern.span, "E_UNION_CASE_HAS_NO_PAYLOAD", "union case binding requires a payload case");
+                        }
+                    } else if (!isResultNarrowingTag(node.tag.text)) {
                         self.errorCode(node.tag.span, "E_SWITCH_RESULT_TAG", "switch result binding supports only ok(...) or err(...)");
                     } else if (subject_class != .result) {
                         self.errorCode(pattern.span, "E_SWITCH_RESULT_REQUIRED", "switch ok(...) or err(...) binding requires a Result value");
@@ -1283,20 +1317,25 @@ pub const Checker = struct {
 
     fn addSwitchArmBindings(self: *Checker, patterns: []const ast.Pattern, subject: ast.Expr, subject_class: TypeClass, scope: *Scope, ctx: Context) void {
         _ = self;
-        if (subject_class != .result) return;
         if (patterns.len != 1) return;
         var binding_ctx = ctx;
         binding_ctx.scope = scope;
         const subject_ty = exprResultType(subject, binding_ctx) orelse return;
+        const subject_union = unionInfoForType(subject_ty, binding_ctx);
         for (patterns) |pattern| {
             switch (pattern.kind) {
                 .tag_bind => |node| {
-                    if (!isResultNarrowingTag(node.tag.text)) continue;
-                    const narrowed_ty = resultPayloadType(subject_ty, node.tag.text) orelse continue;
+                    const narrowed_ty = if (subject_class == .result and isResultNarrowingTag(node.tag.text))
+                        resultPayloadType(subject_ty, node.tag.text)
+                    else if (subject_union) |union_info|
+                        unionCasePayloadType(union_info, node.tag.text)
+                    else
+                        null;
+                    const ty = narrowed_ty orelse continue;
                     scope.put(node.binding.text, .{
-                        .class = classifyType(narrowed_ty),
+                        .class = classifyType(ty),
                         .mutable = false,
-                        .ty = narrowed_ty,
+                        .ty = ty,
                         .origin = .local,
                     }) catch {};
                 },
@@ -1685,6 +1724,24 @@ fn enumInfoForType(ty: ast.TypeExpr, ctx: Context) ?EnumInfo {
 fn closedEnumInfoForType(ty: ast.TypeExpr, ctx: Context) ?EnumInfo {
     const enum_info = enumInfoForType(ty, ctx) orelse return null;
     return if (enum_info.is_open) null else enum_info;
+}
+
+fn unionTypeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |name| name.text,
+        .qualified => |node| unionTypeName(node.child.*),
+        else => null,
+    };
+}
+
+fn unionInfoForType(ty: ast.TypeExpr, ctx: Context) ?UnionInfo {
+    const name = unionTypeName(ty) orelse return null;
+    const tagged_unions = ctx.tagged_unions orelse return null;
+    return tagged_unions.get(name);
+}
+
+fn unionCasePayloadType(union_info: UnionInfo, case_name: []const u8) ?ast.TypeExpr {
+    return union_info.cases.get(case_name) orelse null;
 }
 
 fn classifyGenericTypeName(name: []const u8) TypeClass {
@@ -2722,6 +2779,7 @@ fn switchMayFallThrough(node: ast.Switch, ctx: Context) bool {
     var has_result_err = false;
     const subject_is_result = if (exprResultType(node.subject, ctx)) |ty| classifyType(ty) == .result else false;
     const closed_enum = if (exprResultType(node.subject, ctx)) |ty| closedEnumInfoForType(ty, ctx) else null;
+    const tagged_union = if (exprResultType(node.subject, ctx)) |ty| unionInfoForType(ty, ctx) else null;
     for (node.arms) |arm| {
         for (arm.patterns) |pattern| {
             switch (pattern.kind) {
@@ -2743,6 +2801,9 @@ fn switchMayFallThrough(node: ast.Switch, ctx: Context) bool {
     if (closed_enum) |enum_info| {
         return !has_wildcard and !switchCoversAllEnumCases(node, enum_info);
     }
+    if (tagged_union) |union_info| {
+        return !has_wildcard and !switchCoversAllUnionCases(node, union_info);
+    }
     return !has_wildcard and !(has_result_ok and has_result_err);
 }
 
@@ -2761,6 +2822,28 @@ fn switchCoversEnumCase(node: ast.Switch, case_name: []const u8) bool {
                 .tag => |tag| if (std.mem.eql(u8, tag.text, case_name)) return true,
                 .wildcard => return true,
                 .tag_bind, .literal, .bind => {},
+            }
+        }
+    }
+    return false;
+}
+
+fn switchCoversAllUnionCases(node: ast.Switch, union_info: UnionInfo) bool {
+    var cases = union_info.cases.keyIterator();
+    while (cases.next()) |case_name| {
+        if (!switchCoversUnionCase(node, case_name.*)) return false;
+    }
+    return true;
+}
+
+fn switchCoversUnionCase(switch_node: ast.Switch, case_name: []const u8) bool {
+    for (switch_node.arms) |arm| {
+        for (arm.patterns) |pattern| {
+            switch (pattern.kind) {
+                .tag => |tag| if (std.mem.eql(u8, tag.text, case_name)) return true,
+                .tag_bind => |tag_bind| if (std.mem.eql(u8, tag_bind.tag.text, case_name)) return true,
+                .wildcard => return true,
+                .literal, .bind => {},
             }
         }
     }
