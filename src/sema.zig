@@ -68,7 +68,7 @@ pub const Checker = struct {
         _ = self;
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .fn_decl, .extern_fn => |fn_decl| functions.put(fn_decl.name.text, .{ .return_ty = fn_decl.return_type }) catch {},
+                .fn_decl, .extern_fn => |fn_decl| functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_ty = fn_decl.return_type }) catch {},
                 .extern_struct, .type_alias, .opaque_decl, .global_decl => {},
             }
         }
@@ -450,7 +450,13 @@ pub const Checker = struct {
                 if (trap_call) self.checkTrapKind(expr.span, node.args);
                 _ = self.checkExpr(node.callee.*, ctx);
                 for (node.type_args) |ty| self.checkType(ty, .normal);
-                for (node.args) |arg| _ = self.checkExpr(arg, ctx);
+                const direct_function = directCallFunction(node.callee.*, ctx);
+                for (node.args, 0..) |arg, index| {
+                    const source = self.checkExpr(arg, ctx);
+                    if (direct_function) |function| {
+                        if (index < function.params.len) self.checkCallArgument(function.params[index].ty, arg, source, ctx);
+                    }
+                }
                 if (trap_call) return .never;
                 if (directCallReturnClass(node.callee.*, ctx)) |class| return class;
                 return .unknown;
@@ -633,6 +639,19 @@ pub const Checker = struct {
         return false;
     }
 
+    fn checkCallArgument(self: *Checker, target_ty: ast.TypeExpr, arg: ast.Expr, source: TypeClass, ctx: Context) void {
+        const target = classifyType(target_ty);
+        const literal_checked = self.checkIntegerLiteralInitializer(target, target_ty, arg);
+        const null_checked = self.checkNullPointerInitializer(target, arg);
+        const array_decay_checked = self.checkArrayDecayInitializer(target, source, arg);
+        const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, arg, ctx);
+        const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, arg, ctx);
+        const address_checked = self.checkAddressOfInitializer(target, arg);
+        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !canInitialize(target, source)) {
+            self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
+        }
+    }
+
     fn checkLocalAddressReturn(self: *Checker, target: TypeClass, expr: ast.Expr, ctx: Context) bool {
         if (!isNonNullPointerLike(target) and !isNullablePointerLike(target)) return false;
         if (localAddressRoot(expr, ctx) != null) {
@@ -753,6 +772,7 @@ const StructInfo = struct {
 };
 
 const FunctionInfo = struct {
+    params: []const ast.Param,
     return_ty: ?ast.TypeExpr,
 };
 
@@ -1350,15 +1370,19 @@ fn memberFieldType(member: anytype, ctx: Context) ?ast.TypeExpr {
 }
 
 fn directCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
+    const function = directCallFunction(callee, ctx) orelse return null;
+    const return_ty = function.return_ty orelse return .void;
+    return classifyType(return_ty);
+}
+
+fn directCallFunction(callee: ast.Expr, ctx: Context) ?FunctionInfo {
     const ident = switch (callee.kind) {
         .ident => |ident| ident,
-        .grouped => |inner| return directCallReturnClass(inner.*, ctx),
+        .grouped => |inner| return directCallFunction(inner.*, ctx),
         else => return null,
     };
     const functions = ctx.functions orelse return null;
-    const function = functions.get(ident.text) orelse return null;
-    const return_ty = function.return_ty orelse return .void;
-    return classifyType(return_ty);
+    return functions.get(ident.text);
 }
 
 fn updateAssignmentAddressOrigin(target: ast.Expr, value: ast.Expr, ctx: Context) void {

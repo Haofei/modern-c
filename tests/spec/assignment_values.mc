@@ -8,10 +8,22 @@ fn make_bool() -> bool {
     return true;
 }
 
+fn takes_u32(value: u32) -> u32 {
+    return value;
+}
+
+fn takes_mut_u8_pointer(p: *mut u8) -> *mut u8 {
+    return p;
+}
+
 fn accept_same_integer_assignment(value: u32) -> u32 {
     var x: u32 = 0;
     x = value;
     return x;
+}
+
+fn accept_call_argument_type(value: u32) -> u32 {
+    return takes_u32(value);
 }
 
 fn accept_same_bool_assignment(flag: bool) -> bool {
@@ -58,6 +70,16 @@ fn reject_integer_to_bool_assignment(value: u32) -> bool {
     // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
     flag = value;
     return flag;
+}
+
+fn reject_call_argument_bool_to_integer(flag: bool) -> u32 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
+    return takes_u32(flag);
+}
+
+fn reject_call_argument_pointer_conversion(p: *const u8, fallback: *mut u8) -> *mut u8 {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return takes_mut_u8_pointer(p);
 }
 
 fn reject_call_assignment_value_type() -> u32 {

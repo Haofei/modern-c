@@ -5,6 +5,8 @@
 // SPEC: check=E_C_VOID_DEREF,E_C_VOID_NO_LAYOUT,E_C_VOID_CONVERSION,E_MC_VOID_POINTER_FFI,E_BITWISE_POINTER_OPERAND
 
 extern "C" fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
+extern "C" fn takes_c_void(handle: *mut c_void) -> void;
+extern "C" fn takes_typed_pointer(ptr: *mut u8) -> void;
 
 fn accept_c_void_ffi(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
     // EXPECT: extern C opaque-object pointers are accepted and may cross the FFI boundary.
@@ -81,6 +83,16 @@ fn reject_typed_pointer_to_c_void_assignment(p: *mut u8, fallback: *mut c_void) 
     // EXPECT_ERROR: E_C_VOID_CONVERSION
     handle = p;
     return handle;
+}
+
+fn reject_typed_pointer_to_c_void_call_arg(p: *mut u8) -> void {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    takes_c_void(p);
+}
+
+fn reject_c_void_to_typed_pointer_call_arg(p: *mut c_void) -> void {
+    // EXPECT_ERROR: E_C_VOID_CONVERSION
+    takes_typed_pointer(p);
 }
 
 fn reject_c_void_to_typed_pointer_return(p: *mut c_void) -> *mut u8 {
