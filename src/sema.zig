@@ -194,7 +194,11 @@ pub const Checker = struct {
                 if (ctx.no_lang_trap) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "unwrap may emit a language trap in #[no_lang_trap]");
                 }
-                return self.checkExpr(inner.*, ctx);
+                const operand = self.checkExpr(inner.*, ctx);
+                if (!isTryOperand(operand)) {
+                    self.errorCode(expr.span, "E_TRY_REQUIRES_RESULT_OR_NULLABLE", "postfix '?' requires a Result or nullable operand");
+                }
+                return tryResultType(operand);
             },
             .block => |block| {
                 self.checkBlock(block, ctx);
@@ -784,6 +788,22 @@ fn isConditionType(kind: TypeClass) bool {
     return switch (kind) {
         .bool, .never, .unknown => true,
         else => false,
+    };
+}
+
+fn isTryOperand(kind: TypeClass) bool {
+    return switch (kind) {
+        .result, .nullable_pointer, .nullable_c_void_pointer, .never, .unknown => true,
+        else => false,
+    };
+}
+
+fn tryResultType(kind: TypeClass) TypeClass {
+    return switch (kind) {
+        .nullable_pointer => .pointer,
+        .nullable_c_void_pointer => .c_void_pointer,
+        .result => .unknown,
+        else => kind,
     };
 }
 
