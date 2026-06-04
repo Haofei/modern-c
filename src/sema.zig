@@ -218,6 +218,9 @@ pub const Checker = struct {
                 if (isArithmeticBinary(node.op) and ((left == .wrap and isCheckedInt(right)) or (right == .wrap and isCheckedInt(left)))) {
                     self.errorCode(expr.span, "E_ARITH_POLICY_MIX", "arithmetic domains do not implicitly mix");
                 }
+                if (isPointerArithmeticBinary(node.op) and (isSingleObjectPointerLike(left) or isSingleObjectPointerLike(right))) {
+                    self.errorCode(expr.span, "E_POINTER_ARITH_SINGLE_OBJECT", "single-object pointers do not support arithmetic");
+                }
                 if (isBitwiseBinary(node.op) and (isCheckedSigned(left) or isCheckedSigned(right))) {
                     self.errorCode(expr.span, "E_BITWISE_SIGNED_OPERAND", "bitwise operations are not defined on signed checked integers");
                 }
@@ -424,6 +427,7 @@ const TypeClass = enum {
     serial,
     counter,
     pointer,
+    slice,
     c_void_pointer,
     never,
     void,
@@ -457,6 +461,13 @@ fn isArithmeticBinary(op: ast.BinaryOp) bool {
     };
 }
 
+fn isPointerArithmeticBinary(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .add, .sub => true,
+        else => false,
+    };
+}
+
 fn isBitwiseBinary(op: ast.BinaryOp) bool {
     return switch (op) {
         .bit_and, .bit_or, .bit_xor, .shl, .shr => true,
@@ -484,6 +495,13 @@ fn isCheckedSigned(kind: TypeClass) bool {
 
 fn isPointerLike(kind: TypeClass) bool {
     return switch (kind) {
+        .pointer, .slice, .c_void_pointer => true,
+        else => false,
+    };
+}
+
+fn isSingleObjectPointerLike(kind: TypeClass) bool {
+    return switch (kind) {
         .pointer, .c_void_pointer => true,
         else => false,
     };
@@ -509,7 +527,7 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
     return switch (ty.kind) {
         .name => |name| classifyTypeName(name.text),
         .pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .pointer,
-        .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .pointer,
+        .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .slice,
         .generic => |node| classifyGenericTypeName(node.base.text),
         else => .unknown,
     };
