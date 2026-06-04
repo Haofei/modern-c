@@ -107,6 +107,8 @@ pub const Checker = struct {
                     if (local.ty != null and !literal_checked and !null_checked and !canInitialize(kind, initializer)) {
                         self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                     }
+                } else {
+                    self.errorCode(stmt.span, "E_LOCAL_REQUIRES_INITIALIZER", "ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage");
                 }
                 if (ctx.scope) |scope| {
                     for (local.names) |name| scope.put(name.text, kind) catch {};
