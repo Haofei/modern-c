@@ -253,7 +253,7 @@ test "tests/spec check entries are classified" {
         }
     }
 
-    if (summary.unsupported > 0) {
+    if (summary.future_traps > 0 or summary.future_lowering > 0 or summary.unsupported > 0) {
         std.debug.print(
             "SPEC check summary: {d} diagnostic, {d} IR fact, {d} lower-c, {d} future trap, {d} future lowering, {d} unsupported\n",
             .{ summary.diagnostics, summary.ir_facts, summary.lower_c, summary.future_traps, summary.future_lowering, summary.unsupported },
@@ -262,6 +262,9 @@ test "tests/spec check entries are classified" {
     try std.testing.expect(summary.diagnostics > 0);
     try std.testing.expect(summary.ir_facts > 0);
     try std.testing.expect(summary.lower_c > 0);
+    try std.testing.expectEqual(@as(usize, 0), summary.future_traps);
+    try std.testing.expectEqual(@as(usize, 0), summary.future_lowering);
+    try std.testing.expectEqual(@as(usize, 0), summary.unsupported);
 }
 
 test "tests/spec fixtures produce declared semantic error codes" {
