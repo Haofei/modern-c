@@ -17,7 +17,6 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\#include <stdbool.h>
         \\#include <stddef.h>
         \\#include <stdalign.h>
-        \\#include <string.h>
         \\#include <limits.h>
         \\
         \\#if defined(__GNUC__) || defined(__clang__)
@@ -401,20 +400,20 @@ const CEmitter = struct {
         try self.emitEnums();
         try self.emitPackedBitsTypes();
         try self.emitOverlayUnionTypes();
-        try self.emitArrayTypes();
+        try self.emitAggregateForwardDeclarations(module);
+        // Slices lower to a struct with a pointer field, so the forward
+        // declarations above suffice; emit them before the by-value aggregates
+        // (a struct may embed a slice by value).
         try self.emitSliceTypes();
-        try self.emitTaggedUnionTypes(module);
         for (module.decls) |decl| {
             if (decl.kind == .struct_decl and self.mmio_structs.contains(decl.kind.struct_decl.name.text)) {
                 try self.emitMmioStruct(decl.kind.struct_decl);
             }
         }
-        for (module.decls) |decl| {
-            if (decl.kind == .struct_decl and self.structs.contains(decl.kind.struct_decl.name.text)) {
-                try self.emitStruct(decl.kind.struct_decl);
-            }
-        }
-        try self.emitResultTypes();
+        // Arrays, structs, Result types, and tagged unions can embed one another
+        // by value (`[N]S`, `struct { [N]S }`, `Result<S, E>`), so emit them in
+        // dependency order rather than a fixed category order.
+        try self.emitOrderedAggregates(module);
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .global_decl => |global| try self.emitGlobal(global),
@@ -575,11 +574,165 @@ const CEmitter = struct {
         switch (value.kind) {
             .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
             .grouped => |inner| try self.emitEnumCaseValue(inner.*),
-            else => {
-                try self.out.print(self.allocator, "/* unsupported enum value: {s} */0", .{@tagName(value.kind)});
-                return error.UnsupportedCEmission;
+            // Negative discriminants for signed-repr enums (`negative = -1`).
+            .unary => |node| {
+                if (node.op != .neg) return self.unsupportedEnumValue(value);
+                try self.out.appendSlice(self.allocator, "-");
+                try self.emitEnumCaseValue(node.expr.*);
+            },
+            else => return self.unsupportedEnumValue(value),
+        }
+    }
+
+    fn unsupportedEnumValue(self: *CEmitter, value: ast.Expr) !void {
+        try self.out.print(self.allocator, "/* unsupported enum value: {s} */0", .{@tagName(value.kind)});
+        return error.UnsupportedCEmission;
+    }
+
+    // Forward-declare every user struct and tagged-union as an incomplete
+    // typedef so that container types emitted earlier (e.g. a slice
+    // `[]const T` lowering to a struct with a `T *` field) can name `T` before
+    // its full definition appears. C11 permits the later redundant
+    // `typedef struct T { ... } T;`. Pointer references only need this forward
+    // declaration; by-value embedding still relies on definition ordering.
+    fn emitAggregateForwardDeclarations(self: *CEmitter, module: ast.Module) !void {
+        var emitted = false;
+        for (module.decls) |decl| {
+            const name = switch (decl.kind) {
+                .struct_decl => |struct_decl| if (self.structs.contains(struct_decl.name.text)) struct_decl.name.text else continue,
+                .union_decl => |union_decl| if (self.tagged_unions.contains(union_decl.name.text)) union_decl.name.text else continue,
+                else => continue,
+            };
+            try self.out.print(self.allocator, "typedef struct {s} {s};\n", .{ name, name });
+            emitted = true;
+        }
+        // Generated array/Result typedefs are also `struct`s and may be referenced
+        // through a pointer before their definition (e.g. a slice of an array,
+        // `[][N]T`, whose element pointer is `mc_array_..._N *`).
+        {
+            var it = self.array_types.valueIterator();
+            while (it.next()) |array| {
+                try self.out.print(self.allocator, "typedef struct {s} {s};\n", .{ array.name, array.name });
+                emitted = true;
+            }
+        }
+        {
+            var it = self.result_types.valueIterator();
+            while (it.next()) |result| {
+                try self.out.print(self.allocator, "typedef struct {s} {s};\n", .{ result.name, result.name });
+                emitted = true;
+            }
+        }
+        if (emitted) try self.out.appendSlice(self.allocator, "\n");
+    }
+
+    // Emit arrays, structs, Result types, and tagged unions in dependency
+    // order: a unit is emitted once every aggregate it embeds *by value* has
+    // been emitted. Pointer/slice references are covered by the forward
+    // declarations and need no ordering. For valid (acyclic) programs this
+    // terminates; a defensive fallback emits any stragglers to stay complete.
+    fn emitOrderedAggregates(self: *CEmitter, module: ast.Module) !void {
+        const arena = self.scratch.allocator();
+        var units: std.ArrayList(AggregateEmitUnit) = .empty;
+        defer units.deinit(arena);
+
+        for (module.decls) |decl| switch (decl.kind) {
+            .struct_decl => |s| if (self.structs.contains(s.name.text)) try units.append(arena, .{ .struct_decl = s }),
+            .union_decl => |u| if (self.tagged_unions.contains(u.name.text)) try units.append(arena, .{ .tagged_union = u }),
+            else => {},
+        };
+        {
+            var it = self.array_types.valueIterator();
+            while (it.next()) |a| try units.append(arena, .{ .array = a.* });
+        }
+        {
+            var it = self.result_types.valueIterator();
+            while (it.next()) |r| try units.append(arena, .{ .result = r.* });
+        }
+
+        var emitted = std.StringHashMap(void).init(arena);
+        defer emitted.deinit();
+        const done = try arena.alloc(bool, units.items.len);
+        @memset(done, false);
+
+        var remaining = units.items.len;
+        while (remaining > 0) {
+            var progressed = false;
+            for (units.items, 0..) |unit, i| {
+                if (done[i]) continue;
+                if (!try self.aggregateDepsSatisfied(unit, &emitted)) continue;
+                try self.emitAggregateUnit(unit);
+                try emitted.put(self.aggregateUnitName(unit), {});
+                done[i] = true;
+                remaining -= 1;
+                progressed = true;
+            }
+            if (progressed) continue;
+            // No progress: an unexpected dependency cycle. Emit the rest as-is
+            // so output stays complete (clang will flag any genuine bad order).
+            for (units.items, 0..) |unit, i| {
+                if (done[i]) continue;
+                try self.emitAggregateUnit(unit);
+                done[i] = true;
+            }
+            break;
+        }
+    }
+
+    fn aggregateUnitName(self: *CEmitter, unit: AggregateEmitUnit) []const u8 {
+        _ = self;
+        return switch (unit) {
+            .struct_decl => |s| s.name.text,
+            .array => |a| a.name,
+            .result => |r| r.name,
+            .tagged_union => |u| u.name.text,
+        };
+    }
+
+    fn emitAggregateUnit(self: *CEmitter, unit: AggregateEmitUnit) !void {
+        switch (unit) {
+            .struct_decl => |s| try self.emitStruct(s),
+            .array => |a| try self.emitArrayType(a),
+            .result => |r| try self.emitResultType(r),
+            .tagged_union => |u| try self.emitTaggedUnionType(u),
+        }
+    }
+
+    fn aggregateDepsSatisfied(self: *CEmitter, unit: AggregateEmitUnit, emitted: *std.StringHashMap(void)) !bool {
+        switch (unit) {
+            .struct_decl => |s| for (s.fields) |field| {
+                if (try self.aggregateDepName(field.ty)) |dep| if (!emitted.contains(dep)) return false;
+            },
+            .array => |a| {
+                if (try self.aggregateDepName(a.element_ty)) |dep| if (!emitted.contains(dep)) return false;
+            },
+            .result => |r| {
+                if (try self.aggregateDepName(r.ok_ty)) |dep| if (!emitted.contains(dep)) return false;
+                if (try self.aggregateDepName(r.err_ty)) |dep| if (!emitted.contains(dep)) return false;
+            },
+            .tagged_union => |u| for (u.cases) |case| {
+                if (case.ty) |ty| if (try self.aggregateDepName(ty)) |dep| if (!emitted.contains(dep)) return false;
             },
         }
+        return true;
+    }
+
+    // The typedef name of the by-value aggregate `ty` refers to, if it is one
+    // this pass emits (struct, array, Result, tagged union). Slices, pointers,
+    // and nullable pointers reference their pointee only through a pointer, so
+    // they impose no ordering and return null; scalars and enums likewise.
+    fn aggregateDepName(self: *CEmitter, ty: ast.TypeExpr) !?[]const u8 {
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .array => try self.cTypeFor(resolved, .typedef_name),
+            .qualified => |node| try self.aggregateDepName(node.child.*),
+            .generic => |node| if (std.mem.eql(u8, node.base.text, "Result"))
+                try self.cTypeFor(resolved, .typedef_name)
+            else
+                null,
+            .name => |ident| if (self.structs.contains(ident.text) or self.tagged_unions.contains(ident.text)) ident.text else null,
+            else => null,
+        };
     }
 
     fn emitStruct(self: *CEmitter, struct_decl: ast.StructDecl) !void {
@@ -610,36 +763,48 @@ const CEmitter = struct {
 
     fn emitResultTypes(self: *CEmitter) !void {
         var it = self.result_types.valueIterator();
-        while (it.next()) |result| {
-            try self.out.print(self.allocator, "typedef struct {s} {{\n", .{result.name});
-            self.indent += 1;
-            try self.writeIndent();
-            try self.out.appendSlice(self.allocator, "bool is_ok;\n");
-            try self.writeIndent();
-            try self.out.appendSlice(self.allocator, "union {\n");
-            self.indent += 1;
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} ok;\n", .{try self.cTypeFor(result.ok_ty, .typedef_name)});
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} err;\n", .{try self.cTypeFor(result.err_ty, .typedef_name)});
-            self.indent -= 1;
-            try self.writeIndent();
-            try self.out.appendSlice(self.allocator, "} payload;\n");
-            self.indent -= 1;
-            try self.out.print(self.allocator, "}} {s};\n\n", .{result.name});
-        }
+        while (it.next()) |result| try self.emitResultType(result.*);
+    }
+
+    // C has no `void` struct member, so a `Result<void, E>` (or `Result<T, void>`)
+    // payload uses a 1-byte placeholder. The unit value `()` lowers to `0`, so
+    // `.payload.ok = 0` stays well-formed.
+    fn resultPayloadCType(self: *CEmitter, ty: ast.TypeExpr) ![]const u8 {
+        if (isVoidType(self.resolveAliasType(ty))) return "unsigned char";
+        return try self.cTypeFor(ty, .typedef_name);
+    }
+
+    fn emitResultType(self: *CEmitter, result: ResultInfo) !void {
+        try self.out.print(self.allocator, "typedef struct {s} {{\n", .{result.name});
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "bool is_ok;\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "union {\n");
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} ok;\n", .{try self.resultPayloadCType(result.ok_ty)});
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} err;\n", .{try self.resultPayloadCType(result.err_ty)});
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "} payload;\n");
+        self.indent -= 1;
+        try self.out.print(self.allocator, "}} {s};\n\n", .{result.name});
     }
 
     fn emitArrayTypes(self: *CEmitter) !void {
         var it = self.array_types.valueIterator();
-        while (it.next()) |array| {
-            try self.out.print(self.allocator, "typedef struct {s} {{\n", .{array.name});
-            self.indent += 1;
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} elems[{s}];\n", .{ array.element_c_type, array.len });
-            self.indent -= 1;
-            try self.out.print(self.allocator, "}} {s};\n\n", .{array.name});
-        }
+        while (it.next()) |array| try self.emitArrayType(array.*);
+    }
+
+    fn emitArrayType(self: *CEmitter, array: ArrayInfo) !void {
+        try self.out.print(self.allocator, "typedef struct {s} {{\n", .{array.name});
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} elems[{s}];\n", .{ array.element_c_type, array.len });
+        self.indent -= 1;
+        try self.out.print(self.allocator, "}} {s};\n\n", .{array.name});
     }
 
     fn emitFunctionPrototype(self: *CEmitter, fn_decl: ast.FnDecl) !void {
@@ -1232,6 +1397,7 @@ const CEmitter = struct {
                     if (try self.emitMmioReadReturn(expr, locals)) return;
                     if (try self.emitOverlayFieldReadReturn(expr, locals, return_ty)) return;
                     if (try self.emitResultTryCallReturn(expr, locals)) return;
+                    if (try self.emitResultTryConstructorReturn(expr, locals, return_ty)) return;
                     if (try self.emitNullableTryCallReturn(expr, locals)) return;
                     if (try self.emitResultTryReturn(expr, locals, return_ty)) return;
                     if (try self.emitNullableTryReturn(expr, locals)) return;
@@ -2782,6 +2948,7 @@ const CEmitter = struct {
             },
             .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
             .float_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+            .char_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
             .null_literal => try self.out.appendSlice(self.allocator, "NULL"),
             .void_literal => try self.out.appendSlice(self.allocator, "0"),
@@ -2800,13 +2967,35 @@ const CEmitter = struct {
             },
             .unreachable_expr => try self.out.appendSlice(self.allocator, "mc_trap_Unreachable()"),
             .unary => |node| {
+                if (node.op == .neg and !self.exprResolvesToFloat(node.expr.*, locals)) {
+                    // Signed negation can overflow (`-INT_MIN`); like checked
+                    // binary ops it must keep its trap edge even with no target
+                    // type, e.g. as a comparison operand `(-a) == b`. wrap/sat
+                    // operands negate with plain C operators (no trap), so they
+                    // fall through to the plain emission below.
+                    if (self.numericExprTypeForEmission(node.expr.*, locals)) |inferred| {
+                        const resolved = self.resolveAliasType(inferred);
+                        if (!isWrapType(resolved) and !isSatType(resolved)) {
+                            if (try self.emitCheckedUnaryWithTarget(node, locals, inferred)) return;
+                        }
+                    }
+                }
                 try self.out.appendSlice(self.allocator, unaryCOp(node.op));
                 try self.out.appendSlice(self.allocator, "(");
                 try self.emitExpr(node.expr.*, locals);
                 try self.out.appendSlice(self.allocator, ")");
             },
             .binary => |node| {
-                if (isCheckedBinaryOp(node.op) and !self.binaryIsFloat(node, locals)) return error.UnsupportedCEmission;
+                if (isCheckedBinaryOp(node.op) and !self.binaryIsFloat(node, locals)) {
+                    // A checked integer op used where no target type is supplied
+                    // (e.g. an operand of a comparison: `(a + b) == c`). Recover
+                    // the operand storage type and lower through the checked
+                    // helper so the trap edge is still emitted.
+                    if (self.numericExprTypeForEmission(expr, locals)) |inferred| {
+                        if (try self.emitCheckedBinaryWithTarget(node, locals, inferred)) return;
+                    }
+                    return error.UnsupportedCEmission;
+                }
                 try self.out.appendSlice(self.allocator, "(");
                 try self.emitExpr(node.left.*, locals);
                 try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
@@ -2818,6 +3007,8 @@ const CEmitter = struct {
                     try self.out.print(self.allocator, "{s}()", .{helper});
                     return;
                 }
+                if (try self.emitAtomicInitCall(node, locals)) return;
+                if (try self.emitAtomicCall(node, locals)) return;
                 if (try self.emitPhysCall(node, locals)) return;
                 if (try self.emitEnumRawCall(node, locals)) return;
                 if (try self.emitConversionCall(node, locals)) return;
@@ -2827,6 +3018,7 @@ const CEmitter = struct {
                 if (try self.emitConstGetCall(node, locals)) return;
                 if (try self.emitRawManyOffsetCall(node, locals)) return;
                 if (try self.emitAssumeNoaliasCall(node, locals)) return;
+                if (try self.emitWrappingCall(node, locals)) return;
                 if (try self.emitUncheckedCall(node, locals)) return;
                 const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
                 try self.emitExpr(node.callee.*, locals);
@@ -2848,19 +3040,19 @@ const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, ", ");
                     try self.emitExpr(node.base.*, locals);
                     try self.out.print(self.allocator, ".{s})]", .{slice.len_field});
+                } else if (self.arrayTypeForExpr(node.base.*, locals)) |base_arr| {
+                    // Array (possibly the element of an outer array, e.g.
+                    // `m[i][j]` over `[N][M]T`): index the `.elems` member with a
+                    // bounds check against this dimension's length.
+                    try self.emitExpr(node.base.*, locals);
+                    try self.out.appendSlice(self.allocator, ".elems[mc_check_index_usize(");
+                    try self.emitExpr(node.index.*, locals);
+                    const len = try self.arrayLenTextForExpr(base_arr.kind.array.len);
+                    try self.out.print(self.allocator, ", {s})]", .{len});
                 } else {
                     try self.emitExpr(node.base.*, locals);
-                    if (arrayElemsFieldForExpr(node.base.*, locals)) |elems_field| {
-                        try self.out.print(self.allocator, ".{s}", .{elems_field});
-                    }
                     try self.out.appendSlice(self.allocator, "[");
-                    if (arrayLenForExpr(node.base.*, locals)) |len| {
-                        try self.out.appendSlice(self.allocator, "mc_check_index_usize(");
-                        try self.emitExpr(node.index.*, locals);
-                        try self.out.print(self.allocator, ", {s})", .{len});
-                    } else {
-                        try self.emitExpr(node.index.*, locals);
-                    }
+                    try self.emitExpr(node.index.*, locals);
                     try self.out.appendSlice(self.allocator, "]");
                 }
             },
@@ -3302,6 +3494,30 @@ const CEmitter = struct {
         return true;
     }
 
+    // `wrapping.add(a, b)` is explicit modular addition (no trap edge); it
+    // lowers to plain C `+`, matching how `a + b` on `wrap<T>` operands already
+    // emits (unsigned/two's-complement wraparound is well-defined).
+    fn emitWrappingCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!isIdentNamed(member.base.*, "wrapping")) return false;
+        if (!std.mem.eql(u8, member.name.text, "add")) return error.UnsupportedCEmission;
+        if (call.args.len != 2) return error.UnsupportedCEmission;
+
+        try self.out.appendSlice(self.allocator, "(");
+        try self.emitExpr(call.args[0], locals);
+        try self.out.appendSlice(self.allocator, " + ");
+        try self.emitExpr(call.args[1], locals);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
     fn emitAssumeNoaliasCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         if (!isAssumeNoaliasCall(call)) return false;
         if (call.args.len != 2) return error.UnsupportedCEmission;
@@ -3312,6 +3528,90 @@ const CEmitter = struct {
         try self.emitExpr(call.args[0], locals);
         try self.out.appendSlice(self.allocator, ")");
         return true;
+    }
+
+    // Payload type name of an `atomic<T>` local referenced by `expr`, or null
+    // if `expr` is not such a local.
+    fn atomicLocalPayload(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+        const local_set = locals orelse return null;
+        const name = switch (expr.kind) {
+            .ident => |ident| ident.text,
+            .grouped => |inner| return self.atomicLocalPayload(inner.*, locals),
+            else => return null,
+        };
+        const info = local_set.get(name) orelse return null;
+        const source_ty = info.source_ty orelse return null;
+        const child = genericChildType(source_ty, "atomic") orelse return null;
+        return typeName(child);
+    }
+
+    // `atomic.init(v)` constructs an atomic with initial value `v`. The atomic
+    // storage lowers to the plain payload object (operated on with `__atomic_*`
+    // builtins), so construction is just the initial value.
+    fn emitAtomicInitCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!isIdentNamed(member.base.*, "atomic")) return false;
+        if (!std.mem.eql(u8, member.name.text, "init")) return false;
+        if (call.args.len != 1) return false;
+        try self.emitExpr(call.args[0], locals);
+        return true;
+    }
+
+    // `obj.load/store/fetch_add(..., .ordering)` on an `atomic<T>` local lower to
+    // the matching `__atomic_*` builtin on `&obj`, mirroring the inspector's
+    // `atomics-lowering` facts (load_n / store_n / fetch_add).
+    fn emitAtomicCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const payload = self.atomicLocalPayload(member.base.*, locals) orelse return false;
+        const op = member.name.text;
+        if (std.mem.eql(u8, op, "load")) {
+            const ordering = atomicOrderingArg(call.args, 0);
+            if (!isAtomicLoadOrdering(ordering)) return false;
+            const order_c = atomicOrderCConstant(ordering) orelse return false;
+            try self.out.appendSlice(self.allocator, "__atomic_load_n(&");
+            try self.emitExpr(member.base.*, locals);
+            try self.out.print(self.allocator, ", {s})", .{order_c});
+            return true;
+        }
+        if (std.mem.eql(u8, op, "store")) {
+            if (call.args.len < 1) return false;
+            const ordering = atomicOrderingArg(call.args, 1);
+            if (!isAtomicStoreOrdering(ordering)) return false;
+            const order_c = atomicOrderCConstant(ordering) orelse return false;
+            try self.out.appendSlice(self.allocator, "__atomic_store_n(&");
+            try self.emitExpr(member.base.*, locals);
+            try self.out.appendSlice(self.allocator, ", ");
+            try self.emitExpr(call.args[0], locals);
+            try self.out.print(self.allocator, ", {s})", .{order_c});
+            return true;
+        }
+        if (std.mem.eql(u8, op, "fetch_add")) {
+            if (call.args.len < 1) return false;
+            if (!isAtomicIntegerPayload(payload)) return false;
+            const ordering = atomicOrderingArg(call.args, 1);
+            const order_c = atomicOrderCConstant(ordering) orelse return false;
+            try self.out.appendSlice(self.allocator, "__atomic_fetch_add(&");
+            try self.emitExpr(member.base.*, locals);
+            try self.out.appendSlice(self.allocator, ", ");
+            try self.emitExpr(call.args[0], locals);
+            try self.out.print(self.allocator, ", {s})", .{order_c});
+            return true;
+        }
+        return false;
     }
 
     fn emitConstGetCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
@@ -3379,6 +3679,16 @@ const CEmitter = struct {
                 if (enum_name) |name| return self.emitEnumLiteral(literal, name);
                 try self.out.print(self.allocator, "/* unsupported enum literal: {s} */0", .{literal.text});
                 return error.UnsupportedCEmission;
+            },
+            .string_literal => |literal| {
+                // String literals require a target type (sema rejects targetless
+                // ones). They lower to a C string literal cast to the target
+                // pointer type, e.g. `*const u8` -> `(uint8_t const *)"…"`.
+                const target = target_ty orelse return error.UnsupportedCEmission;
+                if (!isStringLiteralTarget(self.resolveAliasType(target))) return error.UnsupportedCEmission;
+                try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(target, .typedef_name)});
+                try self.out.appendSlice(self.allocator, literal);
+                try self.out.appendSlice(self.allocator, ")");
             },
             .grouped => |inner| {
                 try self.out.appendSlice(self.allocator, "(");
@@ -3547,7 +3857,10 @@ const CEmitter = struct {
 
     fn emitCheckedBinaryWithTarget(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
         if (!isCheckedBinaryOp(node.op)) return false;
-        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return error.UnsupportedCEmission;
+        // No target type (e.g. RHS of a `.member`/`.index` assignment): decline
+        // so the caller falls through to the plain `emitExpr` path, which infers
+        // the type from the operands.
+        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return false;
         if (isWrapType(target) or isSatType(target)) return false;
         const target_name = typeName(target) orelse return error.UnsupportedCEmission;
 
@@ -3575,7 +3888,9 @@ const CEmitter = struct {
 
     fn emitCheckedUnaryWithTarget(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
         if (node.op != .neg) return false;
-        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return error.UnsupportedCEmission;
+        // No target type: decline so the caller falls through to `emitExpr`,
+        // which infers the operand type.
+        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return false;
         if (isWrapType(target) or isSatType(target)) return false;
         const target_name = typeName(target) orelse return error.UnsupportedCEmission;
         const suffix = signedTypeSuffix(target_name) orelse return false;
@@ -3995,7 +4310,7 @@ const CEmitter = struct {
                 try self.writeIndent();
                 try self.out.print(self.allocator, "{s} {s};\n", .{ try self.cTypeFor(temp_ty, .typedef_name), temp_name });
                 try self.writeIndent();
-                try self.out.print(self.allocator, "memcpy(&{s}, ", .{temp_name});
+                try self.out.print(self.allocator, "__builtin_memcpy(&{s}, ", .{temp_name});
                 try self.emitExpr(access.base, locals);
                 try self.out.print(self.allocator, ".storage, {d});\n", .{access.field.layout.size});
                 try self.writeIndent();
@@ -4041,7 +4356,7 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ";\n");
 
                 try self.writeIndent();
-                try self.out.print(self.allocator, "memcpy(", .{});
+                try self.out.print(self.allocator, "__builtin_memcpy(", .{});
                 try self.emitExpr(access.base, locals);
                 try self.out.print(self.allocator, ".storage, &{s}, {d});\n", .{ temp_name, access.field.layout.size });
                 return true;
@@ -4469,10 +4784,17 @@ const CEmitter = struct {
             .unary => |node| self.numericExprTypeForEmission(node.expr.*, locals),
             .binary => |node| {
                 if (!isNumericValueBinaryOp(node.op)) return null;
-                const left_ty = self.numericExprTypeForEmission(node.left.*, locals) orelse return null;
-                const right_ty = self.numericExprTypeForEmission(node.right.*, locals) orelse return null;
-                if (!sameCStorageType(left_ty, right_ty)) return null;
-                return left_ty;
+                const left_ty = self.numericExprTypeForEmission(node.left.*, locals);
+                const right_ty = self.numericExprTypeForEmission(node.right.*, locals);
+                if (left_ty != null and right_ty != null) {
+                    return if (sameCStorageType(left_ty.?, right_ty.?)) left_ty else null;
+                }
+                // A bare numeric literal adopts its sibling operand's storage
+                // type, so `i + 1` resolves to `i`'s type (e.g. as a comparison
+                // or loop-condition operand: `while (i + 1) < n`).
+                if (left_ty) |lt| return if (exprIsNumericLiteral(node.right.*)) lt else null;
+                if (right_ty) |rt| return if (exprIsNumericLiteral(node.left.*)) rt else null;
+                return null;
             },
             else => null,
         };
@@ -4552,15 +4874,24 @@ const CEmitter = struct {
     }
 
     fn emitResultTryExprLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
-        const enclosing_return_ty = return_ty orelse return false;
-        if (resultPayloadTypeForTag(enclosing_return_ty, "err") == null) return false;
+        // When the enclosing function returns a Result, `?` propagates the err;
+        // otherwise `?` handles it by unwrapping (trapping on err). The local
+        // init must support both, mirroring the return/stmt dispatch.
+        const propagates = if (return_ty) |ty| resultPayloadTypeForTag(ty, "err") != null else false;
 
-        if (try self.emitResultTrySequencedBinaryLocalInit(name, decl_ty, initializer, locals, enclosing_return_ty)) return true;
-        if (try self.emitResultTryCallLocalInit(name, decl_ty, initializer, locals, enclosing_return_ty)) return true;
+        if (propagates) {
+            const enclosing_return_ty = return_ty.?;
+            if (try self.emitResultTrySequencedBinaryLocalInit(name, decl_ty, initializer, locals, enclosing_return_ty)) return true;
+            if (try self.emitResultTryCallLocalInit(name, decl_ty, initializer, locals, enclosing_return_ty)) return true;
+        }
 
         var replacements: std.ArrayList(TryReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
-        if (!try self.collectResultTryHoistsForLocalInit(initializer, locals, enclosing_return_ty, &replacements)) return false;
+        const found = if (propagates)
+            try self.collectResultTryHoistsForLocalInit(initializer, locals, return_ty.?, &replacements)
+        else
+            try self.collectResultTryHoistsForReturn(initializer, locals, &replacements);
+        if (!found) return false;
 
         try self.writeIndent();
         try self.emitDeclarator(decl_ty, name);
@@ -4993,6 +5324,33 @@ const CEmitter = struct {
         return true;
     }
 
+    // `return ok(<expr-with-?>)` / `return err(<expr-with-?>)`: the `ok`/`err`
+    // Result constructor isn't a registered function, so `emitResultTryCallReturn`
+    // skips it. Hoist any `?` in the payload argument (reusing the call-arg-temp
+    // machinery), then wrap the resulting value in the Result aggregate.
+    fn emitResultTryConstructorReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitResultTryConstructorReturn(inner.*, locals, return_ty),
+            else => return false,
+        };
+        const tag = calleeIdentName(call.callee.*) orelse return false;
+        if (!std.mem.eql(u8, tag, "ok") and !std.mem.eql(u8, tag, "err")) return false;
+        if (call.args.len != 1) return false;
+        if (!self.exprContainsResultTry(call.args[0], locals)) return false;
+        const payload_ty = resultPayloadTypeForTag(target_ty, tag) orelse return false;
+
+        const temp = try self.emitResultTryCallArgTempWithMode(call.args[0], locals, payload_ty, return_ty, .stmt);
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return (({s}){{ .is_ok = ", .{try self.cTypeFor(target_ty, .typedef_name)});
+        try self.out.appendSlice(self.allocator, if (std.mem.eql(u8, tag, "ok")) "true, .payload.ok = " else "false, .payload.err = ");
+        try self.out.appendSlice(self.allocator, temp.name);
+        try self.out.appendSlice(self.allocator, " });\n");
+        return true;
+    }
+
     fn emitResultTryCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
         return try self.emitResultTryCallArgTempWithMode(arg, locals, target_ty, null, .stmt);
     }
@@ -5310,7 +5668,7 @@ const CEmitter = struct {
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s};\n", .{ try self.cTypeFor(target_ty, .typedef_name), result_temp });
         try self.writeIndent();
-        try self.out.print(self.allocator, "memcpy(&{s}, &{s}, sizeof({s}));\n", .{ result_temp, source_temp.name, result_temp });
+        try self.out.print(self.allocator, "__builtin_memcpy(&{s}, &{s}, sizeof({s}));\n", .{ result_temp, source_temp.name, result_temp });
         return .{ .name = result_temp, .ty = target_ty };
     }
 
@@ -5328,7 +5686,7 @@ const CEmitter = struct {
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
         try self.writeIndent();
-        try self.out.print(self.allocator, "memcpy(&{s}, &{s}, sizeof({s}));\n", .{ name, source_temp.name, name });
+        try self.out.print(self.allocator, "__builtin_memcpy(&{s}, &{s}, sizeof({s}));\n", .{ name, source_temp.name, name });
         return true;
     }
 
@@ -6093,8 +6451,18 @@ const CEmitter = struct {
                 return found;
             },
             .unary => |node| return try self.collectResultTryHoistsForReturn(node.expr.*, locals, replacements),
-            .binary => |node| return (try self.collectResultTryHoistsForReturn(node.left.*, locals, replacements)) or (try self.collectResultTryHoistsForReturn(node.right.*, locals, replacements)),
-            .index => |node| return (try self.collectResultTryHoistsForReturn(node.base.*, locals, replacements)) or (try self.collectResultTryHoistsForReturn(node.index.*, locals, replacements)),
+            .binary => |node| {
+                // Evaluate both operands without short-circuiting so `a? OP b?`
+                // hoists both tries, not just the left one.
+                const left_found = try self.collectResultTryHoistsForReturn(node.left.*, locals, replacements);
+                const right_found = try self.collectResultTryHoistsForReturn(node.right.*, locals, replacements);
+                return left_found or right_found;
+            },
+            .index => |node| {
+                const base_found = try self.collectResultTryHoistsForReturn(node.base.*, locals, replacements);
+                const index_found = try self.collectResultTryHoistsForReturn(node.index.*, locals, replacements);
+                return base_found or index_found;
+            },
             .member => |node| return try self.collectResultTryHoistsForReturn(node.base.*, locals, replacements),
             .cast => |node| return try self.collectResultTryHoistsForReturn(node.value.*, locals, replacements),
             else => return false,
@@ -6142,8 +6510,18 @@ const CEmitter = struct {
                 return found;
             },
             .unary => |node| return try self.collectResultTryHoistsForLocalInit(node.expr.*, locals, enclosing_return_ty, replacements),
-            .binary => |node| return (try self.collectResultTryHoistsForLocalInit(node.left.*, locals, enclosing_return_ty, replacements)) or (try self.collectResultTryHoistsForLocalInit(node.right.*, locals, enclosing_return_ty, replacements)),
-            .index => |node| return (try self.collectResultTryHoistsForLocalInit(node.base.*, locals, enclosing_return_ty, replacements)) or (try self.collectResultTryHoistsForLocalInit(node.index.*, locals, enclosing_return_ty, replacements)),
+            .binary => |node| {
+                // Evaluate both operands without short-circuiting so `a? OP b?`
+                // hoists both tries, not just the left one.
+                const left_found = try self.collectResultTryHoistsForLocalInit(node.left.*, locals, enclosing_return_ty, replacements);
+                const right_found = try self.collectResultTryHoistsForLocalInit(node.right.*, locals, enclosing_return_ty, replacements);
+                return left_found or right_found;
+            },
+            .index => |node| {
+                const base_found = try self.collectResultTryHoistsForLocalInit(node.base.*, locals, enclosing_return_ty, replacements);
+                const index_found = try self.collectResultTryHoistsForLocalInit(node.index.*, locals, enclosing_return_ty, replacements);
+                return base_found or index_found;
+            },
             .member => |node| return try self.collectResultTryHoistsForLocalInit(node.base.*, locals, enclosing_return_ty, replacements),
             .cast => |node| return try self.collectResultTryHoistsForLocalInit(node.value.*, locals, enclosing_return_ty, replacements),
             else => return false,
@@ -6174,8 +6552,18 @@ const CEmitter = struct {
                 return found;
             },
             .unary => |node| return try self.collectNullableTryHoistsForReturn(node.expr.*, locals, replacements),
-            .binary => |node| return (try self.collectNullableTryHoistsForReturn(node.left.*, locals, replacements)) or (try self.collectNullableTryHoistsForReturn(node.right.*, locals, replacements)),
-            .index => |node| return (try self.collectNullableTryHoistsForReturn(node.base.*, locals, replacements)) or (try self.collectNullableTryHoistsForReturn(node.index.*, locals, replacements)),
+            .binary => |node| {
+                // Evaluate both operands without short-circuiting (see the
+                // Result collectors) so both nested tries are hoisted.
+                const left_found = try self.collectNullableTryHoistsForReturn(node.left.*, locals, replacements);
+                const right_found = try self.collectNullableTryHoistsForReturn(node.right.*, locals, replacements);
+                return left_found or right_found;
+            },
+            .index => |node| {
+                const base_found = try self.collectNullableTryHoistsForReturn(node.base.*, locals, replacements);
+                const index_found = try self.collectNullableTryHoistsForReturn(node.index.*, locals, replacements);
+                return base_found or index_found;
+            },
             .member => |node| return try self.collectNullableTryHoistsForReturn(node.base.*, locals, replacements),
             .cast => |node| return try self.collectNullableTryHoistsForReturn(node.value.*, locals, replacements),
             else => return false,
@@ -6459,6 +6847,28 @@ const CEmitter = struct {
     fn arrayLenTextForExpr(self: *CEmitter, expr: ast.Expr) ![]const u8 {
         const value = constArrayLenValue(expr) orelse return error.UnsupportedCEmission;
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
+    }
+
+    // The array type of `expr`, if it is an array — including the element of an
+    // outer array access (`m[i]` over `[N][M]T` yields `[M]T`), which enables
+    // nested indexing `m[i][j]`. Returns null for non-array expressions.
+    fn arrayTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const local_set = locals orelse return null;
+        switch (expr.kind) {
+            .ident => |ident| {
+                const info = local_set.get(ident.text) orelse return null;
+                const source_ty = info.source_ty orelse return null;
+                const resolved = self.resolveAliasType(source_ty);
+                return if (resolved.kind == .array) resolved else null;
+            },
+            .grouped => |inner| return self.arrayTypeForExpr(inner.*, locals),
+            .index => |node| {
+                const base_arr = self.arrayTypeForExpr(node.base.*, locals) orelse return null;
+                const resolved_child = self.resolveAliasType(base_arr.kind.array.child.*);
+                return if (resolved_child.kind == .array) resolved_child else null;
+            },
+            else => return null,
+        }
     }
 
     fn arrayReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
@@ -6946,6 +7356,15 @@ const ArrayInfo = struct {
     len: []const u8,
 };
 
+// A by-value aggregate typedef emitted in dependency order (see
+// `emitOrderedAggregates`).
+const AggregateEmitUnit = union(enum) {
+    struct_decl: ast.StructDecl,
+    array: ArrayInfo,
+    result: ResultInfo,
+    tagged_union: ast.UnionDecl,
+};
+
 const RawManyOffsetInfo = struct {
     base: ast.Expr,
     ty: ast.TypeExpr,
@@ -6991,6 +7410,15 @@ fn isNumericStorageType(ty: ast.TypeExpr) bool {
             return isNumericStorageType(node.args[0]);
         },
         .qualified => |node| isNumericStorageType(node.child.*),
+        else => false,
+    };
+}
+
+fn exprIsNumericLiteral(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .int_literal, .float_literal => true,
+        .grouped => |inner| exprIsNumericLiteral(inner.*),
+        .unary => |node| node.op == .neg and exprIsNumericLiteral(node.expr.*),
         else => false,
     };
 }
@@ -7946,6 +8374,19 @@ fn typeName(ty: ast.TypeExpr) ?[]const u8 {
         .qualified => |node| typeName(node.child.*),
         else => null,
     };
+}
+
+// A string literal lowers to a C string literal cast to a `u8` pointer target
+// (`*const u8` or `[*]const u8`), the FFI-facing string shape MC's grammar can
+// express. Other targets are left unsupported (loud failure by design).
+fn isStringLiteralTarget(ty: ast.TypeExpr) bool {
+    const child = switch (ty.kind) {
+        .pointer => |node| node.child.*,
+        .raw_many_pointer => |node| node.child.*,
+        else => return false,
+    };
+    const name = typeName(child) orelse return false;
+    return std.mem.eql(u8, name, "u8");
 }
 
 fn structTypeName(ty: ast.TypeExpr) ?[]const u8 {

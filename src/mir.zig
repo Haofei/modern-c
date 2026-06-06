@@ -2409,6 +2409,11 @@ const FunctionBuilder = struct {
             .address_of => true,
             .call => true,
             .member, .index, .deref => true,
+            // A string literal is a non-null pointer to static storage by
+            // construction, so its representation is statically proven at the
+            // target site (like address_of); emitting the dominating check
+            // discharges the nonnull_pointer obligation.
+            .string_literal => true,
             else => false,
         };
     }

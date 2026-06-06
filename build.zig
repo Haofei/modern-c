@@ -41,7 +41,18 @@ pub fn build(b: *std.Build) void {
     const c_test_step = b.step("c-test", "Emit C for smoke fixture and compile-check it with clang");
     c_test_step.dependOn(&c_test_cmd.step);
 
+    const sweep_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/spec-emit-sweep.py",
+        "zig-out/bin/mcc",
+        "tests/spec",
+    });
+    sweep_cmd.step.dependOn(b.getInstallStep());
+    const sweep_step = b.step("sweep", "Emit C for every valid spec-corpus function and compile-check it with clang");
+    sweep_step.dependOn(&sweep_cmd.step);
+
     const m0_step = b.step("m0", "Run M0 conformance gates");
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);
+    m0_step.dependOn(&sweep_cmd.step);
 }

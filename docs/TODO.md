@@ -274,10 +274,140 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
     which also needs reassignment tracking. The value-range optimizer is thus
     materially complete for what MC's grammar can express.
 
-- [ ] **Broader C-backend conformance** — effort **L**, ongoing.
-  ~126 `UnsupportedCEmission` bail sites in `src/lower_c.zig`. The emitter
-  handles known patterns and fails loudly otherwise (by design); closing these
-  is steady, open-ended work.
+- [x] **Broader C-backend conformance (core emission)** — effort **L**.
+  Scope: `src/lower_c.zig` faithfully lowers every construct the front-end
+  (parser + sema + MIR verifier) accepts and that declares a `lower-c` phase.
+  As of the 2026-06-06 audit + empirical sweep this is **complete and
+  evidenced**, with the standing caveat that it is a *living* target: each new
+  language feature adds new lowering, and "no known reachable defect" means
+  validated-by-sweep, not exhaustively proven (two earlier "closed" claims this
+  cycle were later disproven by deeper probing, which is why the evidence below
+  is empirical rather than asserted).
+
+  Evidence: `tools/spec-emit-sweep.py` (run via `zig build sweep`, also part of
+  the `m0` gate) strips the `EXPECT_ERROR` functions from all 54
+  `tests/spec/*.mc` fixtures and `emit-c` + `clang -std=c11 -Wall -Wextra
+  -Werror`'s the ~348 remaining valid functions — all compile, except the two
+  documented out-of-scope items it allowlists (`dma_cache.mc` DmaBuf =
+  library-profile per §18; `unsafe_context.mc`'s `mmio.map<T>(pa)?` lives in a
+  `phase=sema` fixture, so C emission is not a declared target). The reachable
+  feature gaps found this cycle are closed (sub-items below); 10 new
+  `tests/c_emit_*.mc` fixtures lock them in.
+
+  Bail-site classification (all 128 audited): ~100 are one-line defensive
+  guard-rails — call/type-arg arity (`call.args.len != N`), type-class lookups
+  (`typeName(...) orelse`, `checkedTypeSuffix`, `primitiveCTypeName`),
+  struct/array shape lookups — that sema validates *before* emission, so they
+  are unreachable for sema-accepted programs. Of the 27 bare bails, the
+  reachable feature gaps are closed; the rest guard shapes sema/parser already
+  reject (non-static global initializers `E_GLOBAL_INITIALIZER_NOT_STATIC`,
+  if-let patterns other than optional/Result bindings `E_IF_LET_NARROW_PATTERN`,
+  precise inline asm `E_PRECISE_ASM_UNSUPPORTED`).
+
+  Out of scope for this item (not `lower_c.zig` gaps): language constructs MC
+  deliberately omits or never specified — plain `if cond {}`
+  (`MC_0.6.1_Final_Design.md`: "a deliberately narrow `if let` form"),
+  function-pointer types, sub-slicing
+  `a[i..j]`, switch range patterns (all rejected upstream in the parser/sema) —
+  and library-profile types (serial/counter/DmaBuf, explicitly out of core
+  conformance, §18). Lowering those would require front-end/language work and
+  is tracked by their own items, not here.
+
+- [ ] **C-backend conformance — ongoing maintenance.** As new language/library
+  features land (Standard library, full comptime, precise inline asm, etc.),
+  add their C lowering and a `tests/c_emit_*.mc` fixture; `zig build sweep`
+  (`tools/spec-emit-sweep.py`, also in the `m0` gate) re-runs the spec-corpus
+  emit+clang check to catch regressions. This is the perpetual tail of the
+  item above.
+  - [x] Aggregate typedef ordering: generated container typedefs (slices,
+        arrays, `Result`) reference user structs, and structs embed those
+        containers, so emitting them in a fixed category order produced
+        forward-reference errors (`[]Packet`/`[4]Packet`/`struct { []Inner }`
+        all failed `clang` with "unknown/incomplete type"). Now every user
+        struct and tagged union is forward-declared up front (so pointer/slice
+        references resolve), and arrays/structs/`Result`s/tagged-unions are
+        emitted in dependency order (`emitOrderedAggregates`) so by-value
+        embedding sees complete types. Array and `Result` typedefs are
+        forward-declared too, so a slice of an array (`[][N]T`, element pointer
+        `mc_array_..._N *`) resolves. Fixture
+        `tests/c_emit_aggregate_ordering.mc`.
+  - [x] Nested (multidimensional) array indexing `m[i][j]` over `[N][M]T` now
+        lowers correctly: `arrayTypeForExpr` recurses through index bases so
+        each dimension indexes its `.elems` member with its own bounds check
+        (`m.elems[check(i,N)].elems[check(j,M)]`), instead of emitting an
+        invalid `m.elems[..][j]`. Same fixture.
+  - [x] Empirical spec-corpus sweep (2026-06-06): stripped the `EXPECT_ERROR`
+        functions from all 54 `tests/spec/*.mc` fixtures and `emit-c` +
+        `clang -Werror`'d the ~348 remaining valid functions. Found and fixed
+        three reachable emission bugs (below); the only residual failures are
+        `dma_cache.mc` (DmaBuf, explicitly library-profile/out-of-core, see §18
+        above) and `unsafe_context.mc`'s `mmio.map<T>(pa)?` (a `phase=sema`
+        fixture — C emission is not a declared target there).
+  - [x] Signed-repr enums with negative discriminants (`enum E: i8 { n = -1 }`)
+        now lower: the enum-value emitter handles unary negation, not just bare
+        integer literals. Fixture `tests/c_emit_signed_enum.mc`.
+  - [x] The explicit `wrapping.add(a, b)` builtin now lowers to plain C `+`
+        (modular, no trap edge), matching `a + b` on `wrap<T>` operands;
+        previously it emitted an undeclared `wrapping` identifier. Fixture
+        `tests/c_emit_wrapping_builtin.mc`.
+  - [x] `Result<void, E>` (e.g. `return ok(())`) now lowers: C has no `void`
+        struct member, so a void Result payload uses a 1-byte placeholder and
+        the unit value `()` stays `0`. Fixture `tests/c_emit_void_result.mc`.
+  - [x] Character literals (`'x'`, `'\n'`, …) now lower to C — MC's escape set
+        (`\\ \' \" \0 \n \r \t`) is a subset of C's, so the lexeme emits verbatim
+        in returns, typed locals, and call arguments. Fixture
+        `tests/c_emit_char_literals.mc`.
+  - [x] Checked integer arithmetic assigned into a struct field or array
+        element (`r.v = a + b`, `xs[0] = a * 2`) now lowers through the checked
+        helper. The assignment path carries no target type for `.member`/`.index`
+        targets, so `emitCheckedBinary/UnaryWithTarget` now decline (return false)
+        on a null target instead of erroring, letting `emitExpr` infer the type
+        from the operands. Fixture `tests/c_emit_checked_in_assignment.mc`.
+  - [x] Checked integer arithmetic used as a comparison operand (e.g.
+        `(a + b) == c`) now lowers through the checked helper instead of
+        bailing: the targetless `emitExpr` binary path recovers the operand
+        storage type via `numericExprTypeForEmission` and delegates to
+        `emitCheckedBinaryWithTarget`, so the overflow trap edge survives.
+        Covers add/sub/mul/div, signed/unsigned, nested, and logical
+        connectives. The same recovery applies to targetless signed
+        negation (`(-a) == b` → `mc_checked_neg_i32`), while wrap/sat
+        negation stays plain. `numericExprTypeForEmission` also lets a bare
+        numeric literal adopt its sibling operand's type, so `a + 1` resolves
+        (e.g. `while (i + 1) < n`, `(a + 1) == a`).
+        Fixture `tests/c_emit_checked_in_comparison.mc`.
+  - [x] `?` (try) nested inside other expressions now lowers in more shapes:
+        (a) `?` as a typed-local initializer in a non-`Result` function (unwrap
+        with trap-on-err, not just the propagation case `emitResultTryExprLocalInit`
+        previously required); (b) `?` inside an `ok(...)`/`err(...)` constructor
+        argument (`return ok(a?)`, `return ok(dbl(a?))`) via a new
+        `emitResultTryConstructorReturn`; (c) two `?` operands in one
+        sub-expression (`ok(a? + b?)`) — fixed a short-circuit `or` in the
+        `collectResultTryHoistsFor{Return,LocalInit}` binary/index cases that
+        previously hoisted only the left operand's try. Fixture
+        `tests/c_emit_try_in_expressions.mc`.
+  - [x] String literals now lower to C. They require a target type (sema
+        rejects targetless ones) and emit a C string literal cast to the target
+        u8-pointer type (`*const u8` -> `(uint8_t const *)"…"`); MC's escape set
+        is a subset of C's so the lexeme emits verbatim. This needed a MIR
+        verifier change too: a string literal is a non-null pointer by
+        construction, so `exprNeedsTargetRepresentationCheck` now treats it like
+        `address_of`, emitting the dominating `representation_check` that
+        discharges the `nonnull_pointer` obligation (previously the
+        `return_value`/`call_arg` use tripped `E_REPRESENTATION_CHECK_MISSING`).
+        Fixture `tests/c_emit_string_literals.mc`.
+  - [x] Atomic locals (§19) now lower to C: an `atomic<T>` local becomes its
+        plain payload object, `atomic.init(v)` becomes the initial value, and
+        `obj.load/store/fetch_add(..., .ordering)` become
+        `__atomic_load_n` / `__atomic_store_n` / `__atomic_fetch_add` on `&obj`
+        with the mapped `__ATOMIC_*` order constant — matching the inspector's
+        existing `atomics-lowering` facts. Previously only the inspector facts
+        existed and emission bailed. Fixture `tests/c_emit_atomics.mc`.
+  - [x] Generated C no longer `#include <string.h>`; internal struct/bitcast
+        copies use `__builtin_memcpy` (the emitter already requires GCC/clang
+        builtins via `__builtin_trap`). This stops libc fortify macros (e.g.
+        macOS `#define memcpy(...) __memcpy_chk_func(...)`) from mangling user
+        FFI declarations like `extern "C" fn memcpy(...)`, which previously
+        broke `tests/c_emit_c_void_ffi.mc` under `clang -Werror`.
 
 ## Engineering tracks (large, low conceptual risk)
 
