@@ -95,6 +95,86 @@ fn accept_if_let_else_result() -> void {
     }
 }
 
+fn accept_result_switch_handles_both_tags() -> void {
+    let result = make_result_u32();
+    switch result {
+        ok(value) => {
+            let copy: u32 = value;
+        },
+        err(e) => {
+            let fallback: u32 = 0;
+        },
+    }
+}
+
+fn accept_result_handled_in_nested_block() -> void {
+    let result = make_result_u32();
+    {
+        switch result {
+            ok(value) => {
+                let copy: u32 = value;
+            },
+            err(e) => {
+                let fallback: u32 = 0;
+            },
+        }
+    }
+}
+
+fn accept_result_handled_in_unsafe_block() -> void {
+    let result = make_result_u32();
+    unsafe {
+        switch result {
+            ok(value) => {
+                let copy: u32 = value;
+            },
+            err(e) => {
+                let fallback: u32 = 0;
+            },
+        }
+    }
+}
+
+fn accept_result_handled_in_contract_block() -> void {
+    let result = make_result_u32();
+    #[unsafe_contract(no_overflow)]
+    {
+        switch result {
+            ok(value) => {
+                let copy: u32 = value;
+            },
+            err(e) => {
+                let fallback: u32 = 0;
+            },
+        }
+    }
+}
+
+fn reject_result_handled_only_in_loop() -> void {
+    // EXPECT_ERROR: E_UNHANDLED_RESULT
+    let result = make_result_u32();
+    while false {
+        switch result {
+            ok(value) => {
+                let copy: u32 = value;
+            },
+            err(e) => {
+                let fallback: u32 = 0;
+            },
+        }
+    }
+}
+
+fn reject_result_switch_partial_tags() -> void {
+    // EXPECT_ERROR: E_UNHANDLED_RESULT
+    let result = make_result_u32();
+    switch result {
+        ok(value) => {
+            let copy: u32 = value;
+        },
+    }
+}
+
 fn reject_defer_unhandled_result() -> void {
     // EXPECT_ERROR: E_UNHANDLED_RESULT
     defer make_result_u32();

@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
+const hir = @import("hir.zig");
 const ir = @import("ir.zig");
 const lexer = @import("lexer.zig");
 const lower_c = @import("lower_c.zig");
@@ -16,6 +17,8 @@ const usage =
     \\  mcc check <file.mc>
     \\  mcc run-trap <file.mc>
     \\  mcc facts <file.mc>
+    \\  mcc lower-hir <file.mc>
+    \\  mcc verify-hir <file.mc>
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
     \\  mcc emit-c <file.mc>
@@ -44,6 +47,10 @@ pub fn main(init: std.process.Init) !void {
         try runTrap(allocator, path, source);
     } else if (std.mem.eql(u8, command, "facts")) {
         try runFacts(allocator, path, source);
+    } else if (std.mem.eql(u8, command, "lower-hir")) {
+        try runLowerHir(allocator, path, source);
+    } else if (std.mem.eql(u8, command, "verify-hir")) {
+        try runVerifyHir(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-ir")) {
         try runLowerIr(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-c")) {
@@ -53,6 +60,50 @@ pub fn main(init: std.process.Init) !void {
     } else {
         return failUsage();
     }
+}
+
+fn runLowerHir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.LowerHirFailed;
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    try hir.appendDump(allocator, module, &output);
+    std.debug.print("{s}", .{output.items});
+}
+
+fn runVerifyHir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.VerifyHirFailed;
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    try hir.appendVerificationFacts(allocator, module, &output);
+    std.debug.print("{s}", .{output.items});
 }
 
 fn failUsage() !void {
@@ -240,6 +291,12 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
         return error.EmitCFailed;
     }
 
+    try hir.verify(allocator, module, &diag);
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitCFailed;
+    }
+
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_c.appendC(allocator, module, &output);
@@ -258,6 +315,7 @@ test {
     _ = diagnostics;
     _ = eval;
     _ = ast;
+    _ = hir;
     _ = ir;
     _ = lexer;
     _ = lower_c;

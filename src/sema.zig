@@ -28,7 +28,11 @@ pub const Checker = struct {
         defer functions.deinit();
         var globals = std.StringHashMap(GlobalInfo).init(self.reporter.allocator);
         defer globals.deinit();
+        var type_aliases = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
+        defer type_aliases.deinit();
         self.checkTopLevelNames(module);
+        self.collectTypeAliases(module, &type_aliases);
+        self.checkTypeAliasCycles(module, &type_aliases);
         self.collectMmioStructs(module, &mmio_structs);
         self.collectStructs(module, &structs);
         self.collectPackedBits(module, &packed_bits);
@@ -38,7 +42,59 @@ pub const Checker = struct {
         self.collectFunctions(module, &functions);
         self.collectGlobals(module, &globals);
 
-        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals);
+        for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
+    }
+
+    fn collectTypeAliases(self: *Checker, module: ast.Module, type_aliases: *std.StringHashMap(ast.TypeExpr)) void {
+        _ = self;
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .type_alias => |alias| if (!type_aliases.contains(alias.name.text)) type_aliases.put(alias.name.text, alias.ty) catch {},
+                .opaque_decl => |name| if (!type_aliases.contains(name.text)) type_aliases.put(name.text, simpleNameType(name.text, name.span)) catch {},
+                .fn_decl, .extern_fn, .extern_struct, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .global_decl => {},
+            }
+        }
+    }
+
+    fn checkTypeAliasCycles(self: *Checker, module: ast.Module, type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+        for (module.decls) |decl| {
+            const alias = switch (decl.kind) {
+                .type_alias => |alias| alias,
+                else => continue,
+            };
+            var visiting = std.StringHashMap(void).init(self.reporter.allocator);
+            defer visiting.deinit();
+            if (self.typeExprHasAliasCycle(alias.name.text, alias.ty, type_aliases, &visiting)) {
+                self.errorCode(alias.name.span, "E_TYPE_ALIAS_CYCLE", "type aliases must not form recursive cycles");
+            }
+        }
+    }
+
+    fn typeExprHasAliasCycle(self: *Checker, root_name: []const u8, ty: ast.TypeExpr, type_aliases: *const std.StringHashMap(ast.TypeExpr), visiting: *std.StringHashMap(void)) bool {
+        switch (ty.kind) {
+            .name => |name| {
+                if (std.mem.eql(u8, name.text, root_name)) return true;
+                const target = type_aliases.get(name.text) orelse return false;
+                if (visiting.contains(name.text)) return true;
+                visiting.put(name.text, {}) catch return false;
+                defer _ = visiting.remove(name.text);
+                return self.typeExprHasAliasCycle(root_name, target, type_aliases, visiting);
+            },
+            .member => |node| return self.typeExprHasAliasCycle(root_name, node.base.*, type_aliases, visiting),
+            .nullable => |child| return self.typeExprHasAliasCycle(root_name, child.*, type_aliases, visiting),
+            .qualified => |node| return self.typeExprHasAliasCycle(root_name, node.child.*, type_aliases, visiting),
+            .pointer => |node| return self.typeExprHasAliasCycle(root_name, node.child.*, type_aliases, visiting),
+            .raw_many_pointer => |node| return self.typeExprHasAliasCycle(root_name, node.child.*, type_aliases, visiting),
+            .slice => |node| return self.typeExprHasAliasCycle(root_name, node.child.*, type_aliases, visiting),
+            .array => |node| return self.typeExprHasAliasCycle(root_name, node.child.*, type_aliases, visiting),
+            .generic => |node| {
+                for (node.args) |arg| {
+                    if (self.typeExprHasAliasCycle(root_name, arg, type_aliases, visiting)) return true;
+                }
+                return false;
+            },
+            .enum_literal => return false,
+        }
     }
 
     fn collectMmioStructs(self: *Checker, module: ast.Module, mmio_structs: *std.StringHashMap(MmioStruct)) void {
@@ -56,9 +112,11 @@ pub const Checker = struct {
 
     fn collectMmioStruct(self: *Checker, struct_decl: ast.StructDecl, mmio_structs: *std.StringHashMap(MmioStruct)) void {
         if (mmio_structs.contains(struct_decl.name.text)) return;
-        var fields = std.StringHashMap(void).init(self.reporter.allocator);
+        var fields = std.StringHashMap(MmioFieldInfo).init(self.reporter.allocator);
         for (struct_decl.fields) |field| {
-            if (isMmioRegisterType(field.ty) and !fields.contains(field.name.text)) fields.put(field.name.text, {}) catch {};
+            if (mmioFieldInfoFromType(field.ty)) |info| {
+                if (!fields.contains(field.name.text)) fields.put(field.name.text, info) catch {};
+            }
         }
         mmio_structs.put(struct_decl.name.text, .{ .fields = fields }) catch {
             fields.deinit();
@@ -196,29 +254,43 @@ pub const Checker = struct {
         }
     }
 
-    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
+    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
+        const type_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
         switch (decl.kind) {
-            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals),
-            .extern_struct => |struct_decl| self.checkStruct(struct_decl),
-            .enum_decl => |enum_decl| self.checkEnum(enum_decl),
-            .union_decl => |union_decl| self.checkTaggedUnion(union_decl),
-            .packed_bits_decl => |packed_bits_decl| self.checkPackedBits(packed_bits_decl),
-            .overlay_union_decl => |overlay_union_decl| self.checkOverlayUnion(overlay_union_decl),
-            .type_alias => |alias| self.checkType(alias.ty, .normal),
+            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases),
+            .extern_struct => |struct_decl| {
+                var struct_ctx = type_ctx;
+                if (struct_decl.abi) |abi| {
+                    struct_ctx.allow_mmio_register_type = std.mem.eql(u8, abi, "mmio");
+                }
+                self.checkStruct(struct_decl, struct_ctx);
+            },
+            .enum_decl => |enum_decl| self.checkEnum(enum_decl, type_ctx),
+            .union_decl => |union_decl| self.checkTaggedUnion(union_decl, type_ctx),
+            .packed_bits_decl => |packed_bits_decl| self.checkPackedBits(packed_bits_decl, type_ctx),
+            .overlay_union_decl => |overlay_union_decl| self.checkOverlayUnion(overlay_union_decl, type_ctx),
+            .type_alias => |alias| self.checkType(alias.ty, .normal, type_ctx),
             .opaque_decl => {},
             .global_decl => |global| {
-                if (global.ty) |ty| self.checkType(ty, .normal);
-                if (global.init) |initializer| self.checkGlobalInitializer(global, initializer, .{ .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .functions = functions, .globals = globals });
+                const type_error_count = self.reporter.diagnostics.items.len;
+                if (global.ty) |ty| {
+                    self.checkType(ty, .storage, type_ctx);
+                } else {
+                    self.errorCode(global.name.span, "E_GLOBAL_REQUIRES_TYPE", "global declarations require an explicit storage type");
+                    return;
+                }
+                const type_valid = self.reporter.diagnostics.items.len == type_error_count;
+                if (global.init) |initializer| self.checkGlobalInitializer(global, initializer, type_valid, .{ .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .functions = functions, .globals = globals, .type_aliases = type_aliases });
             },
         }
     }
 
-    fn checkEnum(self: *Checker, enum_decl: ast.EnumDecl) void {
-        const repr_class = if (enum_decl.repr) |repr| classifyType(repr) else .checked_isize;
+    fn checkEnum(self: *Checker, enum_decl: ast.EnumDecl, ctx: Context) void {
+        const repr_class = if (enum_decl.repr) |repr| classifyTypeCtx(repr, ctx) else .checked_isize;
         const repr_bounds = checkedIntBounds(repr_class);
         if (enum_decl.repr) |repr| {
-            self.checkType(repr, .normal);
+            self.checkType(repr, .normal, ctx);
             if (!isCheckedInt(repr_class)) {
                 self.errorCode(repr.span, "E_ENUM_REPR_NOT_INTEGER", "enum representation type must be an integer type");
             }
@@ -258,12 +330,12 @@ pub const Checker = struct {
         }
     }
 
-    fn checkStruct(self: *Checker, struct_decl: ast.StructDecl) void {
+    fn checkStruct(self: *Checker, struct_decl: ast.StructDecl, ctx: Context) void {
         var fields = std.StringHashMap(void).init(self.reporter.allocator);
         defer fields.deinit();
 
         for (struct_decl.fields) |field| {
-            self.checkType(field.ty, .normal);
+            self.checkType(field.ty, .storage, ctx);
             if (fields.contains(field.name.text)) {
                 self.errorCode(field.name.span, "E_DUPLICATE_STRUCT_FIELD", "struct field names must be unique");
             } else {
@@ -272,12 +344,12 @@ pub const Checker = struct {
         }
     }
 
-    fn checkTaggedUnion(self: *Checker, union_decl: ast.UnionDecl) void {
+    fn checkTaggedUnion(self: *Checker, union_decl: ast.UnionDecl, ctx: Context) void {
         var cases = std.StringHashMap(void).init(self.reporter.allocator);
         defer cases.deinit();
 
         for (union_decl.cases) |case| {
-            if (case.ty) |ty| self.checkType(ty, .normal);
+            if (case.ty) |ty| self.checkType(ty, .storage, ctx);
             if (cases.contains(case.name.text)) {
                 self.errorCode(case.name.span, "E_DUPLICATE_UNION_CASE", "safe tagged union case names must be unique");
             } else {
@@ -286,16 +358,16 @@ pub const Checker = struct {
         }
     }
 
-    fn checkPackedBits(self: *Checker, packed_bits: ast.PackedBitsDecl) void {
-        self.checkType(packed_bits.repr, .normal);
-        if (!isCheckedInt(classifyType(packed_bits.repr))) {
+    fn checkPackedBits(self: *Checker, packed_bits: ast.PackedBitsDecl, ctx: Context) void {
+        self.checkType(packed_bits.repr, .normal, ctx);
+        if (!isCheckedInt(classifyTypeCtx(packed_bits.repr, ctx))) {
             self.errorCode(packed_bits.repr.span, "E_PACKED_BITS_REPR_NOT_INTEGER", "packed bits representation type must be an integer type");
         }
 
         var fields = std.StringHashMap(void).init(self.reporter.allocator);
         defer fields.deinit();
         for (packed_bits.fields) |field| {
-            self.checkType(field.ty, .normal);
+            self.checkType(field.ty, .storage, ctx);
             if (!isTypeName(field.ty, "bool")) {
                 self.errorCode(field.ty.span, "E_PACKED_BITS_FIELD_NOT_BOOL", "packed bits fields must be bool");
             }
@@ -307,11 +379,11 @@ pub const Checker = struct {
         }
     }
 
-    fn checkOverlayUnion(self: *Checker, overlay_union: ast.OverlayUnionDecl) void {
+    fn checkOverlayUnion(self: *Checker, overlay_union: ast.OverlayUnionDecl, ctx: Context) void {
         var fields = std.StringHashMap(void).init(self.reporter.allocator);
         defer fields.deinit();
         for (overlay_union.fields) |field| {
-            self.checkType(field.ty, .normal);
+            self.checkType(field.ty, .storage, ctx);
             if (fields.contains(field.name.text)) {
                 self.errorCode(field.name.span, "E_DUPLICATE_OVERLAY_FIELD", "overlay union field names must be unique");
             } else {
@@ -320,45 +392,60 @@ pub const Checker = struct {
         }
     }
 
-    fn checkGlobalInitializer(self: *Checker, global: ast.GlobalDecl, initializer: ast.Expr, ctx: Context) void {
-        const ty = global.ty orelse return;
-        const target = classifyType(ty);
+    fn checkGlobalInitializer(self: *Checker, global: ast.GlobalDecl, initializer: ast.Expr, type_valid: bool, ctx: Context) void {
+        const errors_before = self.reporter.diagnostics.items.len;
         const source = self.checkExpr(initializer, ctx);
+        const ty = global.ty orelse {
+            if (isNullLiteral(initializer)) {
+                self.errorCode(initializer.span, "E_NULL_REQUIRES_TARGET", "null requires an explicit nullable pointer target type");
+            }
+            _ = self.checkTargetlessLiteralInitializer(initializer);
+            return;
+        };
+        const target = classifyTypeCtx(ty, ctx);
         if (isUninitLiteral(initializer)) {
             self.errorCode(initializer.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
             return;
         }
-        const literal_checked = self.checkIntegerLiteralInitializer(target, ty, initializer);
+        const literal_checked = self.checkIntegerLiteralInitializer(target, ty, initializer, ctx);
         const null_checked = self.checkNullPointerInitializer(target, initializer);
+        const array_literal_checked = self.checkArrayLiteralInitializer(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
+        const struct_literal_checked = self.checkStructLiteralInitializer(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
+        const packed_bits_literal_checked = self.checkPackedBitsLiteralInitializer(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         const array_decay_checked = self.checkArrayDecayInitializer(target, source, initializer);
         const pointer_conversion_checked = self.checkPointerViewInitializer(ty, initializer, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(ty, initializer, ctx);
         const address_checked = self.checkAddressOfInitializer(target, ty, initializer, ctx);
         const address_class_checked = checkAddressClassConversion(self, initializer.span, target, source);
         const enum_checked = self.checkEnumValueCompatibility(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !canInitialize(target, source)) {
+        const union_checked = self.checkTaggedUnionConstructorCompatibility(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
+        const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion") else false;
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, source)) {
             self.errorCode(initializer.span, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
+        }
+        if (type_valid and self.reporter.diagnostics.items.len == errors_before and !isStaticGlobalInitializer(initializer, ctx)) {
+            self.errorCode(initializer.span, "E_GLOBAL_INITIALIZER_NOT_STATIC", "global initializer must be a compile-time static value for M0 C emission");
         }
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         var scope = Scope.init(self.reporter.allocator);
         defer scope.deinit();
         var mmio_params = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer mmio_params.deinit();
 
         for (fn_decl.params) |param| {
-            self.checkType(param.ty, .normal);
+            self.checkType(param.ty, .storage, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases });
             if (scope.contains(param.name.text)) {
                 self.errorCode(param.name.span, "E_DUPLICATE_PARAMETER", "function parameter names must be unique");
             } else {
-                scope.put(param.name.text, .{ .class = classifyType(param.ty), .mutable = false, .ty = param.ty, .origin = .param }) catch {};
+                scope.put(param.name.text, .{ .class = classifyTypeCtx(param.ty, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases }), .mutable = false, .ty = param.ty, .origin = .param }) catch {};
                 if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {};
             }
         }
-        const return_kind = if (fn_decl.return_type) |ty| classifyType(ty) else TypeClass.void;
+        const return_kind = if (fn_decl.return_type) |ty| classifyTypeCtx(ty, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases }) else TypeClass.void;
         const returns_never = if (fn_decl.return_type) |ty| blk: {
-            self.checkType(ty, .normal);
+            self.checkType(ty, .return_type, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases });
             break :blk isTypeName(ty, "never");
         } else false;
         const returns_void = if (fn_decl.return_type) |ty| isTypeName(ty, "void") else false;
@@ -378,6 +465,7 @@ pub const Checker = struct {
                 .overlay_unions = overlay_unions,
                 .tagged_unions = tagged_unions,
                 .enums = enums,
+                .type_aliases = type_aliases,
                 .functions = functions,
                 .globals = globals,
             };
@@ -406,7 +494,7 @@ pub const Checker = struct {
             if (local.init == null) continue;
             const local_ty = local.ty orelse exprResultType(local.init.?, ctx);
             const ty = local_ty orelse continue;
-            if (classifyType(ty) != .result) continue;
+            if (classifyTypeCtx(ty, ctx) != .result) continue;
             for (local.names) |name| {
                 if (!resultLocalHandledLater(name.text, block.items[i + 1 ..])) {
                     self.errorCode(name.span, "E_UNHANDLED_RESULT", "Result local must be handled or propagated");
@@ -421,10 +509,9 @@ pub const Checker = struct {
             };
             const target_name = assignmentResultLocalName(assignment.target, ctx) orelse continue;
             const value_ty = exprResultType(assignment.value, ctx) orelse continue;
-            if (classifyType(value_ty) != .result) continue;
+            if (classifyTypeCtx(value_ty, ctx) != .result) continue;
 
-            const prior_stmts = block.items[0..i];
-            if (resultLocalHasPendingValueBefore(target_name.text, prior_stmts, ctx)) {
+            if (resultLocalHasPendingValueBefore(target_name.text, block.items[0..i], ctx)) {
                 self.errorCode(assignment.target.span, "E_UNHANDLED_RESULT", "Result local must be handled before reassignment");
             }
             if (!resultLocalHandledLater(target_name.text, block.items[i + 1 ..])) {
@@ -464,16 +551,18 @@ pub const Checker = struct {
             },
             .if_let => |node| {
                 const value_class = self.checkExpr(node.value, ctx);
+                const pattern_error_count = self.reporter.diagnostics.items.len;
                 self.checkIfLetPattern(node.pattern, value_class);
+                const pattern_is_valid = self.reporter.diagnostics.items.len == pattern_error_count;
                 var then_scope = Scope.init(self.reporter.allocator);
                 defer then_scope.deinit();
                 var then_ctx = ctx;
                 if (ctx.scope) |scope| {
                     copyScope(scope, &then_scope) catch {};
-                    self.addIfLetBinding(node.pattern, node.value, value_class, &then_scope, ctx);
+                    if (pattern_is_valid) self.addIfLetBinding(node.pattern, node.value, value_class, &then_scope, ctx);
                     then_ctx.scope = &then_scope;
                 }
-                self.checkBlock(node.then_block, then_ctx);
+                if (pattern_is_valid) self.checkBlock(node.then_block, then_ctx);
                 if (node.else_block) |else_block| self.checkBlock(else_block, ctx);
             },
             .@"switch" => |node| {
@@ -490,12 +579,18 @@ pub const Checker = struct {
                 self.checkBlock(block, next);
             },
             .block => |block| self.checkBlock(block, ctx),
-            .asm_stmt => {
+            .asm_stmt => |asm_stmt| {
                 if (!ctx.in_unsafe) {
                     self.errorCode(stmt.span, "E_UNSAFE_REQUIRED", "operation requires unsafe context");
                 }
                 if (ctx.in_comptime) {
                     self.errorCode(stmt.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
+                }
+                if (asm_stmt.form == .precise and !ctx.unsafe_contracts.has(.precise_asm)) {
+                    self.errorCode(stmt.span, "E_PRECISE_ASM_CONTRACT", "precise asm requires #[unsafe_contract(precise_asm)]");
+                }
+                if (asm_stmt.form == .precise) {
+                    self.errorCode(stmt.span, "E_PRECISE_ASM_UNSUPPORTED", "precise asm constraints are not represented by this compiler profile");
                 }
             },
             .contract_block => |contract| {
@@ -504,6 +599,9 @@ pub const Checker = struct {
                 self.checkBlock(contract.block, next);
             },
             .@"return" => |maybe| {
+                if (ctx.in_comptime) {
+                    self.errorCode(stmt.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot alter runtime control flow");
+                }
                 if (maybe) |expr| {
                     const error_count = self.reporter.diagnostics.items.len;
                     const returned = self.checkExpr(expr, ctx);
@@ -521,11 +619,17 @@ pub const Checker = struct {
                 }
             },
             .@"break" => {
+                if (ctx.in_comptime) {
+                    self.errorCode(stmt.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot alter runtime control flow");
+                }
                 if (ctx.loop_depth == 0) {
                     self.errorCode(stmt.span, "E_BREAK_OUTSIDE_LOOP", "break is valid only inside a loop");
                 }
             },
             .@"continue" => {
+                if (ctx.in_comptime) {
+                    self.errorCode(stmt.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot alter runtime control flow");
+                }
                 if (ctx.loop_depth == 0) {
                     self.errorCode(stmt.span, "E_CONTINUE_OUTSIDE_LOOP", "continue is valid only inside a loop");
                 }
@@ -553,6 +657,9 @@ pub const Checker = struct {
                 if (!isConditionType(condition)) {
                     self.errorCode(expr.span, "E_CONDITION_NOT_BOOL", "condition must be bool");
                 }
+                if (ctx.in_comptime and isFalseLiteral(expr)) {
+                    self.errorCode(stmt.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error");
+                }
             },
             .assignment => |node| {
                 if (!isAssignableTarget(node.target)) {
@@ -579,9 +686,9 @@ pub const Checker = struct {
         if (inferred_ty == null) {
             if (local.init) |expr| inferred_ty = exprResultType(expr, ctx);
         }
-        const kind = if (inferred_ty) |ty| classifyType(ty) else TypeClass.unknown;
+        const kind = if (inferred_ty) |ty| classifyTypeCtx(ty, ctx) else TypeClass.unknown;
         var address_origin: AddressOrigin = .none;
-        if (local.ty) |ty| self.checkType(ty, .normal);
+        if (local.ty) |ty| self.checkType(ty, .storage, ctx);
         if (local.init) |expr| {
             const initializer = self.checkExpr(expr, ctx);
             address_origin = addressOrigin(expr, ctx);
@@ -590,15 +697,39 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
                 }
             } else {
-                const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr) else false;
+                const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr, ctx) else false;
                 const null_checked = if (local.ty != null) self.checkNullPointerInitializer(kind, expr) else false;
+                const null_target_checked = if (local.ty == null and isNullLiteral(expr)) blk: {
+                    self.errorCode(expr.span, "E_NULL_REQUIRES_TARGET", "null requires an explicit nullable pointer target type");
+                    break :blk true;
+                } else false;
+                const targetless_literal_checked = if (local.ty == null) self.checkTargetlessLiteralInitializer(expr) else false;
+                const array_literal_checked = if (local.ty) |ty| self.checkArrayLiteralInitializer(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else blk: {
+                    if (isArrayLiteral(expr)) {
+                        self.errorCode(expr.span, "E_ARRAY_LITERAL_REQUIRES_TARGET", "array literal requires an explicit array target type");
+                        break :blk true;
+                    }
+                    break :blk false;
+                };
+                const struct_literal_checked = if (local.ty) |ty| self.checkStructLiteralInitializer(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else blk: {
+                    if (isStructLiteral(expr)) {
+                        self.errorCode(expr.span, "E_STRUCT_LITERAL_REQUIRES_TARGET", "struct literal requires an explicit struct target type");
+                        break :blk true;
+                    }
+                    break :blk false;
+                };
+                const packed_bits_literal_checked = if (local.ty) |ty| self.checkPackedBitsLiteralInitializer(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 const array_decay_checked = if (local.ty != null) self.checkArrayDecayInitializer(kind, initializer, expr) else false;
                 const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
                 const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
                 const address_checked = if (local.ty) |ty| self.checkAddressOfInitializer(kind, ty, expr, ctx) else false;
                 const address_class_checked = if (local.ty != null) checkAddressClassConversion(self, expr.span, kind, initializer) else false;
                 const enum_checked = if (local.ty) |ty| self.checkEnumValueCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
-                if (local.ty != null and !literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !canInitialize(kind, initializer)) {
+                const union_checked = if (local.ty) |ty| self.checkTaggedUnionConstructorCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
+                const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
+                if (local.ty == null and untargeted_union_checked) {
+                    // The diagnostic was emitted above; constructor calls need an explicit union target.
+                } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(kind, initializer)) {
                     self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                 }
             }
@@ -662,34 +793,48 @@ pub const Checker = struct {
             self.errorCode(value.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
             return;
         }
-        const target_class = classifyType(target_ty);
-        const literal_checked = self.checkIntegerLiteralInitializer(target_class, target_ty, value);
+        const target_class = classifyTypeCtx(target_ty, ctx);
+        const literal_checked = self.checkIntegerLiteralInitializer(target_class, target_ty, value, ctx);
         const null_checked = self.checkNullPointerInitializer(target_class, value);
+        const array_literal_checked = self.checkArrayLiteralInitializer(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
+        const struct_literal_checked = self.checkStructLiteralInitializer(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
+        const packed_bits_literal_checked = self.checkPackedBitsLiteralInitializer(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         const array_decay_checked = self.checkArrayDecayInitializer(target_class, value_class, value);
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, value, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, value, ctx);
         const address_checked = self.checkAddressOfInitializer(target_class, target_ty, value, ctx);
         const address_class_checked = checkAddressClassConversion(self, value.span, target_class, value_class);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !canInitialize(target_class, value_class)) {
+        const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
+        const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion") else false;
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
     }
 
     fn checkExpr(self: *Checker, expr: ast.Expr, ctx: Context) TypeClass {
         return switch (expr.kind) {
-            .ident => |ident| if (ctx.scope) |scope|
-                if (scope.get(ident.text)) |binding| binding.class else globalClass(ident.text, ctx) orelse .unknown
-            else
-                globalClass(ident.text, ctx) orelse .unknown,
+            .ident => |ident| self.checkIdentExpr(ident, ctx),
             .int_literal => .int_literal,
+            .float_literal => .float_literal,
             .void_literal => .void,
             .bool_literal => .bool,
             .null_literal => .null_literal,
+            .array_literal => |items| {
+                for (items) |item| _ = self.checkExpr(item, ctx);
+                return .unknown;
+            },
+            .struct_literal => |fields| {
+                for (fields) |field| _ = self.checkExpr(field.value, ctx);
+                return .unknown;
+            },
             .string_literal, .char_literal, .uninit_literal, .enum_literal => .unknown,
             .unreachable_expr => {
                 if (ctx.no_lang_trap) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "reachable unreachable emits a language trap in #[no_lang_trap]");
+                }
+                if (ctx.in_comptime) {
+                    self.errorCode(expr.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error");
                 }
                 return .never;
             },
@@ -702,7 +847,7 @@ pub const Checker = struct {
                 if (!isTryOperand(operand)) {
                     self.errorCode(expr.span, "E_TRY_REQUIRES_RESULT_OR_NULLABLE", "postfix '?' requires a Result or nullable operand");
                 }
-                if (tryPayloadType(inner.*, ctx)) |payload_ty| return classifyType(payload_ty);
+                if (tryPayloadType(inner.*, ctx)) |payload_ty| return classifyTypeCtx(payload_ty, ctx);
                 return tryResultType(operand);
             },
             .block => |block| {
@@ -717,6 +862,9 @@ pub const Checker = struct {
                 if (node.op == .neg and isCheckedUnsigned(inner)) {
                     self.errorCode(expr.span, "E_UNSIGNED_NEGATION", "unsigned checked integers do not support unary '-'");
                 }
+                if (node.op == .neg) {
+                    self.checkUnaryNegOperand(expr.span, inner);
+                }
                 if (node.op == .bit_not and isCheckedSigned(inner)) {
                     self.errorCode(expr.span, "E_BITWISE_SIGNED_OPERAND", "bitwise operations are not defined on signed checked integers");
                 }
@@ -726,8 +874,14 @@ pub const Checker = struct {
                 if (node.op == .bit_not and isPointerLike(inner)) {
                     self.errorCode(expr.span, "E_BITWISE_POINTER_OPERAND", "bitwise operations are not defined on pointer operands");
                 }
+                if (node.op == .bit_not and isAddressClass(inner)) {
+                    self.errorCode(expr.span, "E_ADDRESS_CLASS_OPERATION", "opaque address classes do not support this operator");
+                }
                 if (node.op == .bit_not and isForbiddenBitwisePolicy(inner)) {
                     self.errorCode(expr.span, "E_BITWISE_ARITH_DOMAIN_OPERAND", "bitwise operations are not defined on this arithmetic domain");
+                }
+                if (node.op == .bit_not) {
+                    self.checkUnaryBitwiseOperand(expr.span, inner);
                 }
                 if (node.op == .logical_not) {
                     if (!isConditionType(inner)) {
@@ -738,16 +892,35 @@ pub const Checker = struct {
                 return inner;
             },
             .binary => |node| {
-                if (ctx.no_lang_trap and isTrapBinary(node.op)) {
-                    self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "checked operation may trap in #[no_lang_trap]");
-                }
                 const left = self.checkExpr(node.left.*, ctx);
                 const right = self.checkExpr(node.right.*, ctx);
-                if (isArithmeticBinary(node.op) and ((left == .wrap and isCheckedInt(right)) or (right == .wrap and isCheckedInt(left)))) {
+                if (ctx.no_lang_trap and isTrapBinary(node.op) and !isNoTrapArithmeticDomainOp(node.op, left, right) and !isNonTrappingFloatOp(node.op, left, right)) {
+                    self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "checked operation may trap in #[no_lang_trap]");
+                }
+                if (isArithmeticBinary(node.op) and arithmeticDomainsImplicitlyMix(left, right)) {
                     self.errorCode(expr.span, "E_ARITH_POLICY_MIX", "arithmetic domains do not implicitly mix");
+                }
+                if (isArithmeticBinary(node.op)) {
+                    self.checkArithmeticOperatorOperands(expr.span, left, right);
+                }
+                if ((isArithmeticBinary(node.op) or isComparisonBinary(node.op))) {
+                    self.checkFloatBinaryOperands(expr.span, left, right);
+                }
+                if (node.op == .mod and (isFloat(left) or isFloat(right))) {
+                    self.errorCode(expr.span, "E_OPERATOR_OPERAND", "remainder is not defined on floating-point operands");
+                }
+                if ((node.op == .div or node.op == .mod) and (isArithmeticDomain(left) or isArithmeticDomain(right))) {
+                    self.errorCode(expr.span, "E_ARITH_DOMAIN_DIVISION", "division and remainder are defined only on checked integers, not arithmetic domains");
+                }
+                if ((isArithmeticBinary(node.op) or isBitwiseBinary(node.op) or isComparisonBinary(node.op) or isLogicalBinary(node.op)) and (isAddressClass(left) or isAddressClass(right))) {
+                    self.errorCode(expr.span, "E_ADDRESS_CLASS_OPERATION", "opaque address classes do not support this operator");
                 }
                 if (isArithmeticBinary(node.op) or isComparisonBinary(node.op)) {
                     self.checkCheckedIntegerBinaryOperands(expr.span, left, right);
+                }
+                if (isComparisonBinary(node.op)) {
+                    self.checkPointerComparison(expr.span, node.op, node.left.*, left, node.right.*, right, ctx);
+                    self.checkComparisonOperatorOperands(expr.span, node.op, left, right);
                 }
                 if (isPointerArithmeticBinary(node.op) and (isSingleObjectPointerLike(left) or isSingleObjectPointerLike(right))) {
                     self.errorCode(expr.span, "E_POINTER_ARITH_SINGLE_OBJECT", "single-object pointers do not support arithmetic");
@@ -764,6 +937,9 @@ pub const Checker = struct {
                 if (isBitwiseBinary(node.op) and (isForbiddenBitwisePolicy(left) or isForbiddenBitwisePolicy(right))) {
                     self.errorCode(expr.span, "E_BITWISE_ARITH_DOMAIN_OPERAND", "bitwise operations are not defined on this arithmetic domain");
                 }
+                if (isBitwiseBinary(node.op)) {
+                    self.checkBitwiseOperatorOperands(expr.span, left, right);
+                }
                 if (isLogicalBinary(node.op)) {
                     if (!isConditionType(left) or !isConditionType(right)) {
                         self.errorCode(expr.span, "E_BOOL_OPERATOR_OPERAND", "boolean operators are defined only for bool operands");
@@ -775,8 +951,8 @@ pub const Checker = struct {
             },
             .cast => |node| {
                 const source = self.checkExpr(node.value.*, ctx);
-                self.checkType(node.ty.*, .normal);
-                const target = classifyType(node.ty.*);
+                self.checkType(node.ty.*, .normal, ctx);
+                const target = classifyTypeCtx(node.ty.*, ctx);
                 if ((source == .c_void_pointer) != (target == .c_void_pointer)) {
                     self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
                 }
@@ -787,6 +963,9 @@ pub const Checker = struct {
                 const trap_call = isTrapCall(node.callee.*);
                 if (ctx.no_lang_trap and isTrapCall(node.callee.*)) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "explicit trap emits a language trap in #[no_lang_trap]");
+                }
+                if (ctx.in_comptime and trap_call) {
+                    self.errorCode(expr.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error");
                 }
                 if (ctx.no_lang_trap and isUnwrapCall(node.callee.*)) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "unwrap may emit a language trap in #[no_lang_trap]");
@@ -805,12 +984,23 @@ pub const Checker = struct {
                 if (ctx.in_comptime and isMmioRegisterAccessCall(node.callee.*, ctx)) {
                     self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
                 }
+                self.checkMmioRegisterAccessCall(expr.span, node.callee.*, node.args, ctx);
+                self.checkAtomicCall(expr.span, node.callee.*, node.args, ctx);
+                self.checkDmaCall(expr.span, node.callee.*, node.args, ctx);
+                self.checkTypeStaticCall(expr.span, node.callee.*, node.args, ctx);
+                self.checkResidueCall(expr.span, node.callee.*, node.args, ctx);
+                const bitcast_class = self.checkBitcastCall(expr.span, node, ctx);
+                const raw_many_offset_class = self.checkRawManyOffsetCall(expr.span, node, ctx);
                 const reflection_class = self.checkReflectionCall(expr.span, node, ctx);
+                if (reflection_class) |class| return class;
                 if (trap_call) self.checkTrapKind(expr.span, node.args);
-                _ = self.checkExpr(node.callee.*, ctx);
-                for (node.type_args) |ty| self.checkType(ty, .normal);
+                self.checkCallCallee(node.callee.*, ctx);
+                for (node.type_args) |ty| self.checkType(ty, .normal, ctx);
                 const direct_function = if (!trap_call and node.type_args.len == 0) directCallFunction(node.callee.*, ctx) else null;
                 if (direct_function) |function| {
+                    if (ctx.in_comptime) {
+                        self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot call runtime functions");
+                    }
                     if (ctx.no_lang_trap and !function.no_lang_trap) {
                         self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "call target is not proven #[no_lang_trap]");
                     }
@@ -826,7 +1016,12 @@ pub const Checker = struct {
                 }
                 if (trap_call) return .never;
                 if (self.checkEnumRawCall(expr.span, node.callee.*, node.args, ctx)) |class| return class;
-                if (reflection_class) |class| return class;
+                if (atomicCallReturnClass(node.callee.*, ctx)) |class| return class;
+                if (self.dmaCallReturnClass(node.callee.*, ctx)) |class| return class;
+                if (typeStaticCallReturnClass(node.callee.*, ctx)) |class| return class;
+                if (residueCallReturnClass(node.callee.*, ctx)) |class| return class;
+                if (bitcast_class) |class| return class;
+                if (raw_many_offset_class) |class| return class;
                 if (directCallReturnClass(node.callee.*, ctx)) |class| return class;
                 return .unknown;
             },
@@ -842,7 +1037,7 @@ pub const Checker = struct {
                 if (!isIndexType(index_class)) {
                     self.errorCode(node.index.span, "E_INDEX_NOT_USIZE", "array and slice indices must be checked usize");
                 }
-                if (indexResultType(node, ctx)) |ty| return classifyType(ty);
+                if (indexResultType(node, ctx)) |ty| return classifyTypeCtx(ty, ctx);
                 return .unknown;
             },
             .deref => |inner| {
@@ -850,58 +1045,547 @@ pub const Checker = struct {
                 if (ctx.in_comptime and isRuntimePointerDerefClass(inner_class)) {
                     self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
                 }
+                if (inner_class == .raw_many_pointer and !ctx.in_unsafe) {
+                    self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "operation requires unsafe context");
+                }
                 if (inner_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_DEREF", "c_void pointer cannot be dereferenced");
                 }
                 if (isOpaqueAddressClass(inner_class)) {
                     self.errorCode(expr.span, addressDerefDiagnostic(inner_class), addressDerefMessage(inner_class));
                 }
-                if (derefResultType(inner.*, ctx)) |ty| return classifyType(ty);
+                if (derefResultType(inner.*, ctx)) |ty| return classifyTypeCtx(ty, ctx);
                 return .unknown;
             },
             .member => |node| {
+                if (isBuiltinNamespaceMember(node)) return .unknown;
                 const base_class = self.checkExpr(node.base.*, ctx);
                 if (base_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no fields in MC");
                 }
                 self.checkKnownStructField(expr.span, node.base.*, node.name.text, ctx);
-                if (memberResultFieldType(node, ctx)) |field_ty| return classifyType(field_ty);
+                if (memberResultFieldType(node, ctx)) |field_ty| return classifyTypeCtx(field_ty, ctx);
                 return .unknown;
             },
         };
     }
 
-    fn checkType(self: *Checker, ty: ast.TypeExpr, mode: TypeMode) void {
+    fn checkIdentExpr(self: *Checker, ident: ast.Ident, ctx: Context) TypeClass {
+        if (ctx.scope) |scope| {
+            if (scope.get(ident.text)) |binding| return binding.class;
+        }
+        if (globalClass(ident.text, ctx)) |class| return class;
+        self.errorCode(ident.span, "E_UNKNOWN_IDENTIFIER", "unknown identifier");
+        return .unknown;
+    }
+
+    fn checkCallCallee(self: *Checker, callee: ast.Expr, ctx: Context) void {
+        switch (callee.kind) {
+            .ident => |ident| {
+                if (isBuiltinFunctionName(ident.text)) return;
+                if (isKnownTaggedUnionConstructorName(ident.text, ctx)) return;
+                if (ctx.functions != null and ctx.functions.?.contains(ident.text)) return;
+                self.errorCode(ident.span, "E_UNKNOWN_FUNCTION", "unknown function");
+            },
+            .member => |node| {
+                if (isAtomicOperationMember(node, ctx)) return;
+                if (isDmaOperationMember(node, ctx)) return;
+                if (isTypeStaticMember(node, ctx)) return;
+                if (isBuiltinNamespaceMember(node)) return;
+                _ = self.checkExpr(callee, ctx);
+            },
+            .grouped => |inner| self.checkCallCallee(inner.*, ctx),
+            else => _ = self.checkExpr(callee, ctx),
+        }
+    }
+
+    fn checkType(self: *Checker, ty: ast.TypeExpr, mode: TypeMode, ctx: Context) void {
         switch (ty.kind) {
             .name => |name| {
                 if (mode == .ffi_opaque_pointer and std.mem.eql(u8, name.text, "void")) {
                     self.errorCode(name.span, "E_MC_VOID_POINTER_FFI", "use c_void for C opaque object pointers, not MC void");
+                } else if (mode != .ffi_opaque_pointer and std.mem.eql(u8, name.text, "c_void")) {
+                    self.errorCode(name.span, "E_C_VOID_NO_LAYOUT", "c_void has no size or layout in MC; use pointers to c_void at FFI boundaries");
+                } else if (mode == .storage and std.mem.eql(u8, name.text, "void")) {
+                    self.errorCode(name.span, "E_VOID_STORAGE", "void is only valid as a function return type or generic marker");
+                } else if (mode == .storage and std.mem.eql(u8, name.text, "never")) {
+                    self.errorCode(name.span, "E_NEVER_STORAGE", "never is a control-flow type and cannot be used for storage");
+                } else if (!isKnownTypeName(name.text, ctx)) {
+                    self.errorCode(name.span, "E_UNKNOWN_TYPE", "unknown type name");
                 }
             },
             .enum_literal => {},
-            .member => |node| self.checkType(node.base.*, .normal),
-            .nullable => |child| self.checkType(child.*, mode),
-            .qualified => |node| self.checkType(node.child.*, mode),
+            .member => |node| self.checkType(node.base.*, .normal, ctx),
+            .nullable => |child| self.checkType(child.*, mode, ctx),
+            .qualified => |node| self.checkType(node.child.*, mode, ctx),
             .pointer => |node| {
                 const child_mode: TypeMode = if (isCAbiOpaqueBoundary(node.child.*)) .ffi_opaque_pointer else .normal;
-                self.checkType(node.child.*, child_mode);
+                self.checkType(node.child.*, child_mode, ctx);
             },
             .raw_many_pointer => |node| {
                 const child_mode: TypeMode = if (isCAbiOpaqueBoundary(node.child.*)) .ffi_opaque_pointer else .normal;
-                self.checkType(node.child.*, child_mode);
+                self.checkType(node.child.*, child_mode, ctx);
             },
             .slice => |node| {
                 const child_mode: TypeMode = if (isCAbiOpaqueBoundary(node.child.*)) .ffi_opaque_pointer else .normal;
-                self.checkType(node.child.*, child_mode);
+                self.checkType(node.child.*, child_mode, ctx);
             },
             .array => |node| {
-                _ = self.checkExpr(node.len, .{});
-                self.checkType(node.child.*, .normal);
+                const len_class = self.checkExpr(node.len, .{});
+                if (!isIndexType(len_class)) {
+                    self.errorCode(node.len.span, "E_ARRAY_LENGTH_TYPE", "array length must be a compile-time checked usize integer expression");
+                }
+                self.checkType(node.child.*, if (mode == .storage) .storage else .normal, ctx);
             },
             .generic => |node| {
-                for (node.args) |arg| self.checkType(arg, .normal);
+                if (!isKnownGenericTypeName(node.base.text)) {
+                    self.errorCode(node.base.span, "E_UNKNOWN_TYPE", "unknown generic type name");
+                } else if (genericTypeExpectedArgs(node.base.text)) |expected| {
+                    if (node.args.len != expected) {
+                        self.errorCode(node.base.span, "E_GENERIC_TYPE_ARG_COUNT", "generic type has the wrong number of type arguments");
+                    }
+                }
+                for (node.args) |arg| self.checkType(arg, .normal, ctx);
+                self.checkGenericTypeArgs(node, ctx);
+                if (isArithmeticDomainTypeName(node.base.text) and node.args.len == 1) {
+                    if (!isCheckedUnsigned(classifyTypeCtx(node.args[0], ctx))) {
+                        self.errorCode(node.args[0].span, "E_ARITH_DOMAIN_UNSIGNED", "MC-C0 arithmetic domains require an unsigned integer type argument");
+                    }
+                }
             },
         }
+    }
+
+    fn checkGenericTypeArgs(self: *Checker, node: anytype, ctx: Context) void {
+        if (std.mem.eql(u8, node.base.text, "Reg")) {
+            if (node.args.len != 2) return;
+            self.checkMmioRegisterPosition(node.base.span, ctx);
+            self.checkMmioRegisterWidth(node.args[0]);
+            self.checkMmioAccessMode(node.args[1]);
+        } else if (std.mem.eql(u8, node.base.text, "RegBits")) {
+            if (node.args.len != 3) return;
+            self.checkMmioRegisterPosition(node.base.span, ctx);
+            self.checkMmioRegisterWidth(node.args[0]);
+            if (!isPackedBitsTypeName(node.args[1], ctx)) {
+                self.errorCode(node.args[1].span, "E_MMIO_REGBITS_TYPE", "RegBits value type must be a known packed bits type");
+            }
+            self.checkMmioAccessMode(node.args[2]);
+        } else if (std.mem.eql(u8, node.base.text, "DmaBuf")) {
+            if (node.args.len != 2) return;
+            self.checkStoragePayloadType(node.args[0]);
+            self.checkDmaBufMode(node.args[1]);
+        } else if (std.mem.eql(u8, node.base.text, "atomic")) {
+            if (node.args.len != 1) return;
+            self.checkStoragePayloadType(node.args[0]);
+        } else if (std.mem.eql(u8, node.base.text, "MmioPtr")) {
+            if (node.args.len != 1) return;
+            self.checkStoragePayloadType(node.args[0]);
+            self.checkMmioPtrTarget(node.args[0], ctx);
+        } else if (genericHasStoragePayload(node.base.text)) {
+            if (node.args.len == 0) return;
+            self.checkStoragePayloadType(node.args[0]);
+        }
+    }
+
+    fn checkMmioRegisterPosition(self: *Checker, span: diagnostics.Span, ctx: Context) void {
+        if (!ctx.allow_mmio_register_type) {
+            self.errorCode(span, "E_MMIO_REGISTER_POSITION", "Reg and RegBits types are valid only as extern mmio struct fields");
+        }
+    }
+
+    fn checkMmioPtrTarget(self: *Checker, ty: ast.TypeExpr, ctx: Context) void {
+        const name = typeName(ty) orelse {
+            self.errorCode(ty.span, "E_MMIO_PTR_TARGET", "MmioPtr target must be an extern mmio struct type");
+            return;
+        };
+        if (!isKnownTypeName(name, ctx)) return;
+        if (!knownMmioStructName(name, ctx)) {
+            self.errorCode(ty.span, "E_MMIO_PTR_TARGET", "MmioPtr target must be an extern mmio struct type");
+        }
+    }
+
+    fn checkStoragePayloadType(self: *Checker, ty: ast.TypeExpr) void {
+        switch (ty.kind) {
+            .name => |name| {
+                if (std.mem.eql(u8, name.text, "void")) {
+                    self.errorCode(name.span, "E_VOID_STORAGE", "void is only valid as a function return type or generic marker");
+                } else if (std.mem.eql(u8, name.text, "never")) {
+                    self.errorCode(name.span, "E_NEVER_STORAGE", "never is a control-flow type and cannot be used for storage");
+                }
+            },
+            .qualified => |node| self.checkStoragePayloadType(node.child.*),
+            .array => |node| self.checkStoragePayloadType(node.child.*),
+            else => {},
+        }
+    }
+
+    fn checkDmaBufMode(self: *Checker, ty: ast.TypeExpr) void {
+        const mode = switch (ty.kind) {
+            .enum_literal => |literal| literal.text,
+            else => {
+                self.errorCode(ty.span, "E_DMA_BUF_MODE", "DmaBuf mode must be .coherent or .noncoherent");
+                return;
+            },
+        };
+        if (!isDmaBufMode(mode)) {
+            self.errorCode(ty.span, "E_DMA_BUF_MODE", "DmaBuf mode must be .coherent or .noncoherent");
+        }
+    }
+
+    fn checkMmioRegisterWidth(self: *Checker, ty: ast.TypeExpr) void {
+        if (!isFixedUnsignedMmioWidth(ty)) {
+            self.errorCode(ty.span, "E_MMIO_REGISTER_WIDTH", "MMIO register width must be u8, u16, u32, or u64");
+        }
+    }
+
+    fn checkMmioAccessMode(self: *Checker, ty: ast.TypeExpr) void {
+        const mode = switch (ty.kind) {
+            .enum_literal => |literal| literal.text,
+            else => {
+                self.errorCode(ty.span, "E_MMIO_ACCESS_MODE", "MMIO register access mode must be .read, .write, or .read_write");
+                return;
+            },
+        };
+        if (!isMmioAccessMode(mode)) {
+            self.errorCode(ty.span, "E_MMIO_ACCESS_MODE", "MMIO register access mode must be .read, .write, or .read_write");
+        }
+    }
+
+    fn checkMmioRegisterAccessCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
+        const member = switch (callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| {
+                self.checkMmioRegisterAccessCall(span, inner.*, args, ctx);
+                return;
+            },
+            else => return,
+        };
+        if (!std.mem.eql(u8, member.name.text, "read") and !std.mem.eql(u8, member.name.text, "write")) return;
+        const info = mmioRegisterMemberInfo(member.base.*, ctx) orelse return;
+        if (std.mem.eql(u8, member.name.text, "read")) {
+            if (args.len != 1) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "MMIO read expects exactly one ordering argument");
+                return;
+            }
+            self.checkMmioReadOrdering(args[0]);
+            if (!info.access.allowsRead()) {
+                self.errorCode(member.name.span, "E_MMIO_ACCESS_FORBIDDEN", "MMIO register access mode does not allow read");
+            }
+        }
+        if (std.mem.eql(u8, member.name.text, "write")) {
+            if (args.len != 2) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "MMIO write expects a value and one ordering argument");
+                return;
+            }
+            self.checkMmioWriteOrdering(args[1]);
+            if (!info.access.allowsWrite()) {
+                self.errorCode(member.name.span, "E_MMIO_ACCESS_FORBIDDEN", "MMIO register access mode does not allow write");
+            }
+        }
+    }
+
+    fn checkAtomicCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
+        const member = switch (callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| {
+                self.checkAtomicCall(span, inner.*, args, ctx);
+                return;
+            },
+            else => return,
+        };
+
+        if (isIdentNamed(member.base.*, "atomic") and std.mem.eql(u8, member.name.text, "init")) {
+            if (args.len != 1) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "atomic.init expects exactly one initializer argument");
+            }
+            return;
+        }
+
+        const payload_ty = atomicPayloadTypeForValue(member.base.*, ctx) orelse return;
+        const payload_class = classifyTypeCtx(payload_ty, ctx);
+        if (std.mem.eql(u8, member.name.text, "load")) {
+            if (args.len != 1) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "atomic load expects exactly one memory ordering argument");
+                return;
+            }
+            self.checkAtomicLoadOrdering(args[0]);
+            return;
+        }
+        if (std.mem.eql(u8, member.name.text, "store")) {
+            if (args.len != 2) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "atomic store expects a value and one memory ordering argument");
+                return;
+            }
+            const source = self.checkExpr(args[0], ctx);
+            self.checkCallArgument(payload_ty, args[0], source, ctx);
+            self.checkAtomicStoreOrdering(args[1]);
+            return;
+        }
+        if (std.mem.eql(u8, member.name.text, "fetch_add")) {
+            if (args.len != 2) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "atomic fetch_add expects a value and one memory ordering argument");
+                return;
+            }
+            if (!isCheckedInt(payload_class)) {
+                self.errorCode(member.name.span, "E_ATOMIC_OPERATION", "atomic fetch_add requires an integer payload type");
+            }
+            const source = self.checkExpr(args[0], ctx);
+            self.checkCallArgument(payload_ty, args[0], source, ctx);
+            self.checkAtomicReadModifyWriteOrdering(args[1]);
+            return;
+        }
+        self.errorCode(member.name.span, "E_ATOMIC_OPERATION", "unknown atomic operation");
+    }
+
+    fn checkAtomicLoadOrdering(self: *Checker, expr: ast.Expr) void {
+        const ordering = atomicOrderingName(expr) orelse {
+            self.errorCode(expr.span, "E_ATOMIC_ORDERING", "atomic load ordering must be .relaxed, .acquire, or .seq_cst");
+            return;
+        };
+        if (!isAtomicLoadOrdering(ordering)) {
+            self.errorCode(expr.span, "E_ATOMIC_ORDERING", "atomic load ordering must be .relaxed, .acquire, or .seq_cst");
+        }
+    }
+
+    fn checkAtomicStoreOrdering(self: *Checker, expr: ast.Expr) void {
+        const ordering = atomicOrderingName(expr) orelse {
+            self.errorCode(expr.span, "E_ATOMIC_ORDERING", "atomic store ordering must be .relaxed, .release, or .seq_cst");
+            return;
+        };
+        if (!isAtomicStoreOrdering(ordering)) {
+            self.errorCode(expr.span, "E_ATOMIC_ORDERING", "atomic store ordering must be .relaxed, .release, or .seq_cst");
+        }
+    }
+
+    fn checkAtomicReadModifyWriteOrdering(self: *Checker, expr: ast.Expr) void {
+        const ordering = atomicOrderingName(expr) orelse {
+            self.errorCode(expr.span, "E_ATOMIC_ORDERING", "atomic read-modify-write ordering must be a valid atomic memory order");
+            return;
+        };
+        if (!isAtomicOrdering(ordering)) {
+            self.errorCode(expr.span, "E_ATOMIC_ORDERING", "atomic read-modify-write ordering must be a valid atomic memory order");
+        }
+    }
+
+    fn checkDmaCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
+        const member = switch (callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| {
+                self.checkDmaCall(span, inner.*, args, ctx);
+                return;
+            },
+            else => return,
+        };
+
+        if (isIdentNamed(member.base.*, "cache")) {
+            if (!std.mem.eql(u8, member.name.text, "clean") and !std.mem.eql(u8, member.name.text, "invalidate")) return;
+            if (args.len != 1) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "cache DMA operation expects exactly one DmaBuf argument");
+                return;
+            }
+            const info = dmaBufInfoForValue(args[0], ctx) orelse {
+                self.errorCode(args[0].span, "E_DMA_OPERATION", "cache DMA operation requires a DmaBuf argument");
+                _ = self.checkExpr(args[0], ctx);
+                return;
+            };
+            if (!std.mem.eql(u8, info.mode, "noncoherent")) {
+                self.errorCode(args[0].span, "E_DMA_CACHE_MODE", "cache clean/invalidate are required only for noncoherent DmaBuf values");
+            }
+            return;
+        }
+
+        const info = dmaBufInfoForValue(member.base.*, ctx) orelse return;
+        if (std.mem.eql(u8, member.name.text, "dma_addr") or std.mem.eql(u8, member.name.text, "as_slice")) {
+            if (args.len != 0) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "DmaBuf operation does not take arguments");
+            }
+            _ = info;
+            return;
+        }
+        self.errorCode(member.name.span, "E_DMA_OPERATION", "unknown DmaBuf operation");
+    }
+
+    fn checkTypeStaticCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
+        const member = switch (callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| {
+                self.checkTypeStaticCall(span, inner.*, args, ctx);
+                return;
+            },
+            else => return,
+        };
+        const class = staticTypeBaseClass(member.base.*, ctx) orelse return;
+        const op = member.name.text;
+
+        // Explicit scalar/domain conversions (section 3, section 5).
+        if (isConversionName(op)) {
+            if (std.mem.eql(u8, op, "from_mod") and class != .wrap) {
+                self.errorCode(member.name.span, "E_CONVERSION_OPERATION", "from_mod is defined only on wrap<T> targets");
+                return;
+            }
+            if (isNarrowingConversionName(op) and !isCheckedInt(class)) {
+                self.errorCode(member.name.span, "E_CONVERSION_OPERATION", "try_from/trap_from/wrap_from/sat_from are defined only on scalar integer targets");
+                return;
+            }
+            if (args.len != 1) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "conversion expects exactly one source argument");
+            }
+            return;
+        }
+
+        // Two-operand domain operations (section 5.4, section 5.5).
+        if (class == .serial or class == .counter) {
+            const code = if (class == .serial) "E_SERIAL_OPERATION" else "E_COUNTER_OPERATION";
+            const known = if (class == .serial) isSerialOperationName(op) else isCounterOperationName(op);
+            if (!known) {
+                self.errorCode(member.name.span, code, if (class == .serial) "unknown serial number operation" else "unknown free-running counter operation");
+                return;
+            }
+            const expected = domainOperationArgCount(op);
+            if (args.len != expected) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "domain operation has the wrong number of arguments");
+                return;
+            }
+            // The first two operands must share the domain type; a third argument
+            // (an external interval bound) is checked only for arity.
+            for (args[0..@min(@as(usize, 2), args.len)]) |arg| {
+                const arg_ty = exprResultType(arg, ctx) orelse exprStorageType(arg, ctx) orelse continue;
+                const arg_class = classifyTypeCtx(arg_ty, ctx);
+                if (arg_class != .unknown and arg_class != class) {
+                    self.errorCode(arg.span, code, "domain operation operands must have the same arithmetic-domain type");
+                }
+            }
+            return;
+        }
+
+        // Scalar/wrap/sat targets only define the conversion constructors above.
+        self.errorCode(member.name.span, "E_CONVERSION_OPERATION", "unknown type-level operation");
+    }
+
+    fn checkResidueCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
+        const member = switch (callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| {
+                self.checkResidueCall(span, inner.*, args, ctx);
+                return;
+            },
+            else => return,
+        };
+        if (!std.mem.eql(u8, member.name.text, "residue")) return;
+        const ty = exprResultType(member.base.*, ctx) orelse exprStorageType(member.base.*, ctx) orelse return;
+        const class = classifyTypeCtx(ty, ctx);
+        if (!isArithmeticDomain(class)) return;
+        if (class != .wrap) {
+            self.errorCode(member.name.span, "E_CONVERSION_OPERATION", "residue() is defined only on wrap<T> values");
+            return;
+        }
+        if (args.len != 0) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "residue expects no arguments");
+        }
+    }
+
+    fn dmaCallReturnClass(self: *Checker, callee: ast.Expr, ctx: Context) ?TypeClass {
+        const member = switch (callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| return self.dmaCallReturnClass(inner.*, ctx),
+            else => return null,
+        };
+        _ = dmaBufInfoForValue(member.base.*, ctx) orelse return null;
+        if (std.mem.eql(u8, member.name.text, "dma_addr")) return .dma_addr;
+        if (std.mem.eql(u8, member.name.text, "as_slice")) return .slice;
+        return null;
+    }
+
+    fn checkBitcastCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) ?TypeClass {
+        if (!isBitcastCallName(call.callee.*)) return null;
+
+        const target_ty = if (call.type_args.len == 1) call.type_args[0] else null;
+        if (call.type_args.len != 1 or call.args.len != 1) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "bitcast requires exactly one target type and one value argument");
+        }
+
+        const target = if (target_ty) |ty| classifyTypeCtx(ty, ctx) else TypeClass.unknown;
+        if (target_ty) |ty| {
+            if (!isBitcastLayoutClass(target) or !isBitcastLayoutType(ty, ctx)) {
+                self.errorCode(ty.span, "E_BITCAST_TYPE", "bitcast target must have a fixed scalar, pointer, or address-class layout");
+            }
+        }
+
+        if (call.args.len == 1) {
+            const source_ty = exprResultType(call.args[0], ctx) orelse exprStorageType(call.args[0], ctx);
+            if (source_ty) |ty| {
+                const source = classifyTypeCtx(ty, ctx);
+                if (!isBitcastLayoutClass(source) or !isBitcastLayoutType(ty, ctx)) {
+                    self.errorCode(call.args[0].span, "E_BITCAST_TYPE", "bitcast source must have a fixed scalar, pointer, or address-class layout");
+                }
+            } else {
+                self.errorCode(call.args[0].span, "E_BITCAST_TYPE", "bitcast source type must be known");
+            }
+        }
+
+        return target;
+    }
+
+    fn checkMmioReadOrdering(self: *Checker, expr: ast.Expr) void {
+        const ordering = mmioOrderingName(expr) orelse {
+            self.errorCode(expr.span, "E_MMIO_ORDERING", "MMIO read ordering must be .relaxed or .acquire");
+            return;
+        };
+        if (!isMmioReadOrdering(ordering)) {
+            self.errorCode(expr.span, "E_MMIO_ORDERING", "MMIO read ordering must be .relaxed or .acquire");
+        }
+    }
+
+    fn checkMmioWriteOrdering(self: *Checker, expr: ast.Expr) void {
+        const ordering = mmioOrderingName(expr) orelse {
+            self.errorCode(expr.span, "E_MMIO_ORDERING", "MMIO write ordering must be .relaxed or .release");
+            return;
+        };
+        if (!isMmioWriteOrdering(ordering)) {
+            self.errorCode(expr.span, "E_MMIO_ORDERING", "MMIO write ordering must be .relaxed or .release");
+        }
+    }
+
+    fn mmioOrderingName(expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .enum_literal => |literal| literal.text,
+            else => null,
+        };
+    }
+
+    fn atomicOrderingName(expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .enum_literal => |literal| literal.text,
+            else => null,
+        };
+    }
+
+    fn isAtomicOrdering(ordering: []const u8) bool {
+        return std.mem.eql(u8, ordering, "relaxed") or
+            std.mem.eql(u8, ordering, "acquire") or
+            std.mem.eql(u8, ordering, "release") or
+            std.mem.eql(u8, ordering, "acq_rel") or
+            std.mem.eql(u8, ordering, "seq_cst");
+    }
+
+    fn isAtomicLoadOrdering(ordering: []const u8) bool {
+        return std.mem.eql(u8, ordering, "relaxed") or
+            std.mem.eql(u8, ordering, "acquire") or
+            std.mem.eql(u8, ordering, "seq_cst");
+    }
+
+    fn isAtomicStoreOrdering(ordering: []const u8) bool {
+        return std.mem.eql(u8, ordering, "relaxed") or
+            std.mem.eql(u8, ordering, "release") or
+            std.mem.eql(u8, ordering, "seq_cst");
+    }
+
+    fn isMmioReadOrdering(ordering: []const u8) bool {
+        return std.mem.eql(u8, ordering, "relaxed") or std.mem.eql(u8, ordering, "acquire");
+    }
+
+    fn isMmioWriteOrdering(ordering: []const u8) bool {
+        return std.mem.eql(u8, ordering, "relaxed") or std.mem.eql(u8, ordering, "release");
     }
 
     fn errorCode(self: *Checker, span: diagnostics.Span, code: []const u8, message: []const u8) void {
@@ -972,13 +1656,29 @@ pub const Checker = struct {
     }
 
     fn checkReflectedType(self: *Checker, ty: ast.TypeExpr, ctx: Context) void {
-        self.checkType(ty, .normal);
+        self.checkReflectedGenericTypeArgs(ty, ctx);
         if (reflectionGenericHasWrongArity(ty)) {
             self.errorCode(ty.span, "E_REFLECTION_GENERIC_ARG_COUNT", "reflection generic type has the wrong number of type arguments");
             return;
         }
         if (isKnownLayoutType(ty, ctx)) return;
         self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "reflection requires a known layout-capable type");
+    }
+
+    fn checkReflectedGenericTypeArgs(self: *Checker, ty: ast.TypeExpr, ctx: Context) void {
+        switch (ty.kind) {
+            .generic => |node| {
+                self.checkGenericTypeArgs(node, ctx);
+                for (node.args) |arg| self.checkReflectedGenericTypeArgs(arg, ctx);
+            },
+            .qualified => |node| self.checkReflectedGenericTypeArgs(node.child.*, ctx),
+            .nullable => |child| self.checkReflectedGenericTypeArgs(child.*, ctx),
+            .pointer => |node| self.checkReflectedGenericTypeArgs(node.child.*, ctx),
+            .raw_many_pointer => |node| self.checkReflectedGenericTypeArgs(node.child.*, ctx),
+            .slice => |node| self.checkReflectedGenericTypeArgs(node.child.*, ctx),
+            .array => |node| self.checkReflectedGenericTypeArgs(node.child.*, ctx),
+            .member, .name, .enum_literal => {},
+        }
     }
 
     fn checkReflectedField(self: *Checker, ty: ast.TypeExpr, field: ast.Ident, ctx: Context) void {
@@ -995,15 +1695,15 @@ pub const Checker = struct {
         }
     }
 
-    fn checkIntegerLiteralInitializer(self: *Checker, target: TypeClass, target_ty: ast.TypeExpr, expr: ast.Expr) bool {
+    fn checkIntegerLiteralInitializer(self: *Checker, target: TypeClass, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         const value = integerLiteralValue(expr) orelse return false;
-        if (target == .wrap) {
-            const bounds = wrapInnerBounds(target_ty) orelse return false;
+        if (target == .wrap or target == .sat) {
+            const bounds = arithmeticDomainInnerBounds(resolveAliasType(target_ty, ctx), if (target == .wrap) "wrap" else "sat", ctx) orelse return false;
             if (value.negative or value.magnitude > bounds.max) {
                 self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
                 return true;
             }
-            return false;
+            return true;
         }
         const bounds = checkedIntBounds(target) orelse return false;
         if (value.negative) {
@@ -1037,6 +1737,147 @@ pub const Checker = struct {
         return false;
     }
 
+    fn checkArrayLiteralInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
+        const items = arrayLiteralItems(expr) orelse return false;
+        const resolved_target_ty = resolveAliasType(target_ty, ctx);
+        const array = switch (resolved_target_ty.kind) {
+            .array => |node| node,
+            .qualified => |node| switch (node.child.kind) {
+                .array => |array_node| array_node,
+                else => {
+                    self.errorCode(expr.span, code, message);
+                    return true;
+                },
+            },
+            else => {
+                self.errorCode(expr.span, code, message);
+                return true;
+            },
+        };
+        const expected_len = parseArrayLen(array.len) orelse {
+            self.errorCode(array.len.span, "E_ARRAY_LITERAL_LENGTH", "array literal target must have a known constant length");
+            return true;
+        };
+        if (items.len != expected_len) {
+            self.errorCode(expr.span, "E_ARRAY_LITERAL_LENGTH", "array literal element count must match the target array length");
+        }
+        const element_ty = array.child.*;
+        const element_class = classifyTypeCtx(element_ty, ctx);
+        for (items) |item| {
+            const item_class = self.checkExpr(item, ctx);
+            const literal_checked = self.checkIntegerLiteralInitializer(element_class, element_ty, item, ctx);
+            const null_checked = self.checkNullPointerInitializer(element_class, item);
+            const array_literal_checked = self.checkArrayLiteralInitializer(element_ty, item, ctx, code, message);
+            const packed_bits_literal_checked = self.checkPackedBitsLiteralInitializer(element_ty, item, ctx, code, message);
+            const pointer_conversion_checked = self.checkPointerViewInitializer(element_ty, item, ctx);
+            const c_void_conversion_checked = self.checkCVoidPointerConversion(element_ty, item, ctx);
+            const address_checked = self.checkAddressOfInitializer(element_class, element_ty, item, ctx);
+            const address_class_checked = checkAddressClassConversion(self, item.span, element_class, item_class);
+            const enum_checked = self.checkEnumValueCompatibility(element_ty, item, ctx, code, message);
+            const union_checked = self.checkTaggedUnionConstructorCompatibility(element_ty, item, ctx, code, message);
+            const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(item, ctx, code, message) else false;
+            if (!literal_checked and !null_checked and !array_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(element_class, item_class)) {
+                self.errorCode(item.span, code, message);
+            }
+        }
+        return true;
+    }
+
+    fn checkStructLiteralInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
+        const literal_fields = structLiteralFields(expr) orelse return false;
+        const resolved_target_ty = resolveAliasType(target_ty, ctx);
+        if (packedBitsInfoForType(resolved_target_ty, ctx) != null) return false;
+        const struct_name = structTypeName(resolved_target_ty) orelse {
+            self.errorCode(expr.span, code, message);
+            return true;
+        };
+        const structs = ctx.structs orelse {
+            self.errorCode(expr.span, code, message);
+            return true;
+        };
+        const struct_info = structs.get(struct_name) orelse {
+            self.errorCode(expr.span, code, message);
+            return true;
+        };
+
+        var seen = std.StringHashMap(void).init(self.reporter.allocator);
+        defer seen.deinit();
+        for (literal_fields) |field| {
+            if (seen.contains(field.name.text)) {
+                self.errorCode(field.name.span, "E_DUPLICATE_STRUCT_LITERAL_FIELD", "struct literal field names must be unique");
+            } else {
+                seen.put(field.name.text, {}) catch {};
+            }
+            const field_ty = struct_info.fields.get(field.name.text) orelse {
+                self.errorCode(field.name.span, "E_UNKNOWN_STRUCT_FIELD", "struct has no field with this name");
+                _ = self.checkExpr(field.value, ctx);
+                continue;
+            };
+            const value_class = self.checkExpr(field.value, ctx);
+            const field_class = classifyTypeCtx(field_ty, ctx);
+            const literal_checked = self.checkIntegerLiteralInitializer(field_class, field_ty, field.value, ctx);
+            const null_checked = self.checkNullPointerInitializer(field_class, field.value);
+            const array_literal_checked = self.checkArrayLiteralInitializer(field_ty, field.value, ctx, code, message);
+            const struct_literal_checked = self.checkStructLiteralInitializer(field_ty, field.value, ctx, code, message);
+            const packed_bits_literal_checked = self.checkPackedBitsLiteralInitializer(field_ty, field.value, ctx, code, message);
+            const pointer_conversion_checked = self.checkPointerViewInitializer(field_ty, field.value, ctx);
+            const c_void_conversion_checked = self.checkCVoidPointerConversion(field_ty, field.value, ctx);
+            const address_checked = self.checkAddressOfInitializer(field_class, field_ty, field.value, ctx);
+            const address_class_checked = checkAddressClassConversion(self, field.value.span, field_class, value_class);
+            const enum_checked = self.checkEnumValueCompatibility(field_ty, field.value, ctx, code, message);
+            const union_checked = self.checkTaggedUnionConstructorCompatibility(field_ty, field.value, ctx, code, message);
+            const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(field.value, ctx, code, message) else false;
+            if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(field_class, value_class)) {
+                self.errorCode(field.value.span, code, message);
+            }
+        }
+
+        var required = struct_info.fields.iterator();
+        while (required.next()) |entry| {
+            if (!seen.contains(entry.key_ptr.*)) {
+                self.errorCode(expr.span, "E_STRUCT_LITERAL_MISSING_FIELD", "struct literal must initialize every field");
+            }
+        }
+        return true;
+    }
+
+    fn checkPackedBitsLiteralInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
+        const literal_fields = structLiteralFields(expr) orelse return false;
+        const packed_info = packedBitsInfoForType(resolveAliasType(target_ty, ctx), ctx) orelse return false;
+
+        var seen = std.StringHashMap(void).init(self.reporter.allocator);
+        defer seen.deinit();
+        var has_unknown_field = false;
+        for (literal_fields) |field| {
+            if (seen.contains(field.name.text)) {
+                self.errorCode(field.name.span, "E_DUPLICATE_STRUCT_LITERAL_FIELD", "struct literal field names must be unique");
+            } else {
+                seen.put(field.name.text, {}) catch {};
+            }
+            const field_ty = packed_info.fields.get(field.name.text) orelse {
+                self.errorCode(field.name.span, "E_UNKNOWN_STRUCT_FIELD", "packed bits type has no field with this name");
+                has_unknown_field = true;
+                _ = self.checkExpr(field.value, ctx);
+                continue;
+            };
+            const value_class = self.checkExpr(field.value, ctx);
+            const field_class = classifyTypeCtx(field_ty, ctx);
+            if (!canInitialize(field_class, value_class)) {
+                self.errorCode(field.value.span, code, message);
+            }
+        }
+
+        if (!has_unknown_field) {
+            var required = packed_info.fields.iterator();
+            while (required.next()) |entry| {
+                if (!seen.contains(entry.key_ptr.*)) {
+                    self.errorCode(expr.span, "E_STRUCT_LITERAL_MISSING_FIELD", "packed bits literal must initialize every field");
+                }
+            }
+        }
+        return true;
+    }
+
     fn checkAddressOfInitializer(self: *Checker, target: TypeClass, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         if (!isNonNullPointerLike(target)) return false;
         const operand = addressOfOperand(expr) orelse return false;
@@ -1049,7 +1890,8 @@ pub const Checker = struct {
 
     fn checkPointerViewInitializer(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         const source = exprResultType(expr, ctx) orelse return false;
-        if (implicitPointerViewConversion(target, source)) {
+        if (nullablePointerWideningCtx(target, source, ctx)) return true;
+        if (implicitPointerViewConversionCtx(target, source, ctx)) {
             self.errorCode(expr.span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer and view conversions must be explicit");
             return true;
         }
@@ -1063,8 +1905,11 @@ pub const Checker = struct {
             return;
         }
         const target = ctx.return_kind;
-        const literal_checked = self.checkIntegerLiteralInitializer(target, target_ty, expr);
+        const literal_checked = self.checkIntegerLiteralInitializer(target, target_ty, expr, ctx);
         const null_checked = self.checkNullPointerInitializer(target, expr);
+        const array_literal_checked = self.checkArrayLiteralInitializer(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
+        const struct_literal_checked = self.checkStructLiteralInitializer(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
+        const packed_bits_literal_checked = self.checkPackedBitsLiteralInitializer(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const array_decay_checked = self.checkArrayDecayInitializer(target, returned, expr);
         const pointer_conversion_checked = self.checkPointerViewReturn(target_ty, expr, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, expr, ctx);
@@ -1072,14 +1917,17 @@ pub const Checker = struct {
         const address_class_checked = checkAddressClassConversion(self, expr.span, target, returned);
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !local_escape_checked and !enum_checked and !canInitialize(target, returned)) {
+        const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
+        const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type") else false;
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
 
     fn checkPointerViewReturn(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         const source = exprResultType(expr, ctx) orelse return false;
-        if (implicitPointerViewConversion(target, source)) {
+        if (nullablePointerWideningCtx(target, source, ctx)) return true;
+        if (implicitPointerViewConversionCtx(target, source, ctx)) {
             self.errorCode(expr.span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer and view conversions must be explicit");
             return true;
         }
@@ -1088,7 +1936,7 @@ pub const Checker = struct {
 
     fn checkCVoidPointerConversion(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         const source = exprResultType(expr, ctx) orelse return false;
-        if (implicitCVoidPointerConversion(target, source)) {
+        if (implicitCVoidPointerConversionCtx(target, source, ctx)) {
             self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
             return true;
         }
@@ -1100,18 +1948,54 @@ pub const Checker = struct {
             self.errorCode(arg.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
             return;
         }
-        const target = classifyType(target_ty);
-        const literal_checked = self.checkIntegerLiteralInitializer(target, target_ty, arg);
+        const target = classifyTypeCtx(target_ty, ctx);
+        const literal_checked = self.checkIntegerLiteralInitializer(target, target_ty, arg, ctx);
         const null_checked = self.checkNullPointerInitializer(target, arg);
+        const array_literal_checked = self.checkArrayLiteralInitializer(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
+        const struct_literal_checked = self.checkStructLiteralInitializer(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
+        const packed_bits_literal_checked = self.checkPackedBitsLiteralInitializer(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         const array_decay_checked = self.checkArrayDecayInitializer(target, source, arg);
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, arg, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, arg, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, arg, ctx);
         const address_class_checked = checkAddressClassConversion(self, arg.span, target, source);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
-        if (!literal_checked and !null_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !canInitialize(target, source)) {
+        const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
+        const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion") else false;
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         }
+    }
+
+    fn checkTaggedUnionConstructorCompatibility(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
+        const union_info = unionInfoForType(target_ty, ctx) orelse return false;
+        const call = taggedUnionConstructorCall(expr) orelse return false;
+        if (taggedUnionConstructorIsFunction(call.name.text, ctx)) return false;
+        const case_payload = union_info.cases.get(call.name.text) orelse {
+            self.errorCode(call.name.span, "E_UNKNOWN_UNION_CASE", "union has no case with this name");
+            return true;
+        };
+        if (case_payload) |payload_ty| {
+            if (call.args.len != 1) {
+                self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match union case payload");
+                return true;
+            }
+            const source = self.checkExpr(call.args[0], ctx);
+            self.checkCallArgument(payload_ty, call.args[0], source, ctx);
+        } else if (call.args.len != 0) {
+            self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match union case payload");
+        }
+        _ = code;
+        _ = message;
+        return true;
+    }
+
+    fn checkTaggedUnionConstructorRequiresUnionTarget(self: *Checker, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
+        const call = taggedUnionConstructorCall(expr) orelse return false;
+        if (!isKnownTaggedUnionConstructorName(call.name.text, ctx)) return false;
+        if (taggedUnionConstructorIsFunction(call.name.text, ctx)) return false;
+        self.errorCode(expr.span, code, message);
+        return true;
     }
 
     fn checkEnumValueCompatibility(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
@@ -1129,7 +2013,7 @@ pub const Checker = struct {
         if (exprResultType(expr, ctx)) |source_ty| {
             const source_is_enum = enumInfoForType(source_ty, ctx) != null;
             if (target_enum != null or source_is_enum) {
-                if (sameTypeSyntax(target_ty, source_ty)) return true;
+                if (sameTypeSyntaxCtx(target_ty, source_ty, ctx)) return true;
                 self.errorCode(expr.span, code, message);
                 return true;
             }
@@ -1174,7 +2058,23 @@ pub const Checker = struct {
             return .unknown;
         }
         const repr = enum_info.repr orelse return .unknown;
-        return classifyType(repr);
+        return classifyTypeCtx(repr, ctx);
+    }
+
+    fn checkRawManyOffsetCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) ?TypeClass {
+        const base_ty = rawManyOffsetReturnType(call, ctx) orelse return null;
+        if (!ctx.in_unsafe) {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "operation requires unsafe context");
+        }
+        if (call.args.len != 1) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "call argument count does not match function declaration");
+            return classifyTypeCtx(base_ty, ctx);
+        }
+        const index_class = self.checkExpr(call.args[0], ctx);
+        if (!isIndexType(index_class)) {
+            self.errorCode(call.args[0].span, "E_INDEX_NOT_USIZE", "array and slice indices must be checked usize");
+        }
+        return classifyTypeCtx(base_ty, ctx);
     }
 
     fn checkLocalAddressReturn(self: *Checker, target: TypeClass, expr: ast.Expr, ctx: Context) bool {
@@ -1186,6 +2086,21 @@ pub const Checker = struct {
         return false;
     }
 
+    fn checkTargetlessLiteralInitializer(self: *Checker, expr: ast.Expr) bool {
+        switch (expr.kind) {
+            .enum_literal => {
+                self.errorCode(expr.span, "E_ENUM_LITERAL_REQUIRES_TARGET", "enum literal requires an explicit enum target type");
+                return true;
+            },
+            .string_literal, .char_literal => {
+                self.errorCode(expr.span, "E_LITERAL_REQUIRES_TARGET", "literal requires an explicit target type");
+                return true;
+            },
+            .grouped => |inner| return self.checkTargetlessLiteralInitializer(inner.*),
+            else => return false,
+        }
+    }
+
     fn checkCheckedIntegerBinaryOperands(self: *Checker, span: diagnostics.Span, left: TypeClass, right: TypeClass) void {
         if (!isCheckedInt(left) or !isCheckedInt(right)) return;
         if (left == right) return;
@@ -1194,6 +2109,109 @@ pub const Checker = struct {
             return;
         }
         self.errorCode(span, "E_NO_IMPLICIT_INTEGER_PROMOTION", "integer arithmetic requires matching types or an explicit conversion");
+    }
+
+    fn checkUnaryNegOperand(self: *Checker, span: diagnostics.Span, operand: TypeClass) void {
+        if (isCheckedUnsigned(operand)) return;
+        if (isDiagnosticNeutralOperand(operand) or isCheckedSigned(operand) or isArithmeticDomain(operand) or isFloatish(operand) or operand == .int_literal) return;
+        self.errorCode(span, "E_OPERATOR_OPERAND", "unary '-' requires a signed integer, floating-point, or arithmetic-domain operand");
+    }
+
+    fn checkUnaryBitwiseOperand(self: *Checker, span: diagnostics.Span, operand: TypeClass) void {
+        if (isAddressClass(operand)) return;
+        if (isCheckedSigned(operand) or operand == .bool or isPointerLike(operand) or isForbiddenBitwisePolicy(operand)) return;
+        if (isBitwiseOperand(operand)) return;
+        self.errorCode(span, "E_OPERATOR_OPERAND", "bitwise operators require unsigned integer or wrapping operands");
+    }
+
+    fn checkFloatBinaryOperands(self: *Checker, span: diagnostics.Span, left: TypeClass, right: TypeClass) void {
+        if (!isFloatish(left) and !isFloatish(right)) return;
+        if (isDiagnosticNeutralOperand(left) or isDiagnosticNeutralOperand(right)) return;
+        if (isFloatish(left) and isFloatish(right)) {
+            if (isFloat(left) and isFloat(right) and left != right) {
+                self.errorCode(span, "E_NO_IMPLICIT_CONVERSION", "f32 and f64 do not implicitly convert; use an explicit conversion");
+            }
+            return;
+        }
+        self.errorCode(span, "E_NO_IMPLICIT_CONVERSION", "floating-point and non-floating-point operands do not implicitly mix");
+    }
+
+    fn checkArithmeticOperatorOperands(self: *Checker, span: diagnostics.Span, left: TypeClass, right: TypeClass) void {
+        if (isAddressClass(left) or isAddressClass(right)) return;
+        if (isSingleObjectPointerLike(left) or isSingleObjectPointerLike(right)) return;
+        if (!isArithmeticOperand(left) or !isArithmeticOperand(right)) {
+            self.errorCode(span, "E_OPERATOR_OPERAND", "arithmetic operators require integer or arithmetic-domain operands");
+        }
+    }
+
+    fn checkBitwiseOperatorOperands(self: *Checker, span: diagnostics.Span, left: TypeClass, right: TypeClass) void {
+        if (isAddressClass(left) or isAddressClass(right)) return;
+        if (isCheckedSigned(left) or isCheckedSigned(right)) return;
+        if (left == .bool or right == .bool) return;
+        if (isPointerLike(left) or isPointerLike(right)) return;
+        if (isForbiddenBitwisePolicy(left) or isForbiddenBitwisePolicy(right)) return;
+        if (!isBitwiseOperand(left) or !isBitwiseOperand(right)) {
+            self.errorCode(span, "E_OPERATOR_OPERAND", "bitwise operators require unsigned integer or wrapping operands");
+        }
+    }
+
+    fn checkComparisonOperatorOperands(self: *Checker, span: diagnostics.Span, op: ast.BinaryOp, left: TypeClass, right: TypeClass) void {
+        if (isAddressClass(left) or isAddressClass(right)) return;
+        if (op == .eq or op == .ne) {
+            if (equalityOperandsCompatible(left, right)) return;
+            self.errorCode(span, "E_OPERATOR_OPERAND", "equality operators require comparable operands");
+            return;
+        }
+        if (isPointerLike(left) or isPointerLike(right) or left == .null_literal or right == .null_literal) return;
+        if (isDiagnosticNeutralOperand(left) or isDiagnosticNeutralOperand(right)) return;
+        if (isForbiddenOrderingDomain(left) or isForbiddenOrderingDomain(right)) {
+            self.errorCode(span, "E_ORDERED_ARITH_DOMAIN_OPERAND", "ordered comparisons are not defined on wrap, serial, or counter arithmetic domains");
+            return;
+        }
+        if (isOrderedComparisonOperand(left) and isOrderedComparisonOperand(right)) return;
+        self.errorCode(span, "E_OPERATOR_OPERAND", "ordered comparisons require integer or arithmetic-domain operands");
+    }
+
+    fn checkPointerComparison(
+        self: *Checker,
+        span: diagnostics.Span,
+        op: ast.BinaryOp,
+        left_expr: ast.Expr,
+        left: TypeClass,
+        right_expr: ast.Expr,
+        right: TypeClass,
+        ctx: Context,
+    ) void {
+        if (isAddressClass(left) or isAddressClass(right)) return;
+
+        const left_is_null = left == .null_literal;
+        const right_is_null = right == .null_literal;
+        const left_ty = exprResultType(left_expr, ctx) orelse exprStorageType(left_expr, ctx);
+        const right_ty = exprResultType(right_expr, ctx) orelse exprStorageType(right_expr, ctx);
+        const left_is_view = if (left_ty) |ty| viewType(ty) != null else false;
+        const right_is_view = if (right_ty) |ty| viewType(ty) != null else false;
+
+        if (!left_is_null and !right_is_null and !left_is_view and !right_is_view) return;
+
+        if (op != .eq and op != .ne) {
+            self.errorCode(span, "E_POINTER_ORDERING", "pointer and view values support only equality comparisons");
+            return;
+        }
+
+        if (left_is_null or right_is_null) {
+            if ((left_is_null and right_is_view) or (right_is_null and left_is_view)) return;
+            self.errorCode(span, "E_NO_IMPLICIT_CONVERSION", "null comparisons require a pointer or view operand");
+            return;
+        }
+
+        if (!left_is_view or !right_is_view) {
+            self.errorCode(span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer comparisons require compatible pointer or view operands");
+            return;
+        }
+
+        if (!pointerComparableTypesCtx(left_ty.?, right_ty.?, ctx)) {
+            self.errorCode(span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer comparisons require compatible pointer or view operands");
+        }
     }
 
     fn checkKnownStructField(self: *Checker, span: diagnostics.Span, base: ast.Expr, field_name: []const u8, ctx: Context) void {
@@ -1247,7 +2265,7 @@ pub const Checker = struct {
                 if (!isResultNarrowingTag(node.tag.text) or value_class != .result) return;
                 const narrowed_ty = if (exprResultType(value, binding_ctx)) |ty| resultPayloadType(ty, node.tag.text) else null;
                 self.addLocalBinding(scope, node.binding, .{
-                    .class = if (narrowed_ty) |ty| classifyType(ty) else .unknown,
+                    .class = if (narrowed_ty) |ty| classifyTypeCtx(ty, ctx) else .unknown,
                     .mutable = false,
                     .ty = narrowed_ty,
                     .origin = .local,
@@ -1262,7 +2280,7 @@ pub const Checker = struct {
         const iterable = loop.iterable orelse return;
         const element_ty = if (exprResultType(iterable, ctx)) |ty| iterableElementType(ty) else null;
         self.addLocalBinding(scope, label, .{
-            .class = if (element_ty) |ty| classifyType(ty) else .unknown,
+            .class = if (element_ty) |ty| classifyTypeCtx(ty, ctx) else .unknown,
             .mutable = false,
             .ty = element_ty,
             .origin = .local,
@@ -1293,6 +2311,13 @@ pub const Checker = struct {
         defer enum_cases_seen.deinit();
         var union_cases_seen = std.StringHashMap(void).init(self.reporter.allocator);
         defer union_cases_seen.deinit();
+        var result_cases_seen = std.StringHashMap(void).init(self.reporter.allocator);
+        defer result_cases_seen.deinit();
+        var bool_cases_seen = std.StringHashMap(void).init(self.reporter.allocator);
+        defer bool_cases_seen.deinit();
+        var literal_cases_seen = std.AutoHashMap(EnumValueKey, void).init(self.reporter.allocator);
+        defer literal_cases_seen.deinit();
+        self.checkSwitchWildcardOrdering(node);
         for (node.arms) |arm| {
             self.checkSwitchArmPatterns(arm.patterns, subject_class, subject_ty, ctx);
             if (subject_enum) |enum_info| {
@@ -1300,6 +2325,15 @@ pub const Checker = struct {
             }
             if (subject_union) |union_info| {
                 self.checkDuplicateSwitchUnionCases(arm.patterns, union_info, &union_cases_seen);
+            }
+            if (subject_class == .result) {
+                self.checkDuplicateSwitchResultCases(arm.patterns, &result_cases_seen);
+            }
+            if (subject_class == .bool) {
+                self.checkDuplicateSwitchBoolCases(arm.patterns, &bool_cases_seen);
+            }
+            if (isIntegerLike(subject_class)) {
+                self.checkDuplicateSwitchIntegerLiteralCases(arm.patterns, &literal_cases_seen);
             }
             var arm_scope = Scope.init(self.reporter.allocator);
             defer arm_scope.deinit();
@@ -1354,6 +2388,70 @@ pub const Checker = struct {
         }
     }
 
+    fn checkDuplicateSwitchResultCases(self: *Checker, patterns: []const ast.Pattern, seen: *std.StringHashMap(void)) void {
+        for (patterns) |pattern| {
+            const tag = switch (pattern.kind) {
+                .tag => |tag| tag,
+                .tag_bind => |node| node.tag,
+                else => continue,
+            };
+            if (!isResultNarrowingTag(tag.text)) continue;
+            if (seen.contains(tag.text)) {
+                self.errorCode(tag.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
+            } else {
+                seen.put(tag.text, {}) catch {};
+            }
+        }
+    }
+
+    fn checkDuplicateSwitchBoolCases(self: *Checker, patterns: []const ast.Pattern, seen: *std.StringHashMap(void)) void {
+        for (patterns) |pattern| {
+            const value = switchBoolLiteralValue(pattern) orelse continue;
+            const key = if (value) "true" else "false";
+            if (seen.contains(key)) {
+                self.errorCode(pattern.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
+            } else {
+                seen.put(key, {}) catch {};
+            }
+        }
+    }
+
+    fn checkDuplicateSwitchIntegerLiteralCases(self: *Checker, patterns: []const ast.Pattern, seen: *std.AutoHashMap(EnumValueKey, void)) void {
+        for (patterns) |pattern| {
+            const key = switch (pattern.kind) {
+                .literal => |expr| if (integerLiteralValue(expr)) |value| enumValueKey(value) else continue,
+                else => continue,
+            };
+            if (seen.contains(key)) {
+                self.errorCode(pattern.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
+            } else {
+                seen.put(key, {}) catch {};
+            }
+        }
+    }
+
+    fn checkSwitchWildcardOrdering(self: *Checker, node: ast.Switch) void {
+        var wildcard_seen = false;
+        for (node.arms) |arm| {
+            var arm_has_wildcard = false;
+            for (arm.patterns) |pattern| {
+                if (wildcard_seen) {
+                    self.errorCode(pattern.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
+                    continue;
+                }
+                if (pattern.kind == .wildcard) {
+                    if (arm_has_wildcard) {
+                        self.errorCode(pattern.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
+                    }
+                    arm_has_wildcard = true;
+                } else if (arm_has_wildcard) {
+                    self.errorCode(pattern.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
+                }
+            }
+            if (arm_has_wildcard) wildcard_seen = true;
+        }
+    }
+
     fn checkSwitchArmPatterns(self: *Checker, patterns: []const ast.Pattern, subject_class: TypeClass, subject_ty: ?ast.TypeExpr, ctx: Context) void {
         var binding_pattern_count: usize = 0;
         const subject_enum = if (subject_ty) |ty| enumInfoForType(ty, ctx) else null;
@@ -1392,12 +2490,30 @@ pub const Checker = struct {
                 .bind => {
                     binding_pattern_count += 1;
                 },
-                .wildcard, .literal => {},
+                .literal => |expr| self.checkSwitchLiteralPattern(pattern, expr, subject_class),
+                .wildcard => {},
             }
         }
         if (binding_pattern_count > 1) {
             self.errorCode(patterns[0].span, "E_SWITCH_MULTI_BINDING_ARM", "switch arms with multiple patterns cannot introduce bindings");
         }
+    }
+
+    fn checkSwitchLiteralPattern(self: *Checker, pattern: ast.Pattern, expr: ast.Expr, subject_class: TypeClass) void {
+        if (subject_class == .unknown) return;
+        if (subject_class == .bool) {
+            if (switchBoolLiteralValue(pattern) == null) {
+                self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "switch literal pattern must match the subject type");
+            }
+            return;
+        }
+        if (isIntegerLike(subject_class)) {
+            if (integerLiteralValue(expr) == null) {
+                self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "switch literal pattern must match the subject type");
+            }
+            return;
+        }
+        self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "switch literal pattern must match the subject type");
     }
 
     fn addSwitchArmBindings(self: *Checker, patterns: []const ast.Pattern, subject: ast.Expr, subject_class: TypeClass, scope: *Scope, ctx: Context) void {
@@ -1417,7 +2533,7 @@ pub const Checker = struct {
                         null;
                     const ty = narrowed_ty orelse continue;
                     self.addLocalBinding(scope, node.binding, .{
-                        .class = classifyType(ty),
+                        .class = classifyTypeCtx(ty, ctx),
                         .mutable = false,
                         .ty = ty,
                         .origin = .local,
@@ -1427,7 +2543,7 @@ pub const Checker = struct {
                     if (!isNullableValue(subject_class)) continue;
                     const narrowed_ty = nullableInnerType(subject_ty) orelse continue;
                     self.addLocalBinding(scope, ident, .{
-                        .class = classifyType(narrowed_ty),
+                        .class = classifyTypeCtx(narrowed_ty, ctx),
                         .mutable = false,
                         .ty = narrowed_ty,
                         .origin = .local,
@@ -1450,6 +2566,7 @@ const Context = struct {
     loop_depth: usize = 0,
     unsafe_contracts: UnsafeContracts = .{},
     scope: ?*Scope = null,
+    allow_mmio_register_type: bool = false,
     mmio_structs: ?*const std.StringHashMap(MmioStruct) = null,
     mmio_params: ?*const std.StringHashMap([]const u8) = null,
     structs: ?*const std.StringHashMap(StructInfo) = null,
@@ -1457,12 +2574,31 @@ const Context = struct {
     overlay_unions: ?*const std.StringHashMap(LayoutFieldInfo) = null,
     tagged_unions: ?*const std.StringHashMap(UnionInfo) = null,
     enums: ?*const std.StringHashMap(EnumInfo) = null,
+    type_aliases: ?*const std.StringHashMap(ast.TypeExpr) = null,
     functions: ?*const std.StringHashMap(FunctionInfo) = null,
     globals: ?*const std.StringHashMap(GlobalInfo) = null,
 };
 
 const MmioStruct = struct {
-    fields: std.StringHashMap(void),
+    fields: std.StringHashMap(MmioFieldInfo),
+};
+
+const MmioFieldInfo = struct {
+    access: MmioRegisterAccess,
+};
+
+const MmioRegisterAccess = enum {
+    read,
+    write,
+    read_write,
+
+    fn allowsRead(self: MmioRegisterAccess) bool {
+        return self == .read or self == .read_write;
+    }
+
+    fn allowsWrite(self: MmioRegisterAccess) bool {
+        return self == .write or self == .read_write;
+    }
 };
 
 const StructInfo = struct {
@@ -1496,6 +2632,7 @@ const GlobalInfo = struct {
 const UnsafeContracts = struct {
     no_overflow: bool = false,
     noalias_contract: bool = false,
+    precise_asm: bool = false,
 
     fn with(self: UnsafeContracts, attr: ast.Attr) UnsafeContracts {
         var next = self;
@@ -1503,6 +2640,7 @@ const UnsafeContracts = struct {
             .unsafe_contract => |contract| {
                 if (std.mem.eql(u8, contract.name.text, "no_overflow")) next.no_overflow = true;
                 if (std.mem.eql(u8, contract.name.text, "noalias")) next.noalias_contract = true;
+                if (std.mem.eql(u8, contract.name.text, "precise_asm")) next.precise_asm = true;
             },
             .no_lang_trap, .named => {},
         }
@@ -1513,6 +2651,7 @@ const UnsafeContracts = struct {
         return switch (required) {
             .no_overflow => self.no_overflow,
             .noalias_contract => self.noalias_contract,
+            .precise_asm => self.precise_asm,
         };
     }
 };
@@ -1520,6 +2659,7 @@ const UnsafeContracts = struct {
 const ContractKind = enum {
     no_overflow,
     noalias_contract,
+    precise_asm,
 };
 
 const LocalInfo = struct {
@@ -1592,16 +2732,25 @@ const TypeClass = enum {
     user_ptr,
     mmio_ptr,
     phys_ptr,
+    atomic,
+    dma_buf,
     result,
     never,
     void,
     bool,
     null_literal,
     int_literal,
+    f32,
+    f64,
+    float_literal,
+    duration,
+    order,
 };
 
 const TypeMode = enum {
     normal,
+    storage,
+    return_type,
     ffi_opaque_pointer,
 };
 
@@ -1718,8 +2867,109 @@ fn isForbiddenBitwisePolicy(kind: TypeClass) bool {
     };
 }
 
+fn isForbiddenOrderingDomain(kind: TypeClass) bool {
+    return switch (kind) {
+        .wrap, .serial, .counter => true,
+        else => false,
+    };
+}
+
+fn isArithmeticDomain(kind: TypeClass) bool {
+    return switch (kind) {
+        .wrap, .sat, .serial, .counter => true,
+        else => false,
+    };
+}
+
+fn isFloat(kind: TypeClass) bool {
+    return kind == .f32 or kind == .f64;
+}
+
+fn isFloatish(kind: TypeClass) bool {
+    return isFloat(kind) or kind == .float_literal;
+}
+
+// IEEE floating-point arithmetic never raises a language trap: division by zero
+// and overflow yield infinities or NaN rather than `.DivideByZero`/`.IntegerOverflow`.
+fn isNonTrappingFloatOp(op: ast.BinaryOp, left: TypeClass, right: TypeClass) bool {
+    if (!isFloatish(left) or !isFloatish(right)) return false;
+    if (!isFloat(left) and !isFloat(right)) return false;
+    return switch (op) {
+        .add, .sub, .mul, .div => true,
+        else => false,
+    };
+}
+
+fn isDiagnosticNeutralOperand(kind: TypeClass) bool {
+    return kind == .unknown or kind == .never;
+}
+
+fn isArithmeticOperand(kind: TypeClass) bool {
+    return isDiagnosticNeutralOperand(kind) or isIntegerLike(kind) or isArithmeticDomain(kind) or isFloatish(kind);
+}
+
+fn isBitwiseOperand(kind: TypeClass) bool {
+    return isDiagnosticNeutralOperand(kind) or isCheckedUnsigned(kind) or kind == .int_literal or kind == .wrap;
+}
+
+fn isOrderedComparisonOperand(kind: TypeClass) bool {
+    return isArithmeticOperand(kind);
+}
+
+fn isEqualityOperand(kind: TypeClass) bool {
+    return isDiagnosticNeutralOperand(kind) or
+        isIntegerLike(kind) or
+        isArithmeticDomain(kind) or
+        isFloatish(kind) or
+        kind == .bool or
+        isPointerLike(kind) or
+        kind == .null_literal;
+}
+
+fn equalityOperandsCompatible(left: TypeClass, right: TypeClass) bool {
+    if (!isEqualityOperand(left) or !isEqualityOperand(right)) return false;
+    if (isDiagnosticNeutralOperand(left) or isDiagnosticNeutralOperand(right)) return true;
+    if (left == .null_literal or right == .null_literal) return isPointerLike(left) or isPointerLike(right);
+    if (left == .bool or right == .bool) return left == .bool and right == .bool;
+    if (isPointerLike(left) or isPointerLike(right)) return isPointerLike(left) and isPointerLike(right);
+    if (isArithmeticDomain(left) or isArithmeticDomain(right)) return left == right;
+    if (isFloatish(left) or isFloatish(right)) return floatOperandsCompatible(left, right);
+    return isIntegerLike(left) and isIntegerLike(right);
+}
+
+fn floatOperandsCompatible(left: TypeClass, right: TypeClass) bool {
+    if (!isFloatish(left) or !isFloatish(right)) return false;
+    if (isFloat(left) and isFloat(right)) return left == right;
+    return true; // at least one operand is an adaptable float literal
+}
+
+fn arithmeticDomainsImplicitlyMix(left: TypeClass, right: TypeClass) bool {
+    if (left == .unknown or right == .unknown or left == .never or right == .never) return false;
+    if (isArithmeticDomain(left) or isArithmeticDomain(right)) return left != right;
+    return false;
+}
+
+fn isNoTrapArithmeticDomainOp(op: ast.BinaryOp, left: TypeClass, right: TypeClass) bool {
+    if (left != right) return false;
+    return switch (left) {
+        .wrap => switch (op) {
+            .add, .sub, .mul => true,
+            else => false,
+        },
+        .sat => switch (op) {
+            .add, .sub, .mul => true,
+            else => false,
+        },
+        else => false,
+    };
+}
+
 fn mergeArithmetic(left: TypeClass, right: TypeClass) TypeClass {
+    if (left == .f64 or right == .f64) return .f64;
+    if (left == .f32 or right == .f32) return .f32;
+    if (left == .float_literal or right == .float_literal) return .float_literal;
     if (left == .wrap or right == .wrap) return .wrap;
+    if (left == .sat or right == .sat) return .sat;
     if (isCheckedSigned(left)) return left;
     if (isCheckedSigned(right)) return right;
     if (isCheckedUnsigned(left)) return left;
@@ -1738,6 +2988,30 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
         .qualified => |node| classifyType(node.child.*),
         .generic => |node| classifyGenericTypeName(node.base.text),
         else => .unknown,
+    };
+}
+
+fn classifyTypeCtx(ty: ast.TypeExpr, ctx: Context) TypeClass {
+    return classifyType(resolveAliasType(ty, ctx));
+}
+
+fn resolveAliasType(ty: ast.TypeExpr, ctx: Context) ast.TypeExpr {
+    return resolveAliasTypeDepth(ty, ctx, 0);
+}
+
+fn resolveAliasTypeDepth(ty: ast.TypeExpr, ctx: Context, depth: usize) ast.TypeExpr {
+    if (depth > 64) return ty;
+    return switch (ty.kind) {
+        .name => |name| {
+            const aliases = ctx.type_aliases orelse return ty;
+            const target = aliases.get(name.text) orelse return ty;
+            if (typeName(target)) |target_name| {
+                if (std.mem.eql(u8, target_name, name.text)) return ty;
+            }
+            return resolveAliasTypeDepth(target, ctx, depth + 1);
+        },
+        .qualified => |node| resolveAliasTypeDepth(node.child.*, ctx, depth),
+        else => ty,
     };
 }
 
@@ -1770,6 +3044,175 @@ fn resultPayloadType(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
     };
 }
 
+fn atomicPayloadType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .generic => |node| {
+            if (!std.mem.eql(u8, node.base.text, "atomic") or node.args.len != 1) return null;
+            return node.args[0];
+        },
+        .qualified => |node| atomicPayloadType(node.child.*),
+        else => null,
+    };
+}
+
+fn atomicPayloadTypeForValue(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
+    return atomicPayloadType(resolveAliasType(ty, ctx));
+}
+
+const DmaBufInfo = struct {
+    payload: ast.TypeExpr,
+    mode: []const u8,
+};
+
+fn dmaBufInfo(ty: ast.TypeExpr) ?DmaBufInfo {
+    return switch (ty.kind) {
+        .generic => |node| {
+            if (!std.mem.eql(u8, node.base.text, "DmaBuf") or node.args.len != 2) return null;
+            const mode = switch (node.args[1].kind) {
+                .enum_literal => |literal| literal.text,
+                else => return null,
+            };
+            return .{ .payload = node.args[0], .mode = mode };
+        },
+        .qualified => |node| dmaBufInfo(node.child.*),
+        else => null,
+    };
+}
+
+fn dmaBufInfoForValue(expr: ast.Expr, ctx: Context) ?DmaBufInfo {
+    const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
+    return dmaBufInfo(resolveAliasType(ty, ctx));
+}
+
+// Resolves a member base that names a scalar integer or arithmetic-domain type
+// (directly or through a type alias), for static operations like `TcpSeq.before(a, b)`
+// or `u8.try_from(x)`. Returns null when the base is a value binding or does not
+// name such a type.
+fn staticTypeBaseClass(base: ast.Expr, ctx: Context) ?TypeClass {
+    const ident = switch (base.kind) {
+        .ident => |id| id,
+        .grouped => |inner| return staticTypeBaseClass(inner.*, ctx),
+        else => return null,
+    };
+    if (ctx.scope) |scope| {
+        if (scope.get(ident.text) != null) return null;
+    }
+    const resolved = resolveAliasType(simpleNameType(ident.text, ident.span), ctx);
+    const class = classifyType(resolved);
+    if (isCheckedInt(class) or isArithmeticDomain(class)) return class;
+    return null;
+}
+
+fn isConversionName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "from") or
+        std.mem.eql(u8, name, "try_from") or
+        std.mem.eql(u8, name, "trap_from") or
+        std.mem.eql(u8, name, "wrap_from") or
+        std.mem.eql(u8, name, "sat_from") or
+        std.mem.eql(u8, name, "from_mod");
+}
+
+fn isNarrowingConversionName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "try_from") or
+        std.mem.eql(u8, name, "trap_from") or
+        std.mem.eql(u8, name, "wrap_from") or
+        std.mem.eql(u8, name, "sat_from");
+}
+
+fn isSerialOperationName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "before") or
+        std.mem.eql(u8, name, "after") or
+        std.mem.eql(u8, name, "distance") or
+        std.mem.eql(u8, name, "compare");
+}
+
+fn isCounterOperationName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "delta_mod") or
+        std.mem.eql(u8, name, "elapsed_assume_within") or
+        std.mem.eql(u8, name, "elapsed_bounded");
+}
+
+// Number of arguments a serial/counter domain operation takes. The first two are
+// always the domain operands; a third (where present) is an external interval.
+fn domainOperationArgCount(op: []const u8) usize {
+    if (std.mem.eql(u8, op, "elapsed_assume_within") or std.mem.eql(u8, op, "elapsed_bounded")) return 3;
+    return 2;
+}
+
+fn isTypeStaticMember(member: anytype, ctx: Context) bool {
+    return staticTypeBaseClass(member.base.*, ctx) != null;
+}
+
+fn typeStaticCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return typeStaticCallReturnClass(inner.*, ctx),
+        else => return null,
+    };
+    const class = staticTypeBaseClass(member.base.*, ctx) orelse return null;
+    const op = member.name.text;
+    if (std.mem.eql(u8, op, "try_from")) return .result;
+    if (std.mem.eql(u8, op, "from_mod")) return if (class == .wrap) .wrap else null;
+    if (std.mem.eql(u8, op, "from") or
+        std.mem.eql(u8, op, "trap_from") or
+        std.mem.eql(u8, op, "wrap_from") or
+        std.mem.eql(u8, op, "sat_from")) return class;
+    if (class == .serial) {
+        if (std.mem.eql(u8, op, "before") or std.mem.eql(u8, op, "after")) return .bool;
+        if (std.mem.eql(u8, op, "distance")) return .wrap;
+        if (std.mem.eql(u8, op, "compare")) return .result;
+    } else if (class == .counter) {
+        if (std.mem.eql(u8, op, "delta_mod")) return .wrap;
+        if (std.mem.eql(u8, op, "elapsed_assume_within")) return .duration;
+        if (std.mem.eql(u8, op, "elapsed_bounded")) return .result;
+    }
+    return null;
+}
+
+fn wrapValueInnerType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
+    const resolved = resolveAliasType(ty, ctx);
+    return switch (resolved.kind) {
+        .generic => |node| if (std.mem.eql(u8, node.base.text, "wrap") and node.args.len == 1) node.args[0] else null,
+        else => null,
+    };
+}
+
+// `.residue()` exposes the raw modulo representative of a wrap<T> value (section 5.2).
+fn residueCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return residueCallReturnClass(inner.*, ctx),
+        else => return null,
+    };
+    if (!std.mem.eql(u8, member.name.text, "residue")) return null;
+    const inner = wrapValueInnerType(member.base.*, ctx) orelse return null;
+    return classifyTypeCtx(inner, ctx);
+}
+
+fn atomicCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return atomicCallReturnType(inner.*, ctx),
+        else => return null,
+    };
+    if (std.mem.eql(u8, member.name.text, "load") or std.mem.eql(u8, member.name.text, "fetch_add")) {
+        return atomicPayloadTypeForValue(member.base.*, ctx);
+    }
+    return null;
+}
+
+fn atomicCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
+    const ty = atomicCallReturnType(callee, ctx) orelse return null;
+    return classifyTypeCtx(ty, ctx);
+}
+
+fn bitcastCallReturnType(call: anytype) ?ast.TypeExpr {
+    if (!isBitcastCallName(call.callee.*) or call.type_args.len != 1) return null;
+    return call.type_args[0];
+}
+
 fn tryPayloadType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     const ty = exprResultType(expr, ctx) orelse return null;
     return nullableInnerType(ty) orelse resultPayloadType(ty, "ok");
@@ -1787,6 +3230,7 @@ fn iterableElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
 fn storageElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
     return switch (ty.kind) {
         .pointer => |node| node.child.*,
+        .raw_many_pointer => |node| node.child.*,
         .slice => |node| node.child.*,
         .array => |node| node.child.*,
         .qualified => |node| storageElementType(node.child.*),
@@ -1839,8 +3283,47 @@ fn unionCasePayloadType(union_info: UnionInfo, case_name: []const u8) ?ast.TypeE
     return union_info.cases.get(case_name) orelse null;
 }
 
+const TaggedUnionConstructorCall = struct {
+    name: ast.Ident,
+    args: []const ast.Expr,
+};
+
+fn taggedUnionConstructorCall(expr: ast.Expr) ?TaggedUnionConstructorCall {
+    return switch (expr.kind) {
+        .call => |node| blk: {
+            const ident = switch (node.callee.kind) {
+                .ident => |ident| ident,
+                .grouped => |inner| switch (inner.kind) {
+                    .ident => |ident| ident,
+                    else => break :blk null,
+                },
+                else => break :blk null,
+            };
+            break :blk .{ .name = ident, .args = node.args };
+        },
+        .grouped => |inner| taggedUnionConstructorCall(inner.*),
+        else => null,
+    };
+}
+
+fn isKnownTaggedUnionConstructorName(name: []const u8, ctx: Context) bool {
+    const tagged_unions = ctx.tagged_unions orelse return false;
+    var values = tagged_unions.valueIterator();
+    while (values.next()) |union_info| {
+        if (union_info.cases.contains(name)) return true;
+    }
+    return false;
+}
+
+fn taggedUnionConstructorIsFunction(name: []const u8, ctx: Context) bool {
+    const functions = ctx.functions orelse return false;
+    return functions.contains(name);
+}
+
 fn classifyGenericTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "Result")) return .result;
+    if (std.mem.eql(u8, name, "atomic")) return .atomic;
+    if (std.mem.eql(u8, name, "DmaBuf")) return .dma_buf;
     if (std.mem.eql(u8, name, "UserPtr")) return .user_ptr;
     if (std.mem.eql(u8, name, "MmioPtr")) return .mmio_ptr;
     if (std.mem.eql(u8, name, "PhysPtr")) return .phys_ptr;
@@ -1848,6 +3331,7 @@ fn classifyGenericTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "sat")) return .sat;
     if (std.mem.eql(u8, name, "serial")) return .serial;
     if (std.mem.eql(u8, name, "counter")) return .counter;
+    if (std.mem.eql(u8, name, "Duration")) return .duration;
     return .unknown;
 }
 
@@ -1862,6 +3346,9 @@ fn classifyTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "i32")) return .checked_i32;
     if (std.mem.eql(u8, name, "i64")) return .checked_i64;
     if (std.mem.eql(u8, name, "isize")) return .checked_isize;
+    if (std.mem.eql(u8, name, "f32")) return .f32;
+    if (std.mem.eql(u8, name, "f64")) return .f64;
+    if (std.mem.eql(u8, name, "Order")) return .order;
     if (std.mem.eql(u8, name, "never")) return .never;
     if (std.mem.eql(u8, name, "void")) return .void;
     if (std.mem.eql(u8, name, "bool")) return .bool;
@@ -1877,6 +3364,7 @@ fn canInitialize(target: TypeClass, initializer: TypeClass) bool {
     if (target == initializer) return true;
     if (isNullablePointerLike(target) and initializer == .null_literal) return true;
     if (isCheckedInt(target) and initializer == .int_literal) return true;
+    if (isFloat(target) and initializer == .float_literal) return true;
     return false;
 }
 
@@ -1902,13 +3390,14 @@ fn checkedIntBounds(kind: TypeClass) ?IntBounds {
     };
 }
 
-fn wrapInnerBounds(ty: ast.TypeExpr) ?IntBounds {
+fn arithmeticDomainInnerBounds(ty: ast.TypeExpr, domain: []const u8, ctx: Context) ?IntBounds {
     const generic = switch (ty.kind) {
         .generic => |node| node,
+        .qualified => |node| return arithmeticDomainInnerBounds(resolveAliasType(node.child.*, ctx), domain, ctx),
         else => return null,
     };
-    if (!std.mem.eql(u8, generic.base.text, "wrap") or generic.args.len != 1) return null;
-    return checkedIntBounds(classifyType(generic.args[0]));
+    if (!std.mem.eql(u8, generic.base.text, domain) or generic.args.len != 1) return null;
+    return checkedIntBounds(classifyTypeCtx(generic.args[0], ctx));
 }
 
 fn maxUnsigned(bits: u7) u128 {
@@ -1968,6 +3457,65 @@ fn integerLiteralValue(expr: ast.Expr) ?LiteralValue {
     };
 }
 
+fn parseArrayLen(expr: ast.Expr) ?usize {
+    return switch (expr.kind) {
+        .int_literal => |literal| parseUsizeLiteral(literal),
+        .grouped => |inner| parseArrayLen(inner.*),
+        .binary => |node| {
+            const left = parseArrayLen(node.left.*) orelse return null;
+            const right = parseArrayLen(node.right.*) orelse return null;
+            return switch (node.op) {
+                .add => std.math.add(usize, left, right) catch null,
+                .sub => std.math.sub(usize, left, right) catch null,
+                .mul => std.math.mul(usize, left, right) catch null,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                .mod => if (right == 0) null else @mod(left, right),
+                .shl => if (right >= @bitSizeOf(usize)) null else std.math.shl(usize, left, right),
+                .shr => if (right >= @bitSizeOf(usize)) null else left >> @intCast(right),
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+fn parseUsizeLiteral(literal: []const u8) ?usize {
+    var cleaned: [128]u8 = undefined;
+    if (literal.len > cleaned.len) return null;
+    var len: usize = 0;
+    for (literal) |ch| {
+        if (ch != '_') {
+            cleaned[len] = ch;
+            len += 1;
+        }
+    }
+    return std.fmt.parseInt(usize, cleaned[0..len], 0) catch null;
+}
+
+fn isArrayLiteral(expr: ast.Expr) bool {
+    return arrayLiteralItems(expr) != null;
+}
+
+fn arrayLiteralItems(expr: ast.Expr) ?[]const ast.Expr {
+    return switch (expr.kind) {
+        .array_literal => |items| items,
+        .grouped => |inner| arrayLiteralItems(inner.*),
+        else => null,
+    };
+}
+
+fn isStructLiteral(expr: ast.Expr) bool {
+    return structLiteralFields(expr) != null;
+}
+
+fn structLiteralFields(expr: ast.Expr) ?[]const ast.StructLiteralField {
+    return switch (expr.kind) {
+        .struct_literal => |fields| fields,
+        .grouped => |inner| structLiteralFields(inner.*),
+        else => null,
+    };
+}
+
 fn isNullLiteral(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .null_literal => true,
@@ -1980,6 +3528,43 @@ fn isUninitLiteral(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .uninit_literal => true,
         .grouped => |inner| isUninitLiteral(inner.*),
+        else => false,
+    };
+}
+
+fn isStaticGlobalInitializer(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .int_literal, .bool_literal, .null_literal, .void_literal, .enum_literal => true,
+        .ident => |ident| if (ctx.globals) |globals| globals.contains(ident.text) else false,
+        .unary => |node| node.op == .neg and integerLiteralValue(node.expr.*) != null,
+        .grouped => |inner| isStaticGlobalInitializer(inner.*, ctx),
+        .address_of => |inner| isStaticGlobalAddressTarget(inner.*, ctx),
+        .array_literal => |items| allStaticGlobalInitializerItems(items, ctx),
+        .struct_literal => |fields| allStaticGlobalInitializerFields(fields, ctx),
+        else => false,
+    };
+}
+
+fn allStaticGlobalInitializerItems(items: []const ast.Expr, ctx: Context) bool {
+    for (items) |item| {
+        if (!isStaticGlobalInitializer(item, ctx)) return false;
+    }
+    return true;
+}
+
+fn allStaticGlobalInitializerFields(fields: []const ast.StructLiteralField, ctx: Context) bool {
+    for (fields) |field| {
+        if (!isStaticGlobalInitializer(field.value, ctx)) return false;
+    }
+    return true;
+}
+
+fn isStaticGlobalAddressTarget(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .ident => |ident| if (ctx.globals) |globals| globals.contains(ident.text) else false,
+        .member => |node| isStaticGlobalAddressTarget(node.base.*, ctx),
+        .index => |node| isStaticGlobalAddressTarget(node.base.*, ctx) and isStaticGlobalInitializer(node.index.*, ctx),
+        .grouped => |inner| isStaticGlobalAddressTarget(inner.*, ctx),
         else => false,
     };
 }
@@ -2019,7 +3604,7 @@ fn addressOfMatchesPointerTarget(target: ast.TypeExpr, source_child: ast.TypeExp
     return switch (target.kind) {
         .pointer => |node| {
             if (node.mutability == .mut and !addressableStorageIsMutable(operand, ctx)) return false;
-            return sameTypeSyntax(node.child.*, source_child);
+            return sameTypeSyntaxCtx(node.child.*, source_child, ctx);
         },
         .qualified => |node| addressOfMatchesPointerTarget(node.child.*, source_child, operand, ctx),
         else => false,
@@ -2106,6 +3691,14 @@ fn isAddressClass(kind: TypeClass) bool {
         .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
         else => false,
     };
+}
+
+fn isBitcastLayoutClass(kind: TypeClass) bool {
+    return isCheckedInt(kind) or kind == .bool or isPointerLike(kind) or isAddressClass(kind);
+}
+
+fn isBitcastLayoutType(ty: ast.TypeExpr, ctx: Context) bool {
+    return isBitcastLayoutClass(classifyTypeCtx(resolveAliasType(ty, ctx), ctx));
 }
 
 fn checkAddressClassConversion(self: *Checker, span: diagnostics.Span, target: TypeClass, source: TypeClass) bool {
@@ -2208,7 +3801,7 @@ fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
         .grouped => |inner| return isMmioRegisterTarget(inner.*, ctx),
         else => return false,
     };
-    if (isMmioRegisterMember(target, ctx)) return true;
+    if (mmioRegisterMemberInfo(target, ctx) != null) return true;
     if (isMmioRegisterTarget(member.base.*, ctx)) return true;
     const base_name = switch (member.base.kind) {
         .ident => |ident| ident.text,
@@ -2228,35 +3821,71 @@ fn isMmioRegisterAccessCall(callee: ast.Expr, ctx: Context) bool {
         else => return false,
     };
     if (!std.mem.eql(u8, member.name.text, "read") and !std.mem.eql(u8, member.name.text, "write")) return false;
-    return isMmioRegisterMember(member.base.*, ctx);
+    return mmioRegisterMemberInfo(member.base.*, ctx) != null;
 }
 
-fn isMmioRegisterMember(expr: ast.Expr, ctx: Context) bool {
+fn isAtomicOperationMember(member: anytype, ctx: Context) bool {
+    if (isIdentNamed(member.base.*, "atomic")) return std.mem.eql(u8, member.name.text, "init");
+    _ = atomicPayloadTypeForValue(member.base.*, ctx) orelse return false;
+    return true;
+}
+
+fn isDmaOperationMember(member: anytype, ctx: Context) bool {
+    if (isIdentNamed(member.base.*, "cache")) {
+        return std.mem.eql(u8, member.name.text, "clean") or
+            std.mem.eql(u8, member.name.text, "invalidate");
+    }
+    _ = dmaBufInfoForValue(member.base.*, ctx) orelse return false;
+    return true;
+}
+
+fn mmioRegisterMemberInfo(expr: ast.Expr, ctx: Context) ?MmioFieldInfo {
     const member = switch (expr.kind) {
         .member => |node| node,
-        .grouped => |inner| return isMmioRegisterMember(inner.*, ctx),
-        else => return false,
+        .grouped => |inner| return mmioRegisterMemberInfo(inner.*, ctx),
+        else => return null,
     };
     const base_name = switch (member.base.kind) {
         .ident => |ident| ident.text,
-        else => return false,
+        else => return null,
     };
-    const mmio_params = ctx.mmio_params orelse return false;
-    const struct_name = mmio_params.get(base_name) orelse return false;
-    const mmio_structs = ctx.mmio_structs orelse return false;
-    const mmio_struct = mmio_structs.get(struct_name) orelse return false;
-    return mmio_struct.fields.contains(member.name.text);
+    const mmio_params = ctx.mmio_params orelse return null;
+    const struct_name = mmio_params.get(base_name) orelse return null;
+    const mmio_structs = ctx.mmio_structs orelse return null;
+    const mmio_struct = mmio_structs.get(struct_name) orelse return null;
+    return mmio_struct.fields.get(member.name.text);
 }
 
 fn isAssignableTarget(target: ast.Expr) bool {
     return switch (target.kind) {
         .ident => true,
-        .deref => |inner| isAssignableTarget(inner.*),
+        .deref => |inner| isAssignableDerefOperand(inner.*),
         .index => |node| isAssignableTarget(node.base.*),
         .member => |node| isAssignableTarget(node.base.*),
         .grouped => |inner| isAssignableTarget(inner.*),
         else => false,
     };
+}
+
+fn isAssignableDerefOperand(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .call => |node| isRawManyOffsetCallSyntax(node),
+        .grouped => |inner| isAssignableDerefOperand(inner.*),
+        else => isAssignableTarget(expr),
+    };
+}
+
+fn isRawManyOffsetCallSyntax(call: anytype) bool {
+    if (call.type_args.len != 0 or call.args.len != 1) return false;
+    const member = switch (call.callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| switch (inner.kind) {
+            .member => |node| node,
+            else => return false,
+        },
+        else => return false,
+    };
+    return std.mem.eql(u8, member.name.text, "offset");
 }
 
 fn constStorageBase(expr: ast.Expr, ctx: Context) bool {
@@ -2273,6 +3902,7 @@ fn constStorageBase(expr: ast.Expr, ctx: Context) bool {
         .deref => |inner| constStorageBase(inner.*, ctx),
         .index => |node| constStorageBase(node.base.*, ctx),
         .member => |node| constStorageBase(node.base.*, ctx),
+        .call => |node| if (rawManyOffsetReturnType(node, ctx)) |ty| isConstStorageType(ty) else false,
         .grouped => |inner| constStorageBase(inner.*, ctx),
         else => false,
     };
@@ -2311,6 +3941,7 @@ fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
             if (binding) |entry| return entry.ty;
             return globalType(ident.text, ctx);
         },
+        .call => |node| rawManyOffsetReturnType(node, ctx),
         .grouped => |inner| exprStorageType(inner.*, ctx),
         else => null,
     };
@@ -2324,12 +3955,12 @@ fn globalType(name: []const u8, ctx: Context) ?ast.TypeExpr {
 
 fn globalClass(name: []const u8, ctx: Context) ?TypeClass {
     const ty = globalType(name, ctx) orelse return null;
-    return classifyType(ty);
+    return classifyTypeCtx(ty, ctx);
 }
 
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |node| if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .call => |node| rawManyOffsetReturnType(node, ctx) orelse atomicCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .try_expr => |inner| tryPayloadType(inner.*, ctx),
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),
@@ -2338,6 +3969,33 @@ fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .grouped => |inner| exprResultType(inner.*, ctx),
         else => exprStorageType(expr, ctx),
     };
+}
+
+fn rawManyOffsetReturnType(call: anytype, ctx: Context) ?ast.TypeExpr {
+    if (call.type_args.len != 0) return null;
+    const member = switch (call.callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| switch (inner.kind) {
+            .member => |node| node,
+            else => return null,
+        },
+        else => return null,
+    };
+    if (!std.mem.eql(u8, member.name.text, "offset")) return null;
+    const base_ty = exprResultType(member.base.*, ctx) orelse return null;
+    return if (isRawManyPointerTypeCtx(base_ty, ctx)) base_ty else null;
+}
+
+fn isRawManyPointerType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .raw_many_pointer => true,
+        .qualified => |node| isRawManyPointerType(node.child.*),
+        else => false,
+    };
+}
+
+fn isRawManyPointerTypeCtx(ty: ast.TypeExpr, ctx: Context) bool {
+    return isRawManyPointerType(resolveAliasType(ty, ctx));
 }
 
 fn assignmentTargetType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
@@ -2387,7 +4045,7 @@ fn structFieldType(base_ty: ast.TypeExpr, field_name: []const u8, ctx: Context) 
 fn directCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
     const function = directCallFunction(callee, ctx) orelse return null;
     const return_ty = function.return_ty orelse return .void;
-    return classifyType(return_ty);
+    return classifyTypeCtx(return_ty, ctx);
 }
 
 fn directCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
@@ -2465,7 +4123,17 @@ fn localStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
 fn indexedLocalArrayStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
     const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
     if (!isArrayType(ty)) return null;
-    return localStorageRoot(expr, ctx);
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| {
+                if (entry.origin == .local or entry.origin == .param) return expr.span;
+            }
+            return null;
+        },
+        .grouped => |inner| indexedLocalArrayStorageRoot(inner.*, ctx),
+        else => localStorageRoot(expr, ctx),
+    };
 }
 
 fn isConstStorageType(ty: ast.TypeExpr) bool {
@@ -2506,13 +4174,77 @@ fn viewType(ty: ast.TypeExpr) ?ViewType {
     };
 }
 
+fn pointerComparableTypes(left: ast.TypeExpr, right: ast.TypeExpr) bool {
+    const left_view = viewType(left) orelse return false;
+    const right_view = viewType(right) orelse return false;
+    if (left_view.kind != right_view.kind) return false;
+    const left_child = viewElementType(left) orelse return false;
+    const right_child = viewElementType(right) orelse return false;
+    return sameTypeSyntax(left_child, right_child);
+}
+
+fn pointerComparableTypesCtx(left: ast.TypeExpr, right: ast.TypeExpr, ctx: Context) bool {
+    const resolved_left = resolveAliasType(left, ctx);
+    const resolved_right = resolveAliasType(right, ctx);
+    const left_view = viewType(resolved_left) orelse return false;
+    const right_view = viewType(resolved_right) orelse return false;
+    if (left_view.kind != right_view.kind) return false;
+    const left_child = viewElementType(resolved_left) orelse return false;
+    const right_child = viewElementType(resolved_right) orelse return false;
+    return sameTypeSyntaxCtx(left_child, right_child, ctx);
+}
+
+fn viewElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .pointer => |node| node.child.*,
+        .raw_many_pointer => |node| node.child.*,
+        .slice => |node| node.child.*,
+        .nullable => |child| viewElementType(child.*),
+        .qualified => |node| viewElementType(node.child.*),
+        else => null,
+    };
+}
+
 fn implicitPointerViewConversion(target: ast.TypeExpr, source: ast.TypeExpr) bool {
     _ = viewType(target) orelse return false;
     _ = viewType(source) orelse return false;
+    if (nullablePointerWidening(target, source)) return false;
     const target_is_c_void = isCVoidPointerClass(classifyType(target));
     const source_is_c_void = isCVoidPointerClass(classifyType(source));
     if (target_is_c_void != source_is_c_void) return false;
     return !sameTypeSyntax(target, source);
+}
+
+fn implicitPointerViewConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {
+    const resolved_target = resolveAliasType(target, ctx);
+    const resolved_source = resolveAliasType(source, ctx);
+    _ = viewType(resolved_target) orelse return false;
+    _ = viewType(resolved_source) orelse return false;
+    if (nullablePointerWideningCtx(resolved_target, resolved_source, ctx)) return false;
+    const target_is_c_void = isCVoidPointerClass(classifyTypeCtx(resolved_target, ctx));
+    const source_is_c_void = isCVoidPointerClass(classifyTypeCtx(resolved_source, ctx));
+    if (target_is_c_void != source_is_c_void) return false;
+    return !sameTypeSyntaxCtx(resolved_target, resolved_source, ctx);
+}
+
+fn nullablePointerWidening(target: ast.TypeExpr, source: ast.TypeExpr) bool {
+    const target_view = viewType(target) orelse return false;
+    const source_view = viewType(source) orelse return false;
+    if (!target_view.nullable or source_view.nullable) return false;
+    if (target_view.kind != source_view.kind or target_view.mutability != source_view.mutability) return false;
+    const target_child = nullableInnerType(target) orelse return false;
+    return sameTypeSyntax(target_child, source);
+}
+
+fn nullablePointerWideningCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {
+    const resolved_target = resolveAliasType(target, ctx);
+    const resolved_source = resolveAliasType(source, ctx);
+    const target_view = viewType(resolved_target) orelse return false;
+    const source_view = viewType(resolved_source) orelse return false;
+    if (!target_view.nullable or source_view.nullable) return false;
+    if (target_view.kind != source_view.kind or target_view.mutability != source_view.mutability) return false;
+    const target_child = nullableInnerType(resolved_target) orelse return false;
+    return sameTypeSyntaxCtx(target_child, resolved_source, ctx);
 }
 
 fn implicitCVoidPointerConversion(target: ast.TypeExpr, source: ast.TypeExpr) bool {
@@ -2520,6 +4252,16 @@ fn implicitCVoidPointerConversion(target: ast.TypeExpr, source: ast.TypeExpr) bo
     _ = viewType(source) orelse return false;
     const target_is_c_void = isCVoidPointerClass(classifyType(target));
     const source_is_c_void = isCVoidPointerClass(classifyType(source));
+    return target_is_c_void != source_is_c_void;
+}
+
+fn implicitCVoidPointerConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {
+    const resolved_target = resolveAliasType(target, ctx);
+    const resolved_source = resolveAliasType(source, ctx);
+    _ = viewType(resolved_target) orelse return false;
+    _ = viewType(resolved_source) orelse return false;
+    const target_is_c_void = isCVoidPointerClass(classifyTypeCtx(resolved_target, ctx));
+    const source_is_c_void = isCVoidPointerClass(classifyTypeCtx(resolved_source, ctx));
     return target_is_c_void != source_is_c_void;
 }
 
@@ -2608,6 +4350,10 @@ fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {
     };
 }
 
+fn sameTypeSyntaxCtx(left: ast.TypeExpr, right: ast.TypeExpr, ctx: Context) bool {
+    return sameTypeSyntax(resolveAliasType(left, ctx), resolveAliasType(right, ctx));
+}
+
 fn sameExprSyntax(left: ast.Expr, right: ast.Expr) bool {
     if (std.meta.activeTag(left.kind) != std.meta.activeTag(right.kind)) return false;
     return switch (left.kind) {
@@ -2643,6 +4389,32 @@ fn isMmioRegisterType(ty: ast.TypeExpr) bool {
     };
 }
 
+fn mmioFieldInfoFromType(ty: ast.TypeExpr) ?MmioFieldInfo {
+    const generic = switch (ty.kind) {
+        .generic => |node| node,
+        else => return null,
+    };
+    const access_arg: ast.TypeExpr = if (std.mem.eql(u8, generic.base.text, "Reg") and generic.args.len == 2)
+        generic.args[1]
+    else if (std.mem.eql(u8, generic.base.text, "RegBits") and generic.args.len == 3)
+        generic.args[2]
+    else
+        return null;
+    const access = mmioRegisterAccessFromType(access_arg) orelse return null;
+    return .{ .access = access };
+}
+
+fn mmioRegisterAccessFromType(ty: ast.TypeExpr) ?MmioRegisterAccess {
+    const name = switch (ty.kind) {
+        .enum_literal => |literal| literal.text,
+        else => return null,
+    };
+    if (std.mem.eql(u8, name, "read")) return .read;
+    if (std.mem.eql(u8, name, "write")) return .write;
+    if (std.mem.eql(u8, name, "read_write")) return .read_write;
+    return null;
+}
+
 fn mmioPointee(ty: ast.TypeExpr) ?[]const u8 {
     const generic = switch (ty.kind) {
         .generic => |node| node,
@@ -2658,6 +4430,10 @@ fn typeName(ty: ast.TypeExpr) ?[]const u8 {
         .qualified => |node| typeName(node.child.*),
         else => null,
     };
+}
+
+fn simpleNameType(name: []const u8, span: diagnostics.Span) ast.TypeExpr {
+    return .{ .span = span, .kind = .{ .name = .{ .text = name, .span = span } } };
 }
 
 fn uncheckedRequirement(expr: ast.Expr) ?ContractKind {
@@ -2684,8 +4460,69 @@ fn isUnsafeOperationCall(callee: ast.Expr) bool {
     };
 }
 
+fn isBuiltinNamespaceMember(member: anytype) bool {
+    const base = switch (member.base.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| switch (inner.kind) {
+            .ident => |ident| ident.text,
+            else => return false,
+        },
+        else => return false,
+    };
+    if (std.mem.eql(u8, base, "raw")) return std.mem.eql(u8, member.name.text, "store");
+    if (std.mem.eql(u8, base, "mmio")) return std.mem.eql(u8, member.name.text, "map");
+    if (std.mem.eql(u8, base, "unchecked")) return std.mem.eql(u8, member.name.text, "add");
+    if (std.mem.eql(u8, base, "wrapping")) return std.mem.eql(u8, member.name.text, "add");
+    if (std.mem.eql(u8, base, "compiler")) return std.mem.eql(u8, member.name.text, "assume_noalias_unchecked");
+    if (std.mem.eql(u8, base, "cpu")) return std.mem.eql(u8, member.name.text, "pause");
+    if (std.mem.eql(u8, base, "atomic")) return std.mem.eql(u8, member.name.text, "init");
+    if (std.mem.eql(u8, base, "cache")) return std.mem.eql(u8, member.name.text, "clean") or std.mem.eql(u8, member.name.text, "invalidate");
+    return false;
+}
+
+fn isBuiltinFunctionName(name: []const u8) bool {
+    if (std.mem.eql(u8, name, "trap")) return true;
+    if (std.mem.eql(u8, name, "unwrap")) return true;
+    if (std.mem.eql(u8, name, "bitcast")) return true;
+    if (std.mem.eql(u8, name, "phys")) return true;
+    if (std.mem.eql(u8, name, "ok")) return true;
+    if (std.mem.eql(u8, name, "err")) return true;
+    if (std.mem.eql(u8, name, "size_of")) return true;
+    if (std.mem.eql(u8, name, "sizeof")) return true;
+    if (std.mem.eql(u8, name, "alignof")) return true;
+    if (std.mem.eql(u8, name, "field_offset")) return true;
+    if (std.mem.eql(u8, name, "field_type")) return true;
+    if (std.mem.eql(u8, name, "bit_offset")) return true;
+    if (std.mem.eql(u8, name, "repr_of")) return true;
+    return false;
+}
+
+fn isBitcastCallName(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, "bitcast"),
+        .grouped => |inner| isBitcastCallName(inner.*),
+        else => false,
+    };
+}
+
 fn isComptimeForbiddenCall(callee: ast.Expr) bool {
-    return isUnsafeOperationCall(callee);
+    return isUnsafeOperationCall(callee) or isCpuPauseCall(callee);
+}
+
+fn isCpuPauseCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |node| isIdentNamed(node.base.*, "cpu") and std.mem.eql(u8, node.name.text, "pause"),
+        .grouped => |inner| isCpuPauseCall(inner.*),
+        else => false,
+    };
+}
+
+fn isFalseLiteral(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .bool_literal => |value| !value,
+        .grouped => |inner| isFalseLiteral(inner.*),
+        else => false,
+    };
 }
 
 const ReflectionKind = enum {
@@ -2759,6 +4596,79 @@ fn isPrimitiveLayoutType(name: []const u8) bool {
     return classifyTypeName(name) != .unknown;
 }
 
+fn isKnownTypeName(name: []const u8, ctx: Context) bool {
+    if (classifyTypeName(name) != .unknown) return true;
+    if (std.mem.eql(u8, name, "Error")) return true;
+    if (std.mem.eql(u8, name, "AmbiguousSerialOrder")) return true;
+    if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return true;
+    if (std.mem.eql(u8, name, "ConversionError")) return true;
+    if (std.mem.eql(u8, name, "c_void")) return true;
+    if (knownStructName(name, ctx)) return true;
+    if (knownPackedBitsName(name, ctx)) return true;
+    if (knownOverlayUnionName(name, ctx)) return true;
+    if (knownTaggedUnionName(name, ctx)) return true;
+    if (knownEnumName(name, ctx)) return true;
+    if (ctx.type_aliases) |type_aliases| {
+        if (type_aliases.contains(name)) return true;
+    }
+    return false;
+}
+
+fn isKnownGenericTypeName(name: []const u8) bool {
+    if (classifyGenericTypeName(name) != .unknown) return true;
+    if (std.mem.eql(u8, name, "Reg")) return true;
+    if (std.mem.eql(u8, name, "RegBits")) return true;
+    if (std.mem.eql(u8, name, "DmaBuf")) return true;
+    if (std.mem.eql(u8, name, "MaybeUninit")) return true;
+    if (std.mem.eql(u8, name, "atomic")) return true;
+    return false;
+}
+
+fn isArithmeticDomainTypeName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "wrap") or
+        std.mem.eql(u8, name, "sat") or
+        std.mem.eql(u8, name, "serial") or
+        std.mem.eql(u8, name, "counter");
+}
+
+fn genericHasStoragePayload(name: []const u8) bool {
+    return std.mem.eql(u8, name, "MaybeUninit") or
+        std.mem.eql(u8, name, "atomic") or
+        std.mem.eql(u8, name, "UserPtr") or
+        std.mem.eql(u8, name, "MmioPtr") or
+        std.mem.eql(u8, name, "PhysPtr") or
+        std.mem.eql(u8, name, "DmaBuf");
+}
+
+fn isFixedUnsignedMmioWidth(ty: ast.TypeExpr) bool {
+    const name = typeName(ty) orelse return false;
+    return std.mem.eql(u8, name, "u8") or
+        std.mem.eql(u8, name, "u16") or
+        std.mem.eql(u8, name, "u32") or
+        std.mem.eql(u8, name, "u64");
+}
+
+fn isPackedBitsTypeName(ty: ast.TypeExpr, ctx: Context) bool {
+    const name = typeName(ty) orelse return false;
+    return knownPackedBitsName(name, ctx);
+}
+
+fn isMmioAccessMode(mode: []const u8) bool {
+    return std.mem.eql(u8, mode, "read") or
+        std.mem.eql(u8, mode, "write") or
+        std.mem.eql(u8, mode, "read_write");
+}
+
+fn isDmaBufMode(mode: []const u8) bool {
+    return std.mem.eql(u8, mode, "coherent") or
+        std.mem.eql(u8, mode, "noncoherent");
+}
+
+fn knownMmioStructName(name: []const u8, ctx: Context) bool {
+    const mmio_structs = ctx.mmio_structs orelse return false;
+    return mmio_structs.contains(name);
+}
+
 fn knownStructName(name: []const u8, ctx: Context) bool {
     const structs = ctx.structs orelse return false;
     return structs.contains(name);
@@ -2767,6 +4677,12 @@ fn knownStructName(name: []const u8, ctx: Context) bool {
 fn knownPackedBitsName(name: []const u8, ctx: Context) bool {
     const packed_bits = ctx.packed_bits orelse return false;
     return packed_bits.contains(name);
+}
+
+fn packedBitsInfoForType(ty: ast.TypeExpr, ctx: Context) ?LayoutFieldInfo {
+    const name = typeName(ty) orelse return null;
+    const packed_bits = ctx.packed_bits orelse return null;
+    return packed_bits.get(name);
 }
 
 fn knownOverlayUnionName(name: []const u8, ctx: Context) bool {
@@ -2798,7 +4714,7 @@ fn knownEnumName(name: []const u8, ctx: Context) bool {
 }
 
 fn isKnownLayoutGeneric(node: anytype, ctx: Context) bool {
-    const expected = reflectionGenericExpectedArgs(node.base.text) orelse return false;
+    const expected = genericTypeExpectedArgs(node.base.text) orelse return false;
     if (node.args.len != expected) return false;
     for (node.args) |arg| {
         if (arg.kind == .enum_literal) continue;
@@ -2809,24 +4725,27 @@ fn isKnownLayoutGeneric(node: anytype, ctx: Context) bool {
 
 fn reflectionGenericHasWrongArity(ty: ast.TypeExpr) bool {
     return switch (ty.kind) {
-        .generic => |node| if (reflectionGenericExpectedArgs(node.base.text)) |expected| node.args.len != expected else false,
+        .generic => |node| if (genericTypeExpectedArgs(node.base.text)) |expected| node.args.len != expected else false,
         .qualified => |node| reflectionGenericHasWrongArity(node.child.*),
         else => false,
     };
 }
 
-fn reflectionGenericExpectedArgs(name: []const u8) ?usize {
+fn genericTypeExpectedArgs(name: []const u8) ?usize {
     if (std.mem.eql(u8, name, "Reg")) return 2;
     if (std.mem.eql(u8, name, "RegBits")) return 3;
     if (std.mem.eql(u8, name, "MmioPtr")) return 1;
     if (std.mem.eql(u8, name, "UserPtr")) return 1;
     if (std.mem.eql(u8, name, "PhysPtr")) return 1;
     if (std.mem.eql(u8, name, "DmaBuf")) return 2;
+    if (std.mem.eql(u8, name, "MaybeUninit")) return 1;
+    if (std.mem.eql(u8, name, "atomic")) return 1;
     if (std.mem.eql(u8, name, "Result")) return 2;
     if (std.mem.eql(u8, name, "wrap")) return 1;
     if (std.mem.eql(u8, name, "sat")) return 1;
     if (std.mem.eql(u8, name, "serial")) return 1;
     if (std.mem.eql(u8, name, "counter")) return 1;
+    if (std.mem.eql(u8, name, "Duration")) return 1;
     return null;
 }
 
@@ -2910,7 +4829,10 @@ fn switchMayFallThrough(node: ast.Switch, ctx: Context) bool {
     var has_wildcard = false;
     var has_result_ok = false;
     var has_result_err = false;
-    const subject_is_result = if (exprResultType(node.subject, ctx)) |ty| classifyType(ty) == .result else false;
+    var has_bool_true = false;
+    var has_bool_false = false;
+    const subject_is_result = if (exprResultType(node.subject, ctx)) |ty| classifyTypeCtx(ty, ctx) == .result else false;
+    const subject_is_bool = if (exprResultType(node.subject, ctx)) |ty| classifyTypeCtx(ty, ctx) == .bool else false;
     const closed_enum = if (exprResultType(node.subject, ctx)) |ty| closedEnumInfoForType(ty, ctx) else null;
     const tagged_union = if (exprResultType(node.subject, ctx)) |ty| unionInfoForType(ty, ctx) else null;
     for (node.arms) |arm| {
@@ -2926,7 +4848,18 @@ fn switchMayFallThrough(node: ast.Switch, ctx: Context) bool {
                     if (subject_is_result and std.mem.eql(u8, tag, "ok")) has_result_ok = true;
                     if (subject_is_result and std.mem.eql(u8, tag, "err")) has_result_err = true;
                 },
-                .literal, .bind => {},
+                .literal => {
+                    if (subject_is_bool) {
+                        if (switchBoolLiteralValue(pattern)) |value| {
+                            if (value) {
+                                has_bool_true = true;
+                            } else {
+                                has_bool_false = true;
+                            }
+                        }
+                    }
+                },
+                .bind => {},
             }
         }
         if (switchBodyMayFallThrough(arm.body, ctx)) return true;
@@ -2937,7 +4870,25 @@ fn switchMayFallThrough(node: ast.Switch, ctx: Context) bool {
     if (tagged_union) |union_info| {
         return !has_wildcard and !switchCoversAllUnionCases(node, union_info);
     }
+    if (subject_is_bool) {
+        return !has_wildcard and !(has_bool_true and has_bool_false);
+    }
     return !has_wildcard and !(has_result_ok and has_result_err);
+}
+
+fn switchBoolLiteralValue(pattern: ast.Pattern) ?bool {
+    return switch (pattern.kind) {
+        .literal => |expr| boolLiteralValue(expr),
+        else => null,
+    };
+}
+
+fn boolLiteralValue(expr: ast.Expr) ?bool {
+    return switch (expr.kind) {
+        .bool_literal => |value| value,
+        .grouped => |inner| boolLiteralValue(inner.*),
+        else => null,
+    };
 }
 
 fn switchCoversAllEnumCases(node: ast.Switch, enum_info: EnumInfo) bool {
@@ -3070,12 +5021,12 @@ fn resultLocalHasPendingValueBefore(name: []const u8, stmts: []const ast.Stmt, c
                 if (!localDeclaresName(local, name)) continue;
                 const local_ty = local.ty orelse if (local.init) |expr| exprResultType(expr, ctx) else null;
                 const ty = local_ty orelse continue;
-                if (classifyType(ty) == .result and local.init != null) pending = true;
+                if (classifyTypeCtx(ty, ctx) == .result and local.init != null) pending = true;
             },
             .assignment => |assignment| {
                 if (!exprIsIdentNamed(assignment.target, name)) continue;
                 const value_ty = exprResultType(assignment.value, ctx) orelse continue;
-                pending = classifyType(value_ty) == .result;
+                pending = classifyTypeCtx(value_ty, ctx) == .result;
             },
             else => {},
         }
@@ -3090,7 +5041,7 @@ fn assignmentResultLocalName(target: ast.Expr, ctx: Context) ?ast.Ident {
             const binding = scope.get(ident.text) orelse return null;
             if (binding.origin != .local or !binding.mutable) return null;
             const ty = binding.ty orelse return null;
-            if (classifyType(ty) != .result) return null;
+            if (classifyTypeCtx(ty, ctx) != .result) return null;
             return ident;
         },
         .grouped => |inner| assignmentResultLocalName(inner.*, ctx),
@@ -3110,13 +5061,66 @@ fn stmtHandlesResultLocal(name: []const u8, stmt: ast.Stmt) bool {
         .let_decl, .var_decl => |local| if (local.init) |expr| exprHandlesResultLocal(name, expr) else false,
         .loop => |node| if (node.iterable) |iterable| exprHandlesResultLocal(name, iterable) else false,
         .if_let => |node| resultIfLetHandlesLocal(name, node) or exprHandlesResultLocal(name, node.value),
-        .@"switch" => |node| exprIsIdentNamed(node.subject, name) or exprHandlesResultLocal(name, node.subject),
-        .unsafe_block, .comptime_block, .block => false,
-        .contract_block => false,
+        .@"switch" => |node| resultSwitchHandlesLocal(name, node) or exprHandlesResultLocal(name, node.subject),
+        .unsafe_block, .comptime_block, .block => |block| blockHandlesResultLocal(name, block),
+        .contract_block => |contract| blockHandlesResultLocal(name, contract.block),
         .@"return" => |maybe| if (maybe) |expr| exprHandlesResultLocal(name, expr) else false,
         .@"break", .@"continue", .asm_stmt => false,
         .@"defer", .expr, .assert => |expr| exprHandlesResultLocal(name, expr),
         .assignment => |node| exprHandlesResultLocal(name, node.target) or exprHandlesResultLocal(name, node.value),
+    };
+}
+
+fn blockHandlesResultLocal(name: []const u8, block: ast.Block) bool {
+    for (block.items) |stmt| {
+        if (stmtHandlesResultLocal(name, stmt)) return true;
+    }
+    return false;
+}
+
+fn stmtTerminatesNormally(stmt: ast.Stmt) bool {
+    return switch (stmt.kind) {
+        .@"return", .@"break", .@"continue", .asm_stmt => true,
+        .expr => |expr| exprTerminatesNormally(expr),
+        .block, .unsafe_block, .comptime_block => |block| blockTerminatesNormally(block),
+        .contract_block => |contract| blockTerminatesNormally(contract.block),
+        .if_let => |node| node.else_block != null and
+            blockTerminatesNormally(node.then_block) and
+            blockTerminatesNormally(node.else_block.?),
+        .@"switch" => |node| switchTerminatesNormally(node),
+        else => false,
+    };
+}
+
+fn blockTerminatesNormally(block: ast.Block) bool {
+    for (block.items) |stmt| {
+        if (stmtTerminatesNormally(stmt)) return true;
+    }
+    return false;
+}
+
+fn switchTerminatesNormally(node: ast.Switch) bool {
+    var has_wildcard = false;
+    for (node.arms) |arm| {
+        for (arm.patterns) |pattern| {
+            if (pattern.kind == .wildcard) has_wildcard = true;
+        }
+        const body_terminates = switch (arm.body) {
+            .block => |block| blockTerminatesNormally(block),
+            .expr => |expr| exprTerminatesNormally(expr),
+        };
+        if (!body_terminates) return false;
+    }
+    return has_wildcard;
+}
+
+fn exprTerminatesNormally(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .unreachable_expr => true,
+        .grouped => |inner| exprTerminatesNormally(inner.*),
+        .call => |node| isTrapCall(node.callee.*),
+        .block => |block| blockTerminatesNormally(block),
+        else => false,
     };
 }
 
@@ -3128,11 +5132,35 @@ fn resultIfLetHandlesLocal(name: []const u8, node: ast.IfLet) bool {
     };
 }
 
+fn resultSwitchHandlesLocal(name: []const u8, node: ast.Switch) bool {
+    if (!exprIsIdentNamed(node.subject, name)) return false;
+    var has_wildcard = false;
+    var has_ok = false;
+    var has_err = false;
+    for (node.arms) |arm| {
+        for (arm.patterns) |pattern| {
+            switch (pattern.kind) {
+                .wildcard => has_wildcard = true,
+                .tag => |tag| {
+                    if (std.mem.eql(u8, tag.text, "ok")) has_ok = true;
+                    if (std.mem.eql(u8, tag.text, "err")) has_err = true;
+                },
+                .tag_bind => |tag_bind| {
+                    if (std.mem.eql(u8, tag_bind.tag.text, "ok")) has_ok = true;
+                    if (std.mem.eql(u8, tag_bind.tag.text, "err")) has_err = true;
+                },
+                .literal, .bind => {},
+            }
+        }
+    }
+    return has_wildcard or (has_ok and has_err);
+}
+
 fn exprHandlesResultLocal(name: []const u8, expr: ast.Expr) bool {
     return switch (expr.kind) {
         .try_expr => |inner| exprIsIdentNamed(inner.*, name) or exprHandlesResultLocal(name, inner.*),
         .grouped, .address_of, .deref => |inner| exprHandlesResultLocal(name, inner.*),
-        .block => false,
+        .block => |block| blockHandlesResultLocal(name, block),
         .unary => |node| exprHandlesResultLocal(name, node.expr.*),
         .binary => |node| exprHandlesResultLocal(name, node.left.*) or exprHandlesResultLocal(name, node.right.*),
         .cast => |node| exprHandlesResultLocal(name, node.value.*),
@@ -3215,7 +5243,7 @@ fn exprContainsDeferControlFlow(expr: ast.Expr, ctx: Context) bool {
         .call => |node| callContainsDeferControlFlow(node, ctx),
         .index => |node| exprContainsDeferControlFlow(node.base.*, ctx) or exprContainsDeferControlFlow(node.index.*, ctx),
         .member => |node| exprContainsDeferControlFlow(node.base.*, ctx),
-        else => if (exprResultType(expr, ctx)) |ty| classifyType(ty) == .never else false,
+        else => if (exprResultType(expr, ctx)) |ty| classifyTypeCtx(ty, ctx) == .never else false,
     };
 }
 

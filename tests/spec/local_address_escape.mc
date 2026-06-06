@@ -110,6 +110,11 @@ fn reject_return_local_array_element_address(i: usize) -> *mut u32 {
     return &xs[i];
 }
 
+fn reject_return_array_param_element_address(xs: [4]u32, i: usize) -> *mut u32 {
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return &xs[i];
+}
+
 fn reject_return_local_pointer_to_var() -> *mut u32 {
     var x: u32 = 1;
     let p: *mut u32 = &x;

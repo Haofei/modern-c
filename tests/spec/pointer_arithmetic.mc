@@ -2,14 +2,46 @@
 // SPEC: milestone=single-object-pointer-arithmetic
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_POINTER_ARITH_SINGLE_OBJECT
+// SPEC: check=E_POINTER_ARITH_SINGLE_OBJECT,E_NO_IMPLICIT_POINTER_CONVERSION,E_POINTER_ORDERING
 
 fn accept_pointer_equality(a: *mut u8, b: *mut u8) -> bool {
     return a == b;
 }
 
+fn accept_pointer_const_equality(a: *mut u8, b: *const u8) -> bool {
+    return a == b;
+}
+
+fn accept_nullable_pointer_equality(a: ?*mut u8, b: *mut u8) -> bool {
+    return a != b;
+}
+
+fn accept_pointer_null_comparison(p: *mut u8) -> bool {
+    return p != null;
+}
+
 fn accept_c_void_pointer_equality(a: *mut c_void, b: *mut c_void) -> bool {
     return a == b;
+}
+
+fn reject_pointer_element_type_equality(a: *mut u8, b: *mut u16) -> bool {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return a == b;
+}
+
+fn reject_pointer_raw_many_equality(a: *mut u8, b: [*]mut u8) -> bool {
+    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+    return a == b;
+}
+
+fn reject_pointer_ordering(a: *mut u8, b: *mut u8) -> bool {
+    // EXPECT_ERROR: E_POINTER_ORDERING
+    return a < b;
+}
+
+fn reject_nullable_pointer_ordering(a: ?*mut u8, b: ?*mut u8) -> bool {
+    // EXPECT_ERROR: E_POINTER_ORDERING
+    return a < b;
 }
 
 fn reject_pointer_plus_int(p: *mut u32, n: usize) -> *mut u32 {

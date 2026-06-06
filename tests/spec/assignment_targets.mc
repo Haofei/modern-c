@@ -26,11 +26,19 @@ extern struct Packet {
     ptr: *mut u8,
 }
 
+struct PlainPacket {
+    value: u32,
+}
+
 fn accept_storage_assignment_targets(p: *mut u32, xs: []mut u32, i: usize, packet: Packet, value: u32) -> void {
     p.* = value;
     xs[i] = value;
     var local: Packet = packet;
     local.value = value;
+}
+
+fn accept_plain_struct_member_read(packet: PlainPacket) -> u32 {
+    return packet.value;
 }
 
 fn accept_member_read(packet: Packet) -> u32 {

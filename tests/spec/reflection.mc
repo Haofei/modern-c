@@ -2,7 +2,7 @@
 // SPEC: milestone=comptime-reflection
 // SPEC: phase=parse,sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_UNKNOWN_STRUCT_FIELD,E_REFLECTION_FIELD_LITERAL,E_REFLECTION_TYPE_ARG,E_REFLECTION_GENERIC_ARG_COUNT,E_CALL_ARG_COUNT,E_REFLECTION_UNKNOWN_TYPE,E_C_VOID_NO_LAYOUT
+// SPEC: check=E_UNKNOWN_STRUCT_FIELD,E_REFLECTION_FIELD_LITERAL,E_REFLECTION_TYPE_ARG,E_REFLECTION_GENERIC_ARG_COUNT,E_CALL_ARG_COUNT,E_REFLECTION_UNKNOWN_TYPE,E_C_VOID_NO_LAYOUT,E_DMA_BUF_MODE
 
 extern struct Packet {
     len: u16,
@@ -41,6 +41,10 @@ fn accept_spec_sizeof_generic() -> usize {
 
 fn accept_spec_sizeof_dma_buf() -> usize {
     return sizeof(DmaBuf<Packet, .noncoherent>);
+}
+
+fn accept_spec_sizeof_coherent_dma_buf() -> usize {
+    return sizeof(DmaBuf<Packet, .coherent>);
 }
 
 fn accept_spec_sizeof_pointer() -> usize {
@@ -142,6 +146,16 @@ fn reject_dma_buf_missing_mode() -> usize {
 fn reject_dma_buf_extra_typestate_for_section22() -> usize {
     // EXPECT_ERROR: E_REFLECTION_GENERIC_ARG_COUNT
     return sizeof(DmaBuf<Packet, .noncoherent, .cpu_owned>);
+}
+
+fn reject_dma_buf_non_literal_mode() -> usize {
+    // EXPECT_ERROR: E_DMA_BUF_MODE
+    return sizeof(DmaBuf<Packet, bool>);
+}
+
+fn reject_dma_buf_unknown_mode() -> usize {
+    // EXPECT_ERROR: E_DMA_BUF_MODE
+    return sizeof(DmaBuf<Packet, .bogus>);
 }
 
 fn reject_user_ptr_extra_arg() -> usize {

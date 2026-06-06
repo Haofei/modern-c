@@ -96,8 +96,7 @@ fn reject_slice_element_type_mismatch(xs: []mut u8) -> []mut u16 {
     return ys;
 }
 
-fn reject_nonnull_to_nullable_pointer(p: *mut u32) -> ?*mut u32 {
-    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+fn accept_nonnull_to_nullable_pointer(p: *mut u32) -> ?*mut u32 {
     let q: ?*mut u32 = p;
     return q;
 }

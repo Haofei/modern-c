@@ -2,7 +2,7 @@
 // SPEC: milestone=tagged-union-declarations
 // SPEC: phase=parse,sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_DUPLICATE_UNION_CASE,E_REFLECTION_UNKNOWN_TYPE,E_UNKNOWN_UNION_CASE,E_UNION_CASE_HAS_NO_PAYLOAD,E_DUPLICATE_SWITCH_CASE,E_RETURN_TYPE_MISMATCH,E_RETURN_MISSING
+// SPEC: check=E_DUPLICATE_UNION_CASE,E_REFLECTION_UNKNOWN_TYPE,E_UNKNOWN_UNION_CASE,E_UNION_CASE_HAS_NO_PAYLOAD,E_DUPLICATE_SWITCH_CASE,E_RETURN_TYPE_MISMATCH,E_RETURN_MISSING,E_CALL_ARG_COUNT,E_NO_IMPLICIT_CONVERSION,E_UNKNOWN_FUNCTION
 
 union Token {
     int: i64,
@@ -32,6 +32,14 @@ fn accept_union_payloadless_tag(token: Token) -> u32 {
         .ident => { return 2; },
         .eof => { return 0; },
     }
+}
+
+fn accept_union_payload_constructor() -> Token {
+    return int(7);
+}
+
+fn accept_union_payloadless_constructor() -> Token {
+    return eof();
 }
 
 union RejectDuplicateUnionCase {
@@ -74,6 +82,14 @@ fn reject_duplicate_union_switch_case(token: Token) -> u32 {
     }
 }
 
+fn reject_union_switch_case_after_wildcard(token: Token) -> u32 {
+    switch token {
+        _ => { return 0; },
+        // EXPECT_ERROR: E_DUPLICATE_SWITCH_CASE
+        .int => { return 1; },
+    }
+}
+
 fn reject_union_payload_binding_return_type(token: Token) -> u32 {
     switch token {
         int(v) => { return 1; },
@@ -89,4 +105,35 @@ fn reject_union_switch_missing_case_return(token: Token) -> u32 {
         int(v) => { return 1; },
         ident(s) => { return 2; },
     }
+}
+
+fn reject_union_constructor_missing_payload() -> Token {
+    // EXPECT_ERROR: E_CALL_ARG_COUNT
+    return int();
+}
+
+fn reject_union_constructor_extra_payload() -> Token {
+    // EXPECT_ERROR: E_CALL_ARG_COUNT
+    return eof(1);
+}
+
+fn reject_union_constructor_payload_type() -> Token {
+    // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
+    return ident(1);
+}
+
+fn reject_union_constructor_to_integer() -> u32 {
+    // EXPECT_ERROR: E_RETURN_TYPE_MISMATCH
+    return int(1);
+}
+
+fn reject_union_constructor_without_target() -> Token {
+    // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
+    let token = int(1);
+    return eof();
+}
+
+fn reject_unknown_union_constructor_case() -> Token {
+    // EXPECT_ERROR: E_UNKNOWN_FUNCTION
+    return missing(1);
 }

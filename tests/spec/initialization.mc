@@ -2,10 +2,14 @@
 // SPEC: milestone=local-initialization
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_LOCAL_REQUIRES_INITIALIZER,E_UNINIT_REQUIRES_STORAGE
+// SPEC: check=E_LOCAL_REQUIRES_INITIALIZER,E_UNINIT_REQUIRES_STORAGE,E_LITERAL_REQUIRES_TARGET
 
 fn takes_u32(value: u32) -> u32 {
     return value;
+}
+
+extern struct Node {
+    value: u32,
 }
 
 fn accept_initialized_local() -> u32 {
@@ -67,4 +71,19 @@ fn reject_uninit_assignment() -> u32 {
 fn reject_uninit_call_argument() -> u32 {
     // EXPECT_ERROR: E_UNINIT_REQUIRES_STORAGE
     return takes_u32(uninit);
+}
+
+fn reject_targetless_string_literal() -> void {
+    // EXPECT_ERROR: E_LITERAL_REQUIRES_TARGET
+    let text = "hello";
+}
+
+fn reject_targetless_char_literal() -> void {
+    // EXPECT_ERROR: E_LITERAL_REQUIRES_TARGET
+    let ch = 'x';
+}
+
+fn reject_grouped_targetless_char_literal() -> void {
+    // EXPECT_ERROR: E_LITERAL_REQUIRES_TARGET
+    var ch = ('x');
 }

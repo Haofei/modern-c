@@ -2,7 +2,7 @@
 // SPEC: milestone=index-usize
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_INDEX_NOT_USIZE,E_INDEX_BASE_NOT_ARRAY_OR_SLICE,E_RETURN_TYPE_MISMATCH
+// SPEC: check=E_INDEX_NOT_USIZE,E_INDEX_BASE_NOT_ARRAY_OR_SLICE,E_RETURN_TYPE_MISMATCH,E_C_VOID_NO_LAYOUT
 
 extern fn make_u8_slice() -> []const u8;
 
@@ -52,6 +52,7 @@ fn reject_raw_many_index(p: [*]mut u8, i: usize) -> u8 {
     return p[i];
 }
 
+// EXPECT_ERROR: E_C_VOID_NO_LAYOUT
 fn reject_raw_many_c_void_index(p: [*]mut c_void, i: usize) -> c_void {
     // EXPECT_ERROR: E_INDEX_BASE_NOT_ARRAY_OR_SLICE
     return p[i];

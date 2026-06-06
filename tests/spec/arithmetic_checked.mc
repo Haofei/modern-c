@@ -68,3 +68,8 @@ fn reject_policy_mixing(a: u32, b: wrap<u32>) -> u32 {
     // EXPECT_ERROR: E_ARITH_POLICY_MIX
     return a + b;
 }
+
+fn reject_sat_policy_mixing(a: u32, b: sat<u32>) -> u32 {
+    // EXPECT_ERROR: E_ARITH_POLICY_MIX
+    return a + b;
+}

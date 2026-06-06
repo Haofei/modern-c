@@ -2,10 +2,18 @@
 // SPEC: milestone=address-class-deref
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_PADDR_DEREF,E_VADDR_DEREF,E_USER_PTR_DEREF,E_MMIO_PTR_DEREF,E_DMA_ADDR_DEREF,E_PHYS_PTR_DEREF,E_DMA_ADDR_NOT_PADDR,E_DMA_ADDR_NOT_VADDR,E_ADDRESS_CLASS_MISMATCH,E_RETURN_TYPE_MISMATCH
+// SPEC: check=E_PADDR_DEREF,E_VADDR_DEREF,E_USER_PTR_DEREF,E_MMIO_PTR_DEREF,E_DMA_ADDR_DEREF,E_PHYS_PTR_DEREF,E_DMA_ADDR_NOT_PADDR,E_DMA_ADDR_NOT_VADDR,E_ADDRESS_CLASS_MISMATCH,E_ADDRESS_CLASS_OPERATION,E_RETURN_TYPE_MISMATCH
 
 extern fn make_u8_pointer() -> *const u8;
 extern fn takes_paddr(addr: PAddr) -> void;
+
+extern mmio struct Uart16550 {
+    data: Reg<u8, .read>,
+}
+
+extern struct Page {
+    bytes: [4096]u8,
+}
 
 fn accept_direct_virtual_pointer_deref(p: *const u8) -> u8 {
     return p.*;
@@ -84,4 +92,24 @@ fn reject_dma_addr_as_paddr_assignment(addr: DmaAddr, fallback: PAddr) -> void {
 fn reject_dma_addr_as_paddr_call_arg(addr: DmaAddr) -> void {
     // EXPECT_ERROR: E_DMA_ADDR_NOT_PADDR
     takes_paddr(addr);
+}
+
+fn reject_paddr_arithmetic(addr: PAddr, offset: usize) -> PAddr {
+    // EXPECT_ERROR: E_ADDRESS_CLASS_OPERATION
+    return addr + offset;
+}
+
+fn reject_vaddr_ordering(left: VAddr, right: VAddr) -> bool {
+    // EXPECT_ERROR: E_ADDRESS_CLASS_OPERATION
+    return left < right;
+}
+
+fn reject_dma_addr_equality(left: DmaAddr, right: DmaAddr) -> bool {
+    // EXPECT_ERROR: E_ADDRESS_CLASS_OPERATION
+    return left == right;
+}
+
+fn reject_user_ptr_bitwise(ptr: UserPtr<u8>) -> UserPtr<u8> {
+    // EXPECT_ERROR: E_ADDRESS_CLASS_OPERATION
+    return ~ptr;
 }

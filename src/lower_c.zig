@@ -17,6 +17,7 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\#include <stddef.h>
         \\#include <stdalign.h>
         \\#include <string.h>
+        \\#include <limits.h>
         \\
         \\#if defined(__GNUC__) || defined(__clang__)
         \\#define MC_NORETURN __attribute__((noreturn))
@@ -63,83 +64,180 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\    return index;
         \\}
         \\
-        \\MC_UNUSED static inline uint32_t mc_checked_add_u32(uint32_t a, uint32_t b) {
-        \\    uint32_t out;
-        \\    if (__builtin_add_overflow(a, b, &out)) mc_trap_IntegerOverflow();
-        \\    return out;
+        \\#define MC_DEFINE_CHECKED_UNSIGNED(NAME, TYPE, MAXV) \
+        \\MC_UNUSED static inline TYPE mc_checked_add_##NAME(TYPE a, TYPE b) { \
+        \\    TYPE out; \
+        \\    if (__builtin_add_overflow(a, b, &out)) mc_trap_IntegerOverflow(); \
+        \\    return out; \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_sub_##NAME(TYPE a, TYPE b) { \
+        \\    TYPE out; \
+        \\    if (__builtin_sub_overflow(a, b, &out)) mc_trap_IntegerOverflow(); \
+        \\    return out; \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_mul_##NAME(TYPE a, TYPE b) { \
+        \\    TYPE out; \
+        \\    if (__builtin_mul_overflow(a, b, &out)) mc_trap_IntegerOverflow(); \
+        \\    return out; \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_div_##NAME(TYPE a, TYPE b) { \
+        \\    if (b == (TYPE)0) mc_trap_DivideByZero(); \
+        \\    return (TYPE)(a / b); \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_mod_##NAME(TYPE a, TYPE b) { \
+        \\    if (b == (TYPE)0) mc_trap_DivideByZero(); \
+        \\    return (TYPE)(a % b); \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_shl_##NAME(TYPE a, TYPE b) { \
+        \\    if (b >= (TYPE)(sizeof(TYPE) * CHAR_BIT)) mc_trap_InvalidShift(); \
+        \\    if (a > (TYPE)(MAXV >> b)) mc_trap_IntegerOverflow(); \
+        \\    return (TYPE)(a << b); \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_shr_##NAME(TYPE a, TYPE b) { \
+        \\    if (b >= (TYPE)(sizeof(TYPE) * CHAR_BIT)) mc_trap_InvalidShift(); \
+        \\    return (TYPE)(a >> b); \
         \\}
         \\
-        \\MC_UNUSED static inline uint32_t mc_checked_sub_u32(uint32_t a, uint32_t b) {
-        \\    uint32_t out;
-        \\    if (__builtin_sub_overflow(a, b, &out)) mc_trap_IntegerOverflow();
-        \\    return out;
+        \\#define MC_DEFINE_CHECKED_SIGNED(NAME, TYPE, MINV, MAXV) \
+        \\MC_UNUSED static inline TYPE mc_checked_add_##NAME(TYPE a, TYPE b) { \
+        \\    TYPE out; \
+        \\    if (__builtin_add_overflow(a, b, &out)) mc_trap_IntegerOverflow(); \
+        \\    return out; \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_sub_##NAME(TYPE a, TYPE b) { \
+        \\    TYPE out; \
+        \\    if (__builtin_sub_overflow(a, b, &out)) mc_trap_IntegerOverflow(); \
+        \\    return out; \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_mul_##NAME(TYPE a, TYPE b) { \
+        \\    TYPE out; \
+        \\    if (__builtin_mul_overflow(a, b, &out)) mc_trap_IntegerOverflow(); \
+        \\    return out; \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_div_##NAME(TYPE a, TYPE b) { \
+        \\    if (b == (TYPE)0) mc_trap_DivideByZero(); \
+        \\    if (a == (TYPE)(MINV) && b == (TYPE)-1) mc_trap_IntegerOverflow(); \
+        \\    return (TYPE)(a / b); \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_mod_##NAME(TYPE a, TYPE b) { \
+        \\    if (b == (TYPE)0) mc_trap_DivideByZero(); \
+        \\    if (a == (TYPE)(MINV) && b == (TYPE)-1) mc_trap_IntegerOverflow(); \
+        \\    return (TYPE)(a % b); \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_shl_##NAME(TYPE a, TYPE b) { \
+        \\    if (b < (TYPE)0 || b >= (TYPE)(sizeof(TYPE) * CHAR_BIT)) mc_trap_InvalidShift(); \
+        \\    if (a < (TYPE)0) mc_trap_IntegerOverflow(); \
+        \\    if (a > (TYPE)(MAXV >> b)) mc_trap_IntegerOverflow(); \
+        \\    return (TYPE)(a << b); \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_checked_shr_##NAME(TYPE a, TYPE b) { \
+        \\    if (b < (TYPE)0 || b >= (TYPE)(sizeof(TYPE) * CHAR_BIT)) mc_trap_InvalidShift(); \
+        \\    return (TYPE)(a >> b); \
         \\}
         \\
-        \\MC_UNUSED static inline uint32_t mc_checked_mul_u32(uint32_t a, uint32_t b) {
-        \\    uint32_t out;
-        \\    if (__builtin_mul_overflow(a, b, &out)) mc_trap_IntegerOverflow();
-        \\    return out;
+        \\MC_DEFINE_CHECKED_UNSIGNED(u8, uint8_t, UINT8_MAX)
+        \\MC_DEFINE_CHECKED_UNSIGNED(u16, uint16_t, UINT16_MAX)
+        \\MC_DEFINE_CHECKED_UNSIGNED(u32, uint32_t, UINT32_MAX)
+        \\MC_DEFINE_CHECKED_UNSIGNED(u64, uint64_t, UINT64_MAX)
+        \\MC_DEFINE_CHECKED_UNSIGNED(usize, uintptr_t, UINTPTR_MAX)
+        \\MC_DEFINE_CHECKED_SIGNED(i8, int8_t, INT8_MIN, INT8_MAX)
+        \\MC_DEFINE_CHECKED_SIGNED(i16, int16_t, INT16_MIN, INT16_MAX)
+        \\MC_DEFINE_CHECKED_SIGNED(i32, int32_t, INT32_MIN, INT32_MAX)
+        \\MC_DEFINE_CHECKED_SIGNED(i64, int64_t, INT64_MIN, INT64_MAX)
+        \\MC_DEFINE_CHECKED_SIGNED(isize, intptr_t, INTPTR_MIN, INTPTR_MAX)
+        \\
+        \\#define MC_DEFINE_CHECKED_NEG_SIGNED(NAME, TYPE, MINV) \
+        \\MC_UNUSED static inline TYPE mc_checked_neg_##NAME(TYPE a) { \
+        \\    if (a == (TYPE)(MINV)) mc_trap_IntegerOverflow(); \
+        \\    return (TYPE)(-a); \
         \\}
         \\
-        \\MC_UNUSED static inline uint32_t mc_checked_div_u32(uint32_t a, uint32_t b) {
-        \\    if (b == 0u) mc_trap_DivideByZero();
-        \\    return a / b;
+        \\MC_DEFINE_CHECKED_NEG_SIGNED(i8, int8_t, INT8_MIN)
+        \\MC_DEFINE_CHECKED_NEG_SIGNED(i16, int16_t, INT16_MIN)
+        \\MC_DEFINE_CHECKED_NEG_SIGNED(i32, int32_t, INT32_MIN)
+        \\MC_DEFINE_CHECKED_NEG_SIGNED(i64, int64_t, INT64_MIN)
+        \\MC_DEFINE_CHECKED_NEG_SIGNED(isize, intptr_t, INTPTR_MIN)
+        \\
+        \\#define MC_DEFINE_WRAP_SHIFT_UNSIGNED(NAME, TYPE) \
+        \\MC_UNUSED static inline TYPE mc_wrap_shl_##NAME(TYPE a, TYPE b) { \
+        \\    if (b >= (TYPE)(sizeof(TYPE) * CHAR_BIT)) mc_trap_InvalidShift(); \
+        \\    return (TYPE)(a << b); \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_wrap_shr_##NAME(TYPE a, TYPE b) { \
+        \\    if (b >= (TYPE)(sizeof(TYPE) * CHAR_BIT)) mc_trap_InvalidShift(); \
+        \\    return (TYPE)(a >> b); \
         \\}
         \\
-        \\MC_UNUSED static inline uint32_t mc_checked_mod_u32(uint32_t a, uint32_t b) {
-        \\    if (b == 0u) mc_trap_DivideByZero();
-        \\    return a % b;
+        \\#define MC_DEFINE_SAT_UNSIGNED(NAME, TYPE, MAXV) \
+        \\MC_UNUSED static inline TYPE mc_sat_add_##NAME(TYPE a, TYPE b) { \
+        \\    if (a > (TYPE)(MAXV - b)) return (TYPE)MAXV; \
+        \\    return (TYPE)(a + b); \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_sat_sub_##NAME(TYPE a, TYPE b) { \
+        \\    if (a < b) return (TYPE)0; \
+        \\    return (TYPE)(a - b); \
+        \\} \
+        \\MC_UNUSED static inline TYPE mc_sat_mul_##NAME(TYPE a, TYPE b) { \
+        \\    if (b != (TYPE)0 && a > (TYPE)(MAXV / b)) return (TYPE)MAXV; \
+        \\    return (TYPE)(a * b); \
         \\}
         \\
-        \\MC_UNUSED static inline uint32_t mc_checked_shl_u32(uint32_t a, uint32_t b) {
-        \\    if (b >= 32u) mc_trap_InvalidShift();
-        \\    if (a > (UINT32_MAX >> b)) mc_trap_IntegerOverflow();
-        \\    return a << b;
+        \\MC_DEFINE_WRAP_SHIFT_UNSIGNED(u8, uint8_t)
+        \\MC_DEFINE_WRAP_SHIFT_UNSIGNED(u16, uint16_t)
+        \\MC_DEFINE_WRAP_SHIFT_UNSIGNED(u32, uint32_t)
+        \\MC_DEFINE_WRAP_SHIFT_UNSIGNED(u64, uint64_t)
+        \\MC_DEFINE_WRAP_SHIFT_UNSIGNED(usize, uintptr_t)
+        \\MC_DEFINE_SAT_UNSIGNED(u8, uint8_t, UINT8_MAX)
+        \\MC_DEFINE_SAT_UNSIGNED(u16, uint16_t, UINT16_MAX)
+        \\MC_DEFINE_SAT_UNSIGNED(u32, uint32_t, UINT32_MAX)
+        \\MC_DEFINE_SAT_UNSIGNED(u64, uint64_t, UINT64_MAX)
+        \\MC_DEFINE_SAT_UNSIGNED(usize, uintptr_t, UINTPTR_MAX)
+        \\
+        \\#define MC_DEFINE_RACE_SCALAR(NAME, TYPE) \
+        \\MC_UNUSED static inline TYPE mc_race_load_##NAME(TYPE const *p) { \
+        \\    TYPE value; \
+        \\    __atomic_load(p, &value, __ATOMIC_RELAXED); \
+        \\    return value; \
+        \\} \
+        \\MC_UNUSED static inline void mc_race_store_##NAME(TYPE *p, TYPE value) { \
+        \\    __atomic_store(p, &value, __ATOMIC_RELAXED); \
         \\}
         \\
-        \\MC_UNUSED static inline uint32_t mc_checked_shr_u32(uint32_t a, uint32_t b) {
-        \\    if (b >= 32u) mc_trap_InvalidShift();
-        \\    return a >> b;
+        \\MC_DEFINE_RACE_SCALAR(bool, bool)
+        \\MC_DEFINE_RACE_SCALAR(u8, uint8_t)
+        \\MC_DEFINE_RACE_SCALAR(u16, uint16_t)
+        \\MC_DEFINE_RACE_SCALAR(u32, uint32_t)
+        \\MC_DEFINE_RACE_SCALAR(u64, uint64_t)
+        \\MC_DEFINE_RACE_SCALAR(usize, uintptr_t)
+        \\MC_DEFINE_RACE_SCALAR(i8, int8_t)
+        \\MC_DEFINE_RACE_SCALAR(i16, int16_t)
+        \\MC_DEFINE_RACE_SCALAR(i32, int32_t)
+        \\MC_DEFINE_RACE_SCALAR(i64, int64_t)
+        \\MC_DEFINE_RACE_SCALAR(isize, intptr_t)
+        \\
+        \\#define MC_DEFINE_RAW_STORE(NAME, TYPE) \
+        \\MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) { \
+        \\    *((volatile TYPE *)(uintptr_t)addr) = value; \
         \\}
         \\
-        \\MC_UNUSED static inline uint32_t mc_race_load_u32(uint32_t const *p) {
-        \\    uint32_t value;
-        \\    __atomic_load(p, &value, __ATOMIC_RELAXED);
-        \\    return value;
-        \\}
+        \\MC_DEFINE_RAW_STORE(bool, bool)
+        \\MC_DEFINE_RAW_STORE(u8, uint8_t)
+        \\MC_DEFINE_RAW_STORE(u16, uint16_t)
+        \\MC_DEFINE_RAW_STORE(u32, uint32_t)
+        \\MC_DEFINE_RAW_STORE(u64, uint64_t)
+        \\MC_DEFINE_RAW_STORE(usize, uintptr_t)
+        \\MC_DEFINE_RAW_STORE(i8, int8_t)
+        \\MC_DEFINE_RAW_STORE(i16, int16_t)
+        \\MC_DEFINE_RAW_STORE(i32, int32_t)
+        \\MC_DEFINE_RAW_STORE(i64, int64_t)
+        \\MC_DEFINE_RAW_STORE(isize, intptr_t)
         \\
-        \\MC_UNUSED static inline uint8_t mc_race_load_u8(uint8_t const *p) {
-        \\    uint8_t value;
-        \\    __atomic_load(p, &value, __ATOMIC_RELAXED);
-        \\    return value;
-        \\}
-        \\
-        \\MC_UNUSED static inline uint16_t mc_race_load_u16(uint16_t const *p) {
-        \\    uint16_t value;
-        \\    __atomic_load(p, &value, __ATOMIC_RELAXED);
-        \\    return value;
-        \\}
-        \\
-        \\MC_UNUSED static inline uint64_t mc_race_load_u64(uint64_t const *p) {
-        \\    uint64_t value;
-        \\    __atomic_load(p, &value, __ATOMIC_RELAXED);
-        \\    return value;
-        \\}
-        \\
-        \\MC_UNUSED static inline void mc_race_store_u32(uint32_t *p, uint32_t value) {
-        \\    __atomic_store(p, &value, __ATOMIC_RELAXED);
-        \\}
-        \\
-        \\MC_UNUSED static inline void mc_race_store_u8(uint8_t *p, uint8_t value) {
-        \\    __atomic_store(p, &value, __ATOMIC_RELAXED);
-        \\}
-        \\
-        \\MC_UNUSED static inline void mc_race_store_u16(uint16_t *p, uint16_t value) {
-        \\    __atomic_store(p, &value, __ATOMIC_RELAXED);
-        \\}
-        \\
-        \\MC_UNUSED static inline void mc_race_store_u64(uint64_t *p, uint64_t value) {
-        \\    __atomic_store(p, &value, __ATOMIC_RELAXED);
+        \\MC_UNUSED static inline void mc_cpu_pause(void) {
+        \\#if defined(__i386__) || defined(__x86_64__)
+        \\    __asm__ __volatile__("pause" ::: "memory");
+        \\#else
+        \\    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        \\#endif
         \\}
         \\
         \\MC_UNUSED static inline uint8_t mc_mmio_read_u8(uint8_t volatile const *p) {
@@ -175,11 +273,11 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\}
         \\
         \\MC_UNUSED static inline void mc_barrier_release_before(void) {
-        \\    __atomic_signal_fence(__ATOMIC_RELEASE);
+        \\    __atomic_thread_fence(__ATOMIC_RELEASE);
         \\}
         \\
         \\MC_UNUSED static inline void mc_barrier_acquire_after(void) {
-        \\    __atomic_signal_fence(__ATOMIC_ACQUIRE);
+        \\    __atomic_thread_fence(__ATOMIC_ACQUIRE);
         \\}
         \\
     );
@@ -188,11 +286,20 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
     try emitter.emitModule(module);
 }
 
+fn hasTestDiagnosticCode(reporter: diagnostics.Reporter, code: []const u8) bool {
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.startsWith(u8, diag.message, code) and diag.message.len > code.len and diag.message[code.len] == ':') return true;
+    }
+    return false;
+}
+
 const CEmitter = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
+    static_initializers: std.StringHashMap(ast.Expr),
+    type_aliases: std.StringHashMap(ast.TypeExpr),
     functions: std.StringHashMap(FnInfo),
     structs: std.StringHashMap(ast.StructDecl),
     mmio_structs: std.StringHashMap(MmioStruct),
@@ -200,6 +307,7 @@ const CEmitter = struct {
     overlay_unions: std.StringHashMap(OverlayUnionInfo),
     tagged_unions: std.StringHashMap(ast.UnionDecl),
     enums: std.StringHashMap(ast.EnumDecl),
+    array_types: std.StringHashMap(ArrayInfo),
     slice_types: std.StringHashMap(SliceInfo),
     result_types: std.StringHashMap(ResultInfo),
     temp_index: usize,
@@ -211,6 +319,8 @@ const CEmitter = struct {
             .out = out,
             .scratch = std.heap.ArenaAllocator.init(allocator),
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
+            .static_initializers = std.StringHashMap(ast.Expr).init(allocator),
+            .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
@@ -218,6 +328,7 @@ const CEmitter = struct {
             .overlay_unions = std.StringHashMap(OverlayUnionInfo).init(allocator),
             .tagged_unions = std.StringHashMap(ast.UnionDecl).init(allocator),
             .enums = std.StringHashMap(ast.EnumDecl).init(allocator),
+            .array_types = std.StringHashMap(ArrayInfo).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
             .temp_index = 0,
@@ -228,6 +339,7 @@ const CEmitter = struct {
     fn deinit(self: *CEmitter) void {
         self.result_types.deinit();
         self.slice_types.deinit();
+        self.array_types.deinit();
         self.enums.deinit();
         var packed_bits = self.packed_bits.valueIterator();
         while (packed_bits.next()) |bits| bits.fields.deinit();
@@ -241,6 +353,8 @@ const CEmitter = struct {
         self.mmio_structs.deinit();
         self.structs.deinit();
         self.functions.deinit();
+        self.type_aliases.deinit();
+        self.static_initializers.deinit();
         self.globals.deinit();
         self.scratch.deinit();
     }
@@ -249,8 +363,9 @@ const CEmitter = struct {
         defer self.deinit();
         for (module.decls) |decl| {
             switch (decl.kind) {
+                .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .global_decl => |global| {
-                    if (global.ty) |ty| try self.globals.put(global.name.text, globalInfoFromType(ty));
+                    if (global.ty) |ty| try self.globals.put(global.name.text, try self.globalInfoFromType(ty));
                     if (global.ty) |ty| try self.collectTypeArtifacts(ty);
                 },
                 .extern_struct => |struct_decl| {
@@ -265,8 +380,12 @@ const CEmitter = struct {
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
                 .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
                 .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
-                .fn_decl, .extern_fn => |fn_decl| {
-                    try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type });
+                .fn_decl => |fn_decl| {
+                    try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = false });
+                    try self.collectFunctionSliceTypes(fn_decl);
+                },
+                .extern_fn => |fn_decl| {
+                    try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = true });
                     try self.collectFunctionSliceTypes(fn_decl);
                 },
                 else => {},
@@ -275,6 +394,8 @@ const CEmitter = struct {
         try self.emitEnums();
         try self.emitPackedBitsTypes();
         try self.emitOverlayUnionTypes();
+        try self.emitArrayTypes();
+        try self.emitSliceTypes();
         try self.emitTaggedUnionTypes(module);
         for (module.decls) |decl| {
             if (decl.kind == .extern_struct and self.mmio_structs.contains(decl.kind.extern_struct.name.text)) {
@@ -286,7 +407,6 @@ const CEmitter = struct {
                 try self.emitStruct(decl.kind.extern_struct);
             }
         }
-        try self.emitSliceTypes();
         try self.emitResultTypes();
         for (module.decls) |decl| {
             switch (decl.kind) {
@@ -299,27 +419,51 @@ const CEmitter = struct {
     }
 
     fn emitGlobal(self: *CEmitter, global: ast.GlobalDecl) !void {
-        try self.out.appendSlice(self.allocator, "static ");
+        try self.out.appendSlice(self.allocator, "static MC_UNUSED ");
         if (global.ty) |global_ty| {
             try self.emitDeclarator(global_ty, global.name.text);
         } else {
             try self.out.print(self.allocator, "uint32_t {s}", .{global.name.text});
         }
         if (global.init) |initializer| {
-            if (isStaticCInitializer(initializer)) {
+            if (self.staticCInitializer(initializer)) |static_initializer| {
                 try self.out.appendSlice(self.allocator, " = ");
-                try self.emitExpr(initializer, null);
+                if (try self.emitStaticCInitializer(static_initializer)) {
+                    // Emitted directly.
+                } else if (global.ty) |global_ty| {
+                    try self.emitExprWithTarget(static_initializer, null, global_ty);
+                } else {
+                    try self.emitExpr(static_initializer, null);
+                }
+                try self.static_initializers.put(global.name.text, static_initializer);
+            } else if (global.ty != null and isArrayLiteralExpr(initializer)) {
+                try self.out.appendSlice(self.allocator, " = ");
+                try self.emitExprWithTarget(initializer, null, global.ty.?);
+            } else if (global.ty != null and isStructLiteralExpr(initializer)) {
+                try self.out.appendSlice(self.allocator, " = ");
+                try self.emitExprWithTarget(initializer, null, global.ty.?);
             } else if (global.ty != null and global.ty.?.kind == .array) {
-                try self.out.appendSlice(self.allocator, " = {0}");
+                try self.out.appendSlice(self.allocator, "/* unsupported non-static global array initializer */");
+                return error.UnsupportedCEmission;
             } else {
-                try self.out.appendSlice(self.allocator, " = 0");
+                try self.out.appendSlice(self.allocator, "/* unsupported non-static global initializer */");
+                return error.UnsupportedCEmission;
             }
-        } else if (global.ty != null and global.ty.?.kind == .array) {
+        } else if (global.ty != null and self.zeroInitializerRequiresBraces(global.ty.?)) {
             try self.out.appendSlice(self.allocator, " = {0}");
         } else {
             try self.out.appendSlice(self.allocator, " = 0");
         }
         try self.out.appendSlice(self.allocator, ";\n\n");
+    }
+
+    fn zeroInitializerRequiresBraces(self: *CEmitter, ty: ast.TypeExpr) bool {
+        return switch (ty.kind) {
+            .array => true,
+            .name => |name| self.structs.contains(name.text),
+            .qualified => |node| self.zeroInitializerRequiresBraces(node.child.*),
+            else => false,
+        };
     }
 
     fn emitEnums(self: *CEmitter) !void {
@@ -479,6 +623,18 @@ const CEmitter = struct {
         }
     }
 
+    fn emitArrayTypes(self: *CEmitter) !void {
+        var it = self.array_types.valueIterator();
+        while (it.next()) |array| {
+            try self.out.print(self.allocator, "typedef struct {s} {{\n", .{array.name});
+            self.indent += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} elems[{s}];\n", .{ array.element_c_type, array.len });
+            self.indent -= 1;
+            try self.out.print(self.allocator, "}} {s};\n\n", .{array.name});
+        }
+    }
+
     fn emitFunctionPrototype(self: *CEmitter, fn_decl: ast.FnDecl) !void {
         try self.emitFunctionSignature(fn_decl, false);
         try self.out.appendSlice(self.allocator, ";\n\n");
@@ -533,14 +689,7 @@ const CEmitter = struct {
     }
 
     fn emitDeclaratorWithStyle(self: *CEmitter, ty: ast.TypeExpr, name: []const u8, style: StructTypeStyle) !void {
-        switch (ty.kind) {
-            .array => |node| {
-                try self.out.print(self.allocator, "{s} {s}[", .{ try self.cTypeFor(node.child.*, style), name });
-                try self.emitArrayLen(node.len);
-                try self.out.appendSlice(self.allocator, "]");
-            },
-            else => try self.out.print(self.allocator, "{s} {s}", .{ try self.cTypeFor(ty, style), name }),
-        }
+        try self.out.print(self.allocator, "{s} {s}", .{ try self.cTypeFor(ty, style), name });
     }
 
     fn cTypeFor(self: *CEmitter, ty: ast.TypeExpr, style: StructTypeStyle) ![]const u8 {
@@ -550,16 +699,30 @@ const CEmitter = struct {
     }
 
     fn appendType(self: *CEmitter, out: *std.ArrayList(u8), ty: ast.TypeExpr, style: StructTypeStyle) anyerror!void {
+        if (self.aliasTargetType(ty)) |target| return self.appendType(out, target, style);
         switch (ty.kind) {
             .pointer => |node| return self.appendPointerType(out, node.child.*, node.mutability, style),
             .raw_many_pointer => |node| return self.appendPointerType(out, node.child.*, node.mutability, style),
             .slice => |node| return out.appendSlice(self.scratch.allocator(), try self.sliceTypeName(node.child.*, node.mutability)),
-            .array => |node| return self.appendPointerType(out, node.child.*, .none, style),
+            .array => |node| return out.appendSlice(self.scratch.allocator(), try self.arrayTypeName(node.child.*, node.len)),
             .nullable => |child| return self.appendType(out, child.*, style),
             .qualified => |node| return self.appendType(out, node.child.*, style),
             .generic => |node| {
                 if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
                     return out.appendSlice(self.scratch.allocator(), try self.resultTypeName(node.args[0], node.args[1]));
+                }
+                if ((std.mem.eql(u8, node.base.text, "wrap") or
+                    std.mem.eql(u8, node.base.text, "sat") or
+                    std.mem.eql(u8, node.base.text, "serial") or
+                    std.mem.eql(u8, node.base.text, "counter") or
+                    std.mem.eql(u8, node.base.text, "Duration")) and node.args.len == 1) {
+                    return self.appendType(out, node.args[0], style);
+                }
+                if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1) {
+                    return self.appendType(out, node.args[0], style);
+                }
+                if (std.mem.eql(u8, node.base.text, "UserPtr") or std.mem.eql(u8, node.base.text, "PhysPtr")) {
+                    return out.appendSlice(self.scratch.allocator(), "uintptr_t");
                 }
                 if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1) {
                     const pointee = typeName(node.args[0]) orelse return out.appendSlice(self.scratch.allocator(), "void *");
@@ -572,6 +735,7 @@ const CEmitter = struct {
             else => {},
         }
         if (typeName(ty)) |name| {
+            if (std.mem.eql(u8, name, "c_void")) return out.appendSlice(self.scratch.allocator(), "void");
             if (self.enums.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
             if (self.packed_bits.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
             if (self.overlay_unions.contains(name)) return out.appendSlice(self.scratch.allocator(), name);
@@ -582,6 +746,39 @@ const CEmitter = struct {
             }
         }
         try out.appendSlice(self.scratch.allocator(), cType(ty));
+    }
+
+    fn resolveAliasType(self: *CEmitter, ty: ast.TypeExpr) ast.TypeExpr {
+        return self.resolveAliasTypeDepth(ty, 0);
+    }
+
+    fn aliasTargetType(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+        return switch (ty.kind) {
+            .name => |name| {
+                const target = self.type_aliases.get(name.text) orelse return null;
+                if (typeName(target)) |target_name| {
+                    if (std.mem.eql(u8, target_name, name.text)) return null;
+                }
+                return target;
+            },
+            .qualified => |node| self.aliasTargetType(node.child.*),
+            else => null,
+        };
+    }
+
+    fn resolveAliasTypeDepth(self: *CEmitter, ty: ast.TypeExpr, depth: usize) ast.TypeExpr {
+        if (depth > 64) return ty;
+        return switch (ty.kind) {
+            .name => |name| {
+                const target = self.type_aliases.get(name.text) orelse return ty;
+                if (typeName(target)) |target_name| {
+                    if (std.mem.eql(u8, target_name, name.text)) return ty;
+                }
+                return self.resolveAliasTypeDepth(target, depth + 1);
+            },
+            .qualified => |node| self.resolveAliasTypeDepth(node.child.*, depth),
+            else => ty,
+        };
     }
 
     fn collectPackedBits(self: *CEmitter, packed_bits: ast.PackedBitsDecl) !void {
@@ -610,7 +807,7 @@ const CEmitter = struct {
             try fields.put(field.name.text, .{
                 .ty = field.ty,
                 .layout = layout,
-                .byte_array_len = overlayByteArrayLen(field.ty),
+                .byte_array_len = try self.overlayByteArrayLen(field.ty),
             });
         }
         try self.overlay_unions.put(overlay_union.name.text, .{ .size = size, .alignment = alignment, .fields = fields });
@@ -627,8 +824,7 @@ const CEmitter = struct {
         switch (ty.kind) {
             .array => |node| {
                 const child = self.overlayFieldLayout(node.child.*) orelse return null;
-                const len_text = intLiteralText(node.len) orelse return null;
-                const len = parseUsizeLiteral(len_text) orelse return null;
+                const len = constArrayLenValue(node.len) orelse return null;
                 return .{ .size = child.size * len, .alignment = child.alignment };
             },
             .qualified => |node| return self.overlayFieldLayout(node.child.*),
@@ -641,6 +837,18 @@ const CEmitter = struct {
         if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return .{ .size = 4, .alignment = 4 };
         if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return .{ .size = 8, .alignment = 8 };
         return null;
+    }
+
+    fn overlayByteArrayLen(self: *CEmitter, ty: ast.TypeExpr) !?[]const u8 {
+        return switch (ty.kind) {
+            .array => |node| {
+                const child_name = typeName(node.child.*) orelse return null;
+                if (!std.mem.eql(u8, child_name, "u8")) return null;
+                return try self.arrayLenTextForExpr(node.len);
+            },
+            .qualified => |node| try self.overlayByteArrayLen(node.child.*),
+            else => null,
+        };
     }
 
     fn collectMmioStruct(self: *CEmitter, struct_decl: ast.StructDecl) !void {
@@ -685,25 +893,95 @@ const CEmitter = struct {
 
     fn collectBlockSliceTypes(self: *CEmitter, block: ast.Block) anyerror!void {
         for (block.items) |stmt| switch (stmt.kind) {
-            .let_decl, .var_decl => |local| if (local.ty) |ty| try self.collectTypeArtifacts(ty),
-            .loop => |node| try self.collectBlockSliceTypes(node.body),
+            .let_decl, .var_decl => |local| {
+                if (local.ty) |ty| try self.collectTypeArtifacts(ty);
+                if (local.init) |initializer| try self.collectExprTypeArtifacts(initializer);
+            },
+            .loop => |node| {
+                if (node.iterable) |expr| try self.collectExprTypeArtifacts(expr);
+                try self.collectBlockSliceTypes(node.body);
+            },
             .if_let => |node| {
+                try self.collectExprTypeArtifacts(node.value);
                 try self.collectBlockSliceTypes(node.then_block);
                 if (node.else_block) |else_block| try self.collectBlockSliceTypes(else_block);
             },
             .@"switch" => |node| for (node.arms) |arm| switch (arm.body) {
                 .block => |arm_block| try self.collectBlockSliceTypes(arm_block),
-                .expr => {},
+                .expr => |expr| try self.collectExprTypeArtifacts(expr),
             },
             .unsafe_block, .comptime_block, .block => |nested| try self.collectBlockSliceTypes(nested),
             .contract_block => |contract| try self.collectBlockSliceTypes(contract.block),
+            .@"return" => |maybe| if (maybe) |expr| try self.collectExprTypeArtifacts(expr),
+            .@"defer", .expr, .assert => |expr| try self.collectExprTypeArtifacts(expr),
+            .assignment => |node| {
+                try self.collectExprTypeArtifacts(node.target);
+                try self.collectExprTypeArtifacts(node.value);
+            },
             else => {},
         };
     }
 
+    fn collectExprTypeArtifacts(self: *CEmitter, expr: ast.Expr) anyerror!void {
+        switch (expr.kind) {
+            .call => |node| {
+                for (node.type_args) |ty| try self.collectTypeArtifacts(ty);
+                try self.collectExprTypeArtifacts(node.callee.*);
+                for (node.args) |arg| try self.collectExprTypeArtifacts(arg);
+            },
+            .grouped, .address_of, .deref, .try_expr => |inner| try self.collectExprTypeArtifacts(inner.*),
+            .unary => |node| try self.collectExprTypeArtifacts(node.expr.*),
+            .binary => |node| {
+                try self.collectExprTypeArtifacts(node.left.*);
+                try self.collectExprTypeArtifacts(node.right.*);
+            },
+            .index => |node| {
+                try self.collectExprTypeArtifacts(node.base.*);
+                try self.collectExprTypeArtifacts(node.index.*);
+            },
+            .member => |node| try self.collectExprTypeArtifacts(node.base.*),
+            .cast => |node| {
+                try self.collectTypeArtifacts(node.ty.*);
+                try self.collectExprTypeArtifacts(node.value.*);
+            },
+            .array_literal => |items| for (items) |item| try self.collectExprTypeArtifacts(item),
+            .struct_literal => |fields| for (fields) |field| try self.collectExprTypeArtifacts(field.value),
+            else => {},
+        }
+    }
+
     fn collectTypeArtifacts(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
-        try self.collectSliceType(ty);
-        try self.collectResultType(ty);
+        const resolved_ty = self.resolveAliasType(ty);
+        try self.collectArrayType(resolved_ty);
+        try self.collectSliceType(resolved_ty);
+        try self.collectResultType(resolved_ty);
+    }
+
+    fn collectArrayType(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
+        switch (ty.kind) {
+            .array => |node| {
+                try self.collectArrayType(node.child.*);
+                try self.collectTypeArtifacts(node.child.*);
+                const name = try self.arrayTypeName(node.child.*, node.len);
+                if (!self.array_types.contains(name)) {
+                    const len = try self.arrayLenTextForExpr(node.len);
+                    try self.array_types.put(name, .{
+                        .name = name,
+                        .element_ty = node.child.*,
+                        .element_c_type = try self.cTypeFor(node.child.*, .typedef_name),
+                        .len = len,
+                    });
+                }
+            },
+            .pointer => |node| try self.collectArrayType(node.child.*),
+            .raw_many_pointer => |node| try self.collectArrayType(node.child.*),
+            .slice => |node| try self.collectArrayType(node.child.*),
+            .nullable => |child| try self.collectArrayType(child.*),
+            .qualified => |node| try self.collectArrayType(node.child.*),
+            .generic => |node| for (node.args) |arg| try self.collectArrayType(arg),
+            .member => |node| try self.collectArrayType(node.base.*),
+            else => {},
+        }
     }
 
     fn collectSliceType(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
@@ -760,16 +1038,22 @@ const CEmitter = struct {
         return out.toOwnedSlice(self.scratch.allocator());
     }
 
+    fn arrayTypeName(self: *CEmitter, child: ast.TypeExpr, len_expr: ast.Expr) ![]const u8 {
+        const len = try self.arrayLenTextForExpr(len_expr);
+        return std.fmt.allocPrint(self.scratch.allocator(), "mc_array_{s}_{s}", .{ try self.typeSuffix(child), len });
+    }
+
     fn typeSuffix(self: *CEmitter, ty: ast.TypeExpr) ![]const u8 {
-        if (typeName(ty)) |name| {
+        const resolved_ty = self.resolveAliasType(ty);
+        if (typeName(resolved_ty)) |name| {
             if (self.structs.contains(name)) return std.fmt.allocPrint(self.scratch.allocator(), "struct_{s}", .{name});
             return name;
         }
-        return switch (ty.kind) {
+        return switch (resolved_ty.kind) {
             .pointer => |node| std.fmt.allocPrint(self.scratch.allocator(), "ptr_{s}", .{try self.typeSuffix(node.child.*)}),
             .raw_many_pointer => |node| std.fmt.allocPrint(self.scratch.allocator(), "manyptr_{s}", .{try self.typeSuffix(node.child.*)}),
             .slice => |node| std.fmt.allocPrint(self.scratch.allocator(), "slice_{s}", .{try self.typeSuffix(node.child.*)}),
-            .array => |node| std.fmt.allocPrint(self.scratch.allocator(), "array_{s}", .{try self.typeSuffix(node.child.*)}),
+            .array => |node| std.fmt.allocPrint(self.scratch.allocator(), "array_{s}_{s}", .{ try self.typeSuffix(node.child.*), try self.arrayLenTextForExpr(node.len) }),
             .nullable => |child| std.fmt.allocPrint(self.scratch.allocator(), "nullable_{s}", .{try self.typeSuffix(child.*)}),
             .qualified => |node| self.typeSuffix(node.child.*),
             .generic => |node| {
@@ -787,11 +1071,7 @@ const CEmitter = struct {
     }
 
     fn emitArrayLen(self: *CEmitter, expr: ast.Expr) !void {
-        if (intLiteralText(expr)) |literal| {
-            try appendCIntLiteral(self.allocator, self.out, literal);
-        } else {
-            try self.out.appendSlice(self.allocator, "0");
-        }
+        try self.out.appendSlice(self.allocator, try self.arrayLenTextForExpr(expr));
     }
 
     fn emitStmt(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
@@ -809,6 +1089,18 @@ const CEmitter = struct {
                                 if (try self.emitMmioReadLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitMmioReadExprLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitDirectCallSliceIndexLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitDirectCallArrayIndexLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitRawManyOffsetDerefAddressLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitLocalIndexAddressLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitLocalIndexLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitRawManyOffsetDerefLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitRawManyOffsetLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitBitcastLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitExternNonNullCallLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitUncheckedAddLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitSequencedComparisonLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitSequencedCheckedBinaryLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitSequencedCallLocalInit(name.text, decl_ty, initializer, locals)) continue;
                             }
                         } else if (local.init) |initializer| {
                             if (try self.emitArrayCallInferredLocalInit(name.text, initializer, locals)) continue;
@@ -817,7 +1109,14 @@ const CEmitter = struct {
                             if (try self.emitTaggedUnionCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitResultCallInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitNullableCallInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitRawManyOffsetDerefInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitRawManyOffsetInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitBitcastInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitExternNonNullCallInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitLocalCopyInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitBoolInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitCallInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitNumericInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitMmioReadInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitMmioReadExprInferredLocalInit(name.text, initializer, locals)) continue;
                         }
@@ -829,11 +1128,13 @@ const CEmitter = struct {
                         try self.out.print(self.allocator, "uint32_t {s}", .{name.text});
                     }
                     if (local.init) |initializer| {
-                        try self.out.appendSlice(self.allocator, " = ");
-                        if (local.ty) |decl_ty| {
-                            try self.emitExprWithTarget(initializer, locals, decl_ty);
-                        } else {
-                            try self.emitExpr(initializer, locals);
+                        if (!isUninitLiteral(initializer)) {
+                            try self.out.appendSlice(self.allocator, " = ");
+                            if (local.ty) |decl_ty| {
+                                try self.emitExprWithTarget(initializer, locals, decl_ty);
+                            } else {
+                                try self.emitExpr(initializer, locals);
+                            }
                         }
                     } else if (local.ty != null and local.ty.?.kind == .array) {
                         try self.out.appendSlice(self.allocator, " = {0}");
@@ -846,33 +1147,71 @@ const CEmitter = struct {
             .assignment => |node| {
                 if (try self.emitPackedBitsFieldWriteStmt(node, locals)) return;
                 if (try self.emitOverlayFieldWriteStmt(node, locals)) return;
+                if (try self.emitGlobalArrayIndexAssignmentStmt(node, locals)) return;
                 if (try self.emitResultTryAssignmentStmt(node, locals, return_ty)) return;
                 if (try self.emitNullableTryAssignmentStmt(node, locals)) return;
                 if (try self.emitMmioReadAssignmentStmt(node, locals)) return;
                 if (try self.emitMmioReadExprAssignmentStmt(node, locals)) return;
+                if (try self.emitDirectCallSliceIndexAssignmentStmt(node, locals)) return;
+                if (try self.emitDirectCallArrayIndexAssignmentStmt(node, locals)) return;
+                if (try self.emitLocalIndexTargetAssignmentStmt(node, locals)) return;
+                if (try self.emitRawManyOffsetDerefAddressAssignmentStmt(node, locals)) return;
+                if (try self.emitLocalIndexAddressAssignmentStmt(node, locals)) return;
+                if (try self.emitLocalIndexAssignmentStmt(node, locals)) return;
+                if (try self.emitRawManyOffsetDerefTargetAssignmentStmt(node, locals)) return;
+                if (try self.emitRawManyOffsetDerefAssignmentStmt(node, locals)) return;
+                if (try self.emitRawManyOffsetAssignmentStmt(node, locals)) return;
+                if (try self.emitBitcastAssignmentStmt(node, locals)) return;
+                if (try self.emitExternNonNullCallAssignmentStmt(node, locals)) return;
+                if (try self.emitUncheckedAddAssignmentStmt(node, locals)) return;
+                if (try self.emitSequencedComparisonAssignmentStmt(node, locals)) return;
+                if (try self.emitSequencedCheckedBinaryAssignmentStmt(node, locals)) return;
+                if (try self.emitSequencedCallAssignmentStmt(node, locals)) return;
                 try self.writeIndent();
                 if (self.globalAssignmentTarget(node.target, locals)) |target| {
-                    try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ", .{ target.info.type_name, target.name });
+                    try self.emitGlobalStorePrefix(target);
                     try self.emitExpr(node.value, locals);
-                    try self.out.appendSlice(self.allocator, ");\n");
+                    try self.emitGlobalStoreSuffix(target);
                 } else {
                     try self.emitExpr(node.target, locals);
                     try self.out.appendSlice(self.allocator, " = ");
-                    try self.emitExpr(node.value, locals);
+                    try self.emitExprWithTarget(node.value, locals, assignmentTargetType(node.target, locals));
                     try self.out.appendSlice(self.allocator, ";\n");
                 }
             },
             .@"return" => |maybe| {
                 if (maybe) |expr| {
                     if (try self.emitNeverExprStmt(expr, locals)) return;
+                    if (return_ty) |target_ty| {
+                        if (isVoidType(target_ty) and isVoidLiteralExpr(expr)) {
+                            try self.writeIndent();
+                            try self.out.appendSlice(self.allocator, "return;\n");
+                            return;
+                        }
+                    }
                     if (try self.emitDirectCallSliceIndexReturn(expr, locals)) return;
+                    if (try self.emitDirectCallArrayIndexReturn(expr, locals)) return;
+                    if (try self.emitRawManyOffsetDerefAddressReturn(expr, locals, return_ty)) return;
+                    if (try self.emitLocalIndexAddressReturn(expr, locals, return_ty)) return;
+                    if (try self.emitLocalIndexReturn(expr, locals, return_ty)) return;
                     if (try self.emitMmioReadReturn(expr, locals)) return;
                     if (try self.emitOverlayFieldReadReturn(expr, locals, return_ty)) return;
                     if (try self.emitResultTryCallReturn(expr, locals)) return;
                     if (try self.emitNullableTryCallReturn(expr, locals)) return;
                     if (try self.emitResultTryReturn(expr, locals, return_ty)) return;
                     if (try self.emitNullableTryReturn(expr, locals)) return;
+                    if (try self.emitResultTryExprReturn(expr, locals, return_ty)) return;
+                    if (try self.emitNullableTryExprReturn(expr, locals, return_ty)) return;
+                    if (try self.emitMmioReadCallReturn(expr, locals)) return;
                     if (try self.emitMmioReadExprReturn(expr, locals, return_ty)) return;
+                    if (try self.emitRawManyOffsetDerefReturn(expr, locals, return_ty)) return;
+                    if (try self.emitRawManyOffsetReturn(expr, locals, return_ty)) return;
+                    if (try self.emitBitcastReturn(expr, locals, return_ty)) return;
+                    if (try self.emitExternNonNullCallReturn(expr, locals)) return;
+                    if (try self.emitUncheckedAddReturn(expr, locals, return_ty)) return;
+                    if (try self.emitSequencedComparisonReturn(expr, locals, return_ty)) return;
+                    if (try self.emitSequencedCheckedBinaryReturn(expr, locals, return_ty)) return;
+                    if (try self.emitSequencedCallReturn(expr, locals)) return;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "return ");
                     if (return_ty) |target_ty| {
@@ -897,15 +1236,19 @@ const CEmitter = struct {
             .expr => |expr| {
                 if (try self.emitNeverExprStmt(expr, locals)) return;
                 if (try self.emitMmioWriteStmt(expr, locals)) return;
+                if (try self.emitRawStoreStmt(expr, locals)) return;
+                if (try self.emitCpuPauseStmt(expr)) return;
                 if (try self.emitResultTryExprStmt(expr, locals, return_ty)) return;
                 if (try self.emitNullableTryExprStmt(expr, locals)) return;
                 if (try self.emitMmioReadExprStmt(expr, locals)) return;
+                if (try self.emitSequencedCallExprStmt(expr, locals)) return;
                 try self.writeIndent();
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
             },
             .assert => |expr| {
                 if (try self.emitMmioReadAssert(expr, locals)) return;
+                if (try self.emitSequencedConditionAssert(expr, locals)) return;
                 try self.writeIndent();
                 try self.out.appendSlice(self.allocator, "if (!(");
                 try self.emitExpr(expr, locals);
@@ -924,6 +1267,8 @@ const CEmitter = struct {
             },
             .contract_block => |contract| {
                 try self.writeIndent();
+                try self.out.print(self.allocator, "/* MC_CONTRACT_BEGIN {s} */\n", .{contractName(contract.attr)});
+                try self.writeIndent();
                 try self.out.appendSlice(self.allocator, "{\n");
                 var nested = try cloneLocals(self.allocator, locals.*);
                 defer nested.deinit();
@@ -932,12 +1277,15 @@ const CEmitter = struct {
                 self.indent -= 1;
                 try self.writeIndent();
                 try self.out.appendSlice(self.allocator, "}\n");
+                try self.writeIndent();
+                try self.out.print(self.allocator, "/* MC_CONTRACT_END {s} */\n", .{contractName(contract.attr)});
             },
             .comptime_block => {},
             .asm_stmt => |asm_stmt| try self.emitAsmStmt(asm_stmt),
             .loop => |loop| {
                 if (loop.kind == .@"while") {
                     if (try self.emitMmioReadWhileLoop(loop, locals, return_ty)) return;
+                    if (try self.emitSequencedConditionWhileLoop(loop, locals, return_ty)) return;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "while (");
                     if (loop.iterable) |condition| {
@@ -966,6 +1314,7 @@ const CEmitter = struct {
     }
 
     fn emitAsmStmt(self: *CEmitter, asm_stmt: ast.AsmStmt) !void {
+        if (asm_stmt.form == .precise) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
         try self.writeIndent();
@@ -1022,6 +1371,8 @@ const CEmitter = struct {
     }
 
     fn emitMmioReadExprStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (try self.emitMmioReadCallExprStmt(expr, locals)) return true;
+
         var replacements: std.ArrayList(MmioReadReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
         if (!try self.collectMmioReadHoistsForExpr(expr, locals, &replacements)) return false;
@@ -1045,6 +1396,10 @@ const CEmitter = struct {
     }
 
     fn emitMmioReadExprReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        if (return_ty) |target_ty| {
+            if (try self.emitMmioReadSequencedBinaryReturn(expr, locals, target_ty)) return true;
+        }
+
         var replacements: std.ArrayList(MmioReadReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
         if (!try self.collectMmioReadHoistsForExpr(expr, locals, &replacements)) return false;
@@ -1060,6 +1415,133 @@ const CEmitter = struct {
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "return ");
         try self.emitMmioReadExprWithReplacements(expr, &nested, return_ty, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitMmioReadCallReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitMmioReadCallReturn(inner.*, locals),
+            else => return false,
+        };
+        if (call.args.len == 0) return false;
+
+        var found_mmio = false;
+        for (call.args) |arg| {
+            if (self.exprContainsMmioRead(arg, locals)) {
+                found_mmio = true;
+                break;
+            }
+        }
+        if (!found_mmio) return false;
+
+        const fn_info = if (calleeIdentName(call.callee.*)) |name| self.functions.get(name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps: std.ArrayList(SequencedArgTemp) = .empty;
+        defer temps.deinit(self.scratch.allocator());
+        for (call.args, 0..) |arg, i| {
+            try temps.append(self.scratch.allocator(), try self.emitMmioReadCallArgTemp(arg, locals, fn_info.params[i].ty));
+        }
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitMmioReadCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+        if (!self.exprContainsMmioRead(arg, locals)) {
+            return try self.emitSequencedCallArgTemp(arg, locals, target_ty);
+        }
+
+        return try self.emitMmioReadOperandTemp(arg, locals, target_ty);
+    }
+
+    fn emitMmioReadCallArgTemps(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo) anyerror!std.ArrayList(SequencedArgTemp) {
+        var temps: std.ArrayList(SequencedArgTemp) = .empty;
+        errdefer temps.deinit(self.scratch.allocator());
+        for (call.args, 0..) |arg, i| {
+            try temps.append(self.scratch.allocator(), try self.emitMmioReadCallArgTemp(arg, locals, fn_info.params[i].ty));
+        }
+        return temps;
+    }
+
+    fn emitMmioReadCallLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (initializer.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitMmioReadCallLocalInit(name, decl_ty, inner.*, locals),
+            else => return false,
+        };
+        if (!self.callArgsContainMmioRead(call.args, locals)) return false;
+        const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| self.functions.get(callee_name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitMmioReadCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), name });
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitMmioReadCallAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (assignment.value.kind) {
+            .call => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .call => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!self.callArgsContainMmioRead(call.args, locals)) return false;
+        const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| self.functions.get(callee_name) orelse return false else return false;
+        const call_return_ty = fn_info.return_type orelse return false;
+        if (isVoidType(call_return_ty) or fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitMmioReadCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        const result_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(call_return_ty, .typedef_name), result_temp });
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, result_temp);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{result_temp});
+        }
+        return true;
+    }
+
+    fn emitMmioReadCallExprStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitMmioReadCallExprStmt(inner.*, locals),
+            else => return false,
+        };
+        if (!self.callArgsContainMmioRead(call.args, locals)) return false;
+        const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| self.functions.get(callee_name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitMmioReadCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        try self.writeIndent();
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
     }
@@ -1096,6 +1578,62 @@ const CEmitter = struct {
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "}\n");
         return true;
+    }
+
+    fn emitSequencedConditionAssert(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const condition = (try self.emitSequencedConditionValueTemp(expr, locals)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "if (!{s}) mc_trap_Assert();\n", .{condition.name});
+        return true;
+    }
+
+    fn emitSequencedConditionWhileLoop(self: *CEmitter, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const condition = loop.iterable orelse return false;
+        if (!sequencedConditionCandidate(condition)) return false;
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "while (true) {\n");
+
+        var nested = try cloneLocals(self.allocator, locals.*);
+        defer nested.deinit();
+
+        self.indent += 1;
+        const condition_temp = (try self.emitSequencedConditionValueTemp(condition, &nested)) orelse {
+            self.indent -= 1;
+            return false;
+        };
+        try self.writeIndent();
+        try self.out.print(self.allocator, "if (!{s}) break;\n", .{condition_temp.name});
+
+        try self.emitBlockItems(loop.body, &nested, return_ty);
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}\n");
+        return true;
+    }
+
+    fn emitSequencedConditionValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
+        const node = switch (expr.kind) {
+            .grouped => |inner| return try self.emitSequencedConditionValueTemp(inner.*, locals),
+            .binary => |node| node,
+            else => return null,
+        };
+        if (!isComparisonOp(node.op)) return null;
+        if (!exprContainsCall(node.left.*) and !exprContainsCall(node.right.*)) return null;
+
+        const left_ty = conditionOperandTypeForEmission(self, node.left.*, locals) orelse return error.UnsupportedCEmission;
+        const right_ty = conditionOperandTypeForEmission(self, node.right.*, locals) orelse return error.UnsupportedCEmission;
+        if (!sameCStorageType(left_ty, right_ty)) return error.UnsupportedCEmission;
+
+        const left_temp = try self.emitSequencedCallArgTemp(node.left.*, locals, left_ty);
+        const right_temp = try self.emitSequencedCallArgTemp(node.right.*, locals, right_ty);
+        const bool_ty = simpleNameType("bool", expr.span);
+        const condition_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "bool {s} = ({s} {s} {s});\n", .{ condition_temp, left_temp.name, binaryCOp(node.op), right_temp.name });
+        return .{ .name = condition_temp, .ty = bool_ty };
     }
 
     fn emitMmioReadReplacement(self: *CEmitter, replacement: MmioReadReplacement) !void {
@@ -1156,6 +1694,14 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, "}\n");
             },
             else => {
+                if (try self.emitNeverExprStmt(expr, locals)) return;
+                if (try self.emitMmioWriteStmt(expr, locals)) return;
+                if (try self.emitRawStoreStmt(expr, locals)) return;
+                if (try self.emitCpuPauseStmt(expr)) return;
+                if (try self.emitResultTryExprStmt(expr, locals, return_ty)) return;
+                if (try self.emitNullableTryExprStmt(expr, locals)) return;
+                if (try self.emitMmioReadExprStmt(expr, locals)) return;
+                if (try self.emitSequencedCallExprStmt(expr, locals)) return;
                 try self.writeIndent();
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
@@ -1201,30 +1747,28 @@ const CEmitter = struct {
 
     fn emitEnumCallSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
         const enum_ty = self.enumReturnTypeForExpr(node.subject) orelse return false;
-        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
-        self.temp_index += 1;
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(enum_ty, .typedef_name), temp_name });
-        try self.emitExpr(node.subject, locals);
-        try self.out.appendSlice(self.allocator, ";\n");
+        const temp = try self.emitSequencedCallArgTemp(node.subject, locals, enum_ty);
 
         var switch_locals = try cloneLocals(self.allocator, locals.*);
         defer switch_locals.deinit();
-        try switch_locals.put(temp_name, try self.localInfoFromType(enum_ty));
-        const temp_subject = ast.Expr{ .kind = .{ .ident = .{ .text = temp_name, .span = node.subject.span } }, .span = node.subject.span };
+        try switch_locals.put(temp.name, try self.localInfoFromType(enum_ty));
+        const temp_subject = ast.Expr{ .kind = .{ .ident = .{ .text = temp.name, .span = node.subject.span } }, .span = node.subject.span };
         try self.emitGenericSwitch(.{ .subject = temp_subject, .arms = node.arms }, &switch_locals, return_ty, &[_]MmioReadReplacement{});
         return true;
     }
 
     fn emitGenericSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_replacements: []const MmioReadReplacement) anyerror!void {
         const subject_enum_name = self.enumNameForExpr(node.subject, locals);
+        const subject_is_bool = self.exprIsBoolForEmission(node.subject, locals);
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "switch (");
+        if (subject_is_bool) try self.out.appendSlice(self.allocator, "(int)(");
         if (subject_replacements.len > 0) {
             try self.emitMmioReadExprWithReplacements(node.subject, locals, null, subject_replacements);
         } else {
             try self.emitExpr(node.subject, locals);
         }
+        if (subject_is_bool) try self.out.appendSlice(self.allocator, ")");
         try self.out.appendSlice(self.allocator, ") {\n");
 
         self.indent += 1;
@@ -1246,7 +1790,7 @@ const CEmitter = struct {
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "}\n");
         }
-        if (subject_enum_name != null and !has_wildcard) {
+        if ((subject_enum_name != null or subject_is_bool) and !has_wildcard) {
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "default:\n");
             self.indent += 1;
@@ -1265,14 +1809,9 @@ const CEmitter = struct {
             subject
         else blk: {
             const result_ty = self.resultTypeForExpr(node.subject, locals) orelse return false;
-            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
-            self.temp_index += 1;
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(result_ty, .typedef_name), temp_name });
-            try self.emitExpr(node.subject, locals);
-            try self.out.appendSlice(self.allocator, ";\n");
-            try locals.put(temp_name, try self.localInfoFromType(result_ty));
-            break :blk self.resultSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp_name, .span = node.subject.span } }, .span = node.subject.span }, locals).?;
+            const temp = try self.emitSequencedCallArgTemp(node.subject, locals, result_ty);
+            try locals.put(temp.name, try self.localInfoFromType(result_ty));
+            break :blk self.resultSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = node.subject.span } }, .span = node.subject.span }, locals).?;
         };
         var emitted_any = false;
         var seen_ok = false;
@@ -1316,7 +1855,7 @@ const CEmitter = struct {
             if (branch.binding_name) |binding_name| {
                 try nested.put(binding_name, .{ .c_type = branch.binding_type.? });
                 try self.writeIndent();
-                try self.out.print(self.allocator, "{s} {s} = {s}.payload.{s};\n", .{ branch.binding_type.?, binding_name, subject.name, branch.payload_field.? });
+                try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s}.payload.{s};\n", .{ branch.binding_type.?, binding_name, subject.name, branch.payload_field.? });
             }
             try self.emitSwitchBody(arm.body, &nested, return_ty);
             self.indent -= 1;
@@ -1365,7 +1904,7 @@ const CEmitter = struct {
             if (branch.binding_name) |binding_name| {
                 try nested.put(binding_name, .{ .c_type = subject.inner_c_type });
                 try self.writeIndent();
-                try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ subject.inner_c_type, binding_name, subject.name });
+                try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ subject.inner_c_type, binding_name, subject.name });
             }
             try self.emitSwitchBody(arm.body, &nested, return_ty);
             self.indent -= 1;
@@ -1380,14 +1919,9 @@ const CEmitter = struct {
             subject
         else blk: {
             const union_ty = self.taggedUnionReturnTypeForExpr(node.subject) orelse return false;
-            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
-            self.temp_index += 1;
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(union_ty, .typedef_name), temp_name });
-            try self.emitExpr(node.subject, locals);
-            try self.out.appendSlice(self.allocator, ";\n");
-            try locals.put(temp_name, try self.localInfoFromType(union_ty));
-            break :blk self.taggedUnionSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp_name, .span = node.subject.span } }, .span = node.subject.span }, locals).?;
+            const temp = try self.emitSequencedCallArgTemp(node.subject, locals, union_ty);
+            try locals.put(temp.name, try self.localInfoFromType(union_ty));
+            break :blk self.taggedUnionSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = node.subject.span } }, .span = node.subject.span }, locals).?;
         };
         var emitted_any = false;
         var has_wildcard = false;
@@ -1448,7 +1982,14 @@ const CEmitter = struct {
         switch (body) {
             .block => |block| try self.emitBlockItems(block, locals, return_ty),
             .expr => |expr| {
+                if (try self.emitNeverExprStmt(expr, locals)) return;
+                if (try self.emitMmioWriteStmt(expr, locals)) return;
+                if (try self.emitRawStoreStmt(expr, locals)) return;
+                if (try self.emitCpuPauseStmt(expr)) return;
+                if (try self.emitResultTryExprStmt(expr, locals, return_ty)) return;
+                if (try self.emitNullableTryExprStmt(expr, locals)) return;
                 if (try self.emitMmioReadExprStmt(expr, locals)) return;
+                if (try self.emitSequencedCallExprStmt(expr, locals)) return;
                 try self.writeIndent();
                 try self.emitExpr(expr, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
@@ -1551,18 +2092,15 @@ const CEmitter = struct {
             },
             else => null,
         } orelse blk: {
+            const nullable_ty = self.nullableReturnTypeForExpr(expr) orelse return null;
             const inner_c_type = try self.nullableInnerCTypeForExpr(expr, locals) orelse return null;
-            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
-            self.temp_index += 1;
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ inner_c_type, temp_name });
-            try self.emitExpr(expr, locals);
-            try self.out.appendSlice(self.allocator, ";\n");
-            try locals.put(temp_name, .{
+            const temp = try self.emitSequencedCallArgTemp(expr, locals, nullable_ty);
+            try locals.put(temp.name, .{
+                .source_ty = nullable_ty,
                 .c_type = inner_c_type,
                 .nullable_inner_c_type = inner_c_type,
             });
-            break :blk temp_name;
+            break :blk temp.name;
         };
         const source_info = locals.get(source_name) orelse return null;
         const inner_c_type = source_info.nullable_inner_c_type orelse return null;
@@ -1664,9 +2202,15 @@ const CEmitter = struct {
             try self.out.print(self.allocator, ".{s}[{s}]", .{ slice.ptr_field, index_name });
         } else {
             try self.emitExpr(iterable, locals);
-            try self.out.print(self.allocator, "[{s}]", .{index_name});
+            if (arrayElemsFieldForExpr(iterable, locals)) |elems_field| {
+                try self.out.print(self.allocator, ".{s}[{s}]", .{ elems_field, index_name });
+            } else {
+                try self.out.print(self.allocator, "[{s}]", .{index_name});
+            }
         }
         try self.out.appendSlice(self.allocator, ";\n");
+        try self.writeIndent();
+        try self.out.print(self.allocator, "(void){s};\n", .{binding.text});
         try self.emitBlockItems(loop.body, &nested, return_ty);
         self.indent -= 1;
         try self.writeIndent();
@@ -1684,20 +2228,14 @@ const CEmitter = struct {
             else => return false,
         };
         const iterable_ty = self.sliceReturnTypeForCall(call) orelse self.arrayReturnTypeForExpr(iterable) orelse return false;
-        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
-        self.temp_index += 1;
-
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(iterable_ty, .typedef_name), temp_name });
-        try self.emitExpr(iterable, locals);
-        try self.out.appendSlice(self.allocator, ";\n");
+        const temp = try self.emitSequencedCallArgTemp(iterable, locals, iterable_ty);
 
         var loop_locals = try cloneLocals(self.allocator, locals.*);
         defer loop_locals.deinit();
-        try loop_locals.put(temp_name, try self.localInfoFromType(iterable_ty));
+        try loop_locals.put(temp.name, try self.localInfoFromType(iterable_ty));
 
         var rewritten = loop;
-        const ident = ast.Expr{ .span = iterable.span, .kind = .{ .ident = .{ .span = iterable.span, .text = temp_name } } };
+        const ident = ast.Expr{ .span = iterable.span, .kind = .{ .ident = .{ .span = iterable.span, .text = temp.name } } };
         rewritten.iterable = ident;
         try self.emitForLoop(rewritten, &loop_locals, return_ty);
         return true;
@@ -1710,6 +2248,8 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, "case ");
                 try appendCIntLiteral(self.allocator, self.out, literal);
                 try self.out.appendSlice(self.allocator, ":\n");
+            } else if (boolLiteralValue(expr)) |value| {
+                try self.out.print(self.allocator, "case {d}:\n", .{@intFromBool(value)});
             } else {
                 try self.out.print(self.allocator, "/* unsupported switch pattern: {s} */\n", .{@tagName(pattern.kind)});
                 return error.UnsupportedCEmission;
@@ -1748,22 +2288,14 @@ const CEmitter = struct {
             },
             else => null,
         } orelse blk: {
-            const temp_ty = try self.nullableInnerCTypeForExpr(node.value, locals) orelse {
+            const nullable_ty = self.nullableReturnTypeForExpr(node.value) orelse {
                 try self.writeIndent();
                 try self.out.print(self.allocator, "/* unsupported if-let value: {s} */\n", .{@tagName(node.value.kind)});
                 return error.UnsupportedCEmission;
             };
-            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
-            self.temp_index += 1;
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ temp_ty, temp_name });
-            try self.emitExpr(node.value, locals);
-            try self.out.appendSlice(self.allocator, ";\n");
-            try locals.put(temp_name, .{
-                .c_type = temp_ty,
-                .nullable_inner_c_type = temp_ty,
-            });
-            break :blk temp_name;
+            const temp = try self.emitSequencedCallArgTemp(node.value, locals, nullable_ty);
+            try locals.put(temp.name, try self.localInfoFromType(nullable_ty));
+            break :blk temp.name;
         };
         const source_info = locals.get(source_name) orelse {
             try self.writeIndent();
@@ -1783,7 +2315,7 @@ const CEmitter = struct {
         try then_locals.put(binding.text, .{ .c_type = bind_ty });
         self.indent += 1;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ bind_ty, binding.text, source_name });
+        try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ bind_ty, binding.text, source_name });
         try self.emitBlockItems(node.then_block, &then_locals, return_ty);
         self.indent -= 1;
         try self.writeIndent();
@@ -1828,14 +2360,9 @@ const CEmitter = struct {
                 try self.out.print(self.allocator, "/* unsupported result if-let value: {s} */\n", .{@tagName(node.value.kind)});
                 return error.UnsupportedCEmission;
             };
-            const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
-            self.temp_index += 1;
-            try self.writeIndent();
-            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(result_ty, .typedef_name), temp_name });
-            try self.emitExpr(node.value, locals);
-            try self.out.appendSlice(self.allocator, ";\n");
-            try locals.put(temp_name, try self.localInfoFromType(result_ty));
-            break :blk temp_name;
+            const temp = try self.emitSequencedCallArgTemp(node.value, locals, result_ty);
+            try locals.put(temp.name, try self.localInfoFromType(result_ty));
+            break :blk temp.name;
         };
         const source_info = locals.get(source_name) orelse {
             try self.writeIndent();
@@ -1856,7 +2383,7 @@ const CEmitter = struct {
         try then_locals.put(tag_bind.binding.text, .{ .c_type = bind_ty });
         self.indent += 1;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s}.payload.{s};\n", .{ bind_ty, tag_bind.binding.text, source_name, payload_field });
+        try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s}.payload.{s};\n", .{ bind_ty, tag_bind.binding.text, source_name, payload_field });
         try self.emitBlockItems(node.then_block, &then_locals, return_ty);
         self.indent -= 1;
         try self.writeIndent();
@@ -1905,14 +2432,45 @@ const CEmitter = struct {
         if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
         if (call.args.len == 0) return error.UnsupportedCEmission;
 
+        const value_ty = simpleNameType(access.value_type, call.args[0].span);
+        const value_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, value_ty);
         if (std.mem.eql(u8, access.ordering, "release")) {
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "mc_barrier_release_before();\n");
         }
         try self.writeIndent();
-        try self.out.print(self.allocator, "mc_mmio_write_{s}(&{s}->{s}, ", .{ access.width, access.param, access.field });
-        try self.emitExpr(call.args[0], locals);
-        try self.out.appendSlice(self.allocator, ");\n");
+        try self.out.print(self.allocator, "mc_mmio_write_{s}(&{s}->{s}, {s});\n", .{ access.width, access.param, access.field, value_temp.name });
+        return true;
+    }
+
+    fn emitRawStoreStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitRawStoreStmt(inner.*, locals),
+            else => return false,
+        };
+        if (!isRawStoreCall(call.callee.*)) return false;
+        if (call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedCEmission;
+        const type_name = typeName(call.type_args[0]) orelse return error.UnsupportedCEmission;
+        const suffix = checkedTypeSuffix(type_name) orelse return error.UnsupportedCEmission;
+
+        const addr_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, simpleNameType("PAddr", call.args[0].span));
+        const value_temp = try self.emitSequencedCallArgTemp(call.args[1], locals, call.type_args[0]);
+        try self.writeIndent();
+        try self.out.print(self.allocator, "mc_raw_store_{s}({s}, {s});\n", .{ suffix, addr_temp.name, value_temp.name });
+        return true;
+    }
+
+    fn emitCpuPauseStmt(self: *CEmitter, expr: ast.Expr) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitCpuPauseStmt(inner.*),
+            else => return false,
+        };
+        if (!isCpuPauseCall(call.callee.*)) return false;
+        if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedCEmission;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "mc_cpu_pause();\n");
         return true;
     }
 
@@ -1969,7 +2527,7 @@ const CEmitter = struct {
             }
             try self.writeIndent();
             if (global_target) |target| {
-                try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ({s}){s});\n", .{ target.info.type_name, target.name, target.info.type_name, temp_name });
+                try self.emitGlobalStoreValue(target, temp_name);
             } else {
                 try self.emitExpr(assignment.target, locals);
                 try self.out.print(self.allocator, " = {s};\n", .{temp_name});
@@ -1984,6 +2542,9 @@ const CEmitter = struct {
     }
 
     fn emitMmioReadExprAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (try self.emitMmioReadSequencedBinaryAssignmentStmt(assignment, locals)) return true;
+        if (try self.emitMmioReadCallAssignmentStmt(assignment, locals)) return true;
+
         var replacements: std.ArrayList(MmioReadReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
         if (!try self.collectMmioReadHoistsForExpr(assignment.value, locals, &replacements)) return false;
@@ -1998,13 +2559,13 @@ const CEmitter = struct {
 
         try self.writeIndent();
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
-            try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ", .{ target.info.type_name, target.name });
+            try self.emitGlobalStorePrefix(target);
             try self.emitMmioReadExprWithReplacements(assignment.value, &nested, null, replacements.items);
-            try self.out.appendSlice(self.allocator, ");\n");
+            try self.emitGlobalStoreSuffix(target);
         } else {
             try self.emitExpr(assignment.target, locals);
             try self.out.appendSlice(self.allocator, " = ");
-            try self.emitMmioReadExprWithReplacements(assignment.value, &nested, null, replacements.items);
+            try self.emitMmioReadExprWithReplacements(assignment.value, &nested, assignmentTargetType(assignment.target, locals), replacements.items);
             try self.out.appendSlice(self.allocator, ";\n");
         }
         return true;
@@ -2031,6 +2592,9 @@ const CEmitter = struct {
     }
 
     fn emitMmioReadExprLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (try self.emitMmioReadSequencedBinaryLocalInit(name, decl_ty, initializer, locals)) return true;
+        if (try self.emitMmioReadCallLocalInit(name, decl_ty, initializer, locals)) return true;
+
         var replacements: std.ArrayList(MmioReadReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
         if (!try self.collectMmioReadHoistsForExpr(initializer, locals, &replacements)) return false;
@@ -2051,6 +2615,72 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitMmioReadSequencedBinaryReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+        const temp = (try self.emitMmioReadSequencedBinaryValueTemp(expr, locals, target_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitMmioReadSequencedBinaryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitMmioReadSequencedBinaryValueTemp(initializer, locals, decl_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        return true;
+    }
+
+    fn emitMmioReadSequencedBinaryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const temp = (try self.emitMmioReadSequencedBinaryValueTemp(assignment.value, locals, target_ty)) orelse return false;
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn emitMmioReadSequencedBinaryValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        if (!self.exprContainsMmioRead(expr, locals)) return null;
+        const node = switch (expr.kind) {
+            .grouped => |inner| return try self.emitMmioReadSequencedBinaryValueTemp(inner.*, locals, target_ty),
+            .binary => |node| node,
+            else => return null,
+        };
+        const plan = try self.sequencedBinaryPlan(node.op, target_ty) orelse return null;
+
+        const left_temp = try self.emitMmioReadOperandTemp(node.left.*, locals, target_ty);
+        const right_temp = try self.emitMmioReadOperandTemp(node.right.*, locals, target_ty);
+        return try self.emitSequencedBinaryPlanResultTemp(plan, target_ty, left_temp.name, right_temp.name);
+    }
+
+    fn emitMmioReadOperandTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+        var replacements: std.ArrayList(MmioReadReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        _ = try self.collectMmioReadHoistsForExpr(expr, locals, &replacements);
+
+        for (replacements.items) |replacement| {
+            try self.emitMmioReadReplacement(replacement);
+        }
+
+        var nested = try cloneLocals(self.allocator, locals.*);
+        defer nested.deinit();
+        try addMmioReadReplacementLocals(&nested, replacements.items);
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), temp_name });
+        try self.emitMmioReadExprWithReplacements(expr, &nested, target_ty, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return .{ .name = temp_name, .ty = target_ty };
+    }
+
     fn emitMmioReadExprInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         var replacements: std.ArrayList(MmioReadReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
@@ -2065,12 +2695,13 @@ const CEmitter = struct {
         try addMmioReadReplacementLocals(&nested, replacements.items);
 
         try locals.put(name, .{
+            .source_ty = .{ .span = initializer.span, .kind = .{ .name = .{ .text = "u32", .span = initializer.span } } },
             .c_type = "uint32_t",
             .source_type_name = "u32",
         });
         try self.writeIndent();
         try self.out.print(self.allocator, "uint32_t {s} = ", .{name});
-        try self.emitMmioReadExprWithReplacements(initializer, &nested, null, replacements.items);
+        try self.emitMmioReadExprWithReplacements(initializer, &nested, locals.get(name).?.source_ty, replacements.items);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
     }
@@ -2106,7 +2737,7 @@ const CEmitter = struct {
                 if (locals) |local_set| {
                     if (!local_set.contains(ident.text)) {
                         if (self.globals.get(ident.text)) |global| {
-                            try self.out.print(self.allocator, "mc_race_load_{s}(&{s})", .{ global.type_name, ident.text });
+                            try self.emitGlobalLoadExpr(ident.text, global);
                             return;
                         }
                     }
@@ -2114,8 +2745,18 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ident.text);
             },
             .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
+            .float_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
+            .null_literal => try self.out.appendSlice(self.allocator, "NULL"),
             .void_literal => try self.out.appendSlice(self.allocator, "0"),
+            .array_literal => {
+                try self.out.appendSlice(self.allocator, "/* unsupported targetless array literal */0");
+                return error.UnsupportedCEmission;
+            },
+            .struct_literal => {
+                try self.out.appendSlice(self.allocator, "/* unsupported targetless struct literal */0");
+                return error.UnsupportedCEmission;
+            },
             .grouped => |inner| {
                 try self.out.appendSlice(self.allocator, "(");
                 try self.emitExpr(inner.*, locals);
@@ -2129,25 +2770,26 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .binary => |node| {
-                if (checkedU32Helper(node.op)) |helper| {
-                    try self.out.print(self.allocator, "{s}(", .{helper});
-                    try self.emitExpr(node.left.*, locals);
-                    try self.out.appendSlice(self.allocator, ", ");
-                    try self.emitExpr(node.right.*, locals);
-                    try self.out.appendSlice(self.allocator, ")");
-                } else {
-                    try self.out.appendSlice(self.allocator, "(");
-                    try self.emitExpr(node.left.*, locals);
-                    try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
-                    try self.emitExpr(node.right.*, locals);
-                    try self.out.appendSlice(self.allocator, ")");
-                }
+                if (isCheckedBinaryOp(node.op) and !self.binaryIsFloat(node, locals)) return error.UnsupportedCEmission;
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitExpr(node.left.*, locals);
+                try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
+                try self.emitExpr(node.right.*, locals);
+                try self.out.appendSlice(self.allocator, ")");
             },
             .call => |node| {
                 if (trapHelperForCall(node)) |helper| {
                     try self.out.print(self.allocator, "{s}()", .{helper});
                     return;
                 }
+                if (try self.emitPhysCall(node, locals)) return;
+                if (try self.emitEnumRawCall(node, locals)) return;
+                if (try self.emitConversionCall(node, locals)) return;
+                if (try self.emitResidueCall(node, locals)) return;
+                if (try self.emitDomainOpCall(node, locals)) return;
+                if (try self.emitReflectionCall(node)) return;
+                if (try self.emitRawManyOffsetCall(node, locals)) return;
+                if (try self.emitAssumeNoaliasCall(node, locals)) return;
                 if (try self.emitUncheckedCall(node, locals)) return;
                 const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
                 try self.emitExpr(node.callee.*, locals);
@@ -2160,7 +2802,9 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .index => |node| {
-                if (sliceAccessForExpr(node.base.*, locals)) |slice| {
+                if (self.globalArrayElementAccess(node, locals)) |access| {
+                    try self.emitGlobalArrayElementLoadExpr(access, locals);
+                } else if (sliceAccessForExpr(node.base.*, locals)) |slice| {
                     try self.emitExpr(node.base.*, locals);
                     try self.out.print(self.allocator, ".{s}[mc_check_index_usize(", .{slice.ptr_field});
                     try self.emitExpr(node.index.*, locals);
@@ -2169,6 +2813,9 @@ const CEmitter = struct {
                     try self.out.print(self.allocator, ".{s})]", .{slice.len_field});
                 } else {
                     try self.emitExpr(node.base.*, locals);
+                    if (arrayElemsFieldForExpr(node.base.*, locals)) |elems_field| {
+                        try self.out.print(self.allocator, ".{s}", .{elems_field});
+                    }
                     try self.out.appendSlice(self.allocator, "[");
                     if (arrayLenForExpr(node.base.*, locals)) |len| {
                         try self.out.appendSlice(self.allocator, "mc_check_index_usize(");
@@ -2182,7 +2829,7 @@ const CEmitter = struct {
             },
             .address_of => |inner| {
                 try self.out.appendSlice(self.allocator, "&");
-                try self.emitExpr(inner.*, locals);
+                try self.emitAddressOperand(inner.*, locals);
             },
             .deref => |inner| {
                 try self.out.appendSlice(self.allocator, "*");
@@ -2190,6 +2837,10 @@ const CEmitter = struct {
             },
             .member => |node| {
                 if (try self.emitPackedBitsMember(node, locals)) return;
+                if (self.globalMemberAccess(node, locals)) |access| {
+                    try self.emitGlobalLoadExpr(access.name, access.info);
+                    return;
+                }
                 try self.emitExpr(node.base.*, locals);
                 try self.out.print(self.allocator, ".{s}", .{node.name.text});
             },
@@ -2203,6 +2854,403 @@ const CEmitter = struct {
                 return error.UnsupportedCEmission;
             },
         }
+    }
+
+    fn emitAddressOperand(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        switch (expr.kind) {
+            .ident => |ident| {
+                if (locals) |local_set| {
+                    if (!local_set.contains(ident.text) and self.globals.contains(ident.text)) {
+                        try self.out.appendSlice(self.allocator, ident.text);
+                        return;
+                    }
+                }
+                try self.out.appendSlice(self.allocator, ident.text);
+            },
+            .grouped => |inner| {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitAddressOperand(inner.*, locals);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .index => |node| {
+                if (sliceAccessForExpr(node.base.*, locals)) |slice| {
+                    try self.emitExpr(node.base.*, locals);
+                    try self.out.print(self.allocator, ".{s}[mc_check_index_usize(", .{slice.ptr_field});
+                    try self.emitExpr(node.index.*, locals);
+                    try self.out.appendSlice(self.allocator, ", ");
+                    try self.emitExpr(node.base.*, locals);
+                    try self.out.print(self.allocator, ".{s})]", .{slice.len_field});
+                } else {
+                    try self.emitAddressOperand(node.base.*, locals);
+                    if (arrayElemsFieldForExpr(node.base.*, locals)) |elems_field| {
+                        try self.out.print(self.allocator, ".{s}", .{elems_field});
+                    }
+                    try self.out.appendSlice(self.allocator, "[");
+                    if (arrayLenForExpr(node.base.*, locals)) |len| {
+                        try self.out.appendSlice(self.allocator, "mc_check_index_usize(");
+                        try self.emitExpr(node.index.*, locals);
+                        try self.out.print(self.allocator, ", {s})", .{len});
+                    } else {
+                        try self.emitExpr(node.index.*, locals);
+                    }
+                    try self.out.appendSlice(self.allocator, "]");
+                }
+            },
+            .member => |node| {
+                try self.emitAddressOperand(node.base.*, locals);
+                try self.out.print(self.allocator, ".{s}", .{node.name.text});
+            },
+            else => try self.emitExpr(expr, locals),
+        }
+    }
+
+    fn emitEnumRawCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        if (call.type_args.len != 0) return false;
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!std.mem.eql(u8, member.name.text, "raw")) return false;
+        if (call.args.len != 0) return error.UnsupportedCEmission;
+        const enum_name = self.enumNameForValueExpr(member.base.*, locals) orelse return false;
+        const enum_decl = self.enums.get(enum_name) orelse return false;
+        if (!enum_decl.is_open) return false;
+        try self.emitExpr(member.base.*, locals);
+        return true;
+    }
+
+    // Cast-style scalar/domain conversions (`from`, `wrap_from`, `from_mod`) lower
+    // to a plain C cast; `wrap<T>` already lowers to its inner integer type.
+    // Checked conversions (`trap_from`/`sat_from`/`try_from`) are not yet emitted.
+    fn emitConversionCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        if (call.type_args.len != 0) return false;
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const op = member.name.text;
+        const is_cast = std.mem.eql(u8, op, "from") or std.mem.eql(u8, op, "wrap_from") or std.mem.eql(u8, op, "from_mod");
+        const is_checked = std.mem.eql(u8, op, "trap_from") or std.mem.eql(u8, op, "sat_from") or std.mem.eql(u8, op, "try_from");
+        if (!is_cast and !is_checked) return false;
+        const ident = switch (member.base.kind) {
+            .ident => |id| id,
+            else => return false,
+        };
+        if (locals) |ls| {
+            if (ls.contains(ident.text)) return false;
+        }
+        const resolved = self.resolveAliasType(simpleNameType(ident.text, ident.span));
+        const target_name = typeName(resolved);
+        const numeric_target = isNumericStorageType(resolved) or (target_name != null and primitiveCTypeName(target_name.?) != null);
+        if (!numeric_target) return false;
+        if (call.args.len != 1) return error.UnsupportedCEmission;
+        const cty = try self.cTypeFor(resolved, .typedef_name);
+
+        if (is_checked) {
+            const dst_name = self.underlyingIntTypeName(resolved) orelse return error.UnsupportedCEmission;
+            const dst_range = intTypeRange(dst_name) orelse return error.UnsupportedCEmission;
+            const src_ty = self.numericExprTypeForEmission(call.args[0], locals) orelse return error.UnsupportedCEmission;
+            const src_name = self.underlyingIntTypeName(src_ty) orelse return error.UnsupportedCEmission;
+            const src_range = intTypeRange(src_name) orelse return error.UnsupportedCEmission;
+            const need_lower = src_range.min < dst_range.min;
+            const need_upper = src_range.max > dst_range.max;
+
+            // try_from -> Result<T, ConversionError> (section 3): ok on success,
+            // a conversion error when the source is out of the target range.
+            if (std.mem.eql(u8, op, "try_from")) {
+                const struct_name = try self.resultTypeName(resolved, simpleNameType("ConversionError", member.name.span));
+                if (!need_lower and !need_upper) {
+                    try self.out.print(self.allocator, "(({s}){{ .is_ok = true, .payload.ok = ({s})(", .{ struct_name, cty });
+                    try self.emitExpr(call.args[0], locals);
+                    try self.out.appendSlice(self.allocator, ") })");
+                    return true;
+                }
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitConversionBound(call.args[0], locals, dst_range, need_lower, need_upper);
+                try self.out.print(self.allocator, " ? (({s}){{ .is_ok = false, .payload.err = 0 }}) : (({s}){{ .is_ok = true, .payload.ok = ({s})(", .{ struct_name, struct_name, cty });
+                try self.emitExpr(call.args[0], locals);
+                try self.out.appendSlice(self.allocator, ") }))");
+                return true;
+            }
+
+            if (!need_lower and !need_upper) {
+                try self.out.print(self.allocator, "(({s})(", .{cty});
+                try self.emitExpr(call.args[0], locals);
+                try self.out.appendSlice(self.allocator, "))");
+                return true;
+            }
+
+            if (std.mem.eql(u8, op, "trap_from")) {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitConversionBound(call.args[0], locals, dst_range, need_lower, need_upper);
+                try self.out.print(self.allocator, " ? (mc_trap_IntegerOverflow(), ({s})0) : ({s})(", .{ cty, cty });
+                try self.emitExpr(call.args[0], locals);
+                try self.out.appendSlice(self.allocator, "))");
+                return true;
+            }
+
+            // sat_from: clamp into the destination range.
+            try self.out.print(self.allocator, "(({s})(", .{cty});
+            if (need_lower) {
+                try self.out.appendSlice(self.allocator, "(__int128)(");
+                try self.emitExpr(call.args[0], locals);
+                try self.out.print(self.allocator, ") < (__int128)({s}) ? ({s}) : (", .{ dst_range.c_min, dst_range.c_min });
+            }
+            if (need_upper) {
+                try self.out.appendSlice(self.allocator, "(__int128)(");
+                try self.emitExpr(call.args[0], locals);
+                try self.out.print(self.allocator, ") > (__int128)({s}) ? ({s}) : (", .{ dst_range.c_max, dst_range.c_max });
+            }
+            try self.emitExpr(call.args[0], locals);
+            if (need_upper) try self.out.appendSlice(self.allocator, ")");
+            if (need_lower) try self.out.appendSlice(self.allocator, ")");
+            try self.out.appendSlice(self.allocator, "))");
+            return true;
+        }
+
+        try self.out.print(self.allocator, "(({s})(", .{cty});
+        try self.emitExpr(call.args[0], locals);
+        try self.out.appendSlice(self.allocator, "))");
+        return true;
+    }
+
+    fn emitConversionBound(self: *CEmitter, value: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), range: IntTypeRange, need_lower: bool, need_upper: bool) !void {
+        if (need_lower) {
+            try self.out.appendSlice(self.allocator, "(__int128)(");
+            try self.emitExpr(value, locals);
+            try self.out.print(self.allocator, ") < (__int128)({s})", .{range.c_min});
+        }
+        if (need_lower and need_upper) try self.out.appendSlice(self.allocator, " || ");
+        if (need_upper) {
+            try self.out.appendSlice(self.allocator, "(__int128)(");
+            try self.emitExpr(value, locals);
+            try self.out.print(self.allocator, ") > (__int128)({s})", .{range.c_max});
+        }
+    }
+
+    fn underlyingIntTypeName(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .name => |n| if (intTypeRange(n.text) != null) n.text else null,
+            .generic => |g| if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat") or
+                std.mem.eql(u8, g.base.text, "serial") or std.mem.eql(u8, g.base.text, "counter")) and g.args.len == 1)
+                self.underlyingIntTypeName(g.args[0])
+            else
+                null,
+            .qualified => |q| self.underlyingIntTypeName(q.child.*),
+            else => null,
+        };
+    }
+
+    // `wrap<T>.residue()` exposes the raw representative; `wrap<T>` already lowers
+    // to its inner integer type, so this is the identity on the C value.
+    fn emitResidueCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        if (call.type_args.len != 0) return false;
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!std.mem.eql(u8, member.name.text, "residue")) return false;
+        _ = self.numericExprTypeForEmission(member.base.*, locals) orelse return false;
+        if (call.args.len != 0) return error.UnsupportedCEmission;
+        try self.emitExpr(member.base.*, locals);
+        return true;
+    }
+
+    // Serial/counter domain operations. `serial<T>`/`counter<T>` lower to their
+    // unsigned inner integer, so the modular difference is plain wrapping
+    // subtraction; serial ordering reinterprets that difference as signed.
+    fn emitDomainOpCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        if (call.type_args.len != 0) return false;
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const op = member.name.text;
+        const is_serial_op = std.mem.eql(u8, op, "before") or std.mem.eql(u8, op, "after") or
+            std.mem.eql(u8, op, "distance") or std.mem.eql(u8, op, "compare");
+        const is_counter_op = std.mem.eql(u8, op, "delta_mod") or
+            std.mem.eql(u8, op, "elapsed_assume_within") or std.mem.eql(u8, op, "elapsed_bounded");
+        if (!is_serial_op and !is_counter_op) return false;
+        const ident = switch (member.base.kind) {
+            .ident => |id| id,
+            else => return false,
+        };
+        if (locals) |ls| {
+            if (ls.contains(ident.text)) return false;
+        }
+        const resolved = self.resolveAliasType(simpleNameType(ident.text, ident.span));
+        const node = switch (resolved.kind) {
+            .generic => |n| n,
+            else => return false,
+        };
+        const is_serial = std.mem.eql(u8, node.base.text, "serial");
+        const is_counter = std.mem.eql(u8, node.base.text, "counter");
+        if ((!is_serial and !is_counter) or node.args.len != 1) return false;
+        if (is_serial_op and !is_serial) return false;
+        if (is_counter_op and !is_counter) return false;
+        if (call.args.len < 2) return error.UnsupportedCEmission;
+        const inner_name = typeName(node.args[0]) orelse return error.UnsupportedCEmission;
+        const unsigned_c = primitiveCTypeName(inner_name) orelse return error.UnsupportedCEmission;
+
+        // serial.compare -> Result<Order, AmbiguousSerialOrder> (section 5.4).
+        // Ambiguous exactly when the signed modular difference is the half-window
+        // boundary (the wrapped INT_MIN), otherwise a three-way Order (-1/0/+1).
+        if (std.mem.eql(u8, op, "compare")) {
+            const signed_c = signedCTypeForInner(inner_name) orelse return error.UnsupportedCEmission;
+            const min_macro = signedMinMacroForInner(inner_name) orelse return error.UnsupportedCEmission;
+            const struct_name = try self.resultTypeName(simpleNameType("Order", member.name.span), simpleNameType("AmbiguousSerialOrder", member.name.span));
+            try self.out.appendSlice(self.allocator, "(");
+            try self.emitSignedSerialDiff(call.args[0], call.args[1], locals, signed_c, unsigned_c);
+            try self.out.print(self.allocator, " == {s} ? (({s}){{ .is_ok = false, .payload.err = 0 }}) : (({s}){{ .is_ok = true, .payload.ok = (", .{ min_macro, struct_name, struct_name });
+            try self.emitSignedSerialDiff(call.args[0], call.args[1], locals, signed_c, unsigned_c);
+            try self.out.appendSlice(self.allocator, " < 0 ? -1 : (");
+            try self.emitSignedSerialDiff(call.args[0], call.args[1], locals, signed_c, unsigned_c);
+            try self.out.appendSlice(self.allocator, " > 0 ? 1 : 0)) }))");
+            return true;
+        }
+
+        // counter.elapsed_bounded -> Result<Duration<T>, AmbiguousCounterInterval>
+        // (section 5.5). Ok when the modular delta does not exceed the supplied
+        // maximum interval, otherwise the interval is ambiguous.
+        if (std.mem.eql(u8, op, "elapsed_bounded")) {
+            if (call.args.len != 3) return error.UnsupportedCEmission;
+            const duration_ty: ast.TypeExpr = .{ .span = member.name.span, .kind = .{ .generic = .{ .base = .{ .text = "Duration", .span = member.name.span }, .args = node.args } } };
+            const struct_name = try self.resultTypeName(duration_ty, simpleNameType("AmbiguousCounterInterval", member.name.span));
+            try self.out.print(self.allocator, "((({s})(", .{unsigned_c});
+            try self.emitExpr(call.args[0], locals);
+            try self.out.appendSlice(self.allocator, " - ");
+            try self.emitExpr(call.args[1], locals);
+            try self.out.appendSlice(self.allocator, ")) <= (");
+            try self.emitExpr(call.args[2], locals);
+            try self.out.print(self.allocator, ") ? (({s}){{ .is_ok = true, .payload.ok = ({s})(", .{ struct_name, unsigned_c });
+            try self.emitExpr(call.args[0], locals);
+            try self.out.appendSlice(self.allocator, " - ");
+            try self.emitExpr(call.args[1], locals);
+            try self.out.print(self.allocator, ") }}) : (({s}){{ .is_ok = false, .payload.err = 0 }}))", .{struct_name});
+            return true;
+        }
+
+        // `elapsed_assume_within` is a pure modular delta at runtime: the temporal
+        // assumption grants the optimizer no extra license (section 5.5).
+        if (std.mem.eql(u8, op, "distance") or std.mem.eql(u8, op, "delta_mod") or std.mem.eql(u8, op, "elapsed_assume_within")) {
+            try self.out.print(self.allocator, "(({s})(", .{unsigned_c});
+            try self.emitExpr(call.args[0], locals);
+            try self.out.appendSlice(self.allocator, " - ");
+            try self.emitExpr(call.args[1], locals);
+            try self.out.appendSlice(self.allocator, "))");
+            return true;
+        }
+
+        const signed_c = signedCTypeForInner(inner_name) orelse return error.UnsupportedCEmission;
+        const cmp: []const u8 = if (std.mem.eql(u8, op, "before")) "<" else ">";
+        try self.out.print(self.allocator, "(({s})(({s})(", .{ signed_c, unsigned_c });
+        try self.emitExpr(call.args[0], locals);
+        try self.out.appendSlice(self.allocator, " - ");
+        try self.emitExpr(call.args[1], locals);
+        try self.out.print(self.allocator, ")) {s} 0)", .{cmp});
+        return true;
+    }
+
+    fn emitSignedSerialDiff(self: *CEmitter, a: ast.Expr, b: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), signed_c: []const u8, unsigned_c: []const u8) !void {
+        try self.out.print(self.allocator, "({s})({s})(", .{ signed_c, unsigned_c });
+        try self.emitExpr(a, locals);
+        try self.out.appendSlice(self.allocator, " - ");
+        try self.emitExpr(b, locals);
+        try self.out.appendSlice(self.allocator, ")");
+    }
+
+    fn emitPhysCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        if (!isIdentNamed(call.callee.*, "phys")) return false;
+        if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
+        try self.out.appendSlice(self.allocator, "((uintptr_t)(");
+        try self.emitExpr(call.args[0], locals);
+        try self.out.appendSlice(self.allocator, "))");
+        return true;
+    }
+
+    fn emitReflectionCall(self: *CEmitter, call: anytype) !bool {
+        const kind = reflectionCallKind(call.callee.*) orelse return false;
+        if (call.type_args.len != 1) return error.UnsupportedCEmission;
+        const target_ty = call.type_args[0];
+        switch (kind) {
+            .size => {
+                if (call.args.len != 0) return error.UnsupportedCEmission;
+                try self.out.print(self.allocator, "((uintptr_t)sizeof({s}))", .{try self.reflectionCTypeFor(target_ty)});
+                return true;
+            },
+            .alignment => {
+                if (call.args.len != 0) return error.UnsupportedCEmission;
+                try self.out.print(self.allocator, "((uintptr_t)alignof({s}))", .{try self.reflectionCTypeFor(target_ty)});
+                return true;
+            },
+            .field_offset => {
+                if (call.args.len != 1) return error.UnsupportedCEmission;
+                const field_name = reflectionFieldName(call.args[0]) orelse return error.UnsupportedCEmission;
+                if (typeName(target_ty)) |type_name| {
+                    if (self.overlay_unions.get(type_name)) |overlay| {
+                        if (!overlay.fields.contains(field_name)) return error.UnsupportedCEmission;
+                        try self.out.appendSlice(self.allocator, "((uintptr_t)0)");
+                        return true;
+                    }
+                }
+                try self.out.print(self.allocator, "((uintptr_t)offsetof({s}, {s}))", .{ try self.reflectionCTypeFor(target_ty), field_name });
+                return true;
+            },
+            .bit_offset => {
+                if (call.args.len != 1) return error.UnsupportedCEmission;
+                const field_name = reflectionFieldName(call.args[0]) orelse return error.UnsupportedCEmission;
+                const type_name = typeName(target_ty) orelse return error.UnsupportedCEmission;
+                if (self.packed_bits.get(type_name)) |info| {
+                    const field = info.fields.get(field_name) orelse return error.UnsupportedCEmission;
+                    try self.out.print(self.allocator, "((uintptr_t){d})", .{field.bit_index});
+                    return true;
+                }
+                try self.out.print(self.allocator, "((uintptr_t)(offsetof({s}, {s}) * CHAR_BIT))", .{ try self.reflectionCTypeFor(target_ty), field_name });
+                return true;
+            },
+            .repr => {
+                if (call.args.len != 0) return error.UnsupportedCEmission;
+                const type_name = typeName(target_ty) orelse return error.UnsupportedCEmission;
+                if (self.enums.get(type_name)) |enum_decl| {
+                    const repr = enum_decl.repr orelse simpleNameType("isize", target_ty.span);
+                    try self.out.print(self.allocator, "((uintptr_t)sizeof({s}))", .{try self.reflectionCTypeFor(repr)});
+                    return true;
+                }
+                if (self.packed_bits.get(type_name)) |info| {
+                    try self.out.print(self.allocator, "((uintptr_t)sizeof({s}))", .{info.repr_c_type});
+                    return true;
+                }
+                return error.UnsupportedCEmission;
+            },
+        }
+    }
+
+    fn reflectionCTypeFor(self: *CEmitter, ty: ast.TypeExpr) ![]const u8 {
+        if (typeName(ty)) |name| {
+            if (self.mmio_structs.contains(name)) return name;
+        }
+        if (ty.kind == .generic) {
+            const generic = ty.kind.generic;
+            if (std.mem.eql(u8, generic.base.text, "DmaBuf") and generic.args.len == 2) return "uintptr_t";
+        }
+        return try self.cTypeFor(ty, .typedef_name);
     }
 
     fn emitUncheckedCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
@@ -2225,8 +3273,61 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitAssumeNoaliasCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        if (!isAssumeNoaliasCall(call)) return false;
+        if (call.args.len != 2) return error.UnsupportedCEmission;
+
+        try self.out.appendSlice(self.allocator, "((void)(");
+        try self.emitExpr(call.args[1], locals);
+        try self.out.appendSlice(self.allocator, "), ");
+        try self.emitExpr(call.args[0], locals);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    fn emitRawManyOffsetCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        if (call.type_args.len != 0) return false;
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!std.mem.eql(u8, member.name.text, "offset")) return false;
+        if (call.args.len != 1) return error.UnsupportedCEmission;
+        if (self.rawManyOffsetExprTypeForEmission(member.base.*, locals) == null) return false;
+
+        try self.out.appendSlice(self.allocator, "(");
+        try self.emitExpr(member.base.*, locals);
+        try self.out.appendSlice(self.allocator, " + ");
+        try self.emitExpr(call.args[0], locals);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
     fn emitExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
         switch (expr.kind) {
+            .array_literal => |items| {
+                const target = target_ty orelse return error.UnsupportedCEmission;
+                try self.emitArrayLiteral(items, locals, target);
+            },
+            .struct_literal => |fields| {
+                const target = target_ty orelse return error.UnsupportedCEmission;
+                if (try self.emitPackedBitsLiteral(fields, locals, target)) return;
+                try self.emitStructLiteral(fields, locals, target);
+            },
+            .binary => |node| {
+                if (try self.emitWrapBinaryWithTarget(node, locals, target_ty)) return;
+                if (try self.emitSatBinaryWithTarget(node, locals, target_ty)) return;
+                if (try self.emitCheckedBinaryWithTarget(node, locals, target_ty)) return;
+                try self.emitExpr(expr, locals);
+            },
+            .unary => |node| {
+                if (try self.emitCheckedUnaryWithTarget(node, locals, target_ty)) return;
+                try self.emitExpr(expr, locals);
+            },
             .call => |node| {
                 if (target_ty) |ty| {
                     if (try self.emitResultConstructor(node, locals, ty)) return;
@@ -2247,6 +3348,183 @@ const CEmitter = struct {
             },
             else => try self.emitExpr(expr, locals),
         }
+    }
+
+    fn emitArrayLiteral(self: *CEmitter, items: []const ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
+        const resolved_target_ty = self.resolveAliasType(target_ty);
+        const array = switch (resolved_target_ty.kind) {
+            .array => |node| node,
+            .qualified => |node| switch (node.child.kind) {
+                .array => |array_node| array_node,
+                else => return error.UnsupportedCEmission,
+            },
+            else => return error.UnsupportedCEmission,
+        };
+        try self.out.print(self.allocator, "({s}){{ .elems = {{ ", .{try self.cTypeFor(resolved_target_ty, .typedef_name)});
+        for (items, 0..) |item, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.emitExprWithTarget(item, locals, array.child.*);
+        }
+        try self.out.appendSlice(self.allocator, " } }");
+    }
+
+    fn emitStructLiteral(self: *CEmitter, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
+        const resolved_target_ty = self.resolveAliasType(target_ty);
+        const struct_name = structTypeName(resolved_target_ty) orelse return error.UnsupportedCEmission;
+        const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "({s}){{ ", .{try self.cTypeFor(resolved_target_ty, .typedef_name)});
+        for (fields, 0..) |field, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            const field_ty = structFieldType(struct_decl, field.name.text) orelse return error.UnsupportedCEmission;
+            try self.out.print(self.allocator, ".{s} = ", .{field.name.text});
+            try self.emitExprWithTarget(field.value, locals, field_ty);
+        }
+        try self.out.appendSlice(self.allocator, " }");
+    }
+
+    fn emitPackedBitsLiteral(self: *CEmitter, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!bool {
+        const resolved_target_ty = self.resolveAliasType(target_ty);
+        const packed_name = typeName(resolved_target_ty) orelse return false;
+        const info = self.packed_bits.get(packed_name) orelse return false;
+        try self.out.print(self.allocator, "({s})(", .{packed_name});
+        if (fields.len == 0) {
+            try self.out.print(self.allocator, "({s})0", .{packed_name});
+        }
+        for (fields, 0..) |field, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, " | ");
+            const packed_field = info.fields.get(field.name.text) orelse return error.UnsupportedCEmission;
+            const mask = try self.packedBitsMaskLiteral(info, packed_field.bit_index);
+            try self.out.appendSlice(self.allocator, "(");
+            try self.emitExprWithTarget(field.value, locals, simpleNameType("bool", field.value.span));
+            try self.out.print(self.allocator, " ? {s} : ({s})0)", .{ mask, packed_name });
+        }
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    fn emitWrapBinaryWithTarget(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return false;
+        const inner = genericChildType(target, "wrap") orelse return false;
+        const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
+        if (unsignedTypeSuffix(inner_name) == null) return error.UnsupportedCEmission;
+
+        switch (node.op) {
+            .add, .sub, .mul, .bit_and, .bit_or, .bit_xor => {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitExprWithTarget(node.left.*, locals, target);
+                try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
+                try self.emitExprWithTarget(node.right.*, locals, target);
+                try self.out.appendSlice(self.allocator, ")");
+                return true;
+            },
+            .shl, .shr => {
+                const suffix = unsignedTypeSuffix(inner_name) orelse return error.UnsupportedCEmission;
+                try self.out.print(self.allocator, "mc_wrap_{s}_{s}(", .{ if (node.op == .shl) "shl" else "shr", suffix });
+                try self.emitExprWithTarget(node.left.*, locals, target);
+                try self.out.appendSlice(self.allocator, ", ");
+                try self.emitExprWithTarget(node.right.*, locals, target);
+                try self.out.appendSlice(self.allocator, ")");
+                return true;
+            },
+            .div, .mod => {
+                const helper = checkedHelperParts(node.op, inner_name) orelse return error.UnsupportedCEmission;
+                try self.out.print(self.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
+                try self.emitExprWithTarget(node.left.*, locals, target);
+                try self.out.appendSlice(self.allocator, ", ");
+                try self.emitExprWithTarget(node.right.*, locals, target);
+                try self.out.appendSlice(self.allocator, ")");
+                return true;
+            },
+            else => return false,
+        }
+    }
+
+    fn emitSatBinaryWithTarget(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return false;
+        const inner = genericChildType(target, "sat") orelse return false;
+        const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
+        const helper = satHelperParts(node.op, inner_name) orelse return false;
+
+        try self.out.print(self.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
+        try self.emitExprWithTarget(node.left.*, locals, target);
+        try self.out.appendSlice(self.allocator, ", ");
+        try self.emitExprWithTarget(node.right.*, locals, target);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    fn emitCheckedBinaryWithTarget(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+        if (!isCheckedBinaryOp(node.op)) return false;
+        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return error.UnsupportedCEmission;
+        if (isWrapType(target) or isSatType(target)) return false;
+        const target_name = typeName(target) orelse return error.UnsupportedCEmission;
+        const helper = checkedHelperParts(node.op, target_name) orelse return false;
+
+        try self.out.print(self.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
+        try self.emitExprWithTarget(node.left.*, locals, target);
+        try self.out.appendSlice(self.allocator, ", ");
+        try self.emitExprWithTarget(node.right.*, locals, target);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    fn emitCheckedUnaryWithTarget(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+        if (node.op != .neg) return false;
+        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return error.UnsupportedCEmission;
+        if (isWrapType(target) or isSatType(target)) return false;
+        const target_name = typeName(target) orelse return error.UnsupportedCEmission;
+        const suffix = signedTypeSuffix(target_name) orelse return false;
+
+        if (node.expr.kind == .int_literal) {
+            try self.out.print(self.allocator, "(({s})-", .{try self.cTypeFor(target, .typedef_name)});
+            try appendCIntLiteral(self.allocator, self.out, node.expr.kind.int_literal);
+            try self.out.appendSlice(self.allocator, ")");
+            return true;
+        }
+
+        try self.out.print(self.allocator, "mc_checked_neg_{s}(", .{suffix});
+        try self.emitExprWithTarget(node.expr.*, locals, target);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    fn emitCheckedUnaryWithTryReplacements(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const TryReplacement) anyerror!bool {
+        if (node.op != .neg) return false;
+        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return error.UnsupportedCEmission;
+        if (isWrapType(target) or isSatType(target)) return false;
+        const target_name = typeName(target) orelse return error.UnsupportedCEmission;
+        const suffix = signedTypeSuffix(target_name) orelse return false;
+
+        try self.out.print(self.allocator, "mc_checked_neg_{s}(", .{suffix});
+        try self.emitResultTryExprWithReplacements(node.expr.*, locals, target, replacements);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    fn emitCheckedUnaryWithMmioReplacements(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const MmioReadReplacement) anyerror!bool {
+        if (node.op != .neg) return false;
+        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return error.UnsupportedCEmission;
+        if (isWrapType(target) or isSatType(target)) return false;
+        const target_name = typeName(target) orelse return error.UnsupportedCEmission;
+        const suffix = signedTypeSuffix(target_name) orelse return false;
+
+        try self.out.print(self.allocator, "mc_checked_neg_{s}(", .{suffix});
+        try self.emitMmioReadExprWithReplacements(node.expr.*, locals, target, replacements);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    fn emitCheckedUnaryWithNullableReplacements(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const TryReplacement) anyerror!bool {
+        if (node.op != .neg) return false;
+        const target = if (target_ty) |ty| self.resolveAliasType(ty) else return error.UnsupportedCEmission;
+        if (isWrapType(target) or isSatType(target)) return false;
+        const target_name = typeName(target) orelse return error.UnsupportedCEmission;
+        const suffix = signedTypeSuffix(target_name) orelse return false;
+
+        try self.out.print(self.allocator, "mc_checked_neg_{s}(", .{suffix});
+        try self.emitNullableTryExprWithReplacements(node.expr.*, locals, target, replacements);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
     }
 
     fn emitResultConstructor(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
@@ -2392,7 +3670,145 @@ const CEmitter = struct {
                 if (self.globals.get(ident.text)) |global| .{ .name = ident.text, .info = global } else null
             else
                 null,
+            .member => |member| self.globalMemberAccess(member, locals),
             .grouped => |inner| self.globalAssignmentTarget(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn globalMemberAccess(self: *CEmitter, member: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?GlobalAccess {
+        const base_ident = switch (member.base.kind) {
+            .ident => |ident| ident,
+            .grouped => |inner| switch (inner.kind) {
+                .ident => |ident| ident,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (locals) |local_set| if (local_set.contains(base_ident.text)) return null;
+        const global = self.globals.get(base_ident.text) orelse return null;
+        const struct_decl = self.structs.get(global.type_name) orelse return null;
+        for (struct_decl.fields) |field| {
+            if (!std.mem.eql(u8, field.name.text, member.name.text)) continue;
+            const info = self.globalInfoFromType(field.ty) catch return null;
+            return .{
+                .name = std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{ base_ident.text, member.name.text }) catch return null,
+                .info = info,
+            };
+        }
+        return null;
+    }
+
+    fn globalArrayElementAccess(self: *CEmitter, index: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?GlobalArrayElementAccess {
+        const base_ident = switch (index.base.kind) {
+            .ident => |ident| ident,
+            .grouped => |inner| switch (inner.kind) {
+                .ident => |ident| ident,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (locals) |local_set| if (local_set.contains(base_ident.text)) return null;
+        const global = self.globals.get(base_ident.text) orelse return null;
+        const element_info = global.array_element_info orelse return null;
+        const len = global.array_len orelse return null;
+        return .{
+            .base_name = base_ident.text,
+            .index = index.index.*,
+            .len = len,
+            .element_info = element_info,
+        };
+    }
+
+    fn emitGlobalArrayElementLoadExpr(self: *CEmitter, access: GlobalArrayElementAccess, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&{s}.elems[mc_check_index_usize(", .{ access.element_info.c_type, access.element_info.race_type_name, access.base_name });
+        try self.emitExpr(access.index, locals);
+        try self.out.print(self.allocator, ", {s})]))", .{access.len});
+    }
+
+    fn emitGlobalArrayIndexAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const index = switch (assignment.target.kind) {
+            .index => |node| node,
+            .grouped => |inner| return try self.emitGlobalArrayIndexAssignmentStmt(.{ .target = inner.*, .value = assignment.value }, locals),
+            else => return false,
+        };
+        const access = self.globalArrayElementAccess(index, locals) orelse return false;
+        const index_temp = try self.emitSequencedCallArgTemp(access.index, locals, simpleNameType("usize", access.index.span));
+        const value_temp = try self.emitSequencedCallArgTemp(assignment.value, locals, access.element_info.source_ty);
+        try self.writeIndent();
+        try self.out.print(
+            self.allocator,
+            "mc_race_store_{s}(&{s}.elems[mc_check_index_usize({s}, {s})], ({s}){s});\n",
+            .{ access.element_info.race_type_name, access.base_name, index_temp.name, access.len, access.element_info.race_c_type, value_temp.name },
+        );
+        return true;
+    }
+
+    fn emitGlobalLoadExpr(self: *CEmitter, name: []const u8, global: GlobalInfo) !void {
+        if (global.pointer_like) {
+            try self.out.print(self.allocator, "(({s})__atomic_load_n(&{s}, __ATOMIC_RELAXED))", .{ global.c_type, name });
+        } else {
+            try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&{s}))", .{ global.c_type, global.race_type_name, name });
+        }
+    }
+
+    fn emitGlobalStorePrefix(self: *CEmitter, target: GlobalAccess) !void {
+        if (target.info.pointer_like) {
+            try self.out.print(self.allocator, "__atomic_store_n(&{s}, ({s})", .{ target.name, target.info.c_type });
+        } else {
+            try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ({s})", .{ target.info.race_type_name, target.name, target.info.race_c_type });
+        }
+    }
+
+    fn emitGlobalStoreSuffix(self: *CEmitter, target: GlobalAccess) !void {
+        if (target.info.pointer_like) {
+            try self.out.appendSlice(self.allocator, ", __ATOMIC_RELAXED);\n");
+        } else {
+            try self.out.appendSlice(self.allocator, ");\n");
+        }
+    }
+
+    fn emitGlobalStoreValue(self: *CEmitter, target: GlobalAccess, value: []const u8) !void {
+        try self.emitGlobalStorePrefix(target);
+        try self.out.appendSlice(self.allocator, value);
+        try self.emitGlobalStoreSuffix(target);
+    }
+
+    fn emitStaticCInitializer(self: *CEmitter, expr: ast.Expr) !bool {
+        switch (expr.kind) {
+            .grouped => |inner| {
+                if (!isDirectStaticCInitializer(inner.*)) return false;
+                try self.out.appendSlice(self.allocator, "(");
+                if (!try self.emitStaticCInitializer(inner.*)) return false;
+                try self.out.appendSlice(self.allocator, ")");
+                return true;
+            },
+            .unary => |node| {
+                if (node.op != .neg) return false;
+                const literal = switch (node.expr.kind) {
+                    .int_literal => |value| value,
+                    else => return false,
+                };
+                try self.out.appendSlice(self.allocator, "-");
+                try appendCIntLiteral(self.allocator, self.out, literal);
+                return true;
+            },
+            else => return false,
+        }
+    }
+
+    fn staticCInitializer(self: *CEmitter, expr: ast.Expr) ?ast.Expr {
+        return switch (expr.kind) {
+            .ident => |ident| self.static_initializers.get(ident.text),
+            .grouped => |inner| if (self.staticCInitializer(inner.*)) |resolved| resolved else if (isStaticCInitializer(expr)) expr else null,
+            else => if (isStaticCInitializer(expr)) expr else null,
+        };
+    }
+
+    fn assignmentTargetType(target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        return switch (target.kind) {
+            .ident => |ident| if (locals.get(ident.text)) |info| info.source_ty else null,
+            .grouped => |inner| assignmentTargetType(inner.*, locals),
             else => null,
         };
     }
@@ -2408,6 +3824,55 @@ const CEmitter = struct {
                 return null;
             },
             .grouped => |inner| self.enumNameForExpr(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn exprIsBoolForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .bool_literal => true,
+            .ident => |ident| {
+                if (locals) |local_set| {
+                    if (local_set.get(ident.text)) |info| {
+                        if (info.source_ty) |ty| return isBoolType(ty);
+                    }
+                }
+                if (self.globals.get(ident.text)) |global| {
+                    if (global.source_ty) |ty| return isBoolType(ty);
+                }
+                return false;
+            },
+            .call => if (self.callReturnTypeForExpr(expr, locals)) |ty| isBoolType(ty) else false,
+            .grouped => |inner| self.exprIsBoolForEmission(inner.*, locals),
+            else => false,
+        };
+    }
+
+    fn enumNameForValueExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| {
+                if (locals) |local_set| {
+                    if (local_set.get(ident.text)) |info| {
+                        if (info.source_type_name) |name| if (self.enums.contains(name)) return name;
+                    }
+                }
+                if (self.globals.get(ident.text)) |global| {
+                    if (self.enums.contains(global.type_name)) return global.type_name;
+                }
+                return null;
+            },
+            .call => |node| blk: {
+                const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
+                const info = self.functions.get(fn_name) orelse break :blk null;
+                const ret_ty = info.return_type orelse break :blk null;
+                const name = typeName(ret_ty) orelse break :blk null;
+                break :blk if (self.enums.contains(name)) name else null;
+            },
+            .cast => |node| {
+                const name = typeName(node.ty.*) orelse return null;
+                return if (self.enums.contains(name)) name else null;
+            },
+            .grouped => |inner| self.enumNameForValueExpr(inner.*, locals),
             else => null,
         };
     }
@@ -2496,74 +3961,314 @@ const CEmitter = struct {
     }
 
     fn emitDirectCallSliceIndexReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const index = switch (expr.kind) {
-            .index => |node| node,
-            .grouped => |inner| return try self.emitDirectCallSliceIndexReturn(inner.*, locals),
-            else => return false,
-        };
-        const call = switch (index.base.kind) {
-            .call => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .call => |node| node,
-                else => return false,
-            },
-            else => return false,
-        };
-        const return_ty = self.sliceReturnTypeForCall(call) orelse return false;
-        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
-        self.temp_index += 1;
-
+        const value_temp = (try self.emitDirectCallSliceIndexValueTemp(expr, locals, null)) orelse return false;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), temp_name });
-        try self.emitExpr(index.base.*, locals);
-        try self.out.appendSlice(self.allocator, ";\n");
-
-        try self.writeIndent();
-        try self.out.print(self.allocator, "return {s}.ptr[mc_check_index_usize(", .{temp_name});
-        try self.emitExpr(index.index.*, locals);
-        try self.out.print(self.allocator, ", {s}.len)];\n", .{temp_name});
+        try self.out.print(self.allocator, "return {s};\n", .{value_temp.name});
         return true;
     }
 
     fn emitDirectCallSliceIndexLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const index = switch (initializer.kind) {
+        const value_temp = (try self.emitDirectCallSliceIndexValueTemp(initializer, locals, decl_ty)) orelse return false;
+        try self.writeIndent();
+        try self.emitDeclarator(decl_ty, name);
+        try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
+        return true;
+    }
+
+    fn emitDirectCallSliceIndexAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = assignmentTargetType(assignment.target, locals) orelse blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const value_temp = (try self.emitDirectCallSliceIndexValueTemp(assignment.value, locals, target_ty)) orelse return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, value_temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
+        }
+        return true;
+    }
+
+    fn emitDirectCallSliceIndexValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!?SequencedArgTemp {
+        const index = switch (expr.kind) {
             .index => |node| node,
-            .grouped => |inner| return try self.emitDirectCallSliceIndexLocalInit(name, decl_ty, inner.*, locals),
-            else => return false,
+            .grouped => |inner| return try self.emitDirectCallSliceIndexValueTemp(inner.*, locals, target_ty),
+            else => return null,
         };
         const call = switch (index.base.kind) {
             .call => |node| node,
             .grouped => |inner| switch (inner.kind) {
                 .call => |node| node,
-                else => return false,
+                else => return null,
             },
-            else => return false,
+            else => return null,
         };
-        const return_ty = self.sliceReturnTypeForCall(call) orelse return false;
-        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        const slice_ty = self.sliceReturnTypeForCall(call) orelse return null;
+        const slice_temp = try self.emitSequencedCallArgTemp(index.base.*, locals, slice_ty);
+        const usize_ty = simpleNameType("usize", index.index.span);
+        const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+        const value_ty = target_ty orelse sliceElementType(slice_ty) orelse return error.UnsupportedCEmission;
+        const value_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
         self.temp_index += 1;
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), temp_name });
-        try self.emitExpr(index.base.*, locals);
-        try self.out.appendSlice(self.allocator, ";\n");
+        try self.out.print(self.allocator, "{s} {s} = {s}.ptr[mc_check_index_usize({s}, {s}.len)];\n", .{
+            try self.cTypeFor(value_ty, .typedef_name),
+            value_temp,
+            slice_temp.name,
+            index_temp.name,
+            slice_temp.name,
+        });
+        return .{ .name = value_temp, .ty = value_ty };
+    }
 
+    fn emitDirectCallArrayIndexReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const value_temp = (try self.emitDirectCallArrayIndexValueTemp(expr, locals, null)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{value_temp.name});
+        return true;
+    }
+
+    fn emitDirectCallArrayIndexLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const value_temp = (try self.emitDirectCallArrayIndexValueTemp(initializer, locals, decl_ty)) orelse return false;
         try self.writeIndent();
         try self.emitDeclarator(decl_ty, name);
-        try self.out.print(self.allocator, " = {s}.ptr[mc_check_index_usize(", .{temp_name});
-        try self.emitExpr(index.index.*, locals);
-        try self.out.print(self.allocator, ", {s}.len)];\n", .{temp_name});
+        try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
         return true;
+    }
+
+    fn emitDirectCallArrayIndexAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = assignmentTargetType(assignment.target, locals) orelse blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const value_temp = (try self.emitDirectCallArrayIndexValueTemp(assignment.value, locals, target_ty)) orelse return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, value_temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
+        }
+        return true;
+    }
+
+    fn emitDirectCallArrayIndexValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!?SequencedArgTemp {
+        const index = switch (expr.kind) {
+            .index => |node| node,
+            .grouped => |inner| return try self.emitDirectCallArrayIndexValueTemp(inner.*, locals, target_ty),
+            else => return null,
+        };
+        const array_ty = self.arrayReturnTypeForExpr(index.base.*) orelse return null;
+        const element_ty = target_ty orelse arrayElementType(array_ty) orelse return error.UnsupportedCEmission;
+        const len = (try self.arrayLenText(array_ty)) orelse return error.UnsupportedCEmission;
+
+        const array_temp = try self.emitSequencedCallArgTemp(index.base.*, locals, array_ty);
+        const usize_ty = simpleNameType("usize", index.index.span);
+        const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+        const value_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s}.elems[mc_check_index_usize({s}, {s})];\n", .{
+            try self.cTypeFor(element_ty, .typedef_name),
+            value_temp,
+            array_temp.name,
+            index_temp.name,
+            len,
+        });
+        return .{ .name = value_temp, .ty = element_ty };
+    }
+
+    fn emitLocalIndexReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const value_temp = (try self.emitLocalIndexValueTemp(expr, locals, return_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{value_temp.name});
+        return true;
+    }
+
+    fn emitLocalIndexLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const value_temp = (try self.emitLocalIndexValueTemp(initializer, locals, decl_ty)) orelse return false;
+        try self.writeIndent();
+        try self.emitDeclarator(decl_ty, name);
+        try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
+        return true;
+    }
+
+    fn emitLocalIndexAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = assignmentTargetType(assignment.target, locals) orelse blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const value_temp = (try self.emitLocalIndexValueTemp(assignment.value, locals, target_ty)) orelse return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, value_temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
+        }
+        return true;
+    }
+
+    fn emitLocalIndexTargetAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const index = switch (assignment.target.kind) {
+            .index => |node| node,
+            .grouped => |inner| return try self.emitLocalIndexTargetAssignmentStmt(.{ .target = inner.*, .value = assignment.value }, locals),
+            else => return false,
+        };
+        if (!exprContainsCall(index.index.*) and !exprContainsCall(assignment.value)) return false;
+        const element_ty = localIndexElementType(index.base.*, locals) orelse return false;
+
+        const usize_ty = simpleNameType("usize", index.index.span);
+        const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+        const value_temp = try self.emitSequencedCallArgTemp(assignment.value, locals, element_ty);
+
+        try self.writeIndent();
+        if (sliceAccessForExpr(index.base.*, locals)) |slice| {
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s}[mc_check_index_usize({s}, ", .{ slice.ptr_field, index_temp.name });
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s})] = {s};\n", .{ slice.len_field, value_temp.name });
+            return true;
+        }
+
+        if (arrayLenForExpr(index.base.*, locals)) |len| {
+            try self.emitExpr(index.base.*, locals);
+            if (arrayElemsFieldForExpr(index.base.*, locals)) |elems_field| {
+                try self.out.print(self.allocator, ".{s}", .{elems_field});
+            }
+            try self.out.print(self.allocator, "[mc_check_index_usize({s}, {s})] = {s};\n", .{ index_temp.name, len, value_temp.name });
+            return true;
+        }
+
+        return false;
+    }
+
+    fn emitLocalIndexAddressReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        const value_temp = (try self.emitLocalIndexAddressValueTemp(expr, locals, target_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{value_temp.name});
+        return true;
+    }
+
+    fn emitLocalIndexAddressLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const value_temp = (try self.emitLocalIndexAddressValueTemp(initializer, locals, decl_ty)) orelse return false;
+        try self.writeIndent();
+        try self.emitDeclarator(decl_ty, name);
+        try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
+        return true;
+    }
+
+    fn emitLocalIndexAddressAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = assignmentTargetType(assignment.target, locals) orelse blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const value_temp = (try self.emitLocalIndexAddressValueTemp(assignment.value, locals, target_ty)) orelse return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, value_temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
+        }
+        return true;
+    }
+
+    fn emitLocalIndexAddressValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        const operand = switch (expr.kind) {
+            .address_of => |inner| inner.*,
+            .grouped => |inner| return try self.emitLocalIndexAddressValueTemp(inner.*, locals, target_ty),
+            else => return null,
+        };
+        const index = switch (operand.kind) {
+            .index => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .index => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!exprContainsCall(index.index.*)) return null;
+        if (localIndexElementType(index.base.*, locals) == null) return null;
+
+        const usize_ty = simpleNameType("usize", index.index.span);
+        const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+        const value_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = &", .{ try self.cTypeFor(target_ty, .typedef_name), value_temp });
+        if (sliceAccessForExpr(index.base.*, locals)) |slice| {
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s}[mc_check_index_usize({s}, ", .{ slice.ptr_field, index_temp.name });
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s})];\n", .{slice.len_field});
+            return .{ .name = value_temp, .ty = target_ty };
+        }
+
+        if (arrayLenForExpr(index.base.*, locals)) |len| {
+            try self.emitExpr(index.base.*, locals);
+            if (arrayElemsFieldForExpr(index.base.*, locals)) |elems_field| {
+                try self.out.print(self.allocator, ".{s}", .{elems_field});
+            }
+            try self.out.print(self.allocator, "[mc_check_index_usize({s}, {s})];\n", .{ index_temp.name, len });
+            return .{ .name = value_temp, .ty = target_ty };
+        }
+
+        return null;
+    }
+
+    fn emitLocalIndexValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!?SequencedArgTemp {
+        const index = switch (expr.kind) {
+            .index => |node| node,
+            .grouped => |inner| return try self.emitLocalIndexValueTemp(inner.*, locals, target_ty),
+            else => return null,
+        };
+        if (!exprContainsCall(index.index.*)) return null;
+
+        const element_ty = target_ty orelse localIndexElementType(index.base.*, locals) orelse return error.UnsupportedCEmission;
+        const usize_ty = simpleNameType("usize", index.index.span);
+        const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+        const value_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        if (sliceAccessForExpr(index.base.*, locals)) |slice| {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(element_ty, .typedef_name), value_temp });
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s}[mc_check_index_usize({s}, ", .{ slice.ptr_field, index_temp.name });
+            try self.emitExpr(index.base.*, locals);
+            try self.out.print(self.allocator, ".{s})];\n", .{slice.len_field});
+            return .{ .name = value_temp, .ty = element_ty };
+        }
+
+        if (arrayLenForExpr(index.base.*, locals)) |len| {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(element_ty, .typedef_name), value_temp });
+            try self.emitExpr(index.base.*, locals);
+            if (arrayElemsFieldForExpr(index.base.*, locals)) |elems_field| {
+                try self.out.print(self.allocator, ".{s}", .{elems_field});
+            }
+            try self.out.print(self.allocator, "[mc_check_index_usize({s}, {s})];\n", .{ index_temp.name, len });
+            return .{ .name = value_temp, .ty = element_ty };
+        }
+
+        return null;
     }
 
     fn emitArrayCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const array_ty = self.arrayReturnTypeForExpr(initializer) orelse return false;
         try locals.put(name, try self.localInfoFromType(array_ty));
-
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(array_ty, .typedef_name), name });
-        try self.emitExpr(initializer, locals);
-        try self.out.appendSlice(self.allocator, ";\n");
+        try self.emitInferredCallLocalInitValue(name, array_ty, initializer, locals);
         return true;
     }
 
@@ -2578,62 +4283,127 @@ const CEmitter = struct {
         };
         const slice_ty = self.sliceReturnTypeForCall(call) orelse return false;
         try locals.put(name, try self.localInfoFromType(slice_ty));
-
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(slice_ty, .typedef_name), name });
-        try self.emitExpr(initializer, locals);
-        try self.out.appendSlice(self.allocator, ";\n");
+        try self.emitInferredCallLocalInitValue(name, slice_ty, initializer, locals);
         return true;
     }
 
     fn emitEnumCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const enum_ty = self.enumReturnTypeForExpr(initializer) orelse return false;
         try locals.put(name, try self.localInfoFromType(enum_ty));
-
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(enum_ty, .typedef_name), name });
-        try self.emitExpr(initializer, locals);
-        try self.out.appendSlice(self.allocator, ";\n");
+        try self.emitInferredCallLocalInitValue(name, enum_ty, initializer, locals);
         return true;
     }
 
     fn emitTaggedUnionCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const union_ty = self.taggedUnionReturnTypeForExpr(initializer) orelse return false;
         try locals.put(name, try self.localInfoFromType(union_ty));
-
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(union_ty, .typedef_name), name });
-        try self.emitExpr(initializer, locals);
-        try self.out.appendSlice(self.allocator, ";\n");
+        try self.emitInferredCallLocalInitValue(name, union_ty, initializer, locals);
         return true;
     }
 
     fn emitResultCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const result_ty = self.resultTypeForExpr(initializer, locals) orelse return false;
         try locals.put(name, try self.localInfoFromType(result_ty));
-
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(result_ty, .typedef_name), name });
-        try self.emitExpr(initializer, locals);
-        try self.out.appendSlice(self.allocator, ";\n");
+        try self.emitInferredCallLocalInitValue(name, result_ty, initializer, locals);
         return true;
     }
 
     fn emitNullableCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const nullable_ty = self.nullableReturnTypeForExpr(initializer) orelse return false;
         try locals.put(name, try self.localInfoFromType(nullable_ty));
+        try self.emitInferredCallLocalInitValue(name, nullable_ty, initializer, locals);
+        return true;
+    }
+
+    fn emitInferredCallLocalInitValue(self: *CEmitter, name: []const u8, inferred_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+        if (try self.emitSequencedCallLocalInit(name, inferred_ty, initializer, locals)) return;
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(nullable_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), name });
         try self.emitExpr(initializer, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+    }
+
+    fn emitLocalCopyInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const inferred_ty = localCopyTypeForInitializer(initializer, locals) orelse return false;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), name });
+        try self.emitExprWithTarget(initializer, locals, inferred_ty);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
     }
 
+    fn emitNumericInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const inferred_ty = self.numericExprTypeForEmission(initializer, locals) orelse return false;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+
+        if (try self.emitSequencedCheckedBinaryLocalInit(name, inferred_ty, initializer, locals)) return true;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), name });
+        try self.emitExprWithTarget(initializer, locals, inferred_ty);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn numericExprTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .ident => |ident| {
+                const local_set = locals orelse return null;
+                const info = local_set.get(ident.text) orelse return null;
+                const source_ty = info.source_ty orelse return null;
+                return if (isNumericStorageType(source_ty)) source_ty else null;
+            },
+            .call => {
+                const return_ty = self.callReturnTypeForExpr(expr, locals) orelse return null;
+                return if (isNumericStorageType(return_ty)) return_ty else null;
+            },
+            .grouped => |inner| self.numericExprTypeForEmission(inner.*, locals),
+            .unary => |node| self.numericExprTypeForEmission(node.expr.*, locals),
+            .binary => |node| {
+                if (!isNumericValueBinaryOp(node.op)) return null;
+                const left_ty = self.numericExprTypeForEmission(node.left.*, locals) orelse return null;
+                const right_ty = self.numericExprTypeForEmission(node.right.*, locals) orelse return null;
+                if (!sameCStorageType(left_ty, right_ty)) return null;
+                return left_ty;
+            },
+            else => null,
+        };
+    }
+
+    // Floating-point arithmetic lowers to plain C operators: IEEE semantics
+    // never raise a language trap, so no overflow/divide checks are emitted.
+    fn binaryIsFloat(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        return self.exprResolvesToFloat(node.left.*, locals) or self.exprResolvesToFloat(node.right.*, locals);
+    }
+
+    fn exprResolvesToFloat(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .ident => |ident| blk: {
+                const local_set = locals orelse break :blk false;
+                const info = local_set.get(ident.text) orelse break :blk false;
+                const source_ty = info.source_ty orelse break :blk false;
+                break :blk floatCTypeName(source_ty) != null;
+            },
+            .grouped => |inner| self.exprResolvesToFloat(inner.*, locals),
+            .unary => |node| self.exprResolvesToFloat(node.expr.*, locals),
+            .binary => |node| self.exprResolvesToFloat(node.left.*, locals) or self.exprResolvesToFloat(node.right.*, locals),
+            .call => blk: {
+                const return_ty = self.callReturnTypeForExpr(expr, locals) orelse break :blk false;
+                break :blk floatCTypeName(return_ty) != null;
+            },
+            else => false,
+        };
+    }
+
     fn emitCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const return_ty = self.callReturnTypeForExpr(initializer) orelse return false;
+        const return_ty = self.callReturnTypeForExpr(initializer, locals) orelse return false;
         if (isCVoidType(return_ty)) return false;
         try locals.put(name, try self.localInfoFromType(return_ty));
+
+        if (try self.emitSequencedCallLocalInit(name, return_ty, initializer, locals)) return true;
 
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), name });
@@ -2680,6 +4450,9 @@ const CEmitter = struct {
         const enclosing_return_ty = return_ty orelse return false;
         if (resultPayloadTypeForTag(enclosing_return_ty, "err") == null) return false;
 
+        if (try self.emitResultTrySequencedBinaryLocalInit(name, decl_ty, initializer, locals, enclosing_return_ty)) return true;
+        if (try self.emitResultTryCallLocalInit(name, decl_ty, initializer, locals, enclosing_return_ty)) return true;
+
         var replacements: std.ArrayList(TryReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
         if (!try self.collectResultTryHoistsForLocalInit(initializer, locals, enclosing_return_ty, &replacements)) return false;
@@ -2693,6 +4466,9 @@ const CEmitter = struct {
     }
 
     fn emitNullableTryExprLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (try self.emitNullableTrySequencedBinaryLocalInit(name, decl_ty, initializer, locals)) return true;
+        if (try self.emitNullableTryCallLocalInit(name, decl_ty, initializer, locals)) return true;
+
         var replacements: std.ArrayList(TryReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
         if (!try self.collectNullableTryHoistsForReturn(initializer, locals, &replacements)) return false;
@@ -2706,15 +4482,18 @@ const CEmitter = struct {
     }
 
     fn emitResultTryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        if (try self.emitResultTrySequencedBinaryAssignmentStmt(assignment, locals, return_ty)) return true;
+        if (try self.emitResultTryCallAssignmentStmt(assignment, locals, return_ty)) return true;
+
         var replacements: std.ArrayList(TryReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
         if (!try self.collectResultTryHoistsForStmt(assignment.value, locals, return_ty, &replacements)) return false;
 
         try self.writeIndent();
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
-            try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ", .{ target.info.type_name, target.name });
+            try self.emitGlobalStorePrefix(target);
             try self.emitResultTryExprWithReplacements(assignment.value, locals, null, replacements.items);
-            try self.out.appendSlice(self.allocator, ");\n");
+            try self.emitGlobalStoreSuffix(target);
         } else {
             try self.emitExpr(assignment.target, locals);
             try self.out.appendSlice(self.allocator, " = ");
@@ -2725,15 +4504,18 @@ const CEmitter = struct {
     }
 
     fn emitNullableTryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (try self.emitNullableTrySequencedBinaryAssignmentStmt(assignment, locals)) return true;
+        if (try self.emitNullableTryCallAssignmentStmt(assignment, locals)) return true;
+
         var replacements: std.ArrayList(TryReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
         if (!try self.collectNullableTryHoistsForReturn(assignment.value, locals, &replacements)) return false;
 
         try self.writeIndent();
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
-            try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ", .{ target.info.type_name, target.name });
+            try self.emitGlobalStorePrefix(target);
             try self.emitNullableTryExprWithReplacements(assignment.value, locals, null, replacements.items);
-            try self.out.appendSlice(self.allocator, ");\n");
+            try self.emitGlobalStoreSuffix(target);
         } else {
             try self.emitExpr(assignment.target, locals);
             try self.out.appendSlice(self.allocator, " = ");
@@ -2743,7 +4525,287 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitResultTryExprReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        const temp = (try self.emitResultTrySequencedBinaryValueTemp(expr, locals, target_ty, return_ty, .stmt)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitNullableTryExprReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        const temp = (try self.emitNullableTrySequencedBinaryValueTemp(expr, locals, target_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitResultTrySequencedBinaryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr) !bool {
+        const temp = (try self.emitResultTrySequencedBinaryValueTemp(initializer, locals, decl_ty, enclosing_return_ty, .local_init)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        return true;
+    }
+
+    fn emitNullableTrySequencedBinaryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitNullableTrySequencedBinaryValueTemp(initializer, locals, decl_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        return true;
+    }
+
+    fn emitResultTrySequencedBinaryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const temp = (try self.emitResultTrySequencedBinaryValueTemp(assignment.value, locals, target_ty, return_ty, .stmt)) orelse return false;
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn emitNullableTrySequencedBinaryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const temp = (try self.emitNullableTrySequencedBinaryValueTemp(assignment.value, locals, target_ty)) orelse return false;
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn emitResultTryCallLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr) !bool {
+        const call = switch (initializer.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitResultTryCallLocalInit(name, decl_ty, inner.*, locals, enclosing_return_ty),
+            else => return false,
+        };
+        if (!self.callArgsContainResultTry(call.args, locals)) return false;
+        const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| self.functions.get(callee_name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitResultTryCallArgTemps(call, locals, fn_info, enclosing_return_ty, .local_init);
+        defer temps.deinit(self.scratch.allocator());
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), name });
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitNullableTryCallLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (initializer.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitNullableTryCallLocalInit(name, decl_ty, inner.*, locals),
+            else => return false,
+        };
+        if (!try self.callArgsContainNullableTry(call.args, locals)) return false;
+        const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| self.functions.get(callee_name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitNullableTryCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), name });
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitResultTryCallAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const call = switch (assignment.value.kind) {
+            .call => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .call => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!self.callArgsContainResultTry(call.args, locals)) return false;
+        const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| self.functions.get(callee_name) orelse return false else return false;
+        const call_return_ty = fn_info.return_type orelse return false;
+        if (isVoidType(call_return_ty) or fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitResultTryCallArgTemps(call, locals, fn_info, return_ty, .stmt);
+        defer temps.deinit(self.scratch.allocator());
+
+        const result_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(call_return_ty, .typedef_name), result_temp });
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, result_temp);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{result_temp});
+        }
+        return true;
+    }
+
+    fn emitNullableTryCallAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (assignment.value.kind) {
+            .call => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .call => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!try self.callArgsContainNullableTry(call.args, locals)) return false;
+        const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| self.functions.get(callee_name) orelse return false else return false;
+        const call_return_ty = fn_info.return_type orelse return false;
+        if (isVoidType(call_return_ty) or fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitNullableTryCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        const result_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(call_return_ty, .typedef_name), result_temp });
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, result_temp);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{result_temp});
+        }
+        return true;
+    }
+
+    fn emitResultTryCallExprStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitResultTryCallExprStmt(inner.*, locals, return_ty),
+            else => return false,
+        };
+        if (!self.callArgsContainResultTry(call.args, locals)) return false;
+        const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| self.functions.get(callee_name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitResultTryCallArgTemps(call, locals, fn_info, return_ty, .stmt);
+        defer temps.deinit(self.scratch.allocator());
+
+        try self.writeIndent();
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitNullableTryCallExprStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitNullableTryCallExprStmt(inner.*, locals),
+            else => return false,
+        };
+        if (!try self.callArgsContainNullableTry(call.args, locals)) return false;
+        const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| self.functions.get(callee_name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitNullableTryCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        try self.writeIndent();
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    const ResultTrySequenceMode = enum { local_init, stmt };
+
+    fn emitResultTrySequencedBinaryValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!?SequencedArgTemp {
+        if (!self.exprContainsResultTry(expr, locals)) return null;
+        const node = switch (expr.kind) {
+            .grouped => |inner| return try self.emitResultTrySequencedBinaryValueTemp(inner.*, locals, target_ty, return_ty, mode),
+            .binary => |node| node,
+            else => return null,
+        };
+        const plan = try self.sequencedBinaryPlan(node.op, target_ty) orelse return null;
+
+        const left_temp = try self.emitResultTryOperandTemp(node.left.*, locals, target_ty, return_ty, mode);
+        const right_temp = try self.emitResultTryOperandTemp(node.right.*, locals, target_ty, return_ty, mode);
+        return try self.emitSequencedBinaryPlanResultTemp(plan, target_ty, left_temp.name, right_temp.name);
+    }
+
+    fn emitNullableTrySequencedBinaryValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        if (!try self.exprContainsNullableTry(expr, locals)) return null;
+        const node = switch (expr.kind) {
+            .grouped => |inner| return try self.emitNullableTrySequencedBinaryValueTemp(inner.*, locals, target_ty),
+            .binary => |node| node,
+            else => return null,
+        };
+        const plan = try self.sequencedBinaryPlan(node.op, target_ty) orelse return null;
+
+        const left_temp = try self.emitNullableTryOperandTemp(node.left.*, locals, target_ty);
+        const right_temp = try self.emitNullableTryOperandTemp(node.right.*, locals, target_ty);
+        return try self.emitSequencedBinaryPlanResultTemp(plan, target_ty, left_temp.name, right_temp.name);
+    }
+
+    fn emitResultTryOperandTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!SequencedArgTemp {
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        const found = switch (mode) {
+            .local_init => blk: {
+                const enclosing_return_ty = return_ty orelse return error.UnsupportedCEmission;
+                break :blk try self.collectResultTryHoistsForLocalInit(expr, locals, enclosing_return_ty, &replacements);
+            },
+            .stmt => try self.collectResultTryHoistsForStmt(expr, locals, return_ty, &replacements),
+        };
+        _ = found;
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), temp_name });
+        try self.emitResultTryExprWithReplacements(expr, locals, target_ty, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return .{ .name = temp_name, .ty = target_ty };
+    }
+
+    fn emitNullableTryOperandTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        _ = try self.collectNullableTryHoistsForReturn(expr, locals, &replacements);
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), temp_name });
+        try self.emitNullableTryExprWithReplacements(expr, locals, target_ty, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return .{ .name = temp_name, .ty = target_ty };
+    }
+
     fn emitResultTryExprStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        if (try self.emitResultTryCallExprStmt(expr, locals, return_ty)) return true;
+
         var replacements: std.ArrayList(TryReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
         if (!try self.collectResultTryHoistsForStmt(expr, locals, return_ty, &replacements)) return false;
@@ -2756,6 +4818,8 @@ const CEmitter = struct {
     }
 
     fn emitNullableTryExprStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (try self.emitNullableTryCallExprStmt(expr, locals)) return true;
+
         var replacements: std.ArrayList(TryReplacement) = .empty;
         defer replacements.deinit(self.scratch.allocator());
         if (!try self.collectNullableTryHoistsForReturn(expr, locals, &replacements)) return false;
@@ -2799,25 +4863,813 @@ const CEmitter = struct {
             else => return false,
         };
 
-        var replacements: std.ArrayList(TryReplacement) = .empty;
-        defer replacements.deinit(self.scratch.allocator());
         var found_try = false;
 
-        for (call.args) |arg| found_try = (try self.collectResultTryHoistsForReturn(arg, locals, &replacements)) or found_try;
+        for (call.args) |arg| {
+            if (self.exprContainsResultTry(arg, locals)) {
+                found_try = true;
+                break;
+            }
+        }
 
         if (!found_try) return false;
 
-        const fn_info = if (calleeIdentName(call.callee.*)) |name| self.functions.get(name) else null;
+        const fn_info = if (calleeIdentName(call.callee.*)) |name| self.functions.get(name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitResultTryCallArgTemps(call, locals, fn_info, null, .stmt);
+        defer temps.deinit(self.scratch.allocator());
+
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "return ");
         try self.emitExpr(call.callee.*, locals);
-        try self.out.appendSlice(self.allocator, "(");
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitResultTryCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+        return try self.emitResultTryCallArgTempWithMode(arg, locals, target_ty, null, .stmt);
+    }
+
+    fn emitResultTryCallArgTemps(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!std.ArrayList(SequencedArgTemp) {
+        var temps: std.ArrayList(SequencedArgTemp) = .empty;
+        errdefer temps.deinit(self.scratch.allocator());
         for (call.args, 0..) |arg, i| {
-            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
-            try self.emitResultTryExprWithReplacements(arg, locals, target_ty, replacements.items);
+            try temps.append(self.scratch.allocator(), try self.emitResultTryCallArgTempWithMode(arg, locals, fn_info.params[i].ty, return_ty, mode));
         }
-        try self.out.appendSlice(self.allocator, ");\n");
+        return temps;
+    }
+
+    fn emitResultTryCallArgTempWithMode(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!SequencedArgTemp {
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        const found_try = switch (mode) {
+            .local_init => blk: {
+                const enclosing_return_ty = return_ty orelse return error.UnsupportedCEmission;
+                break :blk try self.collectResultTryHoistsForLocalInit(arg, locals, enclosing_return_ty, &replacements);
+            },
+            .stmt => try self.collectResultTryHoistsForStmt(arg, locals, return_ty, &replacements),
+        };
+        if (!found_try) {
+            return try self.emitSequencedCallArgTemp(arg, locals, target_ty);
+        }
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), temp_name });
+        try self.emitResultTryExprWithReplacements(arg, locals, target_ty, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return .{ .name = temp_name, .ty = target_ty };
+    }
+
+    fn emitSequencedCallReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitSequencedCallReturn(inner.*, locals),
+            else => return false,
+        };
+        if (call.args.len == 0) return false;
+
+        const fn_info = if (calleeIdentName(call.callee.*)) |name| self.functions.get(name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitSequencedCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    const SequencedArgTemp = struct {
+        name: []const u8,
+        ty: ast.TypeExpr,
+    };
+
+    fn emitSequencedCallArgTemps(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo) anyerror!std.ArrayList(SequencedArgTemp) {
+        var temps: std.ArrayList(SequencedArgTemp) = .empty;
+        errdefer temps.deinit(self.scratch.allocator());
+
+        for (call.args, 0..) |arg, i| {
+            const target_ty = fn_info.params[i].ty;
+            try temps.append(self.scratch.allocator(), try self.emitSequencedCallArgTemp(arg, locals, target_ty));
+        }
+
+        return temps;
+    }
+
+    fn emitSequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+        switch (arg.kind) {
+            .grouped => |inner| return try self.emitSequencedCallArgTemp(inner.*, locals, target_ty),
+            .address_of => {
+                if (try self.emitRawManyOffsetDerefAddressValueTemp(arg, locals, target_ty)) |temp| return temp;
+                if (try self.emitLocalIndexAddressValueTemp(arg, locals, target_ty)) |temp| return temp;
+            },
+            .index => {
+                if (try self.emitDirectCallSliceIndexValueTemp(arg, locals, target_ty)) |temp| return temp;
+                if (try self.emitDirectCallArrayIndexValueTemp(arg, locals, target_ty)) |temp| return temp;
+                if (try self.emitLocalIndexValueTemp(arg, locals, target_ty)) |temp| return temp;
+            },
+            .binary => {
+                if (try self.emitSequencedConditionValueTemp(arg, locals)) |temp| return temp;
+                if (try self.emitSequencedBinaryValueTemp(arg, locals, target_ty)) |temp| return temp;
+            },
+            .deref => {
+                if (try self.emitRawManyOffsetDerefValueTemp(arg, locals, target_ty)) |temp| return temp;
+            },
+            .call => |call| {
+                if (try self.emitBitcastValueTempFromCall(call, locals)) |temp| return temp;
+                if (try self.emitExternNonNullCallValueTemp(arg, locals)) |temp| return temp;
+                if (try self.emitRawManyOffsetValueTempFromCall(call, locals, target_ty)) |temp| return temp;
+                if (try self.emitUncheckedAddValueTempFromCall(call, locals, target_ty)) |temp| return temp;
+                if (calleeIdentName(call.callee.*)) |callee_name| {
+                    if (self.functions.get(callee_name)) |fn_info| {
+                        if (fn_info.return_type) |return_ty| {
+                            if (!isVoidType(return_ty) and fn_info.params.len >= call.args.len) {
+                                var nested_temps = try self.emitSequencedCallArgTemps(call, locals, fn_info);
+                                defer nested_temps.deinit(self.scratch.allocator());
+
+                                const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+                                self.temp_index += 1;
+                                try self.writeIndent();
+                                try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), temp_name });
+                                try self.emitExpr(call.callee.*, locals);
+                                try self.emitSequencedCallArgList(nested_temps.items);
+                                try self.out.appendSlice(self.allocator, ";\n");
+                                return .{ .name = temp_name, .ty = return_ty };
+                            }
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), temp_name });
+        const cast_pointer_to_paddr = isPAddrType(target_ty) and blk: {
+            const source_ty = self.exprSourceTypeForEmission(arg, locals) orelse break :blk false;
+            break :blk isPointerLikeAddressType(source_ty);
+        };
+        if (cast_pointer_to_paddr) {
+            try self.out.appendSlice(self.allocator, "((uintptr_t)(");
+            try self.emitExpr(arg, locals);
+            try self.out.appendSlice(self.allocator, "))");
+        } else {
+            try self.emitExprWithTarget(arg, locals, target_ty);
+        }
+        try self.out.appendSlice(self.allocator, ";\n");
+        return .{ .name = temp_name, .ty = target_ty };
+    }
+
+    fn emitRawManyOffsetDerefAddressValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        const deref_expr = switch (expr.kind) {
+            .grouped => |grouped| return try self.emitRawManyOffsetDerefAddressValueTemp(grouped.*, locals, target_ty),
+            .address_of => |inner| inner.*,
+            else => return null,
+        };
+        const offset_expr = switch (deref_expr.kind) {
+            .grouped => |grouped| switch (grouped.kind) {
+                .deref => |inner| inner.*,
+                else => return null,
+            },
+            .deref => |inner| inner.*,
+            else => return null,
+        };
+        const call = switch (offset_expr.kind) {
+            .grouped => |grouped| switch (grouped.kind) {
+                .call => |call| call,
+                else => return null,
+            },
+            .call => |call| call,
+            else => return null,
+        };
+        const ptr_ty = self.rawManyOffsetReturnTypeForCall(call, locals) orelse return null;
+        const ptr_temp = (try self.emitRawManyOffsetValueTempFromCallForce(call, locals, ptr_ty, true)) orelse return null;
+
+        const result_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(target_ty, .typedef_name), result_temp, ptr_temp.name });
+        return .{ .name = result_temp, .ty = target_ty };
+    }
+
+    fn emitRawManyOffsetDerefAddressReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        const temp = (try self.emitRawManyOffsetDerefAddressValueTemp(expr, locals, target_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitRawManyOffsetDerefAddressLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitRawManyOffsetDerefAddressValueTemp(initializer, locals, decl_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        return true;
+    }
+
+    fn emitRawManyOffsetDerefAddressAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const temp = (try self.emitRawManyOffsetDerefAddressValueTemp(assignment.value, locals, target_ty)) orelse return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn emitRawManyOffsetDerefValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        const inner = switch (expr.kind) {
+            .grouped => |grouped| return try self.emitRawManyOffsetDerefValueTemp(grouped.*, locals, target_ty),
+            .deref => |inner| inner.*,
+            else => return null,
+        };
+        const ptr_ty = self.rawManyOffsetTypeForExpr(inner, locals) orelse return null;
+        const ptr_temp = (try self.emitRawManyOffsetValueTemp(inner, locals, ptr_ty)) orelse return null;
+        const value_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = *{s};\n", .{ try self.cTypeFor(target_ty, .typedef_name), value_temp, ptr_temp.name });
+        return .{ .name = value_temp, .ty = target_ty };
+    }
+
+    fn emitRawManyOffsetDerefReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        const temp = (try self.emitRawManyOffsetDerefValueTemp(expr, locals, target_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitRawManyOffsetDerefLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitRawManyOffsetDerefValueTemp(initializer, locals, decl_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        return true;
+    }
+
+    fn emitRawManyOffsetDerefInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const element_ty = self.rawManyOffsetDerefTypeForExpr(initializer, locals) orelse return false;
+        try locals.put(name, try self.localInfoFromType(element_ty));
+        if (try self.emitRawManyOffsetDerefLocalInit(name, element_ty, initializer, locals)) return true;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(element_ty, .typedef_name), name });
+        try self.emitExpr(initializer, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitRawManyOffsetDerefAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const temp = (try self.emitRawManyOffsetDerefValueTemp(assignment.value, locals, target_ty)) orelse return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn emitRawManyOffsetDerefTargetAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const inner = switch (assignment.target.kind) {
+            .grouped => |grouped| return try self.emitRawManyOffsetDerefTargetAssignmentStmt(.{ .target = grouped.*, .value = assignment.value }, locals),
+            .deref => |inner| inner.*,
+            else => return false,
+        };
+        const call = switch (inner.kind) {
+            .grouped => |grouped| switch (grouped.kind) {
+                .call => |call| call,
+                else => return false,
+            },
+            .call => |call| call,
+            else => return false,
+        };
+        const ptr_ty = self.rawManyOffsetReturnTypeForCall(call, locals) orelse return false;
+        const element_ty = rawManyElementType(ptr_ty) orelse return false;
+        const should_sequence = exprContainsCall(inner) or exprContainsCall(assignment.value);
+        if (!should_sequence) return false;
+
+        const ptr_temp = (try self.emitRawManyOffsetValueTempFromCallForce(call, locals, ptr_ty, true)) orelse return false;
+        const value_temp = try self.emitSequencedCallArgTemp(assignment.value, locals, element_ty);
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "*{s} = {s};\n", .{ ptr_temp.name, value_temp.name });
+        return true;
+    }
+
+    fn emitBitcastValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
+        return switch (expr.kind) {
+            .grouped => |inner| try self.emitBitcastValueTemp(inner.*, locals),
+            .call => |call| try self.emitBitcastValueTempFromCall(call, locals),
+            else => null,
+        };
+    }
+
+    fn emitBitcastValueTempFromCall(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
+        if (!isBitcastCall(call) or call.type_args.len != 1 or call.args.len != 1) return null;
+        const target_ty = self.resolveAliasType(call.type_args[0]);
+        const source_ty = self.exprSourceTypeForEmission(call.args[0], locals) orelse return error.UnsupportedCEmission;
+        const source_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, source_ty);
+        const result_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s};\n", .{ try self.cTypeFor(target_ty, .typedef_name), result_temp });
+        try self.writeIndent();
+        try self.out.print(self.allocator, "memcpy(&{s}, &{s}, sizeof({s}));\n", .{ result_temp, source_temp.name, result_temp });
+        return .{ .name = result_temp, .ty = target_ty };
+    }
+
+    fn emitBitcastLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (initializer.kind) {
+            .grouped => |inner| return try self.emitBitcastLocalInit(name, decl_ty, inner.*, locals),
+            .call => |node| node,
+            else => return false,
+        };
+        if (!isBitcastCall(call)) return false;
+        if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+        const source_ty = self.exprSourceTypeForEmission(call.args[0], locals) orelse return error.UnsupportedCEmission;
+        const source_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, source_ty);
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name });
+        try self.writeIndent();
+        try self.out.print(self.allocator, "memcpy(&{s}, &{s}, sizeof({s}));\n", .{ name, source_temp.name, name });
+        return true;
+    }
+
+    fn emitBitcastInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (initializer.kind) {
+            .grouped => |inner| return try self.emitBitcastInferredLocalInit(name, inner.*, locals),
+            .call => |node| node,
+            else => return false,
+        };
+        if (!isBitcastCall(call) or call.type_args.len != 1 or call.args.len != 1) return false;
+        try locals.put(name, try self.localInfoFromType(call.type_args[0]));
+        return try self.emitBitcastLocalInit(name, call.type_args[0], initializer, locals);
+    }
+
+    fn emitBitcastReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        _ = return_ty;
+        const temp = (try self.emitBitcastValueTemp(expr, locals)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitBitcastAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitBitcastValueTemp(assignment.value, locals)) orelse return false;
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn externNonNullReturnInfo(self: *CEmitter, call: anytype) ?FnInfo {
+        const callee_name = calleeIdentName(call.callee.*) orelse return null;
+        const fn_info = self.functions.get(callee_name) orelse return null;
+        const return_ty = fn_info.return_type orelse return null;
+        if (!fn_info.is_extern or !isNonNullPointerType(return_ty) or fn_info.params.len < call.args.len) return null;
+        return fn_info;
+    }
+
+    fn emitExternNonNullCallValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
+        const call = switch (expr.kind) {
+            .grouped => |inner| return try self.emitExternNonNullCallValueTemp(inner.*, locals),
+            .call => |node| node,
+            else => return null,
+        };
+        const fn_info = self.externNonNullReturnInfo(call) orelse return null;
+        const return_ty = fn_info.return_type orelse return null;
+
+        var temps = try self.emitSequencedCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), temp_name });
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        try self.writeIndent();
+        try self.out.print(self.allocator, "if ({s} == NULL) mc_trap_InvalidRepresentation();\n", .{temp_name});
+        return .{ .name = temp_name, .ty = return_ty };
+    }
+
+    fn emitExternNonNullCallLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitExternNonNullCallValueTemp(initializer, locals)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        return true;
+    }
+
+    fn emitExternNonNullCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitExternNonNullCallValueTemp(initializer, locals)) orelse return false;
+        try locals.put(name, try self.localInfoFromType(temp.ty));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(temp.ty, .typedef_name), name, temp.name });
+        return true;
+    }
+
+    fn emitExternNonNullCallReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitExternNonNullCallValueTemp(expr, locals)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitExternNonNullCallAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitExternNonNullCallValueTemp(assignment.value, locals)) orelse return false;
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn emitRawManyOffsetValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        return switch (expr.kind) {
+            .grouped => |inner| try self.emitRawManyOffsetValueTemp(inner.*, locals, target_ty),
+            .call => |call| try self.emitRawManyOffsetValueTempFromCallForce(call, locals, target_ty, false),
+            else => null,
+        };
+    }
+
+    fn emitRawManyOffsetValueTempFromCall(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        return try self.emitRawManyOffsetValueTempFromCallForce(call, locals, target_ty, false);
+    }
+
+    fn emitRawManyOffsetValueTempFromCallForce(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, force: bool) anyerror!?SequencedArgTemp {
+        const info = self.rawManyOffsetCallInfo(call, locals) orelse return null;
+        if (!force and !exprContainsCall(info.base) and !exprContainsCall(call.args[0])) return null;
+
+        const base_temp = try self.emitSequencedCallArgTemp(info.base, locals, info.ty);
+        const index_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, simpleNameType("usize", call.args[0].span));
+        const result_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ({s} + {s});\n", .{ try self.cTypeFor(target_ty, .typedef_name), result_temp, base_temp.name, index_temp.name });
+        return .{ .name = result_temp, .ty = target_ty };
+    }
+
+    fn emitRawManyOffsetReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        const temp = (try self.emitRawManyOffsetValueTemp(expr, locals, target_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitRawManyOffsetLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitRawManyOffsetValueTemp(initializer, locals, decl_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        return true;
+    }
+
+    fn emitRawManyOffsetInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const raw_ty = self.rawManyOffsetTypeForExpr(initializer, locals) orelse return false;
+        try locals.put(name, try self.localInfoFromType(raw_ty));
+        if (try self.emitRawManyOffsetLocalInit(name, raw_ty, initializer, locals)) return true;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(raw_ty, .typedef_name), name });
+        try self.emitExpr(initializer, locals);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitRawManyOffsetAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const temp = (try self.emitRawManyOffsetValueTemp(assignment.value, locals, target_ty)) orelse return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn emitUncheckedAddValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        return switch (expr.kind) {
+            .grouped => |inner| try self.emitUncheckedAddValueTemp(inner.*, locals, target_ty),
+            .call => |call| try self.emitUncheckedAddValueTempFromCall(call, locals, target_ty),
+            else => null,
+        };
+    }
+
+    fn emitUncheckedAddValueTempFromCall(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        if (!isUncheckedAddCall(call)) return null;
+        if (!exprContainsCall(call.args[0]) and !exprContainsCall(call.args[1])) return null;
+
+        const left_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, target_ty);
+        const right_temp = try self.emitSequencedCallArgTemp(call.args[1], locals, target_ty);
+        const result_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ({s} + {s});\n", .{ try self.cTypeFor(target_ty, .typedef_name), result_temp, left_temp.name, right_temp.name });
+        return .{ .name = result_temp, .ty = target_ty };
+    }
+
+    fn emitUncheckedAddReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        const temp = (try self.emitUncheckedAddValueTemp(expr, locals, target_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitUncheckedAddLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitUncheckedAddValueTemp(initializer, locals, decl_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        return true;
+    }
+
+    fn emitUncheckedAddAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const temp = (try self.emitUncheckedAddValueTemp(assignment.value, locals, target_ty)) orelse return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn emitSequencedComparisonReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        if (!isBoolType(target_ty)) return false;
+        const temp = (try self.emitSequencedConditionValueTemp(expr, locals)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitSequencedComparisonLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (!isBoolType(decl_ty)) return false;
+        const temp = (try self.emitSequencedConditionValueTemp(initializer, locals)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "bool {s} = {s};\n", .{ name, temp.name });
+        return true;
+    }
+
+    fn emitBoolInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        if (!comparisonExpr(initializer)) return false;
+        const bool_ty = simpleNameType("bool", initializer.span);
+        try locals.put(name, try self.localInfoFromType(bool_ty));
+        if (try self.emitSequencedComparisonLocalInit(name, bool_ty, initializer, locals)) return true;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "bool {s} = ", .{name});
+        try self.emitExprWithTarget(initializer, locals, bool_ty);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitSequencedComparisonAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        if (!isBoolType(target_ty)) return false;
+        const temp = (try self.emitSequencedConditionValueTemp(assignment.value, locals)) orelse return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn emitSequencedBinaryValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        const node = switch (expr.kind) {
+            .grouped => |inner| return try self.emitSequencedBinaryValueTemp(inner.*, locals, target_ty),
+            .binary => |node| node,
+            else => return null,
+        };
+        if (isNoTrapBitwiseInfixOp(node.op) and !exprContainsCall(node.left.*) and !exprContainsCall(node.right.*)) return null;
+        const plan = try self.sequencedBinaryPlan(node.op, target_ty) orelse return null;
+
+        const left_temp = try self.emitSequencedCallArgTemp(node.left.*, locals, target_ty);
+        const right_temp = try self.emitSequencedCallArgTemp(node.right.*, locals, target_ty);
+        return try self.emitSequencedBinaryPlanResultTemp(plan, target_ty, left_temp.name, right_temp.name);
+    }
+
+    fn emitSequencedBinaryPlanResultTemp(self: *CEmitter, plan: SequencedBinaryPlan, target_ty: ast.TypeExpr, left_name: []const u8, right_name: []const u8) anyerror!SequencedArgTemp {
+        const result_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), result_temp });
+        switch (plan) {
+            .infix => |op_text| try self.out.print(self.allocator, "({s} {s} {s})", .{ left_name, op_text, right_name }),
+            .helper => |helper| try self.out.print(self.allocator, "{s}{s}({s}, {s})", .{ helper.prefix, helper.suffix, left_name, right_name }),
+        }
+        try self.out.appendSlice(self.allocator, ";\n");
+        return .{ .name = result_temp, .ty = target_ty };
+    }
+
+    const SequencedBinaryPlan = union(enum) {
+        infix: []const u8,
+        helper: CheckedHelperParts,
+    };
+
+    fn sequencedBinaryPlan(self: *CEmitter, op: ast.BinaryOp, target_ty: ast.TypeExpr) !?SequencedBinaryPlan {
+        const resolved_target_ty = self.resolveAliasType(target_ty);
+        if (genericChildType(resolved_target_ty, "wrap")) |inner| {
+            const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
+            if (unsignedTypeSuffix(inner_name) == null) return error.UnsupportedCEmission;
+            return switch (op) {
+                .add, .sub, .mul, .bit_and, .bit_or, .bit_xor => .{ .infix = binaryCOp(op) },
+                .shl, .shr => .{ .helper = .{
+                    .prefix = try std.fmt.allocPrint(self.scratch.allocator(), "mc_wrap_{s}_", .{if (op == .shl) "shl" else "shr"}),
+                    .suffix = unsignedTypeSuffix(inner_name).?,
+                } },
+                .div, .mod => .{ .helper = checkedHelperParts(op, inner_name) orelse return error.UnsupportedCEmission },
+                else => null,
+            };
+        }
+
+        if (genericChildType(resolved_target_ty, "sat")) |inner| {
+            const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
+            return if (satHelperParts(op, inner_name)) |helper| .{ .helper = helper } else null;
+        }
+
+        const target_name = typeName(resolved_target_ty) orelse return error.UnsupportedCEmission;
+        if (isNoTrapBitwiseInfixOp(op)) {
+            if (unsignedTypeSuffix(target_name) == null) return error.UnsupportedCEmission;
+            return .{ .infix = binaryCOp(op) };
+        }
+        if (!isCheckedBinaryOp(op)) return null;
+        return if (checkedHelperParts(op, target_name)) |helper| .{ .helper = helper } else null;
+    }
+
+    fn emitSequencedCheckedBinaryReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        const temp = (try self.emitSequencedBinaryValueTemp(expr, locals, target_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{temp.name});
+        return true;
+    }
+
+    fn emitSequencedCheckedBinaryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const temp = (try self.emitSequencedBinaryValueTemp(initializer, locals, decl_ty)) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        return true;
+    }
+
+    fn emitSequencedCheckedBinaryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        const temp = (try self.emitSequencedBinaryValueTemp(assignment.value, locals, target_ty)) orelse return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, temp.name);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{temp.name});
+        }
+        return true;
+    }
+
+    fn emitSequencedCallArgList(self: *CEmitter, temps: []const SequencedArgTemp) !void {
+        try self.out.appendSlice(self.allocator, "(");
+        for (temps, 0..) |temp, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.appendSlice(self.allocator, temp.name);
+        }
+        try self.out.appendSlice(self.allocator, ")");
+    }
+
+    fn emitSequencedCallLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (initializer.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitSequencedCallLocalInit(name, decl_ty, inner.*, locals),
+            else => return false,
+        };
+        if (call.args.len == 0) return false;
+
+        const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| self.functions.get(callee_name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitSequencedCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), name });
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitSequencedCallExprStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitSequencedCallExprStmt(inner.*, locals),
+            else => return false,
+        };
+        if (call.args.len == 0) return false;
+
+        const fn_info = if (calleeIdentName(call.callee.*)) |name| self.functions.get(name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitSequencedCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        try self.writeIndent();
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitSequencedCallAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (assignment.value.kind) {
+            .call => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .call => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (call.args.len == 0) return false;
+
+        const fn_info = if (calleeIdentName(call.callee.*)) |name| self.functions.get(name) orelse return false else return false;
+        const return_ty = fn_info.return_type orelse return false;
+        if (isVoidType(return_ty) or fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitSequencedCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
+        const result_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), result_temp });
+        try self.emitExpr(call.callee.*, locals);
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
+            try self.emitGlobalStoreValue(target, result_temp);
+        } else {
+            try self.emitExpr(assignment.target, locals);
+            try self.out.print(self.allocator, " = {s};\n", .{result_temp});
+        }
         return true;
     }
 
@@ -2828,26 +5680,54 @@ const CEmitter = struct {
             else => return false,
         };
 
-        var replacements: std.ArrayList(TryReplacement) = .empty;
-        defer replacements.deinit(self.scratch.allocator());
         var found_try = false;
 
-        for (call.args) |arg| found_try = (try self.collectNullableTryHoistsForReturn(arg, locals, &replacements)) or found_try;
+        for (call.args) |arg| {
+            if (try self.exprContainsNullableTry(arg, locals)) {
+                found_try = true;
+                break;
+            }
+        }
 
         if (!found_try) return false;
 
-        const fn_info = if (calleeIdentName(call.callee.*)) |name| self.functions.get(name) else null;
+        const fn_info = if (calleeIdentName(call.callee.*)) |name| self.functions.get(name) orelse return false else return false;
+        if (fn_info.params.len < call.args.len) return false;
+
+        var temps = try self.emitNullableTryCallArgTemps(call, locals, fn_info);
+        defer temps.deinit(self.scratch.allocator());
+
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "return ");
         try self.emitExpr(call.callee.*, locals);
-        try self.out.appendSlice(self.allocator, "(");
-        for (call.args, 0..) |arg, i| {
-            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            const target_ty = if (fn_info) |info| if (i < info.params.len) info.params[i].ty else null else null;
-            try self.emitNullableTryExprWithReplacements(arg, locals, target_ty, replacements.items);
-        }
-        try self.out.appendSlice(self.allocator, ");\n");
+        try self.emitSequencedCallArgList(temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
         return true;
+    }
+
+    fn emitNullableTryCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+        var replacements: std.ArrayList(TryReplacement) = .empty;
+        defer replacements.deinit(self.scratch.allocator());
+        if (!try self.collectNullableTryHoistsForReturn(arg, locals, &replacements)) {
+            return try self.emitSequencedCallArgTemp(arg, locals, target_ty);
+        }
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), temp_name });
+        try self.emitNullableTryExprWithReplacements(arg, locals, target_ty, replacements.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return .{ .name = temp_name, .ty = target_ty };
+    }
+
+    fn emitNullableTryCallArgTemps(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo) anyerror!std.ArrayList(SequencedArgTemp) {
+        var temps: std.ArrayList(SequencedArgTemp) = .empty;
+        errdefer temps.deinit(self.scratch.allocator());
+        for (call.args, 0..) |arg, i| {
+            try temps.append(self.scratch.allocator(), try self.emitNullableTryCallArgTemp(arg, locals, fn_info.params[i].ty));
+        }
+        return temps;
     }
 
     fn collectResultTryHoistsForReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(TryReplacement)) !bool {
@@ -3023,17 +5903,21 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .unary => |node| {
+                if (try self.emitCheckedUnaryWithTryReplacements(node, locals, target_ty, replacements)) return;
                 try self.out.appendSlice(self.allocator, unaryCOp(node.op));
                 try self.out.appendSlice(self.allocator, "(");
                 try self.emitResultTryExprWithReplacements(node.expr.*, locals, null, replacements);
                 try self.out.appendSlice(self.allocator, ")");
             },
             .binary => |node| {
-                if (checkedU32Helper(node.op)) |helper| {
-                    try self.out.print(self.allocator, "{s}(", .{helper});
-                    try self.emitResultTryExprWithReplacements(node.left.*, locals, null, replacements);
+                if (isCheckedBinaryOp(node.op)) {
+                    const target = target_ty orelse return error.UnsupportedCEmission;
+                    const target_name = typeName(target) orelse return error.UnsupportedCEmission;
+                    const helper = checkedHelperParts(node.op, target_name) orelse return error.UnsupportedCEmission;
+                    try self.out.print(self.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
+                    try self.emitResultTryExprWithReplacements(node.left.*, locals, target, replacements);
                     try self.out.appendSlice(self.allocator, ", ");
-                    try self.emitResultTryExprWithReplacements(node.right.*, locals, null, replacements);
+                    try self.emitResultTryExprWithReplacements(node.right.*, locals, target, replacements);
                     try self.out.appendSlice(self.allocator, ")");
                 } else {
                     try self.out.appendSlice(self.allocator, "(");
@@ -3077,17 +5961,21 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .unary => |node| {
+                if (try self.emitCheckedUnaryWithMmioReplacements(node, locals, target_ty, replacements)) return;
                 try self.out.appendSlice(self.allocator, unaryCOp(node.op));
                 try self.out.appendSlice(self.allocator, "(");
                 try self.emitMmioReadExprWithReplacements(node.expr.*, locals, null, replacements);
                 try self.out.appendSlice(self.allocator, ")");
             },
             .binary => |node| {
-                if (checkedU32Helper(node.op)) |helper| {
-                    try self.out.print(self.allocator, "{s}(", .{helper});
-                    try self.emitMmioReadExprWithReplacements(node.left.*, locals, null, replacements);
+                if (isCheckedBinaryOp(node.op)) {
+                    const target = target_ty orelse return error.UnsupportedCEmission;
+                    const target_name = typeName(target) orelse return error.UnsupportedCEmission;
+                    const helper = checkedHelperParts(node.op, target_name) orelse return error.UnsupportedCEmission;
+                    try self.out.print(self.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
+                    try self.emitMmioReadExprWithReplacements(node.left.*, locals, target, replacements);
                     try self.out.appendSlice(self.allocator, ", ");
-                    try self.emitMmioReadExprWithReplacements(node.right.*, locals, null, replacements);
+                    try self.emitMmioReadExprWithReplacements(node.right.*, locals, target, replacements);
                     try self.out.appendSlice(self.allocator, ")");
                 } else {
                     try self.out.appendSlice(self.allocator, "(");
@@ -3145,17 +6033,21 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .unary => |node| {
+                if (try self.emitCheckedUnaryWithNullableReplacements(node, locals, target_ty, replacements)) return;
                 try self.out.appendSlice(self.allocator, unaryCOp(node.op));
                 try self.out.appendSlice(self.allocator, "(");
                 try self.emitNullableTryExprWithReplacements(node.expr.*, locals, null, replacements);
                 try self.out.appendSlice(self.allocator, ")");
             },
             .binary => |node| {
-                if (checkedU32Helper(node.op)) |helper| {
-                    try self.out.print(self.allocator, "{s}(", .{helper});
-                    try self.emitNullableTryExprWithReplacements(node.left.*, locals, null, replacements);
+                if (isCheckedBinaryOp(node.op)) {
+                    const target = target_ty orelse return error.UnsupportedCEmission;
+                    const target_name = typeName(target) orelse return error.UnsupportedCEmission;
+                    const helper = checkedHelperParts(node.op, target_name) orelse return error.UnsupportedCEmission;
+                    try self.out.print(self.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
+                    try self.emitNullableTryExprWithReplacements(node.left.*, locals, target, replacements);
                     try self.out.appendSlice(self.allocator, ", ");
-                    try self.emitNullableTryExprWithReplacements(node.right.*, locals, null, replacements);
+                    try self.emitNullableTryExprWithReplacements(node.right.*, locals, target, replacements);
                     try self.out.appendSlice(self.allocator, ")");
                 } else {
                     try self.out.appendSlice(self.allocator, "(");
@@ -3201,6 +6093,35 @@ const CEmitter = struct {
         const info = self.functions.get(fn_name) orelse return null;
         const return_ty = info.return_type orelse return null;
         return if (return_ty.kind == .slice) return_ty else null;
+    }
+
+    fn sliceElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+        return switch (ty.kind) {
+            .slice => |node| node.child.*,
+            .qualified => |node| sliceElementType(node.child.*),
+            else => null,
+        };
+    }
+
+    fn arrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+        return switch (ty.kind) {
+            .array => |node| node.child.*,
+            .qualified => |node| arrayElementType(node.child.*),
+            else => null,
+        };
+    }
+
+    fn arrayLenText(self: *CEmitter, ty: ast.TypeExpr) !?[]const u8 {
+        return switch (ty.kind) {
+            .array => |node| try self.arrayLenTextForExpr(node.len),
+            .qualified => |node| try self.arrayLenText(node.child.*),
+            else => null,
+        };
+    }
+
+    fn arrayLenTextForExpr(self: *CEmitter, expr: ast.Expr) ![]const u8 {
+        const value = constArrayLenValue(expr) orelse return error.UnsupportedCEmission;
+        return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 
     fn arrayReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
@@ -3260,14 +6181,45 @@ const CEmitter = struct {
         };
     }
 
-    fn callReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
+    fn callReturnTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         return switch (expr.kind) {
             .call => |node| blk: {
+                if (bitcastReturnTypeForCall(node)) |ty| break :blk ty;
+                if (self.assumeNoaliasReturnTypeForCall(node, locals)) |ty| break :blk ty;
+                if (self.rawManyOffsetReturnTypeForCall(node, locals)) |ty| break :blk ty;
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
                 break :blk info.return_type;
             },
-            .grouped => |inner| self.callReturnTypeForExpr(inner.*),
+            .grouped => |inner| self.callReturnTypeForExpr(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn assumeNoaliasReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (!isAssumeNoaliasCall(call) or call.args.len != 2) return null;
+        return self.exprSourceTypeForEmission(call.args[0], locals);
+    }
+
+    fn exprSourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .ident => |ident| {
+                if (locals) |local_set| {
+                    if (local_set.get(ident.text)) |info| return info.source_ty;
+                }
+                if (self.globals.get(ident.text)) |info| return info.source_ty;
+                return null;
+            },
+            .call => |node| blk: {
+                if (bitcastReturnTypeForCall(node)) |ty| break :blk ty;
+                if (self.assumeNoaliasReturnTypeForCall(node, locals)) |ty| break :blk ty;
+                if (self.rawManyOffsetReturnTypeForCall(node, locals)) |ty| break :blk ty;
+                const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
+                const info = self.functions.get(fn_name) orelse break :blk null;
+                break :blk info.return_type;
+            },
+            .cast => |node| node.ty.*,
+            .grouped => |inner| self.exprSourceTypeForEmission(inner.*, locals),
             else => null,
         };
     }
@@ -3293,6 +6245,90 @@ const CEmitter = struct {
         return switch (ty.kind) {
             .nullable => |child| try self.nullableInnerCType(child.*),
             .qualified => |node| try self.nullableInnerCTypeForType(node.child.*),
+            else => null,
+        };
+    }
+
+    fn exprContainsResultTry(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .try_expr => |inner| self.resultTypeForExpr(inner.*, locals) != null,
+            .grouped, .address_of, .deref => |inner| self.exprContainsResultTry(inner.*, locals),
+            .unary => |node| self.exprContainsResultTry(node.expr.*, locals),
+            .binary => |node| self.exprContainsResultTry(node.left.*, locals) or self.exprContainsResultTry(node.right.*, locals),
+            .call => |node| {
+                for (node.args) |arg| if (self.exprContainsResultTry(arg, locals)) return true;
+                return false;
+            },
+            .index => |node| self.exprContainsResultTry(node.base.*, locals) or self.exprContainsResultTry(node.index.*, locals),
+            .member => |node| self.exprContainsResultTry(node.base.*, locals),
+            .cast => |node| self.exprContainsResultTry(node.value.*, locals),
+            else => false,
+        };
+    }
+
+    fn callArgsContainResultTry(self: *CEmitter, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        for (args) |arg| {
+            if (self.exprContainsResultTry(arg, locals)) return true;
+        }
+        return false;
+    }
+
+    fn exprContainsNullableTry(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        return switch (expr.kind) {
+            .try_expr => |inner| (try self.nullableInnerCTypeForExpr(inner.*, locals)) != null,
+            .grouped, .address_of, .deref => |inner| try self.exprContainsNullableTry(inner.*, locals),
+            .unary => |node| try self.exprContainsNullableTry(node.expr.*, locals),
+            .binary => |node| (try self.exprContainsNullableTry(node.left.*, locals)) or (try self.exprContainsNullableTry(node.right.*, locals)),
+            .call => |node| {
+                for (node.args) |arg| if (try self.exprContainsNullableTry(arg, locals)) return true;
+                return false;
+            },
+            .index => |node| (try self.exprContainsNullableTry(node.base.*, locals)) or (try self.exprContainsNullableTry(node.index.*, locals)),
+            .member => |node| try self.exprContainsNullableTry(node.base.*, locals),
+            .cast => |node| try self.exprContainsNullableTry(node.value.*, locals),
+            else => false,
+        };
+    }
+
+    fn callArgsContainNullableTry(self: *CEmitter, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        for (args) |arg| {
+            if (try self.exprContainsNullableTry(arg, locals)) return true;
+        }
+        return false;
+    }
+
+    fn exprContainsMmioRead(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        return switch (expr.kind) {
+            .call => |node| {
+                if (self.mmioAccess(node.callee.*, node.args, locals)) |access| return std.mem.eql(u8, access.kind, "read");
+                for (node.args) |arg| if (self.exprContainsMmioRead(arg, locals)) return true;
+                return false;
+            },
+            .grouped, .address_of, .deref => |inner| self.exprContainsMmioRead(inner.*, locals),
+            .unary => |node| self.exprContainsMmioRead(node.expr.*, locals),
+            .binary => |node| self.exprContainsMmioRead(node.left.*, locals) or self.exprContainsMmioRead(node.right.*, locals),
+            .index => |node| self.exprContainsMmioRead(node.base.*, locals) or self.exprContainsMmioRead(node.index.*, locals),
+            .member => |node| self.exprContainsMmioRead(node.base.*, locals),
+            .cast => |node| self.exprContainsMmioRead(node.value.*, locals),
+            else => false,
+        };
+    }
+
+    fn callArgsContainMmioRead(self: *CEmitter, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+        for (args) |arg| {
+            if (self.exprContainsMmioRead(arg, locals)) return true;
+        }
+        return false;
+    }
+
+    fn localIndexElementType(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .ident => |ident| {
+                const info = locals.get(ident.text) orelse return null;
+                const source_ty = info.source_ty orelse return null;
+                return arrayElementType(source_ty) orelse sliceElementType(source_ty);
+            },
+            .grouped => |inner| localIndexElementType(inner.*, locals),
             else => null,
         };
     }
@@ -3337,12 +6373,14 @@ const CEmitter = struct {
     }
 
     fn localInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !LocalInfo {
-        const source_type_name = typeName(ty);
-        const mmio_pointee = mmioPointee(ty);
-        return switch (ty.kind) {
-            .array => |node| .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name, .array_len = intLiteralText(node.len), .iterable_element_c_type = try self.cTypeFor(node.child.*, .typedef_name), .mmio_pointee = mmio_pointee },
+        const resolved_ty = self.resolveAliasType(ty);
+        const source_type_name = typeName(resolved_ty);
+        const mmio_pointee = mmioPointee(resolved_ty);
+        return switch (resolved_ty.kind) {
+            .array => |node| .{ .source_ty = resolved_ty, .c_type = try self.cTypeFor(resolved_ty, .typedef_name), .source_type_name = source_type_name, .array_len = try self.arrayLenTextForExpr(node.len), .array_elems_field = "elems", .iterable_element_c_type = try self.cTypeFor(node.child.*, .typedef_name), .mmio_pointee = mmio_pointee },
             .slice => |node| .{
-                .c_type = try self.cTypeFor(ty, .typedef_name),
+                .source_ty = resolved_ty,
+                .c_type = try self.cTypeFor(resolved_ty, .typedef_name),
                 .source_type_name = source_type_name,
                 .slice_ptr_field = "ptr",
                 .slice_len_field = "len",
@@ -3350,20 +6388,120 @@ const CEmitter = struct {
                 .mmio_pointee = mmio_pointee,
             },
             .nullable => |child| .{
-                .c_type = try self.cTypeFor(ty, .typedef_name),
+                .source_ty = resolved_ty,
+                .c_type = try self.cTypeFor(resolved_ty, .typedef_name),
                 .source_type_name = source_type_name,
                 .nullable_inner_c_type = try self.nullableInnerCType(child.*),
                 .mmio_pointee = mmio_pointee,
             },
             .generic => |node| .{
-                .c_type = try self.cTypeFor(ty, .typedef_name),
+                .source_ty = resolved_ty,
+                .c_type = try self.cTypeFor(resolved_ty, .typedef_name),
                 .source_type_name = source_type_name,
-                .result_ty = if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) ty else null,
+                .result_ty = if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) resolved_ty else null,
                 .result_ok_c_type = if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) try self.cTypeFor(node.args[0], .typedef_name) else null,
                 .result_err_c_type = if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) try self.cTypeFor(node.args[1], .typedef_name) else null,
                 .mmio_pointee = mmio_pointee,
             },
-            else => .{ .c_type = try self.cTypeFor(ty, .typedef_name), .source_type_name = source_type_name, .mmio_pointee = mmio_pointee },
+            else => .{ .source_ty = resolved_ty, .c_type = try self.cTypeFor(resolved_ty, .typedef_name), .source_type_name = source_type_name, .mmio_pointee = mmio_pointee },
+        };
+    }
+
+    fn globalInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !GlobalInfo {
+        const resolved_ty = self.resolveAliasType(ty);
+        const name = typeName(resolved_ty) orelse "unknown";
+        const c_type = try self.cTypeFor(resolved_ty, .typedef_name);
+        if (arrayElementType(resolved_ty)) |element_ty| {
+            const element_info = try self.globalElementInfoFromType(element_ty);
+            return .{
+                .type_name = name,
+                .c_type = c_type,
+                .race_type_name = name,
+                .race_c_type = c_type,
+                .width_bits = widthBits(name),
+                .pointer_like = false,
+                .source_ty = resolved_ty,
+                .array_element_info = element_info,
+                .array_len = try self.arrayLenText(resolved_ty),
+            };
+        }
+        if (self.enums.get(name)) |enum_decl| {
+            if (enum_decl.repr) |repr| {
+                const repr_name = typeName(repr) orelse name;
+                return .{
+                    .type_name = name,
+                    .c_type = c_type,
+                    .race_type_name = repr_name,
+                    .race_c_type = try self.cTypeFor(repr, .typedef_name),
+                    .width_bits = widthBits(repr_name),
+                    .pointer_like = false,
+                    .source_ty = resolved_ty,
+                };
+            }
+            return .{
+                .type_name = name,
+                .c_type = c_type,
+                .race_type_name = "isize",
+                .race_c_type = "intptr_t",
+                .width_bits = widthBits("isize"),
+                .pointer_like = false,
+                .source_ty = resolved_ty,
+            };
+        }
+        if (self.packed_bits.get(name)) |packed_bits| {
+            return .{
+                .type_name = name,
+                .c_type = c_type,
+                .race_type_name = packed_bits.repr_name,
+                .race_c_type = packed_bits.repr_c_type,
+                .width_bits = widthBits(packed_bits.repr_name),
+                .pointer_like = false,
+                .source_ty = resolved_ty,
+            };
+        }
+        return .{
+            .type_name = name,
+            .c_type = c_type,
+            .race_type_name = name,
+            .race_c_type = c_type,
+            .width_bits = widthBits(name),
+            .pointer_like = isPointerLikeGlobalType(resolved_ty),
+            .source_ty = resolved_ty,
+        };
+    }
+
+    fn globalElementInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !GlobalElementInfo {
+        const resolved_ty = self.resolveAliasType(ty);
+        const name = typeName(resolved_ty) orelse "unknown";
+        const c_type = try self.cTypeFor(resolved_ty, .typedef_name);
+        if (self.enums.get(name)) |enum_decl| {
+            const repr = enum_decl.repr orelse return .{
+                .source_ty = resolved_ty,
+                .c_type = c_type,
+                .race_type_name = "isize",
+                .race_c_type = "intptr_t",
+            };
+            const repr_name = typeName(repr) orelse name;
+            return .{
+                .source_ty = resolved_ty,
+                .c_type = c_type,
+                .race_type_name = repr_name,
+                .race_c_type = try self.cTypeFor(repr, .typedef_name),
+            };
+        }
+        if (self.packed_bits.get(name)) |packed_bits| {
+            return .{
+                .source_ty = resolved_ty,
+                .c_type = c_type,
+                .race_type_name = packed_bits.repr_name,
+                .race_c_type = packed_bits.repr_c_type,
+            };
+        }
+        return .{
+            .source_ty = resolved_ty,
+            .c_type = c_type,
+            .race_type_name = name,
+            .race_c_type = c_type,
         };
     }
 
@@ -3371,6 +6509,63 @@ const CEmitter = struct {
         return switch (ty.kind) {
             .pointer, .raw_many_pointer => try self.cTypeFor(ty, .typedef_name),
             .qualified => |node| try self.nullableInnerCType(node.child.*),
+            else => null,
+        };
+    }
+
+    fn rawManyOffsetTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .call => |call| self.rawManyOffsetReturnTypeForCall(call, locals),
+            .grouped => |inner| self.rawManyOffsetTypeForExpr(inner.*, locals),
+            else => null,
+        };
+    }
+
+    fn rawManyOffsetDerefTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const inner = switch (expr.kind) {
+            .grouped => |grouped| return self.rawManyOffsetDerefTypeForExpr(grouped.*, locals),
+            .deref => |inner| inner.*,
+            else => return null,
+        };
+        const ptr_ty = self.rawManyOffsetTypeForExpr(inner, locals) orelse return null;
+        return rawManyElementType(ptr_ty);
+    }
+
+    fn rawManyOffsetReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const info = self.rawManyOffsetCallInfo(call, locals) orelse return null;
+        return info.ty;
+    }
+
+    fn rawManyOffsetCallInfo(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?RawManyOffsetInfo {
+        if (call.type_args.len != 0 or call.args.len != 1) return null;
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "offset")) return null;
+        const base_ty = self.rawManyOffsetExprTypeForEmission(member.base.*, locals) orelse return null;
+        if (!isRawManyPointerType(base_ty)) return null;
+        return .{ .base = member.base.*, .ty = base_ty };
+    }
+
+    fn rawManyOffsetExprTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .ident => |ident| {
+                const local_set = locals orelse return null;
+                const info = local_set.get(ident.text) orelse return null;
+                return info.source_ty;
+            },
+            .call => |node| blk: {
+                if (self.rawManyOffsetReturnTypeForCall(node, locals)) |ty| break :blk ty;
+                const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
+                const info = self.functions.get(fn_name) orelse break :blk null;
+                break :blk info.return_type;
+            },
+            .grouped => |inner| self.rawManyOffsetExprTypeForEmission(inner.*, locals),
             else => null,
         };
     }
@@ -3389,9 +6584,11 @@ const CEmitter = struct {
 };
 
 const LocalInfo = struct {
+    source_ty: ?ast.TypeExpr = null,
     c_type: ?[]const u8 = null,
     source_type_name: ?[]const u8 = null,
     array_len: ?[]const u8 = null,
+    array_elems_field: ?[]const u8 = null,
     slice_ptr_field: ?[]const u8 = null,
     slice_len_field: ?[]const u8 = null,
     iterable_element_c_type: ?[]const u8 = null,
@@ -3402,9 +6599,121 @@ const LocalInfo = struct {
     mmio_pointee: ?[]const u8 = null,
 };
 
+const ArrayInfo = struct {
+    name: []const u8,
+    element_ty: ast.TypeExpr,
+    element_c_type: []const u8,
+    len: []const u8,
+};
+
+const RawManyOffsetInfo = struct {
+    base: ast.Expr,
+    ty: ast.TypeExpr,
+};
+
+fn numericExprType(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const local_set = locals orelse return null;
+            const info = local_set.get(ident.text) orelse return null;
+            const source_ty = info.source_ty orelse return null;
+            return if (isNumericStorageType(source_ty)) source_ty else null;
+        },
+        .grouped => |inner| numericExprType(inner.*, locals),
+        .unary => |node| numericExprType(node.expr.*, locals),
+        .binary => |node| {
+            if (!isNumericValueBinaryOp(node.op)) return null;
+            const left_ty = numericExprType(node.left.*, locals) orelse return null;
+            const right_ty = numericExprType(node.right.*, locals) orelse return null;
+            if (!sameCStorageType(left_ty, right_ty)) return null;
+            return left_ty;
+        },
+        else => null,
+    };
+}
+
+fn localCopyTypeForInitializer(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const info = locals.get(ident.text) orelse return null;
+            return info.source_ty;
+        },
+        .grouped => |inner| localCopyTypeForInitializer(inner.*, locals),
+        else => null,
+    };
+}
+
+fn isNumericStorageType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .name => |ident| checkedTypeSuffix(ident.text) != null,
+        .generic => |node| {
+            if ((!std.mem.eql(u8, node.base.text, "wrap") and !std.mem.eql(u8, node.base.text, "sat")) or node.args.len != 1) return false;
+            return isNumericStorageType(node.args[0]);
+        },
+        .qualified => |node| isNumericStorageType(node.child.*),
+        else => false,
+    };
+}
+
+fn isNumericValueBinaryOp(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .add, .sub, .mul, .div, .mod, .shl, .shr, .bit_and, .bit_or, .bit_xor => true,
+        else => false,
+    };
+}
+
+fn sameCStorageType(left: ast.TypeExpr, right: ast.TypeExpr) bool {
+    return switch (left.kind) {
+        .name => |left_name| switch (right.kind) {
+            .name => |right_name| std.mem.eql(u8, left_name.text, right_name.text),
+            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
+            else => false,
+        },
+        .generic => |left_node| switch (right.kind) {
+            .generic => |right_node| {
+                if (!std.mem.eql(u8, left_node.base.text, right_node.base.text)) return false;
+                if (left_node.args.len != right_node.args.len) return false;
+                for (left_node.args, right_node.args) |left_arg, right_arg| {
+                    if (!sameCStorageType(left_arg, right_arg)) return false;
+                }
+                return true;
+            },
+            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
+            else => false,
+        },
+        .qualified => |left_node| sameCStorageType(left_node.child.*, right),
+        else => false,
+    };
+}
+
+fn isRawManyPointerType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .raw_many_pointer => true,
+        .qualified => |node| isRawManyPointerType(node.child.*),
+        else => false,
+    };
+}
+
+fn isNonNullPointerType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .pointer, .raw_many_pointer => true,
+        .qualified => |node| isNonNullPointerType(node.child.*),
+        else => false,
+    };
+}
+
+fn rawManyElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .raw_many_pointer => |node| node.child.*,
+        .qualified => |node| rawManyElementType(node.child.*),
+        else => null,
+    };
+}
+
 const FnInfo = struct {
     params: []const ast.Param,
     return_type: ?ast.TypeExpr,
+    is_extern: bool,
 };
 
 const TryReplacement = struct {
@@ -3460,6 +6769,14 @@ const OverlayFieldAccess = struct {
 const OverlayLayout = struct {
     size: usize,
     alignment: usize,
+};
+
+const ReflectionCallKind = enum {
+    size,
+    alignment,
+    field_offset,
+    bit_offset,
+    repr,
 };
 
 const ResultInfo = struct {
@@ -3529,6 +6846,7 @@ const Inspector = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     mmio_structs: std.StringHashMap(MmioStruct),
+    structs: std.StringHashMap(ast.StructDecl),
     globals: std.StringHashMap(GlobalInfo),
 
     fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) Inspector {
@@ -3536,6 +6854,7 @@ const Inspector = struct {
             .allocator = allocator,
             .out = out,
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
+            .structs = std.StringHashMap(ast.StructDecl).init(allocator),
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
         };
     }
@@ -3544,6 +6863,7 @@ const Inspector = struct {
         var structs = self.mmio_structs.valueIterator();
         while (structs.next()) |mmio_struct| mmio_struct.fields.deinit();
         self.mmio_structs.deinit();
+        self.structs.deinit();
         self.globals.deinit();
     }
 
@@ -3564,6 +6884,8 @@ const Inspector = struct {
                 .extern_struct => |struct_decl| {
                     if (struct_decl.abi) |abi| {
                         if (std.mem.eql(u8, abi, "mmio")) try self.collectMmioStruct(struct_decl);
+                    } else {
+                        try self.structs.put(struct_decl.name.text, struct_decl);
                     }
                 },
                 .packed_bits_decl => |packed_bits| try self.writePackedBitsLowering(packed_bits),
@@ -3609,7 +6931,7 @@ const Inspector = struct {
 
         for (fn_decl.params) |param| {
             try ctx.locals.put(param.name.text, {});
-            if (typeName(param.ty)) |name| try ctx.local_types.put(param.name.text, name);
+            try ctx.recordLocalType(param.name.text, param.ty);
             if (mmioPointee(param.ty)) |struct_name| try ctx.mmio_params.put(param.name.text, struct_name);
         }
 
@@ -3625,9 +6947,7 @@ const Inspector = struct {
             .let_decl, .var_decl => |local| {
                 for (local.names) |name| {
                     try ctx.locals.put(name.text, {});
-                    if (local.ty) |ty| {
-                        if (typeName(ty)) |ty_name| try ctx.local_types.put(name.text, ty_name);
-                    }
+                    if (local.ty) |ty| try ctx.recordLocalType(name.text, ty);
                 }
                 if (local.init) |expr| try self.inspectExpr(expr, ctx);
             },
@@ -3674,13 +6994,15 @@ const Inspector = struct {
                 );
                 if (previous_ended) |ended| ctx.ended_contract = ended;
             },
-            .asm_stmt => {},
+            .asm_stmt => |asm_stmt| try self.writeAsmMetadata(ctx.name, asm_stmt),
             .@"return" => |maybe| if (maybe) |expr| try self.inspectExpr(expr, ctx),
             .@"break", .@"continue" => {},
             .@"defer", .expr, .assert => |expr| try self.inspectExpr(expr, ctx),
             .assignment => |node| {
-                if (ordinaryGlobalTarget(node.target, ctx.*, self.globals)) |target| {
+                if (ordinaryGlobalTarget(self.allocator, node.target, ctx.*, self.globals, self.structs)) |target| {
+                    defer if (target.owned_name) self.allocator.free(target.name);
                     try self.writeOrdinaryAccess(ctx.name, target, "store");
+                    if (node.target.kind == .index) try self.inspectExpr(node.target.kind.index.index.*, ctx);
                 } else if (localOrdinaryTarget(node.target, ctx.*)) |target| {
                     try self.writeLocalOrdinaryAccess(ctx.name, target, "store");
                 }
@@ -3700,7 +7022,9 @@ const Inspector = struct {
                     try self.writeLocalOrdinaryAccess(ctx.name, ident.text, "load");
                 }
             },
-            .int_literal, .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal, .unreachable_expr => {},
+            .int_literal, .float_literal, .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal, .unreachable_expr => {},
+            .array_literal => |items| for (items) |item| try self.inspectExpr(item, ctx),
+            .struct_literal => |fields| for (fields) |field| try self.inspectExpr(field.value, ctx),
             .grouped, .address_of, .deref, .try_expr => |inner| try self.inspectExpr(inner.*, ctx),
             .block => |body| try self.inspectBlock(body, ctx),
             .unary => |node| {
@@ -3713,7 +7037,9 @@ const Inspector = struct {
             },
             .binary => |node| {
                 const op = CheckedOp{ .binary = node.op };
-                if (node.op == .shl) {
+                if (arithmeticDomainForBinary(node, ctx)) |domain| {
+                    try self.writeArithmeticDomainLowering(ctx, domain, node.op);
+                } else if (node.op == .shl) {
                     const ty = exprType(node.left.*, ctx) orelse "unknown";
                     try self.writeCheckedArithmetic(ctx, op, ty, .invalid_shift);
                     try self.writeCheckedArithmetic(ctx, op, ty, .integer_overflow);
@@ -3731,6 +7057,9 @@ const Inspector = struct {
             .call => |node| {
                 try self.writeContractCallMetadata(node.callee.*, ctx);
                 try self.writeRaceCallMetadata(node.callee.*, ctx);
+                try self.writeAtomicCallMetadata(node.callee.*, node.args, ctx);
+                try self.writeDmaCallMetadata(node.callee.*, node.args, ctx);
+                try self.writeBitcastMetadata(node, ctx);
                 if (try self.mmioAccess(node.callee.*, node.args, ctx)) |access| {
                     const bits = widthBits(access.width);
                     try self.out.print(
@@ -3778,10 +7107,22 @@ const Inspector = struct {
                 for (node.args) |arg| try self.inspectExpr(arg, ctx);
             },
             .index => |node| {
-                try self.inspectExpr(node.base.*, ctx);
+                if (ordinaryGlobalTarget(self.allocator, expr, ctx.*, self.globals, self.structs)) |target| {
+                    defer if (target.owned_name) self.allocator.free(target.name);
+                    try self.writeOrdinaryAccess(ctx.name, target, "load");
+                } else {
+                    try self.inspectExpr(node.base.*, ctx);
+                }
                 try self.inspectExpr(node.index.*, ctx);
             },
-            .member => |node| try self.inspectExpr(node.base.*, ctx),
+            .member => |node| {
+                if (ordinaryGlobalTarget(self.allocator, expr, ctx.*, self.globals, self.structs)) |target| {
+                    defer if (target.owned_name) self.allocator.free(target.name);
+                    try self.writeOrdinaryAccess(ctx.name, target, "load");
+                    return;
+                }
+                try self.inspectExpr(node.base.*, ctx);
+            },
         }
     }
 
@@ -3828,6 +7169,16 @@ const Inspector = struct {
         }
     }
 
+    fn writeArithmeticDomainLowering(self: *Inspector, ctx: *FnContext, domain: []const u8, op: ast.BinaryOp) !void {
+        const op_name = arithmeticDomainOpName(op);
+        const strategy = if (std.mem.eql(u8, domain, "sat")) "saturating_helper" else if (op == .shl or op == .shr) "shift_helper" else "plain_unsigned";
+        try self.out.print(
+            self.allocator,
+            "lower arithmetic_domain fn={s} domain={s} op={s} strategy={s} language_trap=false overflow_trap=false emits_checked_overflow_helper=false\n",
+            .{ ctx.name, domain, op_name, strategy },
+        );
+    }
+
     fn writeOrdinaryAccess(self: *Inspector, fn_name: []const u8, target: GlobalAccess, access: []const u8) !void {
         const object = target.name;
         const helper_base = if (std.mem.eql(u8, access, "load")) "mc_race_load" else "mc_race_store";
@@ -3835,23 +7186,23 @@ const Inspector = struct {
             try self.out.print(
                 self.allocator,
                 "lower ordinary_access fn={s} object={s} access={s} race_class=possibly_shared strategy=race_helper helper={s}_{s} type={s} width_bits={s} helper_required=true helper_available=true c_plain_access=false c_expr={s}_{s}(&{s})\n",
-                .{ fn_name, object, access, helper_base, target.info.type_name, target.info.type_name, target.info.width_bits, helper_base, target.info.type_name, object },
+                .{ fn_name, object, access, helper_base, target.info.race_type_name, target.info.race_type_name, target.info.width_bits, helper_base, target.info.race_type_name, object },
             );
             try self.out.print(
                 self.allocator,
                 "lower race_backend fn={s} object={s} access={s} action=emit_helper helper={s}_{s} type={s} width_bits={s} expr={s}_{s}(&{s}) c_plain_access=false reject_if_helper_missing=true\n",
-                .{ fn_name, object, access, helper_base, target.info.type_name, target.info.type_name, target.info.width_bits, helper_base, target.info.type_name, object },
+                .{ fn_name, object, access, helper_base, target.info.race_type_name, target.info.race_type_name, target.info.width_bits, helper_base, target.info.race_type_name, object },
             );
         } else {
             try self.out.print(
                 self.allocator,
                 "lower ordinary_access fn={s} object={s} access={s} race_class=possibly_shared strategy=race_helper helper={s}_{s} type={s} width_bits={s} helper_required=true helper_available=true c_plain_access=false c_expr={s}_{s}(&{s}, <value>)\n",
-                .{ fn_name, object, access, helper_base, target.info.type_name, target.info.type_name, target.info.width_bits, helper_base, target.info.type_name, object },
+                .{ fn_name, object, access, helper_base, target.info.race_type_name, target.info.race_type_name, target.info.width_bits, helper_base, target.info.race_type_name, object },
             );
             try self.out.print(
                 self.allocator,
                 "lower race_backend fn={s} object={s} access={s} action=emit_helper helper={s}_{s} type={s} width_bits={s} expr={s}_{s}(&{s}, value) c_plain_access=false reject_if_helper_missing=true\n",
-                .{ fn_name, object, access, helper_base, target.info.type_name, target.info.type_name, target.info.width_bits, helper_base, target.info.type_name, object },
+                .{ fn_name, object, access, helper_base, target.info.race_type_name, target.info.race_type_name, target.info.width_bits, helper_base, target.info.race_type_name, object },
             );
         }
         try self.out.print(
@@ -3912,6 +7263,72 @@ const Inspector = struct {
         }
     }
 
+    fn writeAtomicCallMetadata(self: *Inspector, callee: ast.Expr, args: []const ast.Expr, ctx: *FnContext) !void {
+        const access = atomicAccess(callee, args, ctx.*) orelse return;
+        const order_const = atomicOrderCConstant(access.ordering) orelse "UNKNOWN";
+        const builtin = if (std.mem.eql(u8, access.op, "load"))
+            "__atomic_load_n"
+        else if (std.mem.eql(u8, access.op, "store"))
+            "__atomic_store_n"
+        else
+            "__atomic_fetch_add";
+        try self.out.print(
+            self.allocator,
+            "lower atomic_access fn={s} op={s} object={s} type={s} ordering={s} c_order={s} builtin={s} volatile=false ordinary_access=false creates_happens_before={s}\n",
+            .{ ctx.name, access.op, access.object, access.payload_type, access.ordering, order_const, builtin, if (atomicOrderSynchronizes(access.ordering)) "true" else "false" },
+        );
+        try self.out.print(
+            self.allocator,
+            "lower atomic_backend fn={s} op={s} object={s} c_expr={s}(&{s}, ...) c_plain_access=false volatile=false\n",
+            .{ ctx.name, access.op, access.object, builtin, access.object },
+        );
+    }
+
+    fn writeDmaCallMetadata(self: *Inspector, callee: ast.Expr, args: []const ast.Expr, ctx: *FnContext) !void {
+        const op = dmaOperation(callee, args, ctx.*) orelse return;
+        if (std.mem.eql(u8, op.kind, "dma_addr")) {
+            try self.out.print(
+                self.allocator,
+                "lower dma_access fn={s} op=dma_addr object={s} payload={s} mode={s} result=DmaAddr address_class=dma_addr not_paddr=true not_vaddr=true\n",
+                .{ ctx.name, op.object, op.payload, op.mode },
+            );
+            return;
+        }
+        if (std.mem.eql(u8, op.kind, "as_slice")) {
+            try self.out.print(
+                self.allocator,
+                "lower dma_access fn={s} op=as_slice object={s} payload={s} mode={s} result=slice temporal_cache_proven=false core_guarantee=address_class_only\n",
+                .{ ctx.name, op.object, op.payload, op.mode },
+            );
+            return;
+        }
+        try self.out.print(
+            self.allocator,
+            "lower dma_cache fn={s} op={s} object={s} payload={s} mode={s} helper=mc_dma_cache_{s} required_for_noncoherent=true\n",
+            .{ ctx.name, op.kind, op.object, op.payload, op.mode, op.kind },
+        );
+    }
+
+    fn writeBitcastMetadata(self: *Inspector, call: anytype, ctx: *FnContext) !void {
+        if (!isBitcastCall(call) or call.type_args.len != 1 or call.args.len != 1) return;
+        const target = typeName(call.type_args[0]) orelse "unknown";
+        const source = exprType(call.args[0], ctx) orelse "unknown";
+        try self.out.print(
+            self.allocator,
+            "lower bitcast fn={s} source={s} target={s} strategy=memcpy helper=mc_bitcast_memcpy strict_aliasing_cast=false c_expr=mc_bitcast_memcpy\n",
+            .{ ctx.name, source, target },
+        );
+    }
+
+    fn writeAsmMetadata(self: *Inspector, fn_name: []const u8, asm_stmt: ast.AsmStmt) !void {
+        if (asm_stmt.form != .@"opaque") return;
+        try self.out.print(
+            self.allocator,
+            "lower asm fn={s} form=opaque volatile={} conservative=true memory_clobber={} optimizer_assumptions=false c_backend=gcc_clang_asm\n",
+            .{ fn_name, asm_stmt.is_volatile, asmHasMemoryClobber(asm_stmt) },
+        );
+    }
+
     fn mmioAccess(self: *Inspector, callee: ast.Expr, args: []ast.Expr, ctx: *FnContext) !?MmioAccess {
         const member = switch (callee.kind) {
             .member => |node| node,
@@ -3950,6 +7367,10 @@ const FnContext = struct {
     name: []const u8,
     locals: std.StringHashMap(void),
     local_types: std.StringHashMap([]const u8),
+    local_domains: std.StringHashMap([]const u8),
+    local_atomic_payloads: std.StringHashMap([]const u8),
+    local_dma_payloads: std.StringHashMap([]const u8),
+    local_dma_modes: std.StringHashMap([]const u8),
     mmio_params: std.StringHashMap([]const u8),
     active_contract: ?[]const u8 = null,
     ended_contract: ?[]const u8 = null,
@@ -3960,6 +7381,10 @@ const FnContext = struct {
             .name = name,
             .locals = std.StringHashMap(void).init(allocator),
             .local_types = std.StringHashMap([]const u8).init(allocator),
+            .local_domains = std.StringHashMap([]const u8).init(allocator),
+            .local_atomic_payloads = std.StringHashMap([]const u8).init(allocator),
+            .local_dma_payloads = std.StringHashMap([]const u8).init(allocator),
+            .local_dma_modes = std.StringHashMap([]const u8).init(allocator),
             .mmio_params = std.StringHashMap([]const u8).init(allocator),
         };
     }
@@ -3967,7 +7392,39 @@ const FnContext = struct {
     fn deinit(self: *FnContext) void {
         self.locals.deinit();
         self.local_types.deinit();
+        self.local_domains.deinit();
+        self.local_atomic_payloads.deinit();
+        self.local_dma_payloads.deinit();
+        self.local_dma_modes.deinit();
         self.mmio_params.deinit();
+    }
+
+    fn recordLocalType(self: *FnContext, name: []const u8, ty: ast.TypeExpr) !void {
+        if (genericChildType(ty, "wrap")) |inner| {
+            try self.local_domains.put(name, "wrap");
+            if (typeName(inner)) |inner_name| try self.local_types.put(name, inner_name);
+            return;
+        }
+        if (genericChildType(ty, "sat")) |inner| {
+            try self.local_domains.put(name, "sat");
+            if (typeName(inner)) |inner_name| try self.local_types.put(name, inner_name);
+            return;
+        }
+        if (genericChildType(ty, "atomic")) |inner| {
+            if (typeName(inner)) |inner_name| {
+                try self.local_atomic_payloads.put(name, inner_name);
+                try self.local_types.put(name, inner_name);
+            }
+            return;
+        }
+        if (dmaBufInfo(ty)) |info| {
+            if (typeName(info.payload)) |payload_name| {
+                try self.local_dma_payloads.put(name, payload_name);
+                try self.local_dma_modes.put(name, info.mode);
+            }
+            return;
+        }
+        if (typeName(ty)) |ty_name| try self.local_types.put(name, ty_name);
     }
 };
 
@@ -3995,19 +7452,107 @@ const MmioAccess = struct {
     ordering: []const u8,
 };
 
+const AtomicAccess = struct {
+    op: []const u8,
+    object: []const u8,
+    payload_type: []const u8,
+    ordering: []const u8,
+};
+
+const DmaOperation = struct {
+    kind: []const u8,
+    object: []const u8,
+    payload: []const u8,
+    mode: []const u8,
+};
+
 const GlobalInfo = struct {
     type_name: []const u8,
+    c_type: []const u8,
+    race_type_name: []const u8,
+    race_c_type: []const u8,
     width_bits: []const u8,
+    pointer_like: bool,
+    source_ty: ?ast.TypeExpr = null,
+    array_element_info: ?GlobalElementInfo = null,
+    array_len: ?[]const u8 = null,
+};
+
+const GlobalElementInfo = struct {
+    source_ty: ast.TypeExpr,
+    c_type: []const u8,
+    race_type_name: []const u8,
+    race_c_type: []const u8,
 };
 
 const GlobalAccess = struct {
     name: []const u8,
     info: GlobalInfo,
+    owned_name: bool = false,
+};
+
+const GlobalArrayElementAccess = struct {
+    base_name: []const u8,
+    index: ast.Expr,
+    len: []const u8,
+    element_info: GlobalElementInfo,
 };
 
 fn globalInfoFromType(ty: ast.TypeExpr) GlobalInfo {
     const name = typeName(ty) orelse "unknown";
-    return .{ .type_name = name, .width_bits = widthBits(name) };
+    if (globalArrayElementType(ty)) |element_ty| {
+        const element_name = typeName(element_ty) orelse "unknown";
+        return .{
+            .type_name = name,
+            .c_type = cType(ty),
+            .race_type_name = name,
+            .race_c_type = cType(ty),
+            .width_bits = widthBits(name),
+            .pointer_like = false,
+            .source_ty = ty,
+            .array_element_info = .{
+                .source_ty = element_ty,
+                .c_type = cType(element_ty),
+                .race_type_name = element_name,
+                .race_c_type = cType(element_ty),
+            },
+            .array_len = globalArrayLenText(ty),
+        };
+    }
+    return .{
+        .type_name = name,
+        .c_type = cType(ty),
+        .race_type_name = name,
+        .race_c_type = cType(ty),
+        .width_bits = widthBits(name),
+        .pointer_like = isPointerLikeGlobalType(ty),
+        .source_ty = ty,
+    };
+}
+
+fn globalArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .array => |node| node.child.*,
+        .qualified => |node| globalArrayElementType(node.child.*),
+        else => null,
+    };
+}
+
+fn globalArrayLenText(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .array => |node| intLiteralText(node.len),
+        .qualified => |node| globalArrayLenText(node.child.*),
+        else => null,
+    };
+}
+
+fn isPointerLikeGlobalType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .pointer, .raw_many_pointer, .slice => true,
+        .nullable => |child| isPointerLikeGlobalType(child.*),
+        .qualified => |node| isPointerLikeGlobalType(node.child.*),
+        else => false,
+    };
 }
 
 fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {
@@ -4063,9 +7608,71 @@ fn typeName(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
+fn structTypeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |name| name.text,
+        .qualified => |node| structTypeName(node.child.*),
+        else => null,
+    };
+}
+
+fn structFieldType(struct_decl: ast.StructDecl, field_name: []const u8) ?ast.TypeExpr {
+    for (struct_decl.fields) |field| {
+        if (std.mem.eql(u8, field.name.text, field_name)) return field.ty;
+    }
+    return null;
+}
+
+fn isWrapType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .generic => |node| std.mem.eql(u8, node.base.text, "wrap"),
+        .qualified => |node| isWrapType(node.child.*),
+        else => false,
+    };
+}
+
+fn isSatType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .generic => |node| std.mem.eql(u8, node.base.text, "sat"),
+        .qualified => |node| isSatType(node.child.*),
+        else => false,
+    };
+}
+
+fn genericChildType(ty: ast.TypeExpr, base_name: []const u8) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .generic => |node| {
+            if (!std.mem.eql(u8, node.base.text, base_name) or node.args.len != 1) return null;
+            return node.args[0];
+        },
+        .qualified => |node| genericChildType(node.child.*, base_name),
+        else => null,
+    };
+}
+
 fn isCVoidType(ty: ast.TypeExpr) bool {
     const name = typeName(ty) orelse return false;
     return std.mem.eql(u8, name, "void") or std.mem.eql(u8, name, "never");
+}
+
+fn isVoidType(ty: ast.TypeExpr) bool {
+    const name = typeName(ty) orelse return false;
+    return std.mem.eql(u8, name, "void");
+}
+
+fn isVoidLiteralExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .void_literal => true,
+        .grouped => |inner| isVoidLiteralExpr(inner.*),
+        else => false,
+    };
+}
+
+fn simpleNameType(name: []const u8, span: diagnostics.Span) ast.TypeExpr {
+    return .{
+        .span = span,
+        .kind = .{ .name = .{ .text = name, .span = span } },
+    };
 }
 
 fn isCKeyword(name: []const u8) bool {
@@ -4096,6 +7703,7 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     }
     const name = typeName(ty) orelse return "void *";
     if (std.mem.eql(u8, name, "void")) return "void";
+    if (std.mem.eql(u8, name, "c_void")) return "void";
     if (std.mem.eql(u8, name, "never")) return "void";
     if (std.mem.eql(u8, name, "bool")) return "bool";
     if (std.mem.eql(u8, name, "u8")) return "uint8_t";
@@ -4103,16 +7711,113 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "u32")) return "uint32_t";
     if (std.mem.eql(u8, name, "u64")) return "uint64_t";
     if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
+    if (isOpaqueAddressTypeName(name)) return "uintptr_t";
     if (std.mem.eql(u8, name, "i8")) return "int8_t";
     if (std.mem.eql(u8, name, "i16")) return "int16_t";
     if (std.mem.eql(u8, name, "i32")) return "int32_t";
     if (std.mem.eql(u8, name, "i64")) return "int64_t";
     if (std.mem.eql(u8, name, "isize")) return "intptr_t";
+    if (std.mem.eql(u8, name, "f32")) return "float";
+    if (std.mem.eql(u8, name, "f64")) return "double";
+    // Library result/order types (sections 5.4, 5.5). Order is a three-way
+    // comparison (-1/0/+1); the ambiguity error types carry no payload.
+    if (std.mem.eql(u8, name, "Order")) return "int8_t";
+    if (std.mem.eql(u8, name, "AmbiguousSerialOrder")) return "uint8_t";
+    if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return "uint8_t";
+    if (std.mem.eql(u8, name, "ConversionError")) return "uint8_t";
     return "void *";
+}
+
+fn checkedTypeSuffix(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "u8")) return "u8";
+    if (std.mem.eql(u8, name, "u16")) return "u16";
+    if (std.mem.eql(u8, name, "u32")) return "u32";
+    if (std.mem.eql(u8, name, "u64")) return "u64";
+    if (std.mem.eql(u8, name, "usize")) return "usize";
+    if (std.mem.eql(u8, name, "i8")) return "i8";
+    if (std.mem.eql(u8, name, "i16")) return "i16";
+    if (std.mem.eql(u8, name, "i32")) return "i32";
+    if (std.mem.eql(u8, name, "i64")) return "i64";
+    if (std.mem.eql(u8, name, "isize")) return "isize";
+    return null;
+}
+
+fn unsignedTypeSuffix(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "u8")) return "u8";
+    if (std.mem.eql(u8, name, "u16")) return "u16";
+    if (std.mem.eql(u8, name, "u32")) return "u32";
+    if (std.mem.eql(u8, name, "u64")) return "u64";
+    if (std.mem.eql(u8, name, "usize")) return "usize";
+    return null;
+}
+
+fn signedTypeSuffix(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "i8")) return "i8";
+    if (std.mem.eql(u8, name, "i16")) return "i16";
+    if (std.mem.eql(u8, name, "i32")) return "i32";
+    if (std.mem.eql(u8, name, "i64")) return "i64";
+    if (std.mem.eql(u8, name, "isize")) return "isize";
+    return null;
+}
+
+fn isOpaqueAddressTypeName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "PAddr") or
+        std.mem.eql(u8, name, "VAddr") or
+        std.mem.eql(u8, name, "DmaAddr");
+}
+
+const IntTypeRange = struct {
+    min: i128,
+    max: i128,
+    c_min: []const u8,
+    c_max: []const u8,
+};
+
+// Value ranges for the scalar integer types, used to elide unnecessary bound
+// checks in `trap_from`/`sat_from` lowering. `usize`/`isize` are treated as
+// 64-bit for elision; the emitted bounds use the portable limit macros.
+fn intTypeRange(name: []const u8) ?IntTypeRange {
+    if (std.mem.eql(u8, name, "u8")) return .{ .min = 0, .max = 255, .c_min = "0", .c_max = "UINT8_MAX" };
+    if (std.mem.eql(u8, name, "u16")) return .{ .min = 0, .max = 65535, .c_min = "0", .c_max = "UINT16_MAX" };
+    if (std.mem.eql(u8, name, "u32")) return .{ .min = 0, .max = 4294967295, .c_min = "0", .c_max = "UINT32_MAX" };
+    if (std.mem.eql(u8, name, "u64")) return .{ .min = 0, .max = 18446744073709551615, .c_min = "0", .c_max = "UINT64_MAX" };
+    if (std.mem.eql(u8, name, "usize")) return .{ .min = 0, .max = 18446744073709551615, .c_min = "0", .c_max = "UINTPTR_MAX" };
+    if (std.mem.eql(u8, name, "i8")) return .{ .min = -128, .max = 127, .c_min = "INT8_MIN", .c_max = "INT8_MAX" };
+    if (std.mem.eql(u8, name, "i16")) return .{ .min = -32768, .max = 32767, .c_min = "INT16_MIN", .c_max = "INT16_MAX" };
+    if (std.mem.eql(u8, name, "i32")) return .{ .min = -2147483648, .max = 2147483647, .c_min = "INT32_MIN", .c_max = "INT32_MAX" };
+    if (std.mem.eql(u8, name, "i64")) return .{ .min = -9223372036854775808, .max = 9223372036854775807, .c_min = "INT64_MIN", .c_max = "INT64_MAX" };
+    if (std.mem.eql(u8, name, "isize")) return .{ .min = -9223372036854775808, .max = 9223372036854775807, .c_min = "INTPTR_MIN", .c_max = "INTPTR_MAX" };
+    return null;
+}
+
+fn signedMinMacroForInner(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) return "INT8_MIN";
+    if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) return "INT16_MIN";
+    if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return "INT32_MIN";
+    if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return "INT64_MIN";
+    if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return "INTPTR_MIN";
+    return null;
+}
+
+fn signedCTypeForInner(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) return "int8_t";
+    if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) return "int16_t";
+    if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return "int32_t";
+    if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return "int64_t";
+    if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return "intptr_t";
+    return null;
+}
+
+fn floatCTypeName(ty: ast.TypeExpr) ?[]const u8 {
+    const name = typeName(ty) orelse return null;
+    if (std.mem.eql(u8, name, "f32")) return "float";
+    if (std.mem.eql(u8, name, "f64")) return "double";
+    return null;
 }
 
 fn primitiveCTypeName(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "void")) return "void";
+    if (std.mem.eql(u8, name, "c_void")) return "void";
     if (std.mem.eql(u8, name, "never")) return "void";
     if (std.mem.eql(u8, name, "bool")) return "bool";
     if (std.mem.eql(u8, name, "u8")) return "uint8_t";
@@ -4120,11 +7825,14 @@ fn primitiveCTypeName(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "u32")) return "uint32_t";
     if (std.mem.eql(u8, name, "u64")) return "uint64_t";
     if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
+    if (isOpaqueAddressTypeName(name)) return "uintptr_t";
     if (std.mem.eql(u8, name, "i8")) return "int8_t";
     if (std.mem.eql(u8, name, "i16")) return "int16_t";
     if (std.mem.eql(u8, name, "i32")) return "int32_t";
     if (std.mem.eql(u8, name, "i64")) return "int64_t";
     if (std.mem.eql(u8, name, "isize")) return "intptr_t";
+    if (std.mem.eql(u8, name, "f32")) return "float";
+    if (std.mem.eql(u8, name, "f64")) return "double";
     return null;
 }
 
@@ -4145,8 +7853,110 @@ fn ptrCType(child: ast.TypeExpr, mutability: ast.Mutability) []const u8 {
 
 fn isStaticCInitializer(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .int_literal, .bool_literal, .null_literal, .void_literal => true,
+        .int_literal, .bool_literal, .null_literal, .void_literal, .enum_literal => true,
+        .address_of => true,
+        .unary => |node| node.op == .neg and switch (node.expr.kind) {
+            .int_literal => true,
+            else => false,
+        },
         .grouped => |inner| isStaticCInitializer(inner.*),
+        else => false,
+    };
+}
+
+fn isArrayLiteralExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .array_literal => true,
+        .grouped => |inner| isArrayLiteralExpr(inner.*),
+        else => false,
+    };
+}
+
+fn isStructLiteralExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .struct_literal => true,
+        .grouped => |inner| isStructLiteralExpr(inner.*),
+        else => false,
+    };
+}
+
+fn boolLiteralValue(expr: ast.Expr) ?bool {
+    return switch (expr.kind) {
+        .bool_literal => |value| value,
+        .grouped => |inner| boolLiteralValue(inner.*),
+        else => null,
+    };
+}
+
+fn isDirectStaticCInitializer(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .unary => |node| node.op == .neg and switch (node.expr.kind) {
+            .int_literal => true,
+            else => false,
+        },
+        .grouped => |inner| isDirectStaticCInitializer(inner.*),
+        else => false,
+    };
+}
+
+fn isUninitLiteral(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .uninit_literal => true,
+        .grouped => |inner| isUninitLiteral(inner.*),
+        else => false,
+    };
+}
+
+fn sequencedConditionCandidate(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .grouped => |inner| sequencedConditionCandidate(inner.*),
+        .binary => |node| isComparisonOp(node.op) and (exprContainsCall(node.left.*) or exprContainsCall(node.right.*)),
+        else => false,
+    };
+}
+
+fn conditionOperandTypeForEmission(emitter: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const info = locals.get(ident.text) orelse return null;
+            return info.source_ty;
+        },
+        .bool_literal => simpleNameType("bool", expr.span),
+        .int_literal => simpleNameType("u32", expr.span),
+        .call => emitter.callReturnTypeForExpr(expr, locals),
+        .grouped => |inner| conditionOperandTypeForEmission(emitter, inner.*, locals),
+        .unary => |node| conditionOperandTypeForEmission(emitter, node.expr.*, locals),
+        .binary => emitter.numericExprTypeForEmission(expr, locals),
+        .index => |node| CEmitter.localIndexElementType(node.base.*, locals),
+        else => null,
+    };
+}
+
+fn exprContainsCall(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .call => true,
+        .grouped, .address_of, .deref, .try_expr => |inner| exprContainsCall(inner.*),
+        .unary => |node| exprContainsCall(node.expr.*),
+        .binary => |node| exprContainsCall(node.left.*) or exprContainsCall(node.right.*),
+        .index => |node| exprContainsCall(node.base.*) or exprContainsCall(node.index.*),
+        .member => |node| exprContainsCall(node.base.*),
+        .cast => |node| exprContainsCall(node.value.*),
+        else => false,
+    };
+}
+
+fn comparisonExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .binary => |node| isComparisonOp(node.op),
+        .grouped => |inner| comparisonExpr(inner.*),
+        else => false,
+    };
+}
+
+fn isBoolType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .name => |name| std.mem.eql(u8, name.text, "bool"),
+        .qualified => |node| isBoolType(node.child.*),
         else => false,
     };
 }
@@ -4175,7 +7985,29 @@ fn parseUsizeLiteral(raw: []const u8) ?usize {
             len += 1;
         }
     }
-    return std.fmt.parseInt(usize, cleaned[0..len], 10) catch null;
+    return std.fmt.parseInt(usize, cleaned[0..len], 0) catch null;
+}
+
+fn constArrayLenValue(expr: ast.Expr) ?usize {
+    return switch (expr.kind) {
+        .int_literal => |literal| parseUsizeLiteral(literal),
+        .grouped => |inner| constArrayLenValue(inner.*),
+        .binary => |node| {
+            const left = constArrayLenValue(node.left.*) orelse return null;
+            const right = constArrayLenValue(node.right.*) orelse return null;
+            return switch (node.op) {
+                .add => std.math.add(usize, left, right) catch null,
+                .sub => std.math.sub(usize, left, right) catch null,
+                .mul => std.math.mul(usize, left, right) catch null,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                .mod => if (right == 0) null else @mod(left, right),
+                .shl => if (right >= @bitSizeOf(usize)) null else std.math.shl(usize, left, right),
+                .shr => if (right >= @bitSizeOf(usize)) null else left >> @intCast(right),
+                else => null,
+            };
+        },
+        else => null,
+    };
 }
 
 fn arrayLenForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
@@ -4183,6 +8015,15 @@ fn arrayLenForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]co
     return switch (expr.kind) {
         .ident => |ident| if (local_set.get(ident.text)) |info| info.array_len else null,
         .grouped => |inner| arrayLenForExpr(inner.*, locals),
+        else => null,
+    };
+}
+
+fn arrayElemsFieldForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    const local_set = locals orelse return null;
+    return switch (expr.kind) {
+        .ident => |ident| if (local_set.get(ident.text)) |info| info.array_elems_field else null,
+        .grouped => |inner| arrayElemsFieldForExpr(inner.*, locals),
         else => null,
     };
 }
@@ -4357,16 +8198,83 @@ fn binaryCOp(op: ast.BinaryOp) []const u8 {
     };
 }
 
-fn checkedU32Helper(op: ast.BinaryOp) ?[]const u8 {
+fn isCheckedBinaryOp(op: ast.BinaryOp) bool {
     return switch (op) {
-        .add => "mc_checked_add_u32",
-        .sub => "mc_checked_sub_u32",
-        .mul => "mc_checked_mul_u32",
-        .div => "mc_checked_div_u32",
-        .mod => "mc_checked_mod_u32",
-        .shl => "mc_checked_shl_u32",
-        .shr => "mc_checked_shr_u32",
-        else => null,
+        .add, .sub, .mul, .div, .mod, .shl, .shr => true,
+        else => false,
+    };
+}
+
+fn isComparisonOp(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .eq, .ne, .lt, .le, .gt, .ge => true,
+        else => false,
+    };
+}
+
+fn isNoTrapBitwiseInfixOp(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .bit_and, .bit_or, .bit_xor => true,
+        else => false,
+    };
+}
+
+const CheckedHelperParts = struct {
+    prefix: []const u8,
+    suffix: []const u8,
+};
+
+fn checkedHelperParts(op: ast.BinaryOp, type_name: []const u8) ?CheckedHelperParts {
+    const suffix = checkedTypeSuffix(type_name) orelse return null;
+    const prefix = switch (op) {
+        .add => "mc_checked_add_",
+        .sub => "mc_checked_sub_",
+        .mul => "mc_checked_mul_",
+        .div => "mc_checked_div_",
+        .mod => "mc_checked_mod_",
+        .shl => "mc_checked_shl_",
+        .shr => "mc_checked_shr_",
+        else => return null,
+    };
+    return .{ .prefix = prefix, .suffix = suffix };
+}
+
+fn satHelperParts(op: ast.BinaryOp, type_name: []const u8) ?CheckedHelperParts {
+    const suffix = unsignedTypeSuffix(type_name) orelse return null;
+    const prefix = switch (op) {
+        .add => "mc_sat_add_",
+        .sub => "mc_sat_sub_",
+        .mul => "mc_sat_mul_",
+        else => return null,
+    };
+    return .{ .prefix = prefix, .suffix = suffix };
+}
+
+fn isWrapPreservingBinary(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .add, .sub, .mul, .bit_and, .bit_or, .bit_xor, .shl, .shr => true,
+        else => false,
+    };
+}
+
+fn isSatPreservingBinary(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .add, .sub, .mul => true,
+        else => false,
+    };
+}
+
+fn arithmeticDomainOpName(op: ast.BinaryOp) []const u8 {
+    return switch (op) {
+        .add => "add",
+        .sub => "sub",
+        .mul => "mul",
+        .bit_and => "bit_and",
+        .bit_or => "bit_or",
+        .bit_xor => "bit_xor",
+        .shl => "shl",
+        .shr => "shr",
+        else => "unknown",
     };
 }
 
@@ -4403,6 +8311,145 @@ fn orderingArg(args: []ast.Expr) []const u8 {
         if (arg.kind == .enum_literal) return arg.kind.enum_literal.text;
     }
     return "none";
+}
+
+fn atomicAccess(callee: ast.Expr, args: []const ast.Expr, ctx: FnContext) ?AtomicAccess {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return atomicAccess(inner.*, args, ctx),
+        else => return null,
+    };
+    const object = switch (member.base.kind) {
+        .ident => |ident| ident.text,
+        else => return null,
+    };
+    const payload = ctx.local_atomic_payloads.get(object) orelse return null;
+    if (std.mem.eql(u8, member.name.text, "load")) {
+        const ordering = atomicOrderingArg(args, 0);
+        if (!isAtomicLoadOrdering(ordering)) return null;
+        return .{ .op = "load", .object = object, .payload_type = payload, .ordering = ordering };
+    }
+    if (std.mem.eql(u8, member.name.text, "store")) {
+        const ordering = atomicOrderingArg(args, 1);
+        if (!isAtomicStoreOrdering(ordering)) return null;
+        return .{ .op = "store", .object = object, .payload_type = payload, .ordering = ordering };
+    }
+    if (std.mem.eql(u8, member.name.text, "fetch_add")) {
+        if (!isAtomicIntegerPayload(payload)) return null;
+        const ordering = atomicOrderingArg(args, 1);
+        if (atomicOrderCConstant(ordering) == null) return null;
+        return .{ .op = "fetch_add", .object = object, .payload_type = payload, .ordering = ordering };
+    }
+    return null;
+}
+
+fn dmaOperation(callee: ast.Expr, args: []const ast.Expr, ctx: FnContext) ?DmaOperation {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return dmaOperation(inner.*, args, ctx),
+        else => return null,
+    };
+    if (isIdentNamed(member.base.*, "cache")) {
+        if (!std.mem.eql(u8, member.name.text, "clean") and !std.mem.eql(u8, member.name.text, "invalidate")) return null;
+        if (args.len != 1) return null;
+        const object = switch (args[0].kind) {
+            .ident => |ident| ident.text,
+            else => return null,
+        };
+        const payload = ctx.local_dma_payloads.get(object) orelse return null;
+        const mode = ctx.local_dma_modes.get(object) orelse return null;
+        if (!std.mem.eql(u8, mode, "noncoherent")) return null;
+        return .{ .kind = member.name.text, .object = object, .payload = payload, .mode = mode };
+    }
+    const object = switch (member.base.kind) {
+        .ident => |ident| ident.text,
+        else => return null,
+    };
+    const payload = ctx.local_dma_payloads.get(object) orelse return null;
+    const mode = ctx.local_dma_modes.get(object) orelse return null;
+    if (std.mem.eql(u8, member.name.text, "dma_addr")) {
+        if (args.len != 0) return null;
+        return .{ .kind = "dma_addr", .object = object, .payload = payload, .mode = mode };
+    }
+    if (std.mem.eql(u8, member.name.text, "as_slice")) {
+        if (args.len != 0) return null;
+        return .{ .kind = "as_slice", .object = object, .payload = payload, .mode = mode };
+    }
+    return null;
+}
+
+fn atomicOrderingArg(args: []const ast.Expr, index: usize) []const u8 {
+    if (index >= args.len) return "none";
+    return switch (args[index].kind) {
+        .enum_literal => |literal| literal.text,
+        else => "none",
+    };
+}
+
+const DmaBufInfo = struct {
+    payload: ast.TypeExpr,
+    mode: []const u8,
+};
+
+fn dmaBufInfo(ty: ast.TypeExpr) ?DmaBufInfo {
+    return switch (ty.kind) {
+        .generic => |node| {
+            if (!std.mem.eql(u8, node.base.text, "DmaBuf") or node.args.len != 2) return null;
+            const mode = switch (node.args[1].kind) {
+                .enum_literal => |literal| literal.text,
+                else => return null,
+            };
+            return .{ .payload = node.args[0], .mode = mode };
+        },
+        .qualified => |node| dmaBufInfo(node.child.*),
+        else => null,
+    };
+}
+
+fn asmHasMemoryClobber(asm_stmt: ast.AsmStmt) bool {
+    if (asm_stmt.clobbers.len == 0) return true;
+    for (asm_stmt.clobbers) |clobber| {
+        if (std.mem.indexOf(u8, clobber, "memory") != null) return true;
+    }
+    return false;
+}
+
+fn atomicOrderCConstant(ordering: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, ordering, "relaxed")) return "__ATOMIC_RELAXED";
+    if (std.mem.eql(u8, ordering, "acquire")) return "__ATOMIC_ACQUIRE";
+    if (std.mem.eql(u8, ordering, "release")) return "__ATOMIC_RELEASE";
+    if (std.mem.eql(u8, ordering, "acq_rel")) return "__ATOMIC_ACQ_REL";
+    if (std.mem.eql(u8, ordering, "seq_cst")) return "__ATOMIC_SEQ_CST";
+    return null;
+}
+
+fn atomicOrderSynchronizes(ordering: []const u8) bool {
+    return !std.mem.eql(u8, ordering, "relaxed") and atomicOrderCConstant(ordering) != null;
+}
+
+fn isAtomicLoadOrdering(ordering: []const u8) bool {
+    return std.mem.eql(u8, ordering, "relaxed") or
+        std.mem.eql(u8, ordering, "acquire") or
+        std.mem.eql(u8, ordering, "seq_cst");
+}
+
+fn isAtomicStoreOrdering(ordering: []const u8) bool {
+    return std.mem.eql(u8, ordering, "relaxed") or
+        std.mem.eql(u8, ordering, "release") or
+        std.mem.eql(u8, ordering, "seq_cst");
+}
+
+fn isAtomicIntegerPayload(name: []const u8) bool {
+    return std.mem.eql(u8, name, "u8") or
+        std.mem.eql(u8, name, "u16") or
+        std.mem.eql(u8, name, "u32") or
+        std.mem.eql(u8, name, "u64") or
+        std.mem.eql(u8, name, "usize") or
+        std.mem.eql(u8, name, "i8") or
+        std.mem.eql(u8, name, "i16") or
+        std.mem.eql(u8, name, "i32") or
+        std.mem.eql(u8, name, "i64") or
+        std.mem.eql(u8, name, "isize");
 }
 
 const CheckedOp = union(enum) {
@@ -4465,6 +8512,26 @@ fn exprType(expr: ast.Expr, ctx: *FnContext) ?[]const u8 {
     };
 }
 
+fn arithmeticDomainForBinary(node: anytype, ctx: *FnContext) ?[]const u8 {
+    if (isWrapPreservingBinary(node.op) and exprHasArithmeticDomain(node.left.*, ctx, "wrap") and exprHasArithmeticDomain(node.right.*, ctx, "wrap")) return "wrap";
+    if (isSatPreservingBinary(node.op) and exprHasArithmeticDomain(node.left.*, ctx, "sat") and exprHasArithmeticDomain(node.right.*, ctx, "sat")) return "sat";
+    return null;
+}
+
+fn exprHasArithmeticDomain(expr: ast.Expr, ctx: *FnContext, domain: []const u8) bool {
+    return switch (expr.kind) {
+        .ident => |ident| if (ctx.local_domains.get(ident.text)) |found| std.mem.eql(u8, found, domain) else false,
+        .grouped => |inner| exprHasArithmeticDomain(inner.*, ctx, domain),
+        .binary => |node| if (std.mem.eql(u8, domain, "wrap"))
+            isWrapPreservingBinary(node.op) and exprHasArithmeticDomain(node.left.*, ctx, domain) and exprHasArithmeticDomain(node.right.*, ctx, domain)
+        else if (std.mem.eql(u8, domain, "sat"))
+            isSatPreservingBinary(node.op) and exprHasArithmeticDomain(node.left.*, ctx, domain) and exprHasArithmeticDomain(node.right.*, ctx, domain)
+        else
+            false,
+        else => false,
+    };
+}
+
 fn iterableElementCTypeForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
     const local_set = locals orelse return null;
     return switch (expr.kind) {
@@ -4493,20 +8560,73 @@ fn isIntLiteral(expr: ast.Expr, value: []const u8) bool {
 }
 
 fn widthBits(width: []const u8) []const u8 {
+    if (std.mem.eql(u8, width, "usize") or std.mem.eql(u8, width, "isize")) return "ptr";
     if (width.len > 1 and (width[0] == 'u' or width[0] == 'i')) return width[1..];
     if (std.mem.eql(u8, width, "bool")) return "1";
     return "unknown";
 }
 
-fn ordinaryGlobalTarget(target: ast.Expr, ctx: FnContext, globals: std.StringHashMap(GlobalInfo)) ?GlobalAccess {
+fn ordinaryGlobalTarget(allocator: std.mem.Allocator, target: ast.Expr, ctx: FnContext, globals: std.StringHashMap(GlobalInfo), structs: std.StringHashMap(ast.StructDecl)) ?GlobalAccess {
     return switch (target.kind) {
         .ident => |ident| if (!ctx.locals.contains(ident.text))
             if (globals.get(ident.text)) |global| .{ .name = ident.text, .info = global } else null
         else
             null,
-        .grouped => |inner| ordinaryGlobalTarget(inner.*, ctx, globals),
+        .index => |index| ordinaryGlobalArrayTarget(allocator, index, ctx, globals),
+        .member => |member| ordinaryGlobalMemberTarget(allocator, member, ctx, globals, structs),
+        .grouped => |inner| ordinaryGlobalTarget(allocator, inner.*, ctx, globals, structs),
         else => null,
     };
+}
+
+fn ordinaryGlobalArrayTarget(allocator: std.mem.Allocator, index: anytype, ctx: FnContext, globals: std.StringHashMap(GlobalInfo)) ?GlobalAccess {
+    const base_ident = switch (index.base.kind) {
+        .ident => |ident| ident,
+        .grouped => |inner| switch (inner.kind) {
+            .ident => |ident| ident,
+            else => return null,
+        },
+        else => return null,
+    };
+    if (ctx.locals.contains(base_ident.text)) return null;
+    const global = globals.get(base_ident.text) orelse return null;
+    const element_info = global.array_element_info orelse return null;
+    return .{
+        .name = std.fmt.allocPrint(allocator, "{s}[]", .{base_ident.text}) catch return null,
+        .info = .{
+            .type_name = element_info.race_type_name,
+            .c_type = element_info.c_type,
+            .race_type_name = element_info.race_type_name,
+            .race_c_type = element_info.race_c_type,
+            .width_bits = widthBits(element_info.race_type_name),
+            .pointer_like = false,
+            .source_ty = element_info.source_ty,
+        },
+        .owned_name = true,
+    };
+}
+
+fn ordinaryGlobalMemberTarget(allocator: std.mem.Allocator, member: anytype, ctx: FnContext, globals: std.StringHashMap(GlobalInfo), structs: std.StringHashMap(ast.StructDecl)) ?GlobalAccess {
+    const base_ident = switch (member.base.kind) {
+        .ident => |ident| ident,
+        .grouped => |inner| switch (inner.kind) {
+            .ident => |ident| ident,
+            else => return null,
+        },
+        else => return null,
+    };
+    if (ctx.locals.contains(base_ident.text)) return null;
+    const global = globals.get(base_ident.text) orelse return null;
+    const struct_decl = structs.get(global.type_name) orelse return null;
+    for (struct_decl.fields) |field| {
+        if (!std.mem.eql(u8, field.name.text, member.name.text)) continue;
+        return .{
+            .name = std.fmt.allocPrint(allocator, "{s}.{s}", .{ base_ident.text, member.name.text }) catch return null,
+            .info = globalInfoFromType(field.ty),
+            .owned_name = true,
+        };
+    }
+    return null;
 }
 
 fn localOrdinaryTarget(target: ast.Expr, ctx: FnContext) ?[]const u8 {
@@ -4548,6 +8668,77 @@ fn contractMatchesCallee(contract: []const u8, callee: []const u8) bool {
 fn isRawStoreCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "store") and isIdentNamed(member.base.*, "raw"),
+        .grouped => |inner| isRawStoreCall(inner.*),
+        else => false,
+    };
+}
+
+fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
+    return switch (callee.kind) {
+        .ident => |ident| {
+            if (std.mem.eql(u8, ident.text, "size_of") or std.mem.eql(u8, ident.text, "sizeof")) return .size;
+            if (std.mem.eql(u8, ident.text, "alignof")) return .alignment;
+            if (std.mem.eql(u8, ident.text, "field_offset")) return .field_offset;
+            if (std.mem.eql(u8, ident.text, "bit_offset")) return .bit_offset;
+            if (std.mem.eql(u8, ident.text, "repr_of")) return .repr;
+            return null;
+        },
+        .grouped => |inner| reflectionCallKind(inner.*),
+        else => null,
+    };
+}
+
+fn reflectionFieldName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .enum_literal => |literal| literal.text,
+        .grouped => |inner| reflectionFieldName(inner.*),
+        else => null,
+    };
+}
+
+fn isAssumeNoaliasCall(call: anytype) bool {
+    if (call.type_args.len != 0 or call.args.len != 2) return false;
+    const member = switch (call.callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| switch (inner.kind) {
+            .member => |node| node,
+            else => return false,
+        },
+        else => return false,
+    };
+    return isIdentNamed(member.base.*, "compiler") and std.mem.eql(u8, member.name.text, "assume_noalias_unchecked");
+}
+
+fn isPAddrType(ty: ast.TypeExpr) bool {
+    const name = typeName(ty) orelse return false;
+    return std.mem.eql(u8, name, "PAddr");
+}
+
+fn isPointerLikeAddressType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .pointer, .raw_many_pointer => true,
+        .qualified => |node| isPointerLikeAddressType(node.child.*),
+        else => false,
+    };
+}
+
+fn isUncheckedAddCall(call: anytype) bool {
+    if (call.type_args.len != 0 or call.args.len != 2) return false;
+    const member = switch (call.callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| switch (inner.kind) {
+            .member => |node| node,
+            else => return false,
+        },
+        else => return false,
+    };
+    return isIdentNamed(member.base.*, "unchecked") and std.mem.eql(u8, member.name.text, "add");
+}
+
+fn isCpuPauseCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "pause") and isIdentNamed(member.base.*, "cpu"),
+        .grouped => |inner| isCpuPauseCall(inner.*),
         else => false,
     };
 }
@@ -4557,6 +8748,22 @@ fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
         .ident => |ident| std.mem.eql(u8, ident.text, name),
         else => false,
     };
+}
+
+fn isBitcastCall(call: anytype) bool {
+    return switch (call.callee.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, "bitcast"),
+        .grouped => |inner| switch (inner.kind) {
+            .ident => |ident| std.mem.eql(u8, ident.text, "bitcast"),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn bitcastReturnTypeForCall(call: anytype) ?ast.TypeExpr {
+    if (!isBitcastCall(call) or call.type_args.len != 1) return null;
+    return call.type_args[0];
 }
 
 fn contractName(attr: ast.Attr) []const u8 {
@@ -4647,15 +8854,16 @@ test "emits C support helpers used by lower-c evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidRepresentation") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Unreachable") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_check_index_usize") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_sub_u32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mul_u32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_div_u32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mod_u32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_shl_u32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_shr_u32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_load_u32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_CHECKED_UNSIGNED(u32, uint32_t, UINT32_MAX)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_CHECKED_UNSIGNED(u64, uint64_t, UINT64_MAX)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_CHECKED_SIGNED(i32, int32_t, INT32_MIN, INT32_MAX)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_CHECKED_NEG_SIGNED(i32, int32_t, INT32_MIN)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_CHECKED_NEG_SIGNED(isize, intptr_t, INTPTR_MIN)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_RACE_SCALAR(NAME, TYPE)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_RACE_SCALAR(bool, bool)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_RACE_SCALAR(u32, uint32_t)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_RACE_SCALAR(i32, int32_t)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_RACE_SCALAR(usize, uintptr_t)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u8") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u16") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32") != null);
@@ -4666,6 +8874,9 @@ test "emits C support helpers used by lower-c evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u64") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_thread_fence(__ATOMIC_RELEASE)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_thread_fence(__ATOMIC_ACQUIRE)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_signal_fence") == null);
 }
 
 test "emits C for simple MMIO register access" {
@@ -4703,12 +8914,12 @@ test "emits C for simple MMIO register access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t volatile thr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t volatile lsr;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void putc(Uart16550 volatile * uart, uint8_t ch)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp0 = ch;\n    mc_barrier_release_before();\n    mc_mmio_write_u8(&uart->thr, mc_tmp0);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u8(&uart->thr, ch);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t read_lsr(Uart16550 volatile * uart)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp0 = (uint8_t)mc_mmio_read_u8(&uart->lsr);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp1 = (uint8_t)mc_mmio_read_u8(&uart->lsr);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp1;") != null);
 }
 
 test "emits C for wider MMIO register access" {
@@ -4755,10 +8966,75 @@ test "emits C for wider MMIO register access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t volatile hi;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint64_t volatile wide;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return (uint16_t)mc_mmio_read_u16(&dev->lo);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u32(&dev->hi, value);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint64_t mc_tmp0 = (uint64_t)mc_mmio_read_u64(&dev->wide);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp0 = value;\n    mc_barrier_release_before();\n    mc_mmio_write_u32(&dev->hi, mc_tmp0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint64_t mc_tmp1 = (uint64_t)mc_mmio_read_u64(&dev->wide);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u64(&dev->wide, value);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint64_t mc_tmp2 = value;\n    mc_mmio_write_u64(&dev->wide, mc_tmp2);") != null);
+}
+
+test "emits C with sequenced MMIO write value before release barrier" {
+    const source =
+        \\extern mmio struct Uart16550 {
+        \\    thr: Reg<u8, .write>,
+        \\}
+        \\
+        \\extern fn next_byte() -> u8;
+        \\extern fn box_byte(value: u8) -> u8;
+        \\
+        \\fn putc_computed(uart: MmioPtr<Uart16550>) -> void {
+        \\    uart.thr.write(box_byte(next_byte()), .release);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_mmio_write_order.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp0 = next_byte();\n    uint8_t mc_tmp1 = box_byte(mc_tmp0);\n    mc_barrier_release_before();\n    mc_mmio_write_u8(&uart->thr, mc_tmp1);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();\n    mc_mmio_write_u8(&uart->thr, box_byte(next_byte()))") == null);
+}
+
+test "emits C with sequenced raw store address and value operands" {
+    const source =
+        \\extern fn next_addr() -> PAddr;
+        \\extern fn next_byte() -> u8;
+        \\extern fn box_byte(value: u8) -> u8;
+        \\
+        \\fn store_computed() -> void {
+        \\    unsafe {
+        \\        raw.store<u8>(next_addr(), box_byte(next_byte()));
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_raw_store_order.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t mc_tmp0 = next_addr();\n        uint8_t mc_tmp1 = next_byte();\n        uint8_t mc_tmp2 = box_byte(mc_tmp1);\n        mc_raw_store_u8(mc_tmp0, mc_tmp2);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_raw_store_u8(next_addr(), box_byte(next_byte()))") == null);
 }
 
 test "emits C for MMIO read local initializers" {
@@ -4919,7 +9195,7 @@ test "emits C ABI for simple Result types" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "void consume_result(mc_result_u32_Error result);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_result_u32_Error pass_result(mc_result_u32_Error result)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return result;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(result);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = result;\n    consume_result(mc_tmp0);") != null);
 }
 
 test "emits C ABI for tagged unions" {
@@ -5083,7 +9359,7 @@ test "emits C for tagged union constructors" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_number, .payload.number = 7 });") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_eof });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return id(((Token){ .tag = TokenTag_number, .payload.number = 7 }));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Token mc_tmp0 = ((Token){ .tag = TokenTag_number, .payload.number = 7 });\n    return id(mc_tmp0);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Token token = ((Token){ .tag = TokenTag_number, .payload.number = 9 });") != null);
 }
 
@@ -5125,7 +9401,7 @@ test "emits C for Result ok and err constructors" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = true, .payload.ok = value });") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = false, .payload.err = Error_denied });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(((mc_result_u32_Error){ .is_ok = true, .payload.ok = 7 }));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = ((mc_result_u32_Error){ .is_ok = true, .payload.ok = 7 });\n    consume_result(mc_tmp0);") != null);
 }
 
 test "emits C for Result try in local initializers" {
@@ -5249,12 +9525,13 @@ test "emits C for Result try in return call arguments" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t arg_try(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp0.is_ok) mc_trap_InvalidRepresentation();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume(mc_tmp0.payload.ok);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp1 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp2 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return combine(mc_tmp1.payload.ok, mc_tmp2.payload.ok);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp3 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume(box_value(mc_tmp3.payload.ok));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_result();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return combine(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "box_value(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume(mc_tmp") != null);
 }
 
 test "emits C for nullable try in return statements" {
@@ -5293,7 +9570,7 @@ test "emits C for nullable try in return statements" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp0 = maybe;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_tmp0 == NULL) mc_trap_NullUnwrap();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp1 = make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp2 = (make_nullable_mut_pointer());") != null);
 }
 
@@ -5339,14 +9616,14 @@ test "emits C for nullable try in return call arguments" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t arg_try(uint8_t const * maybe)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp0 = maybe;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_tmp0 == NULL) mc_trap_NullUnwrap();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(mc_tmp0);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp1 = make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(mc_tmp1);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp2 = maybe;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp3 = make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return choose(mc_tmp2, mc_tmp3);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp4 = make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(ptr_id(mc_tmp4));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return choose(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "ptr_id(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return consume_ptr(mc_tmp") != null);
 }
 
 test "emits C for try in local initializer call arguments" {
@@ -5390,11 +9667,12 @@ test "emits C for try in local initializer call arguments" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp0.is_ok) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((mc_result_u32_Error){ .is_ok = false, .payload.err = mc_tmp0.payload.err });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value = box_value(mc_tmp0.payload.ok);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value = box_value(mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t const * local_nullable_try(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp1 = make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_tmp1 == NULL) mc_trap_NullUnwrap();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr = ptr_id(mc_tmp1);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "== NULL) mc_trap_NullUnwrap();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr = ptr_id(mc_tmp") != null);
 }
 
 test "emits C for try in assignment and expression statements" {
@@ -5453,19 +9731,17 @@ test "emits C for try in assignment and expression statements" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = make_result();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "value = mc_tmp0.payload.ok;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp1 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_value, mc_tmp1.payload.ok);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_value, (uint32_t)mc_tmp1.payload.ok);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp2 = make_result();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!mc_tmp2.is_ok) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp3 = make_result();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume(mc_tmp3.payload.ok);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp4 = make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr = mc_tmp4;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp5 = make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "ptr = mc_tmp5;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp6 = make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (mc_tmp6 == NULL) mc_trap_NullUnwrap();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * mc_tmp7 = make_nullable_pointer();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_ptr(mc_tmp7);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".payload.ok;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "make_nullable_pointer();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t const * ptr = mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "ptr = mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "== NULL) mc_trap_NullUnwrap();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_ptr(mc_tmp") != null);
 }
 
 test "emits C for simple functions and race-safe globals" {
@@ -5500,11 +9776,12 @@ test "emits C for simple functions and race-safe globals" {
     defer output.deinit(std.testing.allocator);
     try appendC(std.testing.allocator, module, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "static uint32_t shared_counter = 0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "static MC_UNUSED uint32_t shared_counter = 0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t add(uint32_t a, uint32_t b)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_add_u32(a, b);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_counter, x);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_race_load_u32(&shared_counter);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_counter, (uint32_t)x);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((uint32_t)mc_race_load_u32(&shared_counter));") != null);
 }
 
 test "emits C for while loops and loop control" {
@@ -5540,7 +9817,8 @@ test "emits C for while loops and loop control" {
     try appendC(std.testing.allocator, module, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "while (flag) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_add_u32(out, 1);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "break;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "continue;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return out;") != null);
@@ -5598,12 +9876,11 @@ test "hoists MMIO reads in while conditions" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(!(((mc_tmp0 & UINT8_C(1)) != 0)))) break;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "pause();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u16(&dev->ctrl, value);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t mc_tmp1 = (uint16_t)mc_mmio_read_u16(&dev->raw);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!((mc_tmp1 == 0))) break;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Status mc_tmp2 = (Status)mc_mmio_read_u8(&dev->stat);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(((mc_tmp2 & UINT8_C(1)) != 0))) mc_trap_Assert();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t mc_tmp1 = value;\n    mc_barrier_release_before();\n    mc_mmio_write_u16(&dev->ctrl, mc_tmp1);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t mc_tmp2 = (uint16_t)mc_mmio_read_u16(&dev->raw);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!((mc_tmp2 == 0))) break;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Status mc_tmp3 = (Status)mc_mmio_read_u8(&dev->stat);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(((mc_tmp3 & UINT8_C(1)) != 0))) mc_trap_Assert();") != null);
 }
 
 test "hoists MMIO reads in return and expression statements" {
@@ -5647,9 +9924,12 @@ test "hoists MMIO reads in return and expression statements" {
     defer output.deinit(std.testing.allocator);
     try appendC(std.testing.allocator, module, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Status mc_tmp0 = (Status)mc_mmio_read_u8(&dev->stat);\n    mc_barrier_acquire_after();\n    observe(mc_tmp0);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp1 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    return mc_checked_add_u32(mc_tmp1, extra);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp2 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    mc_barrier_acquire_after();\n    (void)mc_tmp2;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u8(&dev->stat);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "observe(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32(&dev->raw);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();\n    (void)mc_tmp") != null);
 }
 
 test "hoists MMIO reads in local initializer and assignment expressions" {
@@ -5690,9 +9970,11 @@ test "hoists MMIO reads in local initializer and assignment expressions" {
     defer output.deinit(std.testing.allocator);
     try appendC(std.testing.allocator, module, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp0 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    uint32_t x = mc_checked_add_u32(mc_tmp0, extra);\n    return x;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp1 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    mc_barrier_acquire_after();\n    x = mc_checked_add_u32(mc_tmp1, extra);\n    return x;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp2 = (uint32_t)mc_mmio_read_u32(&dev->raw);\n    uint32_t x = mc_checked_add_u32(mc_tmp2, extra);\n    return x;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32(&dev->raw);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "x = mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
 }
 
 test "hoists MMIO reads in switch subjects" {
@@ -5841,18 +10123,17 @@ test "emits C for array and slice for loops" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t sum_slice(mc_slice_const_u32 xs)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "for (uintptr_t mc_i0 = 0; mc_i0 < xs.len; mc_i0 += 1) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs.ptr[mc_i0];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t sum_array(uint32_t xs[4])") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "for (uintptr_t mc_i1 = 0; mc_i1 < 4; mc_i1 += 1) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs[mc_i1];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp2 = make_slice();\n    for (uintptr_t mc_i3 = 0; mc_i3 < mc_tmp2.len; mc_i3 += 1) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp2.ptr[mc_i3];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t * mc_tmp4 = make_array();\n    for (uintptr_t mc_i5 = 0; mc_i5 < 4; mc_i5 += 1) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp4[mc_i5];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 xs = make_slice();\n    uint32_t sum = 0;\n    for (uintptr_t mc_i6 = 0; mc_i6 < xs.len; mc_i6 += 1) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs.ptr[mc_i6];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t * xs = make_array();\n    uint32_t sum = 0;\n    for (uintptr_t mc_i7 = 0; mc_i7 < 4; mc_i7 += 1) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs[mc_i7];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "sum = mc_checked_add_u32(sum, x);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef struct mc_array_u32_4 {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t sum_array(mc_array_u32_4 xs)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " < 4; mc_i") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = xs.elems[mc_i") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".len; mc_i") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".ptr[mc_i") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u32_4 mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u32_4 xs = make_array();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "sum = mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return sum;") != null);
 }
 
@@ -5882,9 +10163,9 @@ test "emits C for fixed array indexing with bounds checks" {
     defer output.deinit(std.testing.allocator);
     try appendC(std.testing.allocator, module, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t xs[4]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t xs[4]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs[mc_check_index_usize(i, 4)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u8_4 xs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u32_4 xs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.elems[mc_check_index_usize(i, 4)];") != null);
 }
 
 test "emits C for slice typedefs and indexing" {
@@ -5963,14 +10244,22 @@ test "emits C for slice typedefs and indexing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "xs.ptr[mc_check_index_usize(i, xs.len)] = value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_slice_const_u8 same_slice(mc_slice_const_u8 xs)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 mc_tmp0 = make_u8_slice();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp0.ptr[mc_check_index_usize(0, mc_tmp0.len)];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp1 = make_u32_slice();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp1.ptr[mc_check_index_usize(i, mc_tmp1.len)];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 xs = make_u32_slice();\n    return xs.ptr[mc_check_index_usize(i, xs.len)];") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 mc_tmp2 = make_u8_slice();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t x = mc_tmp2.ptr[mc_check_index_usize(0, mc_tmp2.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t mc_tmp1 = 0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp2 = mc_tmp0.ptr[mc_check_index_usize(mc_tmp1, mc_tmp0.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp2;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp3 = make_u32_slice();") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp3.ptr[mc_check_index_usize(i, mc_tmp3.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t mc_tmp4 = i;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp5 = mc_tmp3.ptr[mc_check_index_usize(mc_tmp4, mc_tmp3.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp5;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 xs = make_u32_slice();\n    return xs.ptr[mc_check_index_usize(i, xs.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u8 mc_tmp6 = make_u8_slice();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t mc_tmp7 = 0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t mc_tmp8 = mc_tmp6.ptr[mc_check_index_usize(mc_tmp7, mc_tmp6.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t x = mc_tmp8;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_slice_const_u32 mc_tmp9 = make_u32_slice();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uintptr_t mc_tmp10 = i;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp11 = mc_tmp9.ptr[mc_check_index_usize(mc_tmp10, mc_tmp9.len)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = mc_tmp11;") != null);
 }
 
 test "emits C checked u32 arithmetic helpers" {
@@ -6000,12 +10289,12 @@ test "emits C checked u32 arithmetic helpers" {
     defer output.deinit(std.testing.allocator);
     try appendC(std.testing.allocator, module, &output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t out = mc_checked_sub_u32(a, b);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_mul_u32(out, b);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_div_u32(out, b);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_mod_u32(out, b);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_checked_shl_u32(out, n);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_shr_u32(out, n);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_sub_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mul_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_div_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mod_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_shl_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_shr_u32(") != null);
 }
 
 test "emits C for integer switch arms" {
@@ -6150,7 +10439,7 @@ test "emits C for target-typed enum literals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t sink(Mode mode);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return Mode_read;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode mode = Mode_write;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return sink(Mode_read);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode mc_tmp0 = Mode_read;\n    return sink(mc_tmp0);") != null);
 }
 
 test "emits C for optional pointer if-let" {
@@ -6257,10 +10546,10 @@ test "emits C for nullable switch binding" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t nullable_switch(uint8_t * maybe)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (maybe != NULL) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = maybe;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ptr_value(p);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp0 = p;\n        return ptr_value(mc_tmp0);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "else {\n        return 0;\n    }") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp0 = maybe_ptr();\n    if (mc_tmp0 != NULL) {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = mc_tmp0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp1 = maybe_ptr();\n    if (mc_tmp1 != NULL) {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = mc_tmp1;") != null);
 }
 
 test "emits C for Result if-let narrowing" {
@@ -6484,7 +10773,9 @@ test "emits C extern structs and member access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return make_packet().value;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * make_ptr(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint8_t * inferred_pointer_return(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * p = make_ptr();\n    return p;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint8_t * mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " = make_ptr();\n    if (mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " == NULL) mc_trap_InvalidRepresentation();\n    uint8_t * p = mc_tmp") != null);
 }
 
 test "emits C overlay unions as byte storage" {
@@ -6668,7 +10959,9 @@ test "emits C unsafe blocks as scoped blocks" {
     try appendC(std.testing.allocator, module, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unsafe_block(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    {\n        x = mc_checked_add_u32(x, 1);\n    }\n    return x;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "x = mc_tmp") != null);
 }
 
 test "emits C for opaque volatile asm" {
@@ -6754,9 +11047,11 @@ test "emits C unsafe contract blocks as scoped blocks" {
     try appendC(std.testing.allocator, module, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_plain_contract_scope(void)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    {\n        x = mc_checked_add_u32(x, 1);\n    }\n    return x;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 1;\n    /* MC_CONTRACT_BEGIN no_overflow */\n    {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "x = mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unchecked_contract_add(uint32_t a, uint32_t b)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 0;\n    {\n        x = (a + b);\n    }\n    return x;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 0;\n    /* MC_CONTRACT_BEGIN no_overflow */\n    {\n        x = (a + b);\n    }\n    /* MC_CONTRACT_END no_overflow */\n    return x;") != null);
 }
 
 test "omits pure comptime blocks from C runtime output" {
@@ -6831,4 +11126,158 @@ test "emits C explicit traps and unreachable" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Unreachable();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void never_returns_by_trap(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Assert();") != null);
+}
+
+test "C emission rejects non-static global initializers instead of zeroing" {
+    const source =
+        \\fn source() -> u32 {
+        \\    return 1;
+        \\}
+        \\
+        \\global value: u32 = source();
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_reject_global_init.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var checker = sema.Checker.init(&reporter);
+    checker.checkModule(module);
+    try std.testing.expect(hasTestDiagnosticCode(reporter, "E_GLOBAL_INITIALIZER_NOT_STATIC"));
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, appendC(std.testing.allocator, module, &output));
+}
+
+test "C emission uses type-directed helpers for fixed-width checked arithmetic" {
+    const source =
+        \\fn add_i32(a: i32, b: i32) -> i32 {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn div_i32(a: i32, b: i32) -> i32 {
+        \\    return a / b;
+        \\}
+        \\
+        \\fn mul_u64(a: u64, b: u64) -> u64 {
+        \\    return a * b;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_fixed_width_arith.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_CHECKED_SIGNED(i32, int32_t, INT32_MIN, INT32_MAX)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_i32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_div_i32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mul_u64(") != null);
+}
+
+test "C emission sequences return call arguments left to right" {
+    const source =
+        \\extern fn next_value() -> u32;
+        \\extern fn box_value(value: u32) -> u32;
+        \\extern fn combine(left: u32, right: u32) -> u32;
+        \\extern fn consume(left: u32, right: u32) -> void;
+        \\
+        \\global ordered_global: u32 = 0;
+        \\
+        \\fn ordered_two_args() -> u32 {
+        \\    return combine(next_value(), next_value());
+        \\}
+        \\
+        \\fn ordered_local_init() -> u32 {
+        \\    let value = combine(next_value(), next_value());
+        \\    return value;
+        \\}
+        \\
+        \\fn ordered_typed_local_init() -> u32 {
+        \\    let value: u32 = combine(next_value(), next_value());
+        \\    return value;
+        \\}
+        \\
+        \\fn ordered_expr_stmt() -> void {
+        \\    consume(next_value(), next_value());
+        \\}
+        \\
+        \\fn ordered_nested_return() -> u32 {
+        \\    return combine(box_value(next_value()), next_value());
+        \\}
+        \\
+        \\fn ordered_nested_local_init() -> u32 {
+        \\    let value = combine(box_value(next_value()), next_value());
+        \\    return value;
+        \\}
+        \\
+        \\fn ordered_nested_expr_stmt() -> void {
+        \\    consume(box_value(next_value()), next_value());
+        \\}
+        \\
+        \\fn ordered_assignment() -> u32 {
+        \\    var value: u32 = 0;
+        \\    value = combine(next_value(), next_value());
+        \\    return value;
+        \\}
+        \\
+        \\fn ordered_nested_assignment() -> u32 {
+        \\    var value: u32 = 0;
+        \\    value = combine(box_value(next_value()), next_value());
+        \\    return value;
+        \\}
+        \\
+        \\fn ordered_global_assignment() -> void {
+        \\    ordered_global = combine(next_value(), next_value());
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_eval_order.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp0 = next_value();\n    uint32_t mc_tmp1 = next_value();\n    return combine(mc_tmp0, mc_tmp1);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp2 = next_value();\n    uint32_t mc_tmp3 = next_value();\n    uint32_t value = combine(mc_tmp2, mc_tmp3);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp4 = next_value();\n    uint32_t mc_tmp5 = next_value();\n    uint32_t value = combine(mc_tmp4, mc_tmp5);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp6 = next_value();\n    uint32_t mc_tmp7 = next_value();\n    consume(mc_tmp6, mc_tmp7);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp8 = next_value();\n    uint32_t mc_tmp9 = box_value(mc_tmp8);\n    uint32_t mc_tmp10 = next_value();\n    return combine(mc_tmp9, mc_tmp10);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp11 = next_value();\n    uint32_t mc_tmp12 = box_value(mc_tmp11);\n    uint32_t mc_tmp13 = next_value();\n    uint32_t value = combine(mc_tmp12, mc_tmp13);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp14 = next_value();\n    uint32_t mc_tmp15 = box_value(mc_tmp14);\n    uint32_t mc_tmp16 = next_value();\n    consume(mc_tmp15, mc_tmp16);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp17 = next_value();\n    uint32_t mc_tmp18 = next_value();\n    uint32_t mc_tmp19 = combine(mc_tmp17, mc_tmp18);\n    value = mc_tmp19;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp20 = next_value();\n    uint32_t mc_tmp21 = box_value(mc_tmp20);\n    uint32_t mc_tmp22 = next_value();\n    uint32_t mc_tmp23 = combine(mc_tmp21, mc_tmp22);\n    value = mc_tmp23;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t mc_tmp24 = next_value();\n    uint32_t mc_tmp25 = next_value();\n    uint32_t mc_tmp26 = combine(mc_tmp24, mc_tmp25);\n    mc_race_store_u32(&ordered_global, (uint32_t)mc_tmp26);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return combine(next_value(), next_value());") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t value = combine(next_value(), next_value());") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "value = combine(next_value(), next_value());") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume(next_value(), next_value());") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "box_value(next_value())") == null);
 }

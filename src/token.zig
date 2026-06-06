@@ -11,6 +11,7 @@ pub const Kind = enum {
     invalid,
     identifier,
     integer_literal,
+    float_literal,
     string_literal,
     char_literal,
 

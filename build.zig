@@ -29,4 +29,19 @@ pub fn build(b: *std.Build) void {
     const test_cmd = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&test_cmd.step);
+
+    const c_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/check-generated-c.sh",
+        "zig-out/bin/mcc",
+        "tests/c_emit_*.mc",
+        "zig-out/c-test",
+    });
+    c_test_cmd.step.dependOn(b.getInstallStep());
+    const c_test_step = b.step("c-test", "Emit C for smoke fixture and compile-check it with clang");
+    c_test_step.dependOn(&c_test_cmd.step);
+
+    const m0_step = b.step("m0", "Run M0 conformance gates");
+    m0_step.dependOn(&test_cmd.step);
+    m0_step.dependOn(&c_test_cmd.step);
 }

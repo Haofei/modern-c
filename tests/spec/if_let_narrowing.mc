@@ -2,7 +2,7 @@
 // SPEC: milestone=if-let-narrowing
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_IF_LET_OPTIONAL_REQUIRED,E_IF_LET_RESULT_REQUIRED,E_IF_LET_RESULT_TAG,E_IF_LET_NARROW_PATTERN,E_RETURN_TYPE_MISMATCH,E_SWITCH_RESULT_TAG,E_SWITCH_RESULT_REQUIRED,E_SWITCH_MULTI_BINDING_ARM
+// SPEC: check=E_IF_LET_OPTIONAL_REQUIRED,E_IF_LET_RESULT_REQUIRED,E_IF_LET_RESULT_TAG,E_IF_LET_NARROW_PATTERN,E_RETURN_TYPE_MISMATCH,E_SWITCH_RESULT_TAG,E_SWITCH_RESULT_REQUIRED,E_SWITCH_MULTI_BINDING_ARM,E_DUPLICATE_SWITCH_CASE
 
 extern fn make_nullable_pointer() -> ?*mut u8;
 extern fn make_result_u32() -> Result<u32, Error>;
@@ -172,6 +172,32 @@ fn reject_switch_multi_pattern_binding(result: Result<u32, Error>) -> u32 {
     }
 }
 
+fn reject_switch_duplicate_result_ok(result: Result<u32, Error>) -> u32 {
+    switch result {
+        ok(v) => { return v; },
+        // EXPECT_ERROR: E_DUPLICATE_SWITCH_CASE
+        ok(other) => { return other; },
+        err(e) => { return 0; },
+    }
+}
+
+fn reject_switch_duplicate_payloadless_result_err(result: Result<u32, Error>) -> u32 {
+    switch result {
+        .ok => { return 1; },
+        .err => { return 0; },
+        // EXPECT_ERROR: E_DUPLICATE_SWITCH_CASE
+        .err => { return 2; },
+    }
+}
+
+fn reject_switch_result_case_after_wildcard(result: Result<u32, Error>) -> u32 {
+    switch result {
+        _ => { return 0; },
+        // EXPECT_ERROR: E_DUPLICATE_SWITCH_CASE
+        ok(v) => { return v; },
+    }
+}
+
 fn reject_plain_binding_from_non_nullable(n: u32) -> u32 {
     // EXPECT_ERROR: E_IF_LET_OPTIONAL_REQUIRED
     if let x = n {
@@ -194,6 +220,11 @@ fn reject_unknown_result_tag(result: Result<u32, Error>) -> u32 {
         return 1;
     }
     return 0;
+}
+
+enum Status {
+    ready,
+    waiting,
 }
 
 fn reject_general_if_pattern(status: Status) -> u32 {

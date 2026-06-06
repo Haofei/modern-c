@@ -2,7 +2,7 @@
 // SPEC: milestone=enum-declarations
 // SPEC: phase=parse,sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_DUPLICATE_ENUM_CASE,E_ENUM_REPR_NOT_INTEGER,E_ENUM_CASE_VALUE_NOT_INTEGER,E_ENUM_CASE_VALUE_OUT_OF_RANGE,E_DUPLICATE_ENUM_VALUE,E_UNKNOWN_ENUM_CASE,E_NO_IMPLICIT_CONVERSION,E_RETURN_TYPE_MISMATCH,E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION,E_ENUM_RAW_REQUIRES_OPEN_ENUM,E_CALL_ARG_COUNT,E_CLOSED_ENUM_SWITCH_EXHAUSTIVE,E_DUPLICATE_SWITCH_CASE
+// SPEC: check=E_DUPLICATE_ENUM_CASE,E_ENUM_REPR_NOT_INTEGER,E_ENUM_CASE_VALUE_NOT_INTEGER,E_ENUM_CASE_VALUE_OUT_OF_RANGE,E_DUPLICATE_ENUM_VALUE,E_UNKNOWN_ENUM_CASE,E_ENUM_LITERAL_REQUIRES_TARGET,E_GLOBAL_REQUIRES_TYPE,E_NO_IMPLICIT_CONVERSION,E_RETURN_TYPE_MISMATCH,E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION,E_ENUM_RAW_REQUIRES_OPEN_ENUM,E_CALL_ARG_COUNT,E_CLOSED_ENUM_SWITCH_EXHAUSTIVE,E_DUPLICATE_SWITCH_CASE
 
 enum OpenError {
     not_found,
@@ -15,6 +15,8 @@ enum OtherError {
 }
 
 global default_error: OpenError = .denied;
+// EXPECT_ERROR: E_GLOBAL_REQUIRES_TYPE
+global reject_targetless_global_error = .denied;
 // EXPECT_ERROR: E_UNKNOWN_ENUM_CASE
 global reject_unknown_global_error: OpenError = .missing;
 // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
@@ -35,6 +37,16 @@ fn reject_unknown_enum_local_initializer() -> OpenError {
     // EXPECT_ERROR: E_UNKNOWN_ENUM_CASE
     let error: OpenError = .missing;
     return .denied;
+}
+
+fn reject_targetless_enum_local_initializer() -> void {
+    // EXPECT_ERROR: E_ENUM_LITERAL_REQUIRES_TARGET
+    let error = .denied;
+}
+
+fn reject_grouped_targetless_enum_local_initializer() -> void {
+    // EXPECT_ERROR: E_ENUM_LITERAL_REQUIRES_TARGET
+    var error = (.denied);
 }
 
 fn reject_integer_enum_local_initializer() -> OpenError {
@@ -221,6 +233,14 @@ fn reject_duplicate_enum_switch_case_in_arm(irq: Irq) -> void {
         // EXPECT_ERROR: E_DUPLICATE_SWITCH_CASE
         .timer => {},
         .keyboard => {},
+    }
+}
+
+fn reject_enum_switch_case_after_wildcard(irq: Irq) -> void {
+    switch irq {
+        _ => {},
+        // EXPECT_ERROR: E_DUPLICATE_SWITCH_CASE
+        .timer => {},
     }
 }
 

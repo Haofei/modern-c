@@ -132,6 +132,32 @@ pub const Lexer = struct {
 
         if (!saw_digit or last_was_underscore) invalid = true;
 
+        // Decimal fractional part makes this a floating-point literal. A `.` that
+        // is not followed by a digit (e.g. `x.field`, `x.0`-style) stays integer.
+        var is_float = false;
+        if (base == .decimal and !self.isAtEnd() and self.peek() == '.' and std.ascii.isDigit(self.peekNext())) {
+            is_float = true;
+            _ = self.advance();
+            last_was_underscore = false;
+            var saw_fraction_digit = false;
+            while (!self.isAtEnd()) {
+                const c = self.peek();
+                if (std.ascii.isDigit(c)) {
+                    saw_fraction_digit = true;
+                    last_was_underscore = false;
+                    _ = self.advance();
+                } else if (c == '_') {
+                    if (isIdentStart(self.peekNext())) break;
+                    if (last_was_underscore) invalid = true;
+                    last_was_underscore = true;
+                    _ = self.advance();
+                } else {
+                    break;
+                }
+            }
+            if (!saw_fraction_digit or last_was_underscore) invalid = true;
+        }
+
         if (!self.isAtEnd() and self.peek() == '_') {
             _ = self.advance();
             if (!isIdentStart(self.peek())) {
@@ -144,8 +170,14 @@ pub const Lexer = struct {
             while (!self.isAtEnd() and isIdentContinue(self.peek())) _ = self.advance();
         }
 
-        if (invalid) self.reporter.err(self.spanFrom(start), "invalid integer literal", .{});
-        return self.make(.integer_literal, start);
+        if (invalid) {
+            if (is_float) {
+                self.reporter.err(self.spanFrom(start), "invalid float literal", .{});
+            } else {
+                self.reporter.err(self.spanFrom(start), "invalid integer literal", .{});
+            }
+        }
+        return self.make(if (is_float) .float_literal else .integer_literal, start);
     }
 
     fn string(self: *Lexer, start: Mark) token.Token {

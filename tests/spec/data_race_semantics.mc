@@ -6,6 +6,13 @@
 
 global shared_counter: u32 = 0;
 
+struct SharedPair {
+    value: u32,
+}
+
+global shared_pair: SharedPair;
+global shared_values: [4]u32;
+
 fn local_non_racing_access() -> u32 {
     var local: u32 = 1;
     local = local + 1;
@@ -26,6 +33,26 @@ fn possibly_racing_load() -> u32 {
     // EXPECT: no happens-before edge is inferred.
     // EXPECT: optimizer must not assume this access cannot race.
     return shared_counter;
+}
+
+fn possibly_racing_field_store(x: u32) -> void {
+    // EXPECT: lower-c emits mc_race_store_u32(&shared_pair.value, value) rather than a plain C field store.
+    shared_pair.value = x;
+}
+
+fn possibly_racing_field_load() -> u32 {
+    // EXPECT: lower-c emits mc_race_load_u32(&shared_pair.value) rather than loading the whole aggregate or using a plain C field load.
+    return shared_pair.value;
+}
+
+fn possibly_racing_array_store(index: usize, value: u32) -> void {
+    // EXPECT: lower-c emits mc_race_store_u32(&shared_values[checked_index], value) rather than loading the whole aggregate or using a plain C element store.
+    shared_values[index] = value;
+}
+
+fn possibly_racing_array_load(index: usize) -> u32 {
+    // EXPECT: lower-c emits mc_race_load_u32(&shared_values[checked_index]) rather than loading the whole aggregate or using a plain C element load.
+    return shared_values[index];
 }
 
 fn racing_increment_is_not_atomic() -> void {

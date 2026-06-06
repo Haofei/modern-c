@@ -199,9 +199,15 @@ pub const Stmt = struct {
 };
 
 pub const AsmStmt = struct {
+    form: AsmForm,
     is_volatile: bool,
     templates: []const []const u8,
     clobbers: []const []const u8,
+};
+
+pub const AsmForm = enum {
+    @"opaque",
+    precise,
 };
 
 pub const LocalDecl = struct {
@@ -265,6 +271,11 @@ pub const Pattern = struct {
     };
 };
 
+pub const StructLiteralField = struct {
+    name: Ident,
+    value: Expr,
+};
+
 pub const Expr = struct {
     span: Span,
     kind: Kind,
@@ -272,6 +283,7 @@ pub const Expr = struct {
     pub const Kind = union(enum) {
         ident: Ident,
         int_literal: []const u8,
+        float_literal: []const u8,
         string_literal: []const u8,
         char_literal: []const u8,
         bool_literal: bool,
@@ -280,6 +292,8 @@ pub const Expr = struct {
         unreachable_expr,
         void_literal,
         enum_literal: Ident,
+        array_literal: []Expr,
+        struct_literal: []StructLiteralField,
         grouped: *Expr,
         block: Block,
         unary: struct {

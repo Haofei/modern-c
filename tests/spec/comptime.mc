@@ -2,12 +2,14 @@
 // SPEC: milestone=comptime-runtime-effects
 // SPEC: phase=parse,sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_COMPTIME_FORBIDS_RUNTIME_EFFECT
+// SPEC: check=E_COMPTIME_FORBIDS_RUNTIME_EFFECT,E_COMPTIME_TRAP
 
 extern mmio struct Uart16550 {
     thr: Reg<u8, .write>,
     lsr: Reg<u8, .read>,
 }
+
+extern fn runtime_value() -> u32;
 
 fn accept_pure_comptime_block() -> u32 {
     comptime {
@@ -43,6 +45,67 @@ fn reject_comptime_asm() -> void {
                 "cli"
             }
         }
+    }
+}
+
+fn reject_comptime_cpu_pause() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_FORBIDS_RUNTIME_EFFECT
+        cpu.pause();
+    }
+}
+
+fn reject_comptime_runtime_call() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_FORBIDS_RUNTIME_EFFECT
+        let x: u32 = runtime_value();
+    }
+}
+
+fn reject_comptime_return() -> u32 {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_FORBIDS_RUNTIME_EFFECT
+        return 1;
+    }
+    return 2;
+}
+
+fn reject_comptime_break() -> void {
+    while true {
+        comptime {
+            // EXPECT_ERROR: E_COMPTIME_FORBIDS_RUNTIME_EFFECT
+            break;
+        }
+    }
+}
+
+fn reject_comptime_continue() -> void {
+    while true {
+        comptime {
+            // EXPECT_ERROR: E_COMPTIME_FORBIDS_RUNTIME_EFFECT
+            continue;
+        }
+    }
+}
+
+fn reject_comptime_assert_false() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(false);
+    }
+}
+
+fn reject_comptime_trap() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        trap(.Assert);
+    }
+}
+
+fn reject_comptime_unreachable() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        unreachable;
     }
 }
 

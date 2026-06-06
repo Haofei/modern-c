@@ -2,7 +2,7 @@
 // SPEC: milestone=declaration-binding
 // SPEC: phase=sema
 // SPEC: expect=compile_error
-// SPEC: check=E_DUPLICATE_STRUCT_FIELD,E_DUPLICATE_DECLARATION
+// SPEC: check=E_DUPLICATE_STRUCT_FIELD,E_DUPLICATE_DECLARATION,E_VOID_STORAGE,E_NEVER_STORAGE,E_UNKNOWN_TYPE
 
 fn reject_duplicate_declaration() -> void;
 // EXPECT_ERROR: E_DUPLICATE_DECLARATION
@@ -48,4 +48,19 @@ extern mmio struct RejectDuplicateMmioField {
     status: Reg<u8, .read>,
     // EXPECT_ERROR: E_DUPLICATE_STRUCT_FIELD
     status: Reg<u16, .read>,
+}
+
+extern struct RejectVoidField {
+    // EXPECT_ERROR: E_VOID_STORAGE
+    value: void,
+}
+
+extern struct RejectNeverField {
+    // EXPECT_ERROR: E_NEVER_STORAGE
+    value: never,
+}
+
+extern struct RejectUnknownFieldType {
+    // EXPECT_ERROR: E_UNKNOWN_TYPE
+    value: MissingType,
 }

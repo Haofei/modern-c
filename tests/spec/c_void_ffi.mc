@@ -80,6 +80,34 @@ fn reject_c_void_field(p: *mut c_void) -> usize {
     return p.field;
 }
 
+// EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+fn reject_direct_c_void_return() -> c_void {
+    return trap(.Assert);
+}
+
+// EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+fn reject_direct_c_void_parameter(value: c_void) -> void {
+    return;
+}
+
+fn reject_direct_c_void_local() -> void {
+    // EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+    let value: c_void = trap(.Assert);
+}
+
+fn reject_direct_c_void_array() -> void {
+    // EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+    var values: [2]c_void = uninit;
+}
+
+// EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+fn reject_result_c_void_payload() -> Result<c_void, Error> {
+    return trap(.Assert);
+}
+
+// EXPECT_ERROR: E_C_VOID_NO_LAYOUT
+global reject_direct_c_void_global: c_void = trap(.Assert);
+
 fn reject_c_void_to_typed_pointer(p: *mut c_void) -> *mut u8 {
     // EXPECT_ERROR: E_C_VOID_CONVERSION
     return p as *mut u8;

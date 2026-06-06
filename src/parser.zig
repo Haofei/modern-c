@@ -96,6 +96,11 @@ pub const Parser = struct {
             return .{ .span = joinSpan(start, overlay_union.name.span), .attrs = attrs, .kind = .{ .overlay_union_decl = overlay_union } };
         }
 
+        if (self.match(.kw_struct)) {
+            const struct_decl = try self.finishStructDecl(null);
+            return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .extern_struct = struct_decl } };
+        }
+
         if (self.match(.kw_union)) {
             const union_decl = try self.finishUnionDecl();
             return .{ .span = joinSpan(start, union_decl.name.span), .attrs = attrs, .kind = .{ .union_decl = union_decl } };
@@ -333,8 +338,11 @@ pub const Parser = struct {
 
     fn parseAsmStmt(self: *Parser) anyerror!ast.Stmt {
         const start = self.lxTokenBeforeCurrent();
+        var form: ast.AsmForm = .@"opaque";
         var is_volatile = false;
         while (self.current.kind != .l_brace and self.current.kind != .eof) {
+            if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "opaque")) form = .@"opaque";
+            if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "precise")) form = .precise;
             if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "volatile")) is_volatile = true;
             self.advance();
         }
@@ -363,6 +371,7 @@ pub const Parser = struct {
         }
         const end = try self.expectTok(.r_brace, "expected '}' after asm block");
         return .{ .span = joinSpan(start, end.span), .kind = .{ .asm_stmt = .{
+            .form = form,
             .is_volatile = is_volatile,
             .templates = try templates.toOwnedSlice(self.allocator),
             .clobbers = try clobbers.toOwnedSlice(self.allocator),
@@ -595,6 +604,7 @@ pub const Parser = struct {
             return .{ .span = tok.span, .kind = .{ .ident = ident(tok) } };
         }
         if (self.match(.integer_literal)) return .{ .span = self.lxTokenBeforeCurrent(), .kind = .{ .int_literal = self.previousLexeme() } };
+        if (self.match(.float_literal)) return .{ .span = self.lxTokenBeforeCurrent(), .kind = .{ .float_literal = self.previousLexeme() } };
         if (self.match(.string_literal)) return .{ .span = self.lxTokenBeforeCurrent(), .kind = .{ .string_literal = self.previousLexeme() } };
         if (self.match(.char_literal)) return .{ .span = self.lxTokenBeforeCurrent(), .kind = .{ .char_literal = self.previousLexeme() } };
         if (self.match(.kw_true)) return .{ .span = self.lxTokenBeforeCurrent(), .kind = .{ .bool_literal = true } };
@@ -604,6 +614,32 @@ pub const Parser = struct {
         if (self.match(.kw_unreachable)) return .{ .span = self.lxTokenBeforeCurrent(), .kind = .unreachable_expr };
         if (self.match(.dot)) {
             const dot = self.lxTokenBeforeCurrent();
+            if (self.match(.l_brace)) {
+                if (self.current.kind == .dot) {
+                    var fields: std.ArrayList(ast.StructLiteralField) = .empty;
+                    errdefer fields.deinit(self.allocator);
+                    while (true) {
+                        _ = try self.expectTok(.dot, "expected '.' before struct literal field name");
+                        const field_name = try self.expectSymbol("expected struct literal field name");
+                        try self.expect(.equal, "expected '=' after struct literal field name");
+                        const value = try self.parseExpr(0);
+                        try fields.append(self.allocator, .{ .name = field_name, .value = value });
+                        if (!self.match(.comma) or self.current.kind == .r_brace) break;
+                    }
+                    const end = try self.expectTok(.r_brace, "expected '}' after struct literal");
+                    return .{ .span = joinSpan(dot, end.span), .kind = .{ .struct_literal = try fields.toOwnedSlice(self.allocator) } };
+                }
+                var items: std.ArrayList(ast.Expr) = .empty;
+                errdefer items.deinit(self.allocator);
+                if (self.current.kind != .r_brace) {
+                    while (true) {
+                        try items.append(self.allocator, try self.parseExpr(0));
+                        if (!self.match(.comma) or self.current.kind == .r_brace) break;
+                    }
+                }
+                const end = try self.expectTok(.r_brace, "expected '}' after array literal");
+                return .{ .span = joinSpan(dot, end.span), .kind = .{ .array_literal = try items.toOwnedSlice(self.allocator) } };
+            }
             const name = try self.expectSymbol("expected enum literal name");
             return .{ .span = joinSpan(dot, name.span), .kind = .{ .enum_literal = name } };
         }

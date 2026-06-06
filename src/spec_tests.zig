@@ -2,6 +2,7 @@ const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
+const hir = @import("hir.zig");
 const ir = @import("ir.zig");
 const lower_c = @import("lower_c.zig");
 const parser = @import("parser.zig");
@@ -412,6 +413,60 @@ test "tests/spec inline EXPECT_ERROR comments match diagnostic lines" {
     try std.testing.expect(found_expectation);
 }
 
+test "tests/spec semantic errors are all explicitly expected" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var dir = try std.Io.Dir.cwd().openDir(io, "tests/spec", .{ .iterate = true });
+    defer dir.close(io);
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var found_fixture = false;
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".mc")) continue;
+        found_fixture = true;
+
+        const source = try dir.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024));
+        defer allocator.free(source);
+
+        var expected_errors = try parseExpectedErrors(allocator, source);
+        defer expected_errors.deinit(allocator);
+
+        const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
+        defer allocator.free(path);
+
+        var reporter = diagnostics.Reporter.init(allocator, path, source);
+        defer reporter.deinit();
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const parse_allocator = arena.allocator();
+
+        var p = parser.Parser.init(source, &reporter);
+        const module = try p.parseModule(parse_allocator);
+        defer module.deinit(parse_allocator);
+
+        var checker = sema.Checker.init(&reporter);
+        checker.checkModule(module);
+
+        for (reporter.diagnostics.items) |diag| {
+            if (diag.severity != .error_ or !isCompilerErrorCodeMessage(diag.message)) continue;
+            if (!hasExpectedErrorForDiagnostic(expected_errors.items, diag)) {
+                std.debug.print(
+                    "{s}:{d}: unexpected diagnostic {s}; every spec diagnostic must have an EXPECT_ERROR comment on the target line\n",
+                    .{ path, diag.span.line, diag.message },
+                );
+                try std.testing.expect(false);
+            }
+        }
+    }
+
+    try std.testing.expect(found_fixture);
+}
+
 test "tests/spec inline run trap expectations are reached by arithmetic evaluator" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -541,6 +596,15 @@ test "tests/spec fixtures produce declared IR inspection facts" {
                     try std.testing.expect(false);
                 }
             }
+            if (std.mem.eql(u8, check, "no-language-trap-edge")) {
+                var hir_facts: std.ArrayList(u8) = .empty;
+                defer hir_facts.deinit(allocator);
+                try hir.appendVerificationFacts(allocator, module, &hir_facts);
+                if (!hasHirVerifierEvidenceForCheck(hir_facts.items, check)) {
+                    std.debug.print("{s}: expected HIR verifier evidence for {s}\nHIR verifier:\n{s}", .{ path, check, hir_facts.items });
+                    try std.testing.expect(false);
+                }
+            }
         }
     }
 }
@@ -651,6 +715,7 @@ fn isIrFactCheck(check: []const u8) bool {
         "mmio-ir-ordering-preserved",
         "race-ir-semantics",
         "race-ir-no-ub",
+        "arithmetic-domain-no-trap",
     };
     return matchesAny(check, &names);
 }
@@ -666,6 +731,11 @@ fn isLowerCCheck(check: []const u8) bool {
         "mmio-ordering-preserved",
         "packed-bits-no-c-bitfields",
         "overlay-union-byte-storage",
+        "arithmetic-domain-lowering",
+        "atomics-lowering",
+        "dma-cache-core",
+        "opaque-asm-lowering",
+        "bitcast-lowering",
     };
     return matchesAny(check, &names);
 }
@@ -852,6 +922,12 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             "fact ordinary_access fn=possibly_racing_store object=shared_counter access=store race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
             "fact ordinary_access fn=possibly_racing_load object=shared_counter access=load race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
             "fact racing_load_semantics fn=possibly_racing_load object=shared_counter result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_field_store object=shared_pair.value access=store race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_field_load object=shared_pair.value access=load race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact racing_load_semantics fn=possibly_racing_field_load object=shared_pair.value result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_array_store object=shared_values[] access=store race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_array_load object=shared_values[] access=load race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact racing_load_semantics fn=possibly_racing_array_load object=shared_values[] result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
             "fact non_atomic_rmw fn=racing_increment_is_not_atomic object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false",
         });
     }
@@ -859,8 +935,22 @@ fn hasIrEvidenceForCheck(facts: []const u8, check: []const u8) bool {
         return containsAll(facts, &.{
             "fact ordinary_access fn=possibly_racing_store object=shared_counter access=store race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
             "fact ordinary_access fn=possibly_racing_load object=shared_counter access=load race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_field_store object=shared_pair.value access=store race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_field_load object=shared_pair.value access=load race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_array_store object=shared_values[] access=store race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
+            "fact ordinary_access fn=possibly_racing_array_load object=shared_values[] access=load race_class=possibly_shared creates_happens_before=false assumes_no_race=false optimizer_license_ub=false",
             "fact non_atomic_rmw fn=racing_increment_is_not_atomic object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false",
         });
+    }
+    if (std.mem.eql(u8, check, "arithmetic-domain-no-trap")) {
+        return containsAll(facts, &.{
+            "fact arithmetic_domain_no_trap fn=wrap_add domain=wrap op=add language_trap=false overflow_trap=false",
+            "fact arithmetic_domain_no_trap fn=wrap_bitwise domain=wrap op=bit_and language_trap=false overflow_trap=false",
+            "fact arithmetic_domain_no_trap fn=sat_add domain=sat op=add language_trap=false overflow_trap=false",
+            "fact arithmetic_domain_no_trap fn=sat_mul domain=sat op=mul language_trap=false overflow_trap=false",
+        }) and
+            std.mem.indexOf(u8, facts, "fact checked_arithmetic_trap fn=wrap_add") == null and
+            std.mem.indexOf(u8, facts, "fact checked_arithmetic_trap fn=sat_add") == null;
     }
     return false;
 }
@@ -876,11 +966,36 @@ fn hasLowerIrEvidenceForCheck(module_ir: ir.ModuleIr, check: []const u8) bool {
             lowerIrFunctionHasTrap(module_ir, "reject_unwrap_call", .Unknown, .unwrap) and
             lowerIrFunctionHasTrap(module_ir, "reject_right_shift", .InvalidShift, .checked_shift) and
             lowerIrFunctionHasNoTrapsAndSafeOp(module_ir, "allow_wrapping_add", "wrapping.add") and
+            lowerIrFunctionHasNoTrapsAndSafeOp(module_ir, "allow_saturating_add", "saturating.add") and
             lowerIrFunctionHasNoTrapsAndSafeOp(module_ir, "allow_boot_asm", "opaque_volatile_asm");
     }
     if (std.mem.eql(u8, check, "contract_region")) {
         return lowerIrFunctionHasContractRegion(module_ir, "allow_unchecked_add_inside_contract", "no_overflow", "unchecked.add") and
+            lowerIrFunctionHasPostContractTrapWithoutMetadata(module_ir, "allow_unchecked_add_inside_contract", "no_overflow", .IntegerOverflow, .checked_arithmetic) and
             lowerIrFunctionHasContractRegion(module_ir, "noalias_contract_region", "noalias", "compiler.assume_noalias_unchecked");
+    }
+    return false;
+}
+
+fn hasHirVerifierEvidenceForCheck(facts: []const u8, check: []const u8) bool {
+    if (std.mem.eql(u8, check, "no-language-trap-edge")) {
+        return containsAll(facts, &.{
+            "hir verify fn=reject_checked_add finding=trap_edge detail=IntegerOverflow no_lang_trap=true",
+            "hir verify fn=reject_bounds_check finding=trap_edge detail=Bounds no_lang_trap=true",
+            "hir verify fn=reject_assert finding=trap_edge detail=Assert no_lang_trap=true",
+            "hir verify fn=reject_reachable_unreachable finding=trap_edge detail=Unreachable no_lang_trap=true",
+            "hir verify fn=reject_explicit_trap finding=trap_edge detail=ExplicitTrap no_lang_trap=true",
+            "hir verify fn=reject_nullable_try finding=trap_edge detail=Unwrap no_lang_trap=true",
+            "hir verify fn=reject_unwrap_call finding=trap_edge detail=Unwrap no_lang_trap=true",
+            "hir verify fn=reject_right_shift finding=trap_edge detail=InvalidShift no_lang_trap=true",
+            "hir verify fn=reject_checked_negation finding=trap_edge detail=IntegerOverflow no_lang_trap=true",
+            "hir verify fn=reject_call_trapping_fn finding=trap_edge detail=CallMayTrap no_lang_trap=true",
+        }) and
+            std.mem.indexOf(u8, facts, "hir verify fn=allow_wrapping_add finding=trap_edge") == null and
+            std.mem.indexOf(u8, facts, "hir verify fn=allow_wrapping_neg finding=trap_edge") == null and
+            std.mem.indexOf(u8, facts, "hir verify fn=allow_saturating_add finding=trap_edge") == null and
+            std.mem.indexOf(u8, facts, "hir verify fn=allow_call_no_lang_trap_fn finding=trap_edge") == null and
+            std.mem.indexOf(u8, facts, "hir verify fn=allow_boot_asm finding=trap_edge") == null;
     }
     return false;
 }
@@ -906,15 +1021,38 @@ fn lowerIrFunctionHasNoTrapsAndSafeOp(module_ir: ir.ModuleIr, name: []const u8, 
 fn lowerIrFunctionHasContractRegion(module_ir: ir.ModuleIr, name: []const u8, contract: []const u8, callee: []const u8) bool {
     const function = lowerIrFunctionByName(module_ir, name) orelse return false;
     var region_id: ?usize = null;
+    var begin_line: usize = 0;
+    var end_line: usize = 0;
     for (function.contract_regions) |region| {
         if (std.mem.eql(u8, region.contract, contract) and region.unchecked_calls > 0 and !region.metadata_attached_after_region) {
             region_id = region.id;
+            begin_line = region.begin_line;
+            end_line = region.end_line;
+            if (region.end_line <= region.begin_line) return false;
             break;
         }
     }
     const expected_region_id = region_id orelse return false;
     for (function.unchecked_calls) |call| {
-        if (std.mem.eql(u8, call.callee, callee) and call.contract_region_id != null and call.contract_region_id.? == expected_region_id) return true;
+        if (std.mem.eql(u8, call.callee, callee) and call.contract_region_id != null and call.contract_region_id.? == expected_region_id) {
+            return call.line >= begin_line and call.line <= end_line;
+        }
+    }
+    return false;
+}
+
+fn lowerIrFunctionHasPostContractTrapWithoutMetadata(module_ir: ir.ModuleIr, name: []const u8, contract: []const u8, kind: ir.TrapKind, source: ir.TrapSource) bool {
+    const function = lowerIrFunctionByName(module_ir, name) orelse return false;
+    var contract_end: ?usize = null;
+    for (function.contract_regions) |region| {
+        if (std.mem.eql(u8, region.contract, contract) and !region.metadata_attached_after_region) {
+            contract_end = region.end_line;
+            break;
+        }
+    }
+    const end_line = contract_end orelse return false;
+    for (function.trap_edges) |edge| {
+        if (edge.kind == kind and edge.source == source and edge.line > end_line) return true;
     }
     return false;
 }
@@ -1027,6 +1165,14 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
             "lower race_backend fn=possibly_racing_store object=shared_counter access=store action=emit_helper helper=mc_race_store_u32 type=u32 width_bits=32 expr=mc_race_store_u32(&shared_counter, value) c_plain_access=false reject_if_helper_missing=true",
             "lower ordinary_access fn=possibly_racing_load object=shared_counter access=load race_class=possibly_shared strategy=race_helper helper=mc_race_load_u32 type=u32 width_bits=32 helper_required=true helper_available=true c_plain_access=false",
             "lower race_backend fn=possibly_racing_load object=shared_counter access=load action=emit_helper helper=mc_race_load_u32 type=u32 width_bits=32 expr=mc_race_load_u32(&shared_counter) c_plain_access=false reject_if_helper_missing=true",
+            "lower ordinary_access fn=possibly_racing_field_store object=shared_pair.value access=store race_class=possibly_shared strategy=race_helper helper=mc_race_store_u32 type=u32 width_bits=32 helper_required=true helper_available=true c_plain_access=false",
+            "lower race_backend fn=possibly_racing_field_store object=shared_pair.value access=store action=emit_helper helper=mc_race_store_u32 type=u32 width_bits=32 expr=mc_race_store_u32(&shared_pair.value, value) c_plain_access=false reject_if_helper_missing=true",
+            "lower ordinary_access fn=possibly_racing_field_load object=shared_pair.value access=load race_class=possibly_shared strategy=race_helper helper=mc_race_load_u32 type=u32 width_bits=32 helper_required=true helper_available=true c_plain_access=false",
+            "lower race_backend fn=possibly_racing_field_load object=shared_pair.value access=load action=emit_helper helper=mc_race_load_u32 type=u32 width_bits=32 expr=mc_race_load_u32(&shared_pair.value) c_plain_access=false reject_if_helper_missing=true",
+            "lower ordinary_access fn=possibly_racing_array_store object=shared_values[] access=store race_class=possibly_shared strategy=race_helper helper=mc_race_store_u32 type=u32 width_bits=32 helper_required=true helper_available=true c_plain_access=false",
+            "lower race_backend fn=possibly_racing_array_store object=shared_values[] access=store action=emit_helper helper=mc_race_store_u32 type=u32 width_bits=32 expr=mc_race_store_u32(&shared_values[], value) c_plain_access=false reject_if_helper_missing=true",
+            "lower ordinary_access fn=possibly_racing_array_load object=shared_values[] access=load race_class=possibly_shared strategy=race_helper helper=mc_race_load_u32 type=u32 width_bits=32 helper_required=true helper_available=true c_plain_access=false",
+            "lower race_backend fn=possibly_racing_array_load object=shared_values[] access=load action=emit_helper helper=mc_race_load_u32 type=u32 width_bits=32 expr=mc_race_load_u32(&shared_values[]) c_plain_access=false reject_if_helper_missing=true",
             "lower non_atomic_rmw fn=racing_increment_is_not_atomic object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false c_data_race_ub_dependency=false",
         });
     }
@@ -1034,13 +1180,23 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
         return containsAll(output, &.{
             "lower race_semantics fn=possibly_racing_load object=shared_counter creates_happens_before=false assumes_no_race=false",
             "lower racing_load_semantics fn=possibly_racing_load object=shared_counter result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false c_data_race_ub_dependency=false",
+            "lower race_semantics fn=possibly_racing_field_load object=shared_pair.value creates_happens_before=false assumes_no_race=false",
+            "lower racing_load_semantics fn=possibly_racing_field_load object=shared_pair.value result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false c_data_race_ub_dependency=false",
+            "lower race_semantics fn=possibly_racing_array_load object=shared_values[] creates_happens_before=false assumes_no_race=false",
+            "lower racing_load_semantics fn=possibly_racing_array_load object=shared_values[] result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false c_data_race_ub_dependency=false",
         });
     }
     if (std.mem.eql(u8, check, "no-c-data-race-ub")) {
         return containsAll(output, &.{
             "lower c_ub fn=possibly_racing_store object=shared_counter c_data_race_ub_dependency=false",
             "lower c_ub fn=possibly_racing_load object=shared_counter c_data_race_ub_dependency=false",
+            "lower c_ub fn=possibly_racing_field_store object=shared_pair.value c_data_race_ub_dependency=false",
+            "lower c_ub fn=possibly_racing_field_load object=shared_pair.value c_data_race_ub_dependency=false",
+            "lower c_ub fn=possibly_racing_array_store object=shared_values[] c_data_race_ub_dependency=false",
+            "lower c_ub fn=possibly_racing_array_load object=shared_values[] c_data_race_ub_dependency=false",
             "lower racing_load_semantics fn=possibly_racing_load object=shared_counter result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false c_data_race_ub_dependency=false",
+            "lower racing_load_semantics fn=possibly_racing_field_load object=shared_pair.value result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false c_data_race_ub_dependency=false",
+            "lower racing_load_semantics fn=possibly_racing_array_load object=shared_values[] result=target_defined may_tear=true creates_happens_before=false assumes_no_race=false c_data_race_ub_dependency=false",
             "lower non_atomic_rmw fn=racing_increment_is_not_atomic object=shared_counter bug_if_concurrent=true optimizer_license_ub=false atomic=false c_data_race_ub_dependency=false",
         });
     }
@@ -1083,6 +1239,48 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
             "strategy=byte_storage",
             "c_union=false",
             "semantic_source=mc_bytes",
+        });
+    }
+    if (std.mem.eql(u8, check, "arithmetic-domain-lowering")) {
+        return containsAll(output, &.{
+            "lower arithmetic_domain fn=wrap_add domain=wrap op=add strategy=plain_unsigned language_trap=false overflow_trap=false emits_checked_overflow_helper=false",
+            "lower arithmetic_domain fn=wrap_bitwise domain=wrap op=bit_and strategy=plain_unsigned language_trap=false overflow_trap=false emits_checked_overflow_helper=false",
+            "lower arithmetic_domain fn=sat_add domain=sat op=add strategy=saturating_helper language_trap=false overflow_trap=false emits_checked_overflow_helper=false",
+            "lower arithmetic_domain fn=sat_mul domain=sat op=mul strategy=saturating_helper language_trap=false overflow_trap=false emits_checked_overflow_helper=false",
+        }) and
+            std.mem.indexOf(u8, output, "lower checked_arith fn=wrap_add") == null and
+            std.mem.indexOf(u8, output, "lower checked_arith fn=sat_add") == null;
+    }
+    if (std.mem.eql(u8, check, "atomics-lowering")) {
+        return containsAll(output, &.{
+            "lower atomic_access fn=atomic_load_acquire op=load object=flag type=bool ordering=acquire c_order=__ATOMIC_ACQUIRE builtin=__atomic_load_n volatile=false ordinary_access=false creates_happens_before=true",
+            "lower atomic_backend fn=atomic_load_acquire op=load object=flag c_expr=__atomic_load_n(&flag, ...) c_plain_access=false volatile=false",
+            "lower atomic_access fn=atomic_store_release op=store object=flag type=bool ordering=release c_order=__ATOMIC_RELEASE builtin=__atomic_store_n volatile=false ordinary_access=false creates_happens_before=true",
+            "lower atomic_backend fn=atomic_store_release op=store object=flag c_expr=__atomic_store_n(&flag, ...) c_plain_access=false volatile=false",
+            "lower atomic_access fn=atomic_fetch_add_acq_rel op=fetch_add object=ticks type=u64 ordering=acq_rel c_order=__ATOMIC_ACQ_REL builtin=__atomic_fetch_add volatile=false ordinary_access=false creates_happens_before=true",
+            "lower atomic_backend fn=atomic_fetch_add_acq_rel op=fetch_add object=ticks c_expr=__atomic_fetch_add(&ticks, ...) c_plain_access=false volatile=false",
+        });
+    }
+    if (std.mem.eql(u8, check, "dma-cache-core")) {
+        return containsAll(output, &.{
+            "lower dma_access fn=accept_dma_addr op=dma_addr object=buf payload=Packet mode=noncoherent result=DmaAddr address_class=dma_addr not_paddr=true not_vaddr=true",
+            "lower dma_cache fn=accept_noncoherent_cache_cycle op=clean object=buf payload=Packet mode=noncoherent helper=mc_dma_cache_clean required_for_noncoherent=true",
+            "lower dma_cache fn=accept_noncoherent_cache_cycle op=invalidate object=buf payload=Packet mode=noncoherent helper=mc_dma_cache_invalidate required_for_noncoherent=true",
+            "lower dma_access fn=accept_noncoherent_cache_cycle op=as_slice object=buf payload=Packet mode=noncoherent result=slice temporal_cache_proven=false core_guarantee=address_class_only",
+            "lower dma_access fn=accept_core_allows_unproven_slice op=as_slice object=buf payload=Packet mode=noncoherent result=slice temporal_cache_proven=false core_guarantee=address_class_only",
+            "lower dma_access fn=accept_coherent_slice op=as_slice object=buf payload=Packet mode=coherent result=slice temporal_cache_proven=false core_guarantee=address_class_only",
+        });
+    }
+    if (std.mem.eql(u8, check, "opaque-asm-lowering")) {
+        return containsAll(output, &.{
+            "lower asm fn=accept_opaque_asm form=opaque volatile=true conservative=true memory_clobber=true optimizer_assumptions=false c_backend=gcc_clang_asm",
+            "lower asm fn=accept_opaque_asm_default_memory form=opaque volatile=true conservative=true memory_clobber=true optimizer_assumptions=false c_backend=gcc_clang_asm",
+        });
+    }
+    if (std.mem.eql(u8, check, "bitcast-lowering")) {
+        return containsAll(output, &.{
+            "lower bitcast fn=bitcast_u32_from_i32 source=i32 target=u32 strategy=memcpy helper=mc_bitcast_memcpy strict_aliasing_cast=false",
+            "lower bitcast fn=bitcast_i32_from_u32 source=u32 target=i32 strategy=memcpy helper=mc_bitcast_memcpy strict_aliasing_cast=false",
         });
     }
     return false;

@@ -99,7 +99,7 @@ pub fn buildModuleIr(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
-                    var builder = FunctionIrBuilder.init(allocator, fn_decl.name.text, hasNoLangTrap(decl.attrs));
+                    var builder = FunctionIrBuilder.init(allocator, fn_decl, hasNoLangTrap(decl.attrs));
                     errdefer builder.deinit();
                     try builder.collectBlock(body);
                     try functions.append(allocator, try builder.finish());
@@ -150,6 +150,17 @@ pub fn appendLowerIr(allocator: std.mem.Allocator, module: ast.Module, out: *std
                 .{ edge.function_name, @tagName(edge.kind), @tagName(edge.source), edge.no_lang_trap, edge.line, edge.column },
             );
         }
+        for (function.contract_regions) |region| {
+            for (function.trap_edges) |edge| {
+                if (!std.mem.eql(u8, region.contract, "no_overflow")) continue;
+                if (edge.kind != .IntegerOverflow or edge.line <= region.end_line) continue;
+                try out.print(
+                    allocator,
+                    "ir post_contract_trap_edge fn={s} contract={s} region_id={} trap={s} source={s} line={} metadata_attached=false\n",
+                    .{ function.name, region.contract, region.id, @tagName(edge.kind), @tagName(edge.source), edge.line },
+                );
+            }
+        }
         for (function.safe_no_trap_ops) |op| {
             try out.print(
                 allocator,
@@ -168,20 +179,29 @@ const FunctionIrBuilder = struct {
     safe_no_trap_ops: std.ArrayList(SafeNoTrapOp),
     contract_regions: std.ArrayList(ContractRegion),
     unchecked_calls: std.ArrayList(UncheckedCall),
+    wrap_values: std.StringHashMap(void),
+    sat_values: std.StringHashMap(void),
     active_contract: ?[]const u8 = null,
     active_contract_region_id: ?usize = null,
     next_contract_region_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, function_name: []const u8, no_lang_trap: bool) FunctionIrBuilder {
-        return .{
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, no_lang_trap: bool) FunctionIrBuilder {
+        var builder = FunctionIrBuilder{
             .allocator = allocator,
-            .function_name = function_name,
+            .function_name = fn_decl.name.text,
             .no_lang_trap = no_lang_trap,
             .trap_edges = .empty,
             .safe_no_trap_ops = .empty,
             .contract_regions = .empty,
             .unchecked_calls = .empty,
+            .wrap_values = std.StringHashMap(void).init(allocator),
+            .sat_values = std.StringHashMap(void).init(allocator),
         };
+        for (fn_decl.params) |param| {
+            if (isWrapType(param.ty)) builder.wrap_values.put(param.name.text, {}) catch {};
+            if (isSatType(param.ty)) builder.sat_values.put(param.name.text, {}) catch {};
+        }
+        return builder;
     }
 
     fn deinit(self: *FunctionIrBuilder) void {
@@ -189,6 +209,10 @@ const FunctionIrBuilder = struct {
         self.safe_no_trap_ops.deinit(self.allocator);
         self.contract_regions.deinit(self.allocator);
         self.unchecked_calls.deinit(self.allocator);
+        self.wrap_values.deinit();
+        self.wrap_values = std.StringHashMap(void).init(self.allocator);
+        self.sat_values.deinit();
+        self.sat_values = std.StringHashMap(void).init(self.allocator);
     }
 
     fn finish(self: *FunctionIrBuilder) !FunctionIr {
@@ -199,6 +223,8 @@ const FunctionIrBuilder = struct {
         const contract_regions = try self.contract_regions.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(contract_regions);
         const unchecked_calls = try self.unchecked_calls.toOwnedSlice(self.allocator);
+        self.wrap_values.deinit();
+        self.sat_values.deinit();
         return .{
             .name = self.function_name,
             .no_lang_trap = self.no_lang_trap,
@@ -215,7 +241,17 @@ const FunctionIrBuilder = struct {
 
     fn collectStmt(self: *FunctionIrBuilder, stmt: ast.Stmt) anyerror!void {
         switch (stmt.kind) {
-            .let_decl, .var_decl => |local| if (local.init) |expr| try self.collectExpr(expr),
+            .let_decl, .var_decl => |local| {
+                if (local.ty) |ty| {
+                    if (isWrapType(ty)) {
+                        for (local.names) |name| self.wrap_values.put(name.text, {}) catch {};
+                    }
+                    if (isSatType(ty)) {
+                        for (local.names) |name| self.sat_values.put(name.text, {}) catch {};
+                    }
+                }
+                if (local.init) |expr| try self.collectExpr(expr);
+            },
             .loop => |node| {
                 if (node.iterable) |iterable| try self.collectExpr(iterable);
                 try self.collectBlock(node.body);
@@ -253,6 +289,7 @@ const FunctionIrBuilder = struct {
         switch (expr.kind) {
             .ident,
             .int_literal,
+            .float_literal,
             .string_literal,
             .char_literal,
             .bool_literal,
@@ -261,6 +298,8 @@ const FunctionIrBuilder = struct {
             .void_literal,
             .enum_literal,
             => {},
+            .array_literal => |items| for (items) |item| try self.collectExpr(item),
+            .struct_literal => |fields| for (fields) |field| try self.collectExpr(field.value),
             .unreachable_expr => try self.addTrap(.Unreachable, .unreachable_expr, expr.span),
             .grouped, .address_of, .deref => |inner| try self.collectExpr(inner.*),
             .try_expr => |inner| {
@@ -269,14 +308,22 @@ const FunctionIrBuilder = struct {
             },
             .block => |body| try self.collectBlock(body),
             .unary => |node| {
-                if (node.op == .neg) try self.addTrap(.IntegerOverflow, .checked_arithmetic, expr.span);
+                if (node.op == .neg) {
+                    if (self.exprIsWrap(node.expr.*)) {
+                        if (self.no_lang_trap) try self.addSafeOp("wrapping.neg", expr.span);
+                    } else {
+                        try self.addTrap(.IntegerOverflow, .checked_arithmetic, expr.span);
+                    }
+                }
                 try self.collectExpr(node.expr.*);
             },
             .binary => |node| {
-                if (isCheckedTrapOp(node.op)) {
+                if (self.binaryIsSafeNoTrapArithmeticDomain(node)) {
+                    if (self.no_lang_trap) try self.addSafeOp(safeArithmeticDomainOpName(node.op, if (self.exprIsSat(node.left.*)) "sat" else "wrap"), expr.span);
+                } else if (isCheckedTrapOp(node.op)) {
                     try self.addTrap(irTrapKindForBinary(node), .checked_arithmetic, expr.span);
                 }
-                if (isShiftOp(node.op)) {
+                if (isShiftOp(node.op) and !self.binaryIsSafeNoTrapArithmeticDomain(node)) {
                     try self.addTrap(.InvalidShift, .checked_shift, expr.span);
                 }
                 try self.collectExpr(node.left.*);
@@ -316,7 +363,7 @@ const FunctionIrBuilder = struct {
             .id = id,
             .contract = name,
             .begin_line = contract.attr.span.line,
-            .end_line = contract.attr.span.line,
+            .end_line = contractBlockEndLine(contract.block),
             .unchecked_calls = 0,
             .metadata_attached_after_region = false,
         });
@@ -327,7 +374,7 @@ const FunctionIrBuilder = struct {
         try self.collectBlock(contract.block);
         self.active_contract = previous_contract;
         self.active_contract_region_id = previous_region_id;
-        self.contract_regions.items[region_index].end_line = contract.attr.span.line;
+        self.contract_regions.items[region_index].end_line = contractBlockEndLine(contract.block);
     }
 
     fn addTrap(self: *FunctionIrBuilder, kind: TrapKind, source: TrapSource, span: ast.Span) !void {
@@ -368,6 +415,30 @@ const FunctionIrBuilder = struct {
                 }
             }
         }
+    }
+
+    fn exprIsWrap(self: *FunctionIrBuilder, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .ident => |ident| self.wrap_values.contains(ident.text),
+            .grouped => |inner| self.exprIsWrap(inner.*),
+            .binary => |node| isWrapPreservingBinary(node.op) and self.exprIsWrap(node.left.*) and self.exprIsWrap(node.right.*),
+            else => false,
+        };
+    }
+
+    fn exprIsSat(self: *FunctionIrBuilder, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .ident => |ident| self.sat_values.contains(ident.text),
+            .grouped => |inner| self.exprIsSat(inner.*),
+            .binary => |node| isSatPreservingBinary(node.op) and self.exprIsSat(node.left.*) and self.exprIsSat(node.right.*),
+            else => false,
+        };
+    }
+
+    fn binaryIsSafeNoTrapArithmeticDomain(self: *FunctionIrBuilder, node: anytype) bool {
+        if (isWrapPreservingBinary(node.op) and self.exprIsWrap(node.left.*) and self.exprIsWrap(node.right.*)) return true;
+        if (isSatPreservingBinary(node.op) and self.exprIsSat(node.left.*) and self.exprIsSat(node.right.*)) return true;
+        return false;
     }
 };
 
@@ -447,12 +518,19 @@ const Context = struct {
     unsafe_contract_depth: usize = 0,
     mmio_params: ?*const std.StringHashMap([]const u8) = null,
     locals: ?*std.StringHashMap(void) = null,
+    wrap_values: ?*std.StringHashMap(void) = null,
+    sat_values: ?*std.StringHashMap(void) = null,
     mmio_sequence: ?*MmioSequenceState = null,
 };
 
 const MmioSequenceState = struct {
     ordinary_store_seen: bool = false,
     pending_acquire: ?MmioAccess = null,
+};
+
+const OrdinaryGlobalAccess = struct {
+    name: []const u8,
+    owned: bool = false,
 };
 
 const ListFactWriter = struct {
@@ -467,13 +545,15 @@ const ListFactWriter = struct {
 const ModuleFactCollector = struct {
     allocator: std.mem.Allocator,
     mmio_structs: std.StringHashMap(MmioStruct),
-    globals: std.StringHashMap(void),
+    structs: std.StringHashMap(ast.StructDecl),
+    globals: std.StringHashMap([]const u8),
 
     fn init(allocator: std.mem.Allocator) ModuleFactCollector {
         return .{
             .allocator = allocator,
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
-            .globals = std.StringHashMap(void).init(allocator),
+            .structs = std.StringHashMap(ast.StructDecl).init(allocator),
+            .globals = std.StringHashMap([]const u8).init(allocator),
         };
     }
 
@@ -481,6 +561,7 @@ const ModuleFactCollector = struct {
         var structs = self.mmio_structs.valueIterator();
         while (structs.next()) |mmio_struct| mmio_struct.fields.deinit();
         self.mmio_structs.deinit();
+        self.structs.deinit();
         self.globals.deinit();
     }
 
@@ -501,9 +582,13 @@ const ModuleFactCollector = struct {
                 .extern_struct => |struct_decl| {
                     if (struct_decl.abi) |abi| {
                         if (std.mem.eql(u8, abi, "mmio")) try self.collectMmioStruct(struct_decl);
+                    } else {
+                        try self.structs.put(struct_decl.name.text, struct_decl);
                     }
                 },
-                .global_decl => |global| try self.globals.put(global.name.text, {}),
+                .global_decl => |global| if (global.ty) |ty| {
+                    try self.globals.put(global.name.text, typeName(ty) orelse "unknown");
+                },
                 .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
             }
         }
@@ -528,9 +613,15 @@ const ModuleFactCollector = struct {
                     defer mmio_params.deinit();
                     var locals = std.StringHashMap(void).init(self.allocator);
                     defer locals.deinit();
+                    var wrap_values = std.StringHashMap(void).init(self.allocator);
+                    defer wrap_values.deinit();
+                    var sat_values = std.StringHashMap(void).init(self.allocator);
+                    defer sat_values.deinit();
                     var mmio_sequence = MmioSequenceState{};
                     for (fn_decl.params) |param| {
                         try locals.put(param.name.text, {});
+                        if (isWrapType(param.ty)) try wrap_values.put(param.name.text, {});
+                        if (isSatType(param.ty)) try sat_values.put(param.name.text, {});
                         if (mmioPointee(param.ty)) |struct_name| try mmio_params.put(param.name.text, struct_name);
                     }
                     try writeBlockFacts(self, body, writer, .{
@@ -538,6 +629,8 @@ const ModuleFactCollector = struct {
                         .no_lang_trap = hasNoLangTrap(decl.attrs),
                         .mmio_params = &mmio_params,
                         .locals = &locals,
+                        .wrap_values = &wrap_values,
+                        .sat_values = &sat_values,
                         .mmio_sequence = &mmio_sequence,
                     });
                 }
@@ -580,12 +673,52 @@ const ModuleFactCollector = struct {
         };
     }
 
-    fn ordinaryGlobalTarget(self: *ModuleFactCollector, target: ast.Expr, ctx: Context) ?[]const u8 {
+    fn ordinaryGlobalTarget(self: *ModuleFactCollector, target: ast.Expr, ctx: Context) ?OrdinaryGlobalAccess {
         return switch (target.kind) {
-            .ident => |ident| if (self.isOrdinaryGlobalLoad(ident.text, ctx)) ident.text else null,
+            .ident => |ident| if (self.isOrdinaryGlobalLoad(ident.text, ctx)) .{ .name = ident.text } else null,
+            .index => |index| self.ordinaryGlobalArrayTarget(index, ctx),
+            .member => |member| self.ordinaryGlobalMemberTarget(member, ctx),
             .grouped => |inner| self.ordinaryGlobalTarget(inner.*, ctx),
             else => null,
         };
+    }
+
+    fn ordinaryGlobalArrayTarget(self: *ModuleFactCollector, index: anytype, ctx: Context) ?OrdinaryGlobalAccess {
+        const base_ident = switch (index.base.kind) {
+            .ident => |ident| ident,
+            .grouped => |inner| switch (inner.kind) {
+                .ident => |ident| ident,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!self.isOrdinaryGlobalLoad(base_ident.text, ctx)) return null;
+        return .{
+            .name = std.fmt.allocPrint(self.allocator, "{s}[]", .{base_ident.text}) catch return null,
+            .owned = true,
+        };
+    }
+
+    fn ordinaryGlobalMemberTarget(self: *ModuleFactCollector, member: anytype, ctx: Context) ?OrdinaryGlobalAccess {
+        const base_ident = switch (member.base.kind) {
+            .ident => |ident| ident,
+            .grouped => |inner| switch (inner.kind) {
+                .ident => |ident| ident,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!self.isOrdinaryGlobalLoad(base_ident.text, ctx)) return null;
+        const struct_name = self.globals.get(base_ident.text) orelse return null;
+        const struct_decl = self.structs.get(struct_name) orelse return null;
+        for (struct_decl.fields) |field| {
+            if (!std.mem.eql(u8, field.name.text, member.name.text)) continue;
+            return .{
+                .name = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ base_ident.text, member.name.text }) catch return null,
+                .owned = true,
+            };
+        }
+        return null;
     }
 
     fn mmioRegisterTarget(self: *ModuleFactCollector, target: ast.Expr, ctx: Context) bool {
@@ -679,6 +812,18 @@ fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anyty
                     try locals.put(name.text, {});
                 }
             }
+            if (local.ty) |ty| {
+                if (isWrapType(ty)) {
+                    if (ctx.wrap_values) |wrap_values| {
+                        for (local.names) |name| try wrap_values.put(name.text, {});
+                    }
+                }
+                if (isSatType(ty)) {
+                    if (ctx.sat_values) |sat_values| {
+                        for (local.names) |name| try sat_values.put(name.text, {});
+                    }
+                }
+            }
             if (local.init) |expr| try writeExprFacts(collector, expr, writer, ctx);
         },
         .loop => |node| {
@@ -699,11 +844,11 @@ fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anyty
         },
         .unsafe_block, .comptime_block, .block => |body| try writeBlockFacts(collector, body, writer, ctx),
         .contract_block => |contract| {
-            try writeContractBoundary(.unsafe_contract_begin, contract.attr, writer, ctx);
+            try writeContractBoundary(.unsafe_contract_begin, contract.attr, contract.attr.span.line, contract.attr.span.column, writer, ctx);
             var next = ctx;
             next.unsafe_contract_depth += 1;
             try writeBlockFacts(collector, contract.block, writer, next);
-            try writeContractBoundary(.unsafe_contract_end, contract.attr, writer, ctx);
+            try writeContractBoundary(.unsafe_contract_end, contract.attr, contractBlockEndLine(contract.block), contract.attr.span.column, writer, ctx);
         },
         .asm_stmt => {
             if (ctx.no_lang_trap) {
@@ -732,13 +877,16 @@ fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anyty
             try writeAssignmentFact(kind, stmt.span, node.target, writer, ctx);
             const ordinary_store = collector.ordinaryGlobalTarget(node.target, ctx);
             if (ordinary_store) |target| {
-                try writeOrdinaryAccessFact(stmt.span, target, "store", writer, ctx);
+                defer if (target.owned) collector.allocator.free(target.name);
+                try writeOrdinaryAccessFact(stmt.span, target.name, "store", writer, ctx);
             }
             if (isStoreTarget(node.target)) {
                 try writeAssignmentFact(.store, stmt.span, node.target, writer, ctx);
             }
             if (ordinary_store == null) {
                 try writeExprFacts(collector, node.target, writer, ctx);
+            } else if (node.target.kind == .index) {
+                try writeExprFacts(collector, node.target.kind.index.index.*, writer, ctx);
             }
             try writeExprFacts(collector, node.value, writer, ctx);
         },
@@ -753,6 +901,7 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
             }
         },
         .int_literal,
+        .float_literal,
         .string_literal,
         .char_literal,
         .bool_literal,
@@ -761,6 +910,8 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
         .void_literal,
         .enum_literal,
         => {},
+        .array_literal => |items| for (items) |item| try writeExprFacts(collector, item, writer, ctx),
+        .struct_literal => |fields| for (fields) |field| try writeExprFacts(collector, field.value, writer, ctx),
         .unreachable_expr => {
             try writer.print(
                 "fact trap_edge fn={s} kind=Unreachable source=unreachable no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
@@ -786,10 +937,14 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
         .block => |body| try writeBlockFacts(collector, body, writer, ctx),
         .unary => |node| {
             if (node.op == .neg) {
-                try writer.print(
-                    "fact checked_arithmetic_trap fn={s} op=neg trap=IntegerOverflow no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
-                    .{ ctx.function_name, ctx.no_lang_trap, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
-                );
+                if (exprIsWrap(node.expr.*, ctx)) {
+                    try writeArithmeticDomainFact(expr.span, "wrap", "neg", writer, ctx);
+                } else {
+                    try writer.print(
+                        "fact checked_arithmetic_trap fn={s} op=neg trap=IntegerOverflow no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
+                        .{ ctx.function_name, ctx.no_lang_trap, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
+                    );
+                }
             }
             if (node.op == .bit_not) {
                 try writeBitwiseNoTrapFact(expr.span, "bit_not", writer, ctx);
@@ -797,10 +952,12 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
             try writeExprFacts(collector, node.expr.*, writer, ctx);
         },
         .binary => |node| {
-            if (isCheckedTrapOp(node.op)) {
+            if (arithmeticDomainForBinary(node, ctx)) |domain| {
+                try writeArithmeticDomainFact(expr.span, domain, @tagName(node.op), writer, ctx);
+            } else if (isCheckedTrapOp(node.op)) {
                 try writeCheckedArithmeticFact(expr.span, node, writer, ctx);
             }
-            if (isShiftOp(node.op)) {
+            if (isShiftOp(node.op) and arithmeticDomainForBinary(node, ctx) == null) {
                 try writeShiftTrapFact(expr.span, node.op, writer, ctx);
             }
             if (bitwiseNoTrapOpName(node.op)) |op_name| {
@@ -846,10 +1003,22 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
             if (ctx.no_lang_trap) {
                 try writeIndexFact(expr.span, writer, ctx);
             }
-            try writeExprFacts(collector, node.base.*, writer, ctx);
+            if (collector.ordinaryGlobalTarget(expr, ctx)) |target| {
+                defer if (target.owned) collector.allocator.free(target.name);
+                try writeOrdinaryAccessFact(expr.span, target.name, "load", writer, ctx);
+            } else {
+                try writeExprFacts(collector, node.base.*, writer, ctx);
+            }
             try writeExprFacts(collector, node.index.*, writer, ctx);
         },
-        .member => |node| try writeExprFacts(collector, node.base.*, writer, ctx),
+        .member => |node| {
+            if (collector.ordinaryGlobalTarget(expr, ctx)) |target| {
+                defer if (target.owned) collector.allocator.free(target.name);
+                try writeOrdinaryAccessFact(expr.span, target.name, "load", writer, ctx);
+                return;
+            }
+            try writeExprFacts(collector, node.base.*, writer, ctx);
+        },
     }
 }
 
@@ -857,6 +1026,13 @@ fn writeCheckedArithmeticFact(span: ast.Span, node: anytype, writer: anytype, ct
     try writer.print(
         "fact checked_arithmetic_trap fn={s} op={s} trap={s} no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
         .{ ctx.function_name, @tagName(node.op), arithmeticTrapKind(node), ctx.no_lang_trap, ctx.unsafe_contract_depth, span.line, span.column },
+    );
+}
+
+fn writeArithmeticDomainFact(span: ast.Span, domain: []const u8, op: []const u8, writer: anytype, ctx: Context) anyerror!void {
+    try writer.print(
+        "fact arithmetic_domain_no_trap fn={s} domain={s} op={s} language_trap=false overflow_trap=false no_lang_trap={} unsafe_contract_depth={} line={} column={}\n",
+        .{ ctx.function_name, domain, op, ctx.no_lang_trap, ctx.unsafe_contract_depth, span.line, span.column },
     );
 }
 
@@ -916,14 +1092,38 @@ fn writeOrdinaryAccessFact(span: ast.Span, object: []const u8, access: []const u
     }
 }
 
-fn writeContractBoundary(kind: FactKind, attr: ast.Attr, writer: anytype, ctx: Context) anyerror!void {
+fn arithmeticDomainForBinary(node: anytype, ctx: Context) ?[]const u8 {
+    if (isWrapPreservingBinary(node.op) and exprIsWrap(node.left.*, ctx) and exprIsWrap(node.right.*, ctx)) return "wrap";
+    if (isSatPreservingBinary(node.op) and exprIsSat(node.left.*, ctx) and exprIsSat(node.right.*, ctx)) return "sat";
+    return null;
+}
+
+fn exprIsWrap(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .ident => |ident| if (ctx.wrap_values) |wrap_values| wrap_values.contains(ident.text) else false,
+        .grouped => |inner| exprIsWrap(inner.*, ctx),
+        .binary => |node| isWrapPreservingBinary(node.op) and exprIsWrap(node.left.*, ctx) and exprIsWrap(node.right.*, ctx),
+        else => false,
+    };
+}
+
+fn exprIsSat(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .ident => |ident| if (ctx.sat_values) |sat_values| sat_values.contains(ident.text) else false,
+        .grouped => |inner| exprIsSat(inner.*, ctx),
+        .binary => |node| isSatPreservingBinary(node.op) and exprIsSat(node.left.*, ctx) and exprIsSat(node.right.*, ctx),
+        else => false,
+    };
+}
+
+fn writeContractBoundary(kind: FactKind, attr: ast.Attr, line: usize, column: usize, writer: anytype, ctx: Context) anyerror!void {
     const contract_name = switch (attr.kind) {
         .unsafe_contract => |contract| contract.name.text,
         .no_lang_trap, .named => "",
     };
     try writer.print(
         "fact {s} fn={s} contract={s} unsafe_contract_depth={} line={} column={}\n",
-        .{ @tagName(kind), ctx.function_name, contract_name, ctx.unsafe_contract_depth, attr.span.line, attr.span.column },
+        .{ @tagName(kind), ctx.function_name, contract_name, ctx.unsafe_contract_depth, line, column },
     );
 }
 
@@ -1055,6 +1255,48 @@ fn safeNoLangTrapCalleeName(callee: ast.Expr) ?[]const u8 {
     };
 }
 
+fn isWrapType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .generic => |node| std.mem.eql(u8, node.base.text, "wrap"),
+        .qualified => |node| isWrapType(node.child.*),
+        else => false,
+    };
+}
+
+fn isSatType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .generic => |node| std.mem.eql(u8, node.base.text, "sat"),
+        .qualified => |node| isSatType(node.child.*),
+        else => false,
+    };
+}
+
+fn isWrapPreservingBinary(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .add, .sub, .mul, .bit_and, .bit_or, .bit_xor => true,
+        else => false,
+    };
+}
+
+fn isSatPreservingBinary(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .add, .sub, .mul => true,
+        else => false,
+    };
+}
+
+fn safeArithmeticDomainOpName(op: ast.BinaryOp, domain: []const u8) []const u8 {
+    return switch (op) {
+        .add => if (std.mem.eql(u8, domain, "sat")) "saturating.add" else "wrapping.add",
+        .sub => if (std.mem.eql(u8, domain, "sat")) "saturating.sub" else "wrapping.sub",
+        .mul => if (std.mem.eql(u8, domain, "sat")) "saturating.mul" else "wrapping.mul",
+        .bit_and => "wrapping.bit_and",
+        .bit_or => "wrapping.bit_or",
+        .bit_xor => "wrapping.bit_xor",
+        else => "arithmetic_domain.unknown",
+    };
+}
+
 fn isTrapCall(callee: ast.Expr) bool {
     return isIdentNamed(callee, "trap");
 }
@@ -1150,6 +1392,16 @@ test "builds lower-ir trap edge artifact" {
         \\fn wrapping_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
         \\    return wrapping.add(a, b);
         \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn wrapping_neg(a: wrap<u32>) -> wrap<u32> {
+        \\    return -a;
+        \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn saturating_add(a: sat<u32>, b: sat<u32>) -> sat<u32> {
+        \\    return a + b;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "lower_ir.mc", source);
@@ -1166,7 +1418,7 @@ test "builds lower-ir trap edge artifact" {
     var module_ir = try buildModuleIr(std.testing.allocator, module);
     defer module_ir.deinit();
 
-    try std.testing.expectEqual(@as(usize, 2), module_ir.functions.len);
+    try std.testing.expectEqual(@as(usize, 4), module_ir.functions.len);
     try std.testing.expectEqualStrings("checked_add", module_ir.functions[0].name);
     try std.testing.expect(module_ir.functions[0].no_lang_trap);
     try std.testing.expectEqual(@as(usize, 1), module_ir.functions[0].trap_edges.len);
@@ -1178,6 +1430,16 @@ test "builds lower-ir trap edge artifact" {
     try std.testing.expectEqual(@as(usize, 0), module_ir.functions[1].trap_edges.len);
     try std.testing.expectEqual(@as(usize, 1), module_ir.functions[1].safe_no_trap_ops.len);
     try std.testing.expectEqualStrings("wrapping.add", module_ir.functions[1].safe_no_trap_ops[0].kind);
+
+    try std.testing.expectEqualStrings("wrapping_neg", module_ir.functions[2].name);
+    try std.testing.expectEqual(@as(usize, 0), module_ir.functions[2].trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), module_ir.functions[2].safe_no_trap_ops.len);
+    try std.testing.expectEqualStrings("wrapping.neg", module_ir.functions[2].safe_no_trap_ops[0].kind);
+
+    try std.testing.expectEqualStrings("saturating_add", module_ir.functions[3].name);
+    try std.testing.expectEqual(@as(usize, 0), module_ir.functions[3].trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), module_ir.functions[3].safe_no_trap_ops.len);
+    try std.testing.expectEqualStrings("saturating.add", module_ir.functions[3].safe_no_trap_ops[0].kind);
 }
 
 fn hasNoLangTrap(attrs: []ast.Attr) bool {
@@ -1185,6 +1447,31 @@ fn hasNoLangTrap(attrs: []ast.Attr) bool {
         if (std.meta.activeTag(attr.kind) == .no_lang_trap) return true;
     }
     return false;
+}
+
+fn contractBlockEndLine(block: ast.Block) usize {
+    if (block.items.len == 0) return block.span.line;
+    return stmtEndLine(block.items[block.items.len - 1]);
+}
+
+fn stmtEndLine(stmt: ast.Stmt) usize {
+    return switch (stmt.kind) {
+        .loop => |node| contractBlockEndLine(node.body),
+        .if_let => |node| if (node.else_block) |else_block| contractBlockEndLine(else_block) else contractBlockEndLine(node.then_block),
+        .@"switch" => |node| switchEndLine(node),
+        .unsafe_block, .comptime_block, .block => |block| contractBlockEndLine(block),
+        .contract_block => |contract| contractBlockEndLine(contract.block),
+        else => stmt.span.line,
+    };
+}
+
+fn switchEndLine(node: ast.Switch) usize {
+    if (node.arms.len == 0) return 0;
+    const last_body = node.arms[node.arms.len - 1].body;
+    return switch (last_body) {
+        .block => |block| contractBlockEndLine(block),
+        .expr => |expr| expr.span.line,
+    };
 }
 
 fn isCheckedTrapOp(op: ast.BinaryOp) bool {
