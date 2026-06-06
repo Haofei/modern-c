@@ -48,15 +48,15 @@ pub const Parser = struct {
             if (self.matchIdentifierText("mmio")) {
                 try self.expect(.kw_struct, "expected 'struct' after extern mmio");
                 const struct_decl = try self.finishStructDecl("mmio");
-                return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .extern_struct = struct_decl } };
+                return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
             }
             if (self.match(.kw_fn)) {
-                const fn_decl = try self.finishFnDecl(abi, false);
+                const fn_decl = try self.finishFnDecl(abi, false, false);
                 return .{ .span = joinSpan(start, self.previousSpan(fn_decl.name.span)), .attrs = attrs, .kind = .{ .extern_fn = fn_decl } };
             }
             if (self.match(.kw_struct)) {
                 const struct_decl = try self.finishStructDecl(abi);
-                return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .extern_struct = struct_decl } };
+                return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
             }
             return self.fail("expected extern fn or extern struct");
         }
@@ -67,10 +67,10 @@ pub const Parser = struct {
             return .{ .span = joinSpan(start, enum_decl.name.span), .attrs = attrs, .kind = .{ .enum_decl = enum_decl } };
         }
 
-        _ = self.match(.kw_export);
+        const exported = self.match(.kw_export);
         const is_const = self.match(.kw_const);
         if (self.match(.kw_fn)) {
-            const fn_decl = try self.finishFnDecl(null, is_const);
+            const fn_decl = try self.finishFnDecl(null, is_const, exported);
             const end = if (fn_decl.body) |body| body.span else fn_decl.name.span;
             return .{ .span = joinSpan(start, end), .attrs = attrs, .kind = .{ .fn_decl = fn_decl } };
         }
@@ -98,7 +98,7 @@ pub const Parser = struct {
 
         if (self.match(.kw_struct)) {
             const struct_decl = try self.finishStructDecl(null);
-            return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .extern_struct = struct_decl } };
+            return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
         }
 
         if (self.match(.kw_union)) {
@@ -122,7 +122,7 @@ pub const Parser = struct {
         return self.fail("expected top-level fn, type, or extern declaration");
     }
 
-    fn finishFnDecl(self: *Parser, abi: ?[]const u8, is_const: bool) anyerror!ast.FnDecl {
+    fn finishFnDecl(self: *Parser, abi: ?[]const u8, is_const: bool, exported: bool) anyerror!ast.FnDecl {
         const name = try self.expectName("expected function name");
         try self.expect(.l_paren, "expected '(' after function name");
 
@@ -152,6 +152,7 @@ pub const Parser = struct {
             .return_type = return_type,
             .body = body,
             .is_const = is_const,
+            .exported = exported,
         };
     }
 
@@ -735,7 +736,12 @@ pub const Parser = struct {
         errdefer args.deinit(self.allocator);
         if (self.current.kind != .greater) {
             while (true) {
-                try args.append(self.allocator, try self.parseType());
+                if (self.match(.integer_literal)) {
+                    const span = self.lxTokenBeforeCurrent();
+                    try args.append(self.allocator, .{ .span = span, .kind = .{ .name = .{ .text = self.previousLexeme(), .span = span } } });
+                } else {
+                    try args.append(self.allocator, try self.parseType());
+                }
                 if (!self.match(.comma)) break;
             }
         }

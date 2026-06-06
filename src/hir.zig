@@ -84,7 +84,7 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
-                    var builder = FunctionBuilder.init(allocator, fn_decl, hasNoLangTrap(decl.attrs), &function_summaries);
+                    var builder = try FunctionBuilder.init(allocator, fn_decl, hasNoLangTrap(decl.attrs), &function_summaries);
                     errdefer builder.deinit();
                     try builder.buildBody(body);
                     try functions.append(allocator, try builder.finish());
@@ -200,9 +200,9 @@ const FunctionBuilder = struct {
     sat_values: std.StringHashMap(void),
     current: usize,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, no_lang_trap: bool, function_summaries: *const std.StringHashMap(bool)) FunctionBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, no_lang_trap: bool, function_summaries: *const std.StringHashMap(bool)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
-        blocks.append(allocator, .{ .id = 0, .kind = "entry" }) catch unreachable;
+        try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
         var builder = FunctionBuilder{
             .allocator = allocator,
             .name = fn_decl.name.text,
@@ -215,8 +215,8 @@ const FunctionBuilder = struct {
             .current = 0,
         };
         for (fn_decl.params) |param| {
-            if (isWrapType(param.ty)) builder.wrap_values.put(param.name.text, {}) catch {};
-            if (isSatType(param.ty)) builder.sat_values.put(param.name.text, {}) catch {};
+            if (isWrapType(param.ty)) try builder.wrap_values.put(param.name.text, {});
+            if (isSatType(param.ty)) try builder.sat_values.put(param.name.text, {});
         }
         return builder;
     }
@@ -281,10 +281,10 @@ const FunctionBuilder = struct {
                 for (local.names) |name| try self.addInstr("local", name.text, if (local.ty) |ty| typeText(ty) else "inferred", stmt.span);
                 if (local.ty) |ty| {
                     if (isWrapType(ty)) {
-                        for (local.names) |name| self.wrap_values.put(name.text, {}) catch {};
+                        for (local.names) |name| try self.wrap_values.put(name.text, {});
                     }
                     if (isSatType(ty)) {
-                        for (local.names) |name| self.sat_values.put(name.text, {}) catch {};
+                        for (local.names) |name| try self.sat_values.put(name.text, {});
                     }
                 }
                 if (local.init) |expr| try self.buildExpr(expr);

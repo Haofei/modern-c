@@ -5,6 +5,7 @@ const eval = @import("eval.zig");
 const hir = @import("hir.zig");
 const ir = @import("ir.zig");
 const lower_c = @import("lower_c.zig");
+const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
@@ -336,6 +337,9 @@ test "tests/spec fixtures produce declared semantic error codes" {
 
         var checker = sema.Checker.init(&reporter);
         checker.checkModule(module);
+        if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
+            try mir.verify(allocator, module, &reporter);
+        }
 
         var checks = std.mem.splitScalar(u8, check_value, ',');
         while (checks.next()) |raw_check| {
@@ -367,6 +371,9 @@ test "tests/spec inline EXPECT_ERROR comments match diagnostic lines" {
         const source = try dir.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024));
         defer allocator.free(source);
 
+        var metadata = try parseLeadingMetadata(allocator, source);
+        defer metadata.deinit(allocator);
+
         var expected_errors = try parseExpectedErrors(allocator, source);
         defer expected_errors.deinit(allocator);
         if (expected_errors.items.len == 0) continue;
@@ -388,6 +395,9 @@ test "tests/spec inline EXPECT_ERROR comments match diagnostic lines" {
 
         var checker = sema.Checker.init(&reporter);
         checker.checkModule(module);
+        if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
+            try mir.verify(allocator, module, &reporter);
+        }
 
         for (expected_errors.items) |expected| {
             if (!hasDiagnosticCodeOnLine(reporter, expected.code, expected.target_line)) {
@@ -451,6 +461,11 @@ test "tests/spec semantic errors are all explicitly expected" {
 
         var checker = sema.Checker.init(&reporter);
         checker.checkModule(module);
+        var metadata = try parseLeadingMetadata(allocator, source);
+        defer metadata.deinit(allocator);
+        if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
+            try mir.verify(allocator, module, &reporter);
+        }
 
         for (reporter.diagnostics.items) |diag| {
             if (diag.severity != .error_ or !isCompilerErrorCodeMessage(diag.message)) continue;
@@ -584,7 +599,7 @@ test "tests/spec fixtures produce declared IR inspection facts" {
         while (checks.next()) |raw_check| {
             const check = trimCheck(raw_check);
             if (classifyCheck(check) != .ir_fact) continue;
-            if (!hasIrEvidenceForCheck(facts.items, check)) {
+            if (!std.mem.eql(u8, check, "irq-context-verifier") and !hasIrEvidenceForCheck(facts.items, check)) {
                 std.debug.print("{s}: expected IR fact evidence for {s}\nFacts:\n{s}", .{ path, check, facts.items });
                 try std.testing.expect(false);
             }
@@ -596,12 +611,29 @@ test "tests/spec fixtures produce declared IR inspection facts" {
                     try std.testing.expect(false);
                 }
             }
-            if (std.mem.eql(u8, check, "no-language-trap-edge")) {
+            if (std.mem.eql(u8, check, "no-language-trap-edge") or std.mem.eql(u8, check, "irq-context-verifier")) {
                 var hir_facts: std.ArrayList(u8) = .empty;
                 defer hir_facts.deinit(allocator);
-                try hir.appendVerificationFacts(allocator, module, &hir_facts);
-                if (!hasHirVerifierEvidenceForCheck(hir_facts.items, check)) {
-                    std.debug.print("{s}: expected HIR verifier evidence for {s}\nHIR verifier:\n{s}", .{ path, check, hir_facts.items });
+                if (std.mem.eql(u8, check, "no-language-trap-edge")) {
+                    try hir.appendVerificationFacts(allocator, module, &hir_facts);
+                    if (!hasHirVerifierEvidenceForCheck(hir_facts.items, check)) {
+                        std.debug.print("{s}: expected HIR verifier evidence for {s}\nHIR verifier:\n{s}", .{ path, check, hir_facts.items });
+                        try std.testing.expect(false);
+                    }
+                }
+                var mir_facts: std.ArrayList(u8) = .empty;
+                defer mir_facts.deinit(allocator);
+                try mir.appendVerificationFacts(allocator, module, &mir_facts);
+                if (!hasMirVerifierEvidenceForCheck(mir_facts.items, check)) {
+                    std.debug.print("{s}: expected MIR verifier evidence for {s}\nMIR verifier:\n{s}", .{ path, check, mir_facts.items });
+                    try std.testing.expect(false);
+                }
+            }
+            if (std.mem.eql(u8, check, "contract_region")) {
+                var typed_mir = try mir.build(allocator, module);
+                defer typed_mir.deinit();
+                if (!hasMirEvidenceForCheck(typed_mir, check)) {
+                    std.debug.print("{s}: expected MIR artifact evidence for {s}\n", .{ path, check });
                     try std.testing.expect(false);
                 }
             }
@@ -698,6 +730,14 @@ fn trimCheck(check: []const u8) []const u8 {
     return std.mem.trim(u8, check, " \t\r");
 }
 
+fn metadataListContains(value: []const u8, needle: []const u8) bool {
+    var entries = std.mem.splitScalar(u8, value, ',');
+    while (entries.next()) |raw_entry| {
+        if (std.mem.eql(u8, trimCheck(raw_entry), needle)) return true;
+    }
+    return false;
+}
+
 fn isDiagnosticCode(check: []const u8) bool {
     return std.mem.startsWith(u8, check, "E_");
 }
@@ -709,6 +749,7 @@ fn isIrFactCheck(check: []const u8) bool {
         "InvalidShift",
         "contract_region",
         "no-language-trap-edge",
+        "irq-context-verifier",
         "trap-lowering",
         "bitwise-no-trap",
         "mmio-ir-width-preserved",
@@ -998,6 +1039,94 @@ fn hasHirVerifierEvidenceForCheck(facts: []const u8, check: []const u8) bool {
             std.mem.indexOf(u8, facts, "hir verify fn=allow_boot_asm finding=trap_edge") == null;
     }
     return false;
+}
+
+fn hasMirVerifierEvidenceForCheck(facts: []const u8, check: []const u8) bool {
+    if (std.mem.eql(u8, check, "no-language-trap-edge")) {
+        return containsAll(facts, &.{
+            "mir verify fn=reject_checked_add pass=trap finding=trap_edge detail=IntegerOverflow source=checked_arithmetic no_lang_trap=true",
+            "mir verify fn=reject_bounds_check pass=trap finding=trap_edge detail=Bounds source=bounds_check no_lang_trap=true",
+            "mir verify fn=reject_assert pass=trap finding=trap_edge detail=Assert source=assert_stmt no_lang_trap=true",
+            "mir verify fn=reject_reachable_unreachable pass=trap finding=trap_edge detail=Unreachable source=unreachable_expr no_lang_trap=true",
+            "mir verify fn=reject_explicit_trap pass=trap finding=trap_edge detail=ExplicitTrap source=explicit_trap no_lang_trap=true",
+            "mir verify fn=reject_nullable_try pass=trap finding=trap_edge detail=Unwrap source=unwrap no_lang_trap=true",
+            "mir verify fn=reject_unwrap_call pass=trap finding=trap_edge detail=Unwrap source=unwrap no_lang_trap=true",
+            "mir verify fn=reject_right_shift pass=trap finding=trap_edge detail=InvalidShift source=checked_shift no_lang_trap=true",
+            "mir verify fn=reject_checked_negation pass=trap finding=trap_edge detail=IntegerOverflow source=checked_arithmetic no_lang_trap=true",
+            "mir verify fn=reject_call_trapping_fn pass=trap finding=trap_edge detail=CallMayTrap source=call no_lang_trap=true",
+        }) and
+            std.mem.indexOf(u8, facts, "mir verify fn=allow_wrapping_add pass=trap finding=trap_edge") == null and
+            std.mem.indexOf(u8, facts, "mir verify fn=allow_wrapping_neg pass=trap finding=trap_edge") == null and
+            std.mem.indexOf(u8, facts, "mir verify fn=allow_saturating_add pass=trap finding=trap_edge") == null and
+            std.mem.indexOf(u8, facts, "mir verify fn=allow_call_no_lang_trap_fn pass=trap finding=trap_edge") == null and
+            std.mem.indexOf(u8, facts, "mir verify fn=allow_boot_asm pass=trap finding=trap_edge") == null;
+    }
+    if (std.mem.eql(u8, check, "irq-context-verifier")) {
+        return containsAll(facts, &.{
+            "mir verify fn=reject_plain_call pass=context finding=irq_call detail=ordinary_work",
+            "mir verify fn=reject_indirect_call pass=context finding=irq_call detail=callee",
+            "mir verify fn=reject_blocking_calls pass=context finding=irq_blocking detail=lock.acquire",
+            "mir verify fn=reject_blocking_calls pass=context finding=irq_blocking detail=heap.alloc",
+            "mir verify fn=reject_blocking_calls pass=context finding=irq_blocking detail=device.wait_irq",
+            "mir verify fn=reject_blocking_calls pass=context finding=irq_blocking detail=fs.read",
+        }) and
+            std.mem.indexOf(u8, facts, "mir verify fn=allow_irq_to_irq pass=context finding=irq_call") == null and
+            std.mem.indexOf(u8, facts, "mir verify fn=allow_atomic_and_mmio pass=context finding=irq_call") == null;
+    }
+    return false;
+}
+
+fn hasMirEvidenceForCheck(module: mir.Module, check: []const u8) bool {
+    if (std.mem.eql(u8, check, "contract_region")) {
+        return mirFunctionHasContractRegion(module, "allow_unchecked_add_inside_contract", "no_overflow", "unchecked.add") and
+            mirFunctionHasNoOverflowRangeFact(module, "allow_unchecked_add_inside_contract", "sum", "add") and
+            mirFunctionHasContractRegion(module, "noalias_contract_region", "noalias", "compiler.assume_noalias_unchecked");
+    }
+    return false;
+}
+
+fn mirFunctionHasContractRegion(module: mir.Module, name: []const u8, contract: []const u8, callee: []const u8) bool {
+    const function = mirFunctionByName(module, name) orelse return false;
+    var region_id: ?usize = null;
+    for (function.contract_regions) |region| {
+        if (std.mem.eql(u8, region.kind, contract) and region.end_line > region.begin_line) {
+            region_id = region.id;
+            break;
+        }
+    }
+    const expected_region_id = region_id orelse return false;
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .unchecked_assume and
+                std.mem.eql(u8, instruction.detail, callee) and
+                instruction.contract_region_id != null and
+                instruction.contract_region_id.? == expected_region_id)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn mirFunctionHasNoOverflowRangeFact(module: mir.Module, name: []const u8, target: []const u8, op: []const u8) bool {
+    const function = mirFunctionByName(module, name) orelse return false;
+    for (function.range_facts) |fact| {
+        if (std.mem.eql(u8, fact.target, target) and
+            std.mem.eql(u8, fact.op, op) and
+            fact.region_id != 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn mirFunctionByName(module: mir.Module, name: []const u8) ?mir.Function {
+    for (module.functions) |function| {
+        if (std.mem.eql(u8, function.name, name)) return function;
+    }
+    return null;
 }
 
 fn lowerIrFunctionHasTrap(module_ir: ir.ModuleIr, name: []const u8, kind: ir.TrapKind, source: ir.TrapSource) bool {

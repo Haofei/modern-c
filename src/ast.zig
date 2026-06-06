@@ -11,6 +11,10 @@ pub const Ident = struct {
 pub const Module = struct {
     decls: []Decl,
 
+    /// Shallow free of the top-level `decls` slice only. The AST is built with an
+    /// arena allocator that owns all nested allocations (params, bodies, block
+    /// items, type exprs, …), so they are reclaimed when the arena is freed. This
+    /// is NOT a recursive destructor; do not use it with a non-arena allocator.
     pub fn deinit(self: Module, allocator: std.mem.Allocator) void {
         allocator.free(self.decls);
     }
@@ -41,7 +45,7 @@ pub const Decl = struct {
         fn_decl: FnDecl,
         type_alias: TypeAlias,
         extern_fn: FnDecl,
-        extern_struct: StructDecl,
+        struct_decl: StructDecl,
         enum_decl: EnumDecl,
         union_decl: UnionDecl,
         packed_bits_decl: PackedBitsDecl,
@@ -58,6 +62,7 @@ pub const FnDecl = struct {
     return_type: ?TypeExpr,
     body: ?Block,
     is_const: bool,
+    exported: bool = false,
 };
 
 pub const Param = struct {

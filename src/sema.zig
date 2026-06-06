@@ -6,6 +6,9 @@ const parser = @import("parser.zig");
 
 pub const Checker = struct {
     reporter: *diagnostics.Reporter,
+    // Set when building a symbol table runs out of memory. Surfaced as a fatal
+    // diagnostic so an incomplete table never silently passes checking.
+    oom: bool = false,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -43,15 +46,22 @@ pub const Checker = struct {
         self.collectGlobals(module, &globals);
 
         for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
+
+        if (self.oom) {
+            self.errorCode(.{ .offset = 0, .len = 0, .line = 1, .column = 1 }, "E_INTERNAL_OOM", "compiler ran out of memory while building symbol tables; results are incomplete");
+        }
     }
 
     fn collectTypeAliases(self: *Checker, module: ast.Module, type_aliases: *std.StringHashMap(ast.TypeExpr)) void {
-        _ = self;
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .type_alias => |alias| if (!type_aliases.contains(alias.name.text)) type_aliases.put(alias.name.text, alias.ty) catch {},
-                .opaque_decl => |name| if (!type_aliases.contains(name.text)) type_aliases.put(name.text, simpleNameType(name.text, name.span)) catch {},
-                .fn_decl, .extern_fn, .extern_struct, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .global_decl => {},
+                .type_alias => |alias| if (!type_aliases.contains(alias.name.text)) type_aliases.put(alias.name.text, alias.ty) catch {
+                    self.oom = true;
+                },
+                .opaque_decl => |name| if (!type_aliases.contains(name.text)) type_aliases.put(name.text, simpleNameType(name.text, name.span)) catch {
+                    self.oom = true;
+                },
+                .fn_decl, .extern_fn, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .global_decl => {},
             }
         }
     }
@@ -100,7 +110,7 @@ pub const Checker = struct {
     fn collectMmioStructs(self: *Checker, module: ast.Module, mmio_structs: *std.StringHashMap(MmioStruct)) void {
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .extern_struct => |struct_decl| {
+                .struct_decl => |struct_decl| {
                     if (struct_decl.abi) |abi| {
                         if (std.mem.eql(u8, abi, "mmio")) self.collectMmioStruct(struct_decl, mmio_structs);
                     }
@@ -115,7 +125,9 @@ pub const Checker = struct {
         var fields = std.StringHashMap(MmioFieldInfo).init(self.reporter.allocator);
         for (struct_decl.fields) |field| {
             if (mmioFieldInfoFromType(field.ty)) |info| {
-                if (!fields.contains(field.name.text)) fields.put(field.name.text, info) catch {};
+                if (!fields.contains(field.name.text)) fields.put(field.name.text, info) catch {
+                    self.oom = true;
+                };
             }
         }
         mmio_structs.put(struct_decl.name.text, .{ .fields = fields }) catch {
@@ -126,7 +138,7 @@ pub const Checker = struct {
     fn collectStructs(self: *Checker, module: ast.Module, structs: *std.StringHashMap(StructInfo)) void {
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .extern_struct => |struct_decl| self.collectStruct(struct_decl, structs),
+                .struct_decl => |struct_decl| self.collectStruct(struct_decl, structs),
                 .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
@@ -136,7 +148,9 @@ pub const Checker = struct {
         if (structs.contains(struct_decl.name.text)) return;
         var fields = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
         for (struct_decl.fields) |field| {
-            if (!fields.contains(field.name.text)) fields.put(field.name.text, field.ty) catch {};
+            if (!fields.contains(field.name.text)) fields.put(field.name.text, field.ty) catch {
+                self.oom = true;
+            };
         }
         structs.put(struct_decl.name.text, .{ .fields = fields }) catch {
             fields.deinit();
@@ -147,7 +161,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .packed_bits_decl => |packed_bits_decl| self.collectLayoutFields(packed_bits_decl.name.text, packed_bits_decl.fields, packed_bits),
-                .fn_decl, .extern_fn, .type_alias, .extern_struct, .enum_decl, .union_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .union_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -156,7 +170,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .overlay_union_decl => |overlay_union_decl| self.collectLayoutFields(overlay_union_decl.name.text, overlay_union_decl.fields, overlay_unions),
-                .fn_decl, .extern_fn, .type_alias, .extern_struct, .enum_decl, .union_decl, .packed_bits_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -165,7 +179,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .union_decl => |union_decl| self.collectTaggedUnion(union_decl, tagged_unions),
-                .fn_decl, .extern_fn, .type_alias, .extern_struct, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -174,7 +188,9 @@ pub const Checker = struct {
         if (tagged_unions.contains(union_decl.name.text)) return;
         var cases = std.StringHashMap(?ast.TypeExpr).init(self.reporter.allocator);
         for (union_decl.cases) |case| {
-            if (!cases.contains(case.name.text)) cases.put(case.name.text, case.ty) catch {};
+            if (!cases.contains(case.name.text)) cases.put(case.name.text, case.ty) catch {
+                self.oom = true;
+            };
         }
         tagged_unions.put(union_decl.name.text, .{ .cases = cases }) catch {
             cases.deinit();
@@ -185,7 +201,9 @@ pub const Checker = struct {
         if (infos.contains(name)) return;
         var fields = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
         for (fields_in) |field| {
-            if (!fields.contains(field.name.text)) fields.put(field.name.text, field.ty) catch {};
+            if (!fields.contains(field.name.text)) fields.put(field.name.text, field.ty) catch {
+                self.oom = true;
+            };
         }
         infos.put(name, .{ .fields = fields }) catch {
             fields.deinit();
@@ -193,7 +211,6 @@ pub const Checker = struct {
     }
 
     fn collectFunctions(self: *Checker, module: ast.Module, functions: *std.StringHashMap(FunctionInfo)) void {
-        _ = self;
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .fn_decl, .extern_fn => |fn_decl| {
@@ -201,9 +218,11 @@ pub const Checker = struct {
                         .params = fn_decl.params,
                         .return_ty = fn_decl.return_type,
                         .no_lang_trap = hasNoLangTrap(decl.attrs),
-                    }) catch {};
+                    }) catch {
+                        self.oom = true;
+                    };
                 },
-                .extern_struct, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .struct_decl, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -212,7 +231,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .enum_decl => |enum_decl| self.collectEnum(enum_decl, enums),
-                .fn_decl, .extern_fn, .type_alias, .extern_struct, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .struct_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -221,7 +240,9 @@ pub const Checker = struct {
         if (enums.contains(enum_decl.name.text)) return;
         var cases = std.StringHashMap(void).init(self.reporter.allocator);
         for (enum_decl.cases) |case| {
-            if (!cases.contains(case.name.text)) cases.put(case.name.text, {}) catch {};
+            if (!cases.contains(case.name.text)) cases.put(case.name.text, {}) catch {
+                self.oom = true;
+            };
         }
         enums.put(enum_decl.name.text, .{ .cases = cases, .is_open = enum_decl.is_open, .repr = enum_decl.repr }) catch {
             cases.deinit();
@@ -229,13 +250,14 @@ pub const Checker = struct {
     }
 
     fn collectGlobals(self: *Checker, module: ast.Module, globals: *std.StringHashMap(GlobalInfo)) void {
-        _ = self;
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .global_decl => |global| if (global.ty) |ty| {
-                    if (!globals.contains(global.name.text)) globals.put(global.name.text, .{ .ty = ty }) catch {};
+                    if (!globals.contains(global.name.text)) globals.put(global.name.text, .{ .ty = ty }) catch {
+                        self.oom = true;
+                    };
                 },
-                .fn_decl, .extern_fn, .extern_struct, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
+                .fn_decl, .extern_fn, .struct_decl, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
             }
         }
     }
@@ -249,7 +271,9 @@ pub const Checker = struct {
             if (names.contains(name.text)) {
                 self.errorCode(name.span, "E_DUPLICATE_DECLARATION", "top-level declarations must have unique names");
             } else {
-                names.put(name.text, {}) catch {};
+                names.put(name.text, {}) catch {
+                    self.oom = true;
+                };
             }
         }
     }
@@ -259,7 +283,7 @@ pub const Checker = struct {
         const type_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases),
-            .extern_struct => |struct_decl| {
+            .struct_decl => |struct_decl| {
                 var struct_ctx = type_ctx;
                 if (struct_decl.abi) |abi| {
                     struct_ctx.allow_mmio_register_type = std.mem.eql(u8, abi, "mmio");
@@ -305,7 +329,9 @@ pub const Checker = struct {
             if (cases.contains(case.name.text)) {
                 self.errorCode(case.name.span, "E_DUPLICATE_ENUM_CASE", "enum case names must be unique");
             } else {
-                cases.put(case.name.text, {}) catch {};
+                cases.put(case.name.text, {}) catch {
+                    self.oom = true;
+                };
             }
             if (case.value) |value| self.checkEnumCaseValue(value, repr_bounds, &values);
         }
@@ -326,7 +352,9 @@ pub const Checker = struct {
         if (values.contains(key)) {
             self.errorCode(value.span, "E_DUPLICATE_ENUM_VALUE", "enum case representation values must be unique");
         } else {
-            values.put(key, {}) catch {};
+            values.put(key, {}) catch {
+                self.oom = true;
+            };
         }
     }
 
@@ -339,7 +367,9 @@ pub const Checker = struct {
             if (fields.contains(field.name.text)) {
                 self.errorCode(field.name.span, "E_DUPLICATE_STRUCT_FIELD", "struct field names must be unique");
             } else {
-                fields.put(field.name.text, {}) catch {};
+                fields.put(field.name.text, {}) catch {
+                    self.oom = true;
+                };
             }
         }
     }
@@ -353,7 +383,9 @@ pub const Checker = struct {
             if (cases.contains(case.name.text)) {
                 self.errorCode(case.name.span, "E_DUPLICATE_UNION_CASE", "safe tagged union case names must be unique");
             } else {
-                cases.put(case.name.text, {}) catch {};
+                cases.put(case.name.text, {}) catch {
+                    self.oom = true;
+                };
             }
         }
     }
@@ -374,7 +406,9 @@ pub const Checker = struct {
             if (fields.contains(field.name.text)) {
                 self.errorCode(field.name.span, "E_DUPLICATE_PACKED_BITS_FIELD", "packed bits field names must be unique");
             } else {
-                fields.put(field.name.text, {}) catch {};
+                fields.put(field.name.text, {}) catch {
+                    self.oom = true;
+                };
             }
         }
     }
@@ -387,7 +421,9 @@ pub const Checker = struct {
             if (fields.contains(field.name.text)) {
                 self.errorCode(field.name.span, "E_DUPLICATE_OVERLAY_FIELD", "overlay union field names must be unique");
             } else {
-                fields.put(field.name.text, {}) catch {};
+                fields.put(field.name.text, {}) catch {
+                    self.oom = true;
+                };
             }
         }
     }
@@ -439,8 +475,12 @@ pub const Checker = struct {
             if (scope.contains(param.name.text)) {
                 self.errorCode(param.name.span, "E_DUPLICATE_PARAMETER", "function parameter names must be unique");
             } else {
-                scope.put(param.name.text, .{ .class = classifyTypeCtx(param.ty, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases }), .mutable = false, .ty = param.ty, .origin = .param }) catch {};
-                if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {};
+                scope.put(param.name.text, .{ .class = classifyTypeCtx(param.ty, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases }), .mutable = false, .ty = param.ty, .origin = .param }) catch {
+                    self.oom = true;
+                };
+                if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {
+                    self.oom = true;
+                };
             }
         }
         const return_kind = if (fn_decl.return_type) |ty| classifyTypeCtx(ty, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases }) else TypeClass.void;
@@ -558,7 +598,9 @@ pub const Checker = struct {
                 defer then_scope.deinit();
                 var then_ctx = ctx;
                 if (ctx.scope) |scope| {
-                    copyScope(scope, &then_scope) catch {};
+                    copyScope(scope, &then_scope) catch {
+                        self.oom = true;
+                    };
                     if (pattern_is_valid) self.addIfLetBinding(node.pattern, node.value, value_class, &then_scope, ctx);
                     then_ctx.scope = &then_scope;
                 }
@@ -748,7 +790,9 @@ pub const Checker = struct {
             self.errorCode(name.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
             return;
         }
-        scope.put(name.text, info) catch {};
+        scope.put(name.text, info) catch {
+            self.oom = true;
+        };
     }
 
     fn checkAssignmentTarget(self: *Checker, target: ast.Expr, ctx: Context) void {
@@ -970,6 +1014,9 @@ pub const Checker = struct {
                 if (ctx.no_lang_trap and isUnwrapCall(node.callee.*)) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "unwrap may emit a language trap in #[no_lang_trap]");
                 }
+                if (ctx.no_lang_trap and isTrappingConversionCall(node.callee.*)) {
+                    self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "trap_from may emit a range trap in #[no_lang_trap]");
+                }
                 if (uncheckedRequirement(node.callee.*)) |required| {
                     if (!ctx.unsafe_contracts.has(required)) {
                         self.errorCode(expr.span, "E_UNCHECKED_OUTSIDE_CONTRACT", "unchecked operation requires matching #[unsafe_contract]");
@@ -993,6 +1040,8 @@ pub const Checker = struct {
                 const raw_many_offset_class = self.checkRawManyOffsetCall(expr.span, node, ctx);
                 const reflection_class = self.checkReflectionCall(expr.span, node, ctx);
                 if (reflection_class) |class| return class;
+                const const_get_class = self.checkConstGetCall(expr.span, node, ctx);
+                if (const_get_class) |class| return class;
                 if (trap_call) self.checkTrapKind(expr.span, node.args);
                 self.checkCallCallee(node.callee.*, ctx);
                 for (node.type_args) |ty| self.checkType(ty, .normal, ctx);
@@ -1085,6 +1134,7 @@ pub const Checker = struct {
                 if (isBuiltinFunctionName(ident.text)) return;
                 if (isKnownTaggedUnionConstructorName(ident.text, ctx)) return;
                 if (ctx.functions != null and ctx.functions.?.contains(ident.text)) return;
+                if (ctx.scope != null and ctx.scope.?.contains(ident.text)) return;
                 self.errorCode(ident.span, "E_UNKNOWN_FUNCTION", "unknown function");
             },
             .member => |node| {
@@ -1484,6 +1534,32 @@ pub const Checker = struct {
         }
     }
 
+    fn checkConstGetCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) ?TypeClass {
+        const member = constGetMember(call.callee.*) orelse return null;
+        if (call.args.len != 0) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "const_get expects no runtime arguments");
+        }
+        const index = if (call.type_args.len == 1) constGetIndexArg(call.type_args[0]) else null;
+        if (call.type_args.len != 1 or index == null) {
+            self.errorCode(span, "E_CONST_GET_INDEX", "const_get requires exactly one compile-time usize index");
+        }
+        const base_class = self.checkExpr(member.base.*, ctx);
+        if (base_class != .array and base_class != .unknown and base_class != .never) {
+            self.errorCode(member.base.span, "E_CONST_GET_BASE", "const_get is defined only for fixed-length arrays");
+        }
+        const base_ty = exprResultType(member.base.*, ctx) orelse exprStorageType(member.base.*, ctx) orelse return .unknown;
+        const array = fixedArrayType(resolveAliasType(base_ty, ctx)) orelse {
+            self.errorCode(member.base.span, "E_CONST_GET_BASE", "const_get is defined only for fixed-length arrays");
+            return .unknown;
+        };
+        if (index) |idx| {
+            if (idx >= array.len) {
+                self.errorCode(call.type_args[0].span, "E_CONST_GET_BOUNDS", "const_get index is out of bounds for the fixed-length array");
+            }
+        }
+        return classifyTypeCtx(array.child, ctx);
+    }
+
     fn dmaCallReturnClass(self: *Checker, callee: ast.Expr, ctx: Context) ?TypeClass {
         const member = switch (callee.kind) {
             .member => |node| node,
@@ -1806,7 +1882,9 @@ pub const Checker = struct {
             if (seen.contains(field.name.text)) {
                 self.errorCode(field.name.span, "E_DUPLICATE_STRUCT_LITERAL_FIELD", "struct literal field names must be unique");
             } else {
-                seen.put(field.name.text, {}) catch {};
+                seen.put(field.name.text, {}) catch {
+                    self.oom = true;
+                };
             }
             const field_ty = struct_info.fields.get(field.name.text) orelse {
                 self.errorCode(field.name.span, "E_UNKNOWN_STRUCT_FIELD", "struct has no field with this name");
@@ -1852,7 +1930,9 @@ pub const Checker = struct {
             if (seen.contains(field.name.text)) {
                 self.errorCode(field.name.span, "E_DUPLICATE_STRUCT_LITERAL_FIELD", "struct literal field names must be unique");
             } else {
-                seen.put(field.name.text, {}) catch {};
+                seen.put(field.name.text, {}) catch {
+                    self.oom = true;
+                };
             }
             const field_ty = packed_info.fields.get(field.name.text) orelse {
                 self.errorCode(field.name.span, "E_UNKNOWN_STRUCT_FIELD", "packed bits type has no field with this name");
@@ -2296,7 +2376,9 @@ pub const Checker = struct {
         self.addForBinding(loop, ctx, scope);
         self.checkBlock(loop.body, ctx);
         if (previous) |entry| {
-            scope.put(label.text, entry) catch {};
+            scope.put(label.text, entry) catch {
+                self.oom = true;
+            };
         } else {
             _ = scope.remove(label.text);
         }
@@ -2339,7 +2421,9 @@ pub const Checker = struct {
             defer arm_scope.deinit();
             var arm_ctx = ctx;
             if (ctx.scope) |scope| {
-                copyScope(scope, &arm_scope) catch {};
+                copyScope(scope, &arm_scope) catch {
+                    self.oom = true;
+                };
                 self.addSwitchArmBindings(arm.patterns, node.subject, subject_class, &arm_scope, ctx);
                 arm_ctx.scope = &arm_scope;
             }
@@ -2367,7 +2451,9 @@ pub const Checker = struct {
             if (seen.contains(tag.text)) {
                 self.errorCode(tag.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
             } else {
-                seen.put(tag.text, {}) catch {};
+                seen.put(tag.text, {}) catch {
+                    self.oom = true;
+                };
             }
         }
     }
@@ -2383,7 +2469,9 @@ pub const Checker = struct {
             if (seen.contains(tag.text)) {
                 self.errorCode(tag.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
             } else {
-                seen.put(tag.text, {}) catch {};
+                seen.put(tag.text, {}) catch {
+                    self.oom = true;
+                };
             }
         }
     }
@@ -2399,7 +2487,9 @@ pub const Checker = struct {
             if (seen.contains(tag.text)) {
                 self.errorCode(tag.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
             } else {
-                seen.put(tag.text, {}) catch {};
+                seen.put(tag.text, {}) catch {
+                    self.oom = true;
+                };
             }
         }
     }
@@ -2411,7 +2501,9 @@ pub const Checker = struct {
             if (seen.contains(key)) {
                 self.errorCode(pattern.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
             } else {
-                seen.put(key, {}) catch {};
+                seen.put(key, {}) catch {
+                    self.oom = true;
+                };
             }
         }
     }
@@ -2425,7 +2517,9 @@ pub const Checker = struct {
             if (seen.contains(key)) {
                 self.errorCode(pattern.span, "E_DUPLICATE_SWITCH_CASE", "switch case pattern is already covered");
             } else {
-                seen.put(key, {}) catch {};
+                seen.put(key, {}) catch {
+                    self.oom = true;
+                };
             }
         }
     }
@@ -2693,7 +2787,7 @@ fn declName(decl: ast.Decl) ast.Ident {
     return switch (decl.kind) {
         .fn_decl, .extern_fn => |fn_decl| fn_decl.name,
         .type_alias => |alias| alias.name,
-        .extern_struct => |struct_decl| struct_decl.name,
+        .struct_decl => |struct_decl| struct_decl.name,
         .enum_decl => |enum_decl| enum_decl.name,
         .union_decl => |union_decl| union_decl.name,
         .packed_bits_decl => |packed_bits| packed_bits.name,
@@ -3960,7 +4054,7 @@ fn globalClass(name: []const u8, ctx: Context) ?TypeClass {
 
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |node| rawManyOffsetReturnType(node, ctx) orelse atomicCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse atomicCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .try_expr => |inner| tryPayloadType(inner.*, ctx),
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),
@@ -3968,6 +4062,58 @@ fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .member => |node| memberResultFieldType(node, ctx),
         .grouped => |inner| exprResultType(inner.*, ctx),
         else => exprStorageType(expr, ctx),
+    };
+}
+
+fn constGetMember(callee: ast.Expr) ?struct { base: *ast.Expr, name: ast.Ident } {
+    return switch (callee.kind) {
+        .member => |node| if (std.mem.eql(u8, node.name.text, "const_get")) .{ .base = node.base, .name = node.name } else null,
+        .grouped => |inner| constGetMember(inner.*),
+        else => null,
+    };
+}
+
+const ConstGetInfo = struct {
+    base: *ast.Expr,
+    index: ?usize,
+    len: usize,
+    element_ty: ast.TypeExpr,
+};
+
+fn constGetInfo(call: anytype, ctx: Context) ?ConstGetInfo {
+    const member = constGetMember(call.callee.*) orelse return null;
+    const base_ty = exprResultType(member.base.*, ctx) orelse exprStorageType(member.base.*, ctx) orelse return null;
+    const array = fixedArrayType(resolveAliasType(base_ty, ctx)) orelse return null;
+    return .{
+        .base = member.base,
+        .index = if (call.type_args.len == 1) constGetIndexArg(call.type_args[0]) else null,
+        .len = array.len,
+        .element_ty = array.child,
+    };
+}
+
+fn constGetReturnType(call: anytype, ctx: Context) ?ast.TypeExpr {
+    const info = constGetInfo(call, ctx) orelse return null;
+    return info.element_ty;
+}
+
+const FixedArrayInfo = struct {
+    len: usize,
+    child: ast.TypeExpr,
+};
+
+fn fixedArrayType(ty: ast.TypeExpr) ?FixedArrayInfo {
+    return switch (ty.kind) {
+        .array => |node| .{ .len = parseArrayLen(node.len) orelse return null, .child = node.child.* },
+        .qualified => |node| fixedArrayType(node.child.*),
+        else => null,
+    };
+}
+
+fn constGetIndexArg(ty: ast.TypeExpr) ?usize {
+    return switch (ty.kind) {
+        .name => |name| parseUsizeLiteral(name.text),
+        else => null,
     };
 }
 
@@ -4471,13 +4617,23 @@ fn isBuiltinNamespaceMember(member: anytype) bool {
     };
     if (std.mem.eql(u8, base, "raw")) return std.mem.eql(u8, member.name.text, "store");
     if (std.mem.eql(u8, base, "mmio")) return std.mem.eql(u8, member.name.text, "map");
-    if (std.mem.eql(u8, base, "unchecked")) return std.mem.eql(u8, member.name.text, "add");
+    if (std.mem.eql(u8, base, "unchecked")) return isUncheckedNoOverflowMember(member.name.text);
     if (std.mem.eql(u8, base, "wrapping")) return std.mem.eql(u8, member.name.text, "add");
     if (std.mem.eql(u8, base, "compiler")) return std.mem.eql(u8, member.name.text, "assume_noalias_unchecked");
     if (std.mem.eql(u8, base, "cpu")) return std.mem.eql(u8, member.name.text, "pause");
     if (std.mem.eql(u8, base, "atomic")) return std.mem.eql(u8, member.name.text, "init");
     if (std.mem.eql(u8, base, "cache")) return std.mem.eql(u8, member.name.text, "clean") or std.mem.eql(u8, member.name.text, "invalidate");
+    if (std.mem.eql(u8, base, "lock")) return std.mem.eql(u8, member.name.text, "acquire");
+    if (std.mem.eql(u8, base, "heap")) return std.mem.eql(u8, member.name.text, "alloc");
+    if (std.mem.eql(u8, base, "device")) return std.mem.eql(u8, member.name.text, "wait_irq");
+    if (std.mem.eql(u8, base, "fs")) return std.mem.eql(u8, member.name.text, "read");
     return false;
+}
+
+fn isUncheckedNoOverflowMember(name: []const u8) bool {
+    return std.mem.eql(u8, name, "add") or
+        std.mem.eql(u8, name, "sub") or
+        std.mem.eql(u8, name, "mul");
 }
 
 fn isBuiltinFunctionName(name: []const u8) bool {
@@ -4759,6 +4915,16 @@ fn isUnwrapCall(callee: ast.Expr) bool {
 
 fn isTrapCall(callee: ast.Expr) bool {
     return isIdentNamed(callee, "trap");
+}
+
+// `trap_from` is the only conversion builtin that raises a language (range) trap;
+// the other conversions/domain ops are pure casts/clamps/Result and never trap.
+fn isTrappingConversionCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |node| std.mem.eql(u8, node.name.text, "trap_from"),
+        .grouped => |inner| isTrappingConversionCall(inner.*),
+        else => false,
+    };
 }
 
 fn isLanguageTrapKind(name: []const u8) bool {
@@ -5345,6 +5511,41 @@ test "type checks packed bits fields as bool" {
     try std.testing.expect(hasDiagnosticCode(&reporter, "E_RETURN_TYPE_MISMATCH"));
     try std.testing.expect(hasDiagnosticCode(&reporter, "E_UNKNOWN_STRUCT_FIELD"));
     try std.testing.expect(hasDiagnosticCode(&reporter, "E_NO_IMPLICIT_CONVERSION"));
+}
+
+test "const_get requires in-bounds fixed array index" {
+    const source =
+        \\fn accept(xs: [2]u32) -> u32 {
+        \\    return xs.const_get<1>();
+        \\}
+        \\
+        \\fn reject_oob(xs: [2]u32) -> u32 {
+        \\    return xs.const_get<2>();
+        \\}
+        \\
+        \\fn reject_base(xs: []const u32) -> u32 {
+        \\    return xs.const_get<0>();
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "const_get.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var checker = Checker.init(&reporter);
+    checker.checkModule(module);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(hasDiagnosticCode(&reporter, "E_CONST_GET_BOUNDS"));
+    try std.testing.expect(hasDiagnosticCode(&reporter, "E_CONST_GET_BASE"));
+    try std.testing.expect(!hasDiagnosticCode(&reporter, "E_UNKNOWN_FUNCTION"));
 }
 
 fn hasDiagnosticCode(reporter: *const diagnostics.Reporter, code: []const u8) bool {

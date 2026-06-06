@@ -13,10 +13,12 @@ than invisible optimizer assumptions. MC is not a memory-safe language.
 Implemented today:
 
 - Lexer, parser, semantic checker, fact/inspection output, and partial C output.
+- Typed MIR basic-block CFG lowering with explicit language-trap edges,
+  contract-region markers, and a MIR verifier used by `emit-c`.
 - A spec-driven fixture suite under `tests/spec`.
 - Prototype commands through the `mcc` executable.
 - All five arithmetic domains, including ordering/division legality for
-  `wrap`/`sat`/`serial`/`counter` (sections 5.2–5.5).
+  `wrap`/`sat`/`serial`/`counter` (sections 5.2-5.5).
 - Serial (`before`/`after`/`distance`/`compare`) and counter (`delta_mod`/
   `elapsed_assume_within`/`elapsed_bounded`) operations, with the supporting
   library types `Order`/`Duration`/`AmbiguousSerialOrder`/
@@ -44,6 +46,9 @@ Prototype or incomplete:
 - Full comptime execution (§22): the comptime evaluator currently const-folds
   arithmetic and enforces the comptime effect rules, but does not yet interpret
   arbitrary comptime code.
+- Production MIR optimizer use: MIR records scoped no-overflow range facts for
+  covered unchecked arithmetic, but optimizer consumption and broader range
+  algebra are not implemented yet.
 - Full DMA/cache-coherence model (§18): typed `DmaBuf`, cache clean/invalidate,
   and the address-class rules are implemented; a complete coherence simulation
   is not.
@@ -59,6 +64,11 @@ Deferred:
 - Zig `0.16.0`
 - `clang` for `zig build c-test`
 
+The generated C targets **Clang/GCC only**: the runtime helpers use compiler
+builtins (`__builtin_trap`, `__builtin_*_overflow`, `__atomic_*`) and a few
+extensions (`__int128`, statement attributes). It is not portable C11; compiling
+the output with another toolchain is unsupported.
+
 ## Build And Test
 
 ```sh
@@ -71,6 +81,8 @@ Run the compiler prototype:
 
 ```sh
 zig build run -- check tests/spec/arithmetic_checked.mc
+zig build run -- verify tests/spec/no_lang_trap.mc
+zig build run -- lower-mir tests/spec/no_lang_trap.mc
 zig build run -- lower-hir tests/spec/try_propagation.mc
 zig build run -- verify-hir tests/spec/no_lang_trap.mc
 zig build run -- facts tests/spec/no_lang_trap.mc
@@ -86,6 +98,8 @@ Available commands:
 - `facts <file.mc>`
 - `lower-hir <file.mc>`
 - `verify-hir <file.mc>`
+- `lower-mir <file.mc>`
+- `verify <file.mc>`
 - `lower-ir <file.mc>`
 - `lower-c <file.mc>`
 - `emit-c <file.mc>`

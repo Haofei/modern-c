@@ -105,7 +105,7 @@ pub fn buildModuleIr(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr
                     try functions.append(allocator, try builder.finish());
                 }
             },
-            .type_alias, .extern_struct, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+            .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
         }
     }
 
@@ -579,7 +579,7 @@ const ModuleFactCollector = struct {
     fn collectDeclFacts(self: *ModuleFactCollector, module: ast.Module) !void {
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .extern_struct => |struct_decl| {
+                .struct_decl => |struct_decl| {
                     if (struct_decl.abi) |abi| {
                         if (std.mem.eql(u8, abi, "mmio")) try self.collectMmioStruct(struct_decl);
                     } else {
@@ -635,7 +635,7 @@ const ModuleFactCollector = struct {
                     });
                 }
             },
-            .type_alias, .extern_struct, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+            .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
         }
     }
 

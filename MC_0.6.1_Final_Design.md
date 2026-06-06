@@ -71,6 +71,28 @@
 
 Everything else—arithmetic-policy types, address-space types, typed MMIO, typed DMA, trap ABI, narrow compile-time reflection—is the standardized **kernel profile** rather than ad hoc library convention.
 
+The kernel profile is organized as two layers:
+
+```txt
+Language primitives:
+    Generic, compiler-verified machine contracts. The language defines and
+    checks these and knows about no specific device:
+        arithmetic domains, address spaces, MMIO, DMA and cache coherence,
+        atomics, interrupt context, the trap ABI, narrow compile-time
+        reflection, the inline-asm boundary, and the C ABI.
+
+Device libraries:
+    Concrete protocols and devices, written on top of the primitives and
+    outside the language:
+        PCIe, USB, NVMe, UART, SPI/I2C, Ethernet, SoC HALs, board support.
+```
+
+The point of standardizing the generic primitives is that a driver author does
+not re-derive C's implicit rules—`volatile`, aliasing, overflow, barriers,
+optimizer assumptions—for every device. A device library expresses a datasheet
+and a driver state machine in terms of these primitives; the language stays
+device-agnostic. (See annex section A.1.)
+
 MC is not a memory-safe language. It is a language that makes the machine contract explicit.
 
 The central promise is:
@@ -1543,7 +1565,36 @@ let buf = cache.invalidate_for_cpu(buf);       // cpu_owned
 let packet = buf.as_slice();
 ```
 
-But this requires affine or move-only resource handles and is a profile/library pattern, not a core guarantee.
+DMA-buffer ownership transfer of this kind requires affine or move-only resource handles. MC deliberately does **not** make resource ownership a core language guarantee:
+
+```txt
+Core language tracks:
+    a buffer's access mode and coherence (this section).
+
+Core language does NOT track:
+    the lifetime and ownership of a DmaBuf — and likewise of interrupt
+    handlers, locks, and device handles.
+```
+
+Lifetime and ownership are a **device-library profile**, expressed with library types (move-only handles), not a compiler-enforced core property. Promoting ownership into the core would require a full affine/linear type system, which MC's "explicit machine contract, not memory safety" stance intentionally avoids. A library that needs ownership builds move-only handles on top of the primitives, and may use `#[unsafe_contract]` where its assertions exceed what the primitives prove.
+
+**Summary — the DMA primitive vs the DMA library:**
+
+```txt
+DMA primitive (core, always enforced):
+    DmaAddr address class       — DmaAddr != PAddr != VAddr; not CPU-dereferenceable
+    DmaBuf<T, coherence>        — coherence mode (.coherent / .noncoherent) carried in the type
+    cache.clean / cache.invalidate — typed cache operations, not volatile pokes
+    dma_addr() / as_slice()     — the device-address vs CPU-view bridge
+
+DMA library (profile, built on the primitive):
+    ownership / lifecycle       — .cpu_owned vs .device_owned typestate, move-only
+                                  handles, and the temporal rule "clean before
+                                  handoff, invalidate before CPU read, do not
+                                  touch while device-owned"
+```
+
+The split follows the kind of fact. The primitive checks **spatial / representational** facts (which address space, which coherence mode) structurally and always. Ownership is a **temporal / linear** fact that needs affine handles, so it is a library profile (annex section A.1).
 
 ---
 
@@ -1606,6 +1657,57 @@ Atomic means:
 ```txt
 This access participates in the concurrency memory model.
 ```
+
+---
+
+## 19.1 Interrupt Context
+
+Interrupt context is part of a function's contract, like the trap profile. `#[irq_context]` marks a function that may run inside an interrupt service routine:
+
+> A `#[irq_context]` function, and everything it calls, must be safe to run with interrupts disabled and without a thread context.
+
+Rejected in `#[irq_context]`:
+
+```mc
+lock.acquire();          // may block / sleep
+heap.alloc(n);           // may block / sleep on a slow path
+device.wait_irq();       // blocks for an event
+fs.read(path);           // unbounded blocking I/O
+```
+
+Allowed:
+
+```mc
+let s = status.read(.acquire);     // typed MMIO
+flag.store(true, .release);        // atomic
+ring.try_push(item);               // non-blocking
+```
+
+Propagation rule (mirrors `#[no_lang_trap]`):
+
+```txt
+A #[irq_context] function may call:
+    - other #[irq_context] functions
+    - non-blocking primitives (MMIO, atomics, raw stores, opaque asm)
+
+It may not call:
+    - functions not proven #[irq_context]
+    - operations that block, sleep, or allocate from a blocking allocator
+```
+
+A critical section that requires interrupts to be disabled is expressed with a capability the operation takes, so the sequence cannot be written outside the section:
+
+```mc
+fn update(regs: *mut Regs, cs: IrqOff) -> void {
+    // `cs: IrqOff` witnesses that interrupts are disabled here.
+    regs.ctrl.write(...);
+    regs.data.write(...);
+}
+```
+
+`#[irq_context]` constrains what an ISR-callable function may **do**; it does not verify hardware **reentrancy** (an ISR re-entering shared state), which remains a target concern MC does not fully check (section 2).
+
+Lowering: `#[irq_context]` is a verifier-only contract. It places no requirement on the emitted code beyond the calls it forbids, and does not by itself emit any interrupt-enable/disable instruction.
 
 ---
 
@@ -2157,6 +2259,35 @@ If a backend-generated artifact behaves differently from the MC core semantics, 
 
 ---
 
+## A.1 Primitive and Library Layers
+
+Orthogonal to the core/annex split, the kernel profile (section 0) separates two conformance layers:
+
+```txt
+Language primitives:
+    Defined and verified by this spec. A conforming compiler MUST enforce them.
+    arithmetic domains, address spaces, MMIO, DMA/cache coherence, atomics,
+    interrupt context, trap ABI, compile-time reflection, inline-asm boundary,
+    C ABI.
+
+Device libraries:
+    Built on the primitives, outside this spec. Conformance does NOT define them.
+    PCIe, USB, NVMe, UART, SPI/I2C, Ethernet, SoC HAL, board support.
+```
+
+A guarantee the compiler enforces (a primitive) and an invariant a library asserts (a device convention) are different trust levels:
+
+```txt
+Primitive:   proven by the language; failure is a compiler bug.
+Library:     asserted by the author; failure is a library bug, and where the
+             assertion exceeds what the primitives prove it must be confined to
+             an #[unsafe_contract] region.
+```
+
+The spec defines and conforms the primitive layer. Device libraries are the intended consumers of the primitives and the reason the primitive set exists; they are not part of language conformance.
+
+---
+
 # B. Recommended Compilation Pipeline
 
 Recommended implementation pipeline:
@@ -2655,6 +2786,25 @@ The compiler may assume a typed value representation is valid only if:
 This especially affects C/LLVM lowering.
 
 For example, non-null pointer metadata must not be generated before a dominating representation check exists.
+
+---
+
+## D.6 Context Verifier
+
+The context verifier enforces execution-context contracts on the call graph, the same mechanism the trap verifier (section D.2) uses for `#[no_lang_trap]`.
+
+`#[irq_context]` (section 19.1):
+
+```txt
+A #[irq_context] function may call only:
+    - other #[irq_context] functions
+    - non-blocking primitives (MMIO, atomics, raw stores, opaque asm)
+
+A call to a function not proven #[irq_context], or to a blocking/sleeping/
+blocking-allocating operation, must be rejected.
+```
+
+Like the trap verifier, this is a call-graph contract, not a theorem-proving mode: if the compiler cannot prove a callee satisfies the contract, it rejects the call.
 
 ---
 

@@ -9,9 +9,8 @@ mkdir -p "$out_dir"
 for fixture in $fixture_glob; do
     base=$(basename "$fixture" .mc)
     out="$out_dir/$base.c"
-    if ! "$exe" emit-c "$fixture" 2> "$out"; then
+    if ! "$exe" emit-c "$fixture" > "$out"; then
         echo "emit-c failed for $fixture" >&2
-        cat "$out" >&2
         exit 1
     fi
     clang -std=c11 -Wall -Wextra -Werror -fsyntax-only "$out"

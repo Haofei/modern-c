@@ -37,25 +37,25 @@ pub const Lexer = struct {
             '#' => self.make(.hash, start),
             '@' => self.make(.at, start),
             '~' => self.make(.tilde, start),
-            '^' => if (self.match('=')) self.make(.caret_equal, start) else self.make(.caret, start),
-            '+' => if (self.match('=')) self.make(.plus_equal, start) else self.make(.plus, start),
-            '%' => if (self.match('=')) self.make(.percent_equal, start) else self.make(.percent, start),
+            '^' => self.make(.caret, start),
+            '+' => self.make(.plus, start),
+            '%' => self.make(.percent, start),
             '.' => if (self.match('.')) self.make(.dot_dot, start) else self.make(.dot, start),
-            '-' => if (self.match('=')) self.make(.minus_equal, start) else if (self.match('>')) self.make(.arrow, start) else self.make(.minus, start),
+            '-' => if (self.match('>')) self.make(.arrow, start) else self.make(.minus, start),
             '=' => if (self.match('=')) self.make(.equal_equal, start) else if (self.match('>')) self.make(.fat_arrow, start) else self.make(.equal, start),
             '!' => if (self.match('=')) self.make(.bang_equal, start) else self.make(.bang, start),
             '<' => blk: {
-                if (self.match('<')) break :blk if (self.match('=')) self.make(.shift_left_equal, start) else self.make(.shift_left, start);
+                if (self.match('<')) break :blk self.make(.shift_left, start);
                 break :blk if (self.match('=')) self.make(.less_equal, start) else self.make(.less, start);
             },
             '>' => blk: {
-                if (self.match('>')) break :blk if (self.match('=')) self.make(.shift_right_equal, start) else self.make(.shift_right, start);
+                if (self.match('>')) break :blk self.make(.shift_right, start);
                 break :blk if (self.match('=')) self.make(.greater_equal, start) else self.make(.greater, start);
             },
-            '&' => if (self.match('&')) self.make(.amp_amp, start) else if (self.match('=')) self.make(.amp_equal, start) else self.make(.amp, start),
-            '|' => if (self.match('|')) self.make(.pipe_pipe, start) else if (self.match('=')) self.make(.pipe_equal, start) else self.make(.pipe, start),
-            '/' => if (self.match('=')) self.make(.slash_equal, start) else self.make(.slash, start),
-            '*' => if (self.match('=')) self.make(.star_equal, start) else self.make(.star, start),
+            '&' => if (self.match('&')) self.make(.amp_amp, start) else self.make(.amp, start),
+            '|' => if (self.match('|')) self.make(.pipe_pipe, start) else self.make(.pipe, start),
+            '/' => self.make(.slash, start),
+            '*' => self.make(.star, start),
             '"' => self.string(start),
             '\'' => self.char(start),
             else => blk: {

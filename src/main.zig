@@ -7,6 +7,7 @@ const hir = @import("hir.zig");
 const ir = @import("ir.zig");
 const lexer = @import("lexer.zig");
 const lower_c = @import("lower_c.zig");
+const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 const spec_tests = @import("spec_tests.zig");
@@ -19,14 +20,25 @@ const usage =
     \\  mcc facts <file.mc>
     \\  mcc lower-hir <file.mc>
     \\  mcc verify-hir <file.mc>
+    \\  mcc lower-mir <file.mc>
+    \\  mcc verify <file.mc>
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
     \\  mcc emit-c <file.mc>
     \\
 ;
 
+// Generated artifacts (lowered HIR/IR/C, facts, verification reports) go to
+// stdout so they can be redirected with `>`; diagnostics and logs stay on stderr.
+var stdout_io: std.Io = undefined;
+
+fn writeStdout(bytes: []const u8) void {
+    std.Io.File.stdout().writeStreamingAll(stdout_io, bytes) catch {};
+}
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
+    stdout_io = init.io;
 
     var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
     defer args.deinit();
@@ -51,6 +63,10 @@ pub fn main(init: std.process.Init) !void {
         try runLowerHir(allocator, path, source);
     } else if (std.mem.eql(u8, command, "verify-hir")) {
         try runVerifyHir(allocator, path, source);
+    } else if (std.mem.eql(u8, command, "lower-mir")) {
+        try runLowerMir(allocator, path, source);
+    } else if (std.mem.eql(u8, command, "verify")) {
+        try runVerify(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-ir")) {
         try runLowerIr(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-c")) {
@@ -81,7 +97,7 @@ fn runLowerHir(allocator: std.mem.Allocator, path: []const u8, source: []const u
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try hir.appendDump(allocator, module, &output);
-    std.debug.print("{s}", .{output.items});
+    writeStdout(output.items);
 }
 
 fn runVerifyHir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -103,7 +119,59 @@ fn runVerifyHir(allocator: std.mem.Allocator, path: []const u8, source: []const 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try hir.appendVerificationFacts(allocator, module, &output);
-    std.debug.print("{s}", .{output.items});
+    writeStdout(output.items);
+}
+
+fn runLowerMir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.LowerMirFailed;
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    try mir.appendDump(allocator, module, &output);
+    writeStdout(output.items);
+}
+
+fn runVerify(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.VerifyFailed;
+    }
+
+    var checker = sema.Checker.init(&diag);
+    checker.checkModule(module);
+    if (diag.has_errors) {
+        diag.render();
+        return error.VerifyFailed;
+    }
+
+    try mir.verify(allocator, module, &diag);
+    if (diag.has_errors) {
+        diag.render();
+        return error.VerifyFailed;
+    }
 }
 
 fn failUsage() !void {
@@ -182,7 +250,7 @@ fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(allocator);
     try ir.appendFacts(allocator, module, &facts);
-    std.debug.print("{s}", .{facts.items});
+    writeStdout(facts.items);
 }
 
 fn runLowerIr(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -204,7 +272,7 @@ fn runLowerIr(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try ir.appendLowerIr(allocator, module, &output);
-    std.debug.print("{s}", .{output.items});
+    writeStdout(output.items);
 }
 
 fn runTrap(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -265,7 +333,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_c.appendInspection(allocator, module, &output);
-    std.debug.print("{s}", .{output.items});
+    writeStdout(output.items);
 }
 
 fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -291,7 +359,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
         return error.EmitCFailed;
     }
 
-    try hir.verify(allocator, module, &diag);
+    try mir.verify(allocator, module, &diag);
     if (diag.has_errors) {
         diag.render();
         return error.EmitCFailed;
@@ -300,7 +368,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_c.appendC(allocator, module, &output);
-    std.debug.print("{s}", .{output.items});
+    writeStdout(output.items);
 }
 
 fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {
@@ -319,6 +387,7 @@ test {
     _ = ir;
     _ = lexer;
     _ = lower_c;
+    _ = mir;
     _ = parser;
     _ = sema;
     _ = spec_tests;

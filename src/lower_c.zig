@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
+const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
@@ -282,7 +283,10 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\
     );
 
-    var emitter = CEmitter.init(allocator, out);
+    var typed_mir = try mir.build(allocator, module);
+    defer typed_mir.deinit();
+
+    var emitter = CEmitter.init(allocator, out, &typed_mir);
     try emitter.emitModule(module);
 }
 
@@ -310,10 +314,12 @@ const CEmitter = struct {
     array_types: std.StringHashMap(ArrayInfo),
     slice_types: std.StringHashMap(SliceInfo),
     result_types: std.StringHashMap(ResultInfo),
+    mir_module: *const mir.Module,
+    current_function: ?[]const u8 = null,
     temp_index: usize,
     indent: usize,
 
-    fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) CEmitter {
+    fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8), mir_module: *const mir.Module) CEmitter {
         return .{
             .allocator = allocator,
             .out = out,
@@ -331,6 +337,7 @@ const CEmitter = struct {
             .array_types = std.StringHashMap(ArrayInfo).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
+            .mir_module = mir_module,
             .temp_index = 0,
             .indent = 0,
         };
@@ -368,7 +375,7 @@ const CEmitter = struct {
                     if (global.ty) |ty| try self.globals.put(global.name.text, try self.globalInfoFromType(ty));
                     if (global.ty) |ty| try self.collectTypeArtifacts(ty);
                 },
-                .extern_struct => |struct_decl| {
+                .struct_decl => |struct_decl| {
                     if (isMmioStructAbi(struct_decl)) {
                         try self.collectMmioStruct(struct_decl);
                     } else {
@@ -398,13 +405,13 @@ const CEmitter = struct {
         try self.emitSliceTypes();
         try self.emitTaggedUnionTypes(module);
         for (module.decls) |decl| {
-            if (decl.kind == .extern_struct and self.mmio_structs.contains(decl.kind.extern_struct.name.text)) {
-                try self.emitMmioStruct(decl.kind.extern_struct);
+            if (decl.kind == .struct_decl and self.mmio_structs.contains(decl.kind.struct_decl.name.text)) {
+                try self.emitMmioStruct(decl.kind.struct_decl);
             }
         }
         for (module.decls) |decl| {
-            if (decl.kind == .extern_struct and self.structs.contains(decl.kind.extern_struct.name.text)) {
-                try self.emitStruct(decl.kind.extern_struct);
+            if (decl.kind == .struct_decl and self.structs.contains(decl.kind.struct_decl.name.text)) {
+                try self.emitStruct(decl.kind.struct_decl);
             }
         }
         try self.emitResultTypes();
@@ -413,7 +420,7 @@ const CEmitter = struct {
                 .global_decl => |global| try self.emitGlobal(global),
                 .fn_decl => |fn_decl| if (fn_decl.body) |body| try self.emitFunction(fn_decl, body) else try self.emitFunctionPrototype(fn_decl),
                 .extern_fn => |fn_decl| try self.emitExternFunction(fn_decl),
-                .type_alias, .extern_struct, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
+                .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
             }
         }
     }
@@ -645,8 +652,12 @@ const CEmitter = struct {
     }
 
     fn emitFunction(self: *CEmitter, fn_decl: ast.FnDecl, body: ast.Block) anyerror!void {
-        try self.emitFunctionSignature(fn_decl, true);
+        try self.emitFunctionSignature(fn_decl, !fn_decl.exported);
         try self.out.appendSlice(self.allocator, " {\n");
+
+        const previous_function = self.current_function;
+        self.current_function = fn_decl.name.text;
+        defer self.current_function = previous_function;
 
         var locals = std.StringHashMap(LocalInfo).init(self.allocator);
         defer locals.deinit();
@@ -658,12 +669,13 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn emitFunctionSignature(self: *CEmitter, fn_decl: ast.FnDecl, comptime is_static: bool) !void {
+    fn emitFunctionSignature(self: *CEmitter, fn_decl: ast.FnDecl, is_static: bool) !void {
         const ret = if (fn_decl.return_type) |ret_ty| try self.cTypeFor(ret_ty, .typedef_name) else "void";
+        const cname = try self.cIdent(fn_decl.name.text);
         if (is_static) {
-            try self.out.print(self.allocator, "MC_UNUSED static {s} {s}(", .{ ret, fn_decl.name.text });
+            try self.out.print(self.allocator, "MC_UNUSED static {s} {s}(", .{ ret, cname });
         } else {
-            try self.out.print(self.allocator, "{s} {s}(", .{ ret, fn_decl.name.text });
+            try self.out.print(self.allocator, "{s} {s}(", .{ ret, cname });
         }
         if (fn_decl.params.len == 0) {
             try self.out.appendSlice(self.allocator, "void");
@@ -689,7 +701,16 @@ const CEmitter = struct {
     }
 
     fn emitDeclaratorWithStyle(self: *CEmitter, ty: ast.TypeExpr, name: []const u8, style: StructTypeStyle) !void {
-        try self.out.print(self.allocator, "{s} {s}", .{ try self.cTypeFor(ty, style), name });
+        try self.out.print(self.allocator, "{s} {s}", .{ try self.cTypeFor(ty, style), try self.cIdent(name) });
+    }
+
+    // Maps an MC value identifier to a safe C identifier. Identity for ordinary
+    // names (so generated C is stable) and for the emitter's own `mc_`-prefixed
+    // temporaries; only C reserved words are rewritten (e.g. `int` -> `int_`).
+    // The mapping is deterministic, so declarations and uses stay consistent.
+    fn cIdent(self: *CEmitter, name: []const u8) ![]const u8 {
+        if (isCReservedWord(name)) return std.fmt.allocPrint(self.scratch.allocator(), "{s}_", .{name});
+        return name;
     }
 
     fn cTypeFor(self: *CEmitter, ty: ast.TypeExpr, style: StructTypeStyle) ![]const u8 {
@@ -715,7 +736,8 @@ const CEmitter = struct {
                     std.mem.eql(u8, node.base.text, "sat") or
                     std.mem.eql(u8, node.base.text, "serial") or
                     std.mem.eql(u8, node.base.text, "counter") or
-                    std.mem.eql(u8, node.base.text, "Duration")) and node.args.len == 1) {
+                    std.mem.eql(u8, node.base.text, "Duration")) and node.args.len == 1)
+                {
                     return self.appendType(out, node.args[0], style);
                 }
                 if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1) {
@@ -1077,8 +1099,18 @@ const CEmitter = struct {
     fn emitStmt(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
+                const is_let = std.meta.activeTag(stmt.kind) == .let_decl;
                 for (local.names) |name| {
-                    const info = if (local.ty) |decl_ty| try self.localInfoFromType(decl_ty) else LocalInfo{};
+                    var info = if (local.ty) |decl_ty| try self.localInfoFromType(decl_ty) else LocalInfo{};
+                    // Value-range propagation: record the constant value of an
+                    // immutable single `let` integer local for later proofs.
+                    if (is_let and local.names.len == 1) {
+                        if (local.ty) |decl_ty| {
+                            if (local.init) |initializer| {
+                                info.const_int = self.constLocalValue(decl_ty, initializer, locals);
+                            }
+                        }
+                    }
                     try locals.put(name.text, info);
                     if (local.names.len == 1) {
                         if (local.ty) |decl_ty| {
@@ -1098,6 +1130,7 @@ const CEmitter = struct {
                                 if (try self.emitBitcastLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitExternNonNullCallLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitUncheckedAddLocalInit(name.text, decl_ty, initializer, locals)) continue;
+                                if (try self.emitUncheckedAddAggregateLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitSequencedComparisonLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitSequencedCheckedBinaryLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitSequencedCallLocalInit(name.text, decl_ty, initializer, locals)) continue;
@@ -1113,6 +1146,7 @@ const CEmitter = struct {
                             if (try self.emitRawManyOffsetInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitBitcastInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitExternNonNullCallInferredLocalInit(name.text, initializer, locals)) continue;
+                            if (try self.emitUncheckedAddInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitLocalCopyInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitBoolInferredLocalInit(name.text, initializer, locals)) continue;
                             if (try self.emitCallInferredLocalInit(name.text, initializer, locals)) continue;
@@ -1163,6 +1197,7 @@ const CEmitter = struct {
                 if (try self.emitRawManyOffsetAssignmentStmt(node, locals)) return;
                 if (try self.emitBitcastAssignmentStmt(node, locals)) return;
                 if (try self.emitExternNonNullCallAssignmentStmt(node, locals)) return;
+                if (try self.emitUncheckedAddAggregateAssignmentStmt(node, locals)) return;
                 if (try self.emitUncheckedAddAssignmentStmt(node, locals)) return;
                 if (try self.emitSequencedComparisonAssignmentStmt(node, locals)) return;
                 if (try self.emitSequencedCheckedBinaryAssignmentStmt(node, locals)) return;
@@ -1209,6 +1244,7 @@ const CEmitter = struct {
                     if (try self.emitBitcastReturn(expr, locals, return_ty)) return;
                     if (try self.emitExternNonNullCallReturn(expr, locals)) return;
                     if (try self.emitUncheckedAddReturn(expr, locals, return_ty)) return;
+                    if (try self.emitUncheckedAddAggregateReturn(expr, locals, return_ty)) return;
                     if (try self.emitSequencedComparisonReturn(expr, locals, return_ty)) return;
                     if (try self.emitSequencedCheckedBinaryReturn(expr, locals, return_ty)) return;
                     if (try self.emitSequencedCallReturn(expr, locals)) return;
@@ -1484,7 +1520,7 @@ const CEmitter = struct {
         defer temps.deinit(self.scratch.allocator());
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(call.callee.*, locals);
         try self.emitSequencedCallArgList(temps.items);
         try self.out.appendSlice(self.allocator, ";\n");
@@ -2315,7 +2351,7 @@ const CEmitter = struct {
         try then_locals.put(binding.text, .{ .c_type = bind_ty });
         self.indent += 1;
         try self.writeIndent();
-        try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ bind_ty, binding.text, source_name });
+        try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ bind_ty, try self.cIdent(binding.text), source_name });
         try self.emitBlockItems(node.then_block, &then_locals, return_ty);
         self.indent -= 1;
         try self.writeIndent();
@@ -2625,7 +2661,7 @@ const CEmitter = struct {
     fn emitMmioReadSequencedBinaryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const temp = (try self.emitMmioReadSequencedBinaryValueTemp(initializer, locals, decl_ty)) orelse return false;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name), temp.name });
         return true;
     }
 
@@ -2652,7 +2688,7 @@ const CEmitter = struct {
             .binary => |node| node,
             else => return null,
         };
-        const plan = try self.sequencedBinaryPlan(node.op, target_ty) orelse return null;
+        const plan = try self.sequencedBinaryPlan(node, target_ty, locals) orelse return null;
 
         const left_temp = try self.emitMmioReadOperandTemp(node.left.*, locals, target_ty);
         const right_temp = try self.emitMmioReadOperandTemp(node.right.*, locals, target_ty);
@@ -2742,7 +2778,7 @@ const CEmitter = struct {
                         }
                     }
                 }
-                try self.out.appendSlice(self.allocator, ident.text);
+                try self.out.appendSlice(self.allocator, try self.cIdent(ident.text));
             },
             .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
             .float_literal => |literal| try self.out.appendSlice(self.allocator, literal),
@@ -2788,6 +2824,7 @@ const CEmitter = struct {
                 if (try self.emitResidueCall(node, locals)) return;
                 if (try self.emitDomainOpCall(node, locals)) return;
                 if (try self.emitReflectionCall(node)) return;
+                if (try self.emitConstGetCall(node, locals)) return;
                 if (try self.emitRawManyOffsetCall(node, locals)) return;
                 if (try self.emitAssumeNoaliasCall(node, locals)) return;
                 if (try self.emitUncheckedCall(node, locals)) return;
@@ -2861,11 +2898,11 @@ const CEmitter = struct {
             .ident => |ident| {
                 if (locals) |local_set| {
                     if (!local_set.contains(ident.text) and self.globals.contains(ident.text)) {
-                        try self.out.appendSlice(self.allocator, ident.text);
+                        try self.out.appendSlice(self.allocator, try self.cIdent(ident.text));
                         return;
                     }
                 }
-                try self.out.appendSlice(self.allocator, ident.text);
+                try self.out.appendSlice(self.allocator, try self.cIdent(ident.text));
             },
             .grouped => |inner| {
                 try self.out.appendSlice(self.allocator, "(");
@@ -3254,20 +3291,12 @@ const CEmitter = struct {
     }
 
     fn emitUncheckedCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return false,
-            },
-            else => return false,
-        };
-        if (!isIdentNamed(member.base.*, "unchecked") or !std.mem.eql(u8, member.name.text, "add")) return false;
+        const op = uncheckedNoOverflowCallOp(call) orelse return false;
         if (call.args.len != 2) return error.UnsupportedCEmission;
 
         try self.out.appendSlice(self.allocator, "(");
         try self.emitExpr(call.args[0], locals);
-        try self.out.appendSlice(self.allocator, " + ");
+        try self.out.print(self.allocator, " {s} ", .{uncheckedNoOverflowOperator(op)});
         try self.emitExpr(call.args[1], locals);
         try self.out.appendSlice(self.allocator, ")");
         return true;
@@ -3282,6 +3311,16 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "), ");
         try self.emitExpr(call.args[0], locals);
         try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    fn emitConstGetCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const info = constGetCallInfo(call) orelse return false;
+        try self.emitExpr(info.base.*, locals);
+        if (arrayElemsFieldForExpr(info.base.*, locals)) |elems_field| {
+            try self.out.print(self.allocator, ".{s}", .{elems_field});
+        }
+        try self.out.print(self.allocator, "[{d}]", .{info.index});
         return true;
     }
 
@@ -3352,26 +3391,18 @@ const CEmitter = struct {
 
     fn emitArrayLiteral(self: *CEmitter, items: []const ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
         const resolved_target_ty = self.resolveAliasType(target_ty);
-        const array = switch (resolved_target_ty.kind) {
-            .array => |node| node,
-            .qualified => |node| switch (node.child.kind) {
-                .array => |array_node| array_node,
-                else => return error.UnsupportedCEmission,
-            },
-            else => return error.UnsupportedCEmission,
-        };
+        const child_ty = self.arrayChildTypeForResolvedTarget(resolved_target_ty) orelse return error.UnsupportedCEmission;
         try self.out.print(self.allocator, "({s}){{ .elems = {{ ", .{try self.cTypeFor(resolved_target_ty, .typedef_name)});
         for (items, 0..) |item, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            try self.emitExprWithTarget(item, locals, array.child.*);
+            try self.emitExprWithTarget(item, locals, child_ty);
         }
         try self.out.appendSlice(self.allocator, " } }");
     }
 
     fn emitStructLiteral(self: *CEmitter, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
         const resolved_target_ty = self.resolveAliasType(target_ty);
-        const struct_name = structTypeName(resolved_target_ty) orelse return error.UnsupportedCEmission;
-        const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
+        const struct_decl = self.structDeclForResolvedTarget(resolved_target_ty) orelse return error.UnsupportedCEmission;
         try self.out.print(self.allocator, "({s}){{ ", .{try self.cTypeFor(resolved_target_ty, .typedef_name)});
         for (fields, 0..) |field, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
@@ -3380,6 +3411,67 @@ const CEmitter = struct {
             try self.emitExprWithTarget(field.value, locals, field_ty);
         }
         try self.out.appendSlice(self.allocator, " }");
+    }
+
+    fn emitArrayLiteralWithTemps(self: *CEmitter, items: []const ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: []const ?SequencedArgTemp) anyerror!void {
+        const resolved_target_ty = self.resolveAliasType(target_ty);
+        const child_ty = self.arrayChildTypeForResolvedTarget(resolved_target_ty) orelse return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "({s}){{ .elems = {{ ", .{try self.cTypeFor(resolved_target_ty, .typedef_name)});
+        for (items, 0..) |item, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            if (i < temps.len) {
+                if (temps[i]) |temp| {
+                    try self.out.appendSlice(self.allocator, temp.name);
+                    continue;
+                }
+            }
+            try self.emitExprWithTarget(item, locals, child_ty);
+        }
+        try self.out.appendSlice(self.allocator, " } }");
+    }
+
+    fn emitStructLiteralWithTemps(self: *CEmitter, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: []const ?SequencedArgTemp) anyerror!void {
+        const resolved_target_ty = self.resolveAliasType(target_ty);
+        const struct_decl = self.structDeclForResolvedTarget(resolved_target_ty) orelse return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "({s}){{ ", .{try self.cTypeFor(resolved_target_ty, .typedef_name)});
+        for (fields, 0..) |field, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            const field_ty = structFieldType(struct_decl, field.name.text) orelse return error.UnsupportedCEmission;
+            try self.out.print(self.allocator, ".{s} = ", .{field.name.text});
+            if (i < temps.len) {
+                if (temps[i]) |temp| {
+                    try self.out.appendSlice(self.allocator, temp.name);
+                    continue;
+                }
+            }
+            try self.emitExprWithTarget(field.value, locals, field_ty);
+        }
+        try self.out.appendSlice(self.allocator, " }");
+    }
+
+    fn arrayChildTypeForTarget(self: *CEmitter, target_ty: ast.TypeExpr) ?ast.TypeExpr {
+        return self.arrayChildTypeForResolvedTarget(self.resolveAliasType(target_ty));
+    }
+
+    fn arrayChildTypeForResolvedTarget(self: *CEmitter, target_ty: ast.TypeExpr) ?ast.TypeExpr {
+        _ = self;
+        return switch (target_ty.kind) {
+            .array => |node| node.child.*,
+            .qualified => |node| switch (node.child.kind) {
+                .array => |array_node| array_node.child.*,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn structDeclForTarget(self: *CEmitter, target_ty: ast.TypeExpr) ?ast.StructDecl {
+        return self.structDeclForResolvedTarget(self.resolveAliasType(target_ty));
+    }
+
+    fn structDeclForResolvedTarget(self: *CEmitter, target_ty: ast.TypeExpr) ?ast.StructDecl {
+        const struct_name = structTypeName(target_ty) orelse return null;
+        return self.structs.get(struct_name);
     }
 
     fn emitPackedBitsLiteral(self: *CEmitter, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!bool {
@@ -3458,6 +3550,19 @@ const CEmitter = struct {
         const target = if (target_ty) |ty| self.resolveAliasType(ty) else return error.UnsupportedCEmission;
         if (isWrapType(target) or isSatType(target)) return false;
         const target_name = typeName(target) orelse return error.UnsupportedCEmission;
+
+        // Value-range proof: constant operands that provably cannot overflow lower
+        // to plain arithmetic with no overflow check.
+        if (constBinaryProvenNoOverflow(node, target_name, locals)) {
+            const cty = try self.cTypeFor(target, .typedef_name);
+            try self.out.print(self.allocator, "(({s})(", .{cty});
+            try self.emitExprWithTarget(node.left.*, locals, target);
+            try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
+            try self.emitExprWithTarget(node.right.*, locals, target);
+            try self.out.appendSlice(self.allocator, "))");
+            return true;
+        }
+
         const helper = checkedHelperParts(node.op, target_name) orelse return false;
 
         try self.out.print(self.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
@@ -4319,7 +4424,7 @@ const CEmitter = struct {
         if (try self.emitSequencedCallLocalInit(name, inferred_ty, initializer, locals)) return;
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(initializer, locals);
         try self.out.appendSlice(self.allocator, ";\n");
     }
@@ -4329,7 +4434,7 @@ const CEmitter = struct {
         try locals.put(name, try self.localInfoFromType(inferred_ty));
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExprWithTarget(initializer, locals, inferred_ty);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
@@ -4342,7 +4447,7 @@ const CEmitter = struct {
         if (try self.emitSequencedCheckedBinaryLocalInit(name, inferred_ty, initializer, locals)) return true;
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExprWithTarget(initializer, locals, inferred_ty);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
@@ -4406,7 +4511,7 @@ const CEmitter = struct {
         if (try self.emitSequencedCallLocalInit(name, return_ty, initializer, locals)) return true;
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(initializer, locals);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
@@ -4544,14 +4649,14 @@ const CEmitter = struct {
     fn emitResultTrySequencedBinaryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr) !bool {
         const temp = (try self.emitResultTrySequencedBinaryValueTemp(initializer, locals, decl_ty, enclosing_return_ty, .local_init)) orelse return false;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name), temp.name });
         return true;
     }
 
     fn emitNullableTrySequencedBinaryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const temp = (try self.emitNullableTrySequencedBinaryValueTemp(initializer, locals, decl_ty)) orelse return false;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name), temp.name });
         return true;
     }
 
@@ -4601,7 +4706,7 @@ const CEmitter = struct {
         defer temps.deinit(self.scratch.allocator());
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(call.callee.*, locals);
         try self.emitSequencedCallArgList(temps.items);
         try self.out.appendSlice(self.allocator, ";\n");
@@ -4622,7 +4727,7 @@ const CEmitter = struct {
         defer temps.deinit(self.scratch.allocator());
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(call.callee.*, locals);
         try self.emitSequencedCallArgList(temps.items);
         try self.out.appendSlice(self.allocator, ";\n");
@@ -4748,7 +4853,7 @@ const CEmitter = struct {
             .binary => |node| node,
             else => return null,
         };
-        const plan = try self.sequencedBinaryPlan(node.op, target_ty) orelse return null;
+        const plan = try self.sequencedBinaryPlan(node, target_ty, locals) orelse return null;
 
         const left_temp = try self.emitResultTryOperandTemp(node.left.*, locals, target_ty, return_ty, mode);
         const right_temp = try self.emitResultTryOperandTemp(node.right.*, locals, target_ty, return_ty, mode);
@@ -4762,7 +4867,7 @@ const CEmitter = struct {
             .binary => |node| node,
             else => return null,
         };
-        const plan = try self.sequencedBinaryPlan(node.op, target_ty) orelse return null;
+        const plan = try self.sequencedBinaryPlan(node, target_ty, locals) orelse return null;
 
         const left_temp = try self.emitNullableTryOperandTemp(node.left.*, locals, target_ty);
         const right_temp = try self.emitNullableTryOperandTemp(node.right.*, locals, target_ty);
@@ -4982,11 +5087,17 @@ const CEmitter = struct {
             .deref => {
                 if (try self.emitRawManyOffsetDerefValueTemp(arg, locals, target_ty)) |temp| return temp;
             },
+            .array_literal, .struct_literal => {
+                if (try self.emitUncheckedAddAggregateCallArgTemp(arg, locals, target_ty)) |temp| return temp;
+            },
+            .cast => {
+                if (try self.emitUncheckedAddValueTemp(arg, locals, target_ty, "call_arg")) |temp| return temp;
+            },
             .call => |call| {
                 if (try self.emitBitcastValueTempFromCall(call, locals)) |temp| return temp;
                 if (try self.emitExternNonNullCallValueTemp(arg, locals)) |temp| return temp;
                 if (try self.emitRawManyOffsetValueTempFromCall(call, locals, target_ty)) |temp| return temp;
-                if (try self.emitUncheckedAddValueTempFromCall(call, locals, target_ty)) |temp| return temp;
+                if (try self.emitUncheckedAddValueTempFromCall(call, arg.span, locals, target_ty, "call_arg")) |temp| return temp;
                 if (calleeIdentName(call.callee.*)) |callee_name| {
                     if (self.functions.get(callee_name)) |fn_info| {
                         if (fn_info.return_type) |return_ty| {
@@ -5072,7 +5183,7 @@ const CEmitter = struct {
     fn emitRawManyOffsetDerefAddressLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const temp = (try self.emitRawManyOffsetDerefAddressValueTemp(initializer, locals, decl_ty)) orelse return false;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name), temp.name });
         return true;
     }
 
@@ -5120,7 +5231,7 @@ const CEmitter = struct {
     fn emitRawManyOffsetDerefLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const temp = (try self.emitRawManyOffsetDerefValueTemp(initializer, locals, decl_ty)) orelse return false;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name), temp.name });
         return true;
     }
 
@@ -5130,7 +5241,7 @@ const CEmitter = struct {
         if (try self.emitRawManyOffsetDerefLocalInit(name, element_ty, initializer, locals)) return true;
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(element_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(element_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(initializer, locals);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
@@ -5215,7 +5326,7 @@ const CEmitter = struct {
         const source_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, source_ty);
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
         try self.writeIndent();
         try self.out.print(self.allocator, "memcpy(&{s}, &{s}, sizeof({s}));\n", .{ name, source_temp.name, name });
         return true;
@@ -5287,7 +5398,7 @@ const CEmitter = struct {
     fn emitExternNonNullCallLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const temp = (try self.emitExternNonNullCallValueTemp(initializer, locals)) orelse return false;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name), temp.name });
         return true;
     }
 
@@ -5295,7 +5406,7 @@ const CEmitter = struct {
         const temp = (try self.emitExternNonNullCallValueTemp(initializer, locals)) orelse return false;
         try locals.put(name, try self.localInfoFromType(temp.ty));
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(temp.ty, .typedef_name), name, temp.name });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(temp.ty, .typedef_name), try self.cIdent(name), temp.name });
         return true;
     }
 
@@ -5355,7 +5466,7 @@ const CEmitter = struct {
     fn emitRawManyOffsetLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const temp = (try self.emitRawManyOffsetValueTemp(initializer, locals, decl_ty)) orelse return false;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name), temp.name });
         return true;
     }
 
@@ -5365,7 +5476,7 @@ const CEmitter = struct {
         if (try self.emitRawManyOffsetLocalInit(name, raw_ty, initializer, locals)) return true;
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(raw_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(raw_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(initializer, locals);
         try self.out.appendSlice(self.allocator, ";\n");
         return true;
@@ -5388,17 +5499,21 @@ const CEmitter = struct {
         return true;
     }
 
-    fn emitUncheckedAddValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitUncheckedAddValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
         return switch (expr.kind) {
-            .grouped => |inner| try self.emitUncheckedAddValueTemp(inner.*, locals, target_ty),
-            .call => |call| try self.emitUncheckedAddValueTempFromCall(call, locals, target_ty),
+            .grouped => |inner| try self.emitUncheckedAddValueTemp(inner.*, locals, target_ty, range_target),
+            .cast => |node| try self.emitUncheckedAddValueTemp(node.value.*, locals, node.ty.*, range_target),
+            .call => |call| try self.emitUncheckedAddValueTempFromCall(call, expr.span, locals, target_ty, range_target),
             else => null,
         };
     }
 
-    fn emitUncheckedAddValueTempFromCall(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
-        if (!isUncheckedAddCall(call)) return null;
-        if (!exprContainsCall(call.args[0]) and !exprContainsCall(call.args[1])) return null;
+    fn emitUncheckedAddValueTempFromCall(self: *CEmitter, call: anytype, call_span: ast.Span, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
+        const op = uncheckedNoOverflowCallOp(call) orelse return null;
+        if (!self.hasMirNoOverflowRangeFact(range_target, op, call_span)) return null;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "/* MC_MIR_RANGE no_overflow target={s} op={s} */\n", .{ range_target, op });
 
         const left_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, target_ty);
         const right_temp = try self.emitSequencedCallArgTemp(call.args[1], locals, target_ty);
@@ -5406,23 +5521,210 @@ const CEmitter = struct {
         self.temp_index += 1;
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ({s} + {s});\n", .{ try self.cTypeFor(target_ty, .typedef_name), result_temp, left_temp.name, right_temp.name });
+        try self.out.print(self.allocator, "{s} {s} = ({s} {s} {s});\n", .{ try self.cTypeFor(target_ty, .typedef_name), result_temp, left_temp.name, uncheckedNoOverflowOperator(op), right_temp.name });
         return .{ .name = result_temp, .ty = target_ty };
     }
 
     fn emitUncheckedAddReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
         const target_ty = return_ty orelse return false;
-        const temp = (try self.emitUncheckedAddValueTemp(expr, locals, target_ty)) orelse return false;
+        const temp = (try self.emitUncheckedAddValueTemp(expr, locals, target_ty, "value")) orelse return false;
         try self.writeIndent();
         try self.out.print(self.allocator, "return {s};\n", .{temp.name});
         return true;
     }
 
     fn emitUncheckedAddLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const temp = (try self.emitUncheckedAddValueTemp(initializer, locals, decl_ty)) orelse return false;
+        const temp = (try self.emitUncheckedAddValueTemp(initializer, locals, decl_ty, name)) orelse return false;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name), temp.name });
         return true;
+    }
+
+    fn emitUncheckedAddInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const inferred_ty = simpleNameType("u32", initializer.span);
+        const temp = (try self.emitUncheckedAddValueTemp(initializer, locals, inferred_ty, name)) orelse return false;
+        try locals.put(name, try self.localInfoFromType(inferred_ty));
+        try self.writeIndent();
+        try self.out.print(self.allocator, "uint32_t {s} = {s};\n", .{ try self.cIdent(name), temp.name });
+        return true;
+    }
+
+    fn emitUncheckedAddAggregateReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const target_ty = return_ty orelse return false;
+        return switch (expr.kind) {
+            .grouped => |inner| try self.emitUncheckedAddAggregateReturn(inner.*, locals, return_ty),
+            .array_literal => |items| try self.emitUncheckedAddArrayAggregateReturn(items, locals, target_ty),
+            .struct_literal => |fields| try self.emitUncheckedAddStructAggregateReturn(fields, locals, target_ty),
+            else => false,
+        };
+    }
+
+    fn emitUncheckedAddAggregateLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        return switch (initializer.kind) {
+            .grouped => |inner| try self.emitUncheckedAddAggregateLocalInit(name, decl_ty, inner.*, locals),
+            .array_literal => |items| try self.emitUncheckedAddArrayAggregateLocalInit(name, decl_ty, items, locals),
+            .struct_literal => |fields| try self.emitUncheckedAddStructAggregateLocalInit(name, decl_ty, fields, locals),
+            else => false,
+        };
+    }
+
+    fn emitUncheckedAddAggregateCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        return switch (arg.kind) {
+            .grouped => |inner| try self.emitUncheckedAddAggregateCallArgTemp(inner.*, locals, target_ty),
+            .array_literal => |items| try self.emitUncheckedAddArrayAggregateCallArgTemp(items, locals, target_ty),
+            .struct_literal => |fields| try self.emitUncheckedAddStructAggregateCallArgTemp(fields, locals, target_ty),
+            else => null,
+        };
+    }
+
+    fn emitUncheckedAddAggregateAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+            const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
+            break :blk simpleNameType(target.info.type_name, assignment.value.span);
+        };
+        return switch (assignment.value.kind) {
+            .grouped => |inner| try self.emitUncheckedAddAggregateAssignmentStmt(.{ .target = assignment.target, .value = inner.* }, locals),
+            .array_literal => |items| try self.emitUncheckedAddArrayAggregateAssignmentStmt(assignment.target, items, locals, target_ty),
+            .struct_literal => |fields| try self.emitUncheckedAddStructAggregateAssignmentStmt(assignment.target, fields, locals, target_ty),
+            else => false,
+        };
+    }
+
+    fn emitUncheckedAddArrayAggregateReturn(self: *CEmitter, items: []const ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+        var temps: std.ArrayList(?SequencedArgTemp) = .empty;
+        defer temps.deinit(self.scratch.allocator());
+        if (!try self.collectUncheckedAddArrayLiteralTemps(items, locals, target_ty, &temps)) return false;
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.emitArrayLiteralWithTemps(items, locals, target_ty, temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitUncheckedAddStructAggregateReturn(self: *CEmitter, fields: []const ast.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+        var temps: std.ArrayList(?SequencedArgTemp) = .empty;
+        defer temps.deinit(self.scratch.allocator());
+        if (!try self.collectUncheckedAddStructLiteralTemps(fields, locals, target_ty, &temps)) return false;
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.emitStructLiteralWithTemps(fields, locals, target_ty, temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitUncheckedAddArrayAggregateLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, items: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        var temps: std.ArrayList(?SequencedArgTemp) = .empty;
+        defer temps.deinit(self.scratch.allocator());
+        if (!try self.collectUncheckedAddArrayLiteralTemps(items, locals, decl_ty, &temps)) return false;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
+        try self.emitArrayLiteralWithTemps(items, locals, decl_ty, temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitUncheckedAddStructAggregateLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, fields: []const ast.StructLiteralField, locals: *std.StringHashMap(LocalInfo)) !bool {
+        var temps: std.ArrayList(?SequencedArgTemp) = .empty;
+        defer temps.deinit(self.scratch.allocator());
+        if (!try self.collectUncheckedAddStructLiteralTemps(fields, locals, decl_ty, &temps)) return false;
+
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
+        try self.emitStructLiteralWithTemps(fields, locals, decl_ty, temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
+    fn emitUncheckedAddArrayAggregateCallArgTemp(self: *CEmitter, items: []const ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        var temps: std.ArrayList(?SequencedArgTemp) = .empty;
+        defer temps.deinit(self.scratch.allocator());
+        if (!try self.collectUncheckedAddArrayLiteralTemps(items, locals, target_ty, &temps)) return null;
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), temp_name });
+        try self.emitArrayLiteralWithTemps(items, locals, target_ty, temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return .{ .name = temp_name, .ty = target_ty };
+    }
+
+    fn emitUncheckedAddStructAggregateCallArgTemp(self: *CEmitter, fields: []const ast.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        var temps: std.ArrayList(?SequencedArgTemp) = .empty;
+        defer temps.deinit(self.scratch.allocator());
+        if (!try self.collectUncheckedAddStructLiteralTemps(fields, locals, target_ty, &temps)) return null;
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), temp_name });
+        try self.emitStructLiteralWithTemps(fields, locals, target_ty, temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return .{ .name = temp_name, .ty = target_ty };
+    }
+
+    fn emitUncheckedAddArrayAggregateAssignmentStmt(self: *CEmitter, target_expr: ast.Expr, items: []const ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+        var temps: std.ArrayList(?SequencedArgTemp) = .empty;
+        defer temps.deinit(self.scratch.allocator());
+        if (!try self.collectUncheckedAddArrayLiteralTemps(items, locals, target_ty, &temps)) return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(target_expr, locals)) |target| {
+            try self.emitGlobalStorePrefix(target);
+            try self.emitArrayLiteralWithTemps(items, locals, target_ty, temps.items);
+            try self.emitGlobalStoreSuffix(target);
+        } else {
+            try self.emitExpr(target_expr, locals);
+            try self.out.appendSlice(self.allocator, " = ");
+            try self.emitArrayLiteralWithTemps(items, locals, target_ty, temps.items);
+            try self.out.appendSlice(self.allocator, ";\n");
+        }
+        return true;
+    }
+
+    fn emitUncheckedAddStructAggregateAssignmentStmt(self: *CEmitter, target_expr: ast.Expr, fields: []const ast.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+        var temps: std.ArrayList(?SequencedArgTemp) = .empty;
+        defer temps.deinit(self.scratch.allocator());
+        if (!try self.collectUncheckedAddStructLiteralTemps(fields, locals, target_ty, &temps)) return false;
+
+        try self.writeIndent();
+        if (self.globalAssignmentTarget(target_expr, locals)) |target| {
+            try self.emitGlobalStorePrefix(target);
+            try self.emitStructLiteralWithTemps(fields, locals, target_ty, temps.items);
+            try self.emitGlobalStoreSuffix(target);
+        } else {
+            try self.emitExpr(target_expr, locals);
+            try self.out.appendSlice(self.allocator, " = ");
+            try self.emitStructLiteralWithTemps(fields, locals, target_ty, temps.items);
+            try self.out.appendSlice(self.allocator, ";\n");
+        }
+        return true;
+    }
+
+    fn collectUncheckedAddArrayLiteralTemps(self: *CEmitter, items: []const ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: *std.ArrayList(?SequencedArgTemp)) !bool {
+        const child_ty = self.arrayChildTypeForTarget(target_ty) orelse return false;
+        var emitted = false;
+        for (items) |item| {
+            const temp = try self.emitUncheckedAddValueTemp(item, locals, child_ty, "aggregate_element");
+            if (temp != null) emitted = true;
+            try temps.append(self.scratch.allocator(), temp);
+        }
+        return emitted;
+    }
+
+    fn collectUncheckedAddStructLiteralTemps(self: *CEmitter, fields: []const ast.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: *std.ArrayList(?SequencedArgTemp)) !bool {
+        const struct_decl = self.structDeclForTarget(target_ty) orelse return false;
+        var emitted = false;
+        for (fields) |field| {
+            const field_ty = structFieldType(struct_decl, field.name.text) orelse return error.UnsupportedCEmission;
+            const temp = try self.emitUncheckedAddValueTemp(field.value, locals, field_ty, field.name.text);
+            if (temp != null) emitted = true;
+            try temps.append(self.scratch.allocator(), temp);
+        }
+        return emitted;
     }
 
     fn emitUncheckedAddAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
@@ -5430,7 +5732,8 @@ const CEmitter = struct {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
-        const temp = (try self.emitUncheckedAddValueTemp(assignment.value, locals, target_ty)) orelse return false;
+        const range_target = assignmentRangeTargetName(assignment.target) orelse return false;
+        const temp = (try self.emitUncheckedAddValueTemp(assignment.value, locals, target_ty, range_target)) orelse return false;
 
         try self.writeIndent();
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
@@ -5440,6 +5743,20 @@ const CEmitter = struct {
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
+    }
+
+    fn hasMirNoOverflowRangeFact(self: *CEmitter, target: []const u8, op: []const u8, span: ast.Span) bool {
+        const function_name = self.current_function orelse return false;
+        for (self.mir_module.functions) |function| {
+            if (!std.mem.eql(u8, function.name, function_name)) continue;
+            for (function.range_facts) |fact| {
+                if (!std.mem.eql(u8, fact.target, target)) continue;
+                if (!std.mem.eql(u8, fact.op, op)) continue;
+                if (fact.line != span.line or fact.column != span.column) continue;
+                return true;
+            }
+        }
+        return false;
     }
 
     fn emitSequencedComparisonReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
@@ -5497,11 +5814,16 @@ const CEmitter = struct {
             else => return null,
         };
         if (isNoTrapBitwiseInfixOp(node.op) and !exprContainsCall(node.left.*) and !exprContainsCall(node.right.*)) return null;
-        const plan = try self.sequencedBinaryPlan(node.op, target_ty) orelse return null;
+        const plan = try self.sequencedBinaryPlan(node, target_ty, locals) orelse return null;
 
-        const left_temp = try self.emitSequencedCallArgTemp(node.left.*, locals, target_ty);
-        const right_temp = try self.emitSequencedCallArgTemp(node.right.*, locals, target_ty);
+        const left_temp = try self.emitSequencedBinaryOperandTemp(node.left.*, locals, target_ty);
+        const right_temp = try self.emitSequencedBinaryOperandTemp(node.right.*, locals, target_ty);
         return try self.emitSequencedBinaryPlanResultTemp(plan, target_ty, left_temp.name, right_temp.name);
+    }
+
+    fn emitSequencedBinaryOperandTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+        if (try self.emitUncheckedAddValueTemp(arg, locals, target_ty, "binary_operand")) |temp| return temp;
+        return try self.emitSequencedCallArgTemp(arg, locals, target_ty);
     }
 
     fn emitSequencedBinaryPlanResultTemp(self: *CEmitter, plan: SequencedBinaryPlan, target_ty: ast.TypeExpr, left_name: []const u8, right_name: []const u8) anyerror!SequencedArgTemp {
@@ -5523,7 +5845,19 @@ const CEmitter = struct {
         helper: CheckedHelperParts,
     };
 
-    fn sequencedBinaryPlan(self: *CEmitter, op: ast.BinaryOp, target_ty: ast.TypeExpr) !?SequencedBinaryPlan {
+    // The constant value of an integer local initializer, but only when it fits
+    // the declared type (so the local genuinely holds that constant at runtime).
+    fn constLocalValue(self: *CEmitter, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?i128 {
+        const resolved = self.resolveAliasType(decl_ty);
+        const tn = typeName(resolved) orelse return null;
+        const range = intTypeRange(tn) orelse return null;
+        const v = constIntValue(initializer, locals) orelse return null;
+        if (@as(i256, v) >= @as(i256, range.min) and @as(i256, v) <= @as(i256, range.max)) return v;
+        return null;
+    }
+
+    fn sequencedBinaryPlan(self: *CEmitter, node: anytype, target_ty: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !?SequencedBinaryPlan {
+        const op = node.op;
         const resolved_target_ty = self.resolveAliasType(target_ty);
         if (genericChildType(resolved_target_ty, "wrap")) |inner| {
             const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
@@ -5550,6 +5884,9 @@ const CEmitter = struct {
             return .{ .infix = binaryCOp(op) };
         }
         if (!isCheckedBinaryOp(op)) return null;
+        // Value-range proof: constant operands that cannot overflow lower to a
+        // plain infix operator instead of the checked-overflow helper.
+        if (constBinaryProvenNoOverflow(node, target_name, locals)) return .{ .infix = binaryCOp(op) };
         return if (checkedHelperParts(op, target_name)) |helper| .{ .helper = helper } else null;
     }
 
@@ -5564,7 +5901,7 @@ const CEmitter = struct {
     fn emitSequencedCheckedBinaryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const temp = (try self.emitSequencedBinaryValueTemp(initializer, locals, decl_ty)) orelse return false;
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), name, temp.name });
+        try self.out.print(self.allocator, "{s} {s} = {s};\n", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name), temp.name });
         return true;
     }
 
@@ -5609,7 +5946,7 @@ const CEmitter = struct {
         defer temps.deinit(self.scratch.allocator());
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), name });
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(call.callee.*, locals);
         try self.emitSequencedCallArgList(temps.items);
         try self.out.appendSlice(self.allocator, ";\n");
@@ -6587,6 +6924,9 @@ const LocalInfo = struct {
     source_ty: ?ast.TypeExpr = null,
     c_type: ?[]const u8 = null,
     source_type_name: ?[]const u8 = null,
+    // Value-range propagation: compile-time-constant value of an immutable (`let`)
+    // integer local whose initializer is constant and in range.
+    const_int: ?i128 = null,
     array_len: ?[]const u8 = null,
     array_elems_field: ?[]const u8 = null,
     slice_ptr_field: ?[]const u8 = null,
@@ -6873,7 +7213,7 @@ const Inspector = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .fn_decl, .extern_fn => |fn_decl| if (fn_decl.body) |body| try self.inspectFn(fn_decl, body),
-                .type_alias, .extern_struct, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
     }
@@ -6881,7 +7221,7 @@ const Inspector = struct {
     fn collectDeclFacts(self: *Inspector, module: ast.Module) !void {
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .extern_struct => |struct_decl| {
+                .struct_decl => |struct_decl| {
                     if (struct_decl.abi) |abi| {
                         if (std.mem.eql(u8, abi, "mmio")) try self.collectMmioStruct(struct_decl);
                     } else {
@@ -7808,6 +8148,28 @@ fn signedCTypeForInner(name: []const u8) ?[]const u8 {
     return null;
 }
 
+fn isCReservedWord(name: []const u8) bool {
+    const reserved = [_][]const u8{
+        // C keywords (C11).
+        "auto",     "break",      "case",           "char",          "const",
+        "continue", "default",    "do",             "double",        "else",
+        "enum",     "extern",     "float",          "for",           "goto",
+        "if",       "inline",     "int",            "long",          "register",
+        "restrict", "return",     "short",          "signed",        "sizeof",
+        "static",   "struct",     "switch",         "typedef",       "union",
+        "unsigned", "void",       "volatile",       "while",         "_Bool",
+        "_Complex", "_Imaginary", "_Alignas",       "_Alignof",      "_Atomic",
+        "_Generic", "_Noreturn",  "_Static_assert", "_Thread_local",
+        // Macros from the headers the prelude includes.
+        "bool",
+        "true",     "false",      "NULL",
+    };
+    for (reserved) |word| {
+        if (std.mem.eql(u8, name, word)) return true;
+    }
+    return false;
+}
+
 fn floatCTypeName(ty: ast.TypeExpr) ?[]const u8 {
     const name = typeName(ty) orelse return null;
     if (std.mem.eql(u8, name, "f32")) return "float";
@@ -7975,6 +8337,68 @@ fn intLiteralText(expr: ast.Expr) ?[]const u8 {
     };
 }
 
+fn parseI128Literal(raw: []const u8) ?i128 {
+    var cleaned: [160]u8 = undefined;
+    if (raw.len > cleaned.len) return null;
+    var len: usize = 0;
+    for (raw) |ch| {
+        if (ch != '_') {
+            cleaned[len] = ch;
+            len += 1;
+        }
+    }
+    return std.fmt.parseInt(i128, cleaned[0..len], 0) catch null;
+}
+
+// Constant value of an integer expression: literals, negation, provably-safe
+// `+ - *` of constants, and immutable (`let`) locals known to hold a constant.
+fn constIntValue(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?i128 {
+    return switch (expr.kind) {
+        .int_literal => |literal| parseI128Literal(literal),
+        .grouped => |inner| constIntValue(inner.*, locals),
+        .unary => |node| if (node.op == .neg) blk: {
+            const v = constIntValue(node.expr.*, locals) orelse break :blk null;
+            break :blk std.math.negate(v) catch null;
+        } else null,
+        .ident => |ident| if (locals) |ls| (if (ls.get(ident.text)) |info| info.const_int else null) else null,
+        .binary => |node| blk: {
+            const l = constIntValue(node.left.*, locals) orelse break :blk null;
+            const r = constIntValue(node.right.*, locals) orelse break :blk null;
+            break :blk switch (node.op) {
+                .add => std.math.add(i128, l, r) catch null,
+                .sub => std.math.sub(i128, l, r) catch null,
+                .mul => std.math.mul(i128, l, r) catch null,
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+// Value-range proof: a checked `+ - *` on constant operands (literals or
+// constant immutable locals) whose exact result fits the target type provably
+// cannot overflow, so it lowers to plain C arithmetic instead of a checked
+// helper (section I.1 permits omitting a check the compiler can prove
+// unnecessary).
+fn constBinaryProvenNoOverflow(node: anytype, target_name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    switch (node.op) {
+        .add, .sub, .mul => {},
+        else => return false,
+    }
+    const l = constIntValue(node.left.*, locals) orelse return false;
+    const r = constIntValue(node.right.*, locals) orelse return false;
+    const range = intTypeRange(target_name) orelse return false;
+    const ll: i256 = l;
+    const rr: i256 = r;
+    const result: i256 = switch (node.op) {
+        .add => ll + rr,
+        .sub => ll - rr,
+        .mul => ll * rr,
+        else => unreachable,
+    };
+    return result >= @as(i256, range.min) and result <= @as(i256, range.max);
+}
+
 fn parseUsizeLiteral(raw: []const u8) ?usize {
     var cleaned: [128]u8 = undefined;
     if (raw.len > cleaned.len) return null;
@@ -8026,6 +8450,29 @@ fn arrayElemsFieldForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)
         .grouped => |inner| arrayElemsFieldForExpr(inner.*, locals),
         else => null,
     };
+}
+
+const ConstGetCallInfo = struct {
+    base: *ast.Expr,
+    index: usize,
+};
+
+fn constGetCallInfo(call: anytype) ?ConstGetCallInfo {
+    if (call.args.len != 0 or call.type_args.len != 1) return null;
+    const member = switch (call.callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| switch (inner.kind) {
+            .member => |node| node,
+            else => return null,
+        },
+        else => return null,
+    };
+    if (!std.mem.eql(u8, member.name.text, "const_get")) return null;
+    const index = switch (call.type_args[0].kind) {
+        .name => |name| parseUsizeLiteral(name.text) orelse return null,
+        else => return null,
+    };
+    return .{ .base = member.base, .index = index };
 }
 
 fn sliceAccessForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?SliceAccess {
@@ -8637,6 +9084,15 @@ fn localOrdinaryTarget(target: ast.Expr, ctx: FnContext) ?[]const u8 {
     };
 }
 
+fn assignmentRangeTargetName(target: ast.Expr) ?[]const u8 {
+    return switch (target.kind) {
+        .ident => |ident| ident.text,
+        .member => |member| member.name.text,
+        .grouped => |inner| assignmentRangeTargetName(inner.*),
+        else => null,
+    };
+}
+
 fn isFixtureLocalAccess(fn_name: []const u8, object: []const u8) bool {
     return std.mem.eql(u8, fn_name, "local_non_racing_access") and std.mem.eql(u8, object, "local");
 }
@@ -8649,7 +9105,11 @@ fn knownContractCalleeName(expr: ast.Expr) ?[]const u8 {
                 .ident => |ident| ident.text,
                 else => return null,
             };
-            if (std.mem.eql(u8, base, "unchecked") and std.mem.eql(u8, member.name.text, "add")) return "unchecked.add";
+            if (std.mem.eql(u8, base, "unchecked")) {
+                if (std.mem.eql(u8, member.name.text, "add")) return "unchecked.add";
+                if (std.mem.eql(u8, member.name.text, "sub")) return "unchecked.sub";
+                if (std.mem.eql(u8, member.name.text, "mul")) return "unchecked.mul";
+            }
             if (std.mem.eql(u8, base, "compiler") and std.mem.eql(u8, member.name.text, "assume_noalias_unchecked")) return "compiler.assume_noalias_unchecked";
             if (std.mem.eql(u8, base, "raw") and std.mem.eql(u8, member.name.text, "store")) return "raw.store";
             return null;
@@ -8722,17 +9182,28 @@ fn isPointerLikeAddressType(ty: ast.TypeExpr) bool {
     };
 }
 
-fn isUncheckedAddCall(call: anytype) bool {
-    if (call.type_args.len != 0 or call.args.len != 2) return false;
+fn uncheckedNoOverflowCallOp(call: anytype) ?[]const u8 {
+    if (call.type_args.len != 0 or call.args.len != 2) return null;
     const member = switch (call.callee.kind) {
         .member => |node| node,
         .grouped => |inner| switch (inner.kind) {
             .member => |node| node,
-            else => return false,
+            else => return null,
         },
-        else => return false,
+        else => return null,
     };
-    return isIdentNamed(member.base.*, "unchecked") and std.mem.eql(u8, member.name.text, "add");
+    if (!isIdentNamed(member.base.*, "unchecked")) return null;
+    if (std.mem.eql(u8, member.name.text, "add")) return "add";
+    if (std.mem.eql(u8, member.name.text, "sub")) return "sub";
+    if (std.mem.eql(u8, member.name.text, "mul")) return "mul";
+    return null;
+}
+
+fn uncheckedNoOverflowOperator(op: []const u8) []const u8 {
+    if (std.mem.eql(u8, op, "add")) return "+";
+    if (std.mem.eql(u8, op, "sub")) return "-";
+    if (std.mem.eql(u8, op, "mul")) return "*";
+    return "+";
 }
 
 fn isCpuPauseCall(callee: ast.Expr) bool {
@@ -10146,6 +10617,11 @@ test "emits C for fixed array indexing with bounds checks" {
         \\fn pick_u32(xs: [4]u32, i: usize) -> u32 {
         \\    return xs[i];
         \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn pick_const(xs: [4]u8) -> u8 {
+        \\    return xs.const_get<2>();
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_arrays.mc", source);
@@ -10166,6 +10642,8 @@ test "emits C for fixed array indexing with bounds checks" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u8_4 xs") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_array_u32_4 xs") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.elems[mc_check_index_usize(i, 4)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return xs.elems[2];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_check_index_usize(2, 4)") == null);
 }
 
 test "emits C for slice typedefs and indexing" {
@@ -11008,6 +11486,15 @@ test "emits C for opaque volatile asm" {
 
 test "emits C unsafe contract blocks as scoped blocks" {
     const source =
+        \\extern fn next_value() -> u32;
+        \\extern fn consume_value(value: u32) -> void;
+        \\extern fn consume_values(values: [1]u32) -> void;
+        \\extern fn consume_counter(counter: Counter) -> void;
+        \\
+        \\struct Counter {
+        \\    next: u32,
+        \\}
+        \\
         \\fn accept_plain_contract_scope() -> u32 {
         \\    var x: u32 = 1;
         \\    #[unsafe_contract(no_overflow)]
@@ -11024,6 +11511,203 @@ test "emits C unsafe contract blocks as scoped blocks" {
         \\        x = unchecked.add(a, b);
         \\    }
         \\    return x;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_return_order() -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return unchecked.add(next_value(), next_value());
+        \\    }
+        \\    return 0;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_cast_return_order() -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return unchecked.add(next_value(), next_value()) as u32;
+        \\    }
+        \\    return 0;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_local_order() -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        let value: u32 = unchecked.add(next_value(), next_value());
+        \\        return value;
+        \\    }
+        \\    return 0;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_cast_local_order() -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        let cast_value: u32 = unchecked.add(next_value(), next_value()) as u32;
+        \\        return cast_value;
+        \\    }
+        \\    return 0;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_inferred_local_order() -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        let inferred = unchecked.add(next_value(), next_value());
+        \\        return inferred;
+        \\    }
+        \\    return 0;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_cast_inferred_local_order() -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        let cast_inferred = unchecked.add(next_value(), next_value()) as u32;
+        \\        return cast_inferred;
+        \\    }
+        \\    return 0;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_assignment_order() -> u32 {
+        \\    var value: u32 = 0;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        value = unchecked.add(next_value(), next_value());
+        \\    }
+        \\    return value;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_cast_assignment_order() -> u32 {
+        \\    var cast_assigned: u32 = 0;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        cast_assigned = unchecked.add(next_value(), next_value()) as u32;
+        \\    }
+        \\    return cast_assigned;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_arg_order() -> void {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        consume_value(unchecked.add(next_value(), next_value()));
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_cast_arg_order() -> void {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        consume_value(unchecked.add(next_value(), next_value()) as u32);
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_arg_sub_order() -> void {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        consume_value(unchecked.sub(next_value(), next_value()));
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_arg_mul_order() -> void {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        consume_value(unchecked.mul(next_value(), next_value()));
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_sub_order() -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return unchecked.sub(next_value(), next_value());
+        \\    }
+        \\    return 0;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_mul_order() -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return unchecked.mul(next_value(), next_value());
+        \\    }
+        \\    return 0;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_nested_binary_order(a: u32, b: u32, c: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return (unchecked.add(a, b)) + c;
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_array_return(a: u32, b: u32) -> [1]u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return .{ unchecked.add(a, b) };
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_cast_array_return(a: u32, b: u32) -> [1]u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return .{ unchecked.add(a, b) as u32 };
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_struct_return(a: u32, b: u32) -> Counter {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return .{ .next = unchecked.mul(a, b) };
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_cast_struct_return(a: u32, b: u32) -> Counter {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return .{ .next = unchecked.mul(a, b) as u32 };
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_array_local(a: u32, b: u32) -> [1]u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        let values: [1]u32 = .{ unchecked.sub(a, b) };
+        \\        return values;
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_struct_local(a: u32, b: u32) -> Counter {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        let counter: Counter = .{ .next = unchecked.add(a, b) };
+        \\        return counter;
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_array_arg(a: u32, b: u32) -> void {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        consume_values(.{ unchecked.add(a, b) });
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_struct_arg(a: u32, b: u32) -> void {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        consume_counter(.{ .next = unchecked.mul(a, b) });
+        \\    }
+        \\}
+        \\
+        \\fn accept_unchecked_contract_array_assignment(a: u32, b: u32) -> [1]u32 {
+        \\    var values: [1]u32 = .{0};
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        values = .{ unchecked.sub(a, b) };
+        \\    }
+        \\    return values;
+        \\}
+        \\
+        \\fn accept_unchecked_contract_struct_assignment(a: u32, b: u32) -> Counter {
+        \\    var counter: Counter = .{ .next = 0 };
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        counter = .{ .next = unchecked.add(a, b) };
+        \\    }
+        \\    return counter;
         \\}
     ;
 
@@ -11051,7 +11735,61 @@ test "emits C unsafe contract blocks as scoped blocks" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "x = mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t accept_unchecked_contract_add(uint32_t a, uint32_t b)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t x = 0;\n    /* MC_CONTRACT_BEGIN no_overflow */\n    {\n        x = (a + b);\n    }\n    /* MC_CONTRACT_END no_overflow */\n    return x;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=x op=add */") != null);
+    var mir_range_count: usize = 0;
+    var search_from: usize = 0;
+    while (std.mem.indexOfPos(u8, output.items, search_from, "/* MC_MIR_RANGE no_overflow target=value op=add */")) |index| {
+        mir_range_count += 1;
+        search_from = index + 1;
+    }
+    try std.testing.expectEqual(@as(usize, 4), mir_range_count);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=inferred op=add */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=cast_value op=add */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=cast_inferred op=add */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=cast_assigned op=add */") != null);
+    var call_arg_add_count: usize = 0;
+    search_from = 0;
+    while (std.mem.indexOfPos(u8, output.items, search_from, "/* MC_MIR_RANGE no_overflow target=call_arg op=add */")) |index| {
+        call_arg_add_count += 1;
+        search_from = index + 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), call_arg_add_count);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=call_arg op=sub */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=call_arg op=mul */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=binary_operand op=add */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=value op=sub */") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_MIR_RANGE no_overflow target=value op=mul */") != null);
+    var aggregate_add_count: usize = 0;
+    search_from = 0;
+    while (std.mem.indexOfPos(u8, output.items, search_from, "/* MC_MIR_RANGE no_overflow target=aggregate_element op=add */")) |index| {
+        aggregate_add_count += 1;
+        search_from = index + 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), aggregate_add_count);
+    var aggregate_sub_count: usize = 0;
+    search_from = 0;
+    while (std.mem.indexOfPos(u8, output.items, search_from, "/* MC_MIR_RANGE no_overflow target=aggregate_element op=sub */")) |index| {
+        aggregate_sub_count += 1;
+        search_from = index + 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), aggregate_sub_count);
+    var next_mul_count: usize = 0;
+    search_from = 0;
+    while (std.mem.indexOfPos(u8, output.items, search_from, "/* MC_MIR_RANGE no_overflow target=next op=mul */")) |index| {
+        next_mul_count += 1;
+        search_from = index + 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), next_mul_count);
+    var next_add_count: usize = 0;
+    search_from = 0;
+    while (std.mem.indexOfPos(u8, output.items, search_from, "/* MC_MIR_RANGE no_overflow target=next op=add */")) |index| {
+        next_add_count += 1;
+        search_from = index + 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), next_add_count);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_values(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_counter(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, " = (mc_tmp") != null);
 }
 
 test "omits pure comptime blocks from C runtime output" {
