@@ -1,6 +1,6 @@
 // Imports the generic `std/stack` collection and exercises it at a concrete
 // type, exporting a wrapper the stack-test driver calls.
-import "../../std/stack.mc";
+import "std/stack.mc";
 
 export fn stack_top_two_sum(a: u32, b: u32, c: u32) -> u32 {
     var s: Stack<u32> = uninit;

@@ -4,8 +4,8 @@
 // spec's numbered steps. The C runtime (virtio_runtime.c) does platform
 // discovery and hands over the device MmioPtr plus the DMA'd virtqueue memory.
 
-import "../../std/virtio.mc";
-import "../../std/virtqueue.mc";
+import "std/virtio.mc";
+import "std/virtqueue.mc";
 
 const VIRTIO_NET_DEVICE_ID: u32 = 1;
 const VIRTIO_F_VERSION_1_HI: u32 = 1; // feature bit 32 → high-word bit 0

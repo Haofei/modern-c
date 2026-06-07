@@ -12,7 +12,14 @@ const token = @import("token.zig");
 // spaces, preserving newlines — so the root file's byte offsets and line
 // numbers are unchanged and diagnostics in user code stay accurate.
 //
-// Import paths are resolved relative to the directory of the importing file.
+// Import path resolution:
+//   - An *explicitly relative* path (`./foo.mc`, `../bar.mc`, or absolute) is
+//     resolved against the importing file's directory.
+//   - A *rooted* path (anything else, e.g. `std/sync.mc`) is resolved by walking
+//     up the importing file's ancestor directories and taking the first existing
+//     match. So `import "std/sync.mc"` works from any depth in a project (it
+//     finds `<project-root>/std/sync.mc`) without `../../` prefixes.
+//
 // `import` is recognized lexically (an `import` identifier followed by a string
 // literal and `;` at brace-depth 0), so no parser/sema/backend changes are
 // needed: the combined source the rest of the pipeline sees contains only
@@ -61,7 +68,7 @@ fn expand(
     defer arena.deinit();
     const a = arena.allocator();
 
-    const imports = try scanImports(a, path, source);
+    const imports = try scanImports(a, io, path, source);
 
     // Append this file's source with its import statements blanked out.
     const blanked = try allocator.dupe(u8, source);
@@ -88,7 +95,7 @@ fn expand(
 
 // Find top-level `import "path";` statements by lexing. Returns the resolved
 // path and the byte range (start of `import` .. end of `;`) for each.
-fn scanImports(arena: std.mem.Allocator, path: []const u8, source: []const u8) LoadError![]ImportRef {
+fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: []const u8) LoadError![]ImportRef {
     var refs: std.ArrayList(ImportRef) = .empty;
     var reporter = diagnostics.Reporter.init(arena, path, source);
     var lx = lexer.Lexer.init(source, &reporter);
@@ -109,7 +116,7 @@ fn scanImports(arena: std.mem.Allocator, path: []const u8, source: []const u8) L
             const semi = lx.next();
             if (str.kind == .string_literal and semi.kind == .semicolon) {
                 const rel = std.mem.trim(u8, str.lexeme, "\"");
-                const resolved = try resolveImportPath(arena, path, rel);
+                const resolved = try resolveImportPath(arena, io, path, rel);
                 try refs.append(arena, .{
                     .path = resolved,
                     .start = t.span.offset,
@@ -121,15 +128,44 @@ fn scanImports(arena: std.mem.Allocator, path: []const u8, source: []const u8) L
     return refs.toOwnedSlice(arena);
 }
 
-fn resolveImportPath(arena: std.mem.Allocator, importer: []const u8, rel: []const u8) LoadError![]const u8 {
-    // Resolve relative imports against the importing file's directory, then
-    // canonicalize (collapsing `.`/`..`, making absolute) so the same file
-    // imported via different paths dedups to one copy.
-    const joined = if (std.fs.path.isAbsolute(rel))
-        try arena.dupe(u8, rel)
-    else
-        try std.fs.path.join(arena, &.{ std.fs.path.dirname(importer) orelse ".", rel });
-    return canonicalize(arena, joined);
+fn isExplicitlyRelative(rel: []const u8) bool {
+    return std.mem.startsWith(u8, rel, "./") or std.mem.startsWith(u8, rel, "../") or
+        std.mem.eql(u8, rel, ".") or std.mem.eql(u8, rel, "..");
+}
+
+fn fileExists(io: std.Io, path: []const u8) bool {
+    // `access` against cwd works for both cwd-relative and absolute paths.
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
+fn resolveImportPath(arena: std.mem.Allocator, io: std.Io, importer: []const u8, rel: []const u8) LoadError![]const u8 {
+    // Explicitly-relative or absolute: resolve against the importing file's
+    // directory and canonicalize (so diamond imports dedup to one copy).
+    if (std.fs.path.isAbsolute(rel) or isExplicitlyRelative(rel)) {
+        const joined = if (std.fs.path.isAbsolute(rel))
+            try arena.dupe(u8, rel)
+        else
+            try std.fs.path.join(arena, &.{ std.fs.path.dirname(importer) orelse ".", rel });
+        return canonicalize(arena, joined);
+    }
+
+    // Rooted (e.g. `std/sync.mc`): walk up the importer's ancestor directories,
+    // then the current working directory, taking the first existing match.
+    var first: ?[]const u8 = null;
+    var dir: ?[]const u8 = std.fs.path.dirname(importer);
+    while (dir) |d| {
+        const cand = try canonicalize(arena, try std.fs.path.join(arena, &.{ d, rel }));
+        if (first == null) first = cand;
+        if (fileExists(io, cand)) return cand;
+        const parent = std.fs.path.dirname(d);
+        dir = if (parent != null and !std.mem.eql(u8, parent.?, d)) parent else null;
+    }
+    // Cwd-relative (the project root when mcc is run from there).
+    const bare = try canonicalize(arena, rel);
+    if (fileExists(io, bare)) return bare;
+    // None found: return a sensible candidate for the error message.
+    return first orelse bare;
 }
 
 fn canonicalize(arena: std.mem.Allocator, path: []const u8) LoadError![]const u8 {

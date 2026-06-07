@@ -14,11 +14,11 @@
 // The move/linear discipline makes "read after handoff", "double free", and
 // "lock left held" compile errors — see std/dma.mc and std/sync.mc.
 
-import "../../std/sync.mc";
-import "../../std/dma.mc";
-import "../../std/ring.mc";
-import "../../std/endian.mc";
-import "../../std/barrier.mc";
+import "std/sync.mc";
+import "std/dma.mc";
+import "std/ring.mc";
+import "std/endian.mc";
+import "std/barrier.mc";
 
 extern mmio struct Uart16550 {
     thr: Reg<u8, .write>,

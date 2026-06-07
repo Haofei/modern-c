@@ -758,9 +758,15 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
       passthrough flags. Verified end-to-end by `zig build cc-test`
       (`tools/mcc-cc-test.sh`, also in `m0`): an MC module compiles to an object,
       links against a C driver, and runs with the right result.
-      _Module system landed:_ `import "path";` declarations (resolved relative to
-      the importing file) are expanded by textual inclusion in `src/loader.zig`
-      — the root file first (so its line numbers are preserved) followed by each
+      _Module system landed:_ `import "path";` declarations are expanded by
+      textual inclusion in `src/loader.zig`. **Path resolution (2026-06-07):** an
+      *explicitly-relative* path (`./foo.mc`, `../bar.mc`, absolute) resolves
+      against the importing file's directory; a *rooted* path (e.g.
+      `std/sync.mc`) is resolved by walking up the importer's ancestor
+      directories (then the cwd) to the first existing match — so
+      `import "std/sync.mc"` works from any depth in a project without
+      `../../` prefixes (the driver/library files use this). The merged source is
+      the root file first (so its line numbers are preserved) followed by each
       transitively-imported file once (deduped), with the `import` statements
       blanked in place. `import` is recognized lexically, so no parser/sema/
       backend changes were needed; the C backend now forward-declares every
