@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
+const eval = @import("eval.zig");
 const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
@@ -304,6 +305,11 @@ const CEmitter = struct {
     static_initializers: std.StringHashMap(ast.Expr),
     type_aliases: std.StringHashMap(ast.TypeExpr),
     functions: std.StringHashMap(FnInfo),
+    // `const fn` bodies and folded `const` global values, for folding comptime
+    // const-fn calls / named constants in fixed-array lengths (section 22
+    // comptime↔type feedback).
+    const_fns: std.StringHashMap(ast.FnDecl),
+    const_globals: std.StringHashMap(eval.ComptimeValue),
     structs: std.StringHashMap(ast.StructDecl),
     mmio_structs: std.StringHashMap(MmioStruct),
     packed_bits: std.StringHashMap(PackedBitsInfo),
@@ -327,6 +333,8 @@ const CEmitter = struct {
             .static_initializers = std.StringHashMap(ast.Expr).init(allocator),
             .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
+            .const_fns = std.StringHashMap(ast.FnDecl).init(allocator),
+            .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
             .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
@@ -358,6 +366,8 @@ const CEmitter = struct {
         while (mmio_structs.next()) |mmio_struct| mmio_struct.fields.deinit();
         self.mmio_structs.deinit();
         self.structs.deinit();
+        self.const_fns.deinit();
+        self.const_globals.deinit();
         self.functions.deinit();
         self.type_aliases.deinit();
         self.static_initializers.deinit();
@@ -367,6 +377,16 @@ const CEmitter = struct {
 
     fn emitModule(self: *CEmitter, module: ast.Module) anyerror!void {
         defer self.deinit();
+        // Pre-pass: collect `const fn` bodies and fold `const` global values up
+        // front, so fixed-array lengths that reference them (section 22
+        // comptime↔type) resolve during the artifact-collection pass below.
+        for (module.decls) |decl| {
+            if (decl.kind == .fn_decl) {
+                const fn_decl = decl.kind.fn_decl;
+                if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+            }
+        }
+        try eval.collectConstGlobals(self.allocator, module, &self.const_fns, &self.const_globals);
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
@@ -388,6 +408,7 @@ const CEmitter = struct {
                 .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
                 .fn_decl => |fn_decl| {
                     try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = false });
+                    if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
                     try self.collectFunctionSliceTypes(fn_decl);
                 },
                 .extern_fn => |fn_decl| {
@@ -432,6 +453,15 @@ const CEmitter = struct {
             try self.out.print(self.allocator, "uint32_t {s}", .{global.name.text});
         }
         if (global.init) |initializer| {
+            // A `const` global (section 22) emits its folded compile-time value,
+            // so initializers like `MAX * 2` that reference earlier const
+            // globals lower to a plain C constant.
+            if (global.is_const) {
+                if (try self.constGlobalCValue(initializer)) |text| {
+                    try self.out.print(self.allocator, " = {s};\n\n", .{text});
+                    return;
+                }
+            }
             if (self.staticCInitializer(initializer)) |static_initializer| {
                 try self.out.appendSlice(self.allocator, " = ");
                 if (try self.emitStaticCInitializer(static_initializer)) {
@@ -461,6 +491,24 @@ const CEmitter = struct {
             try self.out.appendSlice(self.allocator, " = 0");
         }
         try self.out.appendSlice(self.allocator, ";\n\n");
+    }
+
+    // Fold a `const` global initializer to its C constant text (section 22).
+    fn constGlobalCValue(self: *CEmitter, expr: ast.Expr) !?[]const u8 {
+        var buf: [64 * 1024]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        var scope = eval.ComptimeScope.init(fba.allocator());
+        scope.funcs = &self.const_fns;
+        scope.globals = &self.const_globals;
+        return switch (eval.foldComptimeExpr(&scope, expr)) {
+            .value => |v| switch (v) {
+                .int => |n| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
+                .boolean => |b| if (b) "1" else "0",
+                // Array-valued const globals are not lowered to a C scalar here.
+                .array => null,
+            },
+            else => null,
+        };
     }
 
     fn zeroInitializerRequiresBraces(self: *CEmitter, ty: ast.TypeExpr) bool {
@@ -1011,7 +1059,7 @@ const CEmitter = struct {
         switch (ty.kind) {
             .array => |node| {
                 const child = self.overlayFieldLayout(node.child.*) orelse return null;
-                const len = constArrayLenValue(node.len) orelse return null;
+                const len = constArrayLenValue(node.len, &self.const_fns, &self.const_globals) orelse return null;
                 return .{ .size = child.size * len, .alignment = child.alignment };
             },
             .qualified => |node| return self.overlayFieldLayout(node.child.*),
@@ -6941,7 +6989,7 @@ const CEmitter = struct {
     }
 
     fn arrayLenTextForExpr(self: *CEmitter, expr: ast.Expr) ![]const u8 {
-        const value = constArrayLenValue(expr) orelse return error.UnsupportedCEmission;
+        const value = constArrayLenValue(expr, &self.const_fns, &self.const_globals) orelse return error.UnsupportedCEmission;
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 
@@ -7932,7 +7980,28 @@ const Inspector = struct {
                         .{ ctx.name, access.kind, access.struct_name, access.field, access.value_type, bits, bits, access.ordering },
                     );
                     try self.writeMmioBackendAccess(ctx.name, access, bits);
+                    // section 18: a typed MMIO write whose value is a buf.dma_addr()
+                    // is a DMA-descriptor handoff — it programs a device register
+                    // with a DMA address. Per section 17 it participates in the
+                    // MMIO acquire/release ordering set, so its ordering composes
+                    // with cache/ordinary/atomic/MMIO operations.
+                    if (std.mem.eql(u8, access.kind, "write") and node.args.len > 0) {
+                        if (dmaAddrHandoffObject(node.args[0], ctx.*)) |dma_object| {
+                            try self.out.print(
+                                self.allocator,
+                                "lower dma_descriptor fn={s} register={s}.{s} object={s} value=dma_addr ordering={s} handoff=true composes_with=section17_mmio participants=ordinary,atomic,dma_descriptor,mmio\n",
+                                .{ ctx.name, access.struct_name, access.field, dma_object, access.ordering },
+                            );
+                        }
+                    }
                     if (std.mem.eql(u8, access.ordering, "release")) {
+                        if (ctx.mmio_sequence.cache_clean_seen) {
+                            try self.out.print(
+                                self.allocator,
+                                "lower mmio_sequence fn={s} edge=cache_clean_before_release before=cache.clean barrier={s}.{s}.{s} ordering=release prevents_reorder=true\n",
+                                .{ ctx.name, access.struct_name, access.field, access.kind },
+                            );
+                        }
                         if (ctx.mmio_sequence.ordinary_store_seen) {
                             try self.out.print(
                                 self.allocator,
@@ -8171,6 +8240,27 @@ const Inspector = struct {
             "lower dma_cache fn={s} op={s} object={s} payload={s} mode={s} helper=mc_dma_cache_{s} required_for_noncoherent=true\n",
             .{ ctx.name, op.kind, op.object, op.payload, op.mode, op.kind },
         );
+        // section 18 + section 17 composition: cache.clean/invalidate are typed
+        // ordering barriers, not volatile pokes. clean precedes a device handoff
+        // (clean-before-handoff), invalidate precedes a CPU read of the buffer
+        // (invalidate-before-read). Each composes with the section 17 MMIO
+        // acquire/release ordering: a clean may not move after a later .release
+        // descriptor write, an invalidate may not move before an earlier
+        // .acquire descriptor read.
+        if (std.mem.eql(u8, op.kind, "clean")) {
+            try self.out.print(
+                self.allocator,
+                "lower dma_cache_order fn={s} op=clean object={s} role=before_device_handoff barrier=true composes_with=section17_mmio_release\n",
+                .{ ctx.name, op.object },
+            );
+            ctx.mmio_sequence.cache_clean_seen = true;
+        } else if (std.mem.eql(u8, op.kind, "invalidate")) {
+            try self.out.print(
+                self.allocator,
+                "lower dma_cache_order fn={s} op=invalidate object={s} role=before_cpu_read barrier=true composes_with=section17_mmio_acquire\n",
+                .{ ctx.name, op.object },
+            );
+        }
     }
 
     fn writeBitcastMetadata(self: *Inspector, call: anytype, ctx: *FnContext) !void {
@@ -8295,6 +8385,10 @@ const FnContext = struct {
 const MmioSequenceState = struct {
     ordinary_store_seen: bool = false,
     pending_acquire: ?MmioAccess = null,
+    // section 18: a cache.clean (clean-for-device) seen before a DMA-descriptor
+    // handoff write composes with the section 17 MMIO .release ordering — the
+    // clean may not be moved after the handoff.
+    cache_clean_seen: bool = false,
 };
 
 const MmioStruct = struct {
@@ -8950,13 +9044,16 @@ fn parseUsizeLiteral(raw: []const u8) ?usize {
     return std.fmt.parseInt(usize, cleaned[0..len], 0) catch null;
 }
 
-fn constArrayLenValue(expr: ast.Expr) ?usize {
+fn constArrayLenValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
     return switch (expr.kind) {
         .int_literal => |literal| parseUsizeLiteral(literal),
-        .grouped => |inner| constArrayLenValue(inner.*),
+        .grouped => |inner| constArrayLenValue(inner.*, funcs, globals),
+        // Section 22 comptime↔type: a `const fn` result or named `const` global
+        // can drive a fixed-array length, so emit the same folded constant.
+        .call, .ident => comptimeUsizeArrayLen(expr, funcs, globals),
         .binary => |node| {
-            const left = constArrayLenValue(node.left.*) orelse return null;
-            const right = constArrayLenValue(node.right.*) orelse return null;
+            const left = constArrayLenValue(node.left.*, funcs, globals) orelse return null;
+            const right = constArrayLenValue(node.right.*, funcs, globals) orelse return null;
             return switch (node.op) {
                 .add => std.math.add(usize, left, right) catch null,
                 .sub => std.math.sub(usize, left, right) catch null,
@@ -8967,6 +9064,25 @@ fn constArrayLenValue(expr: ast.Expr) ?usize {
                 .shr => if (right >= @bitSizeOf(usize)) null else left >> @intCast(right),
                 else => null,
             };
+        },
+        else => null,
+    };
+}
+
+// Fold a comptime const-fn call to a usize array length, mirroring the
+// front-end's `comptimeUsizeValue`. A stack buffer backs the scope so this
+// stays a free function.
+fn comptimeUsizeArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
+    if (funcs == null and globals == null) return null;
+    var buf: [64 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    var scope = eval.ComptimeScope.init(fba.allocator());
+    scope.funcs = funcs;
+    scope.globals = globals;
+    return switch (eval.foldComptimeExpr(&scope, expr)) {
+        .value => |v| switch (v) {
+            .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
+            .boolean, .array => null,
         },
         else => null,
     };
@@ -9361,6 +9477,21 @@ fn dmaOperation(callee: ast.Expr, args: []const ast.Expr, ctx: FnContext) ?DmaOp
         return .{ .kind = "as_slice", .object = object, .payload = payload, .mode = mode };
     }
     return null;
+}
+
+// section 18: returns the DmaBuf object name when `value` is a `buf.dma_addr()`
+// expression — i.e. the value being written into a device descriptor register
+// is a DMA address handoff.
+fn dmaAddrHandoffObject(value: ast.Expr, ctx: FnContext) ?[]const u8 {
+    return switch (value.kind) {
+        .grouped => |inner| dmaAddrHandoffObject(inner.*, ctx),
+        .call => |call| blk: {
+            const op = dmaOperation(call.callee.*, call.args, ctx) orelse break :blk null;
+            if (!std.mem.eql(u8, op.kind, "dma_addr")) break :blk null;
+            break :blk op.object;
+        },
+        else => null,
+    };
 }
 
 fn atomicOrderingArg(args: []const ast.Expr, index: usize) []const u8 {

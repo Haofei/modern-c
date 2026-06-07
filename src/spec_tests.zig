@@ -775,6 +775,7 @@ fn isLowerCCheck(check: []const u8) bool {
         "arithmetic-domain-lowering",
         "atomics-lowering",
         "dma-cache-core",
+        "dma-ordering-composition",
         "opaque-asm-lowering",
         "bitcast-lowering",
     };
@@ -1398,6 +1399,17 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
             "lower dma_access fn=accept_noncoherent_cache_cycle op=as_slice object=buf payload=Packet mode=noncoherent result=slice temporal_cache_proven=false core_guarantee=address_class_only",
             "lower dma_access fn=accept_core_allows_unproven_slice op=as_slice object=buf payload=Packet mode=noncoherent result=slice temporal_cache_proven=false core_guarantee=address_class_only",
             "lower dma_access fn=accept_coherent_slice op=as_slice object=buf payload=Packet mode=coherent result=slice temporal_cache_proven=false core_guarantee=address_class_only",
+        });
+    }
+    if (std.mem.eql(u8, check, "dma-ordering-composition")) {
+        return containsAll(output, &.{
+            // section 18 cache barriers carry their section 17 composition role.
+            "lower dma_cache_order fn=program_noncoherent_dma op=clean object=buf role=before_device_handoff barrier=true composes_with=section17_mmio_release",
+            "lower dma_cache_order fn=program_noncoherent_dma op=invalidate object=buf role=before_cpu_read barrier=true composes_with=section17_mmio_acquire",
+            // a DMA-descriptor handoff is an MMIO write of a dma_addr; it joins the section 17 ordering set.
+            "lower dma_descriptor fn=program_noncoherent_dma register=DmaEngine.desc_addr object=buf value=dma_addr ordering=release handoff=true composes_with=section17_mmio participants=ordinary,atomic,dma_descriptor,mmio",
+            // clean-for-device may not move after the .release descriptor write.
+            "lower mmio_sequence fn=program_noncoherent_dma edge=cache_clean_before_release before=cache.clean barrier=DmaEngine.desc_addr.write ordering=release prevents_reorder=true",
         });
     }
     if (std.mem.eql(u8, check, "opaque-asm-lowering")) {

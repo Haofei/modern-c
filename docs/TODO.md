@@ -89,10 +89,10 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
 
 ## Compiler analysis (medium, partly prose-defined)
 
-- [ ] **DMA/cache-coherence — core vs library boundary (§18)** — effort **M**, risk: spec interpretation.
-  Done: typed `DmaBuf`, `cache.clean`/`cache.invalidate`, mode checks,
-  address-class rules — the core tracks a buffer's *access mode and coherence*.
-  The §18 update settled the boundary, which narrows the remaining core work:
+- [x] **DMA/cache-coherence — core vs library boundary (§18)** — core **done**
+  (2026-06-06), effort **M**. The core tracks a buffer's *access mode and
+  coherence* and how DMA-descriptor/cache operations compose with the §17/§19
+  ordering rules; ownership/lifetime stays a library profile (out of core).
   - [x] Documented (§18 summary): the DMA **primitive** = `DmaAddr` address class
         + typed `DmaBuf<T, coherence>` + typed `cache.clean`/`cache.invalidate`
         + `dma_addr()`/`as_slice()` bridge (spatial/representational facts,
@@ -101,22 +101,81 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
         (move-only handles, temporal/linear facts), **not** a core compiler
         guarantee. The previously listed "ownership state machine per `DmaBuf`"
         is therefore out of core scope.
-  - [ ] Core (still open): confirm the typed cache ops and `DmaBuf` modes gate
-        coherent vs noncoherent access correctly, and that DMA-descriptor
-        ordering composes with the §17/§19 ordering rules.
-  - [ ] Library (out of core conformance): a move-only `DmaBuf` API returning
-        `cpu_owned`/`device_owned` handles that requires `invalidate`-before-read
-        and `clean`-before-handoff at the ownership transitions.
+  - [x] Core: the typed cache ops and `DmaBuf` modes gate coherent vs
+        noncoherent access correctly — `cache.clean`/`cache.invalidate` on a
+        `.coherent` buffer is rejected (`E_DMA_CACHE_MODE`, MIR-native
+        `dma_cache_mode` finding); on a non-`DmaBuf` argument rejected
+        (`E_DMA_OPERATION`); `dma_addr()`/`as_slice()` accepted on both modes;
+        `DmaAddr` is not convertible to `PAddr`/`VAddr` (D.4 address-class).
+        Covered by `tests/spec/dma_cache.mc`.
+  - [x] Core: **DMA-descriptor ordering composes with §17/§19.** A typed MMIO
+        write whose value is a `buf.dma_addr()` is recognized as a DMA-descriptor
+        handoff and emits a `dma_descriptor … composes_with=section17_mmio
+        participants=ordinary,atomic,dma_descriptor,mmio` fact; `cache.clean`/
+        `cache.invalidate` emit `dma_cache_order` barrier facts
+        (`before_device_handoff`/`before_cpu_read`) and a `cache.clean` seen
+        before a `.release` descriptor write emits the
+        `cache_clean_before_release` ordering edge — the clean-for-device may not
+        be moved after the handoff. Fixture `tests/spec/dma_ordering.mc`
+        (check `dma-ordering-composition`); green under `zig build test` + sweep.
+  - [ ] Library (out of core conformance, deferred): a move-only `DmaBuf` API
+        returning `cpu_owned`/`device_owned` handles that requires
+        `invalidate`-before-read and `clean`-before-handoff at the ownership
+        transitions. This needs affine/linear handles (a library profile per
+        §18), not a core compiler guarantee.
 
 ## Large subsystems (weeks, architectural)
 
-- [ ] **Full comptime execution (§22)** — effort **L**, risk medium.
-  Today `eval.zig` only const-folds scalar arithmetic and enforces the comptime
-  effect rules. A general comptime interpreter needs:
-  - [ ] Tree-walking evaluator over typed AST/HIR: expressions, control flow,
-        calls, locals, structs/arrays, comptime memory.
-  - [ ] Comptime↔type feedback (comptime values as array lengths, etc.).
-  - [ ] Comptime trap / no-runtime-effect semantics.
+- [ ] **Full comptime execution (§22)** — effort **L**, risk medium. _In
+  progress: the scalar const-evaluator and comptime-trap semantics landed
+  (2026-06-06); control-flow/calls/aggregates and comptime↔type feedback remain._
+  A general comptime interpreter needs:
+  - [~] Tree-walking evaluator over typed AST/HIR: **scalar subset + const-fn
+        calls + comptime loops + comptime arrays done** —
+        `eval.foldComptimeExpr`/`ComptimeScope` fold integer/bool literals,
+        comptime `let`/`var` constant bindings, arithmetic, comparisons, and
+        (short-circuiting) logical operators over the comptime block, with
+        i128-overflow-safe arithmetic. **`const fn` calls** evaluate
+        (`foldComptimeCall`/`foldComptimeFnBody`): a call to a `const fn` with
+        constant arguments binds params and folds the body, bounded by a
+        recursion fuel limit; sema exempts `const fn` calls from
+        `E_COMPTIME_FORBIDS_RUNTIME_EFFECT` (only non-const/runtime calls are a
+        forbidden effect). **Comptime control flow** in const-fn bodies is
+        evaluated (`foldComptimeStmtSeq`/`foldComptimeWhile`/`foldComptimeForLoop`):
+        `var` mutation, `while` *and* `for` loops with `break`/`continue` and a
+        per-loop iteration fuel limit, and nested blocks — e.g. a Euclidean `gcd`
+        and an array-summing `for` `const fn` both fold. **Comptime array values**
+        (`ComptimeValue.array`): array literals (`.{…}`) fold to array values,
+        indexing (`xs[i]`) folds with an out-of-bounds → `E_COMPTIME_TRAP`, and
+        `for x in xs` iterates them. Still open: struct comptime values, and
+        comptime memory.
+  - [~] Comptime↔type feedback (comptime values as array lengths, etc.):
+        **fixed-array lengths fold `const fn` results *and* named `const`
+        globals** — `[align_up(3, 4)]u8` and `[MAX]u8` both validate and emit
+        correctly. The folding helper (`comptimeUsizeValue`/`comptimeUsizeArrayLen`)
+        is shared by all three array-length gates: sema (`parseArrayLen`/
+        `checkType`), the MIR verifier (`addArrayLiteralShapeCheck`), and the C
+        backend (`constArrayLenValue`), each threading a `const fn` registry and
+        a folded-`const`-globals value map (`eval.collectConstGlobals` /
+        `ComptimeScope.globals`). **Const globals** (`const NAME: T = …`) are a
+        complete feature: parsed (`GlobalDecl.is_const`), comptime-const static
+        initializer accepted (may reference earlier const globals, e.g.
+        `DOUBLE = MAX * 2`), folded for array lengths + comptime asserts, and
+        emitted as their folded C constant. Fixture `tests/spec/const_globals.mc`.
+        Still open: comptime *parameters* (`comptime CAP: usize`, needs call-site
+        monomorphization), and reflection-as-comptime-value (`sizeof(T)` — needs
+        an MC-side ABI layout model, since the C backend delegates `sizeof` to
+        clang).
+  - [x] Comptime trap / no-runtime-effect semantics: `foldComptimeBlock` in sema
+        evaluates each `assert(...)` over the folded scope and reports
+        `E_COMPTIME_TRAP` when the condition is provably false or the const eval
+        itself traps (divide-by-zero, invalid shift) — superseding the old
+        literal-`false`-only check. Non-constant conditions fold to `unknown`
+        and are not diagnosed. No-runtime-effect rules
+        (`E_COMPTIME_FORBIDS_RUNTIME_EFFECT`) were already enforced. Fixtures:
+        new accept/reject cases in `tests/spec/comptime.mc` (true/false
+        comparisons, const-binding assertions, divide-by-zero) plus a
+        `foldComptimeExpr` unit test in `eval.zig`.
 
 - [x] **Production typed MIR/CFG + verifier** — core milestone **done**
   (2026-06-06). `src/mir.zig` is the production MIR entry point used by
@@ -556,16 +615,29 @@ inaccurate — untyped globals are rejected in sema with `E_GLOBAL_REQUIRES_TYPE
    sema-validated, and lowered to compilable GCC/Clang extended asm with
    `out`/`in`/`clobber` operands; fixtures in `tests/spec/inline_asm.mc` +
    `tests/c_emit_precise_asm.mc`, green under sweep + c-test.
-2. **DMA/cache-coherence core checks (§18)** — effort **M**. Boundary decided;
-   ownership is a library profile, so the only open *core* work is confirming the
-   typed cache ops/`DmaBuf` modes gate coherent vs noncoherent access and that
-   descriptor ordering composes with §17/§19. Small, bounded.
+2. ✅ **DMA/cache-coherence core checks (§18)** — **done** (2026-06-06). The
+   typed cache ops/`DmaBuf` modes gate coherent vs noncoherent access
+   (`E_DMA_CACHE_MODE`/`E_DMA_OPERATION` + D.4 address-class), and DMA-descriptor
+   handoff + cache barriers compose with the §17/§19 MMIO ordering rules
+   (`dma_descriptor`/`dma_cache_order`/`cache_clean_before_release` facts);
+   fixtures `tests/spec/dma_cache.mc` + `tests/spec/dma_ordering.mc`. Ownership
+   remains a deferred library profile.
 3. ✅ **`reduce.sum_checked<T>` (§8.2)** — **done** (2026-06-06). Wide-accumulate
    (`__int128`) + single range-check lowering to `Result<T, Overflow>`; fixtures
    in `tests/spec/reduce_sum_checked.mc` + `tests/c_emit_reduce_sum_checked.mc`,
    green under sweep + c-test.
-4. **Full comptime interpreter (§22)** — effort **L**. Tree-walking evaluator +
-   comptime↔type feedback. Largest *bounded* language item.
+4. **Full comptime interpreter (§22)** — effort **L**, _in progress_. The scalar
+   const-evaluator, `const fn` call evaluation, comptime `while`/`for`-loop
+   control flow (with fuel), comptime array values + indexing, comptime-trap
+   semantics, named `const` globals, and comptime↔type feedback for `const fn`-
+   and `const`-global-driven fixed-array lengths landed (`foldComptimeExpr`/
+   `foldComptimeCall`/`foldComptimeWhile`/`foldComptimeForLoop`/
+   `foldComptimeBlock`/`collectConstGlobals`, assert folding → `E_COMPTIME_TRAP`,
+   and shared array-length folding across sema/MIR/C-backend); remaining: struct
+   comptime values, comptime *parameters* (needs call-site monomorphization), and
+   reflection-as-comptime value (`sizeof(T)` — needs an MC-side ABI layout model
+   since the C backend delegates `sizeof`/`alignof` to clang). Largest *bounded*
+   language item.
 5. **Production typed MIR/CFG + verifier** — ✅ **done** (core milestone,
    2026-06-06). Typed CFG + trap edges + D.1–D.6 verifier passes (81 MIR-native
    diagnostics, all usage checks migrated); unit suite + sweep + c-test green.

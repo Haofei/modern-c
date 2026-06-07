@@ -96,6 +96,9 @@ pub const GlobalDecl = struct {
     name: Ident,
     ty: ?TypeExpr,
     init: ?Expr,
+    // A `const NAME: T = <comptime constant>` declaration: a named compile-time
+    // constant (section 22), usable in array lengths and comptime asserts.
+    is_const: bool = false,
 };
 
 pub const EnumDecl = struct {

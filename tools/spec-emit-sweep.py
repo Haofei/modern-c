@@ -17,9 +17,11 @@ import sys, os, re, glob, subprocess, tempfile
 
 # Fixtures whose valid functions are NOT a declared lower-c target:
 #  - dma_cache: DmaBuf is a library profile, out of core conformance (design §18).
+#  - dma_ordering: same DmaBuf library-profile slice; it exercises the section 18
+#    /section 17 ordering-composition inspector facts, not C emission.
 #  - unsafe_context: phase=sema fixture; `mmio.map<T>(pa)?` C emission is not a
 #    declared target there.
-OUT_OF_SCOPE = {"dma_cache.mc", "unsafe_context.mc"}
+OUT_OF_SCOPE = {"dma_cache.mc", "dma_ordering.mc", "unsafe_context.mc"}
 
 CLANG = ["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
          # The harness keeps unused valid functions, so silence those two only.

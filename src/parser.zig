@@ -75,6 +75,18 @@ pub const Parser = struct {
             return .{ .span = joinSpan(start, end), .attrs = attrs, .kind = .{ .fn_decl = fn_decl } };
         }
 
+        // `const NAME: T = <comptime constant>;` — a named compile-time constant
+        // (section 22). A const declaration that is not `const fn` is this form.
+        if (is_const) {
+            const name = try self.expectName("expected const name");
+            try self.expect(.colon, "expected ':' in const declaration");
+            const ty = try self.parseType();
+            try self.expect(.equal, "expected '=' in const declaration");
+            const initializer = try self.parseExpr(0);
+            const semi = try self.expectTok(.semicolon, "expected ';' after const declaration");
+            return .{ .span = joinSpan(start, semi.span), .attrs = attrs, .kind = .{ .global_decl = .{ .name = name, .ty = ty, .init = initializer, .is_const = true } } };
+        }
+
         if (self.match(.kw_type)) {
             const name = try self.expectName("expected type alias name");
             try self.expect(.equal, "expected '=' in type alias");

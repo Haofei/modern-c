@@ -3,12 +3,19 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
+const eval = @import("eval.zig");
 
 pub const Checker = struct {
     reporter: *diagnostics.Reporter,
     // Set when building a symbol table runs out of memory. Surfaced as a fatal
     // diagnostic so an incomplete table never silently passes checking.
     oom: bool = false,
+    // Registry of `const fn` declarations, populated for the duration of
+    // checkModule so comptime folding can evaluate const-fn calls (section 22).
+    const_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
+    // Folded values of `const NAME: T = …` globals (section 22), so comptime
+    // folding can resolve named compile-time constants.
+    const_globals: ?*const std.StringHashMap(eval.ComptimeValue) = null,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -44,6 +51,30 @@ pub const Checker = struct {
         self.collectEnums(module, &enums);
         self.collectFunctions(module, &functions);
         self.collectGlobals(module, &globals);
+
+        var const_fns = std.StringHashMap(ast.FnDecl).init(self.reporter.allocator);
+        defer const_fns.deinit();
+        for (module.decls) |decl| {
+            const fn_decl = switch (decl.kind) {
+                .fn_decl => |node| node,
+                else => continue,
+            };
+            if (fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) {
+                const_fns.put(fn_decl.name.text, fn_decl) catch {
+                    self.oom = true;
+                };
+            }
+        }
+        self.const_fns = &const_fns;
+        defer self.const_fns = null;
+
+        var const_globals = std.StringHashMap(eval.ComptimeValue).init(self.reporter.allocator);
+        defer const_globals.deinit();
+        eval.collectConstGlobals(self.reporter.allocator, module, &const_fns, &const_globals) catch {
+            self.oom = true;
+        };
+        self.const_globals = &const_globals;
+        defer self.const_globals = null;
 
         for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
 
@@ -218,6 +249,7 @@ pub const Checker = struct {
                         .params = fn_decl.params,
                         .return_ty = fn_decl.return_type,
                         .no_lang_trap = hasNoLangTrap(decl.attrs),
+                        .is_const = fn_decl.is_const,
                     }) catch {
                         self.oom = true;
                     };
@@ -459,9 +491,25 @@ pub const Checker = struct {
         if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, source)) {
             self.errorCode(initializer.span, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         }
-        if (type_valid and self.reporter.diagnostics.items.len == errors_before and !isStaticGlobalInitializer(initializer, ctx)) {
+        // A `const` global's initializer is a compile-time constant by
+        // definition (section 22): accept any expression that folds, including
+        // named references to earlier const globals (e.g. `MAX * 2`).
+        const folds_const = global.is_const and self.comptimeConstantFolds(initializer);
+        if (type_valid and self.reporter.diagnostics.items.len == errors_before and !isStaticGlobalInitializer(initializer, ctx) and !folds_const) {
             self.errorCode(initializer.span, "E_GLOBAL_INITIALIZER_NOT_STATIC", "global initializer must be a compile-time static value for M0 C emission");
         }
+    }
+
+    fn comptimeConstantFolds(self: *Checker, expr: ast.Expr) bool {
+        var buf: [64 * 1024]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        var scope = eval.ComptimeScope.init(fba.allocator());
+        scope.funcs = self.const_fns;
+        scope.globals = self.const_globals;
+        return switch (eval.foldComptimeExpr(&scope, expr)) {
+            .value => true,
+            else => false,
+        };
     }
 
     fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
@@ -508,6 +556,8 @@ pub const Checker = struct {
                 .type_aliases = type_aliases,
                 .functions = functions,
                 .globals = globals,
+                .const_fns = self.const_fns,
+                .const_globals = self.const_globals,
             };
             self.checkBlock(body, fn_ctx);
             if (fallthroughSpan(body, fn_ctx)) |span| {
@@ -523,6 +573,43 @@ pub const Checker = struct {
     fn checkBlock(self: *Checker, block: ast.Block, ctx: Context) void {
         for (block.items) |stmt| self.checkStmt(stmt, ctx);
         self.checkUnhandledResultLocals(block, ctx);
+    }
+
+    // Section 22: const-fold the scalar subset of a comptime block. Binds
+    // comptime `let`/`var` constants and evaluates `assert(...)` conditions,
+    // reporting E_COMPTIME_TRAP when an assertion is provably false or the
+    // const evaluation itself traps (divide-by-zero, invalid shift). Statements
+    // outside the constant subset are skipped — they are not provably wrong, so
+    // they produce no diagnostic here (effect rules are enforced by checkBlock).
+    fn foldComptimeBlock(self: *Checker, block: ast.Block, scope: *eval.ComptimeScope) void {
+        for (block.items) |stmt| {
+            switch (stmt.kind) {
+                .let_decl, .var_decl => |local| {
+                    if (local.names.len != 1) continue;
+                    const init_expr = local.init orelse continue;
+                    switch (eval.foldComptimeExpr(scope, init_expr)) {
+                        .value => |value| scope.bind(local.names[0].text, value) catch {},
+                        .trap => self.errorCode(stmt.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error"),
+                        .unknown => {},
+                    }
+                },
+                .assert => |expr| {
+                    switch (eval.foldComptimeExpr(scope, expr)) {
+                        .value => |value| {
+                            if (value == .boolean and !value.boolean) {
+                                self.errorCode(stmt.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error");
+                            }
+                        },
+                        .trap => self.errorCode(stmt.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error"),
+                        .unknown => {},
+                    }
+                },
+                // A comptime block may nest plain/unsafe blocks; recurse so their
+                // constants and assertions fold in the same scope.
+                .block, .unsafe_block, .comptime_block => |inner| self.foldComptimeBlock(inner, scope),
+                else => {},
+            }
+        }
     }
 
     fn checkUnhandledResultLocals(self: *Checker, block: ast.Block, ctx: Context) void {
@@ -619,6 +706,18 @@ pub const Checker = struct {
                 var next = ctx;
                 next.in_comptime = true;
                 self.checkBlock(block, next);
+                // Fold the constant subset of the block: bind comptime `let`
+                // constants and evaluate `assert(...)` conditions, reporting
+                // E_COMPTIME_TRAP for a provably-false assertion or a const-eval
+                // trap (section 22: "Trap during const eval is a compile error").
+                // An arena backs the fold scope so comptime array temporaries
+                // are reclaimed together when the block is done.
+                var arena = std.heap.ArenaAllocator.init(self.reporter.allocator);
+                defer arena.deinit();
+                var scope = eval.ComptimeScope.init(arena.allocator());
+                scope.funcs = self.const_fns;
+                scope.globals = self.const_globals;
+                self.foldComptimeBlock(block, &scope);
             },
             .block => |block| self.checkBlock(block, ctx),
             .asm_stmt => |asm_stmt| {
@@ -716,9 +815,8 @@ pub const Checker = struct {
                 if (!isConditionType(condition)) {
                     self.errorCode(expr.span, "E_CONDITION_NOT_BOOL", "condition must be bool");
                 }
-                if (ctx.in_comptime and isFalseLiteral(expr)) {
-                    self.errorCode(stmt.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error");
-                }
+                // Comptime assert folding is handled by foldComptimeBlock once
+                // the whole comptime block (and its constant bindings) is known.
             },
             .assignment => |node| {
                 if (!isAssignableTarget(node.target)) {
@@ -1065,7 +1163,9 @@ pub const Checker = struct {
                 for (node.type_args) |ty| self.checkType(ty, .normal, ctx);
                 const direct_function = if (!trap_call and node.type_args.len == 0) directCallFunction(node.callee.*, ctx) else null;
                 if (direct_function) |function| {
-                    if (ctx.in_comptime) {
+                    // A `const fn` is evaluable at comptime (section 22); only
+                    // non-const (runtime) functions are a forbidden effect.
+                    if (ctx.in_comptime and !function.is_const) {
                         self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot call runtime functions");
                     }
                     if (ctx.no_lang_trap and !function.no_lang_trap) {
@@ -1200,9 +1300,15 @@ pub const Checker = struct {
                 self.checkType(node.child.*, child_mode, ctx);
             },
             .array => |node| {
-                const len_class = self.checkExpr(node.len, .{});
-                if (!isIndexType(len_class)) {
-                    self.errorCode(node.len.span, "E_ARRAY_LENGTH_TYPE", "array length must be a compile-time checked usize integer expression");
+                // A length that folds to a comptime constant — literal
+                // arithmetic or a `const fn` result (section 22 comptime↔type) —
+                // is a valid compile-time array length and need not type-check
+                // as a runtime usize expression.
+                if (comptimeUsizeValue(node.len, self.const_fns, self.const_globals) == null) {
+                    const len_class = self.checkExpr(node.len, .{});
+                    if (!isIndexType(len_class)) {
+                        self.errorCode(node.len.span, "E_ARRAY_LENGTH_TYPE", "array length must be a compile-time checked usize integer expression");
+                    }
                 }
                 self.checkType(node.child.*, if (mode == .storage) .storage else .normal, ctx);
             },
@@ -1595,7 +1701,7 @@ pub const Checker = struct {
             self.errorCode(member.base.span, "E_CONST_GET_BASE", "const_get is defined only for fixed-length arrays");
         }
         const base_ty = exprResultType(member.base.*, ctx) orelse exprStorageType(member.base.*, ctx) orelse return .unknown;
-        const array = fixedArrayType(resolveAliasType(base_ty, ctx)) orelse {
+        const array = fixedArrayType(resolveAliasType(base_ty, ctx), ctx.const_fns, ctx.const_globals) orelse {
             self.errorCode(member.base.span, "E_CONST_GET_BASE", "const_get is defined only for fixed-length arrays");
             return .unknown;
         };
@@ -1877,7 +1983,7 @@ pub const Checker = struct {
                 return true;
             },
         };
-        const expected_len = parseArrayLen(array.len) orelse {
+        const expected_len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse {
             self.errorCode(array.len.span, "E_ARRAY_LITERAL_LENGTH", "array literal target must have a known constant length");
             return true;
         };
@@ -2718,6 +2824,12 @@ const Context = struct {
     type_aliases: ?*const std.StringHashMap(ast.TypeExpr) = null,
     functions: ?*const std.StringHashMap(FunctionInfo) = null,
     globals: ?*const std.StringHashMap(GlobalInfo) = null,
+    // `const fn` bodies, for evaluating comptime const-fn calls (e.g. when a
+    // const-fn result drives a fixed-array length — section 22 comptime↔type).
+    const_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
+    // Folded `const NAME: T = …` global values, for resolving named compile-time
+    // constants in comptime contexts and array lengths.
+    const_globals: ?*const std.StringHashMap(eval.ComptimeValue) = null,
 };
 
 const MmioStruct = struct {
@@ -2764,6 +2876,7 @@ const FunctionInfo = struct {
     params: []const ast.Param,
     return_ty: ?ast.TypeExpr,
     no_lang_trap: bool = false,
+    is_const: bool = false,
 };
 
 const GlobalInfo = struct {
@@ -3618,13 +3731,13 @@ fn integerLiteralValue(expr: ast.Expr) ?LiteralValue {
     };
 }
 
-fn parseArrayLen(expr: ast.Expr) ?usize {
+fn parseArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
     return switch (expr.kind) {
         .int_literal => |literal| parseUsizeLiteral(literal),
-        .grouped => |inner| parseArrayLen(inner.*),
+        .grouped => |inner| parseArrayLen(inner.*, funcs, globals),
         .binary => |node| {
-            const left = parseArrayLen(node.left.*) orelse return null;
-            const right = parseArrayLen(node.right.*) orelse return null;
+            const left = parseArrayLen(node.left.*, funcs, globals) orelse return null;
+            const right = parseArrayLen(node.right.*, funcs, globals) orelse return null;
             return switch (node.op) {
                 .add => std.math.add(usize, left, right) catch null,
                 .sub => std.math.sub(usize, left, right) catch null,
@@ -3635,6 +3748,29 @@ fn parseArrayLen(expr: ast.Expr) ?usize {
                 .shr => if (right >= @bitSizeOf(usize)) null else left >> @intCast(right),
                 else => null,
             };
+        },
+        // Section 22 comptime↔type feedback: a `const fn` result or a named
+        // `const` global can drive a fixed-array length, e.g. `[align_up(3, 4)]u8`
+        // or `[CAP]u8`.
+        .call, .ident => comptimeUsizeValue(expr, funcs, globals),
+        else => null,
+    };
+}
+
+// Fold a comptime expression to a usize using the const-fn evaluator. A
+// stack buffer backs the evaluator's scopes so this stays a free function
+// (callable from the type-level array-length helpers without a Checker).
+fn comptimeUsizeValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
+    if (funcs == null and globals == null) return null;
+    var buf: [64 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    var scope = eval.ComptimeScope.init(fba.allocator());
+    scope.funcs = funcs;
+    scope.globals = globals;
+    return switch (eval.foldComptimeExpr(&scope, expr)) {
+        .value => |v| switch (v) {
+            .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
+            .boolean, .array => null,
         },
         else => null,
     };
@@ -4150,7 +4286,7 @@ const ConstGetInfo = struct {
 fn constGetInfo(call: anytype, ctx: Context) ?ConstGetInfo {
     const member = constGetMember(call.callee.*) orelse return null;
     const base_ty = exprResultType(member.base.*, ctx) orelse exprStorageType(member.base.*, ctx) orelse return null;
-    const array = fixedArrayType(resolveAliasType(base_ty, ctx)) orelse return null;
+    const array = fixedArrayType(resolveAliasType(base_ty, ctx), ctx.const_fns, ctx.const_globals) orelse return null;
     return .{
         .base = member.base,
         .index = if (call.type_args.len == 1) constGetIndexArg(call.type_args[0]) else null,
@@ -4169,10 +4305,10 @@ const FixedArrayInfo = struct {
     child: ast.TypeExpr,
 };
 
-fn fixedArrayType(ty: ast.TypeExpr) ?FixedArrayInfo {
+fn fixedArrayType(ty: ast.TypeExpr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?FixedArrayInfo {
     return switch (ty.kind) {
-        .array => |node| .{ .len = parseArrayLen(node.len) orelse return null, .child = node.child.* },
-        .qualified => |node| fixedArrayType(node.child.*),
+        .array => |node| .{ .len = parseArrayLen(node.len, funcs, globals) orelse return null, .child = node.child.* },
+        .qualified => |node| fixedArrayType(node.child.*, funcs, globals),
         else => null,
     };
 }
@@ -4737,14 +4873,6 @@ fn isCpuPauseCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |node| isIdentNamed(node.base.*, "cpu") and std.mem.eql(u8, node.name.text, "pause"),
         .grouped => |inner| isCpuPauseCall(inner.*),
-        else => false,
-    };
-}
-
-fn isFalseLiteral(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .bool_literal => |value| !value,
-        .grouped => |inner| isFalseLiteral(inner.*),
         else => false,
     };
 }

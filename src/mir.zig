@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
+const eval = @import("eval.zig");
 const parser = @import("parser.zig");
 
 pub const TrapKind = enum {
@@ -290,6 +291,10 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
 
     var summaries = std.StringHashMap(FunctionSummary).init(allocator);
     defer summaries.deinit();
+    var const_fns = std.StringHashMap(ast.FnDecl).init(allocator);
+    defer const_fns.deinit();
+    var const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator);
+    defer const_globals.deinit();
     var globals = std.StringHashMap(ValueType).init(allocator);
     defer globals.deinit();
     var global_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator);
@@ -305,6 +310,7 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
                     .return_type_expr = fn_decl.return_type,
                     .params = fn_decl.params,
                 });
+                if (decl.kind == .fn_decl and fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, fn_decl);
             },
             .global_decl => |global| {
                 if (global.ty) |ty| {
@@ -315,6 +321,8 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
             else => {},
         }
     }
+
+    try eval.collectConstGlobals(allocator, module, &const_fns, &const_globals);
 
     var functions: std.ArrayList(Function) = .empty;
     errdefer {
@@ -327,7 +335,7 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
             .global_decl => |global| {
                 if (global.ty) |ty| {
                     if (global.init) |initializer| {
-                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &globals, &global_type_exprs);
+                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals, &globals, &global_type_exprs);
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
                         try functions.append(allocator, try builder.finish());
@@ -336,7 +344,7 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
             },
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
-                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &globals, &global_type_exprs);
+                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals, &globals, &global_type_exprs);
                     errdefer builder.deinit();
                     try builder.buildBody(body);
                     try functions.append(allocator, try builder.finish());
@@ -857,6 +865,8 @@ const FunctionBuilder = struct {
     unions: *const std.StringHashMap(UnionSummary),
     packed_bits: *const std.StringHashMap(PackedBitsSummary),
     aliases: *const std.StringHashMap(ast.TypeExpr),
+    const_fns: *const std.StringHashMap(ast.FnDecl),
+    const_globals: *const std.StringHashMap(eval.ComptimeValue),
     globals: *const std.StringHashMap(ValueType),
     global_type_exprs: *const std.StringHashMap(ast.TypeExpr),
     blocks: std.ArrayList(MutableBlock),
@@ -884,7 +894,7 @@ const FunctionBuilder = struct {
     semantic_expr_depth: usize = 0,
     next_contract_region_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr)) !FunctionBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
@@ -902,6 +912,8 @@ const FunctionBuilder = struct {
             .unions = unions,
             .packed_bits = packed_bits,
             .aliases = aliases,
+            .const_fns = const_fns,
+            .const_globals = const_globals,
             .globals = globals,
             .global_type_exprs = global_type_exprs,
             .blocks = blocks,
@@ -931,7 +943,7 @@ const FunctionBuilder = struct {
         return builder;
     }
 
-    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr)) !FunctionBuilder {
+    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "global_init" });
@@ -949,6 +961,8 @@ const FunctionBuilder = struct {
             .unions = unions,
             .packed_bits = packed_bits,
             .aliases = aliases,
+            .const_fns = const_fns,
+            .const_globals = const_globals,
             .globals = globals,
             .global_type_exprs = global_type_exprs,
             .blocks = blocks,
@@ -2488,7 +2502,7 @@ const FunctionBuilder = struct {
             .array => |node| node,
             else => return,
         };
-        const expected_len = parseArrayLen(array.len) orelse {
+        const expected_len = parseArrayLen(array.len, self.const_fns, self.const_globals) orelse {
             try self.addInstr(.aggregate_check, "array_literal_length", valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases), span);
             return;
         };
@@ -3528,13 +3542,16 @@ fn unionCasePayloadType(info: UnionSummary, case_name: []const u8) ?ast.TypeExpr
     return null;
 }
 
-fn parseArrayLen(expr: ast.Expr) ?usize {
+fn parseArrayLen(expr: ast.Expr, const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue)) ?usize {
     return switch (expr.kind) {
         .int_literal => |literal| parseUsizeLiteral(literal),
-        .grouped => |inner| parseArrayLen(inner.*),
+        .grouped => |inner| parseArrayLen(inner.*, const_fns, const_globals),
+        // Section 22 comptime↔type: a `const fn` result or named `const` global
+        // can drive a fixed-array length; fold it the way the front-end did.
+        .call, .ident => comptimeUsizeArrayLen(expr, const_fns, const_globals),
         .binary => |node| {
-            const left = parseArrayLen(node.left.*) orelse return null;
-            const right = parseArrayLen(node.right.*) orelse return null;
+            const left = parseArrayLen(node.left.*, const_fns, const_globals) orelse return null;
+            const right = parseArrayLen(node.right.*, const_fns, const_globals) orelse return null;
             return switch (node.op) {
                 .add => std.math.add(usize, left, right) catch null,
                 .sub => std.math.sub(usize, left, right) catch null,
@@ -3545,6 +3562,21 @@ fn parseArrayLen(expr: ast.Expr) ?usize {
                 .shr => if (right >= @bitSizeOf(usize)) null else left >> @intCast(right),
                 else => null,
             };
+        },
+        else => null,
+    };
+}
+
+fn comptimeUsizeArrayLen(expr: ast.Expr, const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue)) ?usize {
+    var buf: [64 * 1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    var scope = eval.ComptimeScope.init(fba.allocator());
+    scope.funcs = const_fns;
+    scope.globals = const_globals;
+    return switch (eval.foldComptimeExpr(&scope, expr)) {
+        .value => |v| switch (v) {
+            .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
+            .boolean, .array => null,
         },
         else => null,
     };
