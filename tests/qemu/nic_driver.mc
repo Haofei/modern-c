@@ -51,20 +51,24 @@ export fn nic_transmit(uart: MmioPtr<Uart16550>, l: *SpinLock) -> void {
     let dev: DeviceBuffer = clean_for_device(cpu0); // cpu0 consumed at handoff
     let desc_addr: usize = device_addr(&dev);        // borrow the device address
 
-    // 2. Under the lock, enqueue a TX descriptor on the ring and order the
-    //    descriptor write before the doorbell.
+    // 2. Under the lock, enqueue the TX descriptor on the ring and dequeue it for
+    //    transmit; order the descriptor write before the doorbell.
     let g: Guard = lock(l);
     let tx0: Ring<usize> = empty(usize, 0);
-    let tx1: Ring<usize> = push(usize, tx0, desc_addr);
-    let pending: usize = len(usize, tx1);
+    let tx1: Ring<usize> = push(usize, tx0, desc_addr); // enqueue the descriptor
+    let queued: usize = front(usize, tx1);              // dequeue it for transmit
     wmb();
 
-    // 3. Doorbell + payload: write the frame to the device register (the UART).
-    let frame: [10]u8 = .{ 'N', 'I', 'C', '-', 'T', 'X', '-', 'O', 'K', 10 };
-    var i: usize = 0;
-    while i < pending + 9 {
-        uart_putc(uart, frame[i]);
-        i = i + 1;
+    // 3. Doorbell + payload: write the frame (fixed length) to the device
+    //    register (the UART). `queued` is the descriptor that round-tripped the
+    //    ring; transmit only when it matches what we enqueued.
+    if queued == desc_addr {
+        let frame: [10]u8 = .{ 'N', 'I', 'C', '-', 'T', 'X', '-', 'O', 'K', 10 };
+        var i: usize = 0;
+        while i < 10 {
+            uart_putc(uart, frame[i]);
+            i = i + 1;
+        }
     }
     unlock(g); // guard consumed
 

@@ -14,8 +14,10 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: demo-test (clang not found)
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# 1. Positive demos must lower to compilable C.
 count=0
 for src in "$HERE"/demo/*/*.mc; do
+    case "$src" in */demo/bad/*) continue ;; esac # the bad/ cases must NOT compile
     name="$(basename "$(dirname "$src")")/$(basename "$src")"
     if ! "$MCC" emit-c "$src" >"$WORK/out.c" 2>"$WORK/err"; then
         echo "FAIL: demo-test — $name did not lower to C"
@@ -31,5 +33,21 @@ for src in "$HERE"/demo/*/*.mc; do
     count=$((count + 1))
 done
 
-echo "PASS: demo-test — $count demo drivers lowered to compilable C"
+# 2. Compile-fail demos: each must be rejected with the error its `EXPECT:` line
+#    names — this is where the type-safety value is demonstrated.
+rejects=0
+for src in "$HERE"/demo/bad/*.mc; do
+    [ -e "$src" ] || continue
+    name="bad/$(basename "$src")"
+    want="$(grep -o 'EXPECT: [A-Z_]*' "$src" | awk '{print $2}')"
+    out="$("$MCC" check "$src" 2>&1 || true)"
+    if ! printf '%s' "$out" | grep -q "$want"; then
+        echo "FAIL: demo-test — $name should be rejected with $want, but was not"
+        printf '%s\n' "$out" | head
+        exit 1
+    fi
+    rejects=$((rejects + 1))
+done
+
+echo "PASS: demo-test — $count demo drivers lower to compilable C; $rejects misuses correctly rejected"
 exit 0

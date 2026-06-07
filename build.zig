@@ -168,6 +168,33 @@ pub fn build(b: *std.Build) void {
     const demo_test_step = b.step("demo-test", "Lower every demo/ driver to C and compile-check it");
     demo_test_step.dependOn(&demo_test_cmd.step);
 
+    const net_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/net-test.sh",
+        "zig-out/bin/mcc",
+    });
+    net_test_cmd.step.dependOn(b.getInstallStep());
+    const net_test_step = b.step("net-test", "Run the kernel virtio-net RX/TX ARP exchange under QEMU");
+    net_test_step.dependOn(&net_test_cmd.step);
+
+    const kernel_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/kernel-test.sh",
+        "zig-out/bin/mcc",
+    });
+    kernel_test_cmd.step.dependOn(b.getInstallStep());
+    const kernel_test_step = b.step("kernel-test", "Compile-check kernel/ for riscv64 and verify typestate rejects");
+    kernel_test_step.dependOn(&kernel_test_cmd.step);
+
+    const trap_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/trap-test.sh",
+        "zig-out/bin/mcc",
+    });
+    trap_test_cmd.step.dependOn(b.getInstallStep());
+    const trap_test_step = b.step("trap-test", "Run the typed-CPU trap/timer interrupt path under QEMU");
+    trap_test_step.dependOn(&trap_test_cmd.step);
+
     const m0_step = b.step("m0", "Run M0 conformance gates");
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);
@@ -201,4 +228,10 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&virtio_test_cmd.step);
     // demo-test compile-checks the whole demo/ suite (needs clang).
     m0_step.dependOn(&demo_test_cmd.step);
+    // net-test runs the kernel virtio-net RX/TX ARP exchange under QEMU.
+    m0_step.dependOn(&net_test_cmd.step);
+    // kernel-test compile-checks kernel/ for riscv64 + typestate rejects.
+    m0_step.dependOn(&kernel_test_cmd.step);
+    // trap-test runs the typed-CPU trap/timer interrupt path under QEMU.
+    m0_step.dependOn(&trap_test_cmd.step);
 }

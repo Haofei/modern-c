@@ -5,15 +5,32 @@
 #include <stdint.h>
 #include <stddef.h>
 
+// Freestanding libc primitives the compiler may emit (struct copies/zeroing).
+void *memset(void *d, int c, size_t n) {
+    uint8_t *p = (uint8_t *)d;
+    for (size_t i = 0; i < n; ++i) p[i] = (uint8_t)c;
+    return d;
+}
+void *memcpy(void *d, const void *s, size_t n) {
+    uint8_t *dp = (uint8_t *)d; const uint8_t *sp = (const uint8_t *)s;
+    for (size_t i = 0; i < n; ++i) dp[i] = sp[i];
+    return d;
+}
+
 // ----- virtqueue structs matching the MC layout (virtio_net.mc / virtio spec) -
 typedef struct VringDesc { uint64_t addr; uint32_t len; uint16_t flags; uint16_t next; } VringDesc;
 typedef struct DescTable { VringDesc d[8]; } DescTable;
 typedef struct VringAvail { uint16_t flags; uint16_t idx; uint16_t ring[8]; uint16_t used_event; } VringAvail;
 typedef struct UsedElem { uint32_t id; uint32_t len; } UsedElem;
 typedef struct VringUsed { uint16_t flags; uint16_t idx; UsedElem ring[8]; uint16_t avail_event; } VringUsed;
-// The driver-side virtqueue handle (std/virtqueue.mc Virtq) — note the
-// negotiated `size` field.
-typedef struct Virtq { DescTable *desc; VringAvail *avail; VringUsed *used; uint16_t size; uint16_t last_used; } Virtq;
+// The driver-side virtqueue handle (std/virtqueue.mc Virtq) — free-list +
+// in-flight record. MC lowers `[8]u64` to a struct-wrapped array.
+typedef struct mc_array_u64_8 { uint64_t elems[8]; } mc_array_u64_8;
+typedef struct Virtq {
+    DescTable *desc; VringAvail *avail; VringUsed *used;
+    uint16_t size; uint16_t free_head; uint16_t num_free; uint16_t last_used;
+    mc_array_u64_8 inflight_addr;
+} Virtq;
 // std/dma move handles (erased to plain structs at the boundary).
 typedef struct CpuBuffer { uintptr_t dev_addr; uintptr_t cpu_addr; uintptr_t len; } CpuBuffer;
 typedef struct DeviceBuffer { uintptr_t dev_addr; uintptr_t len; } DeviceBuffer;
@@ -23,14 +40,22 @@ typedef struct VirtioMmio VirtioMmio;
 int nic_init(volatile VirtioMmio *regs, Virtq *txq);
 int nic_transmit(volatile VirtioMmio *regs, Virtq *txq, uint16_t payload_len);
 
-// ----- std/dma platform primitives: a single zeroed, aligned DMA frame pool -----
+// ----- std/dma platform primitives: a single-slot, zeroed, aligned frame pool --
+// Honors the linear contract the MC types promise: one outstanding allocation,
+// length must fit — otherwise halt rather than alias the pool.
 static uint8_t g_dma_pool[2048] __attribute__((aligned(16)));
+static int g_dma_in_use = 0;
 CpuBuffer mc_dma_alloc(uintptr_t len) {
-    for (uintptr_t i = 0; i < sizeof(g_dma_pool); ++i) g_dma_pool[i] = 0; // zero the frame
+    if (len > sizeof(g_dma_pool) || g_dma_in_use) {
+        for (;;) {
+        } // contract violation
+    }
+    g_dma_in_use = 1;
+    for (uintptr_t i = 0; i < len; ++i) g_dma_pool[i] = 0; // zero the frame
     CpuBuffer b = { (uintptr_t)g_dma_pool, (uintptr_t)g_dma_pool, len };
     return b;
 }
-void mc_dma_free(CpuBuffer b) { (void)b; }
+void mc_dma_free(CpuBuffer b) { (void)b; g_dma_in_use = 0; }
 DeviceBuffer mc_dma_clean_for_device(CpuBuffer b) { DeviceBuffer d = { b.dev_addr, b.len }; return d; }
 CpuBuffer mc_dma_invalidate_for_cpu(DeviceBuffer b) { CpuBuffer c = { b.dev_addr, b.dev_addr, b.len }; return c; }
 
@@ -72,7 +97,8 @@ __attribute__((used)) void test_main(void) {
     if (!regs) { puts_("NODEV\n"); goto done; }
     puts_("DISC "); puthex((uint64_t)(uintptr_t)regs); putc_('\n');
 
-    Virtq txq = { &g_desc, &g_avail, &g_used, 0, 0 };
+    static Virtq txq; // zero-initialized in BSS (no large stack-init memcpy)
+    txq.desc = &g_desc; txq.avail = &g_avail; txq.used = &g_used;
     if (!nic_init(regs, &txq)) { puts_("INIT-FAIL\n"); goto done; }
     puts_("INIT-OK\n");
 

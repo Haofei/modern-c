@@ -1,19 +1,21 @@
-// MC standard library — `virtqueue`: the virtio split virtqueue (§2.7). Owns the
-// vring layout, queue setup, and the producer/consumer protocol — so the device
-// driver never touches the shared rings directly. The raw cross-actor memory
-// (the one part that isn't single-owner) is concentrated here behind a typed API.
+// MC standard library — `virtqueue`: the virtio split virtqueue (§2.7).
 //
-// Buffers cross the queue boundary as linear `move` DMA handles (std/dma), not
-// raw addresses: a buffer must be `clean_for_device`-d before it can be
-// submitted, the CPU cannot touch it while it is in flight, and it is handed back
-// (still device-owned) for the driver to reclaim — all checked at compile time.
+// Owns the vring layout, queue setup, a descriptor **free list**, and the
+// producer/consumer protocol, so a driver can have multiple buffers in flight on
+// both the TX and RX paths. Buffers cross the queue as linear `move` DMA handles
+// (std/dma): a buffer must be `clean_for_device`-d before it can be submitted,
+// the CPU cannot touch it while in flight, and it is handed back (reconstructed
+// from the in-flight record, with the device-written length) for the driver to
+// reclaim. The cross-actor shared memory — the one part that isn't single-owner —
+// is concentrated here behind that typed API.
 
 import "virtio.mc";
 import "barrier.mc";
 import "dma.mc";
 
-const QUEUE_SIZE: u16 = 8; // backing-array capacity (the negotiated size is ≤ this)
-const VRING_DESC_F_WRITE: u16 = 2; // buffer is device-writable
+const QUEUE_SIZE: u16 = 8; // backing-array capacity (negotiated size is ≤ this)
+const VRING_DESC_F_NEXT: u16 = 1;  // descriptor chains to `next`
+const VRING_DESC_F_WRITE: u16 = 2; // buffer is device-writable (RX)
 
 // Split-virtqueue structures laid out per the spec, in DMA memory.
 struct VringDesc { addr: u64, len: u32, flags: u16, next: u16 }
@@ -22,40 +24,77 @@ struct VringAvail { flags: u16, idx: u16, ring: [8]u16, used_event: u16 }
 struct UsedElem { id: u32, len: u32 }
 struct VringUsed { flags: u16, idx: u16, ring: [8]UsedElem, avail_event: u16 }
 
-// A driver-side handle bundling the three vring regions, the negotiated size,
-// and the consumer cursor. Built from the DMA'd memory the platform provides.
+// A driver-side handle bundling the three vring regions, the negotiated size, a
+// free-descriptor list, the used-ring cursor, and an in-flight record (the bus
+// address each outstanding descriptor carries, so the buffer can be reconstructed
+// when the device returns it).
 struct Virtq {
     desc: *mut DescTable,
     avail: *mut VringAvail,
     used: *mut VringUsed,
     size: u16,
+    free_head: u16,
+    num_free: u16,
     last_used: u16,
-}
-
-// One reaped used-ring entry: which descriptor completed and how many bytes the
-// device wrote (the received length for an RX buffer).
-struct Completion {
-    id: u16,
-    len: u32,
+    inflight_addr: [8]u64,
 }
 
 fn lo32(a: u64) -> u32 { return (a & 0x0000_0000_FFFF_FFFF) as u32; }
 fn hi32(a: u64) -> u32 { return (a >> 32) as u32; }
 
-// The device-visible (bus) address of a DMA buffer. On a no-IOMMU platform this
-// is the physical address; a generic helper so drivers don't open-code the cast.
+// The device-visible (bus) address of a DMA buffer (no-IOMMU: the physical
+// address). A generic helper so drivers don't open-code the cast.
 export fn bus_addr(comptime T: type, p: *mut T) -> u64 {
     return p as usize as u64;
 }
 
-// Program the queue's three region addresses into the device and mark it ready
-// (§4.2.3.2). Negotiates the queue size against the device's `queue_num_max`
-// (capped at the backing-array size). Returns false if the queue is unavailable.
+// ----- descriptor free list -----
+
+// Chain every descriptor onto the free list (called by vq_setup).
+fn vq_init_free(vq: *mut Virtq) -> void {
+    var i: u16 = 0;
+    while i < vq.size {
+        vq.desc.d[i as usize].next = i + 1;
+        i = i + 1;
+    }
+    vq.free_head = 0;
+    vq.num_free = vq.size;
+}
+
+// How many descriptors are free (a producer checks this before submitting).
+export fn vq_free_count(vq: *mut Virtq) -> u16 {
+    return vq.num_free;
+}
+
+// Take a descriptor off the free list. Traps if none are free — callers gate on
+// `vq_free_count`.
+fn vq_alloc_desc(vq: *mut Virtq) -> u16 {
+    if vq.num_free == 0 {
+        unreachable; // queue full
+    }
+    let id: u16 = vq.free_head;
+    vq.free_head = vq.desc.d[id as usize].next;
+    vq.num_free = vq.num_free - 1;
+    return id;
+}
+
+// Return a descriptor to the free list.
+fn vq_free_desc(vq: *mut Virtq, id: u16) -> void {
+    vq.desc.d[id as usize].next = vq.free_head;
+    vq.free_head = id;
+    vq.num_free = vq.num_free + 1;
+}
+
+// ----- queue setup -----
+
+// Program the queue's three region addresses into the device, negotiate the size
+// against `queue_num_max`, and initialize the free list. Returns false if the
+// queue is unavailable.
 export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> bool {
     regs.queue_sel.write(q, .release);
     let max: u32 = regs.queue_num_max.read(.acquire);
     if max == 0 {
-        return false; // queue does not exist
+        return false;
     }
     var size: u32 = QUEUE_SIZE as u32;
     if max < size {
@@ -79,27 +118,45 @@ export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> bool {
     vq.avail.idx = 0;
     vq.used.flags = 0;
     vq.last_used = 0;
+    vq_init_free(vq);
     return true;
 }
 
-// Submit a device-owned buffer on the TX path: publish a single device-readable
-// descriptor and advance the available ring. Consumes the `DeviceBuffer` and
-// hands it back as the in-flight handle (still device-owned) for the driver to
-// reclaim once the device returns it on the used ring. (v0: descriptor slot 0.)
-export fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -> DeviceBuffer {
-    let addr: u64 = device_addr(&buf) as u64; // borrow the handle's address
-    let len: u32 = buf.len as u32;
-    vq.desc.d[0].addr = addr;
-    vq.desc.d[0].len = len;
-    vq.desc.d[0].flags = 0; // device reads it
-    vq.desc.d[0].next = 0;
+// ----- submit / complete -----
 
-    let cap: u16 = vq.size;
-    let slot: usize = (vq.avail.idx % cap) as usize;
-    vq.avail.ring[slot] = 0;
+// Submit one buffer: allocate a descriptor, record the buffer's address (so it
+// can be reconstructed on completion), publish it in the available ring, and
+// consume the device-owned handle. `device_writable` = the device writes it (RX);
+// otherwise the device reads it (TX). Returns the descriptor id (the token).
+fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> u16 {
+    let id: u16 = vq_alloc_desc(vq);
+    let addr: u64 = device_addr(&buf) as u64; // borrow the handle
+    let len: u32 = buf.len as u32;
+    drop(buf); // the device now owns the buffer; we keep its address on record
+
+    var flags: u16 = 0;
+    if device_writable {
+        flags = VRING_DESC_F_WRITE;
+    }
+    vq.inflight_addr[id as usize] = addr;
+    vq.desc.d[id as usize].addr = addr;
+    vq.desc.d[id as usize].len = len;
+    vq.desc.d[id as usize].flags = flags;
+    vq.desc.d[id as usize].next = 0;
+
+    let slot: usize = (vq.avail.idx % vq.size) as usize;
+    vq.avail.ring[slot] = id;
     wmb(); // descriptor + ring entry visible before the index bump
     vq.avail.idx = vq.avail.idx + 1;
-    return buf; // in-flight handle
+    return id;
+}
+
+export fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -> u16 {
+    return vq_submit(vq, buf, false);
+}
+
+export fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -> u16 {
+    return vq_submit(vq, buf, true);
 }
 
 // Notify the device that `q` has new buffers (§4.2.3.3): order then doorbell.
@@ -109,32 +166,30 @@ export fn vq_kick(regs: MmioPtr<VirtioMmio>, q: u32) -> void {
 }
 
 // Has the device returned a buffer on the used ring since we last reaped?
-export fn vq_used_ready(vq: *mut Virtq) -> bool {
+export fn vq_has_used(vq: *mut Virtq) -> bool {
     rmb();
     return vq.used.idx != vq.last_used;
 }
 
-// Reap one completed buffer: read the used-ring entry (which descriptor, and the
-// device-written length) and advance the consumer cursor. Call only when
-// `vq_used_ready` is true.
-export fn vq_pop_used(vq: *mut Virtq) -> Completion {
+// The number of bytes the device wrote into the next completed buffer (the
+// received length on RX). Call only when `vq_has_used` is true.
+export fn vq_used_len(vq: *mut Virtq) -> u32 {
     rmb();
-    let cap: u16 = vq.size;
-    let slot: usize = (vq.last_used % cap) as usize;
+    let slot: usize = (vq.last_used % vq.size) as usize;
+    return vq.used.ring[slot].len;
+}
+
+// Reap one completed buffer: read the used entry, free its descriptor, and hand
+// back the device-owned buffer reconstructed from the in-flight record, with its
+// length set to the bytes the device wrote. The driver then reclaims it
+// (`invalidate_for_cpu`). Call only when `vq_has_used` is true.
+export fn vq_complete(vq: *mut Virtq) -> DeviceBuffer {
+    rmb();
+    let slot: usize = (vq.last_used % vq.size) as usize;
     let id: u16 = vq.used.ring[slot].id as u16;
     let len: u32 = vq.used.ring[slot].len;
     vq.last_used = vq.last_used + 1;
-    return .{ .id = id, .len = len };
-}
-
-// Busy-wait (bounded) until the device returns a buffer; true if it did.
-export fn vq_wait_used(vq: *mut Virtq, max_spins: u32) -> bool {
-    var spins: u32 = 0;
-    while spins < max_spins {
-        if vq_used_ready(vq) {
-            return true;
-        }
-        spins = spins + 1;
-    }
-    return false;
+    let addr: u64 = vq.inflight_addr[id as usize];
+    vq_free_desc(vq, id);
+    return .{ .dev_addr = addr as usize, .len = len as usize };
 }

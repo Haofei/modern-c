@@ -27,18 +27,28 @@ export fn read_sector(regs: MmioPtr<VirtioMmio>, vq: *mut Virtq, sector: u64) ->
     let hdr_cpu: CpuBuffer = alloc(16);
     let data_cpu: CpuBuffer = alloc(512);
 
-    // (The header fields — kind = VIRTIO_BLK_T_IN, sector — are written into
-    // hdr_cpu's memory before handoff; omitted here for brevity.)
+    // Build the request header with the typed byte view (no open-coded raw.store).
+    // (Real virtio fields are little-endian; the demo writes the request kind.)
+    write_be32(&hdr_cpu, 0, VIRTIO_BLK_T_IN);
+
     let hdr: DeviceBuffer = clean_for_device(hdr_cpu);   // hdr_cpu consumed
     let data: DeviceBuffer = clean_for_device(data_cpu); // data_cpu consumed
-
     let inflight: DeviceBuffer = mc_blk_submit(vq, hdr, data); // hdr + data handed to device
     vq_kick(regs, 0);
-    let ready: bool = vq_wait_used(vq, 1_000_000);
 
-    // Reclaim the data buffer for the CPU before reading it.
-    let result: CpuBuffer = invalidate_for_cpu(inflight);
-    free(result);
+    // Wait (bounded) for the device to complete the request.
+    var ready: bool = false;
+    var spins: u32 = 0;
+    while spins < 1_000_000 {
+        if vq_has_used(vq) {
+            ready = true;
+            break;
+        }
+        spins = spins + 1;
+    }
+
+    // Reclaim the data buffer for the CPU before reading it (then free).
+    free(invalidate_for_cpu(inflight));
     return ready;
 }
 

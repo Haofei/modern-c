@@ -36,8 +36,11 @@ fn len(comptime T: type, r: Ring<T>) -> usize {
 }
 
 // Enqueue `x` at the head, returning the updated ring (value semantics).
-// Pushing a full ring is a bounds trap.
+// Pushing a full ring traps (a producer must check `is_full` first).
 fn push(comptime T: type, r: Ring<T>, x: T) -> Ring<T> {
+    if r.count == 16 {
+        unreachable; // ring full
+    }
     var result: Ring<T> = r;
     result.slots[result.head] = x;
     result.head = (result.head + 1) % 16;
@@ -45,13 +48,19 @@ fn push(comptime T: type, r: Ring<T>, x: T) -> Ring<T> {
     return result;
 }
 
-// The element at the tail (oldest), without removing it.
+// The element at the tail (oldest), without removing it. Traps if empty.
 fn front(comptime T: type, r: Ring<T>) -> T {
+    if r.count == 0 {
+        unreachable; // ring empty
+    }
     return r.slots[r.tail];
 }
 
-// Remove the tail element, returning the updated ring.
+// Remove the tail element, returning the updated ring. Traps if empty.
 fn pop(comptime T: type, r: Ring<T>) -> Ring<T> {
+    if r.count == 0 {
+        unreachable; // ring empty
+    }
     var result: Ring<T> = r;
     result.tail = (result.tail + 1) % 16;
     result.count = result.count - 1;

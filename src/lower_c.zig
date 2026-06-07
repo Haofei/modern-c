@@ -220,6 +220,10 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) { \
         \\    *((volatile TYPE *)(uintptr_t)addr) = value; \
         \\}
+        \\#define MC_DEFINE_RAW_LOAD(NAME, TYPE) \
+        \\MC_UNUSED static inline TYPE mc_raw_load_##NAME(uintptr_t addr) { \
+        \\    return *((volatile TYPE *)(uintptr_t)addr); \
+        \\}
         \\
         \\MC_DEFINE_RAW_STORE(bool, bool)
         \\MC_DEFINE_RAW_STORE(u8, uint8_t)
@@ -232,6 +236,18 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\MC_DEFINE_RAW_STORE(i32, int32_t)
         \\MC_DEFINE_RAW_STORE(i64, int64_t)
         \\MC_DEFINE_RAW_STORE(isize, intptr_t)
+        \\
+        \\MC_DEFINE_RAW_LOAD(bool, bool)
+        \\MC_DEFINE_RAW_LOAD(u8, uint8_t)
+        \\MC_DEFINE_RAW_LOAD(u16, uint16_t)
+        \\MC_DEFINE_RAW_LOAD(u32, uint32_t)
+        \\MC_DEFINE_RAW_LOAD(u64, uint64_t)
+        \\MC_DEFINE_RAW_LOAD(usize, uintptr_t)
+        \\MC_DEFINE_RAW_LOAD(i8, int8_t)
+        \\MC_DEFINE_RAW_LOAD(i16, int16_t)
+        \\MC_DEFINE_RAW_LOAD(i32, int32_t)
+        \\MC_DEFINE_RAW_LOAD(i64, int64_t)
+        \\MC_DEFINE_RAW_LOAD(isize, intptr_t)
         \\
         \\MC_UNUSED static inline void mc_cpu_pause(void) {
         \\#if defined(__i386__) || defined(__x86_64__)
@@ -450,12 +466,23 @@ const CEmitter = struct {
                 else => {},
             }
         }
+        // Emit every global before any function body. MC resolves names
+        // module-wide regardless of declaration order, and import-merged sources
+        // can place a function ahead of a global it reads (e.g. a `const` defined
+        // in an imported module). Globals are simple `static` definitions, so
+        // emitting them first satisfies C's declare-before-use without needing
+        // forward declarations.
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .global_decl => |global| try self.emitGlobal(global),
+                else => {},
+            }
+        }
+        for (module.decls) |decl| {
+            switch (decl.kind) {
                 .fn_decl => |fn_decl| if (fn_decl.body) |body| try self.emitFunction(fn_decl, body) else try self.emitFunctionPrototype(fn_decl),
                 .extern_fn => |fn_decl| try self.emitExternFunction(fn_decl),
-                .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
+                .global_decl, .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
             }
         }
     }
@@ -517,7 +544,12 @@ const CEmitter = struct {
         scope.globals = &self.const_globals;
         return switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => |v| switch (v) {
-                .int => |n| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
+                // Values above the signed-64 range need an unsigned suffix, or C
+                // reads the decimal literal as implicitly unsigned (a warning).
+                .int => |n| if (n > std.math.maxInt(i64))
+                    try std.fmt.allocPrint(self.scratch.allocator(), "{d}ULL", .{n})
+                else
+                    try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
                 .boolean => |b| if (b) "1" else "0",
                 // Aggregate const globals are not lowered to a C scalar here.
                 .array, .@"struct" => null,
@@ -3179,6 +3211,27 @@ const CEmitter = struct {
                     try self.out.print(self.allocator, "{s}()", .{helper});
                     return;
                 }
+                // `drop(x)` consumes its argument and yields void; emit a cast to
+                // void so the value is evaluated and discarded (linearity is
+                // erased — it was a compile-time check).
+                if (calleeIdentName(node.callee.*)) |name| {
+                    if (std.mem.eql(u8, name, "drop") and node.args.len == 1) {
+                        try self.out.appendSlice(self.allocator, "(void)(");
+                        try self.emitExpr(node.args[0], locals);
+                        try self.out.appendSlice(self.allocator, ")");
+                        return;
+                    }
+                }
+                // `raw.load<T>(addr)` reads a `T` from a raw address.
+                if (isRawLoadCall(node.callee.*)) {
+                    if (node.type_args.len != 1 or node.args.len != 1) return error.UnsupportedCEmission;
+                    const type_name = typeName(node.type_args[0]) orelse return error.UnsupportedCEmission;
+                    const suffix = checkedTypeSuffix(type_name) orelse return error.UnsupportedCEmission;
+                    try self.out.print(self.allocator, "mc_raw_load_{s}(", .{suffix});
+                    try self.emitExpr(node.args[0], locals);
+                    try self.out.appendSlice(self.allocator, ")");
+                    return;
+                }
                 if (try self.emitAtomicInitCall(node, locals)) return;
                 if (try self.emitAtomicCall(node, locals)) return;
                 if (try self.emitPhysCall(node, locals)) return;
@@ -4472,6 +4525,17 @@ const CEmitter = struct {
                 return false;
             },
             .call => if (self.callReturnTypeForExpr(expr, locals)) |ty| isBoolType(ty) else false,
+            // A bool-typed struct field (`rx.is_arp_request`).
+            .member => |node| {
+                const struct_name = self.structTypeNameForExpr(node.base.*, locals) orelse return false;
+                const struct_decl = self.structs.get(struct_name) orelse return false;
+                for (struct_decl.fields) |field| {
+                    if (std.mem.eql(u8, field.name.text, node.name.text)) {
+                        return isBoolType(self.resolveAliasType(field.ty));
+                    }
+                }
+                return false;
+            },
             .grouped => |inner| self.exprIsBoolForEmission(inner.*, locals),
             // Comparison / logical operators produce a C bool; mark them so a
             // `switch a < b { … }` casts the subject to int and gets a trap
@@ -4988,10 +5052,19 @@ const CEmitter = struct {
     fn numericExprTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         return switch (expr.kind) {
             .ident => |ident| {
-                const local_set = locals orelse return null;
-                const info = local_set.get(ident.text) orelse return null;
-                const source_ty = info.source_ty orelse return null;
-                return if (isNumericStorageType(source_ty)) source_ty else null;
+                if (locals) |local_set| {
+                    if (local_set.get(ident.text)) |info| {
+                        const source_ty = info.source_ty orelse return null;
+                        return if (isNumericStorageType(source_ty)) source_ty else null;
+                    }
+                }
+                // A `const` global (e.g. `IPV4_HDR_LEN`) used in checked arithmetic
+                // recovers its declared type so `(GLOBAL + x) as T` lowers checked.
+                if (self.globals.get(ident.text)) |global| {
+                    const source_ty = global.source_ty orelse return null;
+                    return if (isNumericStorageType(source_ty)) source_ty else null;
+                }
+                return null;
             },
             .call => {
                 const return_ty = self.callReturnTypeForExpr(expr, locals) orelse return null;
@@ -10078,6 +10151,14 @@ fn isRawStoreCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "store") and isIdentNamed(member.base.*, "raw"),
         .grouped => |inner| isRawStoreCall(inner.*),
+        else => false,
+    };
+}
+
+fn isRawLoadCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "load") and isIdentNamed(member.base.*, "raw"),
+        .grouped => |inner| isRawLoadCall(inner.*),
         else => false,
     };
 }

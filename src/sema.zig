@@ -1628,6 +1628,16 @@ pub const Checker = struct {
                     }
                 }
                 if (trap_call) return .never;
+                // `drop(x)` consumes a linear `move` value (or is a no-op for a
+                // plain value) and yields void. The move/liveness pass consumes
+                // the argument via the ordinary call-argument path.
+                if (isDropCall(node.callee.*)) {
+                    if (node.args.len != 1) {
+                        self.errorCode(expr.span, "E_CALL_ARG_COUNT", "drop takes exactly one argument");
+                    }
+                    return .void;
+                }
+                if (rawLoadCallReturnType(node)) |ty| return classifyTypeCtx(ty, ctx);
                 if (self.checkEnumRawCall(expr.span, node.callee.*, node.args, ctx)) |class| return class;
                 if (atomicCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (self.dmaCallReturnClass(node.callee.*, ctx)) |class| return class;
@@ -3962,6 +3972,20 @@ fn bitcastCallReturnType(call: anytype) ?ast.TypeExpr {
     return call.type_args[0];
 }
 
+// `raw.load<T>(addr)` reads a `T` from a raw address (the dual of `raw.store`).
+fn isRawLoadCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |m| isIdentNamed(m.base.*, "raw") and std.mem.eql(u8, m.name.text, "load"),
+        .grouped => |inner| isRawLoadCall(inner.*),
+        else => false,
+    };
+}
+
+fn rawLoadCallReturnType(call: anytype) ?ast.TypeExpr {
+    if (!isRawLoadCall(call.callee.*) or call.type_args.len != 1) return null;
+    return call.type_args[0];
+}
+
 fn tryPayloadType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     const ty = exprResultType(expr, ctx) orelse return null;
     return nullableInnerType(ty) orelse resultPayloadType(ty, "ok");
@@ -5347,7 +5371,7 @@ fn uncheckedRequirement(expr: ast.Expr) ?ContractKind {
 fn isUnsafeOperationCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |node| {
-            if (isIdentNamed(node.base.*, "raw") and std.mem.eql(u8, node.name.text, "store")) return true;
+            if (isIdentNamed(node.base.*, "raw") and (std.mem.eql(u8, node.name.text, "store") or std.mem.eql(u8, node.name.text, "load"))) return true;
             if (isIdentNamed(node.base.*, "mmio") and std.mem.eql(u8, node.name.text, "map")) return true;
             return false;
         },
@@ -5365,7 +5389,7 @@ fn isBuiltinNamespaceMember(member: anytype) bool {
         },
         else => return false,
     };
-    if (std.mem.eql(u8, base, "raw")) return std.mem.eql(u8, member.name.text, "store");
+    if (std.mem.eql(u8, base, "raw")) return std.mem.eql(u8, member.name.text, "store") or std.mem.eql(u8, member.name.text, "load");
     if (std.mem.eql(u8, base, "mmio")) return std.mem.eql(u8, member.name.text, "map");
     if (std.mem.eql(u8, base, "unchecked")) return isUncheckedNoOverflowMember(member.name.text);
     if (std.mem.eql(u8, base, "wrapping")) return std.mem.eql(u8, member.name.text, "add");
@@ -5389,6 +5413,7 @@ fn isUncheckedNoOverflowMember(name: []const u8) bool {
 
 fn isBuiltinFunctionName(name: []const u8) bool {
     if (std.mem.eql(u8, name, "trap")) return true;
+    if (std.mem.eql(u8, name, "drop")) return true;
     if (std.mem.eql(u8, name, "unwrap")) return true;
     if (std.mem.eql(u8, name, "bitcast")) return true;
     if (std.mem.eql(u8, name, "phys")) return true;
@@ -5707,6 +5732,10 @@ fn isUnwrapCall(callee: ast.Expr) bool {
 
 fn isTrapCall(callee: ast.Expr) bool {
     return isIdentNamed(callee, "trap");
+}
+
+fn isDropCall(callee: ast.Expr) bool {
+    return isIdentNamed(callee, "drop");
 }
 
 // `trap_from` is the only conversion builtin that raises a language (range) trap;

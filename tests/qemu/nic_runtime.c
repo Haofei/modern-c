@@ -18,12 +18,22 @@ void mc_spin_release(Guard g) { g.lock->state = 0; }
 IrqGuard mc_spin_acquire_irqsave(SpinLock *l) { l->state = 1; return (IrqGuard){ l, 0 }; }
 void mc_spin_release_irqrestore(IrqGuard g) { g.lock->state = 0; }
 
-// ----- std/dma platform primitives (flat static pool) -----
+// ----- std/dma platform primitives (single-slot pool) -----
+// The platform hook must honor the same linear contract the MC types promise:
+// one outstanding allocation, and the length must fit. Violations halt rather
+// than silently hand out an aliasing buffer.
 static uint8_t dma_pool[256];
+static int dma_in_use = 0;
 CpuBuffer mc_dma_alloc(uintptr_t len) {
+    if (len > sizeof(dma_pool) || dma_in_use) {
+        for (;;) {
+        } // contract violation: too large, or a buffer is already outstanding
+    }
+    dma_in_use = 1;
+    for (uintptr_t i = 0; i < len; ++i) dma_pool[i] = 0;
     return (CpuBuffer){ (uintptr_t)dma_pool, (uintptr_t)dma_pool, len };
 }
-void mc_dma_free(CpuBuffer b) { (void)b; }
+void mc_dma_free(CpuBuffer b) { (void)b; dma_in_use = 0; }
 DeviceBuffer mc_dma_clean_for_device(CpuBuffer b) { return (DeviceBuffer){ b.dev_addr, b.len }; }
 CpuBuffer mc_dma_invalidate_for_cpu(DeviceBuffer b) { return (CpuBuffer){ b.dev_addr, b.dev_addr, b.len }; }
 

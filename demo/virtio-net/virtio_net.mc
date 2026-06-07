@@ -29,17 +29,19 @@ export fn nic_init(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> bool {
 // on the TX queue, wait for completion, then reclaim and free it.
 export fn nic_transmit(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, payload_len: u16) -> bool {
     let cpu: CpuBuffer = alloc((payload_len as usize) + 12);
-    let dev: DeviceBuffer = clean_for_device(cpu);       // cpu consumed at handoff
-    let inflight: DeviceBuffer = vq_submit_tx(txq, dev); // dev consumed; in-flight handle returned
+    let dev: DeviceBuffer = clean_for_device(cpu); // cpu consumed at handoff
+    vq_submit_tx(txq, dev);                        // dev consumed; now in flight
     vq_kick(regs, TX_QUEUE);
 
-    var reaped: bool = vq_wait_used(txq, 1_000_000);
-    if reaped {
-        let done: Completion = vq_pop_used(txq);
-        reaped = done.id == 0; // the device returned our single descriptor
+    // Wait (bounded) for the device to return the buffer on the used ring.
+    var spins: u32 = 0;
+    while spins < 1_000_000 {
+        if vq_has_used(txq) {
+            let done: DeviceBuffer = vq_complete(txq); // reconstructed handle
+            free(invalidate_for_cpu(done));            // reclaim and free
+            return true;
+        }
+        spins = spins + 1;
     }
-
-    let reclaimed: CpuBuffer = invalidate_for_cpu(inflight); // reclaim (consumes inflight)
-    free(reclaimed);
-    return reaped;
+    return false; // device never completed; the buffer stays in flight
 }
