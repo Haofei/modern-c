@@ -297,6 +297,10 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\    __atomic_thread_fence(__ATOMIC_ACQUIRE);
         \\}
         \\
+        \\MC_UNUSED static inline void mc_barrier_full(void) {
+        \\    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        \\}
+        \\
     );
 
     var typed_mir = try mir.build(allocator, module);
@@ -1565,6 +1569,7 @@ const CEmitter = struct {
                 if (try self.emitMmioWriteStmt(expr, locals)) return;
                 if (try self.emitRawStoreStmt(expr, locals)) return;
                 if (try self.emitCpuPauseStmt(expr)) return;
+                if (try self.emitFenceStmt(expr)) return;
                 if (try self.emitResultTryExprStmt(expr, locals, return_ty)) return;
                 if (try self.emitNullableTryExprStmt(expr, locals)) return;
                 if (try self.emitMmioReadExprStmt(expr, locals)) return;
@@ -2095,6 +2100,7 @@ const CEmitter = struct {
                 if (try self.emitMmioWriteStmt(expr, locals)) return;
                 if (try self.emitRawStoreStmt(expr, locals)) return;
                 if (try self.emitCpuPauseStmt(expr)) return;
+                if (try self.emitFenceStmt(expr)) return;
                 if (try self.emitResultTryExprStmt(expr, locals, return_ty)) return;
                 if (try self.emitNullableTryExprStmt(expr, locals)) return;
                 if (try self.emitMmioReadExprStmt(expr, locals)) return;
@@ -2383,6 +2389,7 @@ const CEmitter = struct {
                 if (try self.emitMmioWriteStmt(expr, locals)) return;
                 if (try self.emitRawStoreStmt(expr, locals)) return;
                 if (try self.emitCpuPauseStmt(expr)) return;
+                if (try self.emitFenceStmt(expr)) return;
                 if (try self.emitResultTryExprStmt(expr, locals, return_ty)) return;
                 if (try self.emitNullableTryExprStmt(expr, locals)) return;
                 if (try self.emitMmioReadExprStmt(expr, locals)) return;
@@ -2877,6 +2884,23 @@ const CEmitter = struct {
         if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "mc_cpu_pause();\n");
+        return true;
+    }
+
+    // `fence.full()` / `fence.release()` / `fence.acquire()` lower to the
+    // target-aware `__atomic_thread_fence` helpers (riscv `fence`, x86 `mfence`,
+    // arm `dmb`), so explicit memory barriers are real CPU fences, not just
+    // compiler barriers.
+    fn emitFenceStmt(self: *CEmitter, expr: ast.Expr) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitFenceStmt(inner.*),
+            else => return false,
+        };
+        const helper = fenceHelperForCall(call.callee.*) orelse return false;
+        if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedCEmission;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s}();\n", .{helper});
         return true;
     }
 
@@ -10234,6 +10258,20 @@ fn uncheckedNoOverflowOperator(op: []const u8) []const u8 {
     if (std.mem.eql(u8, op, "sub")) return "-";
     if (std.mem.eql(u8, op, "mul")) return "*";
     return "+";
+}
+
+fn fenceHelperForCall(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .member => |node| blk: {
+            if (!isIdentNamed(node.base.*, "fence")) break :blk null;
+            if (std.mem.eql(u8, node.name.text, "full")) break :blk "mc_barrier_full";
+            if (std.mem.eql(u8, node.name.text, "release")) break :blk "mc_barrier_release_before";
+            if (std.mem.eql(u8, node.name.text, "acquire")) break :blk "mc_barrier_acquire_after";
+            break :blk null;
+        },
+        .grouped => |inner| fenceHelperForCall(inner.*),
+        else => null,
+    };
 }
 
 fn isCpuPauseCall(callee: ast.Expr) bool {

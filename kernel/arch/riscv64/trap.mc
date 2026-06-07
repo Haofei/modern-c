@@ -7,20 +7,26 @@
 
 import "kernel/drivers/timer/clint.mc";
 import "kernel/arch/riscv64/hart.mc";
+import "std/time.mc";
 
 // mcause for a machine timer interrupt: interrupt bit (MSB) set, exception code 7.
 const MCAUSE_MACHINE_TIMER: u64 = 0x8000_0000_0000_0007;
-const TICK_INTERVAL: u64 = 1_000_000; // CLINT ticks between interrupts (~0.1s)
+const TICK_INTERVAL: u64 = 1_000_000;            // CLINT ticks between interrupts (~0.1s)
+const TICK_DEMO_TIMEOUT_TICKS: u64 = 50_000_000; // give up after ~5s of no ticks
 
 global g_ticks: u32 = 0;
 
-// Called from the asm trap vector. Handles the timer interrupt; other causes are
-// currently ignored (return resumes the interrupted instruction via mret).
+// Called from the asm trap vector. Handles the timer interrupt and rearms it.
+// Any other cause is unexpected: we halt rather than blindly `mret`, which for a
+// synchronous fault would resume at the faulting instruction and retrigger the
+// same trap forever. (A fuller kernel would log mcause/mepc and panic.)
 export fn handle_trap(mcause: u64, mepc: u64) -> void {
     if mcause == MCAUSE_MACHINE_TIMER {
         g_ticks = g_ticks + 1;
         timer_set_alarm(0, TICK_INTERVAL); // rearm for the next tick
+        return;
     }
+    unreachable; // unexpected trap — stop instead of looping on a fault
 }
 
 // How many timer ticks have fired so far.
@@ -42,12 +48,11 @@ export fn kernel_tick_demo(trap_vector: usize, target: u32) -> u32 {
     let h2: Hart<IrqsOn> = enable_interrupts(h1);
     start_ticking();
 
-    var spins: u64 = 0;
-    while spins < 500_000_000 {
+    let start: Ticks = read_ticks();
+    while !timed_out(start, read_ticks(), TICK_DEMO_TIMEOUT_TICKS) {
         if tick_count() >= target {
             break;
         }
-        spins = spins + 1;
     }
     drop(h2); // interrupts stay on; we just retire the typestate token
     return tick_count();

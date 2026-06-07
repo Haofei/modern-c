@@ -5,11 +5,12 @@
 // is concentrated in the small raw helpers; the typed layer above is portable in
 // shape (an ARM GIC port keeps the same typestate).
 
-// QEMU virt PLIC layout, supervisor context 1 (hart 0 S-mode). Lines < 32.
-const PLIC_PRIORITY: usize = 0x0000;       // + line*4
-const PLIC_ENABLE_CTX1: usize = 0x2080;    // context 1 enable bitmap
-const PLIC_THRESHOLD_CTX1: usize = 0x201000;
-const PLIC_CLAIM_CTX1: usize = 0x201004;   // claim (read) / complete (write)
+// QEMU virt PLIC layout, **machine context 0** (hart 0 M-mode — matching this
+// kernel's M-mode CSRs in csr.mc). Lines < 32.
+const PLIC_PRIORITY: usize = 0x0000;        // + line*4
+const PLIC_ENABLE_M: usize = 0x2000;        // hart 0 M-mode enable bitmap
+const PLIC_THRESHOLD_M: usize = 0x200000;   // hart 0 M-mode threshold
+const PLIC_CLAIM_M: usize = 0x200004;       // hart 0 M-mode claim/complete
 
 fn plic_set_priority(base: usize, line: u32, prio: u32) -> void {
     unsafe {
@@ -19,26 +20,34 @@ fn plic_set_priority(base: usize, line: u32, prio: u32) -> void {
 
 fn plic_enable_line(base: usize, line: u32) -> void {
     unsafe {
-        let cur: u32 = raw.load<u32>(phys(base + PLIC_ENABLE_CTX1));
-        raw.store<u32>(phys(base + PLIC_ENABLE_CTX1), cur | ((1 as u32) << line));
+        let cur: u32 = raw.load<u32>(phys(base + PLIC_ENABLE_M));
+        raw.store<u32>(phys(base + PLIC_ENABLE_M), cur | ((1 as u32) << line));
+    }
+}
+
+fn plic_disable_line(base: usize, line: u32) -> void {
+    unsafe {
+        let cur: u32 = raw.load<u32>(phys(base + PLIC_ENABLE_M));
+        raw.store<u32>(phys(base + PLIC_ENABLE_M), cur & ~((1 as u32) << line));
+        raw.store<u32>(phys(base + PLIC_PRIORITY + (line as usize) * 4), 0); // priority 0 = never fires
     }
 }
 
 fn plic_set_threshold(base: usize, threshold: u32) -> void {
     unsafe {
-        raw.store<u32>(phys(base + PLIC_THRESHOLD_CTX1), threshold);
+        raw.store<u32>(phys(base + PLIC_THRESHOLD_M), threshold);
     }
 }
 
 fn plic_claim(base: usize) -> u32 {
     unsafe {
-        return raw.load<u32>(phys(base + PLIC_CLAIM_CTX1));
+        return raw.load<u32>(phys(base + PLIC_CLAIM_M));
     }
 }
 
 fn plic_complete_raw(base: usize, line: u32) -> void {
     unsafe {
-        raw.store<u32>(phys(base + PLIC_CLAIM_CTX1), line);
+        raw.store<u32>(phys(base + PLIC_CLAIM_M), line);
     }
 }
 
@@ -67,12 +76,18 @@ export fn enable(base: usize, l: IrqLine<Unclaimed>) -> IrqLine<Enabled> {
     return .{ .line = line };
 }
 
-// Claim the highest-priority pending interrupt; returns true and a Pending line if
-// it is ours, otherwise re-enables. (Single-line model for the smoke path.)
+// Claim the highest-priority pending interrupt and transition the line to Pending.
+// The claimed source id must match this line — a single-line model where the
+// caller asserts this line is the pending source. A mismatch (a different source,
+// or 0 = nothing pending) is a contract violation and traps rather than minting a
+// bogus Pending token that `complete` would then acknowledge.
 export fn claim_if_pending(base: usize, l: IrqLine<Enabled>) -> IrqLine<Pending> {
     let line: u32 = l.line;
+    let claimed: u32 = plic_claim(base);
+    if claimed != line {
+        unreachable; // claimed source does not match this line
+    }
     drop(l);
-    let _claimed: u32 = plic_claim(base); // consume the claim id
     return .{ .line = line };
 }
 
@@ -84,7 +99,9 @@ export fn complete(base: usize, l: IrqLine<Pending>) -> IrqLine<Enabled> {
     return .{ .line = line };
 }
 
-// Release the line (mask it again).
-export fn release(l: IrqLine<Enabled>) -> void {
+// Release the line: actually mask it in the PLIC (clear the enable bit and zero
+// its priority) before retiring the token.
+export fn release(base: usize, l: IrqLine<Enabled>) -> void {
+    plic_disable_line(base, l.line);
     drop(l);
 }

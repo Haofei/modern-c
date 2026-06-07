@@ -3,5 +3,5 @@ import "kernel/drivers/irq/plic.mc";
 fn bad(base: usize) -> void {
     let l: IrqLine<Enabled> = enable(base, claim_line(9));
     let l2: IrqLine<Enabled> = complete(base, l); // complete wants Pending, got Enabled
-    release(l2);
+    release(base, l2);
 }

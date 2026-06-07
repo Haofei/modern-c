@@ -42,6 +42,17 @@ export fn ipv4_write_header(buf: *CpuBuffer, at: usize, proto: u8, src_ip: u32, 
     return at + IPV4_HDR_LEN;
 }
 
+// A received IPv4 header is valid when its checksum field re-sums to zero (the
+// ones-complement property), so we recompute over the 20-byte header including
+// the stored checksum.
+export fn ipv4_checksum_valid(buf: *CpuBuffer, at: usize) -> bool {
+    let sum: u16 = ip_checksum(buf, at, IPV4_HDR_LEN);
+    if sum == 0 {
+        return true;
+    }
+    return false;
+}
+
 export fn ipv4_protocol(buf: *CpuBuffer, at: usize) -> u8 {
     return read_u8(buf, at + 9);
 }

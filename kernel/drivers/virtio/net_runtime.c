@@ -18,6 +18,15 @@ void *memcpy(void *d, const void *s, size_t n) {
     return d;
 }
 
+// std/time platform primitives: monotonic ticks from the CLINT mtime counter
+// (QEMU virt runs it at 10 MHz, so 10 ticks per microsecond).
+#define CLINT_MTIME 0x0200BFF8UL
+uint64_t mc_read_ticks(void) { return *(volatile uint64_t *)CLINT_MTIME; }
+void mc_udelay(uint32_t us) {
+    uint64_t target = *(volatile uint64_t *)CLINT_MTIME + (uint64_t)us * 10u;
+    while (*(volatile uint64_t *)CLINT_MTIME < target) { }
+}
+
 // ----- virtqueue structs matching the MC layout (std/virtqueue.mc) -----
 typedef struct VringDesc { uint64_t addr; uint32_t len; uint16_t flags; uint16_t next; } VringDesc;
 typedef struct DescTable { VringDesc d[8]; } DescTable;
@@ -85,6 +94,9 @@ static VringUsed  g_tx_used  __attribute__((aligned(4)));
 #define OUR_IP     0x0A00020Fu // 10.0.2.15
 #define GATEWAY_IP 0x0A000202u // 10.0.2.2
 
+// The platform provides device discovery (the MC `?MmioPtr` returned by a bus
+// probe cannot yet flow into the `u32`-returning kernel_main — `if let` does not
+// narrow `?MmioPtr`); the typed bus probe lives in kernel/drivers/virtio/mmio_bus.
 static volatile VirtioMmio *find_net_device(void) {
     for (int i = 0; i < VIRTIO_MMIO_COUNT; ++i) {
         volatile uint32_t *slot = (volatile uint32_t *)(VIRTIO_MMIO_BASE + (uintptr_t)i * VIRTIO_MMIO_STRIDE);
@@ -96,7 +108,6 @@ static volatile VirtioMmio *find_net_device(void) {
 __attribute__((used)) void test_main(void) {
     volatile VirtioMmio *regs = find_net_device();
     if (!regs) { puts_("NODEV\n"); goto done; }
-    puts_("DISC "); puthex((uint64_t)(uintptr_t)regs); putc_('\n');
 
     static Virtq rxq, txq; // BSS-zeroed
     rxq.desc = &g_rx_desc; rxq.avail = &g_rx_avail; rxq.used = &g_rx_used;

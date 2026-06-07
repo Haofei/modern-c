@@ -5390,6 +5390,7 @@ fn isBuiltinNamespaceMember(member: anytype) bool {
         else => return false,
     };
     if (std.mem.eql(u8, base, "raw")) return std.mem.eql(u8, member.name.text, "store") or std.mem.eql(u8, member.name.text, "load");
+    if (std.mem.eql(u8, base, "fence")) return std.mem.eql(u8, member.name.text, "full") or std.mem.eql(u8, member.name.text, "acquire") or std.mem.eql(u8, member.name.text, "release");
     if (std.mem.eql(u8, base, "mmio")) return std.mem.eql(u8, member.name.text, "map");
     if (std.mem.eql(u8, base, "unchecked")) return isUncheckedNoOverflowMember(member.name.text);
     if (std.mem.eql(u8, base, "wrapping")) return std.mem.eql(u8, member.name.text, "add");
@@ -5438,7 +5439,16 @@ fn isBitcastCallName(expr: ast.Expr) bool {
 }
 
 fn isComptimeForbiddenCall(callee: ast.Expr) bool {
-    return isUnsafeOperationCall(callee) or isCpuPauseCall(callee);
+    return isUnsafeOperationCall(callee) or isCpuPauseCall(callee) or isFenceCall(callee);
+}
+
+fn isFenceCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |node| isIdentNamed(node.base.*, "fence") and
+            (std.mem.eql(u8, node.name.text, "full") or std.mem.eql(u8, node.name.text, "acquire") or std.mem.eql(u8, node.name.text, "release")),
+        .grouped => |inner| isFenceCall(inner.*),
+        else => false,
+    };
 }
 
 fn isCpuPauseCall(callee: ast.Expr) bool {

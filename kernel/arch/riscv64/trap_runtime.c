@@ -17,27 +17,45 @@ static void putdec(uint32_t v) {
 
 #define FINISHER ((volatile uint32_t *)0x00100000UL)
 
+// std/time platform primitives (CLINT mtime @ 10 MHz on QEMU virt).
+#define CLINT_MTIME 0x0200BFF8UL
+uint64_t mc_read_ticks(void) { return *(volatile uint64_t *)CLINT_MTIME; }
+void mc_udelay(uint32_t us) {
+    uint64_t target = *(volatile uint64_t *)CLINT_MTIME + (uint64_t)us * 10u;
+    while (*(volatile uint64_t *)CLINT_MTIME < target) { }
+}
+
 // MC entry points (kernel/arch/riscv64/trap.mc).
 void handle_trap(uint64_t mcause, uint64_t mepc);
 uint32_t kernel_tick_demo(uintptr_t trap_vector, uint32_t target);
 
-// M-mode trap vector: save caller-saved integer registers, dispatch to the MC
-// handler with (mcause, mepc), restore, and return from the trap.
+// M-mode trap vector. A trap arrives at an arbitrary instruction boundary, so we
+// save a full integer-register frame (every GPR that can hold live caller state:
+// ra, t0-t6, a0-a7, s0-s11; sp is managed here, gp/tp are fixed), dispatch to the
+// MC handler with (mcause, mepc), restore, and `mret`. Saving the callee-saved
+// registers too is belt-and-suspenders over the C ABI, so the interrupted context
+// is preserved regardless of what the handler does.
 __attribute__((naked, aligned(4))) void trap_vector(void) {
     __asm__ volatile(
-        "addi sp, sp, -128\n"
-        "sd ra, 0(sp)\n"  "sd t0, 8(sp)\n"  "sd t1, 16(sp)\n" "sd t2, 24(sp)\n"
-        "sd t3, 32(sp)\n" "sd t4, 40(sp)\n" "sd t5, 48(sp)\n" "sd t6, 56(sp)\n"
-        "sd a0, 64(sp)\n" "sd a1, 72(sp)\n" "sd a2, 80(sp)\n" "sd a3, 88(sp)\n"
-        "sd a4, 96(sp)\n" "sd a5, 104(sp)\n" "sd a6, 112(sp)\n" "sd a7, 120(sp)\n"
+        "addi sp, sp, -256\n"
+        "sd ra,  0(sp)\n"  "sd t0,  8(sp)\n"  "sd t1, 16(sp)\n"  "sd t2, 24(sp)\n"
+        "sd t3, 32(sp)\n"  "sd t4, 40(sp)\n"  "sd t5, 48(sp)\n"  "sd t6, 56(sp)\n"
+        "sd a0, 64(sp)\n"  "sd a1, 72(sp)\n"  "sd a2, 80(sp)\n"  "sd a3, 88(sp)\n"
+        "sd a4, 96(sp)\n"  "sd a5,104(sp)\n"  "sd a6,112(sp)\n"  "sd a7,120(sp)\n"
+        "sd s0,128(sp)\n"  "sd s1,136(sp)\n"  "sd s2,144(sp)\n"  "sd s3,152(sp)\n"
+        "sd s4,160(sp)\n"  "sd s5,168(sp)\n"  "sd s6,176(sp)\n"  "sd s7,184(sp)\n"
+        "sd s8,192(sp)\n"  "sd s9,200(sp)\n"  "sd s10,208(sp)\n" "sd s11,216(sp)\n"
         "csrr a0, mcause\n"
         "csrr a1, mepc\n"
         "call handle_trap\n"
-        "ld ra, 0(sp)\n"  "ld t0, 8(sp)\n"  "ld t1, 16(sp)\n" "ld t2, 24(sp)\n"
-        "ld t3, 32(sp)\n" "ld t4, 40(sp)\n" "ld t5, 48(sp)\n" "ld t6, 56(sp)\n"
-        "ld a0, 64(sp)\n" "ld a1, 72(sp)\n" "ld a2, 80(sp)\n" "ld a3, 88(sp)\n"
-        "ld a4, 96(sp)\n" "ld a5, 104(sp)\n" "ld a6, 112(sp)\n" "ld a7, 120(sp)\n"
-        "addi sp, sp, 128\n"
+        "ld ra,  0(sp)\n"  "ld t0,  8(sp)\n"  "ld t1, 16(sp)\n"  "ld t2, 24(sp)\n"
+        "ld t3, 32(sp)\n"  "ld t4, 40(sp)\n"  "ld t5, 48(sp)\n"  "ld t6, 56(sp)\n"
+        "ld a0, 64(sp)\n"  "ld a1, 72(sp)\n"  "ld a2, 80(sp)\n"  "ld a3, 88(sp)\n"
+        "ld a4, 96(sp)\n"  "ld a5,104(sp)\n"  "ld a6,112(sp)\n"  "ld a7,120(sp)\n"
+        "ld s0,128(sp)\n"  "ld s1,136(sp)\n"  "ld s2,144(sp)\n"  "ld s3,152(sp)\n"
+        "ld s4,160(sp)\n"  "ld s5,168(sp)\n"  "ld s6,176(sp)\n"  "ld s7,184(sp)\n"
+        "ld s8,192(sp)\n"  "ld s9,200(sp)\n"  "ld s10,208(sp)\n" "ld s11,216(sp)\n"
+        "addi sp, sp, 256\n"
         "mret\n");
 }
 

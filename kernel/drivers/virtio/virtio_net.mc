@@ -7,23 +7,48 @@
 
 import "std/virtio.mc";
 import "std/virtqueue.mc";
-import "kernel/net/arp.mc";  // brings kernel/net/ethernet.mc transitively
-import "kernel/net/icmp.mc"; // brings kernel/net/ipv4.mc transitively
+import "std/time.mc";
+import "kernel/net/arp.mc";    // brings kernel/net/ethernet.mc transitively
+import "kernel/net/icmp.mc";   // brings kernel/net/ipv4.mc transitively
+import "kernel/net/packet.mc"; // Ipv4Addr
 
 const VIRTIO_NET_DEVICE_ID: u32 = 1;
 const VIRTIO_F_VERSION_1_HI: u32 = 1; // feature bit 32 → high-word bit 0
 const RX_QUEUE: u32 = 0;              // virtio-net: queue 0 = rx, queue 1 = tx
 const TX_QUEUE: u32 = 1;
 
-const NET_HDR_LEN: usize = 12;  // virtio_net_hdr precedes every frame
-const FRAME_AT: usize = 12;     // ...so the Ethernet frame starts at offset 12
+const NET_HDR_LEN: usize = 12;   // virtio_net_hdr precedes every frame
+const FRAME_AT: usize = 12;      // ...so the Ethernet frame starts at offset 12
+const ETH_MIN_FRAME: usize = 60; // minimum Ethernet frame (ARP/ICMP frames are
+                                 // 42 bytes and get zero-padded up to this)
 const RX_BUF_LEN: usize = 2048;
 const RX_REFILL: u32 = 4;       // device-writable buffers kept posted
+const PING_IDENT: u16 = 0x1234; // ICMP echo identifier we send and expect back
+const PING_SEQ: u16 = 1;        // ICMP echo sequence number
+const IO_TIMEOUT_TICKS: u64 = 10_000_000; // ~1s at the CLINT's 10 MHz (real-time bound)
 // (ARP_OP_REPLY comes from kernel/net/arp.mc)
 
-// Our static identity (host can reach us at OUR_IP).
-fn our_mac() -> MacAddr {
-    return .{ .bytes = .{ 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 } };
+// (Our MAC/IP identity comes from the platform `Machine`, threaded in as
+// `src_mac` / `src_ip` rather than hard-coded in the driver.)
+
+// The driver's recoverable failure modes — a typed error instead of a lossy
+// `bool` (the caller learns *why* it failed). Success carries a placeholder `true`.
+enum NetError {
+    DeviceInitFailed, // virtio handshake / feature negotiation failed
+    QueueUnavailable, // a virtqueue could not be set up
+    ArpFailed,        // no usable ARP reply from the gateway
+    PingTimeout,      // no ICMP echo reply in time
+    BadReply,         // a reply arrived but did not match our request
+}
+
+// The device-class surface: the register block plus the RX/TX queues, bundled
+// into one handle. The net stack (ARP/IPv4/ICMP) never sees these — it works on
+// cpu-owned buffers — so this stays the boundary between transport/queue and
+// protocol.
+struct NetDevice {
+    regs: MmioPtr<VirtioMmio>,
+    rxq: *mut Virtq,
+    txq: *mut Virtq,
 }
 
 // Post one device-writable RX buffer for the card to fill.
@@ -35,15 +60,18 @@ fn post_rx_buffer(rxq: *mut Virtq) -> void {
 
 // Bring the card up: require VERSION_1, set up both queues, go live, and post the
 // initial RX buffers.
-export fn nic_init(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mut Virtq) -> bool {
+export fn nic_init(dev: *NetDevice) -> Result<bool, NetError> {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let rxq: *mut Virtq = dev.rxq;
+    let txq: *mut Virtq = dev.txq;
     if !virtio_init(regs, VIRTIO_NET_DEVICE_ID, 0, VIRTIO_F_VERSION_1_HI) {
-        return false;
+        return err(.DeviceInitFailed);
     }
     if !vq_setup(regs, RX_QUEUE, rxq) {
-        return false;
+        return err(.QueueUnavailable);
     }
     if !vq_setup(regs, TX_QUEUE, txq) {
-        return false;
+        return err(.QueueUnavailable);
     }
     virtio_driver_ok(regs);
 
@@ -53,27 +81,25 @@ export fn nic_init(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mut Virtq) 
         i = i + 1;
     }
     vq_kick(regs, RX_QUEUE);
-    return true;
+    return ok(true);
 }
 
 // Send a broadcast ARP request for `target_ip` and reclaim the TX buffer.
-export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_ip: u32, target_ip: u32) -> bool {
-    var cpu: CpuBuffer = alloc(NET_HDR_LEN + 64);
-    var smac: MacAddr = our_mac();
+export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr, src_ip: u32, target_ip: u32) -> bool {
+    var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
     // The virtio_net_hdr at offset 0 is left zeroed by the allocator.
-    arp_write_request(&cpu, FRAME_AT, &smac, src_ip, target_ip);
+    arp_write_request(&cpu, FRAME_AT, src_mac, src_ip, target_ip);
     let dev: DeviceBuffer = clean_for_device(cpu); // cpu consumed
     vq_submit_tx(txq, dev);                        // dev consumed (in flight)
     vq_kick(regs, TX_QUEUE);
 
     var got: bool = false;
-    var spins: u32 = 0;
-    while spins < 1_000_000 {
+    let start: Ticks = read_ticks();
+    while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
         if vq_has_used(txq) {
             got = true;
             break;
         }
-        spins = spins + 1;
     }
     if !got {
         return false; // buffer stuck in flight (device never completed)
@@ -132,36 +158,53 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
         .src_mac = .{ .bytes = .{ 0, 0, 0, 0, 0, 0 } },
         .icmp_ident = 0, .icmp_seq = 0,
     };
-    var spins: u32 = 0;
-    while spins < 5_000_000 {
+    let start: Ticks = read_ticks();
+    while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
         if vq_has_used(rxq) {
             let dev: DeviceBuffer = vq_complete(rxq);
             var cpu: CpuBuffer = invalidate_for_cpu(dev);
+            let len: usize = cpu_len(&cpu);
             out.valid = true;
-            out.ethertype = eth_ethertype(&cpu, FRAME_AT);
-            out.src_mac = eth_read_mac(&cpu, FRAME_AT + 6);
-            if out.ethertype == ETHERTYPE_ARP {
-                let oper: u16 = arp_oper(&cpu, FRAME_AT);
-                out.src_ip = arp_sender_ip(&cpu, FRAME_AT);
-                out.target_ip = arp_target_ip(&cpu, FRAME_AT);
-                if oper == ARP_OP_REPLY {
-                    out.is_arp_reply = true;
+            // Only parse fields the device actually delivered: check the received
+            // length before reading the Ethernet header, then the ARP / IPv4+ICMP
+            // bodies (both 42 bytes past FRAME_AT).
+            if len >= FRAME_AT + 14 {
+                out.ethertype = eth_ethertype(&cpu, FRAME_AT);
+                out.src_mac = eth_read_mac(&cpu, FRAME_AT + 6);
+                if out.ethertype == ETHERTYPE_ARP {
+                    if len >= FRAME_AT + 28 {
+                        let oper: u16 = arp_oper(&cpu, FRAME_AT);
+                        out.src_ip = arp_sender_ip(&cpu, FRAME_AT);
+                        out.target_ip = arp_target_ip(&cpu, FRAME_AT);
+                        if oper == ARP_OP_REPLY {
+                            out.is_arp_reply = true;
+                        }
+                        if oper == ARP_OP_REQUEST {
+                            out.is_arp_request = true;
+                        }
+                    }
                 }
-                if oper == ARP_OP_REQUEST {
-                    out.is_arp_request = true;
-                }
-            }
-            if out.ethertype == ETHERTYPE_IPV4 {
-                let kind: u8 = icmp_type(&cpu, FRAME_AT);
-                out.src_ip = ipv4_src_ip(&cpu, FRAME_AT + 14);
-                out.target_ip = ipv4_dst_ip(&cpu, FRAME_AT + 14);
-                out.icmp_ident = icmp_ident(&cpu, FRAME_AT);
-                out.icmp_seq = icmp_seq(&cpu, FRAME_AT);
-                if kind == ICMP_ECHO_REPLY {
-                    out.is_icmp_reply = true;
-                }
-                if kind == ICMP_ECHO_REQUEST {
-                    out.is_icmp_request = true;
+                if out.ethertype == ETHERTYPE_IPV4 {
+                    // Only treat it as ICMP after the IPv4 header checks out: full
+                    // length, valid header checksum, and protocol == ICMP.
+                    let ip_at: usize = FRAME_AT + 14;
+                    if len >= FRAME_AT + 42 {
+                        if ipv4_checksum_valid(&cpu, ip_at) {
+                            if ipv4_protocol(&cpu, ip_at) == IP_PROTO_ICMP {
+                                let kind: u8 = icmp_type(&cpu, FRAME_AT);
+                                out.src_ip = ipv4_src_ip(&cpu, ip_at);
+                                out.target_ip = ipv4_dst_ip(&cpu, ip_at);
+                                out.icmp_ident = icmp_ident(&cpu, FRAME_AT);
+                                out.icmp_seq = icmp_seq(&cpu, FRAME_AT);
+                                if kind == ICMP_ECHO_REPLY {
+                                    out.is_icmp_reply = true;
+                                }
+                                if kind == ICMP_ECHO_REQUEST {
+                                    out.is_icmp_request = true;
+                                }
+                            }
+                        }
+                    }
                 }
             }
             free(cpu);
@@ -169,69 +212,83 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
             vq_kick(regs, RX_QUEUE);
             return out;
         }
-        spins = spins + 1;
     }
     return out;
 }
 
-// Wait (bounded) for the device to return a TX buffer and reclaim it.
+// Wait (bounded by a real-time deadline) for the device to return a TX buffer.
 fn tx_wait_reclaim(txq: *mut Virtq) -> bool {
-    var spins: u32 = 0;
-    while spins < 1_000_000 {
+    let start: Ticks = read_ticks();
+    while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
         if vq_has_used(txq) {
             free(invalidate_for_cpu(vq_complete(txq)));
             return true;
         }
-        spins = spins + 1;
     }
     return false;
 }
 
 // Ping the gateway: ARP for its MAC, send an ICMP echo request, await the reply.
 // The full Ethernet/IPv4/ICMP path over real virtio-net DMA.
-export fn nic_ping_gateway(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mut Virtq, src_ip: u32, gw_ip: u32) -> bool {
+export fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr, gw_ip: Ipv4Addr) -> Result<bool, NetError> {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let rxq: *mut Virtq = dev.rxq;
+    let txq: *mut Virtq = dev.txq;
     // 1. Resolve the gateway's hardware address.
-    if !nic_send_arp(regs, txq, src_ip, gw_ip) {
-        return false;
+    if !nic_send_arp(regs, txq, src_mac, src_ip.raw, gw_ip.raw) {
+        return err(.ArpFailed);
     }
     var arp_rx: RxFrame = rx_receive(regs, rxq);
     if !arp_rx.is_arp_reply {
-        return false;
+        return err(.ArpFailed);
+    }
+    if arp_rx.src_ip != gw_ip.raw {
+        return err(.BadReply); // a reply, but not from the gateway we asked about
     }
     var gw_mac: MacAddr = arp_rx.src_mac;
 
     // 2. Send an ICMP echo request to the gateway.
-    var smac: MacAddr = our_mac();
-    var cpu: CpuBuffer = alloc(NET_HDR_LEN + 64);
-    icmp_write_echo_request(&cpu, FRAME_AT, &smac, &gw_mac, src_ip, gw_ip, 0x1234, 1);
-    let dev: DeviceBuffer = clean_for_device(cpu);
-    vq_submit_tx(txq, dev);
+    var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
+    icmp_write_echo_request(&cpu, FRAME_AT, src_mac, &gw_mac, src_ip.raw, gw_ip.raw, PING_IDENT, PING_SEQ);
+    let frame: DeviceBuffer = clean_for_device(cpu);
+    vq_submit_tx(txq, frame);
     vq_kick(regs, TX_QUEUE);
     if !tx_wait_reclaim(txq) {
-        return false;
+        return err(.PingTimeout);
     }
 
-    // 3. Await the ICMP echo reply.
+    // 3. Await the ICMP echo reply — and confirm it is *our* reply (from the
+    // gateway, echoing our identifier and sequence) rather than unrelated traffic.
     var icmp_rx: RxFrame = rx_receive(regs, rxq);
-    return icmp_rx.is_icmp_reply;
+    if !icmp_rx.is_icmp_reply {
+        return err(.PingTimeout);
+    }
+    if icmp_rx.src_ip != gw_ip.raw {
+        return err(.BadReply);
+    }
+    if icmp_rx.icmp_ident != PING_IDENT {
+        return err(.BadReply);
+    }
+    if icmp_rx.icmp_seq != PING_SEQ {
+        return err(.BadReply);
+    }
+    return ok(true);
 }
 
 // ----- inbound responder (the host→guest "pingable" path) -----
 
-fn send_arp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32) -> void {
-    var smac: MacAddr = our_mac();
-    var cpu: CpuBuffer = alloc(NET_HDR_LEN + 64);
-    arp_write_reply(&cpu, FRAME_AT, &smac, our_ip, dst_mac, dst_ip);
+fn send_arp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32) -> void {
+    var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
+    arp_write_reply(&cpu, FRAME_AT, src_mac, our_ip, dst_mac, dst_ip);
     let dev: DeviceBuffer = clean_for_device(cpu);
     vq_submit_tx(txq, dev);
     vq_kick(regs, TX_QUEUE);
     tx_wait_reclaim(txq);
 }
 
-fn send_icmp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32, ident: u16, seq: u16) -> void {
-    var smac: MacAddr = our_mac();
-    var cpu: CpuBuffer = alloc(NET_HDR_LEN + 64);
-    icmp_write_echo_reply(&cpu, FRAME_AT, &smac, dst_mac, our_ip, dst_ip, ident, seq);
+fn send_icmp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32, ident: u16, seq: u16) -> void {
+    var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
+    icmp_write_echo_reply(&cpu, FRAME_AT, src_mac, dst_mac, our_ip, dst_ip, ident, seq);
     let dev: DeviceBuffer = clean_for_device(cpu);
     vq_submit_tx(txq, dev);
     vq_kick(regs, TX_QUEUE);
@@ -241,20 +298,23 @@ fn send_icmp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, our_ip: u32, dst_
 // Serve one inbound frame: answer an ARP request or an ICMP echo request aimed at
 // our address. Returns true if a reply was sent. This is what makes the guest
 // answerable to a host `ping` (host→guest needs a tap netdev to exercise).
-export fn nic_serve_once(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mut Virtq, our_ip: u32) -> bool {
+export fn nic_serve_once(dev: *NetDevice, src_mac: *MacAddr, our_ip: Ipv4Addr) -> bool {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let rxq: *mut Virtq = dev.rxq;
+    let txq: *mut Virtq = dev.txq;
     var rx: RxFrame = rx_receive(regs, rxq);
     if !rx.valid {
         return false;
     }
     if rx.is_arp_request {
-        if rx.target_ip == our_ip {
-            send_arp_reply(regs, txq, our_ip, &rx.src_mac, rx.src_ip);
+        if rx.target_ip == our_ip.raw {
+            send_arp_reply(regs, txq, src_mac, our_ip.raw, &rx.src_mac, rx.src_ip);
             return true;
         }
     }
     if rx.is_icmp_request {
-        if rx.target_ip == our_ip {
-            send_icmp_reply(regs, txq, our_ip, &rx.src_mac, rx.src_ip, rx.icmp_ident, rx.icmp_seq);
+        if rx.target_ip == our_ip.raw {
+            send_icmp_reply(regs, txq, src_mac, our_ip.raw, &rx.src_mac, rx.src_ip, rx.icmp_ident, rx.icmp_seq);
             return true;
         }
     }
@@ -262,12 +322,15 @@ export fn nic_serve_once(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mut V
 }
 
 // The kernel's network event loop (poll mode): serve up to `rounds` frames,
-// returning how many replies were sent.
-export fn nic_serve(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mut Virtq, our_ip: u32, rounds: u32) -> u32 {
+// returning how many replies were sent. NOTE: each round may allocate an RX
+// refill and a TX reply; with the platform's one-shot bump DMA pool (net_runtime),
+// sustained serving eventually exhausts it. A recycling DMA allocator (a free list
+// in `mc_dma_free`) is the next step for an unbounded event loop.
+export fn nic_serve(dev: *NetDevice, src_mac: *MacAddr, our_ip: Ipv4Addr, rounds: u32) -> u32 {
     var served: u32 = 0;
     var i: u32 = 0;
     while i < rounds {
-        if nic_serve_once(regs, rxq, txq, our_ip) {
+        if nic_serve_once(dev, src_mac, our_ip) {
             served = served + 1;
         }
         i = i + 1;
