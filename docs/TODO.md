@@ -54,6 +54,21 @@ makes read-after-handoff / double-free / lock-left-held compile errors. In m0.
    advances), and a real **100-byte TX frame is captured in a pcap**. Required
    adding the typed memory-access primitives below (member/array access and
    `*mut`-field writes *through pointers*), so the vring is typed rather than raw.
+   _Protocol correctness + DMA-ownership pass (2026-06-07, from an external
+   review):_ `virtio_init` now **reads the device's offered features and accepts
+   the intersection** (failing if a required bit is missing), **waits for
+   `status == 0` after reset**, and sets **`STATUS_FAILED`** on any failure;
+   `vq_setup` checks **`queue_num_max`** and negotiates the size; `vq_pop_used`
+   reads the **used-ring `id`/`len`** (not just `used.idx`). Crucially, the queue
+   API now takes **linear `move` DMA handles, not raw `addr/len`**:
+   `vq_submit_tx(DeviceBuffer)` consumes the handle and returns it as the in-flight
+   token, and the driver runs the full `alloc → clean_for_device → submit →
+   reclaim → free` cycle — so read-after-handoff, double-submit, and
+   submit-while-cpu-owned are compile errors. This required fixing a real
+   type-checking gap: **distinct named structs are now non-interchangeable at call
+   sites** (`E_NO_IMPLICIT_CONVERSION`) — previously all structs classified the
+   same, so `CpuBuffer`/`DeviceBuffer` typestates were not enforced. Compile-fail
+   regression `tests/spec/dma_ownership.mc`; still green under QEMU.
 10. [x] **Driver ergonomics — language features + transport libraries** —
     **done** (2026-06-07). Refactored so the net-specific driver is ~12 lines and
     the virtio mechanics are reusable. Added: (a) **boolean `if`** (`if cond { … }

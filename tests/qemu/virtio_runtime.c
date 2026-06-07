@@ -11,15 +11,28 @@ typedef struct DescTable { VringDesc d[8]; } DescTable;
 typedef struct VringAvail { uint16_t flags; uint16_t idx; uint16_t ring[8]; uint16_t used_event; } VringAvail;
 typedef struct UsedElem { uint32_t id; uint32_t len; } UsedElem;
 typedef struct VringUsed { uint16_t flags; uint16_t idx; UsedElem ring[8]; uint16_t avail_event; } VringUsed;
-typedef struct VirtioNetHdr { uint8_t flags; uint8_t gso_type; uint16_t hdr_len; uint16_t gso_size; uint16_t csum_start; uint16_t csum_offset; uint16_t num_buffers; } VirtioNetHdr;
-typedef struct PacketBuf { VirtioNetHdr hdr; uint8_t data[64]; } PacketBuf;
-// The driver-side virtqueue handle (std/virtqueue.mc Virtq).
-typedef struct Virtq { DescTable *desc; VringAvail *avail; VringUsed *used; uint16_t last_used; } Virtq;
+// The driver-side virtqueue handle (std/virtqueue.mc Virtq) — note the
+// negotiated `size` field.
+typedef struct Virtq { DescTable *desc; VringAvail *avail; VringUsed *used; uint16_t size; uint16_t last_used; } Virtq;
+// std/dma move handles (erased to plain structs at the boundary).
+typedef struct CpuBuffer { uintptr_t dev_addr; uintptr_t cpu_addr; uintptr_t len; } CpuBuffer;
+typedef struct DeviceBuffer { uintptr_t dev_addr; uintptr_t len; } DeviceBuffer;
 typedef struct VirtioMmio VirtioMmio;
 
 // The MC driver entry points.
 int nic_init(volatile VirtioMmio *regs, Virtq *txq);
-int nic_transmit(volatile VirtioMmio *regs, Virtq *txq, PacketBuf *pkt, uint16_t payload_len);
+int nic_transmit(volatile VirtioMmio *regs, Virtq *txq, uint16_t payload_len);
+
+// ----- std/dma platform primitives: a single zeroed, aligned DMA frame pool -----
+static uint8_t g_dma_pool[2048] __attribute__((aligned(16)));
+CpuBuffer mc_dma_alloc(uintptr_t len) {
+    for (uintptr_t i = 0; i < sizeof(g_dma_pool); ++i) g_dma_pool[i] = 0; // zero the frame
+    CpuBuffer b = { (uintptr_t)g_dma_pool, (uintptr_t)g_dma_pool, len };
+    return b;
+}
+void mc_dma_free(CpuBuffer b) { (void)b; }
+DeviceBuffer mc_dma_clean_for_device(CpuBuffer b) { DeviceBuffer d = { b.dev_addr, b.len }; return d; }
+CpuBuffer mc_dma_invalidate_for_cpu(DeviceBuffer b) { CpuBuffer c = { b.dev_addr, b.dev_addr, b.len }; return c; }
 
 // ----- UART (QEMU virt 16550 at 0x1000_0000) -----
 #define UART ((volatile uint8_t *)0x10000000UL)
@@ -37,11 +50,10 @@ static void puthex(uint64_t v) {
 #define VIRTIO_MMIO_STRIDE 0x1000UL
 #define VIRTIO_MMIO_COUNT 8
 
-// DMA memory (identity-mapped; alignment per virtio 1.0).
+// vring memory (identity-mapped; alignment per virtio 1.0).
 static DescTable  g_desc  __attribute__((aligned(16)));
 static VringAvail g_avail __attribute__((aligned(2)));
 static VringUsed  g_used  __attribute__((aligned(4)));
-static PacketBuf  g_pkt   __attribute__((aligned(16)));
 
 static volatile VirtioMmio *find_net_device(void) {
     for (int i = 0; i < VIRTIO_MMIO_COUNT; ++i) {
@@ -60,15 +72,11 @@ __attribute__((used)) void test_main(void) {
     if (!regs) { puts_("NODEV\n"); goto done; }
     puts_("DISC "); puthex((uint64_t)(uintptr_t)regs); putc_('\n');
 
-    Virtq txq = { &g_desc, &g_avail, &g_used, 0 };
+    Virtq txq = { &g_desc, &g_avail, &g_used, 0, 0 };
     if (!nic_init(regs, &txq)) { puts_("INIT-FAIL\n"); goto done; }
     puts_("INIT-OK\n");
 
-    // A tiny payload: a destination/source MAC stub + ethertype, "MC" tag.
-    for (int i = 0; i < 64; ++i) g_pkt.data[i] = 0;
-    g_pkt.data[0] = 'M'; g_pkt.data[1] = 'C';
-
-    if (!nic_transmit(regs, &txq, &g_pkt, 60)) { puts_("TX-FAIL\n"); goto done; }
+    if (!nic_transmit(regs, &txq, 60)) { puts_("TX-FAIL\n"); goto done; }
     puts_("VIRTIO-TX-OK\n");
 
 done:

@@ -2641,9 +2641,27 @@ pub const Checker = struct {
         const enum_checked = self.checkEnumValueCompatibility(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion") else false;
+        // A struct value passed where a *different* named struct is expected is a
+        // type error: distinct struct types (e.g. the move typestates CpuBuffer
+        // vs DeviceBuffer) are not interchangeable just because they classify the
+        // same. (Struct literals are target-typed and handled above.)
+        if (self.checkNamedStructMismatch(target_ty, arg, ctx)) return;
         if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         }
+    }
+
+    // True (and reports) when `arg` is a value of one named struct passed where a
+    // different named struct is expected.
+    fn checkNamedStructMismatch(self: *Checker, target_ty: ast.TypeExpr, arg: ast.Expr, ctx: Context) bool {
+        const tname = structNameOfType(target_ty, ctx) orelse return false;
+        const arg_ty = exprDeclaredType(arg, ctx) orelse return false;
+        const aname = structNameOfType(arg_ty, ctx) orelse return false;
+        if (!std.mem.eql(u8, tname, aname)) {
+            self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument struct type does not match the parameter type");
+            return true;
+        }
+        return false;
     }
 
     fn checkTaggedUnionConstructorCompatibility(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
@@ -4898,6 +4916,37 @@ fn typeArgName(arg: ast.Expr) ?[]const u8 {
     return switch (arg.kind) {
         .ident => |id| id.text,
         .grouped => |inner| typeArgName(inner.*),
+        else => null,
+    };
+}
+
+// The struct name a type expression directly names (a known struct/move type),
+// or null if it isn't a plain named struct.
+fn structNameOfType(ty: ast.TypeExpr, ctx: Context) ?[]const u8 {
+    const structs = ctx.structs orelse return null;
+    return switch (ty.kind) {
+        .name => |n| if (structs.contains(n.text)) n.text else null,
+        else => null,
+    };
+}
+
+// The declared type of an expression usable for struct-name comparison: a local
+// or global binding's type, or a direct call's return type.
+fn exprDeclaredType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .ident => |ident| blk: {
+            if (ctx.scope) |scope| {
+                if (scope.get(ident.text)) |entry| break :blk entry.ty;
+            }
+            break :blk globalType(ident.text, ctx);
+        },
+        .call => |node| blk: {
+            const name = directCallName(node.callee.*) orelse break :blk null;
+            const fns = ctx.functions orelse break :blk null;
+            const info = fns.get(name) orelse break :blk null;
+            break :blk info.return_ty;
+        },
+        .grouped => |inner| exprDeclaredType(inner.*, ctx),
         else => null,
     };
 }
