@@ -5021,6 +5021,12 @@ const CEmitter = struct {
                 const resolved = self.resolveAliasType(pointee);
                 return if (isNumericStorageType(resolved)) resolved else null;
             },
+            // A cast's result type is its target type, so `(x as u32) << 8` and
+            // similar recover their width.
+            .cast => |node| {
+                const resolved = self.resolveAliasType(node.ty.*);
+                return if (isNumericStorageType(resolved)) resolved else null;
+            },
             .grouped => |inner| self.numericExprTypeForEmission(inner.*, locals),
             .unary => |node| self.numericExprTypeForEmission(node.expr.*, locals),
             .binary => |node| {

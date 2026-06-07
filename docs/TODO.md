@@ -88,6 +88,15 @@ makes read-after-handoff / double-free / lock-left-held compile errors. In m0.
     concrete `vq_wait_used`; the research-tier shared-region vring type remains
     aspirational.) Also fixed the monomorphizer dropping `Field.offset`/`is_move`
     when cloning structs in a module with generics.
+11. [x] **Typed-hardware demo suite (`demo/`)** — **done** (2026-06-07). Eight
+    drivers, one per hardware class, each showing a different static contract:
+    `uart` (register access permissions + `@offset`), `gpio` (pin capabilities),
+    `timer` (linear typestate state machine), `irq` (interrupt lifecycle +
+    `IrqOff` witness), `spi` (linear bus transaction), `virtio-blk` (DMA
+    request/response ownership), `virtio-net` (the full driver, runs under QEMU),
+    `framebuffer` (linear device-visible memory mapping). `zig build demo-test`
+    (in m0) lowers all eight to compilable C; `demo/README.md` indexes them. The
+    `framebuffer` pixel packing surfaced the `.cast` width-recovery fix (below).
 
 This effort also fixed three C-backend bugs the driver work surfaced (below):
 member access on a pointer base lowered as `.` instead of `->`; a checked op /
@@ -851,7 +860,9 @@ From an external static review; each verified against the code.
       wasn't reachable through a target. Fixed the `.deref` recovery (via
       `derefPointeeType`); the wrap-in-cast case is worked around by binding to a
       typed local first. Exercised by `std/sync`'s `counter.* + delta` and
-      `std/time`'s `elapsed`.
+      `std/time`'s `elapsed`. _Follow-up (2026-06-07):_ added the `.cast` case too,
+      so `(x as u32) << 8` and similar recover their width (a cast result is its
+      target type) — found building the `framebuffer` demo's pixel packing.
 - [x] **Inconsistent C-identifier mangling for fields named after C keywords** —
       surfaced by an external review (most of which was hallucinated, but this was
       real). Struct/MMIO field *declarations* routed through `cIdent` (which

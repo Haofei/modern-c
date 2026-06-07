@@ -159,6 +159,15 @@ pub fn build(b: *std.Build) void {
     const virtio_test_step = b.step("virtio-test", "Build and run the real virtio-net driver against virtio-net-device under QEMU");
     virtio_test_step.dependOn(&virtio_test_cmd.step);
 
+    const demo_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/demo-test.sh",
+        "zig-out/bin/mcc",
+    });
+    demo_test_cmd.step.dependOn(b.getInstallStep());
+    const demo_test_step = b.step("demo-test", "Lower every demo/ driver to C and compile-check it");
+    demo_test_step.dependOn(&demo_test_cmd.step);
+
     const m0_step = b.step("m0", "Run M0 conformance gates");
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);
@@ -190,4 +199,6 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&nic_test_cmd.step);
     // virtio-test runs the real virtio-net driver under QEMU (self-skips without QEMU).
     m0_step.dependOn(&virtio_test_cmd.step);
+    // demo-test compile-checks the whole demo/ suite (needs clang).
+    m0_step.dependOn(&demo_test_cmd.step);
 }

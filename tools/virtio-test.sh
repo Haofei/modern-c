@@ -13,8 +13,8 @@ set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$HERE/tests/qemu/virtio_net.mc"
-RUNTIME="$HERE/tests/qemu/virtio_runtime.c"
+SRC="$HERE/demo/virtio-net/virtio_net.mc"
+RUNTIME="$HERE/demo/virtio-net/runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="VIRTIO-TX-OK"
 
