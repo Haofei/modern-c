@@ -632,7 +632,24 @@ pub const Checker = struct {
                     self.errorCode(stmt.span, "E_PRECISE_ASM_CONTRACT", "precise asm requires #[unsafe_contract(precise_asm)]");
                 }
                 if (asm_stmt.form == .precise) {
-                    self.errorCode(stmt.span, "E_PRECISE_ASM_UNSUPPORTED", "precise asm constraints are not represented by this compiler profile");
+                    // Each output names an assignable local that receives the
+                    // result; the contract trusts the declared register/type.
+                    for (asm_stmt.outputs) |output| {
+                        self.checkType(output.ty, .storage, ctx);
+                        const binding = if (ctx.scope) |scope| scope.get(output.name.text) else null;
+                        if (binding) |entry| {
+                            if (!entry.mutable) {
+                                self.errorCode(output.name.span, "E_ASSIGN_TO_IMMUTABLE_LOCAL", "cannot assign to immutable local binding");
+                            }
+                        } else {
+                            self.errorCode(output.name.span, "E_UNKNOWN_IDENTIFIER", "asm output names an unknown local");
+                        }
+                    }
+                    // Each input feeds a value of the declared type into a register.
+                    for (asm_stmt.inputs) |input| {
+                        self.checkType(input.ty, .storage, ctx);
+                        _ = self.checkExpr(input.value, ctx);
+                    }
                 }
             },
             .contract_block => |contract| {

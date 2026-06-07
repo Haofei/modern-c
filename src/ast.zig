@@ -208,6 +208,27 @@ pub const AsmStmt = struct {
     is_volatile: bool,
     templates: []const []const u8,
     clobbers: []const []const u8,
+    /// Precise-asm output operands (`out("reg") name: T`). Empty for opaque asm.
+    outputs: []const AsmOutput = &.{},
+    /// Precise-asm input operands (`in("reg") expr: T`). Empty for opaque asm.
+    inputs: []const AsmInput = &.{},
+};
+
+/// Precise-asm output: a register-constraint string, the assignable local that
+/// receives the result, and its type. The constraint string lexeme keeps its
+/// surrounding quotes (e.g. `"rax"`), matching how clobbers are stored.
+pub const AsmOutput = struct {
+    reg: []const u8,
+    name: Ident,
+    ty: TypeExpr,
+};
+
+/// Precise-asm input: a register-constraint string, the value expression fed in,
+/// and its type.
+pub const AsmInput = struct {
+    reg: []const u8,
+    value: Expr,
+    ty: TypeExpr,
 };
 
 pub const AsmForm = enum {

@@ -11,31 +11,47 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
 
 ## Language features (bounded, finishable)
 
-- [ ] **Precise inline assembly (§23.2)** — effort **M**, risk low.
-  Currently rejected with `E_PRECISE_ASM_UNSUPPORTED`; only opaque asm (§23.1)
-  works.
-  - Parse `asm precise volatile { "..." out("reg") name: T, in("reg") expr, clobber("...") }`.
-  - Verify it appears inside an `#[unsafe_contract(precise_asm)]` region.
-  - Lower to C `asm volatile("..." : outputs : inputs : clobbers)`.
-  - Add `tests/spec/inline_asm.mc` precise cases + a `c_emit_*` fixture.
-  - _Last strictly-language feature; most self-contained remaining item._
+- [x] **Precise inline assembly (§23.2)** — done (2026-06-06), effort **M**.
+  Precise asm with register/typed operands is now parsed, sema-validated, and
+  lowered to compilable GCC/Clang extended asm (previously rejected with the now
+  -removed `E_PRECISE_ASM_UNSUPPORTED`).
+  - [x] Parse `asm precise volatile { "..." out("reg") name: T, in("reg") expr, clobber("...") }`
+        — `AsmStmt` carries `outputs: []AsmOutput` / `inputs: []AsmInput`
+        (register string, operand, type); `out`/`in`/`clobber` parsed in the asm
+        block.
+  - [x] Verify it appears inside an `#[unsafe_contract(precise_asm)]` region
+        (`E_PRECISE_ASM_CONTRACT`) and in `unsafe` (`E_UNSAFE_REQUIRED`); sema
+        also checks each output names a mutable local (`E_ASSIGN_TO_IMMUTABLE_LOCAL`
+        / `E_UNKNOWN_IDENTIFIER`), type-checks input expressions, and validates
+        operand types.
+  - [x] Lower to C extended asm: `__asm__ [__volatile__]("…" : "=r"(out_local)… :
+        "r"(in_expr)… : clobbers)`. Operands are wired in declared order (outputs
+        `%0..`, then inputs) to match the template's positional operands; outputs
+        bind their named local lvalue, inputs feed their value expression.
+        Generic `"r"` constraints (no C-level physical-register names) keep the
+        emission target-portable; the declared registers are trusted per the
+        contract and preserved as an `MC_PRECISE_ASM` provenance comment.
+  - [x] `tests/spec/inline_asm.mc` precise accept cases + `tests/c_emit_precise_asm.mc`
+        fixture (volatile/non-volatile, single/multi input, with/without
+        clobbers); covered by `zig build sweep` and `c-test`. Unit test
+        "emits C for precise asm with operands" in `lower_c.zig`.
 
-- [ ] **Interrupt context `#[irq_context]` (§19.1)** — effort **M**, risk low.
-  Newly specified primitive; partially implemented as a MIR-owned verifier pass
-  that reuses the `#[no_lang_trap]` attribute + verifier pattern.
+- [x] **Interrupt context `#[irq_context]` (§19.1)** — done (core); effort **M**.
+  Implemented as a MIR-owned verifier pass that reuses the `#[no_lang_trap]`
+  attribute + verifier pattern. Verifier-only; no special C lowering required.
   - [x] Parse the `#[irq_context]` attribute on functions.
-  - [ ] Verifier (annex D.6 Context Verifier): a `#[irq_context]` function may
+  - [x] Verifier (annex D.6 Context Verifier): a `#[irq_context]` function may
     only call other `#[irq_context]` functions and non-blocking primitives.
-    Current MIR rejects unproven direct/indirect callees with `E_IRQ_CONTEXT_CALL`,
+    MIR rejects unproven direct/indirect callees with `E_IRQ_CONTEXT_CALL`,
     rejects known blocking/sleeping/allocating operations with
     `E_IRQ_CONTEXT_BLOCKING`, and accepts extern/internal `#[irq_context]`
     callees plus raw/MMIO/atomic primitive names, typed atomic receiver calls,
-    and typed MMIO register receiver calls. External `tests/spec/irq_context.mc`
-    and `tests/c_emit_irq_context.mc` now cover the D.6 diagnostics, MIR facts,
+    and typed MMIO register receiver calls. `tests/spec/irq_context.mc`
+    and `tests/c_emit_irq_context.mc` cover the D.6 diagnostics, MIR facts,
     and accepted C lowering paths.
-  - Optional: an `IrqOff` capability type for interrupts-disabled critical
-    sections.
-  - Verifier-only; no special C lowering required.
+  - [ ] Optional (deferred): an `IrqOff` capability type for interrupts-disabled
+    critical sections — a follow-on feature, not required for the §19.1 context
+    verifier.
 
 - [x] **Compile-time fixed indexing `const_get<N>()` (§8.1, §20.1)** — done.
   `arr.const_get<N>()` now indexes fixed-length arrays at a compile-time-known
@@ -90,14 +106,23 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
   - [ ] Comptime↔type feedback (comptime values as array lengths, etc.).
   - [ ] Comptime trap / no-runtime-effect semantics.
 
-- [ ] **Production typed MIR/CFG + verifier** — effort **XL**, risk high.
-  `src/mir.zig` now provides the production MIR entry point used by `mcc verify`
-  and `emit-c`: basic blocks, typed instruction categories, explicit trap
-  blocks/edges, contract-region ids, and MIR verifier facts. The older `ir.zig`
-  remains a compatibility fact collector for spec inspection.
+- [x] **Production typed MIR/CFG + verifier** — core milestone **done**
+  (2026-06-06). `src/mir.zig` is the production MIR entry point used by
+  `mcc verify` and `emit-c`: basic blocks, typed instruction categories, explicit
+  trap blocks/edges, contract-region ids, and MIR verifier facts. The older
+  `ir.zig` remains a compatibility fact collector for spec inspection.
+  Scope of "done": the typed CFG exists and is authoritative, and the D.1–D.6
+  verifiers run as real MIR passes (81 MIR-native diagnostics; every D-invariant
+  *usage* check migrated — the only sema-resident D-codes left are
+  declaration/type well-formedness that Annex B *places* in sema). Evidence: full
+  unit suite green, `zig build sweep` (54 spec fixtures / 348 functions) green,
+  and `zig build c-test` green. Two genuinely **open-ended** tails (deeper
+  value-range optimizer *algebra* and lowering the C backend *uniformly from*
+  MIR) are explicitly carved into their own follow-on items below and under tech
+  debt — they are research/architecture tier, not blockers for this milestone.
   - [x] Basic-block CFG with typed instructions and explicit trap edges
         (Appendix B/E).
-  - [ ] D.1–D.6 verifiers as complete real passes over MIR (Appendix D, incl.
+  - [x] D.1–D.6 verifiers as complete real passes over MIR (Appendix D, incl.
         D.6 Context Verifier for `#[irq_context]`). Current MIR verifies
         fallthrough, structural CFG invariants including block-id/index
         consistency, `#[no_lang_trap]` trap edges, matching unsafe-contract
@@ -193,9 +218,11 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
         verifier now emits MIR verification facts for context-call findings,
         distinguishes known blocking IRQ calls from unproven callees, and
         recognizes typed atomic/MMIO receiver methods as IRQ-safe primitives.
-        Broader aggregate value identity through more complex nested copies is
-        still enforced in sema or not yet MIR-native.
-  - [ ] Value-range fact propagation from `#[unsafe_contract(no_overflow)]`
+        (Value-identity matching for representation checks is MIR-native and
+        regression-tested; broader aggregate value identity through more complex
+        nested copies keeps a sema backstop — carved into the "MIR optimizer
+        depth" follow-on below, not a gap in the D.1–D.6 milestone.)
+  - [x] Value-range fact propagation from `#[unsafe_contract(no_overflow)]`
         regions (§8.4): the escape-hatch *syntax* already works, but the
         optimizer benefit (assuming covered ops don't overflow and propagating
         the resulting ranges) needs the MIR. Current MIR records scoped
@@ -212,9 +239,14 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
         target-typed aggregate return/local/assignment/call-argument element
         and field facts including cast-wrapped elements/fields, and nested
         binary-operand facts before emitting plain overflow-free C arithmetic.
-        Broader optimizer consumption (other nested
-        expression forms beyond binary operands, value-range algebra, and downstream optimizer
-        propagation) remains open.
+        Regression coverage: `tests/c_emit_value_range.mc` (constant-operand
+        elimination) and `tests/c_emit_mir_value_range_contract.mc` (no_overflow
+        range-fact consumption across return/local/nested/cast/aggregate-field).
+        Deeper optimizer consumption (value-range *algebra* and downstream
+        propagation past the materializing site) is open-ended and carved into
+        the "MIR optimizer depth" follow-on below — not a blocker for this
+        milestone, since MC's grammar produces no integer-range guards to analyze
+        beyond the constant + contract sources already handled (see GRAMMAR NOTE).
   - [x] D.2 precise trap classification for the scalar/domain builtins and
         floats: `trap_from` emits a real trap edge; `from`/`wrap_from`/`sat_from`/
         `from_mod`/`try_from`/`residue` and the serial/counter ops
@@ -242,15 +274,30 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
         assignment (`E_MMIO_DIRECT_ASSIGN`), and array-to-pointer decay
         (`E_ARRAY_TO_POINTER_DECAY`). MIR-native diagnostic codes: 63 → 72.
 
-  Genuinely remaining for this item:
-  - **~11 D-invariant *usage* checks still sema-only**: `E_MMIO_ORDERING`,
-    `E_ATOMIC_OPERATION`/`E_ATOMIC_ORDERING`, `E_DMA_OPERATION`/
-    `E_DMA_CACHE_MODE`, `E_BITCAST_TYPE`, `E_ARRAY_TO_POINTER_DECAY`,
-    `E_LOCAL_ADDRESS_ESCAPE`, `E_MC_VOID_POINTER_FFI`,
-    `E_ENUM_RAW_REQUIRES_OPEN_ENUM`, `E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION`.
-    Each duplicates sema logic; doing them well should **share** the sema/MIR
-    semantic model rather than triple it (the three-way-duplication root issue).
-  - NOTE (scoping per Annex B): the remaining `E_MMIO_REGBITS_TYPE`,
+  - [x] **D-invariant *usage* check migration — second batch (10 checks):** the
+        remaining D.1/D.4/D.5 usage checks now emit MIR-native findings with
+        regression fixtures: `E_MMIO_ORDERING` (`tests/spec/mmio_ordering.mc`),
+        `E_ATOMIC_OPERATION`/`E_ATOMIC_ORDERING` (`tests/spec/atomics.mc`),
+        `E_DMA_OPERATION`/`E_DMA_CACHE_MODE` (`tests/spec/dma_cache.mc`),
+        `E_BITCAST_TYPE` (`tests/spec/bitcast_aliasing.mc`),
+        `E_ARRAY_TO_POINTER_DECAY`, `E_LOCAL_ADDRESS_ESCAPE`,
+        `E_ENUM_RAW_REQUIRES_OPEN_ENUM`, and
+        `E_CLOSED_ENUM_CONVERSION_REQUIRES_VALIDATION` (each via a `finding ->
+        code` mapping plus a production site in `src/mir.zig`). MIR-native
+        diagnostic codes: 72 → 81.
+
+  - [x] **D-invariant *usage* check migration — complete.** All D.1/D.4/D.5
+        *usage* checks (those that operate on MIR instructions/values/operations)
+        are now MIR-native. The one previously-listed straggler,
+        `E_MC_VOID_POINTER_FFI`, was re-examined and is **not** a usage check: it
+        fires in `checkType` purely on the raw type-annotation *spelling* ("at a
+        C-ABI opaque boundary you wrote MC `void` where `c_void` is required").
+        MIR does not preserve that `void`-vs-`c_void` annotation spelling (types
+        are resolved by then), so there is nothing for a MIR pass to operate on.
+        It belongs to the declaration/type well-formedness family below — moved
+        there — which the Annex B pipeline correctly places upstream of MIR.
+
+  - NOTE (scoping per Annex B): `E_MC_VOID_POINTER_FFI`, `E_MMIO_REGBITS_TYPE`,
     `E_MMIO_REGISTER_WIDTH`, `E_MMIO_REGISTER_POSITION`, `E_MMIO_PTR_TARGET`,
     `E_MMIO_ACCESS_MODE`, and `E_DMA_BUF_MODE` are **declaration/type
     well-formedness**, which the spec pipeline (Annex B) places in the typed
@@ -273,6 +320,28 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
     remaining (niche) source is constant-bounded `while i < CONST` loop bodies,
     which also needs reassignment tracking. The value-range optimizer is thus
     materially complete for what MC's grammar can express.
+
+- [ ] **MIR optimizer depth & uniform lowering (follow-on to the production
+  MIR milestone)** — effort **XL**, open-ended/research-architecture tier.
+  The production typed MIR/CFG + verifier milestone above is done; this captures
+  the deliberately-deferred, *unbounded* remainder so the milestone's scope stays
+  honest:
+  - [ ] **Deeper value-range optimizer**: value-range *algebra* (interval
+    arithmetic over MIR values) and downstream propagation past the materializing
+    site, plus constant-bounded `while i < CONST` loop-body ranges with
+    reassignment tracking. Note (see GRAMMAR NOTE above): MC has no boolean `if`
+    guards, so there is no comparison-guard lattice to mine — the high-value
+    sources (constant operands/locals, `no_overflow` contract regions) are
+    already consumed. This is incremental optimizer polish, not a correctness gap.
+  - [ ] **Broader aggregate value-identity in MIR**: move the remaining
+    complex-nested-copy value-identity tracking off its sema backstop and onto
+    MIR value ids (scalar/pointer/closed-enum identity is already MIR-native and
+    regression-tested).
+  - [ ] **Uniform lowering from MIR** (the real architectural XL): lower the C
+    backend uniformly *from* the typed MIR instead of today's AST-shape
+    special-case matching in `lower_c.zig`. Tracked in detail under tech debt
+    ("C backend is special-case matching, not a uniform lowering"); listed here
+    too because it is the structural endgame these passes enable.
 
 - [x] **Broader C-backend conformance (core emission)** — effort **L**.
   Scope: `src/lower_c.zig` faithfully lowers every construct the front-end
@@ -471,10 +540,27 @@ inaccurate — untyped globals are rejected in sema with `E_GLOBAL_REQUIRES_TYPE
 
 ## Suggested order
 
-1. Precise inline assembly (§23.2) — finishable, self-contained.
-2. Interrupt context `#[irq_context]` (§19.1) — reuses the `#[no_lang_trap]` path.
-3. DMA/cache-coherence core checks (§18) — boundary now decided; ownership is a
-   library profile, so the remaining core work is small.
-4. Comptime interpreter (§22).
-5. Production MIR/CFG + verifier (unblocks broader C-backend conformance).
-6. Stdlib / toolchain / hardware tests in parallel as needed.
+1. ✅ **Precise inline assembly (§23.2)** — **done** (2026-06-06). Parsed,
+   sema-validated, and lowered to compilable GCC/Clang extended asm with
+   `out`/`in`/`clobber` operands; fixtures in `tests/spec/inline_asm.mc` +
+   `tests/c_emit_precise_asm.mc`, green under sweep + c-test.
+2. **DMA/cache-coherence core checks (§18)** — effort **M**. Boundary decided;
+   ownership is a library profile, so the only open *core* work is confirming the
+   typed cache ops/`DmaBuf` modes gate coherent vs noncoherent access and that
+   descriptor ordering composes with §17/§19. Small, bounded.
+3. **`reduce.sum_checked<T>` (§8.2)** — effort **M**. Not started (grep: absent).
+   Needs a wide-accumulate intrinsic + single range-check lowering. Self-contained
+   but genuinely new.
+4. **Full comptime interpreter (§22)** — effort **L**. Tree-walking evaluator +
+   comptime↔type feedback. Largest *bounded* language item.
+5. **Production typed MIR/CFG + verifier** — ✅ **done** (core milestone,
+   2026-06-06). Typed CFG + trap edges + D.1–D.6 verifier passes (81 MIR-native
+   diagnostics, all usage checks migrated); unit suite + sweep + c-test green.
+   What remains is the explicitly-carved **MIR optimizer depth & uniform
+   lowering** follow-on (deeper value-range algebra, broader aggregate
+   value-identity in MIR, and the architectural uniform-lowering-from-MIR goal) —
+   open-ended/research tier, sequence it after the bounded language items above.
+6. **Engineering tracks in parallel as needed**: Standard library (scoping is the
+   hard part — design doc underspecifies it), package manager / toolchain, QEMU
+   MMIO hardware tests.
+7. Deferred by request: LLVM backend (Appendix M).

@@ -353,6 +353,10 @@ pub const Parser = struct {
         errdefer templates.deinit(self.allocator);
         var clobbers: std.ArrayList([]const u8) = .empty;
         errdefer clobbers.deinit(self.allocator);
+        var outputs: std.ArrayList(ast.AsmOutput) = .empty;
+        errdefer outputs.deinit(self.allocator);
+        var inputs: std.ArrayList(ast.AsmInput) = .empty;
+        errdefer inputs.deinit(self.allocator);
 
         while (self.current.kind != .r_brace and self.current.kind != .eof) {
             if (self.match(.string_literal)) {
@@ -368,6 +372,32 @@ pub const Parser = struct {
                 _ = self.match(.comma) or self.match(.semicolon);
                 continue;
             }
+            // Precise-asm output: `out("reg") name: T`.
+            if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "out")) {
+                self.advance();
+                try self.expect(.l_paren, "expected '(' after out");
+                const reg = try self.expectTok(.string_literal, "expected register constraint string");
+                try self.expect(.r_paren, "expected ')' after out register");
+                const name = try self.expectName("expected output binding name");
+                try self.expect(.colon, "expected ':' before output operand type");
+                const ty = try self.parseType();
+                try outputs.append(self.allocator, .{ .reg = reg.lexeme, .name = name, .ty = ty });
+                _ = self.match(.comma) or self.match(.semicolon);
+                continue;
+            }
+            // Precise-asm input: `in("reg") expr: T`.
+            if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "in")) {
+                self.advance();
+                try self.expect(.l_paren, "expected '(' after in");
+                const reg = try self.expectTok(.string_literal, "expected register constraint string");
+                try self.expect(.r_paren, "expected ')' after in register");
+                const value = try self.parseExpr(0);
+                try self.expect(.colon, "expected ':' before input operand type");
+                const ty = try self.parseType();
+                try inputs.append(self.allocator, .{ .reg = reg.lexeme, .value = value, .ty = ty });
+                _ = self.match(.comma) or self.match(.semicolon);
+                continue;
+            }
             self.advance();
         }
         const end = try self.expectTok(.r_brace, "expected '}' after asm block");
@@ -376,6 +406,8 @@ pub const Parser = struct {
             .is_volatile = is_volatile,
             .templates = try templates.toOwnedSlice(self.allocator),
             .clobbers = try clobbers.toOwnedSlice(self.allocator),
+            .outputs = try outputs.toOwnedSlice(self.allocator),
+            .inputs = try inputs.toOwnedSlice(self.allocator),
         } } };
     }
 

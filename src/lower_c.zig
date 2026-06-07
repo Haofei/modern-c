@@ -1483,7 +1483,7 @@ const CEmitter = struct {
                 try self.out.print(self.allocator, "/* MC_CONTRACT_END {s} */\n", .{contractName(contract.attr)});
             },
             .comptime_block => {},
-            .asm_stmt => |asm_stmt| try self.emitAsmStmt(asm_stmt),
+            .asm_stmt => |asm_stmt| try self.emitAsmStmt(asm_stmt, locals),
             .loop => |loop| {
                 if (loop.kind == .@"while") {
                     if (try self.emitMmioReadWhileLoop(loop, locals, return_ty)) return;
@@ -1515,20 +1515,13 @@ const CEmitter = struct {
         }
     }
 
-    fn emitAsmStmt(self: *CEmitter, asm_stmt: ast.AsmStmt) !void {
-        if (asm_stmt.form == .precise) return error.UnsupportedCEmission;
+    fn emitAsmStmt(self: *CEmitter, asm_stmt: ast.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        if (asm_stmt.form == .precise) return self.emitPreciseAsmStmt(asm_stmt, locals);
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, if (asm_stmt.is_volatile) "__asm__ __volatile__(" else "__asm__(");
-        if (asm_stmt.templates.len == 0) {
-            try self.out.appendSlice(self.allocator, "\"\"");
-        } else {
-            for (asm_stmt.templates, 0..) |template, index| {
-                if (index > 0) try self.out.appendSlice(self.allocator, " \"\\n\\t\" ");
-                try self.out.appendSlice(self.allocator, template);
-            }
-        }
+        try self.emitAsmTemplate(asm_stmt.templates);
         try self.out.appendSlice(self.allocator, " ::: ");
         if (asm_stmt.clobbers.len == 0) {
             try self.out.appendSlice(self.allocator, "\"memory\"");
@@ -1539,6 +1532,74 @@ const CEmitter = struct {
             }
         }
         try self.out.appendSlice(self.allocator, ");\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#else\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#error \"inline asm emission requires compiler support\"\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#endif\n");
+    }
+
+    fn emitAsmTemplate(self: *CEmitter, templates: []const []const u8) !void {
+        if (templates.len == 0) {
+            try self.out.appendSlice(self.allocator, "\"\"");
+            return;
+        }
+        for (templates, 0..) |template, index| {
+            if (index > 0) try self.out.appendSlice(self.allocator, " \"\\n\\t\" ");
+            try self.out.appendSlice(self.allocator, template);
+        }
+    }
+
+    /// Precise asm (§23.2): the compiler trusts the declared inputs, outputs, and
+    /// clobbers. Lowers to GCC/Clang extended asm with the operands wired in
+    /// declared order — outputs numbered first (`%0..`), then inputs — so the MC
+    /// template's `%N` references line up. Outputs bind their named local lvalue
+    /// directly (`"=r"(local)`); inputs feed their value expression (`"r"(expr)`).
+    /// Generic `"r"` constraints (no C-level physical-register names) keep the
+    /// emission target-portable; the requested registers are preserved as a
+    /// provenance comment, since the operand registers are an unsafe-contract
+    /// fact the compiler trusts rather than verifies.
+    fn emitPreciseAsmStmt(self: *CEmitter, asm_stmt: ast.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
+
+        if (asm_stmt.outputs.len > 0 or asm_stmt.inputs.len > 0) {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "/* MC_PRECISE_ASM");
+            for (asm_stmt.outputs) |output| {
+                try self.out.print(self.allocator, " out({s})->{s}", .{ output.reg, output.name.text });
+            }
+            for (asm_stmt.inputs) |input| {
+                try self.out.print(self.allocator, " in({s})", .{input.reg});
+            }
+            try self.out.appendSlice(self.allocator, " */\n");
+        }
+
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, if (asm_stmt.is_volatile) "__asm__ __volatile__(" else "__asm__(");
+        try self.emitAsmTemplate(asm_stmt.templates);
+        try self.out.appendSlice(self.allocator, " : ");
+        for (asm_stmt.outputs, 0..) |output, index| {
+            if (index > 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.print(self.allocator, "\"=r\"({s})", .{try self.cIdent(output.name.text)});
+        }
+        try self.out.appendSlice(self.allocator, " : ");
+        for (asm_stmt.inputs, 0..) |input, index| {
+            if (index > 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.appendSlice(self.allocator, "\"r\"(");
+            try self.emitExprWithTarget(input.value, locals, input.ty);
+            try self.out.appendSlice(self.allocator, ")");
+        }
+        if (asm_stmt.clobbers.len > 0) {
+            try self.out.appendSlice(self.allocator, " : ");
+            for (asm_stmt.clobbers, 0..) |clobber, index| {
+                if (index > 0) try self.out.appendSlice(self.allocator, ", ");
+                try self.out.appendSlice(self.allocator, clobber);
+            }
+        }
+        try self.out.appendSlice(self.allocator, ");\n");
+
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "#else\n");
         try self.writeIndent();
@@ -11923,6 +11984,46 @@ test "emits C for opaque volatile asm" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"pause\" ::: \"memory\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"cli\" \"\\n\\t\" \"hlt\" ::: \"memory\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#error \"inline asm emission requires compiler support\"") != null);
+}
+
+test "emits C for precise asm with operands" {
+    const source =
+        \\fn find_first_set(mask: u64) -> u64 {
+        \\    var idx: u64 = 0;
+        \\    #[unsafe_contract(precise_asm)]
+        \\    {
+        \\        unsafe {
+        \\            asm precise volatile {
+        \\                "bsf %1, %0"
+        \\                out("rax") idx: u64,
+        \\                in("rbx") mask: u64,
+        \\                clobber("cc")
+        \\            }
+        \\        }
+        \\    }
+        \\    return idx;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_precise_asm.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    // Outputs bind the named local lvalue; inputs feed their value expression;
+    // declared registers are preserved as a provenance comment.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"bsf %1, %0\" : \"=r\"(idx) : \"r\"(mask) : \"cc\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_PRECISE_ASM out(\"rax\")->idx in(\"rbx\") */") != null);
 }
 
 test "emits C unsafe contract blocks as scoped blocks" {
