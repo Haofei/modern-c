@@ -4666,8 +4666,21 @@ fn immutableValueStorageBase(expr: ast.Expr, ctx: Context) bool {
     return switch (expr.kind) {
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
-            return if (binding) |entry| !entry.mutable else false;
+            if (binding) |entry| {
+                // A field reached through a pointer auto-derefs; its
+                // assignability is the *pointer's* mutability (a const pointer is
+                // caught separately by constStorageBase), not the binding's. So a
+                // `*mut T` parameter permits `p.field = …` even though `p` itself
+                // is an immutable binding.
+                if (entry.ty) |ty| {
+                    if (ty.kind == .pointer) return false;
+                }
+                return !entry.mutable;
+            }
+            return false;
         },
+        // A deref (`(*p).field`) is likewise governed by the pointer's const-ness.
+        .deref => false,
         .member => |node| immutableValueStorageBase(node.base.*, ctx),
         .grouped => |inner| immutableValueStorageBase(inner.*, ctx),
         else => false,

@@ -136,6 +136,9 @@ pub const UnionCase = struct {
 pub const Field = struct {
     name: Ident,
     ty: TypeExpr,
+    // Explicit byte offset from `@offset(N)` (MMIO register maps); null = packed
+    // after the previous field.
+    offset: ?u64 = null,
 };
 
 pub const Mutability = enum {

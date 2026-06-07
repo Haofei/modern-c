@@ -1831,7 +1831,18 @@ const FunctionBuilder = struct {
 
     fn immutableValueStorageBase(self: *FunctionBuilder, expr: ast.Expr) bool {
         return switch (expr.kind) {
-            .ident => |ident| if (self.local_mutability.get(ident.text)) |mutable| !mutable else false,
+            .ident => |ident| blk: {
+                // A field reached through a pointer auto-derefs; its
+                // assignability is the pointer's mutability (a const pointer is
+                // caught by constStorageBase), not the binding's. So a `*mut T`
+                // parameter permits `p.field = …`.
+                switch (self.exprType(expr)) {
+                    .pointer, .nullable_pointer => break :blk false,
+                    else => {},
+                }
+                break :blk if (self.local_mutability.get(ident.text)) |mutable| !mutable else false;
+            },
+            .deref => false,
             .member => |node| self.immutableValueStorageBase(node.base.*),
             .grouped => |inner| self.immutableValueStorageBase(inner.*),
             else => false,
@@ -2954,6 +2965,9 @@ const FunctionBuilder = struct {
     fn memberType(self: *FunctionBuilder, node: anytype) ValueType {
         return switch (self.exprType(node.base.*)) {
             .struct_ => |name| self.structFieldType(name, node.name.text) orelse .value,
+            // Member access auto-derefs a pointer-to-struct (`q.field` over
+            // `q: *Virtq`), so resolve the field on the pointee struct.
+            .pointer, .nullable_pointer => |shape| self.structFieldType(shape.child, node.name.text) orelse .value,
             else => .value,
         };
     }

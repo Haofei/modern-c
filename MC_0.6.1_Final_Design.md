@@ -1163,6 +1163,16 @@ switch result {
 `switch` is the general matcher.  
 `if let` is only narrowing sugar.
 
+A boolean `if cond { … } else { … }` (and `else if`) is also available; it is
+**sugar for a two-arm `switch` on the bool** (`true`/`false`) and carries no extra
+semantics — same exhaustiveness and control-flow rules. It exists because the
+`switch true/false` guard form is verbose for the common early-return check.
+
+```mc
+if x == 0 { return 10; }
+if !ready { return 20; } else if x > 100 { return 30; }
+```
+
 ---
 
 # 12. Representation and Initialization
@@ -1421,6 +1431,19 @@ extern mmio struct Uart16550 {
     fcr: Reg<u8, .write>,
     lcr: Reg<u8, .read_write>,
     lsr: RegBits<u8, UartLsr, .read>,
+}
+```
+
+Registers are placed sequentially by default. For a register map with gaps, the
+`@offset(N)` attribute pins a field at an exact byte offset — so the struct reads
+like a datasheet's register table rather than counting reserved fields. Offsets
+must increase; the compiler generates the reserved padding to reach each one.
+
+```mc
+extern mmio struct VirtioMmio {
+    magic: Reg<u32, .read>             @offset(0x000),  // "virt"
+    status: Reg<u32, .read_write>      @offset(0x070),
+    queue_desc_low: Reg<u32, .write>   @offset(0x080),
 }
 ```
 
@@ -2337,6 +2360,19 @@ NIC driver  ──uses──▶  std/sync     locking + linear guards          (
             ──uses──▶  std/barrier  descriptor-vs-doorbell ordering    (on §17/§19 ordering)
             ──uses──▶  std/mmio     register-field RMW, iomem copy      (on §17 MMIO)
             ──uses──▶  (core)       typed MMIO §17, IrqOff §19.1, irq_context
+```
+
+For a concrete device class, a second tier of libraries owns the **bus/device
+protocol** so the device-specific driver stays tiny. The implemented virtio-net
+driver, for example, is ~12 lines of net-specific logic over:
+
+```txt
+virtio-net  ──uses──▶  std/virtio     virtio-mmio transport: the @offset register
+                                       map, the init status handshake, feature
+                                       negotiation (generic across net/block/…)
+            ──uses──▶  std/virtqueue   the split virtqueue: vring layout, queue
+                                       setup, add_buf/kick/wait_used — the raw
+                                       shared-ring access concentrated here
 ```
 
 ## 28.1 `std/sync` — Locks with Linear Guards

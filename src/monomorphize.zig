@@ -463,9 +463,9 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, sd: ast.StructDecl,
 fn cloneStructDeclCtx(ctx: *const CloneCtx, sd: ast.StructDecl) anyerror!ast.StructDecl {
     var fields = try ctx.arena.alloc(ast.Field, sd.fields.len);
     for (sd.fields, 0..) |field, i| {
-        fields[i] = .{ .name = field.name, .ty = try cloneType(ctx, field.ty) };
+        fields[i] = .{ .name = field.name, .ty = try cloneType(ctx, field.ty), .offset = field.offset };
     }
-    return .{ .name = sd.name, .abi = sd.abi, .fields = fields, .type_params = sd.type_params };
+    return .{ .name = sd.name, .abi = sd.abi, .fields = fields, .type_params = sd.type_params, .is_move = sd.is_move };
 }
 
 fn cloneBlock(ctx: *const CloneCtx, block: ast.Block) anyerror!ast.Block {

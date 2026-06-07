@@ -150,6 +150,15 @@ pub fn build(b: *std.Build) void {
     const nic_test_step = b.step("nic-test", "Build and run the demo NIC driver (driver-library profile) under QEMU");
     nic_test_step.dependOn(&nic_test_cmd.step);
 
+    const virtio_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/virtio-test.sh",
+        "zig-out/bin/mcc",
+    });
+    virtio_test_cmd.step.dependOn(b.getInstallStep());
+    const virtio_test_step = b.step("virtio-test", "Build and run the real virtio-net driver against virtio-net-device under QEMU");
+    virtio_test_step.dependOn(&virtio_test_cmd.step);
+
     const m0_step = b.step("m0", "Run M0 conformance gates");
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);
@@ -179,4 +188,6 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&sync_test_cmd.step);
     // nic-test runs the demo NIC driver under QEMU (self-skips without QEMU).
     m0_step.dependOn(&nic_test_cmd.step);
+    // virtio-test runs the real virtio-net driver under QEMU (self-skips without QEMU).
+    m0_step.dependOn(&virtio_test_cmd.step);
 }

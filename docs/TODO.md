@@ -41,6 +41,38 @@ makes read-after-handoff / double-free / lock-left-held compile errors. In m0.
    via typed MMIO; a typed bulk `iomem` copy could still be added later.
 8. [x] **NIC driver prototype (§28.7)** — `tests/qemu/nic_driver.mc`, run under
    QEMU by `zig build nic-test` (in m0). Proves the libraries compose end-to-end.
+9. [x] **Real virtio-net driver (virtio 1.x over virtio-mmio)** — **done**
+   (2026-06-07). `tests/qemu/virtio_net.mc` is a faithful modern-virtio driver:
+   typed MMIO register block (the real virtio-mmio layout), the device-init status
+   handshake, `VIRTIO_F_VERSION_1` feature negotiation, a real **split virtqueue**
+   (descriptor table / available ring / used ring) laid out as typed structs in
+   DMA memory and accessed through pointers (bounds-checked), `std/barrier`
+   ordering before the doorbell, and `std/endian` field writes. `zig build
+   virtio-test` (in m0) runs it under `qemu-system-riscv64 -machine virt` with an
+   attached `virtio-net-device` (modern, `force-legacy=false`): the device
+   completes the handshake, **reaps the transmitted descriptor** (used ring
+   advances), and a real **100-byte TX frame is captured in a pcap**. Required
+   adding the typed memory-access primitives below (member/array access and
+   `*mut`-field writes *through pointers*), so the vring is typed rather than raw.
+10. [x] **Driver ergonomics — language features + transport libraries** —
+    **done** (2026-06-07). Refactored so the net-specific driver is ~12 lines and
+    the virtio mechanics are reusable. Added: (a) **boolean `if`** (`if cond { … }
+    [else …] / else if`) — desugars to a bool `switch` at parse time, reusing all
+    its checking/CFG; deletes the `switch true/false` guard boilerplate. Fixture
+    `tests/c_emit_bool_if.mc`. (b) **`@offset(N)` MMIO field attribute** — places
+    registers at exact byte offsets (generated reserved padding), so a register
+    block mirrors the datasheet without counting slots; offset-correctness
+    `_Static_assert`-verified, offsets must increase. Fixture
+    `tests/c_emit_mmio_offset.mc`. (c) **`std/virtio`** — the virtio-mmio transport
+    (datasheet-clean `@offset` register map, `virtio_init` handshake + feature
+    negotiation, `virtio_driver_ok`). (d) **`std/virtqueue`** — the split
+    virtqueue: vring structs, `vq_setup` (absorbs the 64-bit-address low/high
+    split), `vq_add_buf`/`vq_kick`/`vq_used_ready`/`vq_wait_used`, and a generic
+    `bus_addr`. The driver now reads as the spec's numbered steps. (The generic
+    `poll_until` from the sketch needs closures MC lacks, so the timeout is the
+    concrete `vq_wait_used`; the research-tier shared-region vring type remains
+    aspirational.) Also fixed the monomorphizer dropping `Field.offset`/`is_move`
+    when cloning structs in a module with generics.
 
 This effort also fixed three C-backend bugs the driver work surfaced (below):
 member access on a pointer base lowered as `.` instead of `->`; a checked op /
@@ -770,6 +802,20 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
 
 From an external static review; each verified against the code.
 
+- [x] **Typed memory access through pointers (the DMA-region bridge)** — added
+      for the virtio-net driver's split virtqueue, so a memory-mapped structure at
+      a runtime address is *typed* (and array indexing is bounds-checked) rather
+      than raw `raw.store`/offset arithmetic. Three fixes let `*Struct` pointers
+      compose with the existing member/array machinery: (1) the MIR `memberType`
+      and the C backend `structTypeNameForExpr` now resolve a struct field through
+      a pointer base (`q.field` / `q.arr[i]` over `q: *Virtq`); (2) `q.field = …`
+      / `q.arr[i] = …` through a `*mut` pointer is permitted — both the sema and
+      MIR `immutableValueStorageBase` checks treated the immutable pointer
+      *binding* as immutable storage, ignoring that the pointee is mutable (a
+      `*const` pointer is still rejected by `constStorageBase`); (3) a checked op
+      over a pointer-deref recovers its type (`numericExprTypeForEmission` `.deref`
+      case). With these, `q.desc[i].addr = …` lowers to bounds-checked
+      `q->desc.elems[i].addr = …`. Exercised by `zig build virtio-test`.
 - [x] **Member access on a pointer base lowered as `.` not `->`** — found
       building the driver libraries (every borrow helper takes a `*Handle`):
       `b.field` over `b: *T` emitted `b.field` instead of `b->field`, which clang

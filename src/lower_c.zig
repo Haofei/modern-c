@@ -1121,14 +1121,28 @@ const CEmitter = struct {
     fn emitMmioStruct(self: *CEmitter, struct_decl: ast.StructDecl) !void {
         try self.out.print(self.allocator, "typedef struct {s} {{\n", .{struct_decl.name.text});
         self.indent += 1;
+        var running: u64 = 0; // byte offset of the next field
+        var pad_n: usize = 0;
         for (struct_decl.fields) |field| {
             const info = mmioFieldFromType(field.ty) orelse {
                 try self.writeIndent();
                 try self.out.print(self.allocator, "/* unsupported MMIO field: {s} */\n", .{field.name.text});
                 return error.UnsupportedCEmission;
             };
+            // `@offset(N)` registers are placed at exact byte offsets (a device
+            // register map); insert reserved padding to reach each one.
+            if (field.offset) |off| {
+                if (off < running) return error.UnsupportedCEmission; // offsets must increase
+                if (off > running) {
+                    try self.writeIndent();
+                    try self.out.print(self.allocator, "uint8_t _pad{d}[{d}];\n", .{ pad_n, off - running });
+                    pad_n += 1;
+                    running = off;
+                }
+            }
             try self.writeIndent();
             try self.out.print(self.allocator, "{s} volatile {s};\n", .{ primitiveCTypeName(info.width) orelse "void *", try self.cIdent(field.name.text) });
+            running += mmioFieldWidthBytes(info.width);
         }
         self.indent -= 1;
         try self.out.print(self.allocator, "}} {s};\n\n", .{struct_decl.name.text});
@@ -7122,6 +7136,19 @@ const CEmitter = struct {
                 const ty = info.source_ty orelse break :blk false;
                 break :blk self.resolveAliasType(ty).kind == .pointer;
             },
+            // A struct field that is itself a pointer (`vq.desc` over
+            // `struct Virtq { desc: *mut DescTable }`), so a chained `vq.desc.d`
+            // lowers as `vq->desc->d`.
+            .member => |m| blk: {
+                const sname = self.structTypeNameForExpr(m.base.*, locals) orelse break :blk false;
+                const sdecl = self.structs.get(sname) orelse break :blk false;
+                for (sdecl.fields) |f| {
+                    if (std.mem.eql(u8, f.name.text, m.name.text)) {
+                        break :blk self.resolveAliasType(f.ty).kind == .pointer;
+                    }
+                }
+                break :blk false;
+            },
             .grouped => |inner| self.exprIsPointer(inner.*, locals),
             else => false,
         };
@@ -7154,8 +7181,33 @@ const CEmitter = struct {
                 const resolved = self.resolveAliasType(ty);
                 break :blk switch (resolved.kind) {
                     .name => |n| n.text,
+                    // Member access auto-derefs a pointer-to-struct.
+                    .pointer => |p| switch (self.resolveAliasType(p.child.*).kind) {
+                        .name => |n| n.text,
+                        else => null,
+                    },
                     else => null,
                 };
+            },
+            // A field whose type is a struct (or pointer-to-struct), so a chained
+            // `vq.desc.d` resolves `vq.desc` to its struct for the next access.
+            .member => |m| blk: {
+                const sname = self.structTypeNameForExpr(m.base.*, locals) orelse break :blk null;
+                const sdecl = self.structs.get(sname) orelse break :blk null;
+                for (sdecl.fields) |f| {
+                    if (std.mem.eql(u8, f.name.text, m.name.text)) {
+                        const resolved = self.resolveAliasType(f.ty);
+                        break :blk switch (resolved.kind) {
+                            .name => |n| n.text,
+                            .pointer => |p| switch (self.resolveAliasType(p.child.*).kind) {
+                                .name => |n| n.text,
+                                else => null,
+                            },
+                            else => null,
+                        };
+                    }
+                }
+                break :blk null;
             },
             .grouped => |inner| self.structTypeNameForExpr(inner.*, locals),
             else => null,
@@ -9019,6 +9071,14 @@ fn floatCTypeName(ty: ast.TypeExpr) ?[]const u8 {
     if (std.mem.eql(u8, name, "f32")) return "float";
     if (std.mem.eql(u8, name, "f64")) return "double";
     return null;
+}
+
+fn mmioFieldWidthBytes(width: []const u8) u64 {
+    if (std.mem.eql(u8, width, "u8") or std.mem.eql(u8, width, "i8") or std.mem.eql(u8, width, "bool")) return 1;
+    if (std.mem.eql(u8, width, "u16") or std.mem.eql(u8, width, "i16")) return 2;
+    if (std.mem.eql(u8, width, "u32") or std.mem.eql(u8, width, "i32")) return 4;
+    if (std.mem.eql(u8, width, "u64") or std.mem.eql(u8, width, "i64") or std.mem.eql(u8, width, "usize")) return 8;
+    return 4;
 }
 
 fn primitiveCTypeName(name: []const u8) ?[]const u8 {

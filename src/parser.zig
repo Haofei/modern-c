@@ -188,6 +188,40 @@ pub const Parser = struct {
         return .{ .name = name, .abi = abi, .fields = fields, .type_params = type_params };
     }
 
+    // Parse an optional `@offset(N)` annotation after a (MMIO) field's type.
+    fn parseFieldOffset(self: *Parser) anyerror!?u64 {
+        if (!self.match(.at)) return null;
+        const kw = try self.expectName("expected 'offset' after '@'");
+        if (!std.mem.eql(u8, kw.text, "offset")) return self.fail("only '@offset(N)' is supported on fields");
+        try self.expect(.l_paren, "expected '(' after @offset");
+        const tok = self.current;
+        if (tok.kind != .integer_literal) return self.fail("expected an integer offset");
+        self.advance();
+        try self.expect(.r_paren, "expected ')' after @offset value");
+        return parseIntLiteralValue(tok.lexeme) orelse return self.fail("invalid @offset value");
+    }
+
+    // Parse an integer literal lexeme (decimal / `0x` / `0b`, with `_` digit
+    // separators) to its value.
+    fn parseIntLiteralValue(lexeme: []const u8) ?u64 {
+        var buf: [64]u8 = undefined;
+        var n: usize = 0;
+        for (lexeme) |ch| {
+            if (ch == '_') continue;
+            if (n >= buf.len) return null;
+            buf[n] = ch;
+            n += 1;
+        }
+        const cleaned = buf[0..n];
+        if (cleaned.len > 2 and cleaned[0] == '0' and (cleaned[1] == 'x' or cleaned[1] == 'X')) {
+            return std.fmt.parseInt(u64, cleaned[2..], 16) catch null;
+        }
+        if (cleaned.len > 2 and cleaned[0] == '0' and (cleaned[1] == 'b' or cleaned[1] == 'B')) {
+            return std.fmt.parseInt(u64, cleaned[2..], 2) catch null;
+        }
+        return std.fmt.parseInt(u64, cleaned, 10) catch null;
+    }
+
     // Parse an optional `<T, U, …>` type-parameter list after a generic
     // declaration name. Returns an empty slice when absent.
     fn parseTypeParamList(self: *Parser) anyerror![]ast.Ident {
@@ -241,8 +275,9 @@ pub const Parser = struct {
             const field_name = try self.expectName("expected field name");
             try self.expect(.colon, "expected ':' after field name");
             const ty = try self.parseType();
+            const offset = try self.parseFieldOffset();
             _ = self.match(.comma) or self.match(.semicolon);
-            try fields.append(self.allocator, .{ .name = field_name, .ty = ty });
+            try fields.append(self.allocator, .{ .name = field_name, .ty = ty, .offset = offset });
         }
         try self.expect(.r_brace, close_message);
         return fields.toOwnedSlice(self.allocator);
@@ -504,14 +539,50 @@ pub const Parser = struct {
 
     fn parseIfLet(self: *Parser) anyerror!ast.Stmt {
         const start = try self.expectTok(.kw_if, "expected if");
-        try self.expect(.kw_let, "expected let after if");
-        const pattern = try self.parsePattern();
-        try self.expect(.equal, "expected '=' in if let");
-        const value = try self.parseExpr(0);
+        if (self.match(.kw_let)) {
+            const pattern = try self.parsePattern();
+            try self.expect(.equal, "expected '=' in if let");
+            const value = try self.parseExpr(0);
+            const then_block = try self.parseBlock();
+            const else_block = if (self.match(.kw_else)) try self.parseBlock() else null;
+            const end = if (else_block) |b| b.span else then_block.span;
+            return .{ .span = joinSpan(start.span, end), .kind = .{ .if_let = .{ .pattern = pattern, .value = value, .then_block = then_block, .else_block = else_block } } };
+        }
+        // Boolean `if cond { … } [else { … }]` (and `else if`). Desugars to a
+        // `switch` on the bool, reusing all its checking and CFG lowering.
+        const cond = try self.parseExpr(0);
         const then_block = try self.parseBlock();
-        const else_block = if (self.match(.kw_else)) try self.parseBlock() else null;
+        var else_block: ?ast.Block = null;
+        if (self.match(.kw_else)) {
+            if (self.current.kind == .kw_if) {
+                // `else if` — wrap the nested if statement in a block.
+                const nested = try self.parseIfLet();
+                var items = try self.allocator.alloc(ast.Stmt, 1);
+                items[0] = nested;
+                else_block = .{ .span = nested.span, .items = items };
+            } else {
+                else_block = try self.parseBlock();
+            }
+        }
         const end = if (else_block) |b| b.span else then_block.span;
-        return .{ .span = joinSpan(start.span, end), .kind = .{ .if_let = .{ .pattern = pattern, .value = value, .then_block = then_block, .else_block = else_block } } };
+        return try self.desugarBoolIf(joinSpan(start.span, end), cond, then_block, else_block);
+    }
+
+    fn boolPattern(self: *Parser, value: bool, span: ast.Span) ast.Pattern {
+        _ = self;
+        return .{ .span = span, .kind = .{ .literal = .{ .span = span, .kind = .{ .bool_literal = value } } } };
+    }
+
+    fn desugarBoolIf(self: *Parser, span: ast.Span, cond: ast.Expr, then_block: ast.Block, else_block: ?ast.Block) anyerror!ast.Stmt {
+        const false_body: ast.Block = else_block orelse .{ .span = span, .items = &.{} };
+        var arms = try self.allocator.alloc(ast.SwitchArm, 2);
+        const true_pats = try self.allocator.alloc(ast.Pattern, 1);
+        true_pats[0] = self.boolPattern(true, cond.span);
+        const false_pats = try self.allocator.alloc(ast.Pattern, 1);
+        false_pats[0] = self.boolPattern(false, cond.span);
+        arms[0] = .{ .patterns = true_pats, .body = .{ .block = then_block } };
+        arms[1] = .{ .patterns = false_pats, .body = .{ .block = false_body } };
+        return .{ .span = span, .kind = .{ .@"switch" = .{ .subject = cond, .arms = arms } } };
     }
 
     fn parseSwitch(self: *Parser) anyerror!ast.Stmt {
