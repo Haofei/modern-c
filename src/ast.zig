@@ -86,6 +86,9 @@ pub const StructDecl = struct {
     // Type parameters for a generic struct `struct Name<T, …>` (section 22);
     // empty for an ordinary struct.
     type_params: []Ident = &.{},
+    // `move struct …` — a linear resource type (section 18.1): its values are
+    // used linearly (moved/consumed exactly once), not copied.
+    is_move: bool = false,
 };
 
 pub const PackedBitsDecl = struct {

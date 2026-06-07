@@ -1128,7 +1128,7 @@ const CEmitter = struct {
                 return error.UnsupportedCEmission;
             };
             try self.writeIndent();
-            try self.out.print(self.allocator, "{s} volatile {s};\n", .{ primitiveCTypeName(info.width) orelse "void *", field.name.text });
+            try self.out.print(self.allocator, "{s} volatile {s};\n", .{ primitiveCTypeName(info.width) orelse "void *", try self.cIdent(field.name.text) });
         }
         self.indent -= 1;
         try self.out.print(self.allocator, "}} {s};\n\n", .{struct_decl.name.text});
@@ -3229,8 +3229,9 @@ const CEmitter = struct {
                     try self.emitGlobalLoadExpr(access.name, access.info);
                     return;
                 }
+                const op: []const u8 = if (self.exprIsPointer(node.base.*, locals)) "->" else ".";
                 try self.emitExpr(node.base.*, locals);
-                try self.out.print(self.allocator, ".{s}", .{node.name.text});
+                try self.out.print(self.allocator, "{s}{s}", .{ op, try self.cIdent(node.name.text) });
             },
             .cast => |node| {
                 try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(node.ty.*, .typedef_name)});
@@ -3285,8 +3286,9 @@ const CEmitter = struct {
                 }
             },
             .member => |node| {
+                const op: []const u8 = if (self.exprIsPointer(node.base.*, locals)) "->" else ".";
                 try self.emitAddressOperand(node.base.*, locals);
-                try self.out.print(self.allocator, ".{s}", .{node.name.text});
+                try self.out.print(self.allocator, "{s}{s}", .{ op, try self.cIdent(node.name.text) });
             },
             else => try self.emitExpr(expr, locals),
         }
@@ -3910,7 +3912,7 @@ const CEmitter = struct {
         for (fields, 0..) |field, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const field_ty = structFieldType(struct_decl, field.name.text) orelse return error.UnsupportedCEmission;
-            try self.out.print(self.allocator, ".{s} = ", .{field.name.text});
+            try self.out.print(self.allocator, ".{s} = ", .{try self.cIdent(field.name.text)});
             try self.emitExprWithTarget(field.value, locals, field_ty);
         }
         try self.out.appendSlice(self.allocator, " }");
@@ -3940,7 +3942,7 @@ const CEmitter = struct {
         for (fields, 0..) |field, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const field_ty = structFieldType(struct_decl, field.name.text) orelse return error.UnsupportedCEmission;
-            try self.out.print(self.allocator, ".{s} = ", .{field.name.text});
+            try self.out.print(self.allocator, ".{s} = ", .{try self.cIdent(field.name.text)});
             if (i < temps.len) {
                 if (temps[i]) |temp| {
                     try self.out.appendSlice(self.allocator, temp.name);
@@ -4980,6 +4982,30 @@ const CEmitter = struct {
             .call => {
                 const return_ty = self.callReturnTypeForExpr(expr, locals) orelse return null;
                 return if (isNumericStorageType(return_ty)) return_ty else null;
+            },
+            // A numeric struct field (`s.len`) recovers its declared type, so
+            // `s.len + 1` and similar lower through the checked helper.
+            .member => |node| {
+                const struct_name = self.structTypeNameForExpr(node.base.*, locals) orelse return null;
+                const struct_decl = self.structs.get(struct_name) orelse return null;
+                for (struct_decl.fields) |field| {
+                    if (std.mem.eql(u8, field.name.text, node.name.text)) {
+                        const resolved = self.resolveAliasType(field.ty);
+                        return if (isNumericStorageType(resolved)) resolved else null;
+                    }
+                }
+                return null;
+            },
+            .index => |node| {
+                const elem = self.arrayTypeForExpr(node.base.*, locals) orelse return null;
+                const resolved = self.resolveAliasType(elem.kind.array.child.*);
+                return if (isNumericStorageType(resolved)) resolved else null;
+            },
+            // `p.*` over `p: *T` recovers `T`, so `p.* + 1` lowers checked.
+            .deref => |inner| {
+                const pointee = self.derefPointeeType(inner.*, locals) orelse return null;
+                const resolved = self.resolveAliasType(pointee);
+                return if (isNumericStorageType(resolved)) resolved else null;
             },
             .grouped => |inner| self.numericExprTypeForEmission(inner.*, locals),
             .unary => |node| self.numericExprTypeForEmission(node.expr.*, locals),
@@ -7085,6 +7111,40 @@ const CEmitter = struct {
         }
     }
 
+    // Whether an expression has a pointer type, so member access lowers as `->`.
+    // MMIO/slice/array accesses take dedicated paths before reaching here, so this
+    // covers ordinary `*T` struct pointers (e.g. a borrowed `move` handle).
+    fn exprIsPointer(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        const set = locals orelse return false;
+        return switch (expr.kind) {
+            .ident => |id| blk: {
+                const info = set.get(id.text) orelse break :blk false;
+                const ty = info.source_ty orelse break :blk false;
+                break :blk self.resolveAliasType(ty).kind == .pointer;
+            },
+            .grouped => |inner| self.exprIsPointer(inner.*, locals),
+            else => false,
+        };
+    }
+
+    // The pointee type of a pointer-typed expression (`p` where `p: *T` → `T`).
+    fn derefPointeeType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const set = locals orelse return null;
+        return switch (expr.kind) {
+            .ident => |id| blk: {
+                const info = set.get(id.text) orelse break :blk null;
+                const ty = info.source_ty orelse break :blk null;
+                const resolved = self.resolveAliasType(ty);
+                break :blk switch (resolved.kind) {
+                    .pointer => |p| p.child.*,
+                    else => null,
+                };
+            },
+            .grouped => |inner| self.derefPointeeType(inner.*, locals),
+            else => null,
+        };
+    }
+
     fn structTypeNameForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
         return switch (expr.kind) {
             .ident => |id| blk: {
@@ -7338,7 +7398,9 @@ const CEmitter = struct {
             .kind = kind,
             .param = param,
             .struct_name = struct_name,
-            .field = reg_member.name.text,
+            // Output name matches the (cIdent-mangled) C struct field declarator;
+            // the lookup above stays on the raw MC name.
+            .field = self.cIdent(reg_member.name.text) catch reg_member.name.text,
             .value_type = field.value_type,
             .width = field.width,
             .ordering = orderingArg(args),

@@ -105,6 +105,15 @@ pub fn build(b: *std.Build) void {
     const reflect_test_step = b.step("reflect-test", "Validate comptime sizeof/alignof folding against clang's C ABI");
     reflect_test_step.dependOn(&reflect_test_cmd.step);
 
+    const stack_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/stack-test.sh",
+        "zig-out/bin/mcc",
+    });
+    stack_test_cmd.step.dependOn(b.getInstallStep());
+    const stack_test_step = b.step("stack-test", "Build, link, and run the generic std/stack collection");
+    stack_test_step.dependOn(&stack_test_cmd.step);
+
     const pkg_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/pkg-test.sh",
@@ -113,6 +122,33 @@ pub fn build(b: *std.Build) void {
     pkg_test_cmd.step.dependOn(b.getInstallStep());
     const pkg_test_step = b.step("pkg-test", "Build a package from its manifest with mcc-pkg, link, and run it");
     pkg_test_step.dependOn(&pkg_test_cmd.step);
+
+    const move_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/move-test.sh",
+        "zig-out/bin/mcc",
+    });
+    move_test_cmd.step.dependOn(b.getInstallStep());
+    const move_test_step = b.step("move-test", "Build, link, and run a linear `move` handle through the toolchain");
+    move_test_step.dependOn(&move_test_cmd.step);
+
+    const sync_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/sync-test.sh",
+        "zig-out/bin/mcc",
+    });
+    sync_test_cmd.step.dependOn(b.getInstallStep());
+    const sync_test_step = b.step("sync-test", "Build, link, and run a std/sync guarded critical section");
+    sync_test_step.dependOn(&sync_test_cmd.step);
+
+    const nic_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/nic-test.sh",
+        "zig-out/bin/mcc",
+    });
+    nic_test_cmd.step.dependOn(b.getInstallStep());
+    const nic_test_step = b.step("nic-test", "Build and run the demo NIC driver (driver-library profile) under QEMU");
+    nic_test_step.dependOn(&nic_test_cmd.step);
 
     const m0_step = b.step("m0", "Run M0 conformance gates");
     m0_step.dependOn(&test_cmd.step);
@@ -135,4 +171,12 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&reflect_test_cmd.step);
     // pkg-test exercises the mcc-pkg manifest build (needs clang).
     m0_step.dependOn(&pkg_test_cmd.step);
+    // stack-test exercises the generic std/stack collection (needs clang).
+    m0_step.dependOn(&stack_test_cmd.step);
+    // move-test exercises linear `move` handle erasure (needs clang).
+    m0_step.dependOn(&move_test_cmd.step);
+    // sync-test exercises std/sync locks + linear guards (needs clang).
+    m0_step.dependOn(&sync_test_cmd.step);
+    // nic-test runs the demo NIC driver under QEMU (self-skips without QEMU).
+    m0_step.dependOn(&nic_test_cmd.step);
 }

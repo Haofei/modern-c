@@ -23,6 +23,10 @@ pub const Checker = struct {
     // Type registries for comptime reflection (`sizeof`/`alignof`), set for the
     // duration of checkModule.
     reflect_env: ?*const ReflectEnv = null,
+    // Names of `move struct` linear resource types (section 18.1), set for the
+    // duration of checkModule so the move/liveness pass (D.7) can classify
+    // bindings. Empty for the common case (no move types → the pass is a no-op).
+    move_types: ?*const std.StringHashMap(void) = null,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -107,7 +111,27 @@ pub const Checker = struct {
         self.reflect_env = &reflect_env;
         defer self.reflect_env = null;
 
+        var move_types = std.StringHashMap(void).init(self.reporter.allocator);
+        defer move_types.deinit();
+        for (module.decls) |decl| {
+            if (decl.kind == .struct_decl and decl.kind.struct_decl.is_move) {
+                move_types.put(decl.kind.struct_decl.name.text, {}) catch {
+                    self.oom = true;
+                };
+            }
+        }
+        self.move_types = &move_types;
+        defer self.move_types = null;
+
         for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
+
+        // Linear `move`/liveness pass (section 18.1, annex D.7). No-op unless the
+        // module declares `move` types.
+        if (move_types.count() > 0) {
+            for (module.decls) |decl| {
+                if (decl.kind == .fn_decl) self.checkMoveLinearity(decl.kind.fn_decl, &type_aliases);
+            }
+        }
 
         if (self.oom) {
             self.errorCode(.{ .offset = 0, .len = 0, .line = 1, .column = 1 }, "E_INTERNAL_OOM", "compiler ran out of memory while building symbol tables; results are incomplete");
@@ -443,6 +467,180 @@ pub const Checker = struct {
                     self.oom = true;
                 };
             }
+        }
+    }
+
+    // ----- Linear `move`/liveness pass (section 18.1, annex D.7) -----
+    //
+    // Tracks each `move`-typed binding (params + locals) and enforces that it is
+    // used linearly: consumed (moved) exactly once. A by-value use moves it; a
+    // borrow (`&x`, `x.field`) does not. Using a moved value is E_USE_AFTER_MOVE;
+    // a live binding reaching the end of the function is E_RESOURCE_LEAK. Not a
+    // borrow checker — there are no lifetimes or aliasing analysis.
+
+    fn isMoveTypeName(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        const move_types = self.move_types orelse return false;
+        var cur = ty;
+        var guard: usize = 0;
+        while (guard < 64) : (guard += 1) {
+            switch (cur.kind) {
+                .name => |n| {
+                    if (move_types.contains(n.text)) return true;
+                    if (aliases.get(n.text)) |target| {
+                        cur = target;
+                        continue;
+                    }
+                    return false;
+                },
+                .generic => |g| return move_types.contains(g.base.text),
+                else => return false,
+            }
+        }
+        return false;
+    }
+
+    fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+        const body = fn_decl.body orelse return;
+        var state = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
+        defer state.deinit();
+        for (fn_decl.params) |param| {
+            if (self.isMoveTypeName(param.ty, aliases)) {
+                state.put(param.name.text, .{ .live = true, .span = param.name.span }) catch {
+                    self.oom = true;
+                };
+            }
+        }
+        self.moveBlock(body, &state, aliases);
+        // Function exit: any still-live (and not deferred-for-consumption) move
+        // binding was never consumed — a leak.
+        var it = state.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.live and !entry.value_ptr.deferred) {
+                self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value is never consumed (must be moved, returned, or freed)");
+            }
+        }
+    }
+
+    fn moveBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+        for (block.items) |stmt| self.moveStmt(stmt, state, aliases);
+    }
+
+    fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |decl| {
+                if (decl.init) |init_expr| self.moveConsume(init_expr, state, aliases);
+                if (decl.ty) |ty| {
+                    if (self.isMoveTypeName(ty, aliases) and decl.names.len > 0) {
+                        state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span }) catch {
+                            self.oom = true;
+                        };
+                    }
+                }
+            },
+            .@"return" => |maybe| if (maybe) |v| self.moveConsume(v, state, aliases),
+            .expr => |e| self.moveConsume(e, state, aliases),
+            .assignment => |a| {
+                self.moveConsume(a.value, state, aliases);
+                if (a.target.kind == .ident) {
+                    if (state.getPtr(a.target.kind.ident.text)) |slot| slot.live = true;
+                }
+            },
+            // `defer <expr>` runs at scope end: it reserves (does not immediately
+            // move) the values it will consume, so they neither leak nor remain
+            // movable.
+            .@"defer" => |e| self.moveDefer(e, state),
+            .assert => |e| self.moveBorrow(e, state),
+            .block, .unsafe_block, .comptime_block => |b| self.moveBlock(b, state, aliases),
+            .contract_block => |c| self.moveBlock(c.block, state, aliases),
+            .loop => |l| {
+                if (l.iterable) |iter| self.moveBorrow(iter, state);
+                self.moveBlock(l.body, state, aliases);
+            },
+            .if_let => |n| {
+                self.moveBorrow(n.value, state);
+                self.moveBlock(n.then_block, state, aliases);
+                if (n.else_block) |eb| self.moveBlock(eb, state, aliases);
+            },
+            .@"switch" => |sw| {
+                self.moveBorrow(sw.subject, state);
+                for (sw.arms) |arm| switch (arm.body) {
+                    .block => |b| self.moveBlock(b, state, aliases),
+                    .expr => |e| self.moveConsume(e, state, aliases),
+                };
+            },
+            .@"break", .@"continue", .asm_stmt => {},
+        }
+    }
+
+    // Consume the move bindings used by-value in `expr` (checking liveness).
+    fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+        switch (expr.kind) {
+            .ident => |id| {
+                if (state.getPtr(id.text)) |slot| {
+                    if (!slot.live) {
+                        self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
+                    } else if (slot.deferred) {
+                        self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be moved");
+                    } else {
+                        slot.live = false;
+                    }
+                }
+            },
+            .grouped => |inner| self.moveConsume(inner.*, state, aliases),
+            .try_expr => |inner| self.moveConsume(inner.*, state, aliases),
+            .cast => |c| self.moveConsume(c.value.*, state, aliases),
+            .address_of => |inner| self.moveBorrow(inner.*, state),
+            .member => |m| self.moveBorrow(m.base.*, state),
+            .deref => |inner| self.moveBorrow(inner.*, state),
+            .index => |ix| {
+                self.moveBorrow(ix.base.*, state);
+                self.moveConsume(ix.index.*, state, aliases);
+            },
+            .call => |c| for (c.args) |arg| self.moveConsume(arg, state, aliases),
+            .binary => |b| {
+                self.moveConsume(b.left.*, state, aliases);
+                self.moveConsume(b.right.*, state, aliases);
+            },
+            .unary => |u| self.moveConsume(u.expr.*, state, aliases),
+            .struct_literal => |fields| for (fields) |f| self.moveConsume(f.value, state, aliases),
+            .array_literal => |items| for (items) |item| self.moveConsume(item, state, aliases),
+            else => {},
+        }
+    }
+
+    // Borrow: check the move bindings referenced are live, without consuming.
+    fn moveBorrow(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot)) void {
+        switch (expr.kind) {
+            .ident => |id| {
+                if (state.getPtr(id.text)) |slot| {
+                    if (!slot.live) self.errorCode(expr.span, "E_USE_AFTER_MOVE", "borrow of linear `move` value after it was moved");
+                }
+            },
+            .grouped, .address_of, .deref, .try_expr => |inner| self.moveBorrow(inner.*, state),
+            .member => |m| self.moveBorrow(m.base.*, state),
+            .index => |ix| self.moveBorrow(ix.base.*, state),
+            .cast => |c| self.moveBorrow(c.value.*, state),
+            .call => |c| for (c.args) |arg| self.moveBorrow(arg, state),
+            else => {},
+        }
+    }
+
+    // `defer <expr>`: reserve the move bindings the deferred expr will consume.
+    fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot)) void {
+        switch (expr.kind) {
+            .ident => |id| {
+                if (state.getPtr(id.text)) |slot| {
+                    if (!slot.live) {
+                        self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer consumes a linear `move` value already moved");
+                    } else {
+                        slot.deferred = true;
+                    }
+                }
+            },
+            .grouped => |inner| self.moveDefer(inner.*, state),
+            .call => |c| for (c.args) |arg| self.moveDefer(arg, state),
+            .member => |m| self.moveBorrow(m.base.*, state),
+            else => {},
         }
     }
 
@@ -3107,6 +3305,14 @@ const MmioRegisterAccess = enum {
 
 const StructInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
+};
+
+// Liveness slot for a linear `move` binding (section 18.1 / annex D.7).
+const MoveSlot = struct {
+    live: bool,
+    span: diagnostics.Span,
+    // Reserved by a `defer` to be consumed at scope end: not a leak, not movable.
+    deferred: bool = false,
 };
 
 const LayoutFieldInfo = struct {

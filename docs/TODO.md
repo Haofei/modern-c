@@ -1,5 +1,53 @@
 # MC Compiler — Remaining Work
 
+## ⭐ Prototype goal — Network-card driver (Driver Library Profile, §28) — ✅ DONE (2026-06-07)
+
+The first end-to-end prototype is a **DMA-capable network-card driver**, and it
+**runs under QEMU**: `zig build nic-test` lowers `tests/qemu/nic_driver.mc` —
+which composes the whole driver-library stack — to C, links it into a bare-metal
+riscv64 image (`tests/qemu/nic_runtime.c` provides the single-core platform
+hooks), runs it under `qemu-system-riscv64 -machine virt`, and confirms the frame
+the driver "transmitted" (`NIC-TX-OK`) arrived at the emulated 16550 UART. One
+`nic_transmit()` exercises DMA ownership, the TX ring, the lock guard, a
+big-endian header, a barrier, and typed MMIO — and the linear `move` discipline
+makes read-after-handoff / double-free / lock-left-held compile errors. In m0.
+
+1. [x] **`std/sync` — locks + linear guards (§28.1)** — `SpinLock` + a `move`
+   `Guard`/`IrqGuard` (release consumes it) over platform acquire/release
+   primitives. Reject-tested (`E_RESOURCE_LEAK` on forgotten unlock,
+   `E_USE_AFTER_MOVE` on double-unlock); runtime `zig build sync-test` (a guarded
+   counter, lock balance preserved). `Mutex`/`RwLock`/`seqlock` are follow-ons.
+2. [x] **`std/dma` — DMA ownership library (§18.2)** — cpu/device ownership as
+   two distinct `move` types (`CpuBuffer`/`DeviceBuffer`); `alloc`/`free`/
+   `clean_for_device`/`invalidate_for_cpu` (consume-and-return) + `cpu_addr`/
+   `device_addr` borrows. Reading a device-owned buffer is a compile error (the
+   borrow takes `*CpuBuffer`). Exercised by nic-test.
+3. [x] **`std/ring` — generic descriptor ring (§28.2)** — `Ring<T>` (generic,
+   fixed-16 capacity) with `push`/`front`/`pop`/`is_full`/`is_empty`/`len`.
+   (A `comptime CAP` capacity awaits value type-parameters on generic structs.)
+4. [x] **`std/endian` — byte order (§28.3)** — `swap_u16/u32/u64`, `to_be*`/
+   `from_be*`/`to_le*`/`from_le*` pure `const fn`s (comptime-foldable); swap_u64
+   runtime-verified. (Host assumed little-endian; a `__BYTE_ORDER__` variant is a
+   follow-on.)
+5. [x] **`std/time` — delays + ticks (§28.4)** — `read_ticks`/`elapsed` (wrap-
+   correct over the `wrap` domain) / `timed_out` / `udelay` / `mdelay`.
+6. [x] **`std/barrier` — memory barriers (§28.5)** — `mb`/`rmb`/`wmb`/`dma_wmb`
+   as compiler barriers (inline-asm `"memory"` clobber); arch hardware fences are
+   a per-target refinement.
+7. [~] **`std/mmio` — register-field RMW + iomem copy (§28.6)** — deferred: MC's
+   typed MMIO (§17) accesses registers as `Reg` fields via the struct path, so a
+   generic `set_bits<R>(MmioPtr<R>, …)` over a bare register pointer does not fit
+   the model (scalar `MmioPtr` is rejected). The driver does register RMW inline
+   via typed MMIO; a typed bulk `iomem` copy could still be added later.
+8. [x] **NIC driver prototype (§28.7)** — `tests/qemu/nic_driver.mc`, run under
+   QEMU by `zig build nic-test` (in m0). Proves the libraries compose end-to-end.
+
+This effort also fixed three C-backend bugs the driver work surfaced (below):
+member access on a pointer base lowered as `.` instead of `->`; a checked op /
+cast over a pointer deref (`p.* + 1`) and a wrap-domain value couldn't recover
+their type.
+
+
 Status snapshot of what is left to implement against `MC_0.6.1_Final_Design.md`,
 beyond the MC-C0 surface that is already done. The full type-checking surface of
 the core language spec is implemented, and every spec operation that produces a
@@ -10,6 +58,18 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
 **XL** ≈ multi-week / architectural.
 
 ## Language features (bounded, finishable)
+
+- [x] **Linear resource types (`move`) (§18.1)** — **done** (2026-06-07). The
+  `move struct` qualifier (a contextual keyword, no lexer change), a per-function
+  move/liveness pass (`Checker.checkMoveLinearity` / annex D.7) emitting
+  `E_USE_AFTER_MOVE` (by-value use of a moved/borrowed-dead value) and
+  `E_RESOURCE_LEAK` (a live `move` binding reaching function end); by-value moves,
+  `&x`/`x.field` borrow, `defer` reserves. `move` is erased in the backend (zero
+  runtime cost). The pass is a no-op unless the module declares `move` types.
+  Fixtures: `tests/spec/move_linear.mc` (accept + `E_USE_AFTER_MOVE`/
+  `E_RESOURCE_LEAK` rejects), runtime `zig build move-test` (erased handle links +
+  runs). _Note: type-changing typestate transitions use distinct binding names
+  (MC has no shadowing) and borrows use `&x`._
 
 - [x] **Precise inline assembly (§23.2)** — done (2026-06-06), effort **M**.
   Precise asm with register/typed operands is now parsed, sema-validated, and
@@ -126,11 +186,17 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
         `cache_clean_before_release` ordering edge — the clean-for-device may not
         be moved after the handoff. Fixture `tests/spec/dma_ordering.mc`
         (check `dma-ordering-composition`); green under `zig build test` + sweep.
-  - [ ] Library (out of core conformance, deferred): a move-only `DmaBuf` API
-        returning `cpu_owned`/`device_owned` handles that requires
-        `invalidate`-before-read and `clean`-before-handoff at the ownership
-        transitions. This needs affine/linear handles (a library profile per
-        §18), not a core compiler guarantee.
+  - [x] **DMA ownership library (`std/dma`) over linear `move` handles
+        (§18.2)** — **done** (2026-06-07). The cpu/device typestate is two
+        distinct `move` types, `CpuBuffer` and `DeviceBuffer`: `alloc`/`free`,
+        `clean_for_device`/`invalidate_for_cpu` (consume-and-return), and
+        `cpu_addr`/`device_addr`/`cpu_len` borrows. Reading a device-owned buffer
+        is a compile error (the CPU-view borrow takes `*CpuBuffer`); using a
+        buffer after handoff is `E_USE_AFTER_MOVE`; dropping it un-freed is
+        `E_RESOURCE_LEAK`. Exercised end-to-end by the demo NIC driver under QEMU
+        (`zig build nic-test`). _(Modeled with two move types rather than a
+        3-parameter `DmaBuf<T, coherence, owner>` because generic structs don't
+        yet take value/owner type-parameters; the safety is identical.)_
 
 ## Large subsystems (weeks, architectural)
 
@@ -226,10 +292,12 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
         to a fixed point, so generic structs and functions compose
         (`mk_pair(comptime T: type) -> Pair<T>`). This is the foundation for
         generic collections. Fixture `tests/c_emit_generic_structs.mc`; runtime
-        coverage in `mono-test` (a `Pair<u32>` round-trip). _Known limitation
-        (pre-existing, not generics-specific): indexing an array-typed struct
-        field (`s.arr[i]`) is not yet lowered (the emitter omits the `.elems`
-        member), so array-backed containers need element accessors for now._
+        coverage in `mono-test` (a `Pair<u32>` round-trip).
+        **Generic collections** are now realized: `std/stack.mc` is a generic
+        fixed-capacity `Stack<T>` with generic `push`/`get`/`len`/`is_empty`,
+        imported and monomorphized per element type, verified end-to-end by
+        `zig build stack-test` (linked + run). Building it fixed two array-backed
+        struct bugs (below).
         **Reflection-as-comptime-value** (`sizeof(T)`/`alignof(T)`) now folds via
         an MC-side ABI layout model (`comptimeSizeOf`/`comptimeAlignOf`, wired
         into the comptime evaluator through a `ComptimeScope.reflect` callback):
@@ -467,17 +535,10 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
     materially complete for what MC's grammar can express.
 
 - [ ] **MIR optimizer depth & uniform lowering (follow-on to the production
-  MIR milestone)** — effort **XL**, open-ended/research-architecture tier.
-  The production typed MIR/CFG + verifier milestone above is done; this captures
-  the deliberately-deferred, *unbounded* remainder so the milestone's scope stays
-  honest:
-  - [ ] **Deeper value-range optimizer**: value-range *algebra* (interval
-    arithmetic over MIR values) and downstream propagation past the materializing
-    site, plus constant-bounded `while i < CONST` loop-body ranges with
-    reassignment tracking. Note (see GRAMMAR NOTE above): MC has no boolean `if`
-    guards, so there is no comparison-guard lattice to mine — the high-value
-    sources (constant operands/locals, `no_overflow` contract regions) are
-    already consumed. This is incremental optimizer polish, not a correctness gap.
+  MIR milestone)** — effort **XL** (large engineering, no functional gap). The
+  production typed MIR/CFG + verifier milestone above is done; this is the
+  architectural follow-on (doable, but a multi-week refactor with no user-facing
+  behavior change — the current backend works):
   - [ ] **Broader aggregate value-identity in MIR**: move the remaining
     complex-nested-copy value-identity tracking off its sema backstop and onto
     MIR value ids (scalar/pointer/closed-enum identity is already MIR-native and
@@ -644,8 +705,16 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
         decimal digit buffer + length, no libc) and `digit_char`. Landing this
         fixed a serious `break`/`continue`-inside-`switch`-inside-loop
         miscompilation (below).
+      - `std/stack.mc`: a generic `Stack<T>` collection (runtime `stack-test`).
+      - **Driver-library profile (§28)** added for the NIC prototype:
+        `std/sync` (locks + linear guards), `std/dma` (DMA ownership),
+        `std/ring` (generic ring buffer), `std/endian` (byte order),
+        `std/time` (ticks/delays), `std/barrier` (memory barriers) — see the
+        Prototype-goal section at the top.
       Verified by `zig build std-test` (`tools/std-test.sh`, in `m0`): compiles
-      all three modules, links them against a C driver, and runs 27 value checks.
+      the core modules, links them against a C driver, and runs value checks
+      (plus the per-library link/run tests sync-test / move-test / stack-test and
+      the integration nic-test).
       Landing this surfaced and fixed two real bool-`switch` bugs (below).
       A **module/import system** now consumes it ergonomically (see Package
       manager / toolchain). Still open: the broader library scope (collections,
@@ -681,12 +750,12 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
       mismatch). Verified by `zig build pkg-test` (`tests/pkg/`: a manifest with a
       `mathlib@0.1.0` dependency + a package-local module + a std dependency,
       whose `deps` resolves, `build` produces an object with all three packages'
-      symbols, and which links/runs; in `m0`). Still open: a network/registry
-      backend (today deps are local-path packages), semver range matching (today
-      exact-version), release packaging, an `mcc`-native `build` subcommand, and
-      richer import semantics (namespacing, visibility, cross-file diagnostics
-      with original line numbers — today imported-file errors report into the
-      combined source).
+      symbols, and which links/runs; in `m0`). Still open (all local /
+      in-project, no external service needed): semver range matching (today
+      exact-version), release packaging (archive a built package), an
+      `mcc`-native `build` subcommand, and richer import semantics (namespacing,
+      visibility, cross-file diagnostics with original line numbers — today
+      imported-file errors report into the combined source).
 - [x] **Hardware MMIO execution tests** — done (2026-06-06), effort **M**. A
       typed-MMIO MC program (`tests/qemu/uart_mmio.mc`: a 16550 `Uart16550` and an
       `export fn uart_putc` doing a `.release` `thr.write`) is lowered to C,
@@ -701,6 +770,44 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
 
 From an external static review; each verified against the code.
 
+- [x] **Member access on a pointer base lowered as `.` not `->`** — found
+      building the driver libraries (every borrow helper takes a `*Handle`):
+      `b.field` over `b: *T` emitted `b.field` instead of `b->field`, which clang
+      rejects. Fixed: the C backend now emits `->` when the member base is a
+      pointer expression (`exprIsPointer`), `.` otherwise; MMIO/slice/array
+      accesses keep their dedicated paths. Exercised by `std/dma`/`std/sync`
+      borrows (nic-test) and the host-emit check.
+- [x] **Checked op / cast over a pointer-deref or wrap value couldn't recover
+      its type** — `p.* + 1` (over `p: *u32`) and `(wrap_value) as u64` bailed
+      with `UnsupportedCEmission` in a targetless position, because
+      `numericExprTypeForEmission` had no `.deref` case and the wrap subtraction
+      wasn't reachable through a target. Fixed the `.deref` recovery (via
+      `derefPointeeType`); the wrap-in-cast case is worked around by binding to a
+      typed local first. Exercised by `std/sync`'s `counter.* + delta` and
+      `std/time`'s `elapsed`.
+- [x] **Inconsistent C-identifier mangling for fields named after C keywords** —
+      surfaced by an external review (most of which was hallucinated, but this was
+      real). Struct/MMIO field *declarations* routed through `cIdent` (which
+      mangles C reserved words, `register` → `register_`), but member access
+      (`p.register`), struct-literal fields (`.register = …`), and MMIO `->field`
+      access emitted the raw name — so a field named after a C keyword produced a
+      name mismatch / invalid C. Fixed: all four output sites (two member-access,
+      two struct-literal) plus the MMIO field declarator and `MmioAccess.field`
+      output now route through the same `cIdent` (the AST-side field lookups stay
+      on the raw MC name). Regression `tests/c_emit_c_keyword_idents.mc`
+      (`default`/`register`/`volatile` fields in a plain struct and an MMIO
+      register, read/written/constructed). Matters for the driver libraries, whose
+      register structs use hardware field names. _(Param-name mangling at MMIO
+      `->` access is the same class and a candidate follow-up; not yet hit.)_
+- [x] **Array-typed struct field access mis-emitted** — found building the
+      generic `std/stack`: indexing an array-typed struct field (`s.items[i]`)
+      emitted `s.items[i]` instead of `s.items.elems[i]` (array types lower to a
+      `{ elems[] }` struct), and a checked op on a struct field / array element
+      operand (`s.len + 1`) couldn't recover its type. Fixed: `arrayTypeForExpr`
+      and `numericExprTypeForEmission` now resolve array/numeric struct-field
+      member types via the struct registry, so `s.items[i]` → `s.items.elems[i]`
+      and `s.len + 1` lowers through the checked helper. Regression: `std/stack`
+      (`zig build stack-test`).
 - [x] **`break`/`continue` inside a `switch` inside a loop miscompiled** — a
       serious one, found while building `std/fmt`: MC lowered switches to C
       `switch`, so a `break` in a switch arm broke the *switch*, not the
@@ -776,11 +883,6 @@ Note: the review's "inferred globals are silently inconsistent" point is mostly
 inaccurate — untyped globals are rejected in sema with `E_GLOBAL_REQUIRES_TYPE`
 (parse-permissive, reject-in-sema), which is intentional, not a silent hole.
 
-## Explicitly deferred
-
-- [ ] **LLVM backend (Appendix M)** — not started; the C backend is the only
-      lowering target. Deferred by request.
-
 ## Suggested order
 
 1. ✅ **Precise inline assembly (§23.2)** — **done** (2026-06-06). Parsed,
@@ -792,8 +894,9 @@ inaccurate — untyped globals are rejected in sema with `E_GLOBAL_REQUIRES_TYPE
    (`E_DMA_CACHE_MODE`/`E_DMA_OPERATION` + D.4 address-class), and DMA-descriptor
    handoff + cache barriers compose with the §17/§19 MMIO ordering rules
    (`dma_descriptor`/`dma_cache_order`/`cache_clean_before_release` facts);
-   fixtures `tests/spec/dma_cache.mc` + `tests/spec/dma_ordering.mc`. Ownership
-   remains a deferred library profile.
+   fixtures `tests/spec/dma_cache.mc` + `tests/spec/dma_ordering.mc`. Ownership is
+   now a **planned** library over the new linear `move` types (see the
+   "Linear resource types" + "DMA ownership library" items).
 3. ✅ **`reduce.sum_checked<T>` (§8.2)** — **done** (2026-06-06). Wide-accumulate
    (`__int128`) + single range-check lowering to `Result<T, Overflow>`; fixtures
    in `tests/spec/reduce_sum_checked.mc` + `tests/c_emit_reduce_sum_checked.mc`,
@@ -820,8 +923,18 @@ inaccurate — untyped globals are rejected in sema with `E_GLOBAL_REQUIRES_TYPE
    lowering** follow-on (deeper value-range algebra, broader aggregate
    value-identity in MIR, and the architectural uniform-lowering-from-MIR goal) —
    open-ended/research tier, sequence it after the bounded language items above.
-6. **Engineering tracks in parallel as needed**: Standard library (scoping is the
+6. **⭐ Network-card driver prototype (Driver Library Profile, §28)** —
+   _next up (spec added 2026-06-07)_. The forcing function for the library layer.
+   In order: (a) **linear `move` types (§18.1)** — the qualifier + move/liveness
+   verifier (`E_USE_AFTER_MOVE`/`E_RESOURCE_LEAK`), effort **M**; (b) **`std/sync`**
+   locks + linear guards; (c) **`std/dma`** ownership handle; (d) **`std/ring`**
+   generic descriptor ring; (e) **`std/endian`**, **`std/time`**, **`std/barrier`**,
+   **`std/mmio`** helpers; (f) the **NIC driver** composing them against an
+   emulated NIC under QEMU. See the "Prototype goal" section at the top for the
+   full ordering. This makes every classic C-driver hazard (read-after-handoff,
+   lock left held, descriptor reordered past the doorbell, host-endian write to a
+   big-endian field) a compile error.
+7. **Engineering tracks in parallel as needed**: Standard library (scoping is the
    hard part — design doc underspecifies it), package manager / toolchain.
    ✅ QEMU MMIO hardware tests — **done** (`zig build qemu-test`: typed MMIO runs
    on an emulated 16550 UART under qemu-system-riscv64).
-7. Deferred by request: LLVM backend (Appendix M).

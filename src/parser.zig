@@ -39,6 +39,14 @@ pub const Parser = struct {
     fn parseDecl(self: *Parser, attrs: []ast.Attr) anyerror!ast.Decl {
         const start = if (attrs.len > 0) attrs[0].span else self.current.span;
 
+        // `move` is a contextual qualifier (section 18.1) on a struct declaration
+        // making it a linear resource type. At top level a leading `move` is
+        // unambiguous — declarations otherwise start with a keyword.
+        const is_move = self.matchIdentifierText("move");
+        if (is_move and self.current.kind != .kw_extern and self.current.kind != .kw_struct) {
+            return self.fail("'move' applies only to struct declarations");
+        }
+
         if (self.match(.kw_extern)) {
             const abi = if (self.current.kind == .string_literal) blk: {
                 const text = self.current.lexeme;
@@ -47,15 +55,18 @@ pub const Parser = struct {
             } else null;
             if (self.matchIdentifierText("mmio")) {
                 try self.expect(.kw_struct, "expected 'struct' after extern mmio");
-                const struct_decl = try self.finishStructDecl("mmio");
+                var struct_decl = try self.finishStructDecl("mmio");
+                struct_decl.is_move = is_move;
                 return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
             }
             if (self.match(.kw_fn)) {
+                if (is_move) return self.fail("'move' applies only to struct declarations");
                 const fn_decl = try self.finishFnDecl(abi, false, false);
                 return .{ .span = joinSpan(start, self.previousSpan(fn_decl.name.span)), .attrs = attrs, .kind = .{ .extern_fn = fn_decl } };
             }
             if (self.match(.kw_struct)) {
-                const struct_decl = try self.finishStructDecl(abi);
+                var struct_decl = try self.finishStructDecl(abi);
+                struct_decl.is_move = is_move;
                 return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
             }
             return self.fail("expected extern fn or extern struct");
@@ -109,7 +120,8 @@ pub const Parser = struct {
         }
 
         if (self.match(.kw_struct)) {
-            const struct_decl = try self.finishStructDecl(null);
+            var struct_decl = try self.finishStructDecl(null);
+            struct_decl.is_move = is_move;
             return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
         }
 

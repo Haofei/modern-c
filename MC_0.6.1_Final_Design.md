@@ -39,6 +39,7 @@
   - [25. Minimal Syntax Principles](#25-minimal-syntax-principles)
   - [26. Rationale Appendix](#26-rationale-appendix)
   - [27. Final Semantic Contract](#27-final-semantic-contract)
+  - [28. Driver Library Profile (Network-Card Target)](#28-driver-library-profile-network-card-target)
 - [Part II — Implementation and Conformance Annex](#part-ii--implementation-and-conformance-annex)
   - [A. Spec Layering](#a-spec-layering)
   - [B. Recommended Compilation Pipeline](#b-recommended-compilation-pipeline)
@@ -69,7 +70,7 @@
 1. **Build mode never changes program semantics.**
 2. **Every unchecked optimizer assumption is confined to an explicitly marked `#[unsafe_contract]` region.**
 
-Everything else—arithmetic-policy types, address-space types, typed MMIO, typed DMA, trap ABI, narrow compile-time reflection—is the standardized **kernel profile** rather than ad hoc library convention.
+Everything else—arithmetic-policy types, address-space types, typed MMIO, typed DMA, linear `move` resource handles, trap ABI, narrow compile-time reflection—is the standardized **kernel profile** rather than ad hoc library convention.
 
 The kernel profile is organized as two layers:
 
@@ -1565,36 +1566,130 @@ let buf = cache.invalidate_for_cpu(buf);       // cpu_owned
 let packet = buf.as_slice();
 ```
 
-DMA-buffer ownership transfer of this kind requires affine or move-only resource handles. MC deliberately does **not** make resource ownership a core language guarantee:
-
-```txt
-Core language tracks:
-    a buffer's access mode and coherence (this section).
-
-Core language does NOT track:
-    the lifetime and ownership of a DmaBuf — and likewise of interrupt
-    handlers, locks, and device handles.
-```
-
-Lifetime and ownership are a **device-library profile**, expressed with library types (move-only handles), not a compiler-enforced core property. Promoting ownership into the core would require a full affine/linear type system, which MC's "explicit machine contract, not memory safety" stance intentionally avoids. A library that needs ownership builds move-only handles on top of the primitives, and may use `#[unsafe_contract]` where its assertions exceed what the primitives prove.
+DMA-buffer ownership transfer of this kind requires **linear resource handles**.
+MC provides these through the `move` type qualifier (section 18.1): `DmaBuf` is a
+`move` type, so the example above is checked — the old `buf` binding is consumed
+at each transition, `as_slice` is defined only on `.cpu_owned`, and forgetting to
+free the buffer is a leak error. Ownership/lifecycle is therefore a **library
+profile expressed with core `move` types**, not a separate ad-hoc convention.
 
 **Summary — the DMA primitive vs the DMA library:**
 
 ```txt
 DMA primitive (core, always enforced):
     DmaAddr address class       — DmaAddr != PAddr != VAddr; not CPU-dereferenceable
-    DmaBuf<T, coherence>        — coherence mode (.coherent / .noncoherent) carried in the type
+    DmaBuf<T, coherence, owner> — coherence (.coherent/.noncoherent) and owner
+                                  (.cpu_owned/.device_owned) carried in the type
     cache.clean / cache.invalidate — typed cache operations, not volatile pokes
     dma_addr() / as_slice()     — the device-address vs CPU-view bridge
 
-DMA library (profile, built on the primitive):
-    ownership / lifecycle       — .cpu_owned vs .device_owned typestate, move-only
-                                  handles, and the temporal rule "clean before
-                                  handoff, invalidate before CPU read, do not
-                                  touch while device-owned"
+DMA library (profile, built on the primitive + core `move` types):
+    ownership / lifecycle       — .cpu_owned vs .device_owned typestate over a
+                                  `move` (linear) DmaBuf handle, enforcing the
+                                  temporal rule "clean before handoff, invalidate
+                                  before CPU read, do not touch while device-owned,
+                                  free exactly once"
 ```
 
-The split follows the kind of fact. The primitive checks **spatial / representational** facts (which address space, which coherence mode) structurally and always. Ownership is a **temporal / linear** fact that needs affine handles, so it is a library profile (annex section A.1).
+The split follows the kind of fact. The primitive checks **spatial / representational** facts (which address space, which coherence mode) structurally and always. Ownership is a **temporal / linear** fact, enforced by the core `move` qualifier (section 18.1) plus the `owner` typestate parameter.
+
+---
+
+## 18.1 Linear Resource Types (`move`)
+
+Hardware resources — DMA buffers, interrupt-disabled witnesses, locks, device
+handles — obey a **use-protocol** the compiler should enforce: a DMA buffer
+handed to the device must not be read until it is handed back; a lock acquired
+must be released exactly once; an `IrqOff` witness must not be duplicated. MC
+expresses these with **linear `move` types**: a narrow, opt-in ownership
+mechanism — *not* a general borrow checker (there are no borrows, lifetimes, or
+aliasing analysis). It enforces exactly one rule kind: **a `move` value is used
+linearly — consumed exactly once.**
+
+A type is made linear with the `move` qualifier on its declaration:
+
+```mc
+move struct Lock { /* … */ }
+move struct DmaBuf<T, coherence, owner> { /* … */ }
+```
+
+Semantics of a `move` value:
+
+```txt
+1. Consumed-on-use: passing a `move` value by value to a function, returning it,
+   or assigning it to another binding *moves* it — the source binding is consumed
+   and becomes dead. Using a dead binding is E_USE_AFTER_MOVE.
+
+2. Linear (must-consume): a live `move` binding that reaches the end of its scope
+   without being moved (consumed) is E_RESOURCE_LEAK. Every resource is released
+   exactly once — no leaks, no double-free.
+
+3. No aliasing: a `move` value has a single owner at any time; it cannot be
+   copied. (`move` types therefore cannot be plain-`Copy` scalars.)
+```
+
+Typestate is expressed with ordinary type parameters: an operation consumes a
+handle in one state and returns it in another, so the old state is unreachable
+after the transition.
+
+```mc
+fn lock(l: Lock) -> Held;            // consumes the unlocked Lock, returns Held
+fn unlock(h: Held) -> Lock;          // consumes Held, returns the Lock
+```
+
+`move` is a **compile-time** contract only: a `move` value lowers to its ordinary
+representation with no runtime cost; the linearity is checked by a per-function
+move/liveness pass (annex D) and erased. This keeps MC's stance — *explicit
+machine contract, not memory safety*: `move` enforces **hardware ownership
+protocols** for resource handles, and is deliberately *not* a whole-program
+borrow/lifetime system.
+
+---
+
+## 18.2 DMA Ownership Library
+
+The DMA ownership profile is a library built on the core `move` qualifier and the
+DMA primitive. `DmaBuf<T, coherence, owner>` is a `move` (linear) handle whose
+`owner` typestate is `.cpu_owned` or `.device_owned`:
+
+```mc
+// Allocation yields a cpu-owned, linear handle (the `?` propagates allocation
+// failure). The handle must eventually be freed exactly once.
+fn alloc<T>(count: usize, coherence: Coherence)
+    -> Result<DmaBuf<T, coherence, .cpu_owned>, DmaError>;
+fn free<T, c, o>(buf: DmaBuf<T, c, o>) -> void;          // consumes the handle
+
+// Cache transitions consume the handle and return it in the new owner state.
+fn clean_for_device<T, c>(buf: DmaBuf<T, c, .cpu_owned>)
+    -> DmaBuf<T, c, .device_owned>;
+fn invalidate_for_cpu<T, c>(buf: DmaBuf<T, c, .device_owned>)
+    -> DmaBuf<T, c, .cpu_owned>;
+
+// The device address is readable in any state; the CPU view only when cpu-owned.
+fn dma_addr<T, c, o>(buf: DmaBuf<T, c, o>) -> DmaAddr;    // borrow-by-value of the address
+fn as_slice<T, c>(buf: DmaBuf<T, c, .cpu_owned>) -> []mut T;
+```
+
+Because the handle is linear, the §18 example is now fully enforced. Each
+type-changing transition consumes the old handle and binds a **new** name (MC has
+no name shadowing); a borrow uses `&handle`:
+
+```mc
+let cpu0 = dma.alloc<u8>(4096, .noncoherent)?;  // cpu_owned, linear
+let dev = cache.clean_for_device(cpu0);         // cpu0 consumed; dev is device_owned
+device.start_dma(dma.addr(&dev));               // &dev borrows, does not consume
+device.wait_irq();
+let cpu1 = cache.invalidate_for_cpu(dev);       // dev consumed; back to cpu_owned
+let packet = dma.as_slice(&cpu1);               // OK only because cpu_owned
+dma.free(cpu1);                                 // consumes cpu1; omitting this is E_RESOURCE_LEAK
+```
+
+The compiler rejects: reading a device-owned buffer (`as_slice` is not defined on
+`.device_owned`), using a buffer after it was moved into a transition
+(`E_USE_AFTER_MOVE`), and dropping a buffer without freeing it
+(`E_RESOURCE_LEAK`). A by-value argument moves; `&handle` borrows. The same
+`move` mechanism gives `IrqOff`, locks, and device handles their single-owner /
+use-once guarantees.
 
 ---
 
@@ -2156,9 +2251,9 @@ The compiler cannot pretend the wrong case is impossible unless the programmer e
 
 ## 26.2 Why Not Rust?
 
-Rust aims for memory safety through ownership, borrowing, lifetimes, and stronger aliasing rules.
+Rust aims for general memory safety through ownership, borrowing, lifetimes, and stronger aliasing rules.
 
-MC deliberately does not.
+MC deliberately does not adopt borrowing, lifetimes, or whole-program aliasing analysis. It does provide one narrow, opt-in slice of ownership — the **linear `move` qualifier** (section 18.1) — but only to enforce *hardware resource use-protocols* (DMA buffer handoff, lock release, capability witnesses), not as a general memory-safety system.
 
 MC is for code where the programmer often manipulates physical addresses, MMIO, raw memory, DMA buffers, interrupt state, page tables, and device-specific invariants that no general language can fully verify.
 
@@ -2219,6 +2314,149 @@ Build modes:
 MC does not make systems programming safe.
 
 It makes the contract explicit enough that a kernel author can reason about where safety ends, where hardware begins, and where the optimizer is allowed to believe them.
+
+---
+
+# 28. Driver Library Profile (Network-Card Target)
+
+The first conformance target for MC's library layer is a **DMA-capable network
+card driver**. A NIC exercises every kernel primitive at once: BAR-mapped MMIO
+registers, DMA descriptor rings plus packet buffers, completion interrupts,
+locking against concurrent producers, memory ordering between descriptor writes
+and the doorbell register, and network byte-order conversion. This section
+specifies the library modules a NIC driver composes. Each is a thin, typed layer
+over a core primitive (sections 16–19) plus the linear `move` qualifier
+(section 18.1); none introduces new language semantics.
+
+```txt
+NIC driver  ──uses──▶  std/sync     locking + linear guards          (on §19 atomics + §18.1 move)
+            ──uses──▶  std/ring     TX/RX descriptor rings           (on §22 generics)
+            ──uses──▶  std/dma      packet buffers, ownership         (§18.2)
+            ──uses──▶  std/endian   network/device byte order         (pure const fn)
+            ──uses──▶  std/time     reset/link-up waits, timeouts      (on counter/serial domains)
+            ──uses──▶  std/barrier  descriptor-vs-doorbell ordering    (on §17/§19 ordering)
+            ──uses──▶  std/mmio     register-field RMW, iomem copy      (on §17 MMIO)
+            ──uses──▶  (core)       typed MMIO §17, IrqOff §19.1, irq_context
+```
+
+## 28.1 `std/sync` — Locks with Linear Guards
+
+Locks are the second use of the linear `move` qualifier (after DMA). Acquiring a
+lock yields a `move` (linear) `Guard`; releasing consumes it. The compiler then
+rejects forgetting to unlock (`E_RESOURCE_LEAK`), double-unlock and
+use-after-unlock (`E_USE_AFTER_MOVE`).
+
+```mc
+move struct Guard { /* witnesses the lock is held */ }
+
+fn lock(l: *SpinLock) -> Guard;          // spins until acquired
+fn unlock(g: Guard) -> void;             // consumes the guard, releases
+
+// IRQ-safe variant: the guard also carries an IrqOff witness (§19.1), so the
+// critical section is provably interrupt-free and re-enables on release.
+move struct IrqGuard { /* held + interrupts disabled */ }
+fn lock_irqsave(l: *SpinLock) -> IrqGuard;
+fn unlock_irqrestore(g: IrqGuard) -> void;
+```
+
+Module also provides `Mutex` (sleeping), `RwLock`, and `seqlock`. A NIC driver
+holds a `SpinLock` (via `lock_irqsave`) around TX/RX ring updates shared between
+the transmit path and the completion ISR.
+
+## 28.2 `std/ring` — Generic Descriptor Ring
+
+A NIC's TX and RX paths are bounded single-producer/single-consumer rings of
+descriptors. `Ring<T, N>` is a generic (section 22) fixed-capacity ring:
+
+```mc
+struct Ring<T, N> { slots: [N]T, head: usize, tail: usize }
+
+fn is_empty<T, N>(r: Ring<T, N>) -> bool;
+fn is_full<T, N>(r: Ring<T, N>)  -> bool;
+fn push<T, N>(r: Ring<T, N>, x: T) -> Ring<T, N>;   // producer; full is a trap
+fn pop<T, N>(r: Ring<T, N>)        -> (Ring<T, N>, T); // consumer
+```
+
+A `comptime N: usize` capacity makes the ring size a type parameter. Descriptors
+carry `DmaAddr` (section 18) for the buffer each slot points at.
+
+## 28.3 `std/endian` — Byte Order
+
+Device registers and on-wire packet headers have a fixed endianness; the host may
+differ. Pure `const fn`s (comptime-foldable) convert explicitly — never an
+implicit reinterpret:
+
+```mc
+export const fn swap_u16(x: u16) -> u16;
+export const fn swap_u32(x: u32) -> u32;
+export const fn swap_u64(x: u64) -> u64;
+export const fn to_be32(x: u32) -> u32;     // host → big-endian (network order)
+export const fn from_be32(x: u32) -> u32;
+export const fn to_le32(x: u32) -> u32;     // host → little-endian (most devices)
+export const fn from_le32(x: u32) -> u32;
+```
+
+## 28.4 `std/time` — Delays and Monotonic Ticks
+
+Reset sequences, link-up polling, and DMA timeouts need bounded waits. Built on
+the `counter`/`serial` arithmetic domains (which model tick wraparound):
+
+```mc
+fn read_ticks() -> Ticks;                       // monotonic counter
+fn elapsed(a: Ticks, b: Ticks) -> Ticks;        // wrap-correct difference
+fn udelay(us: u32) -> void;                      // busy-wait microseconds
+fn mdelay(ms: u32) -> void;
+fn timed_out(start: Ticks, limit: Ticks) -> bool;
+```
+
+## 28.5 `std/barrier` — Memory Barriers
+
+A descriptor must be fully written *before* the doorbell register is rung, and a
+completion flag read *after* the interrupt. Explicit barriers expose the §17/§19
+ordering primitives under driver-conventional names:
+
+```mc
+fn mb()  -> void;       // full barrier
+fn rmb() -> void;       // load barrier
+fn wmb() -> void;       // store barrier (descriptor writes before doorbell)
+fn dma_wmb() -> void;   // DMA-visible store barrier
+```
+
+## 28.6 `std/mmio` — Register-Field Helpers and IO-Memory Copy
+
+Thin helpers over typed MMIO (section 17): atomic read-modify-write of register
+fields, and width-correct volatile copies to/from device memory (which a plain
+`memcpy` would illegally coalesce or elide):
+
+```mc
+fn set_bits<R>(reg: MmioPtr<R>, mask: R) -> void;     // reg |= mask, RMW
+fn clear_bits<R>(reg: MmioPtr<R>, mask: R) -> void;   // reg &= ~mask, RMW
+fn modify_field<R>(reg: MmioPtr<R>, mask: R, value: R) -> void;
+fn memcpy_toio(dst: MmioPtr<u8>, src: []u8) -> void;
+fn memcpy_fromio(dst: []mut u8, src: MmioPtr<u8>) -> void;
+```
+
+## 28.7 Composition — the NIC Driver Shape
+
+The transmit path composes the modules: take the lock, push a DMA-backed
+descriptor onto the TX ring, order the writes, ring the doorbell.
+
+```mc
+fn transmit(dev: *Nic, frame: DmaBuf<u8, .noncoherent, .cpu_owned>) -> void {
+    let owned = cache.clean_for_device(frame);      // §18.2: frame consumed, owned is device_owned
+    let g = sync.lock_irqsave(&dev.lock);           // §28.1: linear IrqGuard
+    dev.tx = ring.push(dev.tx, make_desc(dma.addr(&owned))); // §28.2 + §18 (borrow)
+    barrier.wmb();                                  // §28.5: descriptor before doorbell
+    mmio.set_bits(dev.doorbell, TX_KICK);           // §28.6 / §17
+    enqueue_owned(dev, owned);                       // owned moved into the ring's pending list
+    sync.unlock_irqrestore(g);                      // §28.1: consumes the guard
+}
+```
+
+Every hazard a C NIC driver hits by convention is here a typed contract: a buffer
+read after handoff, a lock left held, a descriptor write reordered past the
+doorbell, or a host-endian value written to a big-endian field is a **compile
+error**, not a runtime corruption.
 
 ---
 
@@ -2805,6 +3043,28 @@ blocking-allocating operation, must be rejected.
 ```
 
 Like the trap verifier, this is a call-graph contract, not a theorem-proving mode: if the compiler cannot prove a callee satisfies the contract, it rejects the call.
+
+---
+
+## D.7 Linear (`move`) Verifier
+
+The linear verifier (section 18.1) enforces single-use ownership of `move`-typed
+values with a per-function move/liveness analysis over the lexical scope. It is
+not a borrow checker — there are no borrows, lifetimes, or aliasing analysis.
+
+```txt
+For each binding of a `move` type:
+    - moved when passed by value, returned, or assigned to another binding;
+      a moved binding becomes dead.
+    - using a dead binding is E_USE_AFTER_MOVE.
+    - a live (unmoved) binding reaching the end of its scope is E_RESOURCE_LEAK
+      (linear: every resource is consumed exactly once).
+    - a `move` value cannot be copied/aliased (it has a single owner).
+```
+
+Conditional control flow joins conservatively: a binding is live after a join
+only if it is live on every predecessor path; otherwise a later use is rejected.
+`move` is erased after checking — it has no runtime representation or cost.
 
 ---
 
@@ -3608,7 +3868,7 @@ better debug mapping
 Adds:
 
 ```txt
-DMA typestate if MC adds affine handles
+DMA ownership typestate via the linear `move` qualifier (section 18.1)
 precise asm per compiler/arch
 full comptime reflection
 advanced packed ABI validation
