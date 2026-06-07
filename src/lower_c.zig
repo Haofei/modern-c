@@ -3080,6 +3080,7 @@ const CEmitter = struct {
                 if (try self.emitRawManyOffsetCall(node, locals)) return;
                 if (try self.emitAssumeNoaliasCall(node, locals)) return;
                 if (try self.emitWrappingCall(node, locals)) return;
+                if (try self.emitReduceSumCheckedCall(node, locals)) return;
                 if (try self.emitUncheckedCall(node, locals)) return;
                 const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
                 try self.emitExpr(node.callee.*, locals);
@@ -3576,6 +3577,40 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, " + ");
         try self.emitExpr(call.args[1], locals);
         try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    // reduce.sum_checked<T>(xs) -> Result<T, Overflow> (section 8.2). Sum the
+    // slice in a wide (`__int128`) accumulator, then range-check the final result
+    // into T — distinct from stepwise checked addition, which would trap on an
+    // intermediate overflow. Lowered as a GCC/Clang statement-expression so it is
+    // a self-contained value; the slice is bound once to avoid double evaluation.
+    fn emitReduceSumCheckedCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!isIdentNamed(member.base.*, "reduce")) return false;
+        if (!std.mem.eql(u8, member.name.text, "sum_checked")) return error.UnsupportedCEmission;
+        if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+
+        const t_ty = call.type_args[0];
+        const t_cty = try self.cTypeFor(t_ty, .typedef_name);
+        const int_name = self.underlyingIntTypeName(t_ty) orelse return error.UnsupportedCEmission;
+        const range = intTypeRange(int_name) orelse return error.UnsupportedCEmission;
+        const struct_name = try self.resultTypeName(t_ty, simpleNameType("Overflow", member.name.span));
+
+        const n = self.temp_index;
+        self.temp_index += 1;
+
+        try self.out.print(self.allocator, "({{ __auto_type mc_xs{d} = (", .{n});
+        try self.emitExpr(call.args[0], locals);
+        try self.out.print(self.allocator, "); __int128 mc_acc{d} = 0; for (uintptr_t mc_i{d} = 0; mc_i{d} < mc_xs{d}.len; mc_i{d}++) mc_acc{d} += (__int128)mc_xs{d}.ptr[mc_i{d}]; ", .{ n, n, n, n, n, n, n, n });
+        try self.out.print(self.allocator, "(mc_acc{d} < (__int128)({s}) || mc_acc{d} > (__int128)({s})) ? (({s}){{ .is_ok = false, .payload.err = 0 }}) : (({s}){{ .is_ok = true, .payload.ok = ({s})mc_acc{d} }}); }})", .{ n, range.c_min, n, range.c_max, struct_name, struct_name, t_cty, n });
         return true;
     }
 
@@ -8567,6 +8602,7 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "AmbiguousSerialOrder")) return "uint8_t";
     if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return "uint8_t";
     if (std.mem.eql(u8, name, "ConversionError")) return "uint8_t";
+    if (std.mem.eql(u8, name, "Overflow")) return "uint8_t";
     return "void *";
 }
 
@@ -12024,6 +12060,34 @@ test "emits C for precise asm with operands" {
     // declared registers are preserved as a provenance comment.
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__asm__ __volatile__(\"bsf %1, %0\" : \"=r\"(idx) : \"r\"(mask) : \"cc\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "/* MC_PRECISE_ASM out(\"rax\")->idx in(\"rbx\") */") != null);
+}
+
+test "emits C for reduce.sum_checked" {
+    const source =
+        \\fn sum(xs: []const u32) -> Result<u32, Overflow> {
+        \\    return reduce.sum_checked<u32>(xs);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_reduce.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    // Wide accumulator, final range-check into the result type, Result struct.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__int128 mc_acc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "> (__int128)(UINT32_MAX)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "(mc_result_u32_Overflow){ .is_ok = true, .payload.ok = (uint32_t)mc_acc") != null);
 }
 
 test "emits C unsafe contract blocks as scoped blocks" {

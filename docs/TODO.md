@@ -60,16 +60,28 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
   `#[no_lang_trap]`, and lowers to direct C element access without
   `mc_check_index`.
 
-- [ ] **Mathematical checked reduction `reduce.sum_checked<T>` (§8.2)** — effort **M**.
-  A checked reduction whose semantics differ from stepwise checked addition:
-  compute the sum in a wide/abstract integer domain and return `Overflow` only
-  if the *final* result does not fit `T`. Not implemented (grep: `reduce.*`
-  absent). Needs an intrinsic (the wide accumulation cannot be expressed as a
-  plain library loop of checked adds). Per the §0/A.1 layering this is a
-  compiler-blessed intrinsic, not an ordinary device library.
-  - Sema: `reduce.sum_checked<T>(xs: []const T) -> Result<T, Overflow>`.
-  - Lower to C: accumulate in the next-wider integer (or `__int128`), then a
-    single range check into `T`.
+- [x] **Mathematical checked reduction `reduce.sum_checked<T>` (§8.2)** — done
+  (2026-06-06), effort **M**. A checked reduction whose semantics differ from
+  stepwise checked addition: the sum is computed in a wide integer domain and
+  `Overflow` is returned only if the *final* result does not fit `T`.
+  - [x] Sema: `reduce.sum_checked<T>(xs: []const T) -> Result<T, Overflow>`
+        (`Overflow` added as a known error type; classified `.result`). Validated
+        as a builtin namespace member: integer type arg (`E_REDUCE_REQUIRES_INTEGER`),
+        exactly one slice argument (`E_REDUCE_ARG_NOT_SLICE`, `E_CALL_ARG_COUNT`).
+  - [x] Lower to C: a GCC/Clang statement-expression accumulates the slice in an
+        `__int128`, then single-range-checks the final result into `T`, yielding
+        the `Result<T, Overflow>` struct (`.is_ok`/`.payload`); the slice is bound
+        once to avoid double evaluation. `Overflow` lowers to a `uint8_t`
+        (payload-free) error marker like `ConversionError`.
+  - [x] Fixtures: `tests/spec/reduce_sum_checked.mc` (accept + the three reject
+        diagnostics) and `tests/c_emit_reduce_sum_checked.mc`
+        (signed/unsigned/narrow/mutable-slice), plus a `lower_c` unit test.
+        Green under sweep + c-test.
+  - _Known limitation (pre-existing, not specific to this feature): applying `?`
+    to the call in a local initializer hits the MIR verifier's
+    `E_TRY_REQUIRES_RESULT_OR_NULLABLE` gap, which also affects `try_from(x)?`;
+    tracked with the MIR Result-inference work, not here. Direct `return` of the
+    Result works._
   - _Note: §8.4 (unsafe hot checked loop) is already expressible — its
     primitives (`#[unsafe_contract(no_overflow)]` + `unchecked.add`) exist; only
     the optimizer's value-range fact propagation from the contract is missing,
@@ -548,9 +560,10 @@ inaccurate — untyped globals are rejected in sema with `E_GLOBAL_REQUIRES_TYPE
    ownership is a library profile, so the only open *core* work is confirming the
    typed cache ops/`DmaBuf` modes gate coherent vs noncoherent access and that
    descriptor ordering composes with §17/§19. Small, bounded.
-3. **`reduce.sum_checked<T>` (§8.2)** — effort **M**. Not started (grep: absent).
-   Needs a wide-accumulate intrinsic + single range-check lowering. Self-contained
-   but genuinely new.
+3. ✅ **`reduce.sum_checked<T>` (§8.2)** — **done** (2026-06-06). Wide-accumulate
+   (`__int128`) + single range-check lowering to `Result<T, Overflow>`; fixtures
+   in `tests/spec/reduce_sum_checked.mc` + `tests/c_emit_reduce_sum_checked.mc`,
+   green under sweep + c-test.
 4. **Full comptime interpreter (§22)** — effort **L**. Tree-walking evaluator +
    comptime↔type feedback. Largest *bounded* language item.
 5. **Production typed MIR/CFG + verifier** — ✅ **done** (core milestone,

@@ -1053,6 +1053,7 @@ pub const Checker = struct {
                 self.checkDmaCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkTypeStaticCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkResidueCall(expr.span, node.callee.*, node.args, ctx);
+                self.checkReduceCall(expr.span, node, ctx);
                 const bitcast_class = self.checkBitcastCall(expr.span, node, ctx);
                 const raw_many_offset_class = self.checkRawManyOffsetCall(expr.span, node, ctx);
                 const reflection_class = self.checkReflectionCall(expr.span, node, ctx);
@@ -1086,6 +1087,7 @@ pub const Checker = struct {
                 if (self.dmaCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (typeStaticCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (residueCallReturnClass(node.callee.*, ctx)) |class| return class;
+                if (reduceCallReturnClass(node.callee.*)) |class| return class;
                 if (bitcast_class) |class| return class;
                 if (raw_many_offset_class) |class| return class;
                 if (directCallReturnClass(node.callee.*, ctx)) |class| return class;
@@ -1548,6 +1550,34 @@ pub const Checker = struct {
         }
         if (args.len != 0) {
             self.errorCode(span, "E_CALL_ARG_COUNT", "residue expects no arguments");
+        }
+    }
+
+    fn checkReduceCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) void {
+        if (!isReduceSumCheckedCallee(call.callee.*)) return;
+        // reduce.sum_checked<T>(xs: []const T) -> Result<T, Overflow>
+        if (call.type_args.len != 1) {
+            self.errorCode(span, "E_REDUCE_REQUIRES_INTEGER", "reduce.sum_checked requires exactly one integer type argument");
+            return;
+        }
+        const t = call.type_args[0];
+        const t_name = typeName(t) orelse {
+            self.errorCode(t.span, "E_REDUCE_REQUIRES_INTEGER", "reduce.sum_checked is restricted to integer types");
+            return;
+        };
+        if (!isIntegerScalarName(t_name)) {
+            self.errorCode(t.span, "E_REDUCE_REQUIRES_INTEGER", "reduce.sum_checked is restricted to integer types");
+        }
+        if (call.args.len != 1) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "reduce.sum_checked expects exactly one slice argument");
+            return;
+        }
+        // The argument is type-checked by the enclosing call arm; here we only
+        // confirm it is a slice of the element type (§8.2: `xs: []const T`).
+        const arg_ty = exprResultType(call.args[0], ctx) orelse exprStorageType(call.args[0], ctx) orelse return;
+        const arg_class = classifyTypeCtx(arg_ty, ctx);
+        if (arg_class != .slice) {
+            self.errorCode(call.args[0].span, "E_REDUCE_ARG_NOT_SLICE", "reduce.sum_checked expects a slice (`[]const T`) of the element type");
         }
     }
 
@@ -3255,6 +3285,26 @@ fn isTypeStaticMember(member: anytype, ctx: Context) bool {
     return staticTypeBaseClass(member.base.*, ctx) != null;
 }
 
+fn isIntegerScalarName(name: []const u8) bool {
+    return switch (classifyTypeName(name)) {
+        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_usize, .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_isize => true,
+        else => false,
+    };
+}
+
+fn isReduceSumCheckedCallee(callee: ast.Expr) bool {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return isReduceSumCheckedCallee(inner.*),
+        else => return false,
+    };
+    return isIdentNamed(member.base.*, "reduce") and std.mem.eql(u8, member.name.text, "sum_checked");
+}
+
+fn reduceCallReturnClass(callee: ast.Expr) ?TypeClass {
+    return if (isReduceSumCheckedCallee(callee)) .result else null;
+}
+
 fn typeStaticCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
     const member = switch (callee.kind) {
         .member => |node| node,
@@ -4636,6 +4686,7 @@ fn isBuiltinNamespaceMember(member: anytype) bool {
     if (std.mem.eql(u8, base, "mmio")) return std.mem.eql(u8, member.name.text, "map");
     if (std.mem.eql(u8, base, "unchecked")) return isUncheckedNoOverflowMember(member.name.text);
     if (std.mem.eql(u8, base, "wrapping")) return std.mem.eql(u8, member.name.text, "add");
+    if (std.mem.eql(u8, base, "reduce")) return std.mem.eql(u8, member.name.text, "sum_checked");
     if (std.mem.eql(u8, base, "compiler")) return std.mem.eql(u8, member.name.text, "assume_noalias_unchecked");
     if (std.mem.eql(u8, base, "cpu")) return std.mem.eql(u8, member.name.text, "pause");
     if (std.mem.eql(u8, base, "atomic")) return std.mem.eql(u8, member.name.text, "init");
@@ -4775,6 +4826,7 @@ fn isKnownTypeName(name: []const u8, ctx: Context) bool {
     if (std.mem.eql(u8, name, "AmbiguousSerialOrder")) return true;
     if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return true;
     if (std.mem.eql(u8, name, "ConversionError")) return true;
+    if (std.mem.eql(u8, name, "Overflow")) return true;
     if (std.mem.eql(u8, name, "c_void")) return true;
     if (knownStructName(name, ctx)) return true;
     if (knownPackedBitsName(name, ctx)) return true;
