@@ -323,6 +323,11 @@ const CEmitter = struct {
     current_function: ?[]const u8 = null,
     temp_index: usize,
     indent: usize,
+    // Stack of enclosing loop ids and a counter, for lowering `break`/`continue`
+    // as labeled `goto`s so they target the loop even through an intervening
+    // `switch` (a C `break` inside a `switch` would otherwise break the switch).
+    loop_ids: std.ArrayList(u32) = .empty,
+    next_loop_id: u32 = 0,
 
     fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8), mir_module: *const mir.Module) CEmitter {
         return .{
@@ -372,6 +377,7 @@ const CEmitter = struct {
         self.type_aliases.deinit();
         self.static_initializers.deinit();
         self.globals.deinit();
+        self.loop_ids.deinit(self.allocator);
         self.scratch.deinit();
     }
 
@@ -435,6 +441,15 @@ const CEmitter = struct {
         // by value (`[N]S`, `struct { [N]S }`, `Result<S, E>`), so emit them in
         // dependency order rather than a fixed category order.
         try self.emitOrderedAggregates(module);
+        // Forward-declare every defined function up front so a call to a function
+        // declared later in the (possibly import-merged) source resolves — MC
+        // resolves calls module-wide, independent of declaration order.
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .fn_decl => |fn_decl| if (fn_decl.body != null) try self.emitFunctionForwardDecl(fn_decl),
+                else => {},
+            }
+        }
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .global_decl => |global| try self.emitGlobal(global),
@@ -504,8 +519,8 @@ const CEmitter = struct {
             .value => |v| switch (v) {
                 .int => |n| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
                 .boolean => |b| if (b) "1" else "0",
-                // Array-valued const globals are not lowered to a C scalar here.
-                .array => null,
+                // Aggregate const globals are not lowered to a C scalar here.
+                .array, .@"struct" => null,
             },
             else => null,
         };
@@ -858,6 +873,14 @@ const CEmitter = struct {
     fn emitFunctionPrototype(self: *CEmitter, fn_decl: ast.FnDecl) !void {
         try self.emitFunctionSignature(fn_decl, false);
         try self.out.appendSlice(self.allocator, ";\n\n");
+    }
+
+    // Forward declaration for a *defined* function, matching the definition's
+    // storage class (non-exported functions are `static`) so the prototype and
+    // body agree.
+    fn emitFunctionForwardDecl(self: *CEmitter, fn_decl: ast.FnDecl) !void {
+        try self.emitFunctionSignature(fn_decl, !fn_decl.exported);
+        try self.out.appendSlice(self.allocator, ";\n");
     }
 
     fn emitExternFunction(self: *CEmitter, fn_decl: ast.FnDecl) !void {
@@ -1477,11 +1500,19 @@ const CEmitter = struct {
             },
             .@"break" => {
                 try self.writeIndent();
-                try self.out.appendSlice(self.allocator, "break;\n");
+                if (self.loop_ids.items.len > 0) {
+                    try self.out.print(self.allocator, "goto mc_break_{d};\n", .{self.loop_ids.items[self.loop_ids.items.len - 1]});
+                } else {
+                    try self.out.appendSlice(self.allocator, "break;\n");
+                }
             },
             .@"continue" => {
                 try self.writeIndent();
-                try self.out.appendSlice(self.allocator, "continue;\n");
+                if (self.loop_ids.items.len > 0) {
+                    try self.out.print(self.allocator, "goto mc_continue_{d};\n", .{self.loop_ids.items[self.loop_ids.items.len - 1]});
+                } else {
+                    try self.out.appendSlice(self.allocator, "continue;\n");
+                }
             },
             .expr => |expr| {
                 if (try self.emitNeverExprStmt(expr, locals)) return;
@@ -1536,6 +1567,11 @@ const CEmitter = struct {
                 if (loop.kind == .@"while") {
                     if (try self.emitMmioReadWhileLoop(loop, locals, return_ty)) return;
                     if (try self.emitSequencedConditionWhileLoop(loop, locals, return_ty)) return;
+                    const id = self.next_loop_id;
+                    self.next_loop_id += 1;
+                    const jumps = loopBodyHasOwnBreakContinue(loop.body);
+                    try self.loop_ids.append(self.allocator, id);
+                    defer _ = self.loop_ids.pop();
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "while (");
                     if (loop.iterable) |condition| {
@@ -1548,9 +1584,13 @@ const CEmitter = struct {
                     defer nested.deinit();
                     self.indent += 1;
                     try self.emitBlockItems(loop.body, &nested, return_ty);
+                    // `continue` lands here, then falls through to re-test the
+                    // loop condition.
+                    if (jumps.cont) try self.out.print(self.allocator, "    mc_continue_{d}:;\n", .{id});
                     self.indent -= 1;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "}\n");
+                    if (jumps.brk) try self.out.print(self.allocator, "    mc_break_{d}:;\n", .{id});
                 } else if (loop.kind == .@"for") {
                     try self.emitForLoop(loop, locals, return_ty);
                 } else {
@@ -2501,6 +2541,12 @@ const CEmitter = struct {
         }
         try self.out.print(self.allocator, "; {s} += 1) {{\n", .{index_name});
 
+        const id = self.next_loop_id;
+        self.next_loop_id += 1;
+        const jumps = loopBodyHasOwnBreakContinue(loop.body);
+        try self.loop_ids.append(self.allocator, id);
+        defer _ = self.loop_ids.pop();
+
         var nested = try cloneLocals(self.allocator, locals.*);
         defer nested.deinit();
         try nested.put(binding.text, .{ .c_type = element_c_type });
@@ -2523,9 +2569,12 @@ const CEmitter = struct {
         try self.writeIndent();
         try self.out.print(self.allocator, "(void){s};\n", .{binding.text});
         try self.emitBlockItems(loop.body, &nested, return_ty);
+        // `continue` lands here, then the for-step (`i += 1`) runs.
+        if (jumps.cont) try self.out.print(self.allocator, "    mc_continue_{d}:;\n", .{id});
         self.indent -= 1;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "}\n");
+        if (jumps.brk) try self.out.print(self.allocator, "    mc_break_{d}:;\n", .{id});
     }
 
     fn emitForLoopCallIterable(self: *CEmitter, loop: ast.Loop, binding: ast.Ident, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
@@ -4408,6 +4457,14 @@ const CEmitter = struct {
             },
             .call => if (self.callReturnTypeForExpr(expr, locals)) |ty| isBoolType(ty) else false,
             .grouped => |inner| self.exprIsBoolForEmission(inner.*, locals),
+            // Comparison / logical operators produce a C bool; mark them so a
+            // `switch a < b { … }` casts the subject to int and gets a trap
+            // default (avoiding -Wswitch-bool / -Wreturn-type).
+            .binary => |node| switch (node.op) {
+                .eq, .ne, .lt, .le, .gt, .ge, .logical_and, .logical_or => true,
+                else => false,
+            },
+            .unary => |node| node.op == .logical_not,
             else => false,
         };
     }
@@ -7011,8 +7068,38 @@ const CEmitter = struct {
                 const resolved_child = self.resolveAliasType(base_arr.kind.array.child.*);
                 return if (resolved_child.kind == .array) resolved_child else null;
             },
+            // An array-typed struct field (`s.items` over `struct { items: [N]T }`)
+            // is indexed through its `.elems` member like any array.
+            .member => |node| {
+                const struct_name = self.structTypeNameForExpr(node.base.*, locals) orelse return null;
+                const struct_decl = self.structs.get(struct_name) orelse return null;
+                for (struct_decl.fields) |field| {
+                    if (std.mem.eql(u8, field.name.text, node.name.text)) {
+                        const resolved = self.resolveAliasType(field.ty);
+                        return if (resolved.kind == .array) resolved else null;
+                    }
+                }
+                return null;
+            },
             else => return null,
         }
+    }
+
+    fn structTypeNameForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |id| blk: {
+                const set = locals orelse break :blk null;
+                const info = set.get(id.text) orelse break :blk null;
+                const ty = info.source_ty orelse break :blk null;
+                const resolved = self.resolveAliasType(ty);
+                break :blk switch (resolved.kind) {
+                    .name => |n| n.text,
+                    else => null,
+                };
+            },
+            .grouped => |inner| self.structTypeNameForExpr(inner.*, locals),
+            else => null,
+        };
     }
 
     fn arrayReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
@@ -7558,9 +7645,64 @@ fn isNumericStorageType(ty: ast.TypeExpr) bool {
     };
 }
 
+// Which of `break`/`continue` does this loop body use targeting *this* loop
+// (i.e. not nested inside an inner loop)? Each needs a labeled target so a
+// `break`/`continue` inside a `switch` reaches the loop, not the switch.
+const LoopJumps = struct {
+    brk: bool = false,
+    cont: bool = false,
+};
+
+fn loopBodyHasOwnBreakContinue(block: ast.Block) LoopJumps {
+    var out = LoopJumps{};
+    for (block.items) |stmt| {
+        const j = stmtOwnBreakContinue(stmt);
+        out.brk = out.brk or j.brk;
+        out.cont = out.cont or j.cont;
+    }
+    return out;
+}
+
+fn stmtOwnBreakContinue(stmt: ast.Stmt) LoopJumps {
+    return switch (stmt.kind) {
+        .@"break" => .{ .brk = true },
+        .@"continue" => .{ .cont = true },
+        .block, .unsafe_block, .comptime_block => |b| loopBodyHasOwnBreakContinue(b),
+        .contract_block => |n| loopBodyHasOwnBreakContinue(n.block),
+        .if_let => |n| blk: {
+            var j = loopBodyHasOwnBreakContinue(n.then_block);
+            if (n.else_block) |e| {
+                const ej = loopBodyHasOwnBreakContinue(e);
+                j.brk = j.brk or ej.brk;
+                j.cont = j.cont or ej.cont;
+            }
+            break :blk j;
+        },
+        .@"switch" => |n| blk: {
+            var j = LoopJumps{};
+            for (n.arms) |arm| {
+                switch (arm.body) {
+                    .block => |b| {
+                        const aj = loopBodyHasOwnBreakContinue(b);
+                        j.brk = j.brk or aj.brk;
+                        j.cont = j.cont or aj.cont;
+                    },
+                    .expr => {},
+                }
+            }
+            break :blk j;
+        },
+        // A nested loop captures its own break/continue.
+        .loop => .{},
+        else => .{},
+    };
+}
+
 fn exprIsNumericLiteral(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .int_literal, .float_literal => true,
+        // A char literal is a byte value; in arithmetic it adopts its sibling
+        // operand's integer storage type (e.g. `c - '0'` over a `u8`).
+        .int_literal, .float_literal, .char_literal => true,
         .grouped => |inner| exprIsNumericLiteral(inner.*),
         .unary => |node| node.op == .neg and exprIsNumericLiteral(node.expr.*),
         else => false,
@@ -7845,6 +7987,12 @@ const Inspector = struct {
             try ctx.locals.put(param.name.text, {});
             try ctx.recordLocalType(param.name.text, param.ty);
             if (mmioPointee(param.ty)) |struct_name| try ctx.mmio_params.put(param.name.text, struct_name);
+            // §19.1: an IrqOff parameter is a compile-time capability witnessing
+            // interrupts are disabled; it lowers to a 1-byte token with no
+            // runtime effect.
+            if (param.ty.kind == .name and std.mem.eql(u8, param.ty.kind.name.text, "IrqOff")) {
+                try self.out.print(self.allocator, "lower irq_off fn={s} param={s} capability=interrupts_disabled c_type=uint8_t witness=true\n", .{ fn_decl.name.text, param.name.text });
+            }
         }
 
         try self.inspectBlock(body, &ctx);
@@ -8683,6 +8831,8 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "u64")) return "uint64_t";
     if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
     if (isOpaqueAddressTypeName(name)) return "uintptr_t";
+    // IrqOff (§19.1) capability token: a 1-byte witness value.
+    if (std.mem.eql(u8, name, "IrqOff")) return "uint8_t";
     if (std.mem.eql(u8, name, "i8")) return "int8_t";
     if (std.mem.eql(u8, name, "i16")) return "int16_t";
     if (std.mem.eql(u8, name, "i32")) return "int32_t";
@@ -8820,6 +8970,8 @@ fn primitiveCTypeName(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "u64")) return "uint64_t";
     if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
     if (isOpaqueAddressTypeName(name)) return "uintptr_t";
+    // IrqOff (§19.1) capability token: a 1-byte witness value.
+    if (std.mem.eql(u8, name, "IrqOff")) return "uint8_t";
     if (std.mem.eql(u8, name, "i8")) return "int8_t";
     if (std.mem.eql(u8, name, "i16")) return "int16_t";
     if (std.mem.eql(u8, name, "i32")) return "int32_t";
@@ -9082,7 +9234,7 @@ fn comptimeUsizeArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.Fn
     return switch (eval.foldComptimeExpr(&scope, expr)) {
         .value => |v| switch (v) {
             .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
-            .boolean, .array => null,
+            .boolean, .array, .@"struct" => null,
         },
         else => null,
     };
@@ -10959,8 +11111,10 @@ test "emits C for while loops and loop control" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "while (flag) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "out = mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "break;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "continue;") != null);
+    // break/continue lower to labeled gotos so they reach the loop through any
+    // intervening switch.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "goto mc_break_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "goto mc_continue_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return out;") != null);
 }
 
@@ -12074,8 +12228,9 @@ test "emits C lexical defer cleanup before return" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "void close_b(void);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_lexical_cleanup(void) {\n    close_b();\n    close_a();\n    return;\n}") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_block_cleanup(void) {\n    {\n        close_a();\n    }\n    return;\n}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_before_break(bool flag) {\n    while (flag) {\n        close_a();\n        break;\n    }\n}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_before_continue(bool flag) {\n    while (flag) {\n        close_a();\n        continue;\n    }\n}") != null);
+    // The defer cleanup still runs before the (now labeled-goto) break/continue.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_before_break(bool flag) {\n    while (flag) {\n        close_a();\n        goto mc_break_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_before_continue(bool flag) {\n    while (flag) {\n        close_a();\n        goto mc_continue_") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_on_fallthrough(void) {\n    close_a();\n}") != null);
 }
 

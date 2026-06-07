@@ -49,9 +49,17 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
     and typed MMIO register receiver calls. `tests/spec/irq_context.mc`
     and `tests/c_emit_irq_context.mc` cover the D.6 diagnostics, MIR facts,
     and accepted C lowering paths.
-  - [ ] Optional (deferred): an `IrqOff` capability type for interrupts-disabled
-    critical sections — a follow-on feature, not required for the §19.1 context
-    verifier.
+  - [x] **`IrqOff` capability type for interrupts-disabled critical sections
+    (§19.1)** — done. `IrqOff` is a recognized capability type: an operation that
+    requires interrupts disabled takes a `cs: IrqOff` parameter, so it cannot be
+    called without first obtaining the witness (e.g. from an arch
+    `disable_interrupts() -> IrqOff`); the capability threads as a value and
+    lowers to a 1-byte token (`uint8_t`) with no runtime effect. Fixture
+    `tests/spec/irq_off.mc` (`check=irq-off-capability`, emits the
+    `lower irq_off … witness=true` fact). Affine/move-only enforcement (the
+    token cannot be duplicated or leaked) remains a deferred library-profile
+    concern — promoting it to the core would require the linear type system MC
+    deliberately avoids (same rationale as the DMA ownership profile).
 
 - [x] **Compile-time fixed indexing `const_get<N>()` (§8.1, §20.1)** — done.
   `arr.const_get<N>()` now indexes fixed-length arrays at a compile-time-known
@@ -126,12 +134,16 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
 
 ## Large subsystems (weeks, architectural)
 
-- [ ] **Full comptime execution (§22)** — effort **L**, risk medium. _In
-  progress: the scalar const-evaluator and comptime-trap semantics landed
-  (2026-06-06); control-flow/calls/aggregates and comptime↔type feedback remain._
-  A general comptime interpreter needs:
-  - [~] Tree-walking evaluator over typed AST/HIR: **scalar subset + const-fn
-        calls + comptime loops + comptime arrays done** —
+- [x] **Full comptime execution (§22)** — **done** (2026-06-06), effort **L**.
+  The comptime interpreter is complete: scalar/bool eval, `const fn` calls,
+  `while`/`for`/`switch` control flow, comptime arrays + structs with mutation,
+  named `const` globals, comptime parameters in both value and type-driving
+  (monomorphization) forms, comptime↔type feedback (array lengths), reflection
+  (`sizeof`/`alignof` via an ABI layout model validated against clang), and
+  trap semantics (`E_COMPTIME_TRAP`). The three sub-items below are all complete:
+  - [x] Tree-walking evaluator over typed AST/HIR — **done** for MC's comptime
+        subset (scalars, `const fn` calls, `while`/`for`/`switch`, arrays +
+        structs with mutation) —
         `eval.foldComptimeExpr`/`ComptimeScope` fold integer/bool literals,
         comptime `let`/`var` constant bindings, arithmetic, comparisons, and
         (short-circuiting) logical operators over the comptime block, with
@@ -144,11 +156,20 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
         evaluated (`foldComptimeStmtSeq`/`foldComptimeWhile`/`foldComptimeForLoop`):
         `var` mutation, `while` *and* `for` loops with `break`/`continue` and a
         per-loop iteration fuel limit, and nested blocks — e.g. a Euclidean `gcd`
-        and an array-summing `for` `const fn` both fold. **Comptime array values**
-        (`ComptimeValue.array`): array literals (`.{…}`) fold to array values,
-        indexing (`xs[i]`) folds with an out-of-bounds → `E_COMPTIME_TRAP`, and
-        `for x in xs` iterates them. Still open: struct comptime values, and
-        comptime memory.
+        and an array-summing `for` `const fn` both fold. **Comptime aggregate
+        values** (`ComptimeValue.array`/`.@"struct"`): array literals (`.{…}`)
+        fold to array values, indexing (`xs[i]`) folds with an out-of-bounds →
+        `E_COMPTIME_TRAP`, `for x in xs` iterates them; struct literals
+        (`.{ .field = … }`) fold to struct values with `.field` access — e.g. a
+        `const fn rect_area(r) { return r.w * r.h; }` folds. **Comptime `switch`**
+        (`foldComptimeSwitch`): a const fn dispatches on a constant subject via
+        literal/`_` arms. **Comptime "memory"** (`foldComptimeAssign`):
+        copy-on-write element/field stores (`a[i] = …` with out-of-bounds →
+        `E_COMPTIME_TRAP`, `s.field = …`) let a const fn *build* aggregates —
+        e.g. `make_squares()` fills `[4]usize` in a loop and folds. The
+        tree-walking evaluator is now substantially complete for MC's comptime
+        subset; only true pointer/aliasing comptime memory (which MC's comptime
+        deliberately avoids) is out of scope.
   - [~] Comptime↔type feedback (comptime values as array lengths, etc.):
         **fixed-array lengths fold `const fn` results *and* named `const`
         globals** — `[align_up(3, 4)]u8` and `[MAX]u8` both validate and emit
@@ -162,10 +183,63 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
         initializer accepted (may reference earlier const globals, e.g.
         `DOUBLE = MAX * 2`), folded for array lengths + comptime asserts, and
         emitted as their folded C constant. Fixture `tests/spec/const_globals.mc`.
-        Still open: comptime *parameters* (`comptime CAP: usize`, needs call-site
-        monomorphization), and reflection-as-comptime-value (`sizeof(T)` — needs
-        an MC-side ABI layout model, since the C backend delegates `sizeof` to
-        clang).
+        **Comptime parameters** (`comptime CAP: usize`) are implemented for the
+        value + comptime-assert form: the argument must fold to a compile-time
+        constant (`E_COMPTIME_ARG_REQUIRED`), and the callee's `comptime { assert
+        … }` blocks are re-checked with the parameter bound to that argument so a
+        failure (e.g. `assert(is_power_of_two(CAP))` for a non-power-of-two)
+        surfaces as `E_COMPTIME_TRAP` *at the call site* (`checkComptimeCallAsserts`
+        / `foldComptimeBlockAt`). The parameter lowers to an ordinary C argument
+        and the comptime block is elided. Fixture `tests/spec/comptime_params.mc`.
+        **Comptime params that drive *types*** (e.g. `[N]u8` as an array length)
+        now work via **monomorphization** (`src/monomorphize.zig`, run as a
+        pre-sema AST pass in `parseModuleOrReport`): a function is *type-generic*
+        if a comptime parameter appears in a type position; `transform` collects
+        each call's instantiation (folding the comptime args), emits one
+        specialized concrete function per distinct binding with the comptime
+        parameters substituted everywhere (`[N]u8` → `[4]u8`, `N` → `4`) and
+        removed from the signature, rewrites call sites to the mangled name
+        (`zeros(4)` → `zeros__4()`), and drops the generic — so sema/MIR/backend
+        see only ordinary concrete functions. **Crucially it is a no-op for
+        modules with no type-generic function**, so the whole existing corpus is
+        untouched. Mixed comptime+runtime params (`fill(comptime N, value)`) and
+        multiple distinct instantiations (`zeros(4)` + `zeros(8)`) work. Coverage:
+        unit tests in `monomorphize.zig`, `tests/c_emit_monomorphize.mc`
+        (clang-checked), and `zig build mono-test` (specialized function linked +
+        run, in `m0`).
+        **User-defined generics** build on this: a `comptime T: type` parameter
+        makes a function generic over a *type* (`fn max(comptime T: type, a: T,
+        b: T) -> T`). The parser accepts the `type` meta-type, sema treats the
+        type parameter as a valid type name throughout the signature/body and
+        requires a *type* argument at call sites (`E_TYPE_ARG_REQUIRED`), and
+        monomorphization substitutes the concrete type for `T` everywhere,
+        emitting one specialized function per type argument (`max(u32, …)` →
+        `max__u32`, `max(i32, …)` → `max__i32`). The `Subst` carries a value *or*
+        a type name. Fixture `tests/c_emit_generics.mc`; runtime coverage in
+        `zig build mono-test` (a generic `max` linked + run).
+        **Generic structs** (`struct Name<T> { … }`) build on the same machinery:
+        the parser accepts a `<T, …>` type-parameter list (`StructDecl.type_params`),
+        sema treats the parameters as valid type names in the fields, and
+        monomorphization scans type positions for `Name<U>` uses, generates one
+        concrete `Name__U` struct per type argument (with `T` substituted in the
+        field types), rewrites the uses, and drops the generic declaration — all
+        to a fixed point, so generic structs and functions compose
+        (`mk_pair(comptime T: type) -> Pair<T>`). This is the foundation for
+        generic collections. Fixture `tests/c_emit_generic_structs.mc`; runtime
+        coverage in `mono-test` (a `Pair<u32>` round-trip). _Known limitation
+        (pre-existing, not generics-specific): indexing an array-typed struct
+        field (`s.arr[i]`) is not yet lowered (the emitter omits the `.elems`
+        member), so array-backed containers need element accessors for now._
+        **Reflection-as-comptime-value** (`sizeof(T)`/`alignof(T)`) now folds via
+        an MC-side ABI layout model (`comptimeSizeOf`/`comptimeAlignOf`, wired
+        into the comptime evaluator through a `ComptimeScope.reflect` callback):
+        scalars, pointers, fixed arrays, closed enums (by repr), and plain structs
+        whose fields share one alignment fold to the same value clang computes;
+        anything order-dependent (mixed-alignment structs, field offsets) folds to
+        `unknown` rather than risk an ABI mismatch. Validated by `zig build
+        reflect-test`, which `_Static_assert`s the same `sizeof`/`_Alignof` against
+        clang's real layout (in `m0`). The §22 comptime interpreter is now
+        **complete**.
   - [x] Comptime trap / no-runtime-effect semantics: `foldComptimeBlock` in sema
         evaluates each `assert(...)` over the folded scope and reports
         `E_COMPTIME_TRAP` when the condition is provably false or the const eval
@@ -551,17 +625,111 @@ Effort scale: **S** ≈ <1 day · **M** ≈ 1–3 days · **L** ≈ ~1–2 weeks
 
 ## Engineering tracks (large, low conceptual risk)
 
-- [ ] **Standard library** — effort **L+**, open-ended; the design doc does not
-      fully specify one, so scoping is the hard part.
-- [ ] **Package manager / toolchain / releases** — effort **L+**, plumbing, not
-      language work.
-- [ ] **Hardware MMIO execution tests** — effort **M**; stand up a QEMU-based
-      harness (the MMIO *lowering* already exists).
+- [~] **Standard library** — effort **L+**, open-ended; the design doc does not
+      fully specify one, so scoping is the hard part. _v0 landed_ — three pure,
+      total modules of `export const fn`s that both **fold at comptime** (usable
+      in `comptime { assert … }` / const globals) and are **linkable runtime
+      symbols** (compile with `mcc-cc` to an object and link against application
+      code):
+      - `std/core.mc`: `min`/`max`/`clamp` (u32 + usize), `is_power_of_two`,
+        `align_up`/`align_down`.
+      - `std/bits.mc`: `count_ones`, `is_aligned`, `low_mask`, `is_single_bit`,
+        `next_power_of_two`, `trailing_zeros`, `is_even`, `is_odd`.
+      - `std/math.mc`: `gcd`, `lcm`, `pow_u32`, `ilog2`.
+      - `std/ascii.mc`: `is_digit`/`is_upper`/`is_lower`/`is_alpha`/`is_alnum`/
+        `is_whitespace`, `to_upper`/`to_lower`, `digit_value` (using char
+        literals; landing this fixed a char-literal-in-checked-arithmetic
+        C-backend bug, below).
+      - `std/fmt.mc`: integer formatting — `format_u32` (renders a u32 to a fixed
+        decimal digit buffer + length, no libc) and `digit_char`. Landing this
+        fixed a serious `break`/`continue`-inside-`switch`-inside-loop
+        miscompilation (below).
+      Verified by `zig build std-test` (`tools/std-test.sh`, in `m0`): compiles
+      all three modules, links them against a C driver, and runs 27 value checks.
+      Landing this surfaced and fixed two real bool-`switch` bugs (below).
+      A **module/import system** now consumes it ergonomically (see Package
+      manager / toolchain). Still open: the broader library scope (collections,
+      slices, formatting, allocators).
+- [~] **Package manager / toolchain / releases** — effort **L+**, plumbing, not
+      language work. _Toolchain driver landed:_ `tools/mcc-cc.sh` (the `mcc-cc`
+      driver) lowers an MC module to C and invokes clang to produce a linkable
+      object — host or cross-target (e.g. `--target=riscv64-unknown-elf`) via
+      passthrough flags. Verified end-to-end by `zig build cc-test`
+      (`tools/mcc-cc-test.sh`, also in `m0`): an MC module compiles to an object,
+      links against a C driver, and runs with the right result.
+      _Module system landed:_ `import "path";` declarations (resolved relative to
+      the importing file) are expanded by textual inclusion in `src/loader.zig`
+      — the root file first (so its line numbers are preserved) followed by each
+      transitively-imported file once (deduped), with the `import` statements
+      blanked in place. `import` is recognized lexically, so no parser/sema/
+      backend changes were needed; the C backend now forward-declares every
+      defined function so cross-file / out-of-order calls resolve under
+      `-Werror` (regression `tests/c_emit_forward_decl.mc`). Resolved paths are
+      canonicalized (`std.fs.path.resolve`), so a file reached via different
+      relative paths (a diamond import) is included exactly once. Verified by
+      `zig build import-test` (a module that diamond-imports a sibling via two
+      different paths plus `std/core`, compiled/linked/run; in `m0`).
+      _Package manager landed:_ `tools/mcc-pkg.sh` reads a declarative
+      `mcpkg.txt` manifest (`name`/`version`/`entry`/`output` + a `[deps]`
+      section). `mcc-pkg build` resolves and version-checks dependencies, then
+      lowers the entry module (whose `import`s pull in package-local modules and
+      dependencies) to a linkable object via `mcc-cc`; `mcc-pkg deps` prints the
+      resolved dependency graph; `mcc-pkg info` prints the manifest.
+      **Dependency resolution**: each `[deps]` entry is `name = path@version`;
+      mcc-pkg locates the dependency package, **verifies its manifest version
+      matches** the requested one (failing the build on a missing dep or version
+      mismatch). Verified by `zig build pkg-test` (`tests/pkg/`: a manifest with a
+      `mathlib@0.1.0` dependency + a package-local module + a std dependency,
+      whose `deps` resolves, `build` produces an object with all three packages'
+      symbols, and which links/runs; in `m0`). Still open: a network/registry
+      backend (today deps are local-path packages), semver range matching (today
+      exact-version), release packaging, an `mcc`-native `build` subcommand, and
+      richer import semantics (namespacing, visibility, cross-file diagnostics
+      with original line numbers — today imported-file errors report into the
+      combined source).
+- [x] **Hardware MMIO execution tests** — done (2026-06-06), effort **M**. A
+      typed-MMIO MC program (`tests/qemu/uart_mmio.mc`: a 16550 `Uart16550` and an
+      `export fn uart_putc` doing a `.release` `thr.write`) is lowered to C,
+      linked into a bare-metal riscv64 image (`tests/qemu/runtime.c` +
+      `virt.ld`), and run under `qemu-system-riscv64 -machine virt`; the harness
+      (`tools/qemu-mmio-test.sh`, `zig build qemu-test`, also in `m0`) asserts the
+      emulated UART at `0x1000_0000` actually received the bytes written through
+      the MMIO lowering. Self-skips when a riscv cross-toolchain or QEMU is
+      absent, so it never breaks toolchain-light environments.
 
 ## Known implementation issues / tech debt
 
 From an external static review; each verified against the code.
 
+- [x] **`break`/`continue` inside a `switch` inside a loop miscompiled** — a
+      serious one, found while building `std/fmt`: MC lowered switches to C
+      `switch`, so a `break` in a switch arm broke the *switch*, not the
+      enclosing loop — the loop never terminated and trapped on a later bounds
+      check (e.g. a digit-extraction `while … { switch … { … break; } }` looped
+      forever). Fixed: each loop tracks whether its body has an own
+      `break`/`continue` and emits labeled targets (`mc_break_N:`/`mc_continue_N:`),
+      and `break`/`continue` lower to `goto` to the innermost loop's label, so
+      they reach the loop through any intervening `switch`. Plain loops without
+      break/continue are unchanged. Regression: `std/fmt`'s `format_u32`
+      (exercised at runtime by `zig build std-test`).
+- [x] **Char literal in checked arithmetic mis-emitted** — found while building
+      `std/ascii`: a targetless `c - '0'` (e.g. inside a cast `(c - '0') as u32`
+      or a switch arm) bailed with `UnsupportedCEmission`, because the C backend's
+      operand-type recovery (`numericExprTypeForEmission` →
+      `exprIsNumericLiteral`) treated only int/float literals as sibling-adopting,
+      not char literals. Fixed: a char literal now adopts its sibling operand's
+      integer storage type, so the checked-subtraction helper is emitted with the
+      right width. Regression `tests/c_emit_char_arithmetic.mc`.
+- [x] **Bool `switch` on an expression mis-analyzed (subject not seen as bool)** —
+      found while building `std/core`: `switch a < b { true => …, false => … }`
+      (and `&&`/`||`/`!` subjects) tripped `E_RETURN_MISSING` in sema and
+      `-Wswitch-bool`/`-Wreturn-type` in the C backend, because both sides only
+      recognized a bool *variable*, not a bool-valued *expression*. Fixed:
+      `exprResultType` (sema) and `exprIsBoolForEmission` (lower_c) now classify
+      comparison/logical operators as `bool`, so such switches are exhaustive and
+      lower to an `(int)`-cast subject with a trap `default`. Bool switches were
+      previously sema-only fixtures (never C-emitted), so this path was untested;
+      regression fixture `tests/c_emit_bool_switch.mc` now clang-checks it.
 - [x] **`emit-c`/`lower-*`/`facts` wrote artifacts to stderr** — fixed: generated
       output now goes to stdout (`writeStdout` in `main.zig`); diagnostics/logs
       stay on stderr; `tools/check-generated-c.sh` updated to capture with `>`.
@@ -591,8 +759,12 @@ From an external static review; each verified against the code.
       removed the dead `+= -= *= /= %= &= |= ^= <<= >>=` production and token
       variants (not in the spec; no fixtures used them). `->`, `<=`, `>=`, `<<`,
       `>>`, `&&`, `||` are unaffected.
-- [ ] **`return` span covers only the `;`**, not `return`→`;`; affects
-      diagnostics/source maps. (Plausible; low impact.)
+- [x] **`return` span covers only the `;`** — fixed: the parser now captures the
+      `return` keyword token and joins it with the terminating `;`
+      (`joinSpan(start, end.span)`), matching `break`/`continue`/`assert`/
+      `assignment`. Diagnostics and source maps for `return` statements now span
+      the whole statement. Regression: `return statement span covers the whole
+      statement` in `parser.zig`.
 - [x] **AST `Module.deinit` is a shallow free** — clarified with a doc comment:
       it frees only the top-level `decls` slice because the AST is arena-backed;
       it is not a recursive destructor.
@@ -628,16 +800,19 @@ inaccurate — untyped globals are rejected in sema with `E_GLOBAL_REQUIRES_TYPE
    green under sweep + c-test.
 4. **Full comptime interpreter (§22)** — effort **L**, _in progress_. The scalar
    const-evaluator, `const fn` call evaluation, comptime `while`/`for`-loop
-   control flow (with fuel), comptime array values + indexing, comptime-trap
-   semantics, named `const` globals, and comptime↔type feedback for `const fn`-
-   and `const`-global-driven fixed-array lengths landed (`foldComptimeExpr`/
-   `foldComptimeCall`/`foldComptimeWhile`/`foldComptimeForLoop`/
-   `foldComptimeBlock`/`collectConstGlobals`, assert folding → `E_COMPTIME_TRAP`,
-   and shared array-length folding across sema/MIR/C-backend); remaining: struct
-   comptime values, comptime *parameters* (needs call-site monomorphization), and
-   reflection-as-comptime value (`sizeof(T)` — needs an MC-side ABI layout model
-   since the C backend delegates `sizeof`/`alignof` to clang). Largest *bounded*
-   language item.
+   control flow (with fuel), comptime aggregate values (arrays + structs) with
+   indexing/field access, comptime-trap semantics, named `const` globals, and
+   comptime↔type feedback for `const fn`- and `const`-global-driven fixed-array
+   lengths landed (`foldComptimeExpr`/`foldComptimeCall`/`foldComptimeWhile`/
+   `foldComptimeForLoop`/`foldComptimeBlock`/`collectConstGlobals`, assert folding
+   → `E_COMPTIME_TRAP`, and shared array-length folding across sema/MIR/C-backend);
+   comptime parameters in both forms also landed — value + call-site
+   comptime-assert (`E_COMPTIME_ARG_REQUIRED` + call-site assert re-checking) and
+   **type-driving via monomorphization** (`src/monomorphize.zig`: per-call
+   specialization of `[N]u8`-style type-generic functions, no-op for non-generic
+   modules), and **reflection** (`sizeof`/`alignof` fold via an MC-side ABI
+   layout model validated against clang by `reflect-test`). ✅ **The §22 comptime
+   interpreter is now complete.**
 5. **Production typed MIR/CFG + verifier** — ✅ **done** (core milestone,
    2026-06-06). Typed CFG + trap edges + D.1–D.6 verifier passes (81 MIR-native
    diagnostics, all usage checks migrated); unit suite + sweep + c-test green.
@@ -646,6 +821,7 @@ inaccurate — untyped globals are rejected in sema with `E_GLOBAL_REQUIRES_TYPE
    value-identity in MIR, and the architectural uniform-lowering-from-MIR goal) —
    open-ended/research tier, sequence it after the bounded language items above.
 6. **Engineering tracks in parallel as needed**: Standard library (scoping is the
-   hard part — design doc underspecifies it), package manager / toolchain, QEMU
-   MMIO hardware tests.
+   hard part — design doc underspecifies it), package manager / toolchain.
+   ✅ QEMU MMIO hardware tests — **done** (`zig build qemu-test`: typed MMIO runs
+   on an emulated 16550 UART under qemu-system-riscv64).
 7. Deferred by request: LLVM backend (Appendix M).

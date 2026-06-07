@@ -1,0 +1,5 @@
+# A dependency package, resolved by the demo package's [deps] section.
+name = mathlib
+version = 0.1.0
+entry = lib.mc
+output = mathlib.o

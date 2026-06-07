@@ -142,10 +142,11 @@ pub const Parser = struct {
         errdefer params.deinit(self.allocator);
         if (self.current.kind != .r_paren) {
             while (true) {
+                const is_comptime = self.match(.kw_comptime);
                 const param_name = try self.expectName("expected parameter name");
                 try self.expect(.colon, "expected ':' after parameter name");
                 const ty = try self.parseType();
-                try params.append(self.allocator, .{ .name = param_name, .ty = ty });
+                try params.append(self.allocator, .{ .name = param_name, .ty = ty, .is_comptime = is_comptime });
                 if (!self.match(.comma) or self.current.kind == .r_paren) break;
             }
         }
@@ -170,8 +171,25 @@ pub const Parser = struct {
 
     fn finishStructDecl(self: *Parser, abi: ?[]const u8) anyerror!ast.StructDecl {
         const name = try self.expectName("expected struct name");
+        const type_params = try self.parseTypeParamList();
         const fields = try self.finishFieldList("expected '{' after struct name", "expected '}' after struct fields");
-        return .{ .name = name, .abi = abi, .fields = fields };
+        return .{ .name = name, .abi = abi, .fields = fields, .type_params = type_params };
+    }
+
+    // Parse an optional `<T, U, …>` type-parameter list after a generic
+    // declaration name. Returns an empty slice when absent.
+    fn parseTypeParamList(self: *Parser) anyerror![]ast.Ident {
+        if (!self.match(.less)) return &.{};
+        var params: std.ArrayList(ast.Ident) = .empty;
+        errdefer params.deinit(self.allocator);
+        if (self.current.kind != .greater) {
+            while (true) {
+                try params.append(self.allocator, try self.expectName("expected type parameter name"));
+                if (!self.match(.comma)) break;
+            }
+        }
+        try self.expect(.greater, "expected '>' after type parameters");
+        return params.toOwnedSlice(self.allocator);
     }
 
     fn finishPackedBitsDecl(self: *Parser) anyerror!ast.PackedBitsDecl {
@@ -310,9 +328,10 @@ pub const Parser = struct {
             return .{ .span = block.span, .kind = .{ .block = block } };
         }
         if (self.match(.kw_return)) {
+            const start = self.lxTokenBeforeCurrent();
             const value = if (self.current.kind != .semicolon) try self.parseExpr(0) else null;
             const end = try self.expectTok(.semicolon, "expected ';' after return");
-            return .{ .span = end.span, .kind = .{ .@"return" = value } };
+            return .{ .span = joinSpan(start, end.span), .kind = .{ .@"return" = value } };
         }
         if (self.match(.kw_break)) {
             const start = self.lxTokenBeforeCurrent();
@@ -567,6 +586,13 @@ pub const Parser = struct {
             try self.expect(.r_bracket, "expected ']' after array length");
             const child = try ast.makePtr(self.allocator, try self.parseType());
             return .{ .span = joinSpan(start, child.span), .kind = .{ .array = .{ .len = len, .child = child } } };
+        }
+
+        // `type` is the meta-type of a `comptime T: type` type parameter
+        // (section 22 type parameters / user-defined generics).
+        if (self.match(.kw_type)) {
+            const tok = self.previous;
+            return .{ .span = tok.span, .kind = .{ .name = .{ .text = "type", .span = tok.span } } };
         }
 
         const base = try self.expectSymbol("expected type name");
@@ -1081,6 +1107,24 @@ test "parser distinguishes relational operators from generic calls" {
 
     const call = module.decls[4].kind.fn_decl.body.?.items[0].kind.expr.kind.call;
     try std.testing.expectEqual(@as(usize, 1), call.type_args.len);
+}
+
+test "return statement span covers the whole statement" {
+    const source = "fn f() -> u32 { return 1; }\n";
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "ret.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+
+    const ret = module.decls[0].kind.fn_decl.body.?.items[0];
+    try std.testing.expect(std.meta.activeTag(ret.kind) == .@"return");
+    // The span runs from the `return` keyword through the terminating `;`,
+    // not just the `;`.
+    try std.testing.expectEqualStrings("return", source[ret.span.offset .. ret.span.offset + 6]);
+    try std.testing.expectEqual(@as(u8, ';'), source[ret.span.offset + ret.span.len - 1]);
 }
 
 test "parser requires in after for binding" {

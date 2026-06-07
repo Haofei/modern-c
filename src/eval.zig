@@ -252,12 +252,19 @@ const Evaluator = struct {
 // error"). Anything outside the constant subset folds to `.unknown`, which sema
 // treats as "not provably wrong" — no diagnostic.
 
+pub const ComptimeStructField = struct {
+    name: []const u8,
+    value: ComptimeValue,
+};
+
 pub const ComptimeValue = union(enum) {
     int: i128,
     boolean: bool,
     // A fixed comptime array value (section 22). Element storage is owned by the
     // evaluation scope's allocator and lives for the duration of the fold.
     array: []const ComptimeValue,
+    // A comptime struct value: field name → value, scope-allocated like arrays.
+    @"struct": []const ComptimeStructField,
 };
 
 pub const ComptimeFold = union(enum) {
@@ -270,6 +277,10 @@ pub const ComptimeFold = union(enum) {
 // hang the compiler — it simply folds to `.unknown` past the limit.
 const comptime_call_fuel: u32 = 256;
 
+// Resolves a comptime reflection call (`sizeof`/`alignof`/…) to an integer, or
+// null if it is not a reflection call this resolver can fold.
+pub const ReflectFn = *const fn (ctx: ?*anyopaque, call: ast.Expr) ?i128;
+
 pub const ComptimeScope = struct {
     bindings: std.StringHashMap(ComptimeValue),
     // Registry of `const fn` declarations callable at comptime (section 22).
@@ -277,6 +288,11 @@ pub const ComptimeScope = struct {
     // Named compile-time constants (`const NAME: T = …` globals), resolved when
     // an identifier is not a local binding.
     globals: ?*const std.StringHashMap(ComptimeValue) = null,
+    // Optional reflection resolver (section 22): folds `sizeof(T)`/`alignof(T)`/
+    // `field_offset(T, .f)` calls to an integer using the front end's layout
+    // model. Returns null for non-reflection calls or types it cannot lay out.
+    reflect: ?ReflectFn = null,
+    reflect_ctx: ?*anyopaque = null,
     // Nested const-fn call depth, bounded by comptime_call_fuel.
     call_depth: u32 = 0,
 
@@ -321,9 +337,9 @@ pub fn collectConstGlobals(
         switch (foldComptimeExpr(&scope, init_expr)) {
             .value => |v| switch (v) {
                 .int, .boolean => try out.put(global.name.text, v),
-                // Array-valued const globals are not exposed as named scalar
+                // Aggregate const globals are not exposed as named scalar
                 // constants (they cannot drive array lengths or scalar asserts).
-                .array => {},
+                .array, .@"struct" => {},
             },
             else => {},
         }
@@ -344,11 +360,51 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
         .grouped => |inner| foldComptimeExpr(scope, inner.*),
         .unary => |node| foldComptimeUnary(scope, node.op, node.expr.*),
         .binary => |node| foldComptimeBinary(scope, node.op, node.left.*, node.right.*),
-        .call => |call| foldComptimeCall(scope, call),
+        .call => |call| switch (foldComptimeCall(scope, call)) {
+            .unknown => if (scope.reflect) |r|
+                (if (r(scope.reflect_ctx, expr)) |v| ComptimeFold{ .value = .{ .int = v } } else .unknown)
+            else
+                .unknown,
+            else => |f| f,
+        },
         .array_literal => |items| foldComptimeArrayLiteral(scope, items),
         .index => |node| foldComptimeIndex(scope, node.base.*, node.index.*),
+        .struct_literal => |fields| foldComptimeStructLiteral(scope, fields),
+        .member => |node| foldComptimeMember(scope, node.base.*, node.name.text),
         else => .unknown,
     };
+}
+
+// Fold a struct literal `.{ .field = value, … }` (section 22). Field storage is
+// allocated in the scope's allocator, which lives for the whole fold.
+fn foldComptimeStructLiteral(scope: *const ComptimeScope, fields: []const ast.StructLiteralField) ComptimeFold {
+    const out = scope.bindings.allocator.alloc(ComptimeStructField, fields.len) catch return .unknown;
+    for (fields, 0..) |field, i| {
+        const value = switch (foldComptimeExpr(scope, field.value)) {
+            .value => |v| v,
+            .trap => return .trap,
+            .unknown => return .unknown,
+        };
+        out[i] = .{ .name = field.name.text, .value = value };
+    }
+    return .{ .value = .{ .@"struct" = out } };
+}
+
+// Fold `base.field` over a comptime struct (section 22).
+fn foldComptimeMember(scope: *const ComptimeScope, base_expr: ast.Expr, field_name: []const u8) ComptimeFold {
+    const base = switch (foldComptimeExpr(scope, base_expr)) {
+        .value => |v| v,
+        .trap => return .trap,
+        .unknown => return .unknown,
+    };
+    const fields = switch (base) {
+        .@"struct" => |f| f,
+        else => return .unknown,
+    };
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name, field_name)) return .{ .value = field.value };
+    }
+    return .unknown;
 }
 
 // Fold an array literal `.{a, b, …}` (section 22). Element storage is allocated
@@ -410,6 +466,8 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
     defer callee_scope.deinit();
     callee_scope.funcs = scope.funcs;
     callee_scope.globals = scope.globals;
+    callee_scope.reflect = scope.reflect;
+    callee_scope.reflect_ctx = scope.reflect_ctx;
     callee_scope.call_depth = scope.call_depth + 1;
     for (fn_decl.params, call.args) |param, arg| {
         const value = switch (foldComptimeExpr(scope, arg)) {
@@ -459,13 +517,8 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                 }
             },
             .assignment => |node| {
-                // Only simple `name = expr` mutation of a comptime binding.
-                const name = switch (node.target.kind) {
-                    .ident => |ident| ident.text,
-                    else => return .unknown,
-                };
-                switch (foldComptimeExpr(scope, node.value)) {
-                    .value => |value| scope.bind(name, value) catch return .unknown,
+                switch (foldComptimeAssign(scope, node.target, node.value)) {
+                    .ok => {},
                     .trap => return .trap,
                     .unknown => return .unknown,
                 }
@@ -493,10 +546,149 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                     else => return flow,
                 }
             },
+            .@"switch" => |sw| {
+                const flow = foldComptimeSwitch(scope, sw);
+                switch (flow) {
+                    .fallthrough => {},
+                    else => return flow,
+                }
+            },
             else => return .unknown,
         }
     }
     return .fallthrough;
+}
+
+// Evaluate a comptime `switch` statement (section 22): fold the subject, take
+// the first arm whose literal/wildcard/binding pattern matches, and run that
+// arm's body. Tag/union patterns are not modeled at comptime → `.unknown`.
+fn foldComptimeSwitch(scope: *ComptimeScope, sw: ast.Switch) BodyFlow {
+    const subject = switch (foldComptimeExpr(scope, sw.subject)) {
+        .value => |v| v,
+        .trap => return .trap,
+        .unknown => return .unknown,
+    };
+    for (sw.arms) |arm| {
+        for (arm.patterns) |pat| {
+            const matched = switch (pat.kind) {
+                .wildcard => true,
+                .bind => |name| blk: {
+                    scope.bind(name.text, subject) catch return .unknown;
+                    break :blk true;
+                },
+                .literal => |lit| switch (foldComptimeExpr(scope, lit)) {
+                    .value => |lv| comptimeValueEql(lv, subject),
+                    .trap => return .trap,
+                    .unknown => return .unknown,
+                },
+                // Enum/union tag patterns are not comptime-modeled.
+                .tag, .tag_bind => return .unknown,
+            };
+            if (matched) {
+                return switch (arm.body) {
+                    .block => |b| foldComptimeStmtSeq(scope, b.items),
+                    // An expression arm as a statement: fold for trap detection,
+                    // then fall through.
+                    .expr => |e| switch (foldComptimeExpr(scope, e)) {
+                        .trap => .trap,
+                        else => .fallthrough,
+                    },
+                };
+            }
+        }
+    }
+    return .unknown; // no arm matched (or non-exhaustive at comptime)
+}
+
+fn comptimeValueEql(a: ComptimeValue, b: ComptimeValue) bool {
+    return switch (a) {
+        .int => |av| switch (b) {
+            .int => |bv| av == bv,
+            else => false,
+        },
+        .boolean => |av| switch (b) {
+            .boolean => |bv| av == bv,
+            else => false,
+        },
+        .array, .@"struct" => false,
+    };
+}
+
+const AssignResult = enum { ok, trap, unknown };
+
+// Comptime assignment (section 22): `name = v`, plus mutable-aggregate element
+// (`arr[i] = v`, out-of-bounds → trap) and field (`s.field = v`) stores, which
+// rebind the whole aggregate with an updated copy (copy-on-write). This is the
+// comptime "memory" model — values, no aliasing.
+fn foldComptimeAssign(scope: *ComptimeScope, target: ast.Expr, value_expr: ast.Expr) AssignResult {
+    switch (target.kind) {
+        .grouped => |inner| return foldComptimeAssign(scope, inner.*, value_expr),
+        .ident => |ident| {
+            const v = switch (foldComptimeExpr(scope, value_expr)) {
+                .value => |x| x,
+                .trap => return .trap,
+                .unknown => return .unknown,
+            };
+            scope.bind(ident.text, v) catch return .unknown;
+            return .ok;
+        },
+        .index => |node| {
+            const base_name = switch (node.base.*.kind) {
+                .ident => |i| i.text,
+                else => return .unknown,
+            };
+            const arr = switch (scope.bindings.get(base_name) orelse return .unknown) {
+                .array => |a| a,
+                else => return .unknown,
+            };
+            const idx = switch (foldComptimeExpr(scope, node.index.*)) {
+                .value => |x| switch (x) {
+                    .int => |n| n,
+                    else => return .unknown,
+                },
+                .trap => return .trap,
+                .unknown => return .unknown,
+            };
+            if (idx < 0 or idx >= arr.len) return .trap;
+            const v = switch (foldComptimeExpr(scope, value_expr)) {
+                .value => |x| x,
+                .trap => return .trap,
+                .unknown => return .unknown,
+            };
+            const copy = scope.bindings.allocator.dupe(ComptimeValue, arr) catch return .unknown;
+            copy[@intCast(idx)] = v;
+            scope.bind(base_name, .{ .array = copy }) catch return .unknown;
+            return .ok;
+        },
+        .member => |node| {
+            const base_name = switch (node.base.*.kind) {
+                .ident => |i| i.text,
+                else => return .unknown,
+            };
+            const fields = switch (scope.bindings.get(base_name) orelse return .unknown) {
+                .@"struct" => |f| f,
+                else => return .unknown,
+            };
+            const v = switch (foldComptimeExpr(scope, value_expr)) {
+                .value => |x| x,
+                .trap => return .trap,
+                .unknown => return .unknown,
+            };
+            const copy = scope.bindings.allocator.dupe(ComptimeStructField, fields) catch return .unknown;
+            var found = false;
+            for (copy) |*f| {
+                if (std.mem.eql(u8, f.name, node.name.text)) {
+                    f.value = v;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return .unknown;
+            scope.bind(base_name, .{ .@"struct" = copy }) catch return .unknown;
+            return .ok;
+        },
+        else => return .unknown,
+    }
 }
 
 fn foldComptimeWhile(scope: *ComptimeScope, loop: ast.Loop) BodyFlow {
@@ -506,7 +698,7 @@ fn foldComptimeWhile(scope: *ComptimeScope, loop: ast.Loop) BodyFlow {
         const keep_going = switch (foldComptimeExpr(scope, cond)) {
             .value => |v| switch (v) {
                 .boolean => |b| b,
-                .int, .array => return .unknown,
+                .int, .array, .@"struct" => return .unknown,
             },
             .trap => return .trap,
             .unknown => return .unknown,
@@ -558,15 +750,15 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
     return switch (op) {
         .neg => switch (operand) {
             .int => |v| .{ .value = .{ .int = std.math.negate(v) catch return .unknown } },
-            .boolean, .array => .unknown,
+            .boolean, .array, .@"struct" => .unknown,
         },
         .bit_not => switch (operand) {
             .int => |v| .{ .value = .{ .int = ~v } },
-            .boolean, .array => .unknown,
+            .boolean, .array, .@"struct" => .unknown,
         },
         .logical_not => switch (operand) {
             .boolean => |v| .{ .value = .{ .boolean = !v } },
-            .int, .array => .unknown,
+            .int, .array, .@"struct" => .unknown,
         },
     };
 }
@@ -583,14 +775,14 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
                     if (op == .logical_and and !b) return .{ .value = .{ .boolean = false } };
                     if (op == .logical_or and b) return .{ .value = .{ .boolean = true } };
                 },
-                .int, .array => return .unknown,
+                .int, .array, .@"struct" => return .unknown,
             },
             .unknown => return .unknown,
         }
         return switch (foldComptimeExpr(scope, right_expr)) {
             .value => |v| switch (v) {
                 .boolean => |b| .{ .value = .{ .boolean = b } },
-                .int, .array => .unknown,
+                .int, .array, .@"struct" => .unknown,
             },
             .trap => .trap,
             .unknown => .unknown,
@@ -614,24 +806,24 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         const equal = switch (left) {
             .int => |l| switch (right) {
                 .int => |r| l == r,
-                .boolean, .array => return .unknown,
+                .boolean, .array, .@"struct" => return .unknown,
             },
             .boolean => |l| switch (right) {
                 .boolean => |r| l == r,
-                .int, .array => return .unknown,
+                .int, .array, .@"struct" => return .unknown,
             },
-            .array => return .unknown,
+            .array, .@"struct" => return .unknown,
         };
         return .{ .value = .{ .boolean = if (op == .eq) equal else !equal } };
     }
 
     const l = switch (left) {
         .int => |v| v,
-        .boolean, .array => return .unknown,
+        .boolean, .array, .@"struct" => return .unknown,
     };
     const r = switch (right) {
         .int => |v| v,
-        .boolean, .array => return .unknown,
+        .boolean, .array, .@"struct" => return .unknown,
     };
 
     return switch (op) {
@@ -971,6 +1163,95 @@ test "foldComptimeExpr folds a const fn with a for loop over an array" {
         .args = try a.dupe(ast.Expr, &.{(try testArrayLit(a, &.{ 1, 2, 3, 4 })).*}),
     } } });
     try std.testing.expectEqual(@as(i128, 10), foldComptimeExpr(&scope, call.*).value.int);
+}
+
+test "foldComptimeExpr folds a const fn with a comptime switch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // const fn classify(x: u32) -> u32 {
+    //     switch x { 0 => { return 100; }, _ => { return 999; }, }
+    // }
+    const arm0_body = ast.Block{ .span = zero_span, .items = try a.dupe(ast.Stmt, &.{testStmt(.{ .@"return" = (try testInt(a, "100")).* })}) };
+    const armw_body = ast.Block{ .span = zero_span, .items = try a.dupe(ast.Stmt, &.{testStmt(.{ .@"return" = (try testInt(a, "999")).* })}) };
+    const arms = try a.dupe(ast.SwitchArm, &.{
+        .{ .patterns = try a.dupe(ast.Pattern, &.{.{ .span = zero_span, .kind = .{ .literal = (try testInt(a, "0")).* } }}), .body = .{ .block = arm0_body } },
+        .{ .patterns = try a.dupe(ast.Pattern, &.{.{ .span = zero_span, .kind = .wildcard }}), .body = .{ .block = armw_body } },
+    });
+    const sw = testStmt(.{ .@"switch" = .{ .subject = (try testIdent(a, "x")).*, .arms = arms } });
+    const fn_decl = ast.FnDecl{
+        .name = .{ .text = "classify", .span = zero_span },
+        .params = try a.dupe(ast.Param, &.{testU32("x")}),
+        .return_type = null,
+        .body = .{ .span = zero_span, .items = try a.dupe(ast.Stmt, &.{sw}) },
+        .is_const = true,
+        .abi = null,
+        .exported = false,
+    };
+
+    var funcs = std.StringHashMap(ast.FnDecl).init(std.testing.allocator);
+    defer funcs.deinit();
+    try funcs.put("classify", fn_decl);
+
+    var scope = ComptimeScope.init(a);
+    defer scope.deinit();
+    scope.funcs = &funcs;
+
+    const call0 = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .call = .{ .callee = try testIdent(a, "classify"), .type_args = &.{}, .args = try a.dupe(ast.Expr, &.{(try testInt(a, "0")).*}) } } });
+    const call7 = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .call = .{ .callee = try testIdent(a, "classify"), .type_args = &.{}, .args = try a.dupe(ast.Expr, &.{(try testInt(a, "7")).*}) } } });
+    try std.testing.expectEqual(@as(i128, 100), foldComptimeExpr(&scope, call0.*).value.int);
+    try std.testing.expectEqual(@as(i128, 999), foldComptimeExpr(&scope, call7.*).value.int);
+}
+
+test "foldComptimeExpr folds comptime aggregate element assignment" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var scope = ComptimeScope.init(a);
+    defer scope.deinit();
+    try scope.bind("xs", .{ .array = try a.dupe(ComptimeValue, &.{ .{ .int = 0 }, .{ .int = 0 }, .{ .int = 0 } }) });
+
+    // xs[1] = 42
+    const target = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .index = .{ .base = try testIdent(a, "xs"), .index = try testInt(a, "1") } } });
+    try std.testing.expect(foldComptimeAssign(&scope, target.*, (try testInt(a, "42")).*) == .ok);
+    try std.testing.expectEqual(@as(i128, 42), scope.bindings.get("xs").?.array[1].int);
+
+    // xs[5] = 1 -> out-of-bounds trap
+    const oob = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .index = .{ .base = try testIdent(a, "xs"), .index = try testInt(a, "5") } } });
+    try std.testing.expect(foldComptimeAssign(&scope, oob.*, (try testInt(a, "1")).*) == .trap);
+}
+
+test "foldComptimeExpr folds comptime struct literals and field access" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Arena-backed scope so folded struct temporaries are freed with the arena.
+    var scope = ComptimeScope.init(a);
+    defer scope.deinit();
+
+    // .{ .w = 3, .h = 4 }
+    const fields = try a.dupe(ast.StructLiteralField, &.{
+        .{ .name = .{ .text = "w", .span = zero_span }, .value = (try testInt(a, "3")).* },
+        .{ .name = .{ .text = "h", .span = zero_span }, .value = (try testInt(a, "4")).* },
+    });
+    const lit = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .struct_literal = fields } });
+
+    // r.w -> 3, r.h -> 4
+    const w = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .member = .{ .base = lit, .name = .{ .text = "w", .span = zero_span } } } });
+    const h = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .member = .{ .base = lit, .name = .{ .text = "h", .span = zero_span } } } });
+    try std.testing.expectEqual(@as(i128, 3), foldComptimeExpr(&scope, w.*).value.int);
+    try std.testing.expectEqual(@as(i128, 4), foldComptimeExpr(&scope, h.*).value.int);
+
+    // w * h -> 12
+    const product = try testBinary(a, .mul, w, h);
+    try std.testing.expectEqual(@as(i128, 12), foldComptimeExpr(&scope, product.*).value.int);
+
+    // unknown field -> unknown
+    const z = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .member = .{ .base = lit, .name = .{ .text = "z", .span = zero_span } } } });
+    try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, z.*)) == .unknown);
 }
 
 test "foldComptimeExpr resolves named const globals via scope.globals" {

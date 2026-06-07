@@ -38,6 +38,33 @@ const fn array_sum(xs: [4]u32) -> u32 {
     return total;
 }
 
+struct ComptimeRect {
+    w: u32,
+    h: u32,
+}
+
+const fn rect_area(r: ComptimeRect) -> u32 {
+    return r.w * r.h;
+}
+
+const fn classify(x: u32) -> u32 {
+    switch x {
+        0 => { return 100; },
+        1 => { return 200; },
+        _ => { return 999; },
+    }
+}
+
+const fn make_squares() -> [4]usize {
+    var a: [4]usize = .{0, 0, 0, 0};
+    var i: usize = 0;
+    while i < 4 {
+        a[i] = i * i;
+        i = i + 1;
+    }
+    return a;
+}
+
 fn accept_pure_comptime_block() -> u32 {
     comptime {
         let x: u32 = 1;
@@ -208,6 +235,51 @@ fn reject_comptime_array_fold() -> void {
     comptime {
         // EXPECT_ERROR: E_COMPTIME_TRAP
         assert(array_sum(.{1, 2, 3, 4}) == 11);
+    }
+}
+
+// Comptime struct values: a const fn folds over a struct argument's fields.
+fn accept_comptime_struct_fold() -> void {
+    comptime {
+        assert(rect_area(.{ .w = 3, .h = 4 }) == 12);
+    }
+}
+
+fn reject_comptime_struct_fold() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(rect_area(.{ .w = 3, .h = 4 }) == 13);
+    }
+}
+
+// Comptime switch: a const fn dispatches on a constant subject.
+fn accept_comptime_switch_fold() -> void {
+    comptime {
+        assert(classify(0) == 100);
+        assert(classify(1) == 200);
+        assert(classify(7) == 999);
+    }
+}
+
+fn reject_comptime_switch_fold() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(classify(1) == 100);
+    }
+}
+
+// Comptime mutable aggregates: a const fn builds an array via element stores.
+fn accept_comptime_array_build() -> void {
+    comptime {
+        assert(make_squares()[2] == 4);
+        assert(make_squares()[3] == 9);
+    }
+}
+
+fn reject_comptime_array_build() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(make_squares()[3] == 8);
     }
 }
 

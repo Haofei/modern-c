@@ -1,0 +1,13 @@
+# MC package manifest (mcpkg). A minimal, declarative project description that
+# mcc-pkg builds via the module system + mcc-cc toolchain driver.
+name = demo
+version = 0.1.0
+# Entry module; its `import`s pull in the rest of the package and its deps.
+entry = src/app.mc
+# Output object name (relative to the manifest directory).
+output = demo.o
+
+# Dependencies: each is `name = path@required-version`. mcc-pkg resolves them
+# transitively and verifies each dependency package's manifest version matches.
+[deps]
+mathlib = deps/mathlib@0.1.0

@@ -51,8 +51,88 @@ pub fn build(b: *std.Build) void {
     const sweep_step = b.step("sweep", "Emit C for every valid spec-corpus function and compile-check it with clang");
     sweep_step.dependOn(&sweep_cmd.step);
 
+    const qemu_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/qemu-mmio-test.sh",
+        "zig-out/bin/mcc",
+    });
+    qemu_test_cmd.step.dependOn(b.getInstallStep());
+    const qemu_test_step = b.step("qemu-test", "Run the typed-MMIO program on emulated hardware under QEMU");
+    qemu_test_step.dependOn(&qemu_test_cmd.step);
+
+    const cc_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/mcc-cc-test.sh",
+        "zig-out/bin/mcc",
+    });
+    cc_test_cmd.step.dependOn(b.getInstallStep());
+    const cc_test_step = b.step("cc-test", "Compile an MC module to an object with mcc-cc, link, and run it");
+    cc_test_step.dependOn(&cc_test_cmd.step);
+
+    const std_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/std-test.sh",
+        "zig-out/bin/mcc",
+    });
+    std_test_cmd.step.dependOn(b.getInstallStep());
+    const std_test_step = b.step("std-test", "Compile std/core, link it against a C driver, and run the checks");
+    std_test_step.dependOn(&std_test_cmd.step);
+
+    const import_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/import-test.sh",
+        "zig-out/bin/mcc",
+    });
+    import_test_cmd.step.dependOn(b.getInstallStep());
+    const import_test_step = b.step("import-test", "Compile an import-merged module (sibling + std), link, and run it");
+    import_test_step.dependOn(&import_test_cmd.step);
+
+    const mono_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/mono-test.sh",
+        "zig-out/bin/mcc",
+    });
+    mono_test_cmd.step.dependOn(b.getInstallStep());
+    const mono_test_step = b.step("mono-test", "Compile a comptime-param type-generic module, link, and run the specialization");
+    mono_test_step.dependOn(&mono_test_cmd.step);
+
+    const reflect_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/reflect-test.sh",
+        "zig-out/bin/mcc",
+    });
+    reflect_test_cmd.step.dependOn(b.getInstallStep());
+    const reflect_test_step = b.step("reflect-test", "Validate comptime sizeof/alignof folding against clang's C ABI");
+    reflect_test_step.dependOn(&reflect_test_cmd.step);
+
+    const pkg_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/pkg-test.sh",
+        "zig-out/bin/mcc",
+    });
+    pkg_test_cmd.step.dependOn(b.getInstallStep());
+    const pkg_test_step = b.step("pkg-test", "Build a package from its manifest with mcc-pkg, link, and run it");
+    pkg_test_step.dependOn(&pkg_test_cmd.step);
+
     const m0_step = b.step("m0", "Run M0 conformance gates");
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);
     m0_step.dependOn(&sweep_cmd.step);
+
+    // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
+    // self-skips when those are absent, so it is safe to include in m0 too.
+    m0_step.dependOn(&qemu_test_cmd.step);
+    // cc-test exercises the mcc-cc toolchain driver (needs clang); self-skips
+    // when clang is absent.
+    m0_step.dependOn(&cc_test_cmd.step);
+    // std-test compiles and runs std/core through the toolchain (needs clang).
+    m0_step.dependOn(&std_test_cmd.step);
+    // import-test exercises the module system end-to-end (needs clang).
+    m0_step.dependOn(&import_test_cmd.step);
+    // mono-test exercises comptime-parameter monomorphization (needs clang).
+    m0_step.dependOn(&mono_test_cmd.step);
+    // reflect-test validates the comptime layout model against the C ABI.
+    m0_step.dependOn(&reflect_test_cmd.step);
+    // pkg-test exercises the mcc-pkg manifest build (needs clang).
+    m0_step.dependOn(&pkg_test_cmd.step);
 }

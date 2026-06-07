@@ -16,6 +16,13 @@ pub const Checker = struct {
     // Folded values of `const NAME: T = …` globals (section 22), so comptime
     // folding can resolve named compile-time constants.
     const_globals: ?*const std.StringHashMap(eval.ComptimeValue) = null,
+    // Functions that declare at least one `comptime` parameter (section 22),
+    // keyed by name, so call sites can re-check their comptime assertions with
+    // the parameters bound to the call's constant arguments.
+    comptime_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
+    // Type registries for comptime reflection (`sizeof`/`alignof`), set for the
+    // duration of checkModule.
+    reflect_env: ?*const ReflectEnv = null,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -75,6 +82,30 @@ pub const Checker = struct {
         };
         self.const_globals = &const_globals;
         defer self.const_globals = null;
+
+        var comptime_fns = std.StringHashMap(ast.FnDecl).init(self.reporter.allocator);
+        defer comptime_fns.deinit();
+        for (module.decls) |decl| {
+            const fn_decl = switch (decl.kind) {
+                .fn_decl => |node| node,
+                else => continue,
+            };
+            if (fn_decl.body == null or comptime_fns.contains(fn_decl.name.text)) continue;
+            for (fn_decl.params) |param| {
+                if (param.is_comptime) {
+                    comptime_fns.put(fn_decl.name.text, fn_decl) catch {
+                        self.oom = true;
+                    };
+                    break;
+                }
+            }
+        }
+        self.comptime_fns = &comptime_fns;
+        defer self.comptime_fns = null;
+
+        var reflect_env = ReflectEnv{ .structs = &structs, .enums = &enums, .aliases = &type_aliases };
+        self.reflect_env = &reflect_env;
+        defer self.reflect_env = null;
 
         for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
 
@@ -390,9 +421,18 @@ pub const Checker = struct {
         }
     }
 
-    fn checkStruct(self: *Checker, struct_decl: ast.StructDecl, ctx: Context) void {
+    fn checkStruct(self: *Checker, struct_decl: ast.StructDecl, ctx_in: Context) void {
         var fields = std.StringHashMap(void).init(self.reporter.allocator);
         defer fields.deinit();
+
+        // A generic struct's type parameters are valid type names in its fields.
+        var type_params = std.StringHashMap(void).init(self.reporter.allocator);
+        defer type_params.deinit();
+        for (struct_decl.type_params) |tp| type_params.put(tp.text, {}) catch {
+            self.oom = true;
+        };
+        var ctx = ctx_in;
+        if (struct_decl.type_params.len > 0) ctx.type_params = &type_params;
 
         for (struct_decl.fields) |field| {
             self.checkType(field.ty, .storage, ctx);
@@ -518,12 +558,25 @@ pub const Checker = struct {
         var mmio_params = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer mmio_params.deinit();
 
+        // Collect `comptime T: type` type parameters first, so the rest of the
+        // signature and body may use them as type names (user-defined generics).
+        var type_params = std.StringHashMap(void).init(self.reporter.allocator);
+        defer type_params.deinit();
         for (fn_decl.params) |param| {
-            self.checkType(param.ty, .storage, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases });
+            if (param.is_comptime and isTypeName(param.ty, "type")) {
+                type_params.put(param.name.text, {}) catch {
+                    self.oom = true;
+                };
+            }
+        }
+        const sig_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases, .type_params = &type_params };
+
+        for (fn_decl.params) |param| {
+            self.checkType(param.ty, .storage, sig_ctx);
             if (scope.contains(param.name.text)) {
                 self.errorCode(param.name.span, "E_DUPLICATE_PARAMETER", "function parameter names must be unique");
             } else {
-                scope.put(param.name.text, .{ .class = classifyTypeCtx(param.ty, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases }), .mutable = false, .ty = param.ty, .origin = .param }) catch {
+                scope.put(param.name.text, .{ .class = classifyTypeCtx(param.ty, sig_ctx), .mutable = false, .ty = param.ty, .origin = .param }) catch {
                     self.oom = true;
                 };
                 if (mmioPointee(param.ty)) |struct_name| mmio_params.put(param.name.text, struct_name) catch {
@@ -531,9 +584,9 @@ pub const Checker = struct {
                 };
             }
         }
-        const return_kind = if (fn_decl.return_type) |ty| classifyTypeCtx(ty, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases }) else TypeClass.void;
+        const return_kind = if (fn_decl.return_type) |ty| classifyTypeCtx(ty, sig_ctx) else TypeClass.void;
         const returns_never = if (fn_decl.return_type) |ty| blk: {
-            self.checkType(ty, .return_type, .{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases });
+            self.checkType(ty, .return_type, sig_ctx);
             break :blk isTypeName(ty, "never");
         } else false;
         const returns_void = if (fn_decl.return_type) |ty| isTypeName(ty, "void") else false;
@@ -558,6 +611,7 @@ pub const Checker = struct {
                 .globals = globals,
                 .const_fns = self.const_fns,
                 .const_globals = self.const_globals,
+                .type_params = &type_params,
             };
             self.checkBlock(body, fn_ctx);
             if (fallthroughSpan(body, fn_ctx)) |span| {
@@ -582,14 +636,22 @@ pub const Checker = struct {
     // outside the constant subset are skipped — they are not provably wrong, so
     // they produce no diagnostic here (effect rules are enforced by checkBlock).
     fn foldComptimeBlock(self: *Checker, block: ast.Block, scope: *eval.ComptimeScope) void {
+        self.foldComptimeBlockAt(block, scope, null);
+    }
+
+    // `report_span`, when set, redirects E_COMPTIME_TRAP to that span — used when
+    // re-checking a callee's comptime assertions at a call site (section 22
+    // comptime parameters), so the failure points at the call, not the callee.
+    fn foldComptimeBlockAt(self: *Checker, block: ast.Block, scope: *eval.ComptimeScope, report_span: ?diagnostics.Span) void {
         for (block.items) |stmt| {
+            const span = report_span orelse stmt.span;
             switch (stmt.kind) {
                 .let_decl, .var_decl => |local| {
                     if (local.names.len != 1) continue;
                     const init_expr = local.init orelse continue;
                     switch (eval.foldComptimeExpr(scope, init_expr)) {
                         .value => |value| scope.bind(local.names[0].text, value) catch {},
-                        .trap => self.errorCode(stmt.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error"),
+                        .trap => self.errorCode(span, "E_COMPTIME_TRAP", "trap during const eval is a compile error"),
                         .unknown => {},
                     }
                 },
@@ -597,16 +659,170 @@ pub const Checker = struct {
                     switch (eval.foldComptimeExpr(scope, expr)) {
                         .value => |value| {
                             if (value == .boolean and !value.boolean) {
-                                self.errorCode(stmt.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error");
+                                self.errorCode(span, "E_COMPTIME_TRAP", "trap during const eval is a compile error");
                             }
                         },
-                        .trap => self.errorCode(stmt.span, "E_COMPTIME_TRAP", "trap during const eval is a compile error"),
+                        .trap => self.errorCode(span, "E_COMPTIME_TRAP", "trap during const eval is a compile error"),
                         .unknown => {},
                     }
                 },
                 // A comptime block may nest plain/unsafe blocks; recurse so their
                 // constants and assertions fold in the same scope.
-                .block, .unsafe_block, .comptime_block => |inner| self.foldComptimeBlock(inner, scope),
+                .block, .unsafe_block, .comptime_block => |inner| self.foldComptimeBlockAt(inner, scope, report_span),
+                else => {},
+            }
+        }
+    }
+
+    // --- Comptime reflection layout model (section 22) ----------------------
+    //
+    // Folds `sizeof(T)` / `alignof(T)` to a constant ONLY where the result is
+    // provably the same as the C-ABI value clang computes for the lowered type:
+    // scalars, pointers, fixed arrays, closed enums (by repr), and plain structs
+    // whose fields all share one alignment (so there is no order-dependent
+    // padding — the field HashMap has no order). Anything else returns null, so
+    // the assertion simply does not fold (no false positive/negative).
+
+    // eval.ReflectFn thunk: `self` is passed as the opaque context.
+    fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
+        const self: *Checker = @ptrCast(@alignCast(ctx orelse return null));
+        return self.comptimeReflect(call);
+    }
+
+    fn comptimeReflect(self: *Checker, call: ast.Expr) ?i128 {
+        const node = switch (call.kind) {
+            .call => |n| n,
+            else => return null,
+        };
+        const kind = reflectionKind(node.callee.*) orelse return null;
+        const ty = reflectionTypeFromCall(node) orelse return null;
+        return switch (kind) {
+            .size => self.comptimeSizeOf(ty, 0),
+            .alignment => self.comptimeAlignOf(ty, 0),
+            else => null, // field/bit offsets need field order; not modeled
+        };
+    }
+
+    fn comptimeSizeOf(self: *Checker, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        switch (ty.kind) {
+            .name => |name| {
+                if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
+                if (self.reflect_env) |env| {
+                    if (env.aliases.get(name.text)) |aliased| return self.comptimeSizeOf(aliased, depth + 1);
+                    if (env.structs.get(name.text)) |info| return self.comptimeStructSize(info, depth);
+                    if (env.enums.get(name.text)) |info| return if (info.repr) |repr| self.comptimeSizeOf(repr, depth + 1) else null;
+                }
+                return null;
+            },
+            .pointer, .raw_many_pointer, .slice => return 8,
+            .generic => |g| {
+                if (isPointerLikeGeneric(g.base.text)) return 8;
+                return null;
+            },
+            .array => |node| {
+                const len = parseArrayLen(node.len, self.const_fns, self.const_globals) orelse return null;
+                const elem = self.comptimeSizeOf(node.child.*, depth + 1) orelse return null;
+                return @as(i128, @intCast(len)) * elem;
+            },
+            .qualified => |node| return self.comptimeSizeOf(node.child.*, depth + 1),
+            else => return null,
+        }
+    }
+
+    fn comptimeAlignOf(self: *Checker, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        switch (ty.kind) {
+            .name => |name| {
+                if (scalarLayout(name.text)) |layout| return @intCast(layout.alignment);
+                if (self.reflect_env) |env| {
+                    if (env.aliases.get(name.text)) |aliased| return self.comptimeAlignOf(aliased, depth + 1);
+                    if (env.structs.get(name.text)) |info| return self.comptimeStructAlign(info, depth);
+                    if (env.enums.get(name.text)) |info| return if (info.repr) |repr| self.comptimeAlignOf(repr, depth + 1) else null;
+                }
+                return null;
+            },
+            .pointer, .raw_many_pointer, .slice => return 8,
+            .generic => |g| {
+                if (isPointerLikeGeneric(g.base.text)) return 8;
+                return null;
+            },
+            .array => |node| return self.comptimeAlignOf(node.child.*, depth + 1),
+            .qualified => |node| return self.comptimeAlignOf(node.child.*, depth + 1),
+            else => return null,
+        }
+    }
+
+    // Size of a plain struct, but only when all fields share one alignment (so
+    // there is no order-dependent padding) — otherwise null. Tail padding is a
+    // no-op in that case (every field size is a multiple of the common align).
+    fn comptimeStructSize(self: *Checker, info: StructInfo, depth: usize) ?i128 {
+        var total: i128 = 0;
+        var common_align: ?i128 = null;
+        var it = info.fields.valueIterator();
+        while (it.next()) |field_ty| {
+            const size = self.comptimeSizeOf(field_ty.*, depth + 1) orelse return null;
+            const alignment = self.comptimeAlignOf(field_ty.*, depth + 1) orelse return null;
+            if (common_align) |a| {
+                if (a != alignment) return null; // mixed alignment: order matters
+            } else common_align = alignment;
+            if (alignment == 0 or @rem(size, alignment) != 0) return null;
+            total += size;
+        }
+        return total;
+    }
+
+    fn comptimeStructAlign(self: *Checker, info: StructInfo, depth: usize) ?i128 {
+        var max_align: i128 = 1;
+        var it = info.fields.valueIterator();
+        while (it.next()) |field_ty| {
+            const alignment = self.comptimeAlignOf(field_ty.*, depth + 1) orelse return null;
+            if (alignment > max_align) max_align = alignment;
+        }
+        return max_align;
+    }
+
+    // Returns the folded comptime value of `expr`, or null if it is not a
+    // compile-time constant (section 22).
+    fn comptimeFoldValue(self: *Checker, expr: ast.Expr) ?eval.ComptimeValue {
+        var buf: [64 * 1024]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        var scope = eval.ComptimeScope.init(fba.allocator());
+        scope.funcs = self.const_fns;
+        scope.globals = self.const_globals;
+        return switch (eval.foldComptimeExpr(&scope, expr)) {
+            .value => |v| v,
+            else => null,
+        };
+    }
+
+    // Re-check a called function's comptime assertions with its `comptime`
+    // parameters bound to the call's constant arguments (section 22). Failures
+    // are reported at the call site.
+    fn checkComptimeCallAsserts(self: *Checker, fn_decl: ast.FnDecl, args: []const ast.Expr, call_span: diagnostics.Span) void {
+        const body = fn_decl.body orelse return;
+        if (args.len != fn_decl.params.len) return;
+        var arena = std.heap.ArenaAllocator.init(self.reporter.allocator);
+        defer arena.deinit();
+        var scope = eval.ComptimeScope.init(arena.allocator());
+        scope.funcs = self.const_fns;
+        scope.globals = self.const_globals;
+        for (fn_decl.params, args) |param, arg| {
+            if (!param.is_comptime) continue;
+            const value = self.comptimeFoldValue(arg) orelse return; // non-const arg already diagnosed
+            scope.bind(param.name.text, value) catch return;
+        }
+        self.foldComptimeCallBody(body, &scope, call_span);
+    }
+
+    // Walk a callee body for `comptime { … }` blocks and fold their assertions
+    // with `scope` (which carries the bound comptime parameters), reporting at
+    // the call site.
+    fn foldComptimeCallBody(self: *Checker, block: ast.Block, scope: *eval.ComptimeScope, call_span: diagnostics.Span) void {
+        for (block.items) |stmt| {
+            switch (stmt.kind) {
+                .comptime_block => |inner| self.foldComptimeBlockAt(inner, scope, call_span),
+                .block, .unsafe_block => |inner| self.foldComptimeCallBody(inner, scope, call_span),
                 else => {},
             }
         }
@@ -717,6 +933,8 @@ pub const Checker = struct {
                 var scope = eval.ComptimeScope.init(arena.allocator());
                 scope.funcs = self.const_fns;
                 scope.globals = self.const_globals;
+                scope.reflect = comptimeReflectThunk;
+                scope.reflect_ctx = self;
                 self.foldComptimeBlock(block, &scope);
             },
             .block => |block| self.checkBlock(block, ctx),
@@ -1173,9 +1391,39 @@ pub const Checker = struct {
                     }
                     if (node.args.len != function.params.len) {
                         self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match function declaration");
+                    } else {
+                        // section 22: a `comptime` value parameter's argument must
+                        // be a compile-time constant; a `comptime T: type`
+                        // parameter's argument must name a type (user generics).
+                        for (function.params, node.args) |param, arg| {
+                            if (!param.is_comptime) continue;
+                            if (isTypeName(param.ty, "type")) {
+                                if (typeArgName(arg)) |tn| {
+                                    if (!isKnownTypeName(tn, ctx)) self.errorCode(arg.span, "E_TYPE_ARG_REQUIRED", "type parameter requires a known type argument");
+                                } else {
+                                    self.errorCode(arg.span, "E_TYPE_ARG_REQUIRED", "type parameter requires a type argument");
+                                }
+                            } else if (!self.comptimeConstantFolds(arg)) {
+                                self.errorCode(arg.span, "E_COMPTIME_ARG_REQUIRED", "comptime parameter requires a compile-time constant argument");
+                            }
+                        }
+                        // Re-check the callee's comptime assertions with its
+                        // comptime parameters bound to these constant arguments.
+                        if (directCallName(node.callee.*)) |callee_name| {
+                            if (self.comptime_fns) |registry| {
+                                if (registry.get(callee_name)) |callee| {
+                                    self.checkComptimeCallAsserts(callee, node.args, expr.span);
+                                }
+                            }
+                        }
                     }
                 }
                 for (node.args, 0..) |arg, index| {
+                    // A `comptime T: type` argument is a type, not a value — do
+                    // not type-check it as an expression.
+                    if (direct_function) |function| {
+                        if (index < function.params.len and function.params[index].is_comptime and isTypeName(function.params[index].ty, "type")) continue;
+                    }
                     const source = self.checkExpr(arg, ctx);
                     if (direct_function) |function| {
                         if (index < function.params.len) self.checkCallArgument(function.params[index].ty, arg, source, ctx);
@@ -2830,6 +3078,9 @@ const Context = struct {
     // Folded `const NAME: T = …` global values, for resolving named compile-time
     // constants in comptime contexts and array lengths.
     const_globals: ?*const std.StringHashMap(eval.ComptimeValue) = null,
+    // Names of the current function's `comptime T: type` type parameters
+    // (user-defined generics, section 22); valid as type names in its body.
+    type_params: ?*const std.StringHashMap(void) = null,
 };
 
 const MmioStruct = struct {
@@ -3770,7 +4021,7 @@ fn comptimeUsizeValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDec
     return switch (eval.foldComptimeExpr(&scope, expr)) {
         .value => |v| switch (v) {
             .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
-            .boolean, .array => null,
+            .boolean, .array, .@"struct" => null,
         },
         else => null,
     };
@@ -4264,8 +4515,19 @@ fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .index => |node| indexResultType(node, ctx),
         .member => |node| memberResultFieldType(node, ctx),
         .grouped => |inner| exprResultType(inner.*, ctx),
+        // Comparison and logical operators yield `bool`; surfacing that lets a
+        // `switch a < b { true => …, false => … }` count as exhaustive.
+        .binary => |node| if (isComparisonBinary(node.op) or isLogicalBinary(node.op))
+            boolTypeExpr(expr.span)
+        else
+            exprStorageType(expr, ctx),
+        .unary => |node| if (node.op == .logical_not) boolTypeExpr(expr.span) else exprStorageType(expr, ctx),
         else => exprStorageType(expr, ctx),
     };
+}
+
+fn boolTypeExpr(span: diagnostics.Span) ast.TypeExpr {
+    return .{ .span = span, .kind = .{ .name = .{ .text = "bool", .span = span } } };
 }
 
 fn constGetMember(callee: ast.Expr) ?struct { base: *ast.Expr, name: ast.Ident } {
@@ -4410,6 +4672,23 @@ fn directCallFunction(callee: ast.Expr, ctx: Context) ?FunctionInfo {
     };
     const functions = ctx.functions orelse return null;
     return functions.get(ident.text);
+}
+
+// The type name of a type-parameter argument (a bare type-name ident).
+fn typeArgName(arg: ast.Expr) ?[]const u8 {
+    return switch (arg.kind) {
+        .ident => |id| id.text,
+        .grouped => |inner| typeArgName(inner.*),
+        else => null,
+    };
+}
+
+fn directCallName(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| directCallName(inner.*),
+        else => null,
+    };
 }
 
 fn updateAssignmentAddressOrigin(target: ast.Expr, value: ast.Expr, ctx: Context) void {
@@ -4915,6 +5194,44 @@ fn reflectionTypeExprFromArg(expr: ast.Expr) ?ast.TypeExpr {
     };
 }
 
+// Type registries used by the comptime reflection layout model.
+const ReflectEnv = struct {
+    structs: *const std.StringHashMap(StructInfo),
+    enums: *const std.StringHashMap(EnumInfo),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+};
+
+const ScalarLayout = struct { size: u32, alignment: u32 };
+
+// Sizes/alignments that are identical across the supported LP64 C ABIs, so a
+// comptime fold agrees with clang's runtime `sizeof`/`alignof`.
+fn scalarLayout(name: []const u8) ?ScalarLayout {
+    const table = [_]struct { n: []const u8, s: u32 }{
+        .{ .n = "u8", .s = 1 },   .{ .n = "i8", .s = 1 },   .{ .n = "bool", .s = 1 },
+        .{ .n = "u16", .s = 2 },  .{ .n = "i16", .s = 2 },
+        .{ .n = "u32", .s = 4 },  .{ .n = "i32", .s = 4 },  .{ .n = "f32", .s = 4 },
+        .{ .n = "u64", .s = 8 },  .{ .n = "i64", .s = 8 },  .{ .n = "f64", .s = 8 },
+        .{ .n = "usize", .s = 8 }, .{ .n = "isize", .s = 8 },
+        // Opaque address classes lower to pointer-width integers.
+        .{ .n = "PAddr", .s = 8 }, .{ .n = "VAddr", .s = 8 }, .{ .n = "DmaAddr", .s = 8 },
+    };
+    for (table) |e| {
+        if (std.mem.eql(u8, name, e.n)) return .{ .size = e.s, .alignment = e.s };
+    }
+    return null;
+}
+
+fn isPointerLikeGeneric(name: []const u8) bool {
+    return std.mem.eql(u8, name, "MmioPtr") or std.mem.eql(u8, name, "UserPtr");
+}
+
+// Extract the reflected type from a reflection call's `type_args` or first arg.
+fn reflectionTypeFromCall(node: anytype) ?ast.TypeExpr {
+    if (node.type_args.len == 1) return node.type_args[0];
+    if (node.args.len >= 1) return reflectionTypeExprFromArg(node.args[0]);
+    return null;
+}
+
 fn reflectionRequiresField(kind: ReflectionKind) bool {
     return switch (kind) {
         .field_offset, .field_type, .bit_offset => true,
@@ -4955,6 +5272,16 @@ fn isKnownTypeName(name: []const u8, ctx: Context) bool {
     if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return true;
     if (std.mem.eql(u8, name, "ConversionError")) return true;
     if (std.mem.eql(u8, name, "Overflow")) return true;
+    // `type` is the meta-type of a `comptime T: type` parameter; `T` and friends
+    // are valid type names inside the generic function (section 22).
+    if (std.mem.eql(u8, name, "type")) return true;
+    if (ctx.type_params) |tps| {
+        if (tps.contains(name)) return true;
+    }
+    // IrqOff (§19.1): a capability type witnessing that interrupts are disabled.
+    // A function requiring a disabled-interrupt critical section takes a
+    // `cs: IrqOff` parameter, so the operation cannot be written without one.
+    if (std.mem.eql(u8, name, "IrqOff")) return true;
     if (std.mem.eql(u8, name, "c_void")) return true;
     if (knownStructName(name, ctx)) return true;
     if (knownPackedBitsName(name, ctx)) return true;

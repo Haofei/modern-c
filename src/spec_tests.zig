@@ -776,6 +776,7 @@ fn isLowerCCheck(check: []const u8) bool {
         "atomics-lowering",
         "dma-cache-core",
         "dma-ordering-composition",
+        "irq-off-capability",
         "opaque-asm-lowering",
         "bitcast-lowering",
     };
@@ -1410,6 +1411,11 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
             "lower dma_descriptor fn=program_noncoherent_dma register=DmaEngine.desc_addr object=buf value=dma_addr ordering=release handoff=true composes_with=section17_mmio participants=ordinary,atomic,dma_descriptor,mmio",
             // clean-for-device may not move after the .release descriptor write.
             "lower mmio_sequence fn=program_noncoherent_dma edge=cache_clean_before_release before=cache.clean barrier=DmaEngine.desc_addr.write ordering=release prevents_reorder=true",
+        });
+    }
+    if (std.mem.eql(u8, check, "irq-off-capability")) {
+        return containsAll(output, &.{
+            "lower irq_off fn=read_device param=cs capability=interrupts_disabled c_type=uint8_t witness=true",
         });
     }
     if (std.mem.eql(u8, check, "opaque-asm-lowering")) {

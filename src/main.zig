@@ -6,8 +6,10 @@ const eval = @import("eval.zig");
 const hir = @import("hir.zig");
 const ir = @import("ir.zig");
 const lexer = @import("lexer.zig");
+const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
 const mir = @import("mir.zig");
+const monomorphize = @import("monomorphize.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 const spec_tests = @import("spec_tests.zig");
@@ -48,7 +50,13 @@ pub fn main(init: std.process.Init) !void {
     const path = args.next() orelse return failUsage();
     if (args.next() != null) return failUsage();
 
-    const source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
+    const root_source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
+    defer allocator.free(root_source);
+
+    // Resolve `import "path";` declarations by textual inclusion (section 22 /
+    // module system). With no imports this is the original source plus a
+    // trailing newline, so single-file behavior is unchanged.
+    const source = try loader.loadCombinedSource(allocator, init.io, path, root_source);
     defer allocator.free(source);
 
     if (std.mem.eql(u8, command, "lex")) {
@@ -373,7 +381,14 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
 
 fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {
     var p = parser.Parser.init(source, diag);
-    return p.parseModule(allocator) catch |err| {
+    const module = p.parseModule(allocator) catch |err| {
+        diag.render();
+        return err;
+    };
+    // Specialize comptime-parameter type-generic functions (section 22). This is
+    // a no-op for modules without any such function, so non-generic code is
+    // passed through untouched.
+    return monomorphize.transform(allocator, module) catch |err| {
         diag.render();
         return err;
     };
@@ -386,8 +401,10 @@ test {
     _ = hir;
     _ = ir;
     _ = lexer;
+    _ = loader;
     _ = lower_c;
     _ = mir;
+    _ = monomorphize;
     _ = parser;
     _ = sema;
     _ = spec_tests;

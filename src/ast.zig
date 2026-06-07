@@ -68,6 +68,10 @@ pub const FnDecl = struct {
 pub const Param = struct {
     name: Ident,
     ty: TypeExpr,
+    // A `comptime NAME: T` parameter (section 22): its argument must be a
+    // compile-time constant, evaluated when the call's comptime asserts are
+    // checked.
+    is_comptime: bool = false,
 };
 
 pub const TypeAlias = struct {
@@ -79,6 +83,9 @@ pub const StructDecl = struct {
     name: Ident,
     abi: ?[]const u8,
     fields: []Field,
+    // Type parameters for a generic struct `struct Name<T, …>` (section 22);
+    // empty for an ordinary struct.
+    type_params: []Ident = &.{},
 };
 
 pub const PackedBitsDecl = struct {
