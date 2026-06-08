@@ -189,6 +189,13 @@ pub const TypeExpr = struct {
             params: []TypeExpr,
             ret: *TypeExpr,
         },
+        // A closure type: `closure(P0, P1) -> R`. A capturing function value —
+        // lowers to a `{ code, env }` fat pointer (the env is a type-erased pointer
+        // to a captured object). Built with `bind(&obj, fn(*E, P...) -> R)`.
+        closure_type: struct {
+            params: []TypeExpr,
+            ret: *TypeExpr,
+        },
     };
 };
 

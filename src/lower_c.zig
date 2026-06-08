@@ -343,6 +343,7 @@ const CEmitter = struct {
     // (*name)(params);` so the name-in-the-middle C declarator works anywhere a
     // plain type name does.
     fn_ptr_types: std.StringHashMap(ast.TypeExpr),
+    closure_types: std.StringHashMap(ast.TypeExpr),
     mir_module: *const mir.Module,
     current_function: ?[]const u8 = null,
     temp_index: usize,
@@ -374,6 +375,7 @@ const CEmitter = struct {
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
             .fn_ptr_types = std.StringHashMap(ast.TypeExpr).init(allocator),
+            .closure_types = std.StringHashMap(ast.TypeExpr).init(allocator),
             .mir_module = mir_module,
             .temp_index = 0,
             .indent = 0,
@@ -382,6 +384,7 @@ const CEmitter = struct {
 
     fn deinit(self: *CEmitter) void {
         self.fn_ptr_types.deinit();
+        self.closure_types.deinit();
         self.result_types.deinit();
         self.slice_types.deinit();
         self.array_types.deinit();
@@ -476,6 +479,7 @@ const CEmitter = struct {
         // Function-pointer typedefs depend only on already-declared scalar/struct
         // types, and structs/params may reference them by name.
         try self.emitFnPtrTypes();
+        try self.emitClosureTypes();
         for (module.decls) |decl| {
             if (decl.kind == .struct_decl and self.mmio_structs.contains(decl.kind.struct_decl.name.text)) {
                 try self.emitMmioStruct(decl.kind.struct_decl);
@@ -1059,6 +1063,11 @@ const CEmitter = struct {
                 if (!self.fn_ptr_types.contains(name)) try self.fn_ptr_types.put(name, ty);
                 return out.appendSlice(self.scratch.allocator(), name);
             },
+            .closure_type => |node| {
+                const name = try self.closureTypeName(node);
+                if (!self.closure_types.contains(name)) try self.closure_types.put(name, ty);
+                return out.appendSlice(self.scratch.allocator(), name);
+            },
             else => {},
         }
         if (typeName(ty)) |name| {
@@ -1312,6 +1321,17 @@ const CEmitter = struct {
         return buf.toOwnedSlice(self.scratch.allocator());
     }
 
+    fn closureTypeName(self: *CEmitter, node: anytype) ![]const u8 {
+        var buf: std.ArrayList(u8) = .empty;
+        try buf.appendSlice(self.scratch.allocator(), "mc_closure_");
+        try buf.appendSlice(self.scratch.allocator(), try self.typeSuffix(node.ret.*));
+        for (node.params) |param| {
+            try buf.append(self.scratch.allocator(), '_');
+            try buf.appendSlice(self.scratch.allocator(), try self.typeSuffix(param));
+        }
+        return buf.toOwnedSlice(self.scratch.allocator());
+    }
+
     fn collectFnPtrType(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
         switch (ty.kind) {
             .fn_pointer => |node| {
@@ -1319,6 +1339,12 @@ const CEmitter = struct {
                 for (node.params) |param| try self.collectFnPtrType(param);
                 const name = try self.fnPtrTypeName(node);
                 if (!self.fn_ptr_types.contains(name)) try self.fn_ptr_types.put(name, ty);
+            },
+            .closure_type => |node| {
+                try self.collectFnPtrType(node.ret.*);
+                for (node.params) |param| try self.collectFnPtrType(param);
+                const name = try self.closureTypeName(node);
+                if (!self.closure_types.contains(name)) try self.closure_types.put(name, ty);
             },
             .pointer => |node| try self.collectFnPtrType(node.child.*),
             .raw_many_pointer => |node| try self.collectFnPtrType(node.child.*),
@@ -1349,6 +1375,79 @@ const CEmitter = struct {
             }
             try self.out.appendSlice(self.allocator, ");\n\n");
         }
+    }
+
+    // A closure is a fat value: a code pointer taking the type-erased env first,
+    // plus the env pointer. `bind`/calls cast at the boundary (compiler-generated),
+    // so user code stays typed and cast-free.
+    fn emitClosureTypes(self: *CEmitter) !void {
+        var it = self.closure_types.iterator();
+        while (it.next()) |entry| {
+            const node = entry.value_ptr.kind.closure_type;
+            try self.out.appendSlice(self.allocator, "typedef struct { ");
+            try self.out.appendSlice(self.allocator, try self.cTypeFor(node.ret.*, .typedef_name));
+            try self.out.appendSlice(self.allocator, " (*code)(void *");
+            for (node.params) |param| {
+                try self.out.appendSlice(self.allocator, ", ");
+                try self.out.appendSlice(self.allocator, try self.cTypeFor(param, .typedef_name));
+            }
+            try self.out.print(self.allocator, "); void *env; }} {s};\n\n", .{entry.key_ptr.*});
+        }
+    }
+
+    // The closure type of a callee expression, if it is closure-typed (so its call
+    // dispatches through the {code, env} pair). Resolves through aliases.
+    fn closureCalleeType(self: *CEmitter, callee: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const ty = self.operandEmitType(callee, locals) orelse return null;
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .closure_type => resolved,
+            else => null,
+        };
+    }
+
+    // Emit `bind(&env, f)` as a closure compound literal. `f` names a function whose
+    // first parameter is the (typed) env; the closure drops it to void*.
+    fn emitBind(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        const fname = calleeIdentName(node.args[1]) orelse return error.UnsupportedCEmission;
+        const info = self.functions.get(fname) orelse return error.UnsupportedCEmission;
+        if (info.params.len == 0) return error.UnsupportedCEmission; // need the env param
+        // Closure type name = return type + the parameters after the env.
+        var buf: std.ArrayList(u8) = .empty;
+        try buf.appendSlice(self.scratch.allocator(), "mc_closure_");
+        const ret_ty: ast.TypeExpr = info.return_type orelse ast.TypeExpr{ .span = node.callee.*.span, .kind = .{ .name = .{ .text = "void", .span = node.callee.*.span } } };
+        try buf.appendSlice(self.scratch.allocator(), try self.typeSuffix(ret_ty));
+        for (info.params[1..]) |param| {
+            try buf.append(self.scratch.allocator(), '_');
+            try buf.appendSlice(self.scratch.allocator(), try self.typeSuffix(param.ty));
+        }
+        const cname = try buf.toOwnedSlice(self.scratch.allocator());
+        // (cname){ .code = (RET (*)(void *, P...)) fname, .env = (void *)(env) }
+        try self.out.print(self.allocator, "({s}){{ .code = (", .{cname});
+        try self.out.appendSlice(self.allocator, try self.cTypeFor(ret_ty, .typedef_name));
+        try self.out.appendSlice(self.allocator, " (*)(void *");
+        for (info.params[1..]) |param| {
+            try self.out.appendSlice(self.allocator, ", ");
+            try self.out.appendSlice(self.allocator, try self.cTypeFor(param.ty, .typedef_name));
+        }
+        try self.out.print(self.allocator, ")){s}, .env = (void *)(", .{fname});
+        try self.emitExpr(node.args[0], locals);
+        try self.out.appendSlice(self.allocator, ") }");
+    }
+
+    fn emitClosureCall(self: *CEmitter, node: anytype, clos: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        _ = clos;
+        // (c).code((c).env, args...)
+        try self.out.appendSlice(self.allocator, "(");
+        try self.emitExpr(node.callee.*, locals);
+        try self.out.appendSlice(self.allocator, ").code((");
+        try self.emitExpr(node.callee.*, locals);
+        try self.out.appendSlice(self.allocator, ").env");
+        for (node.args) |arg| {
+            try self.out.appendSlice(self.allocator, ", ");
+            try self.emitExpr(arg, locals);
+        }
+        try self.out.appendSlice(self.allocator, ")");
     }
 
     fn collectArrayType(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
@@ -3365,6 +3464,19 @@ const CEmitter = struct {
                         try self.out.appendSlice(self.allocator, ")");
                         return;
                     }
+                    // `bind(&env, f)` builds a closure: a {code, env} fat value. The
+                    // env pointer is type-erased to void* and the function pointer
+                    // (whose first param is the typed env) is cast to take void* —
+                    // both casts are ABI-identity, so user code stays typed/cast-free.
+                    if (std.mem.eql(u8, name, "bind") and node.args.len == 2) {
+                        try self.emitBind(node, locals);
+                        return;
+                    }
+                }
+                // Calling a closure-typed value: `c(args)` -> `c.code(c.env, args)`.
+                if (self.closureCalleeType(node.callee.*, locals)) |clos| {
+                    try self.emitClosureCall(node, clos, locals);
+                    return;
                 }
                 // `raw.load<T>(addr)` reads a `T` from a raw address.
                 if (isRawLoadCall(node.callee.*)) {

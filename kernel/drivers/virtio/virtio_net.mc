@@ -96,15 +96,7 @@ export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *Mac
     vq_submit_tx(txq, dev);                        // dev consumed (in flight)
     vq_kick(regs, TX_QUEUE);
 
-    var got: bool = false;
-    let start: Ticks = read_ticks();
-    while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
-        if vq_has_used(txq) {
-            got = true;
-            break;
-        }
-    }
-    if !got {
+    if !vq_wait_used(txq, IO_TIMEOUT_TICKS) {
         return false; // buffer stuck in flight (device never completed)
     }
     free(invalidate_for_cpu(vq_complete(txq)));
@@ -221,12 +213,9 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
 
 // Wait (bounded by a real-time deadline) for the device to return a TX buffer.
 fn tx_wait_reclaim(txq: *mut Virtq) -> bool {
-    let start: Ticks = read_ticks();
-    while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
-        if vq_has_used(txq) {
-            free(invalidate_for_cpu(vq_complete(txq)));
-            return true;
-        }
+    if vq_wait_used(txq, IO_TIMEOUT_TICKS) {
+        free(invalidate_for_cpu(vq_complete(txq)));
+        return true;
     }
     return false;
 }

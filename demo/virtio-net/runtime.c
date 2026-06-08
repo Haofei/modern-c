@@ -3,6 +3,11 @@
 // device's MmioPtr plus the virtqueue memory. The MC driver speaks the virtio
 // protocol. Reports progress over the QEMU `virt` 16550 UART.
 #include <stdint.h>
+
+// CLINT time source (std/time externs; needed now that std/virtqueue uses vq_wait_used).
+#define CLINT_MTIME 0x0200BFF8UL
+uint64_t mc_read_ticks(void) { return *(volatile uint64_t *)CLINT_MTIME; }
+void mc_udelay(uint32_t us) { uint64_t t = mc_read_ticks() + (uint64_t)us * 10u; while (mc_read_ticks() < t) {} }
 #include <stddef.h>
 
 // Freestanding libc primitives the compiler may emit (struct copies/zeroing).

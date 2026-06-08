@@ -10,8 +10,9 @@
 const MAX_CHARDEV: usize = 4;
 
 struct CharDevice {
-    putc: fn(u64, u8) -> void, // (ctx, byte)
-    ctx: u64,                  // driver-private (e.g. the device's base address)
+    putc: closure(u8) -> void, // a capturing function value: the driver's private
+                               // context (e.g. its MMIO base) is captured, not threaded
+                               // through a separate untyped ctx word.
     present: bool,
 }
 
@@ -29,14 +30,13 @@ export fn char_registry_init(reg: *mut CharRegistry) -> void {
     reg.count = 0;
 }
 
-// Register a char device's write op + context, returning its id. Traps if full.
-export fn register_chardev(reg: *mut CharRegistry, putc: fn(u64, u8) -> void, ctx: u64) -> usize {
+// Register a char device's write closure, returning its id. Traps if full.
+export fn register_chardev(reg: *mut CharRegistry, putc: closure(u8) -> void) -> usize {
     let id: usize = reg.count;
     if id >= MAX_CHARDEV {
         unreachable; // registry full
     }
     reg.devs[id].putc = putc;
-    reg.devs[id].ctx = ctx;
     reg.devs[id].present = true;
     reg.count = id + 1;
     return id;
@@ -52,6 +52,6 @@ export fn chardev_putc(reg: *mut CharRegistry, id: usize, b: u8) -> void {
     if !present {
         unreachable; // device unregistered
     }
-    let write: fn(u64, u8) -> void = dev.putc;
-    write(dev.ctx, b);
+    let write: closure(u8) -> void = dev.putc;
+    write(b); // dispatches through the closure's {code, env}
 }

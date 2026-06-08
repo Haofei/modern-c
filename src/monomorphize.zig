@@ -234,6 +234,10 @@ fn typeMentionsIdent(ty: ast.TypeExpr, name: []const u8) bool {
             for (node.params) |param| if (typeMentionsIdent(param, name)) break :blk true;
             break :blk typeMentionsIdent(node.ret.*, name);
         },
+        .closure_type => |node| blk: {
+            for (node.params) |param| if (typeMentionsIdent(param, name)) break :blk true;
+            break :blk typeMentionsIdent(node.ret.*, name);
+        },
         .enum_literal => false,
     };
 }
@@ -432,6 +436,7 @@ pub fn cloneType(ctx: *const CloneCtx, ty: ast.TypeExpr) anyerror!ast.TypeExpr {
             break :blk .{ .generic = .{ .base = node.base, .args = try cloneTypeSlice(ctx, node.args) } };
         },
         .fn_pointer => |node| .{ .fn_pointer = .{ .params = try cloneTypeSlice(ctx, node.params), .ret = try cloneTypePtr(ctx, node.ret.*) } },
+        .closure_type => |node| .{ .closure_type = .{ .params = try cloneTypeSlice(ctx, node.params), .ret = try cloneTypePtr(ctx, node.ret.*) } },
     };
     return .{ .span = ty.span, .kind = kind };
 }

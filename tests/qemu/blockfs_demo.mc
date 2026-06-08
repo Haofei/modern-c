@@ -7,11 +7,15 @@ import "std/addr.mc";
 
 const DISK_BLOCKS: u64 = 8; // 8 * 512 = 4096 bytes
 
+struct Disk { base: usize } // the RAM-disk backend's captured context
+
 global g_disk: [4096]u8;
+global g_disk_h: Disk;
 global g_fs: BlockFs;
 
-fn ramdisk_read(ctx: u64, blk: u64, dst: usize) -> bool {
-    let base: usize = (ctx as usize) + (blk as usize) * 512;
+// The backend gets a *typed* `*Disk` (captured by the closure) — no ctx word, no cast.
+fn ramdisk_read(d: *Disk, blk: u64, dst: usize) -> bool {
+    let base: usize = d.base + (blk as usize) * 512;
     var i: usize = 0;
     while i < 512 {
         unsafe {
@@ -22,8 +26,8 @@ fn ramdisk_read(ctx: u64, blk: u64, dst: usize) -> bool {
     }
     return true;
 }
-fn ramdisk_write(ctx: u64, blk: u64, src: usize) -> bool {
-    let base: usize = (ctx as usize) + (blk as usize) * 512;
+fn ramdisk_write(d: *Disk, blk: u64, src: usize) -> bool {
+    let base: usize = d.base + (blk as usize) * 512;
     var i: usize = 0;
     while i < 512 {
         unsafe {
@@ -37,14 +41,13 @@ fn ramdisk_write(ctx: u64, blk: u64, src: usize) -> bool {
 
 const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
-// Build the device handle on the stack each call (a global struct-field store would
-// emit a race-store intrinsic). The RAM-disk base is g_disk; virtio-blk would supply
-// its own read/write + ctx the same way.
+// Build the device handle on the stack each call. The read/write closures capture the
+// RAM disk; virtio-blk would supply its own backend + captured context the same way.
 fn make_dev() -> BlockDevice {
+    g_disk_h.base = (&g_disk[0]) as usize;
     return .{
-        .read = ramdisk_read,
-        .write = ramdisk_write,
-        .ctx = (&g_disk[0]) as u64,
+        .read = bind(&g_disk_h, ramdisk_read),
+        .write = bind(&g_disk_h, ramdisk_write),
         .blocks = DISK_BLOCKS,
     };
 }

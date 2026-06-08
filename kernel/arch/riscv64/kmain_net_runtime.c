@@ -3,6 +3,11 @@
 // discovery + DMA pool + vring memory (for the NIC). One _start, one test_main:
 // discover the NIC, then run kmain_net (core subsystems + a UDP transmit).
 #include <stdint.h>
+
+// CLINT time source (std/time externs; needed now that std/virtqueue uses vq_wait_used).
+#define CLINT_MTIME 0x0200BFF8UL
+uint64_t mc_read_ticks(void) { return *(volatile uint64_t *)CLINT_MTIME; }
+void mc_udelay(uint32_t us) { uint64_t t = mc_read_ticks() + (uint64_t)us * 10u; while (mc_read_ticks() < t) {} }
 #include <stddef.h>
 
 void *memset(void *d, int c, size_t n) {

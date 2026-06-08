@@ -93,3 +93,45 @@ language/stdlib item, but a single shared `platform.c` (or generating these from
 ### Highest-leverage next steps (not yet done)
 Closures (§3) — unblocks the driver `ctx` word and the poll helper (§5); generics for a
 `Ring<T,N>` (§6); and the nested-array lowering fix (§4).
+
+---
+
+## Implementation status (items 3–7 of this review)
+
+- **#4 (nested `arr[i].field[j]`) — DONE.** Compiler cure: `structTypeNameForExpr`
+  gained an `.index` case (via `operandEmitType`) so a field-array of an array element
+  lowers to `table[i].field.elems[j]`. Demonstrated by simplifying `udp_socket` to an
+  **inline payload array** (`queue[k].payload[j]`), deleting the flat pool + offset +
+  pool_used bookkeeping. (`socket-test`, `net-rx-test`, `net-fuzz-test` green.)
+- **#5 (poll_until) — DONE.** `std/time.poll_until(probe, timeout)` (generic
+  context-free predicate) + `std/virtqueue.vq_wait_used(vq, timeout)` (the typed form
+  whose predicate needs the vq — the part that *would* use a closure). Migrated the
+  `virtio_blk` + `virtio_net` (nic_transmit, tx_wait_reclaim) spin loops.
+- **#6 (generic Ring) — DONE (in-place API), with a noted gap.** Generics already work
+  (`Box<T>`, `Ring<T>`, the existing `stack-test`/`mono-test` gates). Added an
+  **in-place mutable API** to the existing `std/ring` (`ring_init`/`push`/`pop`/`len`/
+  `is_empty`/`is_full`) — a usable generic in-place container, gated by `ring-test`
+  (FIFO/len/empty/full/wrap at `Ring<u32>`). **Gap:** unifying the kernel's
+  *varying-capacity* rings (trace=64, socket=8) needs **const-generic struct params**
+  (`Ring<T, N>`): the use site must accept an integer type-arg and the monomorphizer
+  must substitute it into `[N]T`. The monomorphizer already substitutes `comptime N:
+  usize` values into array sizes *for functions*, so it's a scoped extension (parser
+  use-site + struct value-param + struct-instance subst), not a rewrite — deferred as
+  it touches the core monomorphizer.
+- **#7 (shared platform runtime) — DONE (shared layer + applied).** Created
+  `kernel/arch/riscv64/platform.h` (mem/UART/finisher/CLINT time) and
+  `platform_virtio.h` (vring + buffer structs + DMA transitions). Migrated
+  `blk_runtime.c` (105→70 lines) and `net_runtime.c` (131→83 lines) to include them.
+  Remaining standalone runtimes adopt the same two `#include`s mechanically.
+- **#3 (closures) — DONE.** Added a first-class `closure(P...) -> R` type and a
+  `bind(&obj, fn(*E, P...) -> R)` builtin that bundles a **typed** captured pointer with
+  a function into a `{ code, env }` fat value; calling `c(args)` lowers to
+  `c.code(c.env, args)`. The type-erasing casts (env → `void*`, fn-ptr → env-erased)
+  are **compiler-generated**, so user code has no `ctx` word and no `u64`↔pointer casts.
+  Threads through lexer/ast/parser/sema/mir/lower_c. Gated by `closure-test` (a closure
+  captures a counter and mutates it across calls). **Applied:** `CharDevice` and
+  `BlockDevice` dropped their `ctx: u64` word — backends now take a typed `*Uart` /
+  `*Disk` captured by `bind(...)` (driver-test, kmain-test, blockfs-test green).
+  (Lifetime of the captured object is the caller's responsibility — the closure stores
+  a pointer to it; the kernel's captured objects are static/long-lived. A by-value
+  inline-env form for escaping closures is a possible future extension.)

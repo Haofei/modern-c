@@ -4,21 +4,26 @@
 
 import "kernel/core/device.mc";
 
-const UART_BASE: u64 = 0x1000_0000;
+const UART_BASE: usize = 0x1000_0000;
+
+struct Uart { base: usize }
 
 global g_chardevs: CharRegistry;
+global g_uart: Uart;
 
-// A UART driver's write op: store the byte to the device's transmit register
-// (the base address arrives as the driver context).
-fn uart_putc(ctx: u64, b: u8) -> void {
+// A UART driver's write op: store the byte to the device's transmit register. The
+// device arrives as a *typed* `*Uart` (captured by the closure) — no untyped ctx
+// word and no u64->pointer cast.
+fn uart_putc(u: *Uart, b: u8) -> void {
     unsafe {
-        raw.store<u8>(phys(ctx as usize), b);
+        raw.store<u8>(phys(u.base), b);
     }
 }
 
 export fn driver_demo() -> u32 {
     char_registry_init(&g_chardevs);
-    let uart_id: usize = register_chardev(&g_chardevs, uart_putc, UART_BASE);
+    g_uart.base = UART_BASE;
+    let uart_id: usize = register_chardev(&g_chardevs, bind(&g_uart, uart_putc));
     chardev_putc(&g_chardevs, uart_id, 'D');
     chardev_putc(&g_chardevs, uart_id, 'R');
     chardev_putc(&g_chardevs, uart_id, 'V');

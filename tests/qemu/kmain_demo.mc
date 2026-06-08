@@ -12,18 +12,21 @@ import "kernel/fs/vfs.mc";
 import "kernel/core/process.mc";
 import "std/addr.mc";
 
-const UART_BASE: u64 = 0x1000_0000;
+const UART_BASE: usize = 0x1000_0000;
 const STACK_SIZE: usize = 8192;
 
+struct Uart { base: usize }
+
 global g_chardevs: CharRegistry;
+global g_uart: Uart;
 global g_uart_id: usize;
 global g_log: Logger;
 global g_vfs: Vfs;
 global g_procs: ProcTable;
 
-fn uart_putc(ctx: u64, b: u8) -> void {
+fn uart_putc(u: *Uart, b: u8) -> void {
     unsafe {
-        raw.store<u8>(phys(ctx as usize), b);
+        raw.store<u8>(phys(u.base), b);
     }
 }
 
@@ -102,7 +105,8 @@ export fn kmain(region_base: usize, region_len: usize) -> u32 {
 
     // 2) Driver framework: register the UART as the console device.
     char_registry_init(&g_chardevs);
-    g_uart_id = register_chardev(&g_chardevs, uart_putc, UART_BASE);
+    g_uart.base = UART_BASE;
+    g_uart_id = register_chardev(&g_chardevs, bind(&g_uart, uart_putc));
     stages = stages | 0x2;
     say(0x31); // '1' — heap + console are up
 

@@ -9,10 +9,10 @@
 const BLOCK_SIZE: usize = 512;
 
 struct BlockDevice {
-    read: fn(u64, u64, usize) -> bool,  // (ctx, block_index, dst_addr) -> ok
-    write: fn(u64, u64, usize) -> bool, // (ctx, block_index, src_addr) -> ok
-    ctx: u64,                           // backend context (e.g. the RAM-disk base)
+    read: closure(u64, usize) -> bool,  // (block_index, dst_addr) -> ok
+    write: closure(u64, usize) -> bool, // (block_index, src_addr) -> ok
     blocks: u64,                        // device size, in blocks
+                                        // (the backend's context is captured by the closures)
 }
 
 enum BlockError {
@@ -27,8 +27,8 @@ export fn bd_read_block(dev: *BlockDevice, blk: u64, dst: usize) -> Result<bool,
     if blk >= dev.blocks {
         return err(.OutOfRange);
     }
-    let f: fn(u64, u64, usize) -> bool = dev.read;
-    let ok_io: bool = f(dev.ctx, blk, dst); // bind: a fn-pointer-call condition isn't bool-typed inline
+    let r: closure(u64, usize) -> bool = dev.read;
+    let ok_io: bool = r(blk, dst); // dispatch through the closure (captures the backend ctx)
     if ok_io {
         return ok(true);
     }
@@ -40,8 +40,8 @@ export fn bd_write_block(dev: *BlockDevice, blk: u64, src: usize) -> Result<bool
     if blk >= dev.blocks {
         return err(.OutOfRange);
     }
-    let f: fn(u64, u64, usize) -> bool = dev.write;
-    let ok_io: bool = f(dev.ctx, blk, src);
+    let w: closure(u64, usize) -> bool = dev.write;
+    let ok_io: bool = w(blk, src); // dispatch through the closure (captures the backend ctx)
     if ok_io {
         return ok(true);
     }

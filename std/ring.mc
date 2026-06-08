@@ -66,3 +66,48 @@ fn pop(comptime T: type, r: Ring<T>) -> Ring<T> {
     result.count = result.count - 1;
     return result;
 }
+
+// ----- in-place (mutating) API — what kernel ring users actually want, vs the
+// value-returning ops above. Generic over the element type; capacity is fixed at 16
+// until const-generic struct params (`Ring<T, N>`) land (the monomorphizer already
+// substitutes `comptime N: usize` values into array sizes for functions, so this is
+// a scoped extension). -----
+
+// Reset `r` to empty in place.
+export fn ring_init(comptime T: type, r: *mut Ring<T>) -> void {
+    r.head = 0;
+    r.tail = 0;
+    r.count = 0;
+}
+
+// Enqueue at the head in place; returns false (no-op) if the ring is full.
+export fn ring_push(comptime T: type, r: *mut Ring<T>, x: T) -> bool {
+    if r.count == 16 {
+        return false;
+    }
+    r.slots[r.head] = x;
+    r.head = (r.head + 1) % 16;
+    r.count = r.count + 1;
+    return true;
+}
+
+// Dequeue the tail (oldest) in place. Traps if empty — call `ring_is_empty` first.
+export fn ring_pop(comptime T: type, r: *mut Ring<T>) -> T {
+    if r.count == 0 {
+        unreachable; // ring empty
+    }
+    let x: T = r.slots[r.tail];
+    r.tail = (r.tail + 1) % 16;
+    r.count = r.count - 1;
+    return x;
+}
+
+export fn ring_len(comptime T: type, r: *mut Ring<T>) -> usize {
+    return r.count;
+}
+export fn ring_is_empty(comptime T: type, r: *mut Ring<T>) -> bool {
+    return r.count == 0;
+}
+export fn ring_is_full(comptime T: type, r: *mut Ring<T>) -> bool {
+    return r.count == 16;
+}

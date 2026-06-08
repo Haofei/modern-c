@@ -294,6 +294,24 @@ pub fn build(b: *std.Build) void {
     const udp_test_step = b.step("udp-test", "Link + run the UDP datagram build/parse + checksum");
     udp_test_step.dependOn(&udp_test_cmd.step);
 
+    const closure_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/closure-test.sh",
+        "zig-out/bin/mcc",
+    });
+    closure_test_cmd.step.dependOn(b.getInstallStep());
+    const closure_test_step = b.step("closure-test", "Link + run a bind() closure (capture + call across calls)");
+    closure_test_step.dependOn(&closure_test_cmd.step);
+
+    const ring_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/ring-test.sh",
+        "zig-out/bin/mcc",
+    });
+    ring_test_cmd.step.dependOn(b.getInstallStep());
+    const ring_test_step = b.step("ring-test", "Link + run the generic in-place Ring<T> (push/pop/wrap)");
+    ring_test_step.dependOn(&ring_test_cmd.step);
+
     const trace_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/trace-test.sh",
@@ -661,6 +679,10 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&blockfs_test_cmd.step);
     // udp-test links + runs the UDP build/parse + checksum (needs clang).
     m0_step.dependOn(&udp_test_cmd.step);
+    // closure-test links + runs a bind() capturing closure (needs clang).
+    m0_step.dependOn(&closure_test_cmd.step);
+    // ring-test links + runs the generic in-place Ring<T> (needs clang).
+    m0_step.dependOn(&ring_test_cmd.step);
     // trace-test links + runs the trace ring buffer (needs clang).
     m0_step.dependOn(&trace_test_cmd.step);
     // log-test links + runs the leveled tracepoint logger (needs clang).

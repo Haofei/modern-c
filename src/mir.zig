@@ -4038,6 +4038,7 @@ fn valueTypeFromTypeAliasDepth(ty: ast.TypeExpr, enums: *const std.StringHashMap
         .enum_literal => .value,
         .member => .value,
         .fn_pointer => .value, // a function pointer is a scalar value
+        .closure_type => .value, // a closure is a {code, env} aggregate, treated as a value
         .nullable => |child| blk: {
             const child_ty = valueTypeFromTypeAliasDepth(child.*, enums, structs, packed_bits, aliases, depth + 1);
             break :blk switch (child_ty) {
@@ -4790,6 +4791,7 @@ fn typeText(ty: ast.TypeExpr) []const u8 {
         .array => "array",
         .generic => |node| node.base.text,
         .fn_pointer => "fn",
+        .closure_type => "closure",
     };
 }
 

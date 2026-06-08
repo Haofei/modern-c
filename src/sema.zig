@@ -195,6 +195,12 @@ pub const Checker = struct {
                 }
                 return self.typeExprHasAliasCycle(root_name, node.ret.*, type_aliases, visiting);
             },
+            .closure_type => |node| {
+                for (node.params) |param| {
+                    if (self.typeExprHasAliasCycle(root_name, param, type_aliases, visiting)) return true;
+                }
+                return self.typeExprHasAliasCycle(root_name, node.ret.*, type_aliases, visiting);
+            },
             .enum_literal => return false,
         }
     }
@@ -1815,6 +1821,12 @@ pub const Checker = struct {
                 for (node.params) |param| self.checkType(param, .storage, ctx);
                 self.checkType(node.ret.*, .normal, ctx);
             },
+            .closure_type => |node| {
+                // Same validity rule as a function pointer: parameters are storage
+                // types, the return is a normal type.
+                for (node.params) |param| self.checkType(param, .storage, ctx);
+                self.checkType(node.ret.*, .normal, ctx);
+            },
         }
     }
 
@@ -2394,6 +2406,10 @@ pub const Checker = struct {
             .slice => |node| self.checkReflectedGenericTypeArgs(node.child.*, ctx),
             .array => |node| self.checkReflectedGenericTypeArgs(node.child.*, ctx),
             .fn_pointer => |node| {
+                for (node.params) |param| self.checkReflectedGenericTypeArgs(param, ctx);
+                self.checkReflectedGenericTypeArgs(node.ret.*, ctx);
+            },
+            .closure_type => |node| {
                 for (node.params) |param| self.checkReflectedGenericTypeArgs(param, ctx);
                 self.checkReflectedGenericTypeArgs(node.ret.*, ctx);
             },
@@ -5381,6 +5397,17 @@ fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {
             }
             break :blk sameTypeSyntax(left_node.ret.*, right_node.ret.*);
         },
+        .closure_type => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .closure_type => |node| node,
+                else => unreachable,
+            };
+            if (left_node.params.len != right_node.params.len) break :blk false;
+            for (left_node.params, right_node.params) |left_param, right_param| {
+                if (!sameTypeSyntax(left_param, right_param)) break :blk false;
+            }
+            break :blk sameTypeSyntax(left_node.ret.*, right_node.ret.*);
+        },
     };
 }
 
@@ -5529,6 +5556,7 @@ fn isUncheckedNoOverflowMember(name: []const u8) bool {
 fn isBuiltinFunctionName(name: []const u8) bool {
     if (std.mem.eql(u8, name, "trap")) return true;
     if (std.mem.eql(u8, name, "drop")) return true;
+    if (std.mem.eql(u8, name, "bind")) return true; // closure construction
     if (std.mem.eql(u8, name, "unwrap")) return true;
     if (std.mem.eql(u8, name, "bitcast")) return true;
     if (std.mem.eql(u8, name, "phys")) return true;
@@ -5673,6 +5701,7 @@ fn isKnownLayoutType(ty: ast.TypeExpr, ctx: Context) bool {
             knownEnumName(name.text, ctx),
         .pointer, .raw_many_pointer, .slice, .array, .nullable => true,
         .fn_pointer => true, // a function pointer has pointer layout
+        .closure_type => true, // a closure is a fixed {code, env} aggregate
         .qualified => |node| isKnownLayoutType(node.child.*, ctx),
         .generic => |node| isKnownLayoutGeneric(node, ctx),
         .member, .enum_literal => false,

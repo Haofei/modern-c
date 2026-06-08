@@ -79,16 +79,8 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
     vq_submit_chain3(vq, hdr_d, data_d, status_d, true);
     vq_kick(regs, 0);
 
-    let start: Ticks = read_ticks();
-    var completed: bool = false;
-    while !completed {
-        if vq_has_used(vq) {
-            completed = true;
-        } else {
-            if timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
-                return err(.Timeout);
-            }
-        }
+    if !vq_wait_used(vq, IO_TIMEOUT_TICKS) {
+        return err(.Timeout);
     }
     let used: u32 = vq_complete_chain(vq);
 

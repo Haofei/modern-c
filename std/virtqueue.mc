@@ -12,6 +12,7 @@
 import "virtio.mc";
 import "barrier.mc";
 import "dma.mc";
+import "time.mc";
 
 const QUEUE_SIZE: u16 = 8; // backing-array capacity (negotiated size is ≤ this)
 const VRING_DESC_F_NEXT: u16 = 1;  // descriptor chains to `next`
@@ -254,6 +255,21 @@ export fn vq_kick(regs: MmioPtr<VirtioMmio>, q: u32) -> void {
 export fn vq_has_used(vq: *mut Virtq) -> bool {
     rmb();
     return vq.used.idx != vq.last_used;
+}
+
+// Block until the device returns a buffer on `vq`'s used ring, or `timeout` ticks
+// elapse. Returns true if a completion is ready (the caller then reaps it with
+// vq_complete / vq_complete_chain). Replaces the hand-rolled read_ticks/timed_out
+// spin in each driver — the vq-specific form of `poll_until` (the probe needs the
+// virtqueue, which a non-capturing fn pointer can't carry yet).
+export fn vq_wait_used(vq: *mut Virtq, timeout: u64) -> bool {
+    let start: Ticks = read_ticks();
+    while !timed_out(start, read_ticks(), timeout) {
+        if vq_has_used(vq) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // The number of bytes the device wrote into the next completed buffer (the
