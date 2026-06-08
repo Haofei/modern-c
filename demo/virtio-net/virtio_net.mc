@@ -14,11 +14,13 @@ const TX_QUEUE: u32 = 1;              // virtio-net: queue 0 = rx, queue 1 = tx
 
 // Bring the card up: require VERSION_1, set up the TX queue, go live.
 export fn nic_init(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> bool {
-    if !virtio_init(regs, VIRTIO_NET_DEVICE_ID, 0, VIRTIO_F_VERSION_1_HI) {
-        return false;
+    switch virtio_init(regs, VIRTIO_NET_DEVICE_ID, 0, VIRTIO_F_VERSION_1_HI) {
+        ok(up) => {}
+        err(e) => { return false; }
     }
-    if !vq_setup(regs, TX_QUEUE, txq) {
-        return false;
+    switch vq_setup(regs, TX_QUEUE, txq) {
+        ok(up) => {}
+        err(e) => { return false; }
     }
     virtio_driver_ok(regs);
     return true;

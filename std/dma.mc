@@ -10,14 +10,16 @@
 // `cpu_addr`/`device_addr`/`len` borrow (`&buf`); transitions and `free` consume.
 // alloc/free and the cache maintenance are platform primitives.
 
+import "addr.mc";
+
 move struct CpuBuffer {
-    dev_addr: usize, // device-visible (bus) address
-    cpu_addr: usize, // CPU-visible address
+    dev_addr: DmaAddr, // device-visible (bus) address (opaque, not a raw usize)
+    cpu_addr: PAddr,   // CPU-visible address (typed: checked offset, no raw `+`)
     len: usize,
 }
 
 move struct DeviceBuffer {
-    dev_addr: usize,
+    dev_addr: DmaAddr,
     len: usize,
 }
 
@@ -48,13 +50,15 @@ export fn invalidate_for_cpu(b: DeviceBuffer) -> CpuBuffer {
     return mc_dma_invalidate_for_cpu(b);
 }
 
-// Device address — readable in either state (borrows, does not consume).
-export fn device_addr(b: *DeviceBuffer) -> usize {
+// Device address — readable in either state (borrows, does not consume). Typed
+// `DmaAddr` (the device's bus address), distinct from a CPU `PAddr`.
+export fn device_addr(b: *DeviceBuffer) -> DmaAddr {
     return b.dev_addr;
 }
 
-// CPU address — readable only while cpu-owned (the param type enforces it).
-export fn cpu_addr(b: *CpuBuffer) -> usize {
+// CPU address — readable only while cpu-owned (the param type enforces it). Typed
+// `PAddr`, so callers can't do unchecked pointer math on it.
+export fn cpu_addr(b: *CpuBuffer) -> PAddr {
     return b.cpu_addr;
 }
 
@@ -76,7 +80,7 @@ export fn write_u8(b: *CpuBuffer, offset: usize, value: u8) -> void {
         unreachable; // out of bounds
     }
     unsafe {
-        raw.store<u8>(phys(b.cpu_addr + offset), value);
+        raw.store<u8>(pa_offset(b.cpu_addr, offset), value);
     }
 }
 
@@ -85,7 +89,7 @@ export fn read_u8(b: *CpuBuffer, offset: usize) -> u8 {
         unreachable; // out of bounds
     }
     unsafe {
-        return raw.load<u8>(phys(b.cpu_addr + offset));
+        return raw.load<u8>(pa_offset(b.cpu_addr, offset));
     }
 }
 
@@ -113,4 +117,31 @@ export fn read_be32(b: *CpuBuffer, offset: usize) -> u32 {
     let b2: u32 = read_u8(b, offset + 2) as u32;
     let b3: u32 = read_u8(b, offset + 3) as u32;
     return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+}
+
+// Little-endian accessors (virtio structures are little-endian).
+
+export fn write_le16(b: *CpuBuffer, offset: usize, value: u16) -> void {
+    write_u8(b, offset, (value & 0x00FF) as u8);
+    write_u8(b, offset + 1, (value >> 8) as u8);
+}
+
+export fn write_le32(b: *CpuBuffer, offset: usize, value: u32) -> void {
+    write_u8(b, offset, (value & 0x0000_00FF) as u8);
+    write_u8(b, offset + 1, ((value >> 8) & 0x0000_00FF) as u8);
+    write_u8(b, offset + 2, ((value >> 16) & 0x0000_00FF) as u8);
+    write_u8(b, offset + 3, (value >> 24) as u8);
+}
+
+export fn write_le64(b: *CpuBuffer, offset: usize, value: u64) -> void {
+    write_le32(b, offset, (value & 0x0000_0000_FFFF_FFFF) as u32);
+    write_le32(b, offset + 4, (value >> 32) as u32);
+}
+
+export fn read_le32(b: *CpuBuffer, offset: usize) -> u32 {
+    let b0: u32 = read_u8(b, offset) as u32;
+    let b1: u32 = read_u8(b, offset + 1) as u32;
+    let b2: u32 = read_u8(b, offset + 2) as u32;
+    let b3: u32 = read_u8(b, offset + 3) as u32;
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
 }

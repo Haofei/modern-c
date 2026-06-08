@@ -64,14 +64,17 @@ export fn nic_init(dev: *NetDevice) -> Result<bool, NetError> {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let rxq: *mut Virtq = dev.rxq;
     let txq: *mut Virtq = dev.txq;
-    if !virtio_init(regs, VIRTIO_NET_DEVICE_ID, 0, VIRTIO_F_VERSION_1_HI) {
-        return err(.DeviceInitFailed);
+    switch virtio_init(regs, VIRTIO_NET_DEVICE_ID, 0, VIRTIO_F_VERSION_1_HI) {
+        ok(up) => {}
+        err(e) => { return err(.DeviceInitFailed); }
     }
-    if !vq_setup(regs, RX_QUEUE, rxq) {
-        return err(.QueueUnavailable);
+    switch vq_setup(regs, RX_QUEUE, rxq) {
+        ok(up) => {}
+        err(e) => { return err(.QueueUnavailable); }
     }
-    if !vq_setup(regs, TX_QUEUE, txq) {
-        return err(.QueueUnavailable);
+    switch vq_setup(regs, TX_QUEUE, txq) {
+        ok(up) => {}
+        err(e) => { return err(.QueueUnavailable); }
     }
     virtio_driver_ok(regs);
 
@@ -273,6 +276,61 @@ export fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr,
         return err(.BadReply);
     }
     return ok(true);
+}
+
+// Resolve `target_ip`'s hardware address via ARP (send a request, await the reply).
+export fn nic_arp_resolve(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_ip: u32) -> Result<MacAddr, NetError> {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let rxq: *mut Virtq = dev.rxq;
+    let txq: *mut Virtq = dev.txq;
+    if !nic_send_arp(regs, txq, src_mac, src_ip, target_ip) {
+        return err(.ArpFailed);
+    }
+    var rx: RxFrame = rx_receive(regs, rxq);
+    if !rx.is_arp_reply {
+        return err(.ArpFailed);
+    }
+    if rx.src_ip != target_ip {
+        return err(.BadReply);
+    }
+    return ok(rx.src_mac);
+}
+
+// Receive one RX frame (bounded wait) and copy the Ethernet frame (past the 12-byte
+// virtio-net header) into `dst`; returns its length (0 on timeout). The decoupled
+// real-RX primitive: the caller routes the bytes onward (e.g. to net_rx_deliver),
+// keeping the driver independent of the protocol layers.
+export fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let rxq: *mut Virtq = dev.rxq;
+    let start: Ticks = read_ticks();
+    while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
+        if vq_has_used(rxq) {
+            let d: DeviceBuffer = vq_complete(rxq);
+            var cpu: CpuBuffer = invalidate_for_cpu(d);
+            let total: usize = cpu_len(&cpu);
+            var n: usize = 0;
+            if total > FRAME_AT {
+                n = total - FRAME_AT;
+                if n > max {
+                    n = max;
+                }
+                var i: usize = 0;
+                while i < n {
+                    let b: u8 = read_u8(&cpu, FRAME_AT + i);
+                    unsafe {
+                        raw.store<u8>(phys(dst + i), b);
+                    }
+                    i = i + 1;
+                }
+            }
+            free(cpu);
+            post_rx_buffer(rxq);
+            vq_kick(regs, RX_QUEUE);
+            return n;
+        }
+    }
+    return 0;
 }
 
 // ----- inbound responder (the host→guest "pingable" path) -----

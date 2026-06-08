@@ -4037,6 +4037,7 @@ fn valueTypeFromTypeAliasDepth(ty: ast.TypeExpr, enums: *const std.StringHashMap
             namedValueTypeAlias(name.text, enums, structs, packed_bits),
         .enum_literal => .value,
         .member => .value,
+        .fn_pointer => .value, // a function pointer is a scalar value
         .nullable => |child| blk: {
             const child_ty = valueTypeFromTypeAliasDepth(child.*, enums, structs, packed_bits, aliases, depth + 1);
             break :blk switch (child_ty) {
@@ -4180,6 +4181,10 @@ fn structTypeNameAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(
     return switch (ty.kind) {
         .name => |name| if (aliases.get(name.text)) |resolved| structTypeNameAliasDepth(resolved, aliases, depth + 1) else name.text,
         .qualified => |node| structTypeNameAliasDepth(node.child.*, aliases, depth + 1),
+        // Member access auto-derefs a pointer-to-struct (`t.field` over `t: *mut T`),
+        // so resolve the struct name through the pointee — matching the value-type
+        // path (memberType) which already handles `.pointer`.
+        .pointer => |node| structTypeNameAliasDepth(node.child.*, aliases, depth + 1),
         else => null,
     };
 }
@@ -4784,6 +4789,7 @@ fn typeText(ty: ast.TypeExpr) []const u8 {
         .slice => |node| sliceTypeTextWithChild(node.mutability, typeText(node.child.*)),
         .array => "array",
         .generic => |node| node.base.text,
+        .fn_pointer => "fn",
     };
 }
 

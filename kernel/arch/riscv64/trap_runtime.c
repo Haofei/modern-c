@@ -26,8 +26,16 @@ void mc_udelay(uint32_t us) {
 }
 
 // MC entry points (kernel/arch/riscv64/trap.mc).
-void handle_trap(uint64_t mcause, uint64_t mepc);
+void handle_trap(uint64_t mcause, uint64_t mepc, uint64_t mtval);
 uint32_t kernel_tick_demo(uintptr_t trap_vector, uint32_t target);
+
+// Platform primitive used by kernel/core/panic.mc: stop the machine. On QEMU virt
+// that's the SiFive test finisher.
+void mc_halt(void) {
+    *FINISHER = 0x5555;
+    for (;;) {
+    }
+}
 
 // M-mode trap vector. A trap arrives at an arbitrary instruction boundary, so we
 // save a full integer-register frame (every GPR that can hold live caller state:
@@ -47,6 +55,7 @@ __attribute__((naked, aligned(4))) void trap_vector(void) {
         "sd s8,192(sp)\n"  "sd s9,200(sp)\n"  "sd s10,208(sp)\n" "sd s11,216(sp)\n"
         "csrr a0, mcause\n"
         "csrr a1, mepc\n"
+        "csrr a2, mtval\n"
         "call handle_trap\n"
         "ld ra,  0(sp)\n"  "ld t0,  8(sp)\n"  "ld t1, 16(sp)\n"  "ld t2, 24(sp)\n"
         "ld t3, 32(sp)\n"  "ld t4, 40(sp)\n"  "ld t5, 48(sp)\n"  "ld t6, 56(sp)\n"
@@ -65,7 +74,12 @@ __attribute__((used)) void test_main(void) {
     puts_("TICKS "); putdec(ticks); putc_('\n');
     if (ticks >= 3) puts_("TIMER-OK\n");
     else puts_("TIMER-FAIL\n");
-    *FINISHER = 0x5555;
+
+    // Trigger an unexpected trap (M-mode ecall) to exercise the fail-closed panic
+    // path: handle_trap should diagnose it (PANIC ...) and halt, not silently mret.
+    __asm__ volatile("ecall");
+
+    *FINISHER = 0x5555; // unreachable if the panic path halts as intended
     for (;;) {
     }
 }

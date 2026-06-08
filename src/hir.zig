@@ -668,6 +668,7 @@ fn typeText(ty: ast.TypeExpr) []const u8 {
         .slice => "[]",
         .array => "array",
         .generic => |node| node.base.text,
+        .fn_pointer => "fn",
     };
 }
 

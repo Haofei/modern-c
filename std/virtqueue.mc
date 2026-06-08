@@ -87,14 +87,19 @@ fn vq_free_desc(vq: *mut Virtq, id: u16) -> void {
 
 // ----- queue setup -----
 
+// Why a queue could not be set up.
+enum VqError {
+    QueueUnavailable, // the device reports queue_num_max == 0 for this queue
+}
+
 // Program the queue's three region addresses into the device, negotiate the size
-// against `queue_num_max`, and initialize the free list. Returns false if the
-// queue is unavailable.
-export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> bool {
+// against `queue_num_max`, and initialize the free list. Returns `QueueUnavailable`
+// if the device does not provide this queue.
+export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> Result<bool, VqError> {
     regs.queue_sel.write(q, .release);
     let max: u32 = regs.queue_num_max.read(.acquire);
     if max == 0 {
-        return false;
+        return err(.QueueUnavailable);
     }
     var size: u32 = QUEUE_SIZE as u32;
     if max < size {
@@ -119,7 +124,7 @@ export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> bool {
     vq.used.flags = 0;
     vq.last_used = 0;
     vq_init_free(vq);
-    return true;
+    return ok(true);
 }
 
 // ----- submit / complete -----
@@ -130,7 +135,7 @@ export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> bool {
 // otherwise the device reads it (TX). Returns the descriptor id (the token).
 fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> u16 {
     let id: u16 = vq_alloc_desc(vq);
-    let addr: u64 = device_addr(&buf) as u64; // borrow the handle
+    let addr: u64 = (device_addr(&buf) as usize) as u64; // bus addr → descriptor word
     let len: u32 = buf.len as u32;
     drop(buf); // the device now owns the buffer; we keep its address on record
 
@@ -157,6 +162,86 @@ export fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -> u16 {
 
 export fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -> u16 {
     return vq_submit(vq, buf, true);
+}
+
+// Submit a three-descriptor chain (a virtio-blk request): `header` (device reads),
+// `data` (device reads if `data_writable` is false, writes if true), and `status`
+// (device writes). The descriptors are linked via F_NEXT; only the head is
+// published in the available ring. Consumes the three device-owned buffers and
+// returns the head descriptor id (the completion token).
+export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -> u16 {
+    let id0: u16 = vq_alloc_desc(vq);
+    let id1: u16 = vq_alloc_desc(vq);
+    let id2: u16 = vq_alloc_desc(vq);
+
+    let a0: u64 = (device_addr(&header) as usize) as u64;
+    let l0: u32 = header.len as u32;
+    let a1: u64 = (device_addr(&data) as usize) as u64;
+    let l1: u32 = data.len as u32;
+    let a2: u64 = (device_addr(&status) as usize) as u64;
+    let l2: u32 = status.len as u32;
+    drop(header);
+    drop(data);
+    drop(status);
+
+    // header: device-read, chains to data.
+    vq.desc.d[id0 as usize].addr = a0;
+    vq.desc.d[id0 as usize].len = l0;
+    vq.desc.d[id0 as usize].flags = VRING_DESC_F_NEXT;
+    vq.desc.d[id0 as usize].next = id1;
+
+    // data: device-read or device-write, chains to status.
+    var data_flags: u16 = VRING_DESC_F_NEXT;
+    if data_writable {
+        data_flags = VRING_DESC_F_NEXT | VRING_DESC_F_WRITE;
+    }
+    vq.desc.d[id1 as usize].addr = a1;
+    vq.desc.d[id1 as usize].len = l1;
+    vq.desc.d[id1 as usize].flags = data_flags;
+    vq.desc.d[id1 as usize].next = id2;
+
+    // status: device-write, last in chain.
+    vq.desc.d[id2 as usize].addr = a2;
+    vq.desc.d[id2 as usize].len = l2;
+    vq.desc.d[id2 as usize].flags = VRING_DESC_F_WRITE;
+    vq.desc.d[id2 as usize].next = 0;
+
+    vq.inflight_addr[id0 as usize] = a0; // track the head for bookkeeping
+
+    let slot: usize = (vq.avail.idx % vq.size) as usize;
+    vq.avail.ring[slot] = id0;
+    wmb(); // descriptors + ring entry visible before the index bump
+    vq.avail.idx = vq.avail.idx + 1;
+    return id0;
+}
+
+// Free a descriptor chain starting at `head` (following F_NEXT). `next` is read
+// before each descriptor is freed (freeing rewrites the `next` field).
+fn vq_free_chain(vq: *mut Virtq, head: u16) -> void {
+    var id: u16 = head;
+    var more: bool = true;
+    while more {
+        let flags: u16 = vq.desc.d[id as usize].flags;
+        let next: u16 = vq.desc.d[id as usize].next;
+        vq_free_desc(vq, id);
+        if (flags & VRING_DESC_F_NEXT) != 0 {
+            id = next;
+        } else {
+            more = false;
+        }
+    }
+}
+
+// Reap one completed descriptor chain: read the used head, free the whole chain,
+// and return the device-written length. Call only when `vq_has_used` is true.
+export fn vq_complete_chain(vq: *mut Virtq) -> u32 {
+    rmb();
+    let slot: usize = (vq.last_used % vq.size) as usize;
+    let head: u16 = vq.used.ring[slot].id as u16;
+    let len: u32 = vq.used.ring[slot].len;
+    vq.last_used = vq.last_used + 1;
+    vq_free_chain(vq, head);
+    return len;
 }
 
 // Notify the device that `q` has new buffers (§4.2.3.3): order then doorbell.
@@ -191,5 +276,5 @@ export fn vq_complete(vq: *mut Virtq) -> DeviceBuffer {
     vq.last_used = vq.last_used + 1;
     let addr: u64 = vq.inflight_addr[id as usize];
     vq_free_desc(vq, id);
-    return .{ .dev_addr = addr as usize, .len = len as usize };
+    return .{ .dev_addr = (addr as usize) as DmaAddr, .len = len as usize };
 }

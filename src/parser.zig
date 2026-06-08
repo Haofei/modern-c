@@ -671,6 +671,23 @@ pub const Parser = struct {
             return .{ .span = joinSpan(start, child.span), .kind = .{ .array = .{ .len = len, .child = child } } };
         }
 
+        // A function-pointer type: `fn(P0, P1) -> R`.
+        if (self.match(.kw_fn)) {
+            try self.expect(.l_paren, "expected '(' after 'fn' in function-pointer type");
+            var params: std.ArrayList(ast.TypeExpr) = .empty;
+            errdefer params.deinit(self.allocator);
+            if (self.current.kind != .r_paren) {
+                while (true) {
+                    try params.append(self.allocator, try self.parseType());
+                    if (!self.match(.comma)) break;
+                }
+            }
+            try self.expect(.r_paren, "expected ')' after function-pointer parameter types");
+            try self.expect(.arrow, "expected '->' after function-pointer parameters");
+            const ret = try ast.makePtr(self.allocator, try self.parseType());
+            return .{ .span = joinSpan(start, ret.span), .kind = .{ .fn_pointer = .{ .params = try params.toOwnedSlice(self.allocator), .ret = ret } } };
+        }
+
         // `type` is the meta-type of a `comptime T: type` type parameter
         // (section 22 type parameters / user-defined generics).
         if (self.match(.kw_type)) {

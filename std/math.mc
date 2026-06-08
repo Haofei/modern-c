@@ -45,3 +45,22 @@ export const fn ilog2(x: u32) -> u32 {
     }
     return log;
 }
+
+// Wrapping (modulo-2^32) 32-bit add. Computes in 64-bit then truncates, so it never
+// triggers the checked-overflow trap — for modular arithmetic like TCP sequence
+// numbers, where wraparound is correct, not an error.
+export const fn wrapping_add_u32(a: u32, b: u32) -> u32 {
+    return (((a as u64) + (b as u64)) & 0x0000_0000_FFFF_FFFF) as u32;
+}
+
+// Wrapping (modulo-2^32) 32-bit subtract. `a + 2^32 - b` stays positive in 64 bits.
+export const fn wrapping_sub_u32(a: u32, b: u32) -> u32 {
+    return (((a as u64) + 0x0000_0001_0000_0000 - (b as u64)) & 0x0000_0000_FFFF_FFFF) as u32;
+}
+
+// Wrapping (modulo-2^32) 32-bit left shift: bits shifted past bit 31 are discarded
+// rather than overflowing (the checked `<<` would trap). For hashes / PRNGs where
+// the wraparound is intended. `n` must be < 32.
+export const fn wrapping_shl_u32(x: u32, n: u32) -> u32 {
+    return (((x as u64) << (n as u64)) & 0x0000_0000_FFFF_FFFF) as u32;
+}

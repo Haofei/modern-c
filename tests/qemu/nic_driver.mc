@@ -35,11 +35,11 @@ fn uart_putc(uart: MmioPtr<Uart16550>, ch: u8) -> void {
 
 // Build a frame in the DMA buffer: a 2-byte big-endian length header, demonstrating
 // std/endian writing into cpu-owned DMA memory before handoff.
-fn fill_header(cpu_buf_addr: usize, payload_len: u16) -> void {
+fn fill_header(cpu_buf_addr: PAddr, payload_len: u16) -> void {
     let be: u16 = to_be16(payload_len);
     unsafe {
-        raw.store<u8>(phys(cpu_buf_addr), (be & 0x00FF) as u8);
-        raw.store<u8>(phys(cpu_buf_addr + 1), (be >> 8) as u8);
+        raw.store<u8>(cpu_buf_addr, (be & 0x00FF) as u8);
+        raw.store<u8>(pa_offset(cpu_buf_addr, 1), (be >> 8) as u8);
     }
 }
 
@@ -49,7 +49,7 @@ export fn nic_transmit(uart: MmioPtr<Uart16550>, l: *SpinLock) -> void {
     let cpu0: CpuBuffer = alloc(16);
     fill_header(cpu_addr(&cpu0), 10);
     let dev: DeviceBuffer = clean_for_device(cpu0); // cpu0 consumed at handoff
-    let desc_addr: usize = device_addr(&dev);        // borrow the device address
+    let desc_addr: usize = device_addr(&dev) as usize; // bus address as a ring word
 
     // 2. Under the lock, enqueue the TX descriptor on the ring and dequeue it for
     //    transmit; order the descriptor write before the doorbell.

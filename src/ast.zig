@@ -183,6 +183,12 @@ pub const TypeExpr = struct {
             base: Ident,
             args: []TypeExpr,
         },
+        // A function-pointer type: `fn(P0, P1) -> R`. Lowers to a C function
+        // pointer; the value side is a top-level function's name.
+        fn_pointer: struct {
+            params: []TypeExpr,
+            ret: *TypeExpr,
+        },
     };
 };
 

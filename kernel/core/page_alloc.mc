@@ -1,11 +1,14 @@
-// kernel/core/page_alloc — a typed page allocator. Two safety stories:
+// kernel/core/page_alloc — a physical frame allocator. Safety stories:
 //   * `MemoryMap<Unvalidated> → Validated`: you can only build an allocator from
 //     a region that has been validated (phantom typestate).
 //   * `Page` is a linear `move` resource: a page must be freed exactly once, can
 //     never be used after it is freed, and cannot be double-freed.
-// Arch-neutral. v1 is a bump allocator (no per-page reclaim); the linear `Page`
-// type is what the safety rests on, independent of the reclaim policy.
+//   * addresses are typed `PAddr` with checked arithmetic (std/addr) — no raw
+//     `usize` pointer math, no hand-rolled overflow checks.
+// Allocation pulls from an intrusive LIFO free list first (O(1) alloc + free with
+// real reclaim), then bumps the unused frontier. Arch-neutral.
 
+import "std/addr.mc";
 import "std/mem.mc";
 
 const PAGE_SIZE: usize = 4096;
@@ -14,80 +17,85 @@ const PAGE_SIZE: usize = 4096;
 struct Unvalidated {}
 struct Validated {}
 struct MemoryMap<State> {
-    base: usize,
-    size: usize,
+    range: PhysRange,
 }
 
 // A single owned page frame (linear). Freed exactly once.
 move struct Page {
-    addr: usize,
+    addr: PAddr,
 }
 
-// The allocator state: a bump pointer over a validated region.
+// The allocator: a bump frontier plus an intrusive free list. A freed frame stores
+// the previous free-list head in its first word, so reclaim needs no side table.
 struct PageAllocator {
-    next: usize,
-    end: usize,
+    next: PAddr,       // bump frontier
+    end: PAddr,        // one past the region
+    free_head: usize,  // raw addr of the first free frame, 0 = list empty
+    free_count: usize, // frames currently on the free list
 }
 
+// Describe a region from raw platform values. `phys_range` traps if base+size
+// overflows the address space; alignment/size policy is checked by `validate`.
 export fn memory_map(base: usize, size: usize) -> MemoryMap<Unvalidated> {
-    return .{ .base = base, .size = size };
+    return .{ .range = phys_range(pa(base), size) };
 }
 
-const USIZE_MAX: usize = 0xFFFF_FFFF_FFFF_FFFF;
-
-
-// Validate the region: page-aligned base and size, at least one page, and
-// `base + size` must not overflow the address space. Only a validated map can
-// back an allocator. A bad map is a platform/config error (the bring-up code
-// supplies it), so this traps rather than returning a recoverable error.
+// Validate the region: page-aligned base and size, at least one page. A bad map is
+// a platform/config error (the bring-up code supplies it), so this traps.
 export fn validate(m: MemoryMap<Unvalidated>) -> MemoryMap<Validated> {
-    if !is_aligned(m.base, PAGE_SIZE) {
+    if !pa_is_aligned(pr_start(&m.range), PAGE_SIZE) {
         unreachable; // base must be page-aligned
     }
-    if !is_aligned(m.size, PAGE_SIZE) {
+    let len: usize = pr_len(&m.range);
+    if !is_aligned(len, PAGE_SIZE) {
         unreachable; // size must be a whole number of pages
     }
-    if m.size < PAGE_SIZE {
+    if len < PAGE_SIZE {
         unreachable; // region too small
     }
-    if m.base > USIZE_MAX - m.size {
-        unreachable; // base + size would overflow the address space
-    }
-    return .{ .base = m.base, .size = m.size };
+    return .{ .range = m.range };
 }
 
 export fn page_allocator_from(m: MemoryMap<Validated>) -> PageAllocator {
-    // `base + size` is overflow-checked in validate(), so `end` is exact.
-    return .{ .next = m.base, .end = m.base + m.size };
+    return .{ .next = pr_start(&m.range), .end = pr_end(&m.range), .free_head = 0, .free_count = 0 };
 }
 
-// Allocate one page. Traps when the region is exhausted (callers gate on
-// `pages_available`). NB: returning `Result<Page, _>` here would lose the linear
-// tracking of `Page` — the move checker does not yet track a move value bound by
-// a `switch`/`if let` pattern, so use-after-free of a destructured page goes
-// undetected. Keeping the direct `Page` return preserves the linear guarantee;
-// the recoverable-OOM `Result` is deferred to that move-checker improvement.
+// Allocate one page: reuse a freed frame if any, otherwise bump. Traps only when
+// the region is genuinely exhausted (callers gate on `pages_available`).
 export fn page_alloc(a: *mut PageAllocator) -> Page {
-    if a.next > a.end - PAGE_SIZE {
+    if a.free_count != 0 {
+        let frame: PAddr = pa(a.free_head);
+        unsafe {
+            a.free_head = raw.load<usize>(frame); // pop: next link becomes the head
+        }
+        a.free_count = a.free_count - 1;
+        return .{ .addr = frame };
+    }
+    if pa_diff(a.next, a.end) < PAGE_SIZE {
         unreachable; // out of memory
     }
-    let addr: usize = a.next;
-    a.next = a.next + PAGE_SIZE;
-    return .{ .addr = addr };
+    let frame: PAddr = a.next;
+    a.next = pa_offset(a.next, PAGE_SIZE);
+    return .{ .addr = frame };
 }
 
-// How many pages remain.
-export fn pages_available(a: *mut PageAllocator) -> usize {
-    return (a.end - a.next) / PAGE_SIZE;
-}
-
-// The physical address of a page (borrow).
-export fn page_addr(p: *Page) -> usize {
-    return p.addr;
-}
-
-// Free a page (consumes it). v1 bump allocator does not recycle the frame; the
-// linear type still guarantees no use-after-free and no double-free.
-export fn page_free(p: Page) -> void {
+// Free a page (consumes the linear handle) and return its frame to the free list.
+export fn page_free(a: *mut PageAllocator, p: Page) -> void {
+    let frame: PAddr = p.addr; // borrow before consuming
     drop(p);
+    unsafe {
+        raw.store<usize>(frame, a.free_head); // push: store old head in this frame
+    }
+    a.free_head = pa_value(frame);
+    a.free_count = a.free_count + 1;
+}
+
+// How many pages remain (bump frontier + reclaimed free list).
+export fn pages_available(a: *mut PageAllocator) -> usize {
+    return (pa_diff(a.next, a.end) / PAGE_SIZE) + a.free_count;
+}
+
+// The physical address of a page (borrow) — a typed `PAddr`, not a raw `usize`.
+export fn page_addr(p: *Page) -> PAddr {
+    return p.addr;
 }

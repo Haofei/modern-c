@@ -42,27 +42,40 @@ const VIRTIO_VERSION_MODERN: u32 = 2;
 
 const RESET_SPINS: u32 = 100_000;
 
-// Tell the device the driver has given up (§2.1.2), then report failure.
-fn fail(regs: MmioPtr<VirtioMmio>) -> bool {
+// Why the device-init handshake failed — a typed error instead of a bare `bool`,
+// so a driver (and its logs) can tell *which* step went wrong.
+enum VirtioError {
+    NotVirtio,           // wrong magic — no virtio device at this address
+    UnsupportedVersion,  // legacy/unknown transport version
+    WrongDeviceId,       // a virtio device, but not the class we asked for
+    ResetTimeout,        // device never acknowledged reset
+    FeaturesUnsupported, // device does not offer a feature we require
+    FeaturesNotAccepted, // device rejected FEATURES_OK
+}
+
+// Tell the device the driver has given up (§2.1.2).
+fn mark_failed(regs: MmioPtr<VirtioMmio>) -> void {
     regs.status.write(STATUS_FAILED, .release);
-    return false;
 }
 
 // The device-init handshake (§3.1.1): verify the device; reset and wait for the
 // device to acknowledge it (status reads back 0); ACKNOWLEDGE + DRIVER; read the
 // device's *offered* features and accept only the intersection with what we want
 // (failing if a required bit is missing); confirm FEATURES_OK. On any failure the
-// device is moved to FAILED. The requested feature words are lo = bits 0..31,
-// hi = bits 32..63. Caller then sets up virtqueues and calls `driver_ok`.
-export fn virtio_init(regs: MmioPtr<VirtioMmio>, device_id: u32, want_lo: u32, want_hi: u32) -> bool {
+// device is moved to FAILED and a typed `VirtioError` is returned. The requested
+// feature words are lo = bits 0..31, hi = bits 32..63. Caller then sets up
+// virtqueues and calls `driver_ok`.
+export fn virtio_init(regs: MmioPtr<VirtioMmio>, device_id: u32, want_lo: u32, want_hi: u32) -> Result<bool, VirtioError> {
     if regs.magic.read(.acquire) != VIRTIO_MAGIC {
-        return false; // not a virtio device at all — nothing to FAIL
+        return err(.NotVirtio); // not a virtio device at all — nothing to FAIL
     }
     if regs.version.read(.acquire) != VIRTIO_VERSION_MODERN {
-        return fail(regs);
+        mark_failed(regs);
+        return err(.UnsupportedVersion);
     }
     if regs.device_id.read(.acquire) != device_id {
-        return fail(regs);
+        mark_failed(regs);
+        return err(.WrongDeviceId);
     }
 
     // Reset, then poll until the device confirms (status == 0).
@@ -77,7 +90,8 @@ export fn virtio_init(regs: MmioPtr<VirtioMmio>, device_id: u32, want_lo: u32, w
         spins = spins + 1;
     }
     if !reset_done {
-        return fail(regs);
+        mark_failed(regs);
+        return err(.ResetTimeout);
     }
 
     regs.status.write(STATUS_ACKNOWLEDGE, .release);
@@ -90,10 +104,12 @@ export fn virtio_init(regs: MmioPtr<VirtioMmio>, device_id: u32, want_lo: u32, w
     regs.device_features_sel.write(1, .release);
     let offered_hi: u32 = regs.device_features.read(.acquire);
     if (offered_lo & want_lo) != want_lo {
-        return fail(regs);
+        mark_failed(regs);
+        return err(.FeaturesUnsupported);
     }
     if (offered_hi & want_hi) != want_hi {
-        return fail(regs);
+        mark_failed(regs);
+        return err(.FeaturesUnsupported);
     }
 
     regs.driver_features_sel.write(0, .release);
@@ -103,9 +119,10 @@ export fn virtio_init(regs: MmioPtr<VirtioMmio>, device_id: u32, want_lo: u32, w
 
     regs.status.write(STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK, .release);
     if (regs.status.read(.acquire) & STATUS_FEATURES_OK) != STATUS_FEATURES_OK {
-        return fail(regs);
+        mark_failed(regs);
+        return err(.FeaturesNotAccepted);
     }
-    return true;
+    return ok(true);
 }
 
 // Signal the device that the driver is live (after queue setup).

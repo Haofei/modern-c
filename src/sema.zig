@@ -189,6 +189,12 @@ pub const Checker = struct {
                 }
                 return false;
             },
+            .fn_pointer => |node| {
+                for (node.params) |param| {
+                    if (self.typeExprHasAliasCycle(root_name, param, type_aliases, visiting)) return true;
+                }
+                return self.typeExprHasAliasCycle(root_name, node.ret.*, type_aliases, visiting);
+            },
             .enum_literal => return false,
         }
     }
@@ -1578,6 +1584,15 @@ pub const Checker = struct {
                 self.checkCallCallee(node.callee.*, ctx);
                 for (node.type_args) |ty| self.checkType(ty, .normal, ctx);
                 const direct_function = if (!trap_call and node.type_args.len == 0) directCallFunction(node.callee.*, ctx) else null;
+                // Calling a value of function-pointer type (callback, vtable
+                // field, local): check the call against the pointer's signature.
+                const fnptr_ty: ?ast.TypeExpr = if (!trap_call and direct_function == null) calleeFnPointerType(node.callee.*, ctx) else null;
+                if (fnptr_ty) |fpty| {
+                    const sig = fpty.kind.fn_pointer;
+                    if (node.args.len != sig.params.len) {
+                        self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match function-pointer signature");
+                    }
+                }
                 if (direct_function) |function| {
                     // A `const fn` is evaluable at comptime (section 22); only
                     // non-const (runtime) functions are a forbidden effect.
@@ -1626,6 +1641,10 @@ pub const Checker = struct {
                     if (direct_function) |function| {
                         if (index < function.params.len) self.checkCallArgument(function.params[index].ty, arg, source, ctx);
                     }
+                    if (fnptr_ty) |fpty| {
+                        const sig = fpty.kind.fn_pointer;
+                        if (index < sig.params.len) self.checkCallArgument(sig.params[index], arg, source, ctx);
+                    }
                 }
                 if (trap_call) return .never;
                 // `drop(x)` consumes a linear `move` value (or is a no-op for a
@@ -1647,6 +1666,7 @@ pub const Checker = struct {
                 if (bitcast_class) |class| return class;
                 if (raw_many_offset_class) |class| return class;
                 if (directCallReturnClass(node.callee.*, ctx)) |class| return class;
+                if (fnptr_ty) |fpty| return classifyTypeCtx(fpty.kind.fn_pointer.ret.*, ctx);
                 return .unknown;
             },
             .index => |node| {
@@ -1699,6 +1719,10 @@ pub const Checker = struct {
             if (scope.get(ident.text)) |binding| return binding.class;
         }
         if (globalClass(ident.text, ctx)) |class| return class;
+        // A top-level function name used as a value is a function pointer.
+        if (ctx.functions) |fns| {
+            if (fns.contains(ident.text)) return .fn_pointer;
+        }
         self.errorCode(ident.span, "E_UNKNOWN_IDENTIFIER", "unknown identifier");
         return .unknown;
     }
@@ -1783,6 +1807,13 @@ pub const Checker = struct {
                         self.errorCode(node.args[0].span, "E_ARITH_DOMAIN_UNSIGNED", "MC-C0 arithmetic domains require an unsigned integer type argument");
                     }
                 }
+            },
+            .fn_pointer => |node| {
+                // Parameter and return types must themselves be valid storage
+                // types (a function-pointer parameter/return cannot be `void`
+                // except as the return position).
+                for (node.params) |param| self.checkType(param, .storage, ctx);
+                self.checkType(node.ret.*, .normal, ctx);
             },
         }
     }
@@ -2362,6 +2393,10 @@ pub const Checker = struct {
             .raw_many_pointer => |node| self.checkReflectedGenericTypeArgs(node.child.*, ctx),
             .slice => |node| self.checkReflectedGenericTypeArgs(node.child.*, ctx),
             .array => |node| self.checkReflectedGenericTypeArgs(node.child.*, ctx),
+            .fn_pointer => |node| {
+                for (node.params) |param| self.checkReflectedGenericTypeArgs(param, ctx);
+                self.checkReflectedGenericTypeArgs(node.ret.*, ctx);
+            },
             .member, .name, .enum_literal => {},
         }
     }
@@ -2636,6 +2671,27 @@ pub const Checker = struct {
         if (isUninitLiteral(arg)) {
             self.errorCode(arg.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
             return;
+        }
+        // A function-pointer parameter: the argument is either a named function
+        // (check its signature) or another function-pointer value (check the
+        // signatures match structurally).
+        if (classifyTypeCtx(target_ty, ctx) == .fn_pointer) {
+            if (directCallName(arg)) |name| {
+                if (ctx.functions != null and ctx.functions.?.contains(name)) {
+                    if (!functionMatchesFnPointer(name, target_ty, ctx)) {
+                        self.errorCode(arg.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "function signature does not match the expected function-pointer type");
+                    }
+                    return;
+                }
+            }
+            if (exprDeclaredType(arg, ctx)) |arg_ty| {
+                if (classifyTypeCtx(arg_ty, ctx) == .fn_pointer) {
+                    if (!sameTypeSyntaxCtx(arg_ty, target_ty, ctx)) {
+                        self.errorCode(arg.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "function-pointer signature does not match the expected type");
+                    }
+                    return;
+                }
+            }
         }
         const target = classifyTypeCtx(target_ty, ctx);
         const literal_checked = self.checkIntegerLiteralInitializer(target, target_ty, arg, ctx);
@@ -3474,6 +3530,7 @@ const TypeClass = enum {
     atomic,
     dma_buf,
     result,
+    fn_pointer,
     never,
     void,
     bool,
@@ -3726,6 +3783,7 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
         .nullable => |child| classifyNullableType(child.*),
         .qualified => |node| classifyType(node.child.*),
         .generic => |node| classifyGenericTypeName(node.base.text),
+        .fn_pointer => .fn_pointer,
         else => .unknown,
     };
 }
@@ -4015,6 +4073,9 @@ fn structTypeName(ty: ast.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .name => |name| name.text,
         .qualified => |node| structTypeName(node.child.*),
+        // Member access auto-dereferences a pointer (`p.field` == `(*p).field`), so
+        // the field-type lookup must see through a pointer to the struct too.
+        .pointer => |node| structTypeName(node.child.*),
         else => null,
     };
 }
@@ -4337,6 +4398,18 @@ fn isStaticGlobalInitializer(expr: ast.Expr, ctx: Context) bool {
         .address_of => |inner| isStaticGlobalAddressTarget(inner.*, ctx),
         .array_literal => |items| allStaticGlobalInitializerItems(items, ctx),
         .struct_literal => |fields| allStaticGlobalInitializerFields(fields, ctx),
+        // `atomic.init(<static>)` lowers to a plain `= value` initializer, so a
+        // global atomic with a static seed (e.g. an interrupt-shared counter) is a
+        // valid static global.
+        .call => |node| isAtomicInitCallee(node.callee.*) and node.args.len == 1 and isStaticGlobalInitializer(node.args[0], ctx),
+        else => false,
+    };
+}
+
+fn isAtomicInitCallee(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |m| isIdentNamed(m.base.*, "atomic") and std.mem.eql(u8, m.name.text, "init"),
+        .grouped => |inner| isAtomicInitCallee(inner.*),
         else => false,
     };
 }
@@ -4970,9 +5043,39 @@ fn exprDeclaredType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
             const info = fns.get(name) orelse break :blk null;
             break :blk info.return_ty;
         },
+        .member => |node| memberFieldType(node, ctx),
         .grouped => |inner| exprDeclaredType(inner.*, ctx),
         else => null,
     };
+}
+
+// If `callee` is a value of function-pointer type (a local, global, parameter, or
+// struct field), return its signature type; otherwise null.
+fn calleeFnPointerType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const ty = exprDeclaredType(callee, ctx) orelse return null;
+    const resolved = resolveAliasType(ty, ctx);
+    return switch (resolved.kind) {
+        .fn_pointer => resolved,
+        else => null,
+    };
+}
+
+// Does the named top-level function's signature match an expected `fn(...) -> R`
+// type? Compared structurally, without allocating an intermediate type.
+fn functionMatchesFnPointer(fn_name: []const u8, expected: ast.TypeExpr, ctx: Context) bool {
+    const node = switch (resolveAliasType(expected, ctx).kind) {
+        .fn_pointer => |n| n,
+        else => return false,
+    };
+    const fns = ctx.functions orelse return false;
+    const info = fns.get(fn_name) orelse return false;
+    if (info.params.len != node.params.len) return false;
+    for (info.params, node.params) |param, expected_param| {
+        if (!sameTypeSyntaxCtx(param.ty, expected_param, ctx)) return false;
+    }
+    const void_ty = ast.TypeExpr{ .span = expected.span, .kind = .{ .name = .{ .text = "void", .span = expected.span } } };
+    const ret_ty = info.return_ty orelse void_ty;
+    return sameTypeSyntaxCtx(ret_ty, node.ret.*, ctx);
 }
 
 fn directCallName(callee: ast.Expr) ?[]const u8 {
@@ -5267,6 +5370,17 @@ fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {
             }
             break :blk true;
         },
+        .fn_pointer => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .fn_pointer => |node| node,
+                else => unreachable,
+            };
+            if (left_node.params.len != right_node.params.len) break :blk false;
+            for (left_node.params, right_node.params) |left_param, right_param| {
+                if (!sameTypeSyntax(left_param, right_param)) break :blk false;
+            }
+            break :blk sameTypeSyntax(left_node.ret.*, right_node.ret.*);
+        },
     };
 }
 
@@ -5558,6 +5672,7 @@ fn isKnownLayoutType(ty: ast.TypeExpr, ctx: Context) bool {
             knownTaggedUnionName(name.text, ctx) or
             knownEnumName(name.text, ctx),
         .pointer, .raw_many_pointer, .slice, .array, .nullable => true,
+        .fn_pointer => true, // a function pointer has pointer layout
         .qualified => |node| isKnownLayoutType(node.child.*, ctx),
         .generic => |node| isKnownLayoutGeneric(node, ctx),
         .member, .enum_literal => false,

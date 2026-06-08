@@ -46,9 +46,12 @@ echo "--- kernel UART output ---"
 printf '%s\n' "$OUT"
 echo "--------------------------"
 
-if printf '%s' "$OUT" | grep -q "$EXPECT"; then
-    echo "PASS: trap-test — typed kernel installed the trap vector, enabled interrupts, and counted timer ticks under QEMU"
+# The timer path must work, and the unexpected M-mode ecall (mcause 0xb) must hit
+# the fail-closed panic path with diagnostics rather than silently resuming.
+if printf '%s' "$OUT" | grep -q "$EXPECT" \
+   && printf '%s' "$OUT" | grep -q "PANIC c=0x000000000000000b"; then
+    echo "PASS: trap-test — timer ticks counted, and an unexpected trap fails closed via panic diagnostics under QEMU"
     exit 0
 fi
-echo "FAIL: trap-test — expected '$EXPECT' in kernel output"
+echo "FAIL: trap-test — expected '$EXPECT' and a PANIC diagnostic in kernel output"
 exit 1

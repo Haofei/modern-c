@@ -339,6 +339,10 @@ const CEmitter = struct {
     array_types: std.StringHashMap(ArrayInfo),
     slice_types: std.StringHashMap(SliceInfo),
     result_types: std.StringHashMap(ResultInfo),
+    // Function-pointer signatures encountered, each emitted as a `typedef RET
+    // (*name)(params);` so the name-in-the-middle C declarator works anywhere a
+    // plain type name does.
+    fn_ptr_types: std.StringHashMap(ast.TypeExpr),
     mir_module: *const mir.Module,
     current_function: ?[]const u8 = null,
     temp_index: usize,
@@ -369,6 +373,7 @@ const CEmitter = struct {
             .array_types = std.StringHashMap(ArrayInfo).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
+            .fn_ptr_types = std.StringHashMap(ast.TypeExpr).init(allocator),
             .mir_module = mir_module,
             .temp_index = 0,
             .indent = 0,
@@ -376,6 +381,7 @@ const CEmitter = struct {
     }
 
     fn deinit(self: *CEmitter) void {
+        self.fn_ptr_types.deinit();
         self.result_types.deinit();
         self.slice_types.deinit();
         self.array_types.deinit();
@@ -413,6 +419,21 @@ const CEmitter = struct {
             }
         }
         try eval.collectConstGlobals(self.allocator, module, &self.const_fns, &self.const_globals);
+        // Pre-register every (non-MMIO) struct and type alias name so type-name
+        // mangling (`typeSuffix`'s `struct_` prefix) is consistent regardless of
+        // declaration/import order — e.g. an array-of-struct field (`[N]S`) whose
+        // element struct `S` is declared after the containing struct, or in a
+        // later-merged import. Without this the generated-typedef name and the
+        // field's type reference can disagree.
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
+                .struct_decl => |struct_decl| {
+                    if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
+                },
+                else => {},
+            }
+        }
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
@@ -452,6 +473,9 @@ const CEmitter = struct {
         // declarations above suffice; emit them before the by-value aggregates
         // (a struct may embed a slice by value).
         try self.emitSliceTypes();
+        // Function-pointer typedefs depend only on already-declared scalar/struct
+        // types, and structs/params may reference them by name.
+        try self.emitFnPtrTypes();
         for (module.decls) |decl| {
             if (decl.kind == .struct_decl and self.mmio_structs.contains(decl.kind.struct_decl.name.text)) {
                 try self.emitMmioStruct(decl.kind.struct_decl);
@@ -467,6 +491,9 @@ const CEmitter = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .fn_decl => |fn_decl| if (fn_decl.body != null) try self.emitFunctionForwardDecl(fn_decl),
+                // Extern prototypes must precede any function body that calls them;
+                // an imported `extern fn` can be merged after its caller.
+                .extern_fn => |fn_decl| try self.emitExternFunction(fn_decl),
                 else => {},
             }
         }
@@ -485,7 +512,8 @@ const CEmitter = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .fn_decl => |fn_decl| if (fn_decl.body) |body| try self.emitFunction(fn_decl, body) else try self.emitFunctionPrototype(fn_decl),
-                .extern_fn => |fn_decl| try self.emitExternFunction(fn_decl),
+                // extern prototypes were already emitted in the forward-declaration pass.
+                .extern_fn => {},
                 .global_decl, .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
             }
         }
@@ -1026,6 +1054,11 @@ const CEmitter = struct {
                     }
                 }
             },
+            .fn_pointer => |node| {
+                const name = try self.fnPtrTypeName(node);
+                if (!self.fn_ptr_types.contains(name)) try self.fn_ptr_types.put(name, ty);
+                return out.appendSlice(self.scratch.allocator(), name);
+            },
             else => {},
         }
         if (typeName(ty)) |name| {
@@ -1263,6 +1296,59 @@ const CEmitter = struct {
         try self.collectArrayType(resolved_ty);
         try self.collectSliceType(resolved_ty);
         try self.collectResultType(resolved_ty);
+        try self.collectFnPtrType(resolved_ty);
+    }
+
+    // A stable typedef name for a function-pointer signature: `mc_fnptr_<ret>` then
+    // each parameter suffix, so identical signatures share one typedef.
+    fn fnPtrTypeName(self: *CEmitter, node: anytype) ![]const u8 {
+        var buf: std.ArrayList(u8) = .empty;
+        try buf.appendSlice(self.scratch.allocator(), "mc_fnptr_");
+        try buf.appendSlice(self.scratch.allocator(), try self.typeSuffix(node.ret.*));
+        for (node.params) |param| {
+            try buf.append(self.scratch.allocator(), '_');
+            try buf.appendSlice(self.scratch.allocator(), try self.typeSuffix(param));
+        }
+        return buf.toOwnedSlice(self.scratch.allocator());
+    }
+
+    fn collectFnPtrType(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
+        switch (ty.kind) {
+            .fn_pointer => |node| {
+                try self.collectFnPtrType(node.ret.*);
+                for (node.params) |param| try self.collectFnPtrType(param);
+                const name = try self.fnPtrTypeName(node);
+                if (!self.fn_ptr_types.contains(name)) try self.fn_ptr_types.put(name, ty);
+            },
+            .pointer => |node| try self.collectFnPtrType(node.child.*),
+            .raw_many_pointer => |node| try self.collectFnPtrType(node.child.*),
+            .nullable => |child| try self.collectFnPtrType(child.*),
+            .qualified => |node| try self.collectFnPtrType(node.child.*),
+            .array => |node| try self.collectFnPtrType(node.child.*),
+            .slice => |node| try self.collectFnPtrType(node.child.*),
+            .generic => |node| for (node.args) |arg| try self.collectFnPtrType(arg),
+            .member => |node| try self.collectFnPtrType(node.base.*),
+            else => {},
+        }
+    }
+
+    fn emitFnPtrTypes(self: *CEmitter) !void {
+        var it = self.fn_ptr_types.iterator();
+        while (it.next()) |entry| {
+            const node = entry.value_ptr.kind.fn_pointer;
+            try self.out.appendSlice(self.allocator, "typedef ");
+            try self.out.appendSlice(self.allocator, try self.cTypeFor(node.ret.*, .typedef_name));
+            try self.out.print(self.allocator, " (*{s})(", .{entry.key_ptr.*});
+            if (node.params.len == 0) {
+                try self.out.appendSlice(self.allocator, "void");
+            } else {
+                for (node.params, 0..) |param, i| {
+                    if (i > 0) try self.out.appendSlice(self.allocator, ", ");
+                    try self.out.appendSlice(self.allocator, try self.cTypeFor(param, .typedef_name));
+                }
+            }
+            try self.out.appendSlice(self.allocator, ");\n\n");
+        }
     }
 
     fn collectArrayType(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
@@ -1369,6 +1455,16 @@ const CEmitter = struct {
                     return std.fmt.allocPrint(self.scratch.allocator(), "result_{s}_{s}", .{ try self.typeSuffix(node.args[0]), try self.typeSuffix(node.args[1]) });
                 }
                 return node.base.text;
+            },
+            .fn_pointer => |node| blk: {
+                var buf: std.ArrayList(u8) = .empty;
+                try buf.appendSlice(self.scratch.allocator(), "fnptr_");
+                try buf.appendSlice(self.scratch.allocator(), try self.typeSuffix(node.ret.*));
+                for (node.params) |param| {
+                    try buf.append(self.scratch.allocator(), '_');
+                    try buf.appendSlice(self.scratch.allocator(), try self.typeSuffix(param));
+                }
+                break :blk try buf.toOwnedSlice(self.scratch.allocator());
             },
             else => "unknown",
         };
@@ -1496,7 +1592,7 @@ const CEmitter = struct {
                 } else {
                     try self.emitExpr(node.target, locals);
                     try self.out.appendSlice(self.allocator, " = ");
-                    try self.emitExprWithTarget(node.value, locals, assignmentTargetType(node.target, locals));
+                    try self.emitExprWithTarget(node.value, locals, self.assignmentTargetType(node.target, locals));
                     try self.out.appendSlice(self.allocator, ";\n");
                 }
             },
@@ -2023,12 +2119,19 @@ const CEmitter = struct {
         if (!isComparisonOp(node.op)) return null;
         if (!exprContainsCall(node.left.*) and !exprContainsCall(node.right.*)) return null;
 
-        const left_ty = conditionOperandTypeForEmission(self, node.left.*, locals) orelse return error.UnsupportedCEmission;
-        const right_ty = conditionOperandTypeForEmission(self, node.right.*, locals) orelse return error.UnsupportedCEmission;
-        if (!sameCStorageType(left_ty, right_ty)) return error.UnsupportedCEmission;
+        var left_ty = conditionOperandTypeForEmission(self, node.left.*, locals);
+        var right_ty = conditionOperandTypeForEmission(self, node.right.*, locals);
+        // A bare numeric literal adopts the other operand's storage type, so
+        // `call() != 0` compares at the call's width rather than the literal's
+        // default `u32` (e.g. `(pte & PTE_V) != 0` over a `u64`).
+        if (exprIsNumericLiteral(node.left.*) and right_ty != null) left_ty = right_ty;
+        if (exprIsNumericLiteral(node.right.*) and left_ty != null) right_ty = left_ty;
+        const lt = left_ty orelse return error.UnsupportedCEmission;
+        const rt = right_ty orelse return error.UnsupportedCEmission;
+        if (!sameCStorageType(lt, rt)) return error.UnsupportedCEmission;
 
-        const left_temp = try self.emitSequencedCallArgTemp(node.left.*, locals, left_ty);
-        const right_temp = try self.emitSequencedCallArgTemp(node.right.*, locals, right_ty);
+        const left_temp = try self.emitSequencedCallArgTemp(node.left.*, locals, lt);
+        const right_temp = try self.emitSequencedCallArgTemp(node.right.*, locals, rt);
         const bool_ty = simpleNameType("bool", expr.span);
         const condition_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
         self.temp_index += 1;
@@ -2995,7 +3098,7 @@ const CEmitter = struct {
         } else {
             try self.emitExpr(assignment.target, locals);
             try self.out.appendSlice(self.allocator, " = ");
-            try self.emitMmioReadExprWithReplacements(assignment.value, &nested, assignmentTargetType(assignment.target, locals), replacements.items);
+            try self.emitMmioReadExprWithReplacements(assignment.value, &nested, self.assignmentTargetType(assignment.target, locals), replacements.items);
             try self.out.appendSlice(self.allocator, ";\n");
         }
         return true;
@@ -3060,7 +3163,7 @@ const CEmitter = struct {
     }
 
     fn emitMmioReadSequencedBinaryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+        const target_ty = if (self.assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -3224,6 +3327,23 @@ const CEmitter = struct {
                     }
                     return error.UnsupportedCEmission;
                 }
+                // A comparison with an enum-literal operand (`s == .Ready`): the
+                // literal needs the enum's type, taken from the other operand.
+                if (isComparisonOp(node.op)) {
+                    const left_enum = node.left.*.kind == .enum_literal;
+                    const right_enum = node.right.*.kind == .enum_literal;
+                    if (left_enum or right_enum) {
+                        const enum_ty = if (left_enum) self.operandEmitType(node.right.*, locals) else self.operandEmitType(node.left.*, locals);
+                        if (enum_ty) |ety| {
+                            try self.out.appendSlice(self.allocator, "(");
+                            try self.emitExprWithTarget(node.left.*, locals, ety);
+                            try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
+                            try self.emitExprWithTarget(node.right.*, locals, ety);
+                            try self.out.appendSlice(self.allocator, ")");
+                            return;
+                        }
+                    }
+                }
                 try self.out.appendSlice(self.allocator, "(");
                 try self.emitExpr(node.left.*, locals);
                 try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
@@ -3360,19 +3480,20 @@ const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, ", ");
                     try self.emitExpr(node.base.*, locals);
                     try self.out.print(self.allocator, ".{s})]", .{slice.len_field});
+                } else if (self.arrayTypeForExpr(node.base.*, locals)) |base_arr| {
+                    // An array lvalue — a local, or a struct field (`s.contexts`),
+                    // or an outer-array element: index its `.elems` member with a
+                    // bounds check. Mirrors the value-read path so `&arr[i]` and
+                    // `arr[i]` agree.
+                    try self.emitAddressOperand(node.base.*, locals);
+                    try self.out.appendSlice(self.allocator, ".elems[mc_check_index_usize(");
+                    try self.emitExpr(node.index.*, locals);
+                    const len = try self.arrayLenTextForExpr(base_arr.kind.array.len);
+                    try self.out.print(self.allocator, ", {s})]", .{len});
                 } else {
                     try self.emitAddressOperand(node.base.*, locals);
-                    if (arrayElemsFieldForExpr(node.base.*, locals)) |elems_field| {
-                        try self.out.print(self.allocator, ".{s}", .{elems_field});
-                    }
                     try self.out.appendSlice(self.allocator, "[");
-                    if (arrayLenForExpr(node.base.*, locals)) |len| {
-                        try self.out.appendSlice(self.allocator, "mc_check_index_usize(");
-                        try self.emitExpr(node.index.*, locals);
-                        try self.out.print(self.allocator, ", {s})", .{len});
-                    } else {
-                        try self.emitExpr(node.index.*, locals);
-                    }
+                    try self.emitExpr(node.index.*, locals);
                     try self.out.appendSlice(self.allocator, "]");
                 }
             },
@@ -3819,16 +3940,50 @@ const CEmitter = struct {
     // Payload type name of an `atomic<T>` local referenced by `expr`, or null
     // if `expr` is not such a local.
     fn atomicLocalPayload(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
-        const local_set = locals orelse return null;
         const name = switch (expr.kind) {
             .ident => |ident| ident.text,
             .grouped => |inner| return self.atomicLocalPayload(inner.*, locals),
+            // An atomic struct field (`lock.next` over `struct { next: atomic<T> }`):
+            // resolve the field's declared type and unwrap the `atomic<>`.
+            .member => {
+                if (self.operandEmitType(expr, locals)) |field_ty| {
+                    if (genericChildType(field_ty, "atomic")) |child| return typeName(child);
+                }
+                return null;
+            },
             else => return null,
         };
-        const info = local_set.get(name) orelse return null;
-        const source_ty = info.source_ty orelse return null;
-        const child = genericChildType(source_ty, "atomic") orelse return null;
-        return typeName(child);
+        // A local atomic variable...
+        if (locals) |local_set| {
+            if (local_set.get(name)) |info| {
+                if (info.source_ty) |source_ty| {
+                    if (genericChildType(source_ty, "atomic")) |child| return typeName(child);
+                }
+            }
+        }
+        // ...or a global atomic (e.g. an interrupt-shared counter).
+        if (self.globals.get(name)) |global| {
+            if (global.source_ty) |source_ty| {
+                if (genericChildType(source_ty, "atomic")) |child| return typeName(child);
+            }
+        }
+        return null;
+    }
+
+    // Emit the address-of operand for an atomic op: the raw storage, so a global
+    // atomic yields `&g` (not the relaxed-access wrapper a bare global read uses) and
+    // an atomic struct field yields `&lock->next`.
+    fn emitAtomicBaseAddr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        switch (expr.kind) {
+            .ident => |ident| try self.out.appendSlice(self.allocator, ident.text),
+            .grouped => |inner| try self.emitAtomicBaseAddr(inner.*, locals),
+            .member => |m| {
+                try self.emitAtomicBaseAddr(m.base.*, locals);
+                try self.out.appendSlice(self.allocator, if (self.exprIsPointer(m.base.*, locals)) "->" else ".");
+                try self.out.appendSlice(self.allocator, m.name.text);
+            },
+            else => return error.UnsupportedCEmission,
+        }
     }
 
     // `atomic.init(v)` constructs an atomic with initial value `v`. The atomic
@@ -3869,7 +4024,7 @@ const CEmitter = struct {
             if (!isAtomicLoadOrdering(ordering)) return false;
             const order_c = atomicOrderCConstant(ordering) orelse return false;
             try self.out.appendSlice(self.allocator, "__atomic_load_n(&");
-            try self.emitExpr(member.base.*, locals);
+            try self.emitAtomicBaseAddr(member.base.*, locals);
             try self.out.print(self.allocator, ", {s})", .{order_c});
             return true;
         }
@@ -3879,7 +4034,7 @@ const CEmitter = struct {
             if (!isAtomicStoreOrdering(ordering)) return false;
             const order_c = atomicOrderCConstant(ordering) orelse return false;
             try self.out.appendSlice(self.allocator, "__atomic_store_n(&");
-            try self.emitExpr(member.base.*, locals);
+            try self.emitAtomicBaseAddr(member.base.*, locals);
             try self.out.appendSlice(self.allocator, ", ");
             try self.emitExpr(call.args[0], locals);
             try self.out.print(self.allocator, ", {s})", .{order_c});
@@ -3891,7 +4046,7 @@ const CEmitter = struct {
             const ordering = atomicOrderingArg(call.args, 1);
             const order_c = atomicOrderCConstant(ordering) orelse return false;
             try self.out.appendSlice(self.allocator, "__atomic_fetch_add(&");
-            try self.emitExpr(member.base.*, locals);
+            try self.emitAtomicBaseAddr(member.base.*, locals);
             try self.out.appendSlice(self.allocator, ", ");
             try self.emitExpr(call.args[0], locals);
             try self.out.print(self.allocator, ", {s})", .{order_c});
@@ -4507,16 +4662,25 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .ident => |ident| self.static_initializers.get(ident.text),
             .grouped => |inner| if (self.staticCInitializer(inner.*)) |resolved| resolved else if (isStaticCInitializer(expr)) expr else null,
+            // `atomic.init(X)` initializes the underlying scalar directly (an
+            // `atomic<u32>` lowers to `uint32_t`), so a global atomic seeds from X.
+            .call => |node| if (isAtomicInitCallee(node.callee.*) and node.args.len == 1) self.staticCInitializer(node.args[0]) else null,
             else => if (isStaticCInitializer(expr)) expr else null,
         };
     }
 
-    fn assignmentTargetType(target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        return switch (target.kind) {
-            .ident => |ident| if (locals.get(ident.text)) |info| info.source_ty else null,
-            .grouped => |inner| assignmentTargetType(inner.*, locals),
-            else => null,
+    fn isAtomicInitCallee(callee: ast.Expr) bool {
+        return switch (callee.kind) {
+            .member => |m| isIdentNamed(m.base.*, "atomic") and std.mem.eql(u8, m.name.text, "init"),
+            .grouped => |inner| isAtomicInitCallee(inner.*),
+            else => false,
         };
+    }
+
+    fn assignmentTargetType(self: *CEmitter, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        // Resolves a local, a struct field, or an array element (`a.b[i].c`), so an
+        // assignment's value gets the right target type (e.g. an enum-literal RHS).
+        return self.operandEmitType(target, locals);
     }
 
     fn enumNameForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
@@ -4549,15 +4713,11 @@ const CEmitter = struct {
                 return false;
             },
             .call => if (self.callReturnTypeForExpr(expr, locals)) |ty| isBoolType(ty) else false,
-            // A bool-typed struct field (`rx.is_arp_request`).
-            .member => |node| {
-                const struct_name = self.structTypeNameForExpr(node.base.*, locals) orelse return false;
-                const struct_decl = self.structs.get(struct_name) orelse return false;
-                for (struct_decl.fields) |field| {
-                    if (std.mem.eql(u8, field.name.text, node.name.text)) {
-                        return isBoolType(self.resolveAliasType(field.ty));
-                    }
-                }
+            // A bool-typed struct field — including a field of an array element
+            // (`table[i].used`), resolved through operandEmitType so a `switch` on it
+            // is cast to int (no -Wswitch-bool).
+            .member => {
+                if (self.operandEmitType(expr, locals)) |ty| return isBoolType(self.resolveAliasType(ty));
                 return false;
             },
             .grouped => |inner| self.exprIsBoolForEmission(inner.*, locals),
@@ -4701,7 +4861,7 @@ const CEmitter = struct {
     }
 
     fn emitDirectCallSliceIndexAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = assignmentTargetType(assignment.target, locals) orelse blk: {
+        const target_ty = self.assignmentTargetType(assignment.target, locals) orelse blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -4766,7 +4926,7 @@ const CEmitter = struct {
     }
 
     fn emitDirectCallArrayIndexAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = assignmentTargetType(assignment.target, locals) orelse blk: {
+        const target_ty = self.assignmentTargetType(assignment.target, locals) orelse blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -4825,7 +4985,7 @@ const CEmitter = struct {
     }
 
     fn emitLocalIndexAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = assignmentTargetType(assignment.target, locals) orelse blk: {
+        const target_ty = self.assignmentTargetType(assignment.target, locals) orelse blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -4892,7 +5052,7 @@ const CEmitter = struct {
     }
 
     fn emitLocalIndexAddressAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = assignmentTargetType(assignment.target, locals) orelse blk: {
+        const target_ty = self.assignmentTargetType(assignment.target, locals) orelse blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -5129,6 +5289,10 @@ const CEmitter = struct {
             .binary => |node| {
                 if (!isNumericValueBinaryOp(node.op)) return null;
                 const left_ty = self.numericExprTypeForEmission(node.left.*, locals);
+                // A shift's result type is the left (shifted) operand's type; the
+                // shift amount may be a different width (`u64 >> u32`), so it does
+                // not have to match.
+                if (node.op == .shl or node.op == .shr) return left_ty;
                 const right_ty = self.numericExprTypeForEmission(node.right.*, locals);
                 if (left_ty != null and right_ty != null) {
                     return if (sameCStorageType(left_ty.?, right_ty.?)) left_ty else null;
@@ -5336,7 +5500,7 @@ const CEmitter = struct {
     }
 
     fn emitResultTrySequencedBinaryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
-        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+        const target_ty = if (self.assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -5352,7 +5516,7 @@ const CEmitter = struct {
     }
 
     fn emitNullableTrySequencedBinaryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+        const target_ty = if (self.assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -5890,7 +6054,7 @@ const CEmitter = struct {
     }
 
     fn emitRawManyOffsetDerefAddressAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+        const target_ty = if (self.assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -5950,7 +6114,7 @@ const CEmitter = struct {
     }
 
     fn emitRawManyOffsetDerefAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+        const target_ty = if (self.assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -6185,7 +6349,7 @@ const CEmitter = struct {
     }
 
     fn emitRawManyOffsetAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+        const target_ty = if (self.assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -6280,7 +6444,7 @@ const CEmitter = struct {
     }
 
     fn emitUncheckedAddAggregateAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+        const target_ty = if (self.assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -6430,7 +6594,7 @@ const CEmitter = struct {
     }
 
     fn emitUncheckedAddAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+        const target_ty = if (self.assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -6492,7 +6656,7 @@ const CEmitter = struct {
     }
 
     fn emitSequencedComparisonAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+        const target_ty = if (self.assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -6608,7 +6772,7 @@ const CEmitter = struct {
     }
 
     fn emitSequencedCheckedBinaryAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const target_ty = if (assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
+        const target_ty = if (self.assignmentTargetType(assignment.target, locals)) |ty| ty else blk: {
             const target = self.globalAssignmentTarget(assignment.target, locals) orelse return false;
             break :blk simpleNameType(target.info.type_name, assignment.value.span);
         };
@@ -7196,12 +7360,53 @@ const CEmitter = struct {
     // The array type of `expr`, if it is an array — including the element of an
     // outer array access (`m[i]` over `[N][M]T` yields `[M]T`), which enables
     // nested indexing `m[i][j]`. Returns null for non-array expressions.
+    // The declared type of a value expression (a local, global, struct field, or
+    // array element) — enough to give an enum-literal comparison operand its type.
+    fn operandEmitType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        switch (expr.kind) {
+            .ident => |ident| {
+                if (locals) |ls| {
+                    if (ls.get(ident.text)) |info| return info.source_ty;
+                }
+                if (self.globals.get(ident.text)) |g| return g.source_ty;
+                return null;
+            },
+            .grouped => |inner| return self.operandEmitType(inner.*, locals),
+            .member => |node| {
+                const base_ty = self.operandEmitType(node.base.*, locals) orelse return null;
+                var resolved = self.resolveAliasType(base_ty);
+                if (resolved.kind == .pointer) resolved = self.resolveAliasType(resolved.kind.pointer.child.*);
+                const struct_name = switch (resolved.kind) {
+                    .name => |n| n.text,
+                    else => return null,
+                };
+                const struct_decl = self.structs.get(struct_name) orelse return null;
+                for (struct_decl.fields) |field| {
+                    if (std.mem.eql(u8, field.name.text, node.name.text)) return field.ty;
+                }
+                return null;
+            },
+            .index => |node| {
+                const base_ty = self.operandEmitType(node.base.*, locals) orelse return null;
+                const resolved = self.resolveAliasType(base_ty);
+                return if (resolved.kind == .array) resolved.kind.array.child.* else null;
+            },
+            else => return null,
+        }
+    }
+
     fn arrayTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         const local_set = locals orelse return null;
         switch (expr.kind) {
             .ident => |ident| {
-                const info = local_set.get(ident.text) orelse return null;
-                const source_ty = info.source_ty orelse return null;
+                // A local array, or — falling back — a global array (so taking the
+                // address of a global array element, `&g_buf[i]`, indexes `.elems`).
+                const source_ty = if (local_set.get(ident.text)) |info|
+                    (info.source_ty orelse return null)
+                else if (self.globals.get(ident.text)) |g|
+                    (g.source_ty orelse return null)
+                else
+                    return null;
                 const resolved = self.resolveAliasType(source_ty);
                 return if (resolved.kind == .array) resolved else null;
             },
@@ -7311,6 +7516,21 @@ const CEmitter = struct {
                     }
                 }
                 break :blk null;
+            },
+            // An array element whose type is a struct (`table[i]` over `[N]S`), so a
+            // chained `table[i].field` resolves `table[i]` to its struct — needed to
+            // index a field-array of an array element (`table[i].name[j]`).
+            .index => blk: {
+                const ty = self.operandEmitType(expr, locals) orelse break :blk null;
+                const resolved = self.resolveAliasType(ty);
+                break :blk switch (resolved.kind) {
+                    .name => |n| n.text,
+                    .pointer => |p| switch (self.resolveAliasType(p.child.*).kind) {
+                        .name => |n| n.text,
+                        else => null,
+                    },
+                    else => null,
+                };
             },
             .grouped => |inner| self.structTypeNameForExpr(inner.*, locals),
             else => null,
@@ -9289,8 +9509,11 @@ fn sequencedConditionCandidate(expr: ast.Expr) bool {
 fn conditionOperandTypeForEmission(emitter: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
         .ident => |ident| {
-            const info = locals.get(ident.text) orelse return null;
-            return info.source_ty;
+            if (locals.get(ident.text)) |info| return info.source_ty;
+            // A module-level (e.g. `const`) global compared against a call result,
+            // such as `while tick_count() < LIMIT`.
+            if (emitter.globals.get(ident.text)) |g| return g.source_ty;
+            return null;
         },
         .bool_literal => simpleNameType("bool", expr.span),
         .int_literal => simpleNameType("u32", expr.span),
