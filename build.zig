@@ -294,6 +294,60 @@ pub fn build(b: *std.Build) void {
     const udp_test_step = b.step("udp-test", "Link + run the UDP datagram build/parse + checksum");
     udp_test_step.dependOn(&udp_test_cmd.step);
 
+    const arena_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/arena-test.sh",
+        "zig-out/bin/mcc",
+    });
+    arena_test_cmd.step.dependOn(b.getInstallStep());
+    const arena_test_step = b.step("arena-test", "move Arena: bump alloc, reset/reuse, destroy");
+    arena_test_step.dependOn(&arena_test_cmd.step);
+
+    const genref_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/genref-test.sh",
+        "zig-out/bin/mcc",
+    });
+    genref_test_cmd.step.dependOn(b.getInstallStep());
+    const genref_test_step = b.step("genref-test", "generational handle: live resolve, stale-after-reset trap");
+    genref_test_step.dependOn(&genref_test_cmd.step);
+
+    const owned_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/owned-test.sh",
+        "zig-out/bin/mcc",
+    });
+    owned_test_cmd.step.dependOn(b.getInstallStep());
+    const owned_test_step = b.step("owned-test", "create<T> typed linear allocation, leak-checked");
+    owned_test_step.dependOn(&owned_test_cmd.step);
+
+    const net_arena_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/net-arena-test.sh",
+        "zig-out/bin/mcc",
+    });
+    net_arena_test_cmd.step.dependOn(b.getInstallStep());
+    const net_arena_test_step = b.step("net-arena-test", "RX scratch from a move Arena + generational handle");
+    net_arena_test_step.dependOn(&net_arena_test_cmd.step);
+
+    const pool_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/pool-test.sh",
+        "zig-out/bin/mcc",
+    });
+    pool_test_cmd.step.dependOn(b.getInstallStep());
+    const pool_test_step = b.step("pool-test", "generational pool: use-after-free/double-free caught");
+    pool_test_step.dependOn(&pool_test_cmd.step);
+
+    const alloc_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/alloc-test.sh",
+        "zig-out/bin/mcc",
+    });
+    alloc_test_cmd.step.dependOn(b.getInstallStep());
+    const alloc_test_step = b.step("alloc-test", "Link + run the type-erased std/alloc Allocator over a captured heap");
+    alloc_test_step.dependOn(&alloc_test_cmd.step);
+
     const closure_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/closure-test.sh",
@@ -679,6 +733,13 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&blockfs_test_cmd.step);
     // udp-test links + runs the UDP build/parse + checksum (needs clang).
     m0_step.dependOn(&udp_test_cmd.step);
+    // alloc-test links + runs the type-erased Allocator (needs clang).
+    m0_step.dependOn(&alloc_test_cmd.step);
+    m0_step.dependOn(&arena_test_cmd.step);
+    m0_step.dependOn(&genref_test_cmd.step);
+    m0_step.dependOn(&owned_test_cmd.step);
+    m0_step.dependOn(&net_arena_test_cmd.step);
+    m0_step.dependOn(&pool_test_cmd.step);
     // closure-test links + runs a bind() capturing closure (needs clang).
     m0_step.dependOn(&closure_test_cmd.step);
     // ring-test links + runs the generic in-place Ring<T> (needs clang).

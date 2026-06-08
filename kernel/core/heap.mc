@@ -7,6 +7,7 @@
 // free-list / slab is the next step.
 
 import "std/addr.mc";
+import "std/alloc.mc";
 
 struct Heap {
     range: PhysRange,
@@ -34,4 +35,26 @@ export fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
 // Bytes still available between the bump frontier and the end of the region.
 export fn heap_available(h: *mut Heap) -> usize {
     return pa_diff(h.next, pr_end(&h.range));
+}
+
+// The bump heap doesn't reclaim individual allocations, so `free` only validates the
+// request (fail closed on a bogus free) and returns. The signature matches the
+// Allocator's free closure once `h` is captured.
+fn heap_free_noop(h: *mut Heap, addr: PAddr, size: usize) -> void {
+    if !pr_contains(&h.range, addr) {
+        unreachable; // freeing an address this heap never owned
+    }
+    if size > pr_len(&h.range) {
+        unreachable; // nonsensical size
+    }
+}
+
+// View this heap as a generic `Allocator`: the alloc/free closures capture `h`, so
+// callers allocate against an `*Allocator` without knowing it's a bump heap.
+// `heap_alloc` is already (env, size, align) -> PAddr, so it binds directly.
+export fn heap_allocator(h: *mut Heap) -> Allocator {
+    return .{
+        .alloc = bind(h, heap_alloc),
+        .free = bind(h, heap_free_noop),
+    };
 }

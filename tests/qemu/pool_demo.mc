@@ -1,0 +1,58 @@
+// Generational pool: alloc/set/load/free a slot, then show that a freed handle fails
+// (use-after-free), a second free fails (double-free), and after the slot is reused
+// the old handle stays stale (generation differs). Runtime, fail-closed.
+
+import "std/pool.mc";
+
+struct Cell { v: u32 }
+global g_pool: Pool<Cell>;
+
+export fn pool_demo_run() -> u32 {
+    pool_init(Cell, &g_pool);
+    var pass: u32 = 1;
+
+    var r1: PoolRef<Cell> = .{ .index = 0, .gen = 0 };
+    switch pool_alloc(Cell, &g_pool) {
+        ok(r) => { r1 = r; }
+        err(e) => { pass = 0; }
+    }
+    let v1: Cell = .{ .v = 0xAB };
+    switch pool_set(Cell, &g_pool, r1, v1) {
+        ok(b) => {}
+        err(e) => { pass = 0; }
+    }
+    switch pool_load(Cell, &g_pool, r1) {
+        ok(c) => { if c.v != 0xAB { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
+    switch pool_free(Cell, &g_pool, r1) {
+        ok(b) => {}
+        err(e) => { pass = 0; }
+    }
+    // use-after-free
+    switch pool_load(Cell, &g_pool, r1) {
+        ok(c) => { pass = 0; }
+        err(e) => {}
+    }
+    // double-free
+    switch pool_free(Cell, &g_pool, r1) {
+        ok(b) => { pass = 0; }
+        err(e) => {}
+    }
+    // reuse the slot; the old handle must remain stale (new generation)
+    var r2: PoolRef<Cell> = .{ .index = 0, .gen = 0 };
+    switch pool_alloc(Cell, &g_pool) {
+        ok(r) => { r2 = r; }
+        err(e) => { pass = 0; }
+    }
+    switch pool_load(Cell, &g_pool, r1) {
+        ok(c) => { pass = 0; }
+        err(e) => {}
+    }
+    let v2: Cell = .{ .v = 0xCD };
+    switch pool_set(Cell, &g_pool, r2, v2) {
+        ok(b) => {}
+        err(e) => { pass = 0; }
+    }
+    return pass;
+}

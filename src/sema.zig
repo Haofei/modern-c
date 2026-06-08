@@ -5698,7 +5698,10 @@ fn isKnownLayoutType(ty: ast.TypeExpr, ctx: Context) bool {
             knownPackedBitsName(name.text, ctx) or
             knownOverlayUnionName(name.text, ctx) or
             knownTaggedUnionName(name.text, ctx) or
-            knownEnumName(name.text, ctx),
+            knownEnumName(name.text, ctx) or
+            // A `comptime T: type` parameter is layout-capable once monomorphized;
+            // `sizeof(T)`/`alignof(T)` in a generic body resolve per instantiation.
+            (if (ctx.type_params) |tp| tp.contains(name.text) else false),
         .pointer, .raw_many_pointer, .slice, .array, .nullable => true,
         .fn_pointer => true, // a function pointer has pointer layout
         .closure_type => true, // a closure is a fixed {code, env} aggregate

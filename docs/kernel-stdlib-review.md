@@ -135,3 +135,53 @@ Closures (§3) — unblocks the driver `ctx` word and the poll helper (§5); gen
   (Lifetime of the captured object is the caller's responsibility — the closure stores
   a pointer to it; the kernel's captured objects are static/long-lived. A by-value
   inline-env form for escaping closures is a possible future extension.)
+
+## 8. Type-erased allocator (`std/alloc`) — **DONE** (built on closures)
+
+**Pattern.** The kernel has concrete allocators with different signatures (`Heap`'s
+`heap_alloc`, the page allocator's `page_alloc`); generic code (containers, owning
+closures, drivers) can't allocate without naming a specific backend.
+
+**Migration.** Borrowed Zig's explicit-allocator idea: `std/alloc.Allocator` is a
+type-erased handle `{ alloc, free }` whose ops are **closures that capture the concrete
+allocator** — so the allocator abstraction is built *on* the closure feature (#3). Code
+takes `*Allocator` and calls `alloc_bytes(a, size, align)` / `free_bytes(...)` without
+naming the backend, and there is no implicit global heap — you pass the allocator in.
+`kernel/core/heap.heap_allocator(&heap)` is the first adapter (`heap_alloc` is already
+`(env, size, align) -> PAddr`, so it binds with no shim). Gated by `alloc-test`.
+**Next:** an owning *move*-closure that takes an `Allocator`, allocates its env, and
+frees it on `drop` (linear-checked) — turning the closure lifetime caveat above into a
+compiler-enforced guarantee. The allocator feature is the dependency that unlocks it.
+
+---
+
+## Allocator framework — 5 phases (implemented)
+
+A layered allocator framework built on closures (#3) + generics + `move`, gated in m0:
+
+1. **`move Arena`** (`std/arena.mc`) — bump + bulk `reset`; the arena is the linear
+   resource (forget `arena_destroy` → compile-time `E_RESOURCE_LEAK`, see
+   `kernel/bad/arena_leak.mc`). Plugs into `Allocator` via `arena_allocator`. Gate
+   `arena-test`.
+2. **Generational handles** (`GenRef<T>` + `arena_resolve`) — `reset` bumps a
+   generation; a handle held across a reset fails to resolve (`StaleHandle`). Runtime
+   use-after-reset detection with no lifetimes. Gate `genref-test`.
+3. **Typed owned allocation** (`std/alloc` `create<T> -> Owned<T>`, `own_free`) — a
+   linear typed allocation, compile-time leak-checked (`kernel/bad/owned_leak.mc`).
+   **Compiler change:** `sizeof(T)`/`alignof(T)` now work on a `comptime T: type`
+   parameter (reflection deferred to monomorphization — `isKnownLayoutType` accepts an
+   in-scope type param). Gate `owned-test`.
+4. **Net RX on the arena** (`net_arena_demo`) — per-packet scratch is a `GenRef`, the
+   frame is built + demuxed on arena memory, `reset` per packet; a handle across a
+   reset is caught stale. Gate `net-arena-test`. (virtio_net's DMA ring stays on `move
+   CpuBuffer` — already leak-checked through the device handoff.)
+5. **Generational pool** (`std/pool.mc`) — per-slot generations make use-after-free,
+   double-free, and stale-after-reuse fail closed (`StaleHandle`). Gate `pool-test`.
+
+Net safety story (superset of Zig): compile-time leak detection (`move`), runtime
+use-after-free/reset detection (generations), batch-free arenas.
+
+**Remaining refinements (compiler):** const-generic struct params (`Pool<T, N>` /
+`Ring<T, N>` with caller-chosen capacity — the pool is fixed-16 today); passing a
+`comptime T` to a *nested* generic call (sidestepped by inlining in `std/pool`); and
+the optional `as_ptr<T>` intrinsic for an ergonomic raw `*T` from `create<T>`.
