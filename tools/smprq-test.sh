@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+MCC="${1:-zig-out/bin/mcc}"; HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CLANG="${CLANG:-clang}"; command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: smprq-test (no clang)"; exit 0; }
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/smprq_demo.mc" -o "$WORK/smprq.o" -Wno-switch-bool >/dev/null
+cat >"$WORK/driver.c" <<'EOF'
+#include <stdint.h>
+extern uint32_t smprq_run(void);
+int main(void){ return smprq_run()==1 ? 0 : 1; }
+EOF
+"$CLANG" -std=c11 -Wall -Wextra -Werror "$WORK/driver.c" "$WORK/smprq.o" -o "$WORK/app"
+if "$WORK/app"; then echo "PASS: smprq-test — SMP per-core run queues + work stealing: an idle core steals from the busiest (FIFO, load-balanced)"; exit 0; fi
+echo "FAIL: smprq-test"; exit 1

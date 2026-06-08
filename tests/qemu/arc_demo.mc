@@ -34,16 +34,14 @@ export fn arc_demo_run() -> u32 {
         pass = 0;
     }
 
-    let freed1: bool = arc_drop(Payload, &a, h1); // consumes h1
-    if freed1 {
+    if arc_drop(Payload, &a, h1) {
         pass = 0; // not the last owner -> must NOT free
     }
     if arc_count(Payload, &h2) != 1 {
         pass = 0; // h2 still valid; count back to 1
     }
 
-    let freed2: bool = arc_drop(Payload, &a, h2); // consumes h2
-    if !freed2 {
+    if !arc_drop(Payload, &a, h2) {
         pass = 0; // last owner -> must free
     }
 

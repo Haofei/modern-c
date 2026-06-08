@@ -415,7 +415,9 @@ pub fn cloneType(ctx: *const CloneCtx, ty: ast.TypeExpr) anyerror!ast.TypeExpr {
         // Substitute a type parameter `T` with its concrete type name.
         .name => |n| if (ctx.subst) |s| (if (s.get(n.text)) |value| switch (value) {
             .type_name => |tn| ast.TypeExpr.Kind{ .name = .{ .text = tn, .span = n.span } },
-            .int => ty.kind,
+            // A const-generic value used as a type argument (`Ring<T, N>`) substitutes
+            // to the literal, so the struct instance mangles correctly (`Ring__u32__8`).
+            .int => |v| ast.TypeExpr.Kind{ .name = .{ .text = try std.fmt.allocPrint(ctx.arena, "{d}", .{v}), .span = n.span } },
         } else ty.kind) else ty.kind,
         .enum_literal => ty.kind,
         .member => |node| .{ .member = .{ .base = try cloneTypePtr(ctx, node.base.*), .field = node.field } },
@@ -444,20 +446,32 @@ pub fn cloneType(ctx: *const CloneCtx, ty: ast.TypeExpr) anyerror!ast.TypeExpr {
 // Collect (if new) and name the monomorphization of a generic struct use.
 // Returns the mangled concrete name, or null if the type arguments are not all
 // concrete type names (the use is left generic for sema to diagnose).
+// A generic argument that is a numeric literal is a const-generic *value* (e.g. the
+// `8` in `Ring<u32, 8>`); a type name is not. Returns the value, or null for a type.
+fn constGenericValue(text: []const u8) ?i128 {
+    if (text.len == 0) return null;
+    if (!(text[0] >= '0' and text[0] <= '9')) return null;
+    return std.fmt.parseInt(i128, text, 0) catch null;
+}
+
 fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, sd: ast.StructDecl, node: anytype) anyerror!?[]const u8 {
     if (node.args.len != sd.type_params.len) return null;
     var subst = Subst.init(rw.arena);
     var mangled: std.ArrayList(u8) = .empty;
     try mangled.appendSlice(rw.arena, sd.name.text);
     for (sd.type_params, node.args) |param, arg| {
-        // The argument must itself resolve to a concrete type name (after any
-        // outer substitution — e.g. a generic struct used inside another).
+        // The argument resolves to a concrete type name (after any outer substitution),
+        // or a const-generic *value* (an integer) bound into `[N]T` array lengths.
         const arg_clone = try cloneType(ctx, arg);
         const tn = switch (arg_clone.kind) {
             .name => |n| n.text,
             else => return null,
         };
-        try subst.put(param.text, .{ .type_name = tn });
+        if (constGenericValue(tn)) |value| {
+            try subst.put(param.text, .{ .int = value });
+        } else {
+            try subst.put(param.text, .{ .type_name = tn });
+        }
         try mangled.appendSlice(rw.arena, "__");
         try mangled.appendSlice(rw.arena, tn);
     }

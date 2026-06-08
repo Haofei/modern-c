@@ -5,52 +5,52 @@
 import "std/pool.mc";
 
 struct Cell { v: u32 }
-global g_pool: Pool<Cell>;
+global g_pool: Pool<Cell, 16>;
 
 export fn pool_demo_run() -> u32 {
-    pool_init(Cell, &g_pool);
+    pool_init(Cell, 16, &g_pool);
     var pass: u32 = 1;
 
     var r1: PoolRef<Cell> = .{ .index = 0, .gen = 0 };
-    switch pool_alloc(Cell, &g_pool) {
+    switch pool_alloc(Cell, 16, &g_pool) {
         ok(r) => { r1 = r; }
         err(e) => { pass = 0; }
     }
     let v1: Cell = .{ .v = 0xAB };
-    switch pool_set(Cell, &g_pool, r1, v1) {
+    switch pool_set(Cell, 16, &g_pool, r1, v1) {
         ok(b) => {}
         err(e) => { pass = 0; }
     }
-    switch pool_load(Cell, &g_pool, r1) {
+    switch pool_load(Cell, 16, &g_pool, r1) {
         ok(c) => { if c.v != 0xAB { pass = 0; } }
         err(e) => { pass = 0; }
     }
-    switch pool_free(Cell, &g_pool, r1) {
+    switch pool_free(Cell, 16, &g_pool, r1) {
         ok(b) => {}
         err(e) => { pass = 0; }
     }
     // use-after-free
-    switch pool_load(Cell, &g_pool, r1) {
+    switch pool_load(Cell, 16, &g_pool, r1) {
         ok(c) => { pass = 0; }
         err(e) => {}
     }
     // double-free
-    switch pool_free(Cell, &g_pool, r1) {
+    switch pool_free(Cell, 16, &g_pool, r1) {
         ok(b) => { pass = 0; }
         err(e) => {}
     }
     // reuse the slot; the old handle must remain stale (new generation)
     var r2: PoolRef<Cell> = .{ .index = 0, .gen = 0 };
-    switch pool_alloc(Cell, &g_pool) {
+    switch pool_alloc(Cell, 16, &g_pool) {
         ok(r) => { r2 = r; }
         err(e) => { pass = 0; }
     }
-    switch pool_load(Cell, &g_pool, r1) {
+    switch pool_load(Cell, 16, &g_pool, r1) {
         ok(c) => { pass = 0; }
         err(e) => {}
     }
     let v2: Cell = .{ .v = 0xCD };
-    switch pool_set(Cell, &g_pool, r2, v2) {
+    switch pool_set(Cell, 16, &g_pool, r2, v2) {
         ok(b) => {}
         err(e) => { pass = 0; }
     }

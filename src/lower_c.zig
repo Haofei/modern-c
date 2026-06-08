@@ -4729,7 +4729,9 @@ const CEmitter = struct {
     }
 
     fn emitGlobalLoadExpr(self: *CEmitter, name: []const u8, global: GlobalInfo) !void {
-        if (global.pointer_like) {
+        if (global.aggregate) {
+            try self.out.print(self.allocator, "({s})", .{name}); // plain struct read (copy)
+        } else if (global.pointer_like) {
             try self.out.print(self.allocator, "(({s})__atomic_load_n(&{s}, __ATOMIC_RELAXED))", .{ global.c_type, name });
         } else {
             try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&{s}))", .{ global.c_type, global.race_type_name, name });
@@ -4737,7 +4739,9 @@ const CEmitter = struct {
     }
 
     fn emitGlobalStorePrefix(self: *CEmitter, target: GlobalAccess) !void {
-        if (target.info.pointer_like) {
+        if (target.info.aggregate) {
+            try self.out.print(self.allocator, "{s} = ({s})(", .{ target.name, target.info.c_type }); // plain struct copy
+        } else if (target.info.pointer_like) {
             try self.out.print(self.allocator, "__atomic_store_n(&{s}, ({s})", .{ target.name, target.info.c_type });
         } else {
             try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ({s})", .{ target.info.race_type_name, target.name, target.info.race_c_type });
@@ -4745,7 +4749,9 @@ const CEmitter = struct {
     }
 
     fn emitGlobalStoreSuffix(self: *CEmitter, target: GlobalAccess) !void {
-        if (target.info.pointer_like) {
+        if (target.info.aggregate) {
+            try self.out.appendSlice(self.allocator, ");\n");
+        } else if (target.info.pointer_like) {
             try self.out.appendSlice(self.allocator, ", __ATOMIC_RELAXED);\n");
         } else {
             try self.out.appendSlice(self.allocator, ");\n");
@@ -7997,6 +8003,22 @@ const CEmitter = struct {
                 .source_ty = resolved_ty,
             };
         }
+        const is_aggregate = self.structs.contains(name) or
+            self.overlay_unions.contains(name) or
+            self.tagged_unions.contains(name);
+        // Address newtypes (PAddr/VAddr/DmaAddr) are scalar uintptr_t values, so they use
+        // the usize scalar race helper rather than a (nonexistent) per-name helper.
+        if (isOpaqueAddressTypeName(name)) {
+            return .{
+                .type_name = name,
+                .c_type = c_type,
+                .race_type_name = "usize",
+                .race_c_type = "uintptr_t",
+                .width_bits = widthBits("usize"),
+                .pointer_like = false,
+                .source_ty = resolved_ty,
+            };
+        }
         return .{
             .type_name = name,
             .c_type = c_type,
@@ -8004,6 +8026,7 @@ const CEmitter = struct {
             .race_c_type = c_type,
             .width_bits = widthBits(name),
             .pointer_like = isPointerLikeGlobalType(resolved_ty),
+            .aggregate = is_aggregate,
             .source_ty = resolved_ty,
         };
     }
@@ -9141,6 +9164,9 @@ const GlobalInfo = struct {
     race_c_type: []const u8,
     width_bits: []const u8,
     pointer_like: bool,
+    // An aggregate (struct) global: there is no scalar atomic race helper for it, so
+    // load/store lower to a plain C struct copy rather than mc_race_load/store_<T>.
+    aggregate: bool = false,
     source_ty: ?ast.TypeExpr = null,
     array_element_info: ?GlobalElementInfo = null,
     array_len: ?[]const u8 = null,

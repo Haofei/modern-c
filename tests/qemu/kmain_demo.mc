@@ -32,7 +32,7 @@ struct Session {
     total: u32,
     active: bool,
 }
-global g_sessions: Pool<Session>;
+global g_sessions: Pool<Session, 16>;
 
 const N_REQUESTS: usize = 6;
 
@@ -137,11 +137,11 @@ fn process_request(a: *mut Arena, seed: u32) -> u32 {
 
 // Read-modify-write a session's running total through the pool (gen-checked).
 fn accumulate(r: PoolRef<Session>, amount: u32) -> bool {
-    switch pool_load(Session, &g_sessions, r) {
+    switch pool_load(Session, 16, &g_sessions, r) {
         ok(s) => {
             var ns: Session = s;
             ns.total = ns.total + amount;
-            switch pool_set(Session, &g_sessions, r, ns) {
+            switch pool_set(Session, 16, &g_sessions, r, ns) {
                 ok(b) => {
                     return true;
                 }
@@ -163,11 +163,11 @@ fn accumulate(r: PoolRef<Session>, amount: u32) -> bool {
 fn run_workload(heap: *mut Heap) -> bool {
     let region: PAddr = heap_alloc(heap, 1024, 16);
     var arena: Arena = arena_init(phys_range(region, 1024));
-    pool_init(Session, &g_sessions);
+    pool_init(Session, 16, &g_sessions);
     var pass: bool = true;
 
     var s0: PoolRef<Session> = .{ .index = 0, .gen = 0 };
-    switch pool_alloc(Session, &g_sessions) {
+    switch pool_alloc(Session, 16, &g_sessions) {
         ok(r) => {
             s0 = r;
         }
@@ -176,7 +176,7 @@ fn run_workload(heap: *mut Heap) -> bool {
         }
     }
     let init0: Session = .{ .id = 100, .total = 0, .active = true };
-    switch pool_set(Session, &g_sessions, s0, init0) {
+    switch pool_set(Session, 16, &g_sessions, s0, init0) {
         ok(b) => {}
         err(e) => {
             pass = false;
@@ -197,7 +197,7 @@ fn run_workload(heap: *mut Heap) -> bool {
     }
 
     // the pooled session must hold exactly what we fed it across the loop
-    switch pool_load(Session, &g_sessions, s0) {
+    switch pool_load(Session, 16, &g_sessions, s0) {
         ok(s) => {
             if s.total != expected {
                 pass = false;
@@ -209,13 +209,13 @@ fn run_workload(heap: *mut Heap) -> bool {
     }
 
     // close the session; the handle must now be rejected (use-after-free, fail closed)
-    switch pool_free(Session, &g_sessions, s0) {
+    switch pool_free(Session, 16, &g_sessions, s0) {
         ok(b) => {}
         err(e) => {
             pass = false;
         }
     }
-    switch pool_load(Session, &g_sessions, s0) {
+    switch pool_load(Session, 16, &g_sessions, s0) {
         ok(s) => {
             pass = false; // BUG if reached: stale handle resolved
         }

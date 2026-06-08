@@ -569,12 +569,17 @@ pub const Checker = struct {
                 self.moveBlock(l.body, state, aliases);
             },
             .if_let => |n| {
-                self.moveBorrow(n.value, state);
+                // The condition/scrutinee is evaluated, so by-value `move` operands in
+                // it are consumed (borrow operands `&x` stay borrows inside moveConsume).
+                self.moveConsume(n.value, state, aliases);
                 self.moveBlock(n.then_block, state, aliases);
                 if (n.else_block) |eb| self.moveBlock(eb, state, aliases);
             },
             .@"switch" => |sw| {
-                self.moveBorrow(sw.subject, state);
+                // The subject is evaluated, so by-value `move` operands in it are
+                // consumed (a plain `if cond` desugars to a switch on `cond`; borrow
+                // operands `&x` and non-move subjects stay no-ops in moveConsume).
+                self.moveConsume(sw.subject, state, aliases);
                 for (sw.arms) |arm| switch (arm.body) {
                     .block => |b| self.moveBlock(b, state, aliases),
                     .expr => |e| self.moveConsume(e, state, aliases),

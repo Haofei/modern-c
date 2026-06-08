@@ -339,6 +339,372 @@ pub fn build(b: *std.Build) void {
     const pool_test_step = b.step("pool-test", "generational pool: use-after-free/double-free caught");
     pool_test_step.dependOn(&pool_test_cmd.step);
 
+    const block_server_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/block-server-test.sh",
+        "zig-out/bin/mcc",
+    });
+    block_server_test_cmd.step.dependOn(b.getInstallStep());
+    const block_server_test_step = b.step("block-server-test", "storage driver as a user-mode server (block read/write via IPC)");
+    block_server_test_step.dependOn(&block_server_test_cmd.step);
+
+    const fs_server_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/fs-server-test.sh",
+        "zig-out/bin/mcc",
+    });
+    fs_server_test_cmd.step.dependOn(b.getInstallStep());
+    const fs_server_test_step = b.step("fs-server-test", "filesystem as a user-mode server (open/write/read via IPC)");
+    fs_server_test_step.dependOn(&fs_server_test_cmd.step);
+
+    const net_server_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/net-server-test.sh",
+        "zig-out/bin/mcc",
+    });
+    net_server_test_cmd.step.dependOn(b.getInstallStep());
+    const net_server_test_step = b.step("net-server-test", "UDP socket layer as a user-mode server (bind/recv via IPC)");
+    net_server_test_step.dependOn(&net_server_test_cmd.step);
+
+    const constgen_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/constgen-test.sh",
+        "zig-out/bin/mcc",
+    });
+    constgen_test_cmd.step.dependOn(b.getInstallStep());
+    const constgen_test_step = b.step("constgen-test", "Const-generic Ring<T,N> at two capacities");
+    constgen_test_step.dependOn(&constgen_test_cmd.step);
+
+    const pipe_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/pipe-test.sh", "zig-out/bin/mcc",
+    });
+    pipe_test_cmd.step.dependOn(b.getInstallStep());
+    const pipe_test_step = b.step("pipe-test", "Pipe FIFO");
+    pipe_test_step.dependOn(&pipe_test_cmd.step);
+
+    const bcache_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/bcache-test.sh", "zig-out/bin/mcc",
+    });
+    const perm_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/perm-test.sh", "zig-out/bin/mcc",
+    });
+    perm_test_cmd.step.dependOn(b.getInstallStep());
+    const perm_test_step = b.step("perm-test", "POSIX permission checks");
+    perm_test_step.dependOn(&perm_test_cmd.step);
+
+    const pgroup_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/pgroup-test.sh", "zig-out/bin/mcc",
+    });
+    const tty_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/tty-test.sh", "zig-out/bin/mcc",
+    });
+    tty_test_cmd.step.dependOn(b.getInstallStep());
+    const tty_test_step = b.step("tty-test", "TTY line discipline");
+    tty_test_step.dependOn(&tty_test_cmd.step);
+
+    const args_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/args-test.sh", "zig-out/bin/mcc",
+    });
+    const libc_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/libc-test.sh", "zig-out/bin/mcc",
+    });
+    libc_test_cmd.step.dependOn(b.getInstallStep());
+    const libc_test_step = b.step("libc-test", "Minimal libc core");
+    libc_test_step.dependOn(&libc_test_cmd.step);
+
+    const shell_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/shell-test.sh", "zig-out/bin/mcc",
+    });
+    const vfsmount_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/vfsmount-test.sh", "zig-out/bin/mcc",
+    });
+    vfsmount_test_cmd.step.dependOn(b.getInstallStep());
+    const vfsmount_test_step = b.step("vfsmount-test", "VFS mount switch");
+    vfsmount_test_step.dependOn(&vfsmount_test_cmd.step);
+
+    const fdtable_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/fdtable-test.sh", "zig-out/bin/mcc",
+    });
+    const posix_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/posix-test.sh", "zig-out/bin/mcc",
+    });
+    const userland_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/userland-test.sh", "zig-out/bin/mcc",
+    });
+    const smprq_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/smprq-test.sh", "zig-out/bin/mcc",
+    });
+    const rtc_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/rtc-test.sh", "zig-out/bin/mcc",
+    });
+    const contain_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/contain-test.sh", "zig-out/bin/mcc",
+    });
+    const tcp_server_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/tcp-server-test.sh", "zig-out/bin/mcc",
+    });
+    const fdt_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/fdt-test.sh", "zig-out/bin/mcc",
+    });
+    fdt_test_cmd.step.dependOn(b.getInstallStep());
+    const fdt_test_step = b.step("fdt-test", "Device-tree (FDT) header parsing");
+    fdt_test_step.dependOn(&fdt_test_cmd.step);
+
+    const fb_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/fb-test.sh", "zig-out/bin/mcc",
+    });
+    const dynlink_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/dynlink-test.sh", "zig-out/bin/mcc",
+    });
+    const aarch64_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/aarch64-test.sh", "zig-out/bin/mcc",
+    });
+    const liveupdate_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/liveupdate-test.sh", "zig-out/bin/mcc",
+    });
+    const sbi_boot_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/sbi-boot-test.sh", "zig-out/bin/mcc",
+    });
+    const e1000_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/e1000-test.sh", "zig-out/bin/mcc",
+    });
+    e1000_test_cmd.step.dependOn(b.getInstallStep());
+    const e1000_test_step = b.step("e1000-test", "Real e1000 NIC PCI probe");
+    e1000_test_step.dependOn(&e1000_test_cmd.step);
+
+
+    sbi_boot_test_cmd.step.dependOn(b.getInstallStep());
+    const sbi_boot_test_step = b.step("sbi-boot-test", "Boot under OpenSBI (real firmware)");
+    sbi_boot_test_step.dependOn(&sbi_boot_test_cmd.step);
+
+
+    liveupdate_test_cmd.step.dependOn(b.getInstallStep());
+    const liveupdate_test_step = b.step("liveupdate-test", "Live update (state handoff)");
+    liveupdate_test_step.dependOn(&liveupdate_test_cmd.step);
+
+
+    aarch64_test_cmd.step.dependOn(b.getInstallStep());
+    const aarch64_test_step = b.step("aarch64-test", "Second architecture (aarch64) bring-up");
+    aarch64_test_step.dependOn(&aarch64_test_cmd.step);
+
+
+    dynlink_test_cmd.step.dependOn(b.getInstallStep());
+    const dynlink_test_step = b.step("dynlink-test", "Dynamic-linking relocation core");
+    dynlink_test_step.dependOn(&dynlink_test_cmd.step);
+
+
+    fb_test_cmd.step.dependOn(b.getInstallStep());
+    const fb_test_step = b.step("fb-test", "Linear framebuffer device");
+    fb_test_step.dependOn(&fb_test_cmd.step);
+
+
+    tcp_server_test_cmd.step.dependOn(b.getInstallStep());
+    const tcp_server_test_step = b.step("tcp-server-test", "TCP connection state machine as a server");
+    tcp_server_test_step.dependOn(&tcp_server_test_cmd.step);
+
+
+    contain_test_cmd.step.dependOn(b.getInstallStep());
+    const contain_test_step = b.step("contain-test", "MMU crash containment");
+    contain_test_step.dependOn(&contain_test_cmd.step);
+
+
+    rtc_test_cmd.step.dependOn(b.getInstallStep());
+    const rtc_test_step = b.step("rtc-test", "Wall-clock via goldfish-RTC");
+    rtc_test_step.dependOn(&rtc_test_cmd.step);
+
+
+    smprq_test_cmd.step.dependOn(b.getInstallStep());
+    const smprq_test_step = b.step("smprq-test", "SMP per-core run queues + work stealing");
+    smprq_test_step.dependOn(&smprq_test_cmd.step);
+
+
+    userland_test_cmd.step.dependOn(b.getInstallStep());
+    const userland_test_step = b.step("userland-test", "Userland echo utility");
+    userland_test_step.dependOn(&userland_test_cmd.step);
+
+
+    posix_test_cmd.step.dependOn(b.getInstallStep());
+    const posix_test_step = b.step("posix-test", "POSIX syscall surface");
+    posix_test_step.dependOn(&posix_test_cmd.step);
+
+
+    fdtable_test_cmd.step.dependOn(b.getInstallStep());
+    const fdtable_test_step = b.step("fdtable-test", "File-descriptor table + select");
+    fdtable_test_step.dependOn(&fdtable_test_cmd.step);
+
+
+    shell_test_cmd.step.dependOn(b.getInstallStep());
+    const shell_test_step = b.step("shell-test", "Minimal shell");
+    shell_test_step.dependOn(&shell_test_cmd.step);
+
+
+    args_test_cmd.step.dependOn(b.getInstallStep());
+    const args_test_step = b.step("args-test", "argv/envp vector");
+    args_test_step.dependOn(&args_test_cmd.step);
+
+
+    pgroup_test_cmd.step.dependOn(b.getInstallStep());
+    const pgroup_test_step = b.step("pgroup-test", "Process groups + sessions");
+    pgroup_test_step.dependOn(&pgroup_test_cmd.step);
+
+
+    bcache_test_cmd.step.dependOn(b.getInstallStep());
+    const bcache_test_step = b.step("bcache-test", "Write-back block cache");
+    bcache_test_step.dependOn(&bcache_test_cmd.step);
+
+    const cow_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/cow-test.sh",
+        "zig-out/bin/mcc",
+    });
+    cow_test_cmd.step.dependOn(b.getInstallStep());
+    const cow_test_step = b.step("cow-test", "Copy-on-write: shared RO page diverges on write");
+    cow_test_step.dependOn(&cow_test_cmd.step);
+
+    const usched_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/usched-test.sh",
+        "zig-out/bin/mcc",
+    });
+    usched_test_cmd.step.dependOn(b.getInstallStep());
+    const usched_test_step = b.step("usched-test", "Userspace-set scheduling policy (priority)");
+    usched_test_step.dependOn(&usched_test_cmd.step);
+
+    const userserver_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/userserver-test.sh",
+        "zig-out/bin/mcc",
+    });
+    userserver_test_cmd.step.dependOn(b.getInstallStep());
+    const userserver_test_step = b.step("userserver-test", "A server running in user mode via syscalls");
+    userserver_test_step.dependOn(&userserver_test_cmd.step);
+
+    const isolation_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/isolation-test.sh",
+        "zig-out/bin/mcc",
+    });
+    isolation_test_cmd.step.dependOn(b.getInstallStep());
+    const isolation_test_step = b.step("isolation-test", "Per-server MMU isolation + cross-AS IPC");
+    isolation_test_step.dependOn(&isolation_test_cmd.step);
+
+    const demand_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/demand-test.sh",
+        "zig-out/bin/mcc",
+    });
+    demand_test_cmd.step.dependOn(b.getInstallStep());
+    const demand_test_step = b.step("demand-test", "Demand paging: fault -> map -> retry");
+    demand_test_step.dependOn(&demand_test_cmd.step);
+
+    const mmap_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/mmap-test.sh",
+        "zig-out/bin/mcc",
+    });
+    mmap_test_cmd.step.dependOn(b.getInstallStep());
+    const mmap_test_step = b.step("mmap-test", "mmap anonymous pages into a page table (active satp)");
+    mmap_test_step.dependOn(&mmap_test_cmd.step);
+
+    const diskfs_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/diskfs-test.sh",
+        "zig-out/bin/mcc",
+    });
+    diskfs_test_cmd.step.dependOn(b.getInstallStep());
+    const diskfs_test_step = b.step("diskfs-test", "On-disk FS: persistent format + inodes + named lookup");
+    diskfs_test_step.dependOn(&diskfs_test_cmd.step);
+
+    const heartbeat_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/heartbeat-test.sh",
+        "zig-out/bin/mcc",
+    });
+    heartbeat_test_cmd.step.dependOn(b.getInstallStep());
+    const heartbeat_test_step = b.step("heartbeat-test", "Reincarnation with heartbeat liveness detection");
+    heartbeat_test_step.dependOn(&heartbeat_test_cmd.step);
+
+    const timeout_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/timeout-test.sh",
+        "zig-out/bin/mcc",
+    });
+    timeout_test_cmd.step.dependOn(b.getInstallStep());
+    const timeout_test_step = b.step("timeout-test", "IPC timeout: bounded receive, no infinite block");
+    timeout_test_step.dependOn(&timeout_test_cmd.step);
+
+    const privilege_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/privilege-test.sh",
+        "zig-out/bin/mcc",
+    });
+    privilege_test_cmd.step.dependOn(b.getInstallStep());
+    const privilege_test_step = b.step("privilege-test", "Least privilege: IPC allow-list + kernel-call gate");
+    privilege_test_step.dependOn(&privilege_test_cmd.step);
+
+    const signal_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/signal-test.sh",
+        "zig-out/bin/mcc",
+    });
+    signal_test_cmd.step.dependOn(b.getInstallStep());
+    const signal_test_step = b.step("signal-test", "Signals: deliver + poll + take an async signal");
+    signal_test_step.dependOn(&signal_test_cmd.step);
+
+    const registry_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/registry-test.sh",
+        "zig-out/bin/mcc",
+    });
+    registry_test_cmd.step.dependOn(b.getInstallStep());
+    const registry_test_step = b.step("registry-test", "Name/registry server: lookup a service by name");
+    registry_test_step.dependOn(&registry_test_cmd.step);
+
+    const ipc2_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/ipc2-test.sh",
+        "zig-out/bin/mcc",
+    });
+    ipc2_test_cmd.step.dependOn(b.getInstallStep());
+    const ipc2_test_step = b.step("ipc2-test", "IPC completeness: multi-slot + source filter + notify");
+    ipc2_test_step.dependOn(&ipc2_test_cmd.step);
+
+    const grant_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/grant-test.sh",
+        "zig-out/bin/mcc",
+    });
+    grant_test_cmd.step.dependOn(b.getInstallStep());
+    const grant_test_step = b.step("grant-test", "Memory grant: bounded delegation + revocation");
+    grant_test_step.dependOn(&grant_test_cmd.step);
+
+    const ipc_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/ipc-test.sh",
+        "zig-out/bin/mcc",
+    });
+    ipc_test_cmd.step.dependOn(b.getInstallStep());
+    const ipc_test_step = b.step("ipc-test", "kernel-mediated IPC: client/server message round-trip");
+    ipc_test_step.dependOn(&ipc_test_cmd.step);
+
+    const cap_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/cap-test.sh",
+        "zig-out/bin/mcc",
+    });
+    cap_test_cmd.step.dependOn(b.getInstallStep());
+    const cap_test_step = b.step("cap-test", "capability least-privilege: driver-as-server holds the console cap");
+    cap_test_step.dependOn(&cap_test_cmd.step);
+
+    const restart_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/restart-test.sh",
+        "zig-out/bin/mcc",
+    });
+    restart_test_cmd.step.dependOn(b.getInstallStep());
+    const restart_test_step = b.step("restart-test", "reincarnation: supervisor restarts a crashed server");
+    restart_test_step.dependOn(&restart_test_cmd.step);
+
     const arc_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/arc-test.sh",
@@ -754,6 +1120,50 @@ pub fn build(b: *std.Build) void {
     // alloc-test links + runs the type-erased Allocator (needs clang).
     m0_step.dependOn(&alloc_test_cmd.step);
     m0_step.dependOn(&arc_test_cmd.step);
+    m0_step.dependOn(&constgen_test_cmd.step);
+    m0_step.dependOn(&ipc2_test_cmd.step);
+    m0_step.dependOn(&registry_test_cmd.step);
+    m0_step.dependOn(&signal_test_cmd.step);
+    m0_step.dependOn(&privilege_test_cmd.step);
+    m0_step.dependOn(&timeout_test_cmd.step);
+    m0_step.dependOn(&heartbeat_test_cmd.step);
+    m0_step.dependOn(&diskfs_test_cmd.step);
+    m0_step.dependOn(&mmap_test_cmd.step);
+    m0_step.dependOn(&demand_test_cmd.step);
+    m0_step.dependOn(&isolation_test_cmd.step);
+    m0_step.dependOn(&userserver_test_cmd.step);
+    m0_step.dependOn(&usched_test_cmd.step);
+    m0_step.dependOn(&cow_test_cmd.step);
+    m0_step.dependOn(&pipe_test_cmd.step);
+    m0_step.dependOn(&bcache_test_cmd.step);
+    m0_step.dependOn(&perm_test_cmd.step);
+    m0_step.dependOn(&pgroup_test_cmd.step);
+    m0_step.dependOn(&tty_test_cmd.step);
+    m0_step.dependOn(&args_test_cmd.step);
+    m0_step.dependOn(&libc_test_cmd.step);
+    m0_step.dependOn(&shell_test_cmd.step);
+    m0_step.dependOn(&vfsmount_test_cmd.step);
+    m0_step.dependOn(&fdtable_test_cmd.step);
+    m0_step.dependOn(&posix_test_cmd.step);
+    m0_step.dependOn(&userland_test_cmd.step);
+    m0_step.dependOn(&smprq_test_cmd.step);
+    m0_step.dependOn(&rtc_test_cmd.step);
+    m0_step.dependOn(&contain_test_cmd.step);
+    m0_step.dependOn(&tcp_server_test_cmd.step);
+    m0_step.dependOn(&fdt_test_cmd.step);
+    m0_step.dependOn(&fb_test_cmd.step);
+    m0_step.dependOn(&dynlink_test_cmd.step);
+    m0_step.dependOn(&aarch64_test_cmd.step);
+    m0_step.dependOn(&liveupdate_test_cmd.step);
+    m0_step.dependOn(&sbi_boot_test_cmd.step);
+    m0_step.dependOn(&e1000_test_cmd.step);
+    m0_step.dependOn(&grant_test_cmd.step);
+    m0_step.dependOn(&ipc_test_cmd.step);
+    m0_step.dependOn(&block_server_test_cmd.step);
+    m0_step.dependOn(&fs_server_test_cmd.step);
+    m0_step.dependOn(&net_server_test_cmd.step);
+    m0_step.dependOn(&cap_test_cmd.step);
+    m0_step.dependOn(&restart_test_cmd.step);
     m0_step.dependOn(&arc_pkt_test_cmd.step);
     m0_step.dependOn(&arena_test_cmd.step);
     m0_step.dependOn(&genref_test_cmd.step);

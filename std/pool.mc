@@ -1,21 +1,18 @@
 // std/pool — a fixed-capacity object pool with per-slot generations. Unlike the arena
 // (bulk reset), a pool frees individual objects; the per-slot generation makes
 // use-after-free and double-free fail closed at runtime (StaleHandle), the
-// generational-slotmap pattern. Handles (PoolRef) are copyable; safety is the gen
-// check at `pool_get`, not linearity — complementary to the `move` resources, which
-// give compile-time single-ownership but can't be shared.
+// generational-slotmap pattern. Handles (PoolRef) are copyable; safety is the gen check
+// at access, not linearity — complementary to the `move` resources, which give
+// compile-time single-ownership but can't be shared.
 //
-// Capacity is a fixed 16 (generic over the element type). A `Pool<T, N>` with a
-// caller-chosen capacity awaits const-generic struct parameters.
+// Capacity is a const-generic parameter: `Pool<T, N>` holds up to N objects of type T.
 
 import "std/math.mc";
 
-const POOL_CAP: usize = 16;
-
-struct Pool<T> {
-    slots: [16]T,
-    gen: [16]u32,   // current generation of each slot
-    used: [16]bool,
+struct Pool<T, N> {
+    slots: [N]T,
+    gen: [N]u32, // current generation of each slot
+    used: [N]bool,
     count: usize,
 }
 
@@ -29,9 +26,9 @@ enum PoolError {
     StaleHandle, // the slot was freed (or freed + reused) since this handle was issued
 }
 
-export fn pool_init(comptime T: type, p: *mut Pool<T>) -> void {
+export fn pool_init(comptime T: type, comptime N: usize, p: *mut Pool<T, N>) -> void {
     var i: usize = 0;
-    while i < POOL_CAP {
+    while i < N {
         p.used[i] = false;
         p.gen[i] = 0;
         i = i + 1;
@@ -40,9 +37,9 @@ export fn pool_init(comptime T: type, p: *mut Pool<T>) -> void {
 }
 
 // Reserve a free slot; the handle records the slot's current generation.
-export fn pool_alloc(comptime T: type, p: *mut Pool<T>) -> Result<PoolRef<T>, PoolError> {
+export fn pool_alloc(comptime T: type, comptime N: usize, p: *mut Pool<T, N>) -> Result<PoolRef<T>, PoolError> {
     var i: usize = 0;
-    while i < POOL_CAP {
+    while i < N {
         if !p.used[i] {
             p.used[i] = true;
             p.count = p.count + 1;
@@ -53,10 +50,10 @@ export fn pool_alloc(comptime T: type, p: *mut Pool<T>) -> Result<PoolRef<T>, Po
     return err(.Full);
 }
 
-// Free a slot, bumping its generation so outstanding handles become stale. A handle
-// to an already-free slot (double free) or a stale generation is StaleHandle.
-export fn pool_free(comptime T: type, p: *mut Pool<T>, r: PoolRef<T>) -> Result<bool, PoolError> {
-    if r.index >= POOL_CAP {
+// Free a slot, bumping its generation so outstanding handles become stale. A handle to
+// an already-free slot (double free) or a stale generation is StaleHandle.
+export fn pool_free(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: PoolRef<T>) -> Result<bool, PoolError> {
+    if r.index >= N {
         return err(.StaleHandle);
     }
     if !p.used[r.index] {
@@ -72,8 +69,8 @@ export fn pool_free(comptime T: type, p: *mut Pool<T>, r: PoolRef<T>) -> Result<
 }
 
 // Store a value into the slot behind a live handle (use-after-free caught here).
-export fn pool_set(comptime T: type, p: *mut Pool<T>, r: PoolRef<T>, value: T) -> Result<bool, PoolError> {
-    if r.index >= POOL_CAP {
+export fn pool_set(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: PoolRef<T>, value: T) -> Result<bool, PoolError> {
+    if r.index >= N {
         return err(.StaleHandle);
     }
     if !p.used[r.index] {
@@ -87,8 +84,8 @@ export fn pool_set(comptime T: type, p: *mut Pool<T>, r: PoolRef<T>, value: T) -
 }
 
 // Load the value behind a live handle, or StaleHandle if freed / reused.
-export fn pool_load(comptime T: type, p: *mut Pool<T>, r: PoolRef<T>) -> Result<T, PoolError> {
-    if r.index >= POOL_CAP {
+export fn pool_load(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: PoolRef<T>) -> Result<T, PoolError> {
+    if r.index >= N {
         return err(.StaleHandle);
     }
     if !p.used[r.index] {

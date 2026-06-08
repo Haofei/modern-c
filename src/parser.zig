@@ -719,7 +719,15 @@ pub const Parser = struct {
             errdefer args.deinit(self.allocator);
             if (self.current.kind != .greater) {
                 while (true) {
-                    try args.append(self.allocator, try self.parseType());
+                    // A const-generic argument (`Foo<T, 8>`): an integer literal carried
+                    // as a name; the monomorphizer substitutes it as a value into `[N]T`.
+                    if (self.current.kind == .integer_literal) {
+                        const tok = self.current;
+                        self.advance();
+                        try args.append(self.allocator, .{ .span = tok.span, .kind = .{ .name = .{ .text = tok.lexeme, .span = tok.span } } });
+                    } else {
+                        try args.append(self.allocator, try self.parseType());
+                    }
                     if (!self.match(.comma)) break;
                 }
             }
