@@ -3488,6 +3488,16 @@ const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, ")");
                     return;
                 }
+                // `raw.ptr<T>(addr)` mints a `T *` from a raw address (any T).
+                if (isRawPtrCall(node.callee.*)) {
+                    if (node.type_args.len != 1 or node.args.len != 1) return error.UnsupportedCEmission;
+                    try self.out.appendSlice(self.allocator, "(");
+                    try self.out.appendSlice(self.allocator, try self.cTypeFor(node.type_args[0], .typedef_name));
+                    try self.out.appendSlice(self.allocator, " *)(");
+                    try self.emitExpr(node.args[0], locals);
+                    try self.out.appendSlice(self.allocator, ")");
+                    return;
+                }
                 if (try self.emitAtomicInitCall(node, locals)) return;
                 if (try self.emitAtomicCall(node, locals)) return;
                 if (try self.emitPhysCall(node, locals)) return;
@@ -4152,12 +4162,13 @@ const CEmitter = struct {
             try self.out.print(self.allocator, ", {s})", .{order_c});
             return true;
         }
-        if (std.mem.eql(u8, op, "fetch_add")) {
+        if (std.mem.eql(u8, op, "fetch_add") or std.mem.eql(u8, op, "fetch_sub")) {
             if (call.args.len < 1) return false;
             if (!isAtomicIntegerPayload(payload)) return false;
             const ordering = atomicOrderingArg(call.args, 1);
             const order_c = atomicOrderCConstant(ordering) orelse return false;
-            try self.out.appendSlice(self.allocator, "__atomic_fetch_add(&");
+            const builtin = if (std.mem.eql(u8, op, "fetch_sub")) "__atomic_fetch_sub(&" else "__atomic_fetch_add(&";
+            try self.out.appendSlice(self.allocator, builtin);
             try self.emitAtomicBaseAddr(member.base.*, locals);
             try self.out.appendSlice(self.allocator, ", ");
             try self.emitExpr(call.args[0], locals);
@@ -8900,6 +8911,8 @@ const Inspector = struct {
             "__atomic_load_n"
         else if (std.mem.eql(u8, access.op, "store"))
             "__atomic_store_n"
+        else if (std.mem.eql(u8, access.op, "fetch_sub"))
+            "__atomic_fetch_sub"
         else
             "__atomic_fetch_add";
         try self.out.print(
@@ -10147,11 +10160,11 @@ fn atomicAccess(callee: ast.Expr, args: []const ast.Expr, ctx: FnContext) ?Atomi
         if (!isAtomicStoreOrdering(ordering)) return null;
         return .{ .op = "store", .object = object, .payload_type = payload, .ordering = ordering };
     }
-    if (std.mem.eql(u8, member.name.text, "fetch_add")) {
+    if (std.mem.eql(u8, member.name.text, "fetch_add") or std.mem.eql(u8, member.name.text, "fetch_sub")) {
         if (!isAtomicIntegerPayload(payload)) return null;
         const ordering = atomicOrderingArg(args, 1);
         if (atomicOrderCConstant(ordering) == null) return null;
-        return .{ .op = "fetch_add", .object = object, .payload_type = payload, .ordering = ordering };
+        return .{ .op = member.name.text, .object = object, .payload_type = payload, .ordering = ordering };
     }
     return null;
 }
@@ -10518,6 +10531,14 @@ fn isRawLoadCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "load") and isIdentNamed(member.base.*, "raw"),
         .grouped => |inner| isRawLoadCall(inner.*),
+        else => false,
+    };
+}
+
+fn isRawPtrCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "ptr") and isIdentNamed(member.base.*, "raw"),
+        .grouped => |inner| isRawPtrCall(inner.*),
         else => false,
     };
 }

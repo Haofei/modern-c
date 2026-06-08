@@ -48,10 +48,10 @@ printf '%s\n' "$OUT"
 echo "--------------------------"
 
 # main/worker must interleave (MWMWMW) and the demo must return cleanly.
-if printf '%s' "$OUT" | grep -q "123AB4" \
+if printf '%s' "$OUT" | grep -q "123AB45" \
    && printf '%s' "$OUT" | grep -q "KERNEL-OK"; then
-    echo "PASS: kmain-test — one integrated kernel image booted heap+driver-console+logger+VFS+scheduler together (123AB4, KERNEL-OK) under QEMU"
+    echo "PASS: kmain-test — one integrated kernel image booted heap+console+logger+VFS+scheduler, then ran a session-pool+arena workload (123AB45, KERNEL-OK) under QEMU"
     exit 0
 fi
-echo "FAIL: kmain-test — expected 123AB4 and KERNEL-OK in kernel output"
+echo "FAIL: kmain-test — expected 123AB45 and KERNEL-OK in kernel output"
 exit 1

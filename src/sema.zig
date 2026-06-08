@@ -1663,6 +1663,10 @@ pub const Checker = struct {
                     return .void;
                 }
                 if (rawLoadCallReturnType(node)) |ty| return classifyTypeCtx(ty, ctx);
+                if (isRawPtrCall(node.callee.*) and node.type_args.len == 1) {
+                    const ptr_ty = ast.TypeExpr{ .span = node.type_args[0].span, .kind = .{ .pointer = .{ .mutability = .mut, .child = @constCast(&node.type_args[0]) } } };
+                    return classifyTypeCtx(ptr_ty, ctx);
+                }
                 if (self.checkEnumRawCall(expr.span, node.callee.*, node.args, ctx)) |class| return class;
                 if (atomicCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (self.dmaCallReturnClass(node.callee.*, ctx)) |class| return class;
@@ -1995,13 +1999,13 @@ pub const Checker = struct {
             self.checkAtomicStoreOrdering(args[1]);
             return;
         }
-        if (std.mem.eql(u8, member.name.text, "fetch_add")) {
+        if (std.mem.eql(u8, member.name.text, "fetch_add") or std.mem.eql(u8, member.name.text, "fetch_sub")) {
             if (args.len != 2) {
-                self.errorCode(span, "E_CALL_ARG_COUNT", "atomic fetch_add expects a value and one memory ordering argument");
+                self.errorCode(span, "E_CALL_ARG_COUNT", "atomic fetch_add/fetch_sub expects a value and one memory ordering argument");
                 return;
             }
             if (!isCheckedInt(payload_class)) {
-                self.errorCode(member.name.span, "E_ATOMIC_OPERATION", "atomic fetch_add requires an integer payload type");
+                self.errorCode(member.name.span, "E_ATOMIC_OPERATION", "atomic fetch_add/fetch_sub requires an integer payload type");
             }
             const source = self.checkExpr(args[0], ctx);
             self.checkCallArgument(payload_ty, args[0], source, ctx);
@@ -4030,7 +4034,7 @@ fn atomicCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .grouped => |inner| return atomicCallReturnType(inner.*, ctx),
         else => return null,
     };
-    if (std.mem.eql(u8, member.name.text, "load") or std.mem.eql(u8, member.name.text, "fetch_add")) {
+    if (std.mem.eql(u8, member.name.text, "load") or std.mem.eql(u8, member.name.text, "fetch_add") or std.mem.eql(u8, member.name.text, "fetch_sub")) {
         return atomicPayloadTypeForValue(member.base.*, ctx);
     }
     return null;
@@ -4058,6 +4062,16 @@ fn isRawLoadCall(callee: ast.Expr) bool {
 fn rawLoadCallReturnType(call: anytype) ?ast.TypeExpr {
     if (!isRawLoadCall(call.callee.*) or call.type_args.len != 1) return null;
     return call.type_args[0];
+}
+
+// `raw.ptr<T>(addr)` mints a `*mut T` from a raw address — the typed-pointer companion
+// of raw.load/store (used to view an allocation as a typed object: Arc blocks, etc.).
+fn isRawPtrCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |m| isIdentNamed(m.base.*, "raw") and std.mem.eql(u8, m.name.text, "ptr"),
+        .grouped => |inner| isRawPtrCall(inner.*),
+        else => false,
+    };
 }
 
 fn tryPayloadType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
@@ -5513,6 +5527,8 @@ fn isUnsafeOperationCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |node| {
             if (isIdentNamed(node.base.*, "raw") and (std.mem.eql(u8, node.name.text, "store") or std.mem.eql(u8, node.name.text, "load"))) return true;
+            // raw.ptr mints a typed pointer from an address (like phys() makes a PAddr);
+            // it needs no unsafe block — dereferencing the result is the checked part.
             if (isIdentNamed(node.base.*, "mmio") and std.mem.eql(u8, node.name.text, "map")) return true;
             return false;
         },
@@ -5530,7 +5546,7 @@ fn isBuiltinNamespaceMember(member: anytype) bool {
         },
         else => return false,
     };
-    if (std.mem.eql(u8, base, "raw")) return std.mem.eql(u8, member.name.text, "store") or std.mem.eql(u8, member.name.text, "load");
+    if (std.mem.eql(u8, base, "raw")) return std.mem.eql(u8, member.name.text, "store") or std.mem.eql(u8, member.name.text, "load") or std.mem.eql(u8, member.name.text, "ptr");
     if (std.mem.eql(u8, base, "fence")) return std.mem.eql(u8, member.name.text, "full") or std.mem.eql(u8, member.name.text, "acquire") or std.mem.eql(u8, member.name.text, "release");
     if (std.mem.eql(u8, base, "mmio")) return std.mem.eql(u8, member.name.text, "map");
     if (std.mem.eql(u8, base, "unchecked")) return isUncheckedNoOverflowMember(member.name.text);

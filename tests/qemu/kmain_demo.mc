@@ -10,6 +10,8 @@ import "kernel/core/device.mc";
 import "kernel/core/log.mc";
 import "kernel/fs/vfs.mc";
 import "kernel/core/process.mc";
+import "std/arena.mc";
+import "std/pool.mc";
 import "std/addr.mc";
 
 const UART_BASE: usize = 0x1000_0000;
@@ -23,6 +25,16 @@ global g_uart_id: usize;
 global g_log: Logger;
 global g_vfs: Vfs;
 global g_procs: ProcTable;
+
+// A connection/session, tracked in a generational pool (the workload below).
+struct Session {
+    id: u32,
+    total: u32,
+    active: bool,
+}
+global g_sessions: Pool<Session>;
+
+const N_REQUESTS: usize = 6;
 
 fn uart_putc(u: *Uart, b: u8) -> void {
     unsafe {
@@ -93,6 +105,127 @@ fn worker_b() -> void {
     proc_exit(&g_procs, 0);
 }
 
+// Process one request on per-request arena scratch: write 16 bytes derived from
+// `seed`, then checksum them. The scratch is a generational handle; the arena is
+// reset by the caller after each request (so the handle would go stale).
+fn process_request(a: *mut Arena, seed: u32) -> u32 {
+    let h: GenRef<u8> = arena_alloc_gen(u8, a, 64, 8);
+    var sum: u32 = 0;
+    switch arena_resolve(u8, a, h) {
+        ok(addr) => {
+            var i: usize = 0;
+            while i < 16 {
+                let b: u8 = ((seed + (i as u32)) & 0xFF) as u8;
+                unsafe {
+                    raw.store<u8>(pa_offset(addr, i), b);
+                }
+                i = i + 1;
+            }
+            var j: usize = 0;
+            while j < 16 {
+                unsafe {
+                    let v: u8 = raw.load<u8>(pa_offset(addr, j));
+                    sum = sum + (v as u32);
+                }
+                j = j + 1;
+            }
+        }
+        err(e) => {}
+    }
+    return sum;
+}
+
+// Read-modify-write a session's running total through the pool (gen-checked).
+fn accumulate(r: PoolRef<Session>, amount: u32) -> bool {
+    switch pool_load(Session, &g_sessions, r) {
+        ok(s) => {
+            var ns: Session = s;
+            ns.total = ns.total + amount;
+            switch pool_set(Session, &g_sessions, r, ns) {
+                ok(b) => {
+                    return true;
+                }
+                err(e) => {
+                    return false;
+                }
+            }
+        }
+        err(e) => {
+            return false;
+        }
+    }
+}
+
+// A realistic workload tying the new framework together: a session is opened in a
+// generational pool; N requests are each processed on per-request arena scratch (reset
+// between requests) and accumulated into the session; the total is verified exact;
+// then the session is closed and its now-stale handle is confirmed rejected.
+fn run_workload(heap: *mut Heap) -> bool {
+    let region: PAddr = heap_alloc(heap, 1024, 16);
+    var arena: Arena = arena_init(phys_range(region, 1024));
+    pool_init(Session, &g_sessions);
+    var pass: bool = true;
+
+    var s0: PoolRef<Session> = .{ .index = 0, .gen = 0 };
+    switch pool_alloc(Session, &g_sessions) {
+        ok(r) => {
+            s0 = r;
+        }
+        err(e) => {
+            pass = false;
+        }
+    }
+    let init0: Session = .{ .id = 100, .total = 0, .active = true };
+    switch pool_set(Session, &g_sessions, s0, init0) {
+        ok(b) => {}
+        err(e) => {
+            pass = false;
+        }
+    }
+
+    var expected: u32 = 0;
+    var i: usize = 0;
+    while i < N_REQUESTS {
+        let sum: u32 = process_request(&arena, (i as u32) * 7 + 1);
+        expected = expected + sum;
+        log_event(&g_log, .Info, 2, sum as u64);
+        if !accumulate(s0, sum) {
+            pass = false;
+        }
+        arena_reset(&arena); // per-request scratch reclaimed
+        i = i + 1;
+    }
+
+    // the pooled session must hold exactly what we fed it across the loop
+    switch pool_load(Session, &g_sessions, s0) {
+        ok(s) => {
+            if s.total != expected {
+                pass = false;
+            }
+        }
+        err(e) => {
+            pass = false;
+        }
+    }
+
+    // close the session; the handle must now be rejected (use-after-free, fail closed)
+    switch pool_free(Session, &g_sessions, s0) {
+        ok(b) => {}
+        err(e) => {
+            pass = false;
+        }
+    }
+    switch pool_load(Session, &g_sessions, s0) {
+        ok(s) => {
+            pass = false; // BUG if reached: stale handle resolved
+        }
+        err(e) => {}
+    }
+
+    arena_destroy(arena); // consume the linear arena
+    return pass;
+}
+
 export fn kmain(region_base: usize, region_len: usize) -> u32 {
     var stages: u32 = 0;
 
@@ -132,6 +265,13 @@ export fn kmain(region_base: usize, region_len: usize) -> u32 {
     proc_yield(&g_procs); // run them (they print A, B) and return here when both exit
     stages = stages | 0x10;
     say(0x34); // '4'
+
+    // 6) Integrated workload: a session server over the generational pool with
+    // per-request arena scratch (the new allocator framework, end to end).
+    if run_workload(&heap) {
+        stages = stages | 0x20;
+        say(0x35); // '5'
+    }
 
     return stages;
 }

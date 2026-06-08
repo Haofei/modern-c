@@ -99,7 +99,7 @@ export fn arena_alloc_gen(comptime T: type, a: *mut Arena, size: usize, align: u
 }
 
 // Resolve a handle to its address iff it belongs to the arena's current generation.
-export fn arena_resolve(comptime T: type, a: *Arena, h: GenRef<T>) -> Result<PAddr, ArenaError> {
+export fn arena_resolve(comptime T: type, a: *mut Arena, h: GenRef<T>) -> Result<PAddr, ArenaError> {
     if h.gen != a.gen {
         return err(.StaleHandle); // used after a reset — memory may have been reused
     }

@@ -723,7 +723,7 @@ pub const Parser = struct {
                     if (!self.match(.comma)) break;
                 }
             }
-            const end = try self.expectTok(.greater, "expected '>' after type arguments");
+            const end = try self.consumeGenericClose("expected '>' after type arguments");
             ty = .{ .span = joinSpan(base.span, end.span), .kind = .{ .generic = .{ .base = base, .args = try args.toOwnedSlice(self.allocator) } } };
         }
         while (self.match(.dot)) {
@@ -908,6 +908,13 @@ pub const Parser = struct {
                     depth -= 1;
                     saw_type_token = true;
                 },
+                .shift_right => {
+                    // `>>` closes two levels (a nested generic's `>` plus the outer).
+                    if (depth == 0) return false;
+                    depth -= 1;
+                    if (depth == 0) return saw_type_token and lx.next().kind == .l_paren;
+                    saw_type_token = true;
+                },
                 .comma => {
                     if (!saw_type_token) return false;
                     saw_type_token = false;
@@ -932,7 +939,7 @@ pub const Parser = struct {
                 if (!self.match(.comma)) break;
             }
         }
-        try self.expect(.greater, "expected '>' after type arguments");
+        _ = try self.consumeGenericClose("expected '>' after type arguments");
         return args.toOwnedSlice(self.allocator);
     }
 
@@ -1034,6 +1041,23 @@ pub const Parser = struct {
         const tok = self.current;
         self.advance();
         return tok;
+    }
+
+    // Close a generic/type-argument list, splitting a `>>` (shift_right) token into two
+    // `>` so nested generics like `Foo<Bar<T>>` parse. Consumes one `>`; on a `>>`,
+    // leaves a synthetic `>` as the current token for the enclosing list to consume.
+    fn consumeGenericClose(self: *Parser, message: []const u8) anyerror!token.Token {
+        if (self.current.kind == .greater) {
+            const tok = self.current;
+            self.advance();
+            return tok;
+        }
+        if (self.current.kind == .shift_right) {
+            const tok = token.Token{ .kind = .greater, .lexeme = ">", .span = self.current.span };
+            self.current = token.Token{ .kind = .greater, .lexeme = ">", .span = self.current.span };
+            return tok;
+        }
+        return self.fail(message);
     }
 
     fn match(self: *Parser, kind: token.Kind) bool {

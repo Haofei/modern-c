@@ -2160,6 +2160,7 @@ const FunctionBuilder = struct {
                 if (std.mem.eql(u8, node.name.text, "load")) break :blk "atomic.load";
                 if (std.mem.eql(u8, node.name.text, "store")) break :blk "atomic.store";
                 if (std.mem.eql(u8, node.name.text, "fetch_add")) break :blk "atomic.fetch_add";
+                if (std.mem.eql(u8, node.name.text, "fetch_sub")) break :blk "atomic.fetch_sub";
                 break :blk null;
             },
             .grouped => |inner| self.atomicReceiverCalleeName(inner.*),
@@ -2777,7 +2778,7 @@ const FunctionBuilder = struct {
         const m = member.name.text;
         if (self.typeExprForExpr(member.base.*)) |base_ty| {
             if (isAtomicTypeExprAlias(base_ty, self.aliases)) {
-                if (!std.mem.eql(u8, m, "load") and !std.mem.eql(u8, m, "store") and !std.mem.eql(u8, m, "fetch_add")) return "atomic_operation";
+                if (!std.mem.eql(u8, m, "load") and !std.mem.eql(u8, m, "store") and !std.mem.eql(u8, m, "fetch_add") and !std.mem.eql(u8, m, "fetch_sub")) return "atomic_operation";
                 return null;
             }
         }
@@ -4957,6 +4958,7 @@ fn qualifiedMemberName(node: anytype) ?[]const u8 {
         if (std.mem.eql(u8, node.name.text, "store")) return "atomic.store";
         if (std.mem.eql(u8, node.name.text, "rmw")) return "atomic.rmw";
         if (std.mem.eql(u8, node.name.text, "fetch_add")) return "atomic.fetch_add";
+        if (std.mem.eql(u8, node.name.text, "fetch_sub")) return "atomic.fetch_sub";
     }
     return node.name.text;
 }

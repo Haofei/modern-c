@@ -339,6 +339,24 @@ pub fn build(b: *std.Build) void {
     const pool_test_step = b.step("pool-test", "generational pool: use-after-free/double-free caught");
     pool_test_step.dependOn(&pool_test_cmd.step);
 
+    const arc_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/arc-test.sh",
+        "zig-out/bin/mcc",
+    });
+    arc_test_cmd.step.dependOn(b.getInstallStep());
+    const arc_test_step = b.step("arc-test", "Arc<T> shared ownership: clone/last-drop-frees, handles leak-checked");
+    arc_test_step.dependOn(&arc_test_cmd.step);
+
+    const arc_pkt_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/arc-pkt-test.sh",
+        "zig-out/bin/mcc",
+    });
+    arc_pkt_test_cmd.step.dependOn(b.getInstallStep());
+    const arc_pkt_test_step = b.step("arc-pkt-test", "packet Arc-shared between two consumers (skb/mbuf pattern)");
+    arc_pkt_test_step.dependOn(&arc_pkt_test_cmd.step);
+
     const alloc_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/alloc-test.sh",
@@ -735,6 +753,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&udp_test_cmd.step);
     // alloc-test links + runs the type-erased Allocator (needs clang).
     m0_step.dependOn(&alloc_test_cmd.step);
+    m0_step.dependOn(&arc_test_cmd.step);
+    m0_step.dependOn(&arc_pkt_test_cmd.step);
     m0_step.dependOn(&arena_test_cmd.step);
     m0_step.dependOn(&genref_test_cmd.step);
     m0_step.dependOn(&owned_test_cmd.step);
