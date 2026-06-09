@@ -34,7 +34,7 @@ pub fn build(b: *std.Build) void {
         "sh",
         "tools/check-generated-c.sh",
         "zig-out/bin/mcc",
-        "tests/c_emit_*.mc",
+        "tests/c_emit/*.mc",
         "zig-out/c-test",
     });
     c_test_cmd.step.dependOn(b.getInstallStep());

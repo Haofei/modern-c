@@ -56,7 +56,7 @@ Prototype or incomplete:
 
 Deferred:
 
-- LLVM backend (see Appendix M of `MC_0.6.1_Final_Design.md`). Not started; the
+- LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Not started; the
   C backend is the only lowering target for now.
 
 ## Requirements
@@ -87,7 +87,7 @@ zig build run -- lower-hir tests/spec/try_propagation.mc
 zig build run -- verify-hir tests/spec/no_lang_trap.mc
 zig build run -- facts tests/spec/no_lang_trap.mc
 zig build run -- lower-c tests/spec/mmio_ordering.mc
-zig build run -- emit-c tests/c_emit_smoke.mc
+zig build run -- emit-c tests/c_emit/smoke.mc
 ```
 
 Available commands:
@@ -109,7 +109,7 @@ Available commands:
 The current fixture suite contains 51 spec milestones and is mostly focused on
 parsing, semantic diagnostics, IR/fact inspection, and lower-C inspection
 markers. Passing fixtures do not imply full implementation of
-`MC_0.6.1_Final_Design.md`.
+`docs/spec/MC_0.6.1_Final_Design.md`.
 
 `zig build m0` is the current milestone gate. It runs the spec fixture/unit
 tests and generated-C smoke fixtures together.
