@@ -5508,6 +5508,12 @@ const CEmitter = struct {
             .grouped => |inner| self.exprResolvesToFloat(inner.*, locals),
             .unary => |node| self.exprResolvesToFloat(node.expr.*, locals),
             .binary => |node| self.exprResolvesToFloat(node.left.*, locals) or self.exprResolvesToFloat(node.right.*, locals),
+            // indexing a local array/slice of float (e.g. `w[i] + h[j]`): resolve element type
+            .index => |node| blk: {
+                const local_set = locals orelse break :blk false;
+                const elem = localIndexElementType(node.base.*, local_set) orelse break :blk false;
+                break :blk floatCTypeName(elem) != null;
+            },
             .call => blk: {
                 const return_ty = self.callReturnTypeForExpr(expr, locals) orelse break :blk false;
                 break :blk floatCTypeName(return_ty) != null;

@@ -4639,6 +4639,9 @@ fn unaryNegOperandAllowed(domain: ?ArithmeticDomain, ty: ValueType) bool {
     if (isCheckedSignedType(ty) or isFloatType(ty)) return true;
     return switch (ty) {
         .integer => |name| std.mem.eql(u8, name, "comptime_int"),
+        // unary '-' on an untyped float literal (e.g. `-0.3`) is well-defined; the literal
+        // is typed `comptime_float` until it unifies with f32/f64 at its use site.
+        .float => |name| std.mem.eql(u8, name, "comptime_float"),
         .unknown, .never => true,
         else => false,
     };
