@@ -5514,7 +5514,16 @@ const CEmitter = struct {
                 const elem = localIndexElementType(node.base.*, local_set) orelse break :blk false;
                 break :blk floatCTypeName(elem) != null;
             },
-            .call => blk: {
+            // A float literal (`2.0`) is float: this lets `raw.load<f32>(..) + 2.0`
+            // be recognized as float arithmetic (plain C operators, no integer
+            // trap helper) even when the other operand's type can't be resolved.
+            .float_literal => true,
+            .call => |node| blk: {
+                // `raw.load<T>(addr)` is not a regular function, so its return
+                // type comes from the type argument rather than the function table.
+                if (isRawLoadCall(node.callee.*) and node.type_args.len == 1) {
+                    break :blk floatCTypeName(node.type_args[0]) != null;
+                }
                 const return_ty = self.callReturnTypeForExpr(expr, locals) orelse break :blk false;
                 break :blk floatCTypeName(return_ty) != null;
             },
