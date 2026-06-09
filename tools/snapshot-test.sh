@@ -3,7 +3,7 @@ set -euo pipefail
 MCC="${1:-zig-out/bin/mcc}"; HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLANG="${CLANG:-clang}"; command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: snapshot-test (no clang)"; exit 0; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/snapshot_demo.mc" -o "$WORK/snapshot.o" -Wno-switch-bool -Wno-unused-parameter >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/proc/snapshot_demo.mc" -o "$WORK/snapshot.o" -Wno-switch-bool -Wno-unused-parameter >/dev/null
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>
 // Stub the context-switch primitives: proc_snapshot never switches, but proc_spawn

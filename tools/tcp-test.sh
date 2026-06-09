@@ -7,7 +7,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLANG="${CLANG:-clang}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: tcp-test (clang not found)"; exit 0; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/tcp_demo.mc" -o "$WORK/tcp.o" >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/net/tcp_demo.mc" -o "$WORK/tcp.o" >/dev/null
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>
 extern void     tcp_build(uintptr_t buf, uintptr_t buflen, uintptr_t off, uint32_t s, uint32_t d, uint16_t sp, uint16_t dp, uint32_t seq, uint32_t ack, uint16_t flags, uint16_t win, uintptr_t plen);

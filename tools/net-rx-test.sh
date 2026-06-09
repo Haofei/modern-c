@@ -8,7 +8,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLANG="${CLANG:-clang}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: net-rx-test (clang not found)"; exit 0; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/net_rx_demo.mc" -o "$WORK/rx.o" >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/net/net_rx_demo.mc" -o "$WORK/rx.o" >/dev/null
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>
 extern uintptr_t build_frame(uint32_t s, uint32_t d, uint16_t sp, uint16_t dp);

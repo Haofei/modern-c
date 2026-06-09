@@ -11,7 +11,7 @@ command -v "$QEMU" >/dev/null 2>&1 || skip "no qemu-system-aarch64"
 "$CLANG" --print-targets 2>/dev/null | grep -q aarch64 || skip "clang has no aarch64 target"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 CFLAGS=(--target=aarch64-unknown-elf -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -O1 -Wall -Wextra)
-"$MCC" emit-c "$HERE/tests/qemu/arch_demo.mc" >"$WORK/c.c"
+"$MCC" emit-c "$HERE/tests/qemu/arch/arch_demo.mc" >"$WORK/c.c"
 "$CLANG" "${CFLAGS[@]}" -c "$WORK/c.c" -o "$WORK/c.o"
 "$CLANG" "${CFLAGS[@]}" -c "$HERE/kernel/arch/aarch64/boot_runtime.c" -o "$WORK/boot.o"
 "$LLD" -T "$HERE/tests/qemu/aarch64.ld" "$WORK/boot.o" "$WORK/c.o" -o "$WORK/k.elf"

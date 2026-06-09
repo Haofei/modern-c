@@ -3,7 +3,7 @@ set -euo pipefail
 MCC="${1:-zig-out/bin/mcc}"; HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLANG="${CLANG:-clang}"; command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: vfsmount-test (no clang)"; exit 0; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/vfsmount_demo.mc" -o "$WORK/vfsmount.o" -Wno-switch-bool >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/fs/vfsmount_demo.mc" -o "$WORK/vfsmount.o" -Wno-switch-bool >/dev/null
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>
 extern uint32_t vfsmount_run(void);

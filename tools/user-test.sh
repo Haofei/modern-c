@@ -12,7 +12,7 @@ set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$HERE/tests/qemu/syscall_demo.mc"
+SRC="$HERE/tests/qemu/lang/syscall_demo.mc"
 RUNTIME="$HERE/kernel/arch/riscv64/user_runtime.c"
 SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"

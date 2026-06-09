@@ -11,7 +11,7 @@ command -v "$QEMU" >/dev/null 2>&1 || skip "no qemu"
 "$CLANG" --print-targets 2>/dev/null | grep -q riscv64 || skip "clang has no riscv64 target"
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 CF=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wno-switch-bool -Wno-parentheses-equality)
-"$MCC" emit-c "$HERE/tests/qemu/shell_user_demo.mc" > "$W/sh.c"
+"$MCC" emit-c "$HERE/tests/qemu/lang/shell_user_demo.mc" > "$W/sh.c"
 "$CLANG" "${CF[@]}" -c "$W/sh.c" -o "$W/mc.o"
 "$CLANG" "${CF[@]}" -c "$HERE/kernel/arch/riscv64/shell_user_runtime.c" -o "$W/rt.o"
 "$CLANG" "${CF[@]}" -c "$HERE/kernel/arch/riscv64/usermode_runtime.c" -o "$W/um.o"

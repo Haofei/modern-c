@@ -3,7 +3,7 @@
 // loaded program reaches the kernel only through the syscall table (reused from the
 // syscall demo).
 
-import "tests/qemu/syscall_demo.mc";
+import "tests/qemu/lang/syscall_demo.mc";
 import "kernel/core/elf.mc";
 import "std/addr.mc";
 

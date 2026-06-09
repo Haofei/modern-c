@@ -12,7 +12,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: trace-test (clang not found
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/trace_demo.mc" -o "$WORK/trace.o" >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/lang/trace_demo.mc" -o "$WORK/trace.o" >/dev/null
 
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>

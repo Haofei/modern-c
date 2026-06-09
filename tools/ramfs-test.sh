@@ -12,7 +12,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: ramfs-test (clang not found
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/ramfs_demo.mc" -o "$WORK/ramfs.o" >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/fs/ramfs_demo.mc" -o "$WORK/ramfs.o" >/dev/null
 
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>

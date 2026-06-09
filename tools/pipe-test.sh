@@ -3,7 +3,7 @@ set -euo pipefail
 MCC="${1:-zig-out/bin/mcc}"; HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLANG="${CLANG:-clang}"; command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: pipe-test (no clang)"; exit 0; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/pipe_demo.mc" -o "$WORK/p.o" >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/fs/pipe_demo.mc" -o "$WORK/p.o" >/dev/null
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>
 extern uint32_t pipe_run(void);

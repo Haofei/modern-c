@@ -3,7 +3,7 @@ set -euo pipefail
 MCC="${1:-zig-out/bin/mcc}"; HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLANG="${CLANG:-clang}"; command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: posix-test (no clang)"; exit 0; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/posix_demo.mc" -o "$WORK/posix.o" -Wno-switch-bool -Wno-unused-parameter >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/lang/posix_demo.mc" -o "$WORK/posix.o" -Wno-switch-bool -Wno-unused-parameter >/dev/null
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>
 extern uint32_t posix_run(void);

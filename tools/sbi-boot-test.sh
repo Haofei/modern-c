@@ -10,7 +10,7 @@ command -v "$LLD" >/dev/null 2>&1 || skip "no ld.lld"
 command -v "$QEMU" >/dev/null 2>&1 || skip "no qemu"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra)
-"$MCC" emit-c "$HERE/tests/qemu/arch_demo.mc" >"$WORK/c.c"
+"$MCC" emit-c "$HERE/tests/qemu/arch/arch_demo.mc" >"$WORK/c.c"
 "$CLANG" "${CFLAGS[@]}" -c "$WORK/c.c" -o "$WORK/c.o"
 "$CLANG" "${CFLAGS[@]}" -c "$HERE/kernel/arch/riscv64/sbi_boot_runtime.c" -o "$WORK/boot.o"
 "$LLD" -T "$HERE/tests/qemu/sbi.ld" "$WORK/boot.o" "$WORK/c.o" -o "$WORK/k.elf"

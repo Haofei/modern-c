@@ -8,7 +8,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLANG="${CLANG:-clang}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: tcp-window-test (clang not found)"; exit 0; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/tcp_window_demo.mc" -o "$WORK/win.o" >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/net/tcp_window_demo.mc" -o "$WORK/win.o" >/dev/null
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>
 extern void     tw_init(uint32_t iss, uint32_t irs, uint32_t wnd);

@@ -13,7 +13,7 @@ set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$HERE/tests/qemu/net_rx_live_demo.mc"
+SRC="$HERE/tests/qemu/net/net_rx_live_demo.mc"
 RUNTIME="$HERE/kernel/drivers/virtio/net_rx_live_runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="NET-RX-LIVE-OK"

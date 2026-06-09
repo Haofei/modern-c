@@ -7,7 +7,7 @@ MCC="${MCC:-zig-out/bin/mcc}"; CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; QE
 [ -x "$MCC" ] || zig build >/dev/null
 CF=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wno-switch-bool -Wno-parentheses-equality)
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
-"$MCC" emit-c tests/qemu/shell_user_demo.mc > "$W/sh.c"
+"$MCC" emit-c tests/qemu/lang/shell_user_demo.mc > "$W/sh.c"
 "$CLANG" "${CF[@]}" -c "$W/sh.c" -o "$W/mc.o"
 "$CLANG" "${CF[@]}" -c kernel/arch/riscv64/shell_user_runtime.c -o "$W/rt.o"
 "$CLANG" "${CF[@]}" -c kernel/arch/riscv64/usermode_runtime.c -o "$W/um.o"

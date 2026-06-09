@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ELF parser test: compile the ELF parser (kernel/core/elf.mc via the test
-# wrappers in tests/qemu/elf_demo.mc, with std/bytes + std/addr) to an object,
+# wrappers in tests/qemu/lang/elf_demo.mc, with std/bytes + std/addr) to an object,
 # link a C driver that crafts a minimal ELF64 image and checks the parsed header
 # and program header — including rejection of malformed images.
 set -euo pipefail
@@ -13,7 +13,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: elf-test (clang not found)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/elf_demo.mc" -o "$WORK/elf.o" >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/lang/elf_demo.mc" -o "$WORK/elf.o" >/dev/null
 
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>

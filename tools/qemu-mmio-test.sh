@@ -11,7 +11,7 @@ set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$HERE/tests/qemu/uart_mmio.mc"
+SRC="$HERE/tests/qemu/arch/uart_mmio.mc"
 RUNTIME="$HERE/tests/qemu/runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="MMIO-OK"

@@ -12,7 +12,7 @@ set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$HERE/tests/qemu/nic_driver.mc"
+SRC="$HERE/tests/qemu/net/nic_driver.mc"
 RUNTIME="$HERE/tests/qemu/nic_runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="NIC-TX-OK"

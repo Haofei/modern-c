@@ -12,7 +12,7 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: vfs-test (clang not found)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/vfs_demo.mc" -o "$WORK/vfs.o" >/dev/null
+MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/fs/vfs_demo.mc" -o "$WORK/vfs.o" >/dev/null
 
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>

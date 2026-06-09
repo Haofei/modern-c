@@ -3,7 +3,7 @@
 // the virtio-net device and transmit a real UDP datagram (via `udp_transmit`). One
 // image doing storage, scheduling, logging, AND networking together.
 
-import "tests/qemu/kmain_demo.mc";    // kmain() — heap/console/log/VFS/scheduler
+import "tests/qemu/proc/kmain_demo.mc";    // kmain() — heap/console/log/VFS/scheduler
 import "demo/virtio-net/udp_send.mc"; // nic_init + udp_transmit (+ virtio_net)
 
 export fn kmain_net(region_base: usize, region_len: usize, regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> u32 {
