@@ -32,7 +32,7 @@ pub fn build(b: *std.Build) void {
 
     const c_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/check-generated-c.sh",
+        "tools/toolchain/check-generated-c.sh",
         "zig-out/bin/mcc",
         "tests/c_emit/*.mc",
         "zig-out/c-test",
@@ -43,7 +43,7 @@ pub fn build(b: *std.Build) void {
 
     const sweep_cmd = b.addSystemCommand(&.{
         "python3",
-        "tools/spec-emit-sweep.py",
+        "tools/toolchain/spec-emit-sweep.py",
         "zig-out/bin/mcc",
         "tests/spec",
     });
@@ -53,7 +53,7 @@ pub fn build(b: *std.Build) void {
 
     const qemu_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/qemu-mmio-test.sh",
+        "tools/arch/qemu-mmio-test.sh",
         "zig-out/bin/mcc",
     });
     qemu_test_cmd.step.dependOn(b.getInstallStep());
@@ -62,7 +62,7 @@ pub fn build(b: *std.Build) void {
 
     const cc_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mcc-cc-test.sh",
+        "tools/toolchain/mcc-cc-test.sh",
         "zig-out/bin/mcc",
     });
     cc_test_cmd.step.dependOn(b.getInstallStep());
@@ -71,7 +71,7 @@ pub fn build(b: *std.Build) void {
 
     const std_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/std-test.sh",
+        "tools/toolchain/std-test.sh",
         "zig-out/bin/mcc",
     });
     std_test_cmd.step.dependOn(b.getInstallStep());
@@ -80,7 +80,7 @@ pub fn build(b: *std.Build) void {
 
     const import_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/import-test.sh",
+        "tools/toolchain/import-test.sh",
         "zig-out/bin/mcc",
     });
     import_test_cmd.step.dependOn(b.getInstallStep());
@@ -89,7 +89,7 @@ pub fn build(b: *std.Build) void {
 
     const mono_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mono-test.sh",
+        "tools/toolchain/mono-test.sh",
         "zig-out/bin/mcc",
     });
     mono_test_cmd.step.dependOn(b.getInstallStep());
@@ -98,7 +98,7 @@ pub fn build(b: *std.Build) void {
 
     const reflect_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/reflect-test.sh",
+        "tools/toolchain/reflect-test.sh",
         "zig-out/bin/mcc",
     });
     reflect_test_cmd.step.dependOn(b.getInstallStep());
@@ -107,7 +107,7 @@ pub fn build(b: *std.Build) void {
 
     const stack_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/stack-test.sh",
+        "tools/toolchain/stack-test.sh",
         "zig-out/bin/mcc",
     });
     stack_test_cmd.step.dependOn(b.getInstallStep());
@@ -116,7 +116,7 @@ pub fn build(b: *std.Build) void {
 
     const pkg_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/pkg-test.sh",
+        "tools/toolchain/pkg-test.sh",
         "zig-out/bin/mcc",
     });
     pkg_test_cmd.step.dependOn(b.getInstallStep());
@@ -125,7 +125,7 @@ pub fn build(b: *std.Build) void {
 
     const move_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/move-test.sh",
+        "tools/toolchain/move-test.sh",
         "zig-out/bin/mcc",
     });
     move_test_cmd.step.dependOn(b.getInstallStep());
@@ -134,7 +134,7 @@ pub fn build(b: *std.Build) void {
 
     const sync_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/sync-test.sh",
+        "tools/toolchain/sync-test.sh",
         "zig-out/bin/mcc",
     });
     sync_test_cmd.step.dependOn(b.getInstallStep());
@@ -143,7 +143,7 @@ pub fn build(b: *std.Build) void {
 
     const nic_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/nic-test.sh",
+        "tools/net/nic-test.sh",
         "zig-out/bin/mcc",
     });
     nic_test_cmd.step.dependOn(b.getInstallStep());
@@ -152,7 +152,7 @@ pub fn build(b: *std.Build) void {
 
     const virtio_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/virtio-test.sh",
+        "tools/net/virtio-test.sh",
         "zig-out/bin/mcc",
     });
     virtio_test_cmd.step.dependOn(b.getInstallStep());
@@ -161,7 +161,7 @@ pub fn build(b: *std.Build) void {
 
     const blk_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/blk-test.sh",
+        "tools/fs/blk-test.sh",
         "zig-out/bin/mcc",
     });
     blk_test_cmd.step.dependOn(b.getInstallStep());
@@ -170,7 +170,7 @@ pub fn build(b: *std.Build) void {
 
     const udp_net_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/udp-net-test.sh",
+        "tools/net/udp-net-test.sh",
         "zig-out/bin/mcc",
     });
     udp_net_test_cmd.step.dependOn(b.getInstallStep());
@@ -179,7 +179,7 @@ pub fn build(b: *std.Build) void {
 
     const smp_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/smp-test.sh",
+        "tools/proc/smp-test.sh",
         "zig-out/bin/mcc",
     });
     smp_test_cmd.step.dependOn(b.getInstallStep());
@@ -188,7 +188,7 @@ pub fn build(b: *std.Build) void {
 
     const smp_lock_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/smp-lock-test.sh",
+        "tools/proc/smp-lock-test.sh",
         "zig-out/bin/mcc",
     });
     smp_lock_test_cmd.step.dependOn(b.getInstallStep());
@@ -197,7 +197,7 @@ pub fn build(b: *std.Build) void {
 
     const ipi_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/ipi-test.sh",
+        "tools/proc/ipi-test.sh",
         "zig-out/bin/mcc",
     });
     ipi_test_cmd.step.dependOn(b.getInstallStep());
@@ -206,7 +206,7 @@ pub fn build(b: *std.Build) void {
 
     const demo_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/demo-test.sh",
+        "tools/toolchain/demo-test.sh",
         "zig-out/bin/mcc",
     });
     demo_test_cmd.step.dependOn(b.getInstallStep());
@@ -215,7 +215,7 @@ pub fn build(b: *std.Build) void {
 
     const net_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net-test.sh",
+        "tools/net/net-test.sh",
         "zig-out/bin/mcc",
     });
     net_test_cmd.step.dependOn(b.getInstallStep());
@@ -224,7 +224,7 @@ pub fn build(b: *std.Build) void {
 
     const kernel_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/kernel-test.sh",
+        "tools/toolchain/kernel-test.sh",
         "zig-out/bin/mcc",
     });
     kernel_test_cmd.step.dependOn(b.getInstallStep());
@@ -233,7 +233,7 @@ pub fn build(b: *std.Build) void {
 
     const page_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/page-test.sh",
+        "tools/mem/page-test.sh",
         "zig-out/bin/mcc",
     });
     page_test_cmd.step.dependOn(b.getInstallStep());
@@ -242,7 +242,7 @@ pub fn build(b: *std.Build) void {
 
     const heap_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/heap-test.sh",
+        "tools/mem/heap-test.sh",
         "zig-out/bin/mcc",
     });
     heap_test_cmd.step.dependOn(b.getInstallStep());
@@ -251,7 +251,7 @@ pub fn build(b: *std.Build) void {
 
     const elf_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/elf-test.sh",
+        "tools/lang/elf-test.sh",
         "zig-out/bin/mcc",
     });
     elf_test_cmd.step.dependOn(b.getInstallStep());
@@ -260,7 +260,7 @@ pub fn build(b: *std.Build) void {
 
     const ramfs_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/ramfs-test.sh",
+        "tools/fs/ramfs-test.sh",
         "zig-out/bin/mcc",
     });
     ramfs_test_cmd.step.dependOn(b.getInstallStep());
@@ -269,7 +269,7 @@ pub fn build(b: *std.Build) void {
 
     const vfs_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/vfs-test.sh",
+        "tools/fs/vfs-test.sh",
         "zig-out/bin/mcc",
     });
     vfs_test_cmd.step.dependOn(b.getInstallStep());
@@ -278,7 +278,7 @@ pub fn build(b: *std.Build) void {
 
     const blockfs_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/blockfs-test.sh",
+        "tools/fs/blockfs-test.sh",
         "zig-out/bin/mcc",
     });
     blockfs_test_cmd.step.dependOn(b.getInstallStep());
@@ -287,7 +287,7 @@ pub fn build(b: *std.Build) void {
 
     const udp_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/udp-test.sh",
+        "tools/net/udp-test.sh",
         "zig-out/bin/mcc",
     });
     udp_test_cmd.step.dependOn(b.getInstallStep());
@@ -296,7 +296,7 @@ pub fn build(b: *std.Build) void {
 
     const arena_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/arena-test.sh",
+        "tools/mem/arena-test.sh",
         "zig-out/bin/mcc",
     });
     arena_test_cmd.step.dependOn(b.getInstallStep());
@@ -305,7 +305,7 @@ pub fn build(b: *std.Build) void {
 
     const genref_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/genref-test.sh",
+        "tools/mem/genref-test.sh",
         "zig-out/bin/mcc",
     });
     genref_test_cmd.step.dependOn(b.getInstallStep());
@@ -314,7 +314,7 @@ pub fn build(b: *std.Build) void {
 
     const owned_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/owned-test.sh",
+        "tools/mem/owned-test.sh",
         "zig-out/bin/mcc",
     });
     owned_test_cmd.step.dependOn(b.getInstallStep());
@@ -323,7 +323,7 @@ pub fn build(b: *std.Build) void {
 
     const net_arena_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net-arena-test.sh",
+        "tools/net/net-arena-test.sh",
         "zig-out/bin/mcc",
     });
     net_arena_test_cmd.step.dependOn(b.getInstallStep());
@@ -332,7 +332,7 @@ pub fn build(b: *std.Build) void {
 
     const pool_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/pool-test.sh",
+        "tools/mem/pool-test.sh",
         "zig-out/bin/mcc",
     });
     pool_test_cmd.step.dependOn(b.getInstallStep());
@@ -341,7 +341,7 @@ pub fn build(b: *std.Build) void {
 
     const block_server_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/block-server-test.sh",
+        "tools/fs/block-server-test.sh",
         "zig-out/bin/mcc",
     });
     block_server_test_cmd.step.dependOn(b.getInstallStep());
@@ -350,7 +350,7 @@ pub fn build(b: *std.Build) void {
 
     const fs_server_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/fs-server-test.sh",
+        "tools/fs/fs-server-test.sh",
         "zig-out/bin/mcc",
     });
     fs_server_test_cmd.step.dependOn(b.getInstallStep());
@@ -359,7 +359,7 @@ pub fn build(b: *std.Build) void {
 
     const net_server_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net-server-test.sh",
+        "tools/net/net-server-test.sh",
         "zig-out/bin/mcc",
     });
     net_server_test_cmd.step.dependOn(b.getInstallStep());
@@ -368,7 +368,7 @@ pub fn build(b: *std.Build) void {
 
     const constgen_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/constgen-test.sh",
+        "tools/lang/constgen-test.sh",
         "zig-out/bin/mcc",
     });
     constgen_test_cmd.step.dependOn(b.getInstallStep());
@@ -376,50 +376,50 @@ pub fn build(b: *std.Build) void {
     constgen_test_step.dependOn(&constgen_test_cmd.step);
 
     const pipe_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/pipe-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/fs/pipe-test.sh", "zig-out/bin/mcc",
     });
     pipe_test_cmd.step.dependOn(b.getInstallStep());
     const pipe_test_step = b.step("pipe-test", "Pipe FIFO");
     pipe_test_step.dependOn(&pipe_test_cmd.step);
 
     const bcache_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/bcache-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/fs/bcache-test.sh", "zig-out/bin/mcc",
     });
     const perm_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/perm-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/proc/perm-test.sh", "zig-out/bin/mcc",
     });
     perm_test_cmd.step.dependOn(b.getInstallStep());
     const perm_test_step = b.step("perm-test", "POSIX permission checks");
     perm_test_step.dependOn(&perm_test_cmd.step);
 
     const pgroup_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/pgroup-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/proc/pgroup-test.sh", "zig-out/bin/mcc",
     });
     const tty_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/tty-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/tty-test.sh", "zig-out/bin/mcc",
     });
     tty_test_cmd.step.dependOn(b.getInstallStep());
     const tty_test_step = b.step("tty-test", "TTY line discipline");
     tty_test_step.dependOn(&tty_test_cmd.step);
 
     const args_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/args-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/args-test.sh", "zig-out/bin/mcc",
     });
     const libc_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/libc-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/libc-test.sh", "zig-out/bin/mcc",
     });
     libc_test_cmd.step.dependOn(b.getInstallStep());
     const libc_test_step = b.step("libc-test", "Minimal libc core");
     libc_test_step.dependOn(&libc_test_cmd.step);
 
     const shell_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/shell-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/shell-test.sh", "zig-out/bin/mcc",
     });
     const shell2_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/shell2-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/shell2-test.sh", "zig-out/bin/mcc",
     });
     const ushell_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/ushell-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/ushell-test.sh", "zig-out/bin/mcc",
     });
     ushell_test_cmd.step.dependOn(b.getInstallStep());
     const ushell_test_step = b.step("ushell-test", "Shell running in user mode via syscalls");
@@ -432,32 +432,32 @@ pub fn build(b: *std.Build) void {
 
 
     const vfsmount_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/vfsmount-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/fs/vfsmount-test.sh", "zig-out/bin/mcc",
     });
     vfsmount_test_cmd.step.dependOn(b.getInstallStep());
     const vfsmount_test_step = b.step("vfsmount-test", "VFS mount switch");
     vfsmount_test_step.dependOn(&vfsmount_test_cmd.step);
 
     const fdspace_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/fdspace-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/fs/fdspace-test.sh", "zig-out/bin/mcc",
     });
     const slotmap_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/slotmap-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/mem/slotmap-test.sh", "zig-out/bin/mcc",
     });
     const mask_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/mask-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/mem/mask-test.sh", "zig-out/bin/mcc",
     });
     const mailbox_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/mailbox-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/ipc/mailbox-test.sh", "zig-out/bin/mcc",
     });
     const tryelse_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/tryelse-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/tryelse-test.sh", "zig-out/bin/mcc",
     });
     const byteview_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/byteview-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/byteview-test.sh", "zig-out/bin/mcc",
     });
     const scan_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/scan-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/scan-test.sh", "zig-out/bin/mcc",
     });
     scan_test_cmd.step.dependOn(b.getInstallStep());
     const scan_test_step = b.step("scan-test", "find_index/any closure scan");
@@ -490,47 +490,47 @@ pub fn build(b: *std.Build) void {
 
 
     const posix_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/posix-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/posix-test.sh", "zig-out/bin/mcc",
     });
     const userland_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/userland-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/userland-test.sh", "zig-out/bin/mcc",
     });
     const smprq_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/smprq-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/proc/smprq-test.sh", "zig-out/bin/mcc",
     });
     const rtc_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/rtc-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/arch/rtc-test.sh", "zig-out/bin/mcc",
     });
     const contain_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/contain-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/mem/contain-test.sh", "zig-out/bin/mcc",
     });
     const tcp_server_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/tcp-server-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/net/tcp-server-test.sh", "zig-out/bin/mcc",
     });
     const fdt_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/fdt-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/arch/fdt-test.sh", "zig-out/bin/mcc",
     });
     fdt_test_cmd.step.dependOn(b.getInstallStep());
     const fdt_test_step = b.step("fdt-test", "Device-tree (FDT) header parsing");
     fdt_test_step.dependOn(&fdt_test_cmd.step);
 
     const fb_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/fb-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/arch/fb-test.sh", "zig-out/bin/mcc",
     });
     const dynlink_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/dynlink-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lang/dynlink-test.sh", "zig-out/bin/mcc",
     });
     const aarch64_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/aarch64-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc",
     });
     const liveupdate_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/liveupdate-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/proc/liveupdate-test.sh", "zig-out/bin/mcc",
     });
     const sbi_boot_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/sbi-boot-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc",
     });
     const e1000_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/e1000-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/net/e1000-test.sh", "zig-out/bin/mcc",
     });
     e1000_test_cmd.step.dependOn(b.getInstallStep());
     const e1000_test_step = b.step("e1000-test", "Real e1000 NIC PCI probe");
@@ -595,67 +595,67 @@ pub fn build(b: *std.Build) void {
     fdspace_test_cmd.step.dependOn(b.getInstallStep());
     const fdspace_test_step = b.step("fdspace-test", "FdSpace (kernel/lib): fd alloc/select, sentinel-free");
     fdspace_test_step.dependOn(&fdspace_test_cmd.step);
-    const snapshot_test_cmd = b.addSystemCommand(&.{ "sh", "tools/snapshot-test.sh", "zig-out/bin/mcc" });
+    const snapshot_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/snapshot-test.sh", "zig-out/bin/mcc" });
     snapshot_test_cmd.step.dependOn(b.getInstallStep());
     const snapshot_test_step = b.step("snapshot-test", "proc_snapshot (kernel/lib): stable process enumeration");
     snapshot_test_step.dependOn(&snapshot_test_cmd.step);
 
-    const waitqueue_test_cmd = b.addSystemCommand(&.{ "sh", "tools/waitqueue-test.sh", "zig-out/bin/mcc" });
+    const waitqueue_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/waitqueue-test.sh", "zig-out/bin/mcc" });
     waitqueue_test_cmd.step.dependOn(b.getInstallStep());
     const waitqueue_test_step = b.step("waitqueue-test", "WaitQueue (kernel/lib): block/wake/idle policy");
     waitqueue_test_step.dependOn(&waitqueue_test_cmd.step);
 
-    const service_test_cmd = b.addSystemCommand(&.{ "sh", "tools/service-test.sh", "zig-out/bin/mcc" });
+    const service_test_cmd = b.addSystemCommand(&.{ "sh", "tools/ipc/service-test.sh", "zig-out/bin/mcc" });
     service_test_cmd.step.dependOn(b.getInstallStep());
     const service_test_step = b.step("service-test", "service (kernel/lib): request/reply server loop");
     service_test_step.dependOn(&service_test_cmd.step);
 
-    const plugin_test_cmd = b.addSystemCommand(&.{ "sh", "tools/plugin-test.sh", "zig-out/bin/mcc" });
+    const plugin_test_cmd = b.addSystemCommand(&.{ "sh", "tools/arch/plugin-test.sh", "zig-out/bin/mcc" });
     plugin_test_cmd.step.dependOn(b.getInstallStep());
     const plugin_test_step = b.step("plugin-test", "pluggable boot flow: device/bus probe-attach + registry + discovery");
     plugin_test_step.dependOn(&plugin_test_cmd.step);
 
-    const endpoint_test_cmd = b.addSystemCommand(&.{ "sh", "tools/endpoint-test.sh", "zig-out/bin/mcc" });
+    const endpoint_test_cmd = b.addSystemCommand(&.{ "sh", "tools/ipc/endpoint-test.sh", "zig-out/bin/mcc" });
     endpoint_test_cmd.step.dependOn(b.getInstallStep());
     const endpoint_test_step = b.step("endpoint-test", "MINIX hardening: endpoints/generations, derived runnable, death cleanup");
     endpoint_test_step.dependOn(&endpoint_test_cmd.step);
 
-    const supervisor_test_cmd = b.addSystemCommand(&.{ "sh", "tools/supervisor-test.sh", "zig-out/bin/mcc" });
+    const supervisor_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/supervisor-test.sh", "zig-out/bin/mcc" });
     supervisor_test_cmd.step.dependOn(b.getInstallStep());
     const supervisor_test_step = b.step("supervisor-test", "service supervisor: declarative manifests + restart policy");
     supervisor_test_step.dependOn(&supervisor_test_cmd.step);
 
-    const registry2_test_cmd = b.addSystemCommand(&.{ "sh", "tools/registry2-test.sh", "zig-out/bin/mcc" });
+    const registry2_test_cmd = b.addSystemCommand(&.{ "sh", "tools/ipc/registry2-test.sh", "zig-out/bin/mcc" });
     registry2_test_cmd.step.dependOn(b.getInstallStep());
     const registry2_test_step = b.step("registry2-test", "Registry v2: multiple-per-class, generations, unregister-on-death");
     registry2_test_step.dependOn(&registry2_test_cmd.step);
 
-    const manifest_test_cmd = b.addSystemCommand(&.{ "sh", "tools/manifest-test.sh", "zig-out/bin/mcc" });
+    const manifest_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/manifest-test.sh", "zig-out/bin/mcc" });
     manifest_test_cmd.step.dependOn(b.getInstallStep());
     const manifest_test_step = b.step("manifest-test", "enforced service manifests: privileges applied + enforced");
     manifest_test_step.dependOn(&manifest_test_cmd.step);
 
-    const scheduler_test_cmd = b.addSystemCommand(&.{ "sh", "tools/scheduler-test.sh", "zig-out/bin/mcc" });
+    const scheduler_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/scheduler-test.sh", "zig-out/bin/mcc" });
     scheduler_test_cmd.step.dependOn(b.getInstallStep());
     const scheduler_test_step = b.step("scheduler-test", "scheduler service: quantum expiry notify + refresh");
     scheduler_test_step.dependOn(&scheduler_test_cmd.step);
 
-    const info_test_cmd = b.addSystemCommand(&.{ "sh", "tools/info-test.sh", "zig-out/bin/mcc" });
+    const info_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/info-test.sh", "zig-out/bin/mcc" });
     info_test_cmd.step.dependOn(b.getInstallStep());
     const info_test_step = b.step("info-test", "info/snapshot service: top queries over IPC");
     info_test_step.dependOn(&info_test_cmd.step);
 
-    const granttab_test_cmd = b.addSystemCommand(&.{ "sh", "tools/granttab-test.sh", "zig-out/bin/mcc" });
+    const granttab_test_cmd = b.addSystemCommand(&.{ "sh", "tools/ipc/granttab-test.sh", "zig-out/bin/mcc" });
     granttab_test_cmd.step.dependOn(b.getInstallStep());
     const granttab_test_step = b.step("granttab-test", "owner-tracked grants: bounded IPC sharing + revoke-on-death");
     granttab_test_step.dependOn(&granttab_test_cmd.step);
 
-    const x86_sched_test_cmd = b.addSystemCommand(&.{ "sh", "tools/x86-sched-test.sh", "zig-out/bin/mcc" });
+    const x86_sched_test_cmd = b.addSystemCommand(&.{ "sh", "tools/arch/x86-sched-test.sh", "zig-out/bin/mcc" });
     x86_sched_test_cmd.step.dependOn(b.getInstallStep());
     const x86_sched_test_step = b.step("x86-sched-test", "x86-64 arch port: cooperative context switch (native)");
     x86_sched_test_step.dependOn(&x86_sched_test_cmd.step);
 
-    const x86_qemu_test_cmd = b.addSystemCommand(&.{ "sh", "tools/x86-qemu-test.sh", "zig-out/bin/mcc" });
+    const x86_qemu_test_cmd = b.addSystemCommand(&.{ "sh", "tools/arch/x86-qemu-test.sh", "zig-out/bin/mcc" });
     x86_qemu_test_cmd.step.dependOn(b.getInstallStep());
     const x86_qemu_test_step = b.step("x86-qemu-test", "x86-64 kernel boots under QEMU (multiboot -> long mode)");
     x86_qemu_test_step.dependOn(&x86_qemu_test_cmd.step);
@@ -682,7 +682,7 @@ pub fn build(b: *std.Build) void {
 
     const cow_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/cow-test.sh",
+        "tools/mem/cow-test.sh",
         "zig-out/bin/mcc",
     });
     cow_test_cmd.step.dependOn(b.getInstallStep());
@@ -691,7 +691,7 @@ pub fn build(b: *std.Build) void {
 
     const usched_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/usched-test.sh",
+        "tools/proc/usched-test.sh",
         "zig-out/bin/mcc",
     });
     usched_test_cmd.step.dependOn(b.getInstallStep());
@@ -700,7 +700,7 @@ pub fn build(b: *std.Build) void {
 
     const userserver_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/userserver-test.sh",
+        "tools/lang/userserver-test.sh",
         "zig-out/bin/mcc",
     });
     userserver_test_cmd.step.dependOn(b.getInstallStep());
@@ -709,7 +709,7 @@ pub fn build(b: *std.Build) void {
 
     const isolation_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/isolation-test.sh",
+        "tools/proc/isolation-test.sh",
         "zig-out/bin/mcc",
     });
     isolation_test_cmd.step.dependOn(b.getInstallStep());
@@ -718,7 +718,7 @@ pub fn build(b: *std.Build) void {
 
     const demand_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/demand-test.sh",
+        "tools/mem/demand-test.sh",
         "zig-out/bin/mcc",
     });
     demand_test_cmd.step.dependOn(b.getInstallStep());
@@ -727,7 +727,7 @@ pub fn build(b: *std.Build) void {
 
     const mmap_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mmap-test.sh",
+        "tools/mem/mmap-test.sh",
         "zig-out/bin/mcc",
     });
     mmap_test_cmd.step.dependOn(b.getInstallStep());
@@ -736,7 +736,7 @@ pub fn build(b: *std.Build) void {
 
     const diskfs_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/diskfs-test.sh",
+        "tools/fs/diskfs-test.sh",
         "zig-out/bin/mcc",
     });
     diskfs_test_cmd.step.dependOn(b.getInstallStep());
@@ -745,7 +745,7 @@ pub fn build(b: *std.Build) void {
 
     const heartbeat_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/heartbeat-test.sh",
+        "tools/proc/heartbeat-test.sh",
         "zig-out/bin/mcc",
     });
     heartbeat_test_cmd.step.dependOn(b.getInstallStep());
@@ -754,7 +754,7 @@ pub fn build(b: *std.Build) void {
 
     const timeout_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/timeout-test.sh",
+        "tools/ipc/timeout-test.sh",
         "zig-out/bin/mcc",
     });
     timeout_test_cmd.step.dependOn(b.getInstallStep());
@@ -763,7 +763,7 @@ pub fn build(b: *std.Build) void {
 
     const privilege_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/privilege-test.sh",
+        "tools/proc/privilege-test.sh",
         "zig-out/bin/mcc",
     });
     privilege_test_cmd.step.dependOn(b.getInstallStep());
@@ -772,7 +772,7 @@ pub fn build(b: *std.Build) void {
 
     const signal_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/signal-test.sh",
+        "tools/ipc/signal-test.sh",
         "zig-out/bin/mcc",
     });
     signal_test_cmd.step.dependOn(b.getInstallStep());
@@ -781,7 +781,7 @@ pub fn build(b: *std.Build) void {
 
     const registry_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/registry-test.sh",
+        "tools/ipc/registry-test.sh",
         "zig-out/bin/mcc",
     });
     registry_test_cmd.step.dependOn(b.getInstallStep());
@@ -790,7 +790,7 @@ pub fn build(b: *std.Build) void {
 
     const ipc2_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/ipc2-test.sh",
+        "tools/ipc/ipc2-test.sh",
         "zig-out/bin/mcc",
     });
     ipc2_test_cmd.step.dependOn(b.getInstallStep());
@@ -799,7 +799,7 @@ pub fn build(b: *std.Build) void {
 
     const grant_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/grant-test.sh",
+        "tools/ipc/grant-test.sh",
         "zig-out/bin/mcc",
     });
     grant_test_cmd.step.dependOn(b.getInstallStep());
@@ -808,7 +808,7 @@ pub fn build(b: *std.Build) void {
 
     const ipc_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/ipc-test.sh",
+        "tools/ipc/ipc-test.sh",
         "zig-out/bin/mcc",
     });
     ipc_test_cmd.step.dependOn(b.getInstallStep());
@@ -817,7 +817,7 @@ pub fn build(b: *std.Build) void {
 
     const cap_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/cap-test.sh",
+        "tools/proc/cap-test.sh",
         "zig-out/bin/mcc",
     });
     cap_test_cmd.step.dependOn(b.getInstallStep());
@@ -826,7 +826,7 @@ pub fn build(b: *std.Build) void {
 
     const restart_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/restart-test.sh",
+        "tools/proc/restart-test.sh",
         "zig-out/bin/mcc",
     });
     restart_test_cmd.step.dependOn(b.getInstallStep());
@@ -835,7 +835,7 @@ pub fn build(b: *std.Build) void {
 
     const arc_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/arc-test.sh",
+        "tools/mem/arc-test.sh",
         "zig-out/bin/mcc",
     });
     arc_test_cmd.step.dependOn(b.getInstallStep());
@@ -844,7 +844,7 @@ pub fn build(b: *std.Build) void {
 
     const arc_pkt_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/arc-pkt-test.sh",
+        "tools/mem/arc-pkt-test.sh",
         "zig-out/bin/mcc",
     });
     arc_pkt_test_cmd.step.dependOn(b.getInstallStep());
@@ -853,7 +853,7 @@ pub fn build(b: *std.Build) void {
 
     const alloc_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/alloc-test.sh",
+        "tools/mem/alloc-test.sh",
         "zig-out/bin/mcc",
     });
     alloc_test_cmd.step.dependOn(b.getInstallStep());
@@ -862,7 +862,7 @@ pub fn build(b: *std.Build) void {
 
     const closure_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/closure-test.sh",
+        "tools/lang/closure-test.sh",
         "zig-out/bin/mcc",
     });
     closure_test_cmd.step.dependOn(b.getInstallStep());
@@ -871,7 +871,7 @@ pub fn build(b: *std.Build) void {
 
     const ring_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/ring-test.sh",
+        "tools/mem/ring-test.sh",
         "zig-out/bin/mcc",
     });
     ring_test_cmd.step.dependOn(b.getInstallStep());
@@ -880,7 +880,7 @@ pub fn build(b: *std.Build) void {
 
     const trace_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/trace-test.sh",
+        "tools/lang/trace-test.sh",
         "zig-out/bin/mcc",
     });
     trace_test_cmd.step.dependOn(b.getInstallStep());
@@ -889,7 +889,7 @@ pub fn build(b: *std.Build) void {
 
     const log_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/log-test.sh",
+        "tools/lang/log-test.sh",
         "zig-out/bin/mcc",
     });
     log_test_cmd.step.dependOn(b.getInstallStep());
@@ -898,7 +898,7 @@ pub fn build(b: *std.Build) void {
 
     const tcp_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/tcp-test.sh",
+        "tools/net/tcp-test.sh",
         "zig-out/bin/mcc",
     });
     tcp_test_cmd.step.dependOn(b.getInstallStep());
@@ -907,7 +907,7 @@ pub fn build(b: *std.Build) void {
 
     const tcp_conn_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/tcp-conn-test.sh",
+        "tools/net/tcp-conn-test.sh",
         "zig-out/bin/mcc",
     });
     tcp_conn_test_cmd.step.dependOn(b.getInstallStep());
@@ -916,7 +916,7 @@ pub fn build(b: *std.Build) void {
 
     const tcp_window_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/tcp-window-test.sh",
+        "tools/net/tcp-window-test.sh",
         "zig-out/bin/mcc",
     });
     tcp_window_test_cmd.step.dependOn(b.getInstallStep());
@@ -925,7 +925,7 @@ pub fn build(b: *std.Build) void {
 
     const tcp_reasm_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/tcp-reasm-test.sh",
+        "tools/net/tcp-reasm-test.sh",
         "zig-out/bin/mcc",
     });
     tcp_reasm_test_cmd.step.dependOn(b.getInstallStep());
@@ -934,7 +934,7 @@ pub fn build(b: *std.Build) void {
 
     const tcp_rtx_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/tcp-rtx-test.sh",
+        "tools/net/tcp-rtx-test.sh",
         "zig-out/bin/mcc",
     });
     tcp_rtx_test_cmd.step.dependOn(b.getInstallStep());
@@ -943,7 +943,7 @@ pub fn build(b: *std.Build) void {
 
     const symbols_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/symbols-test.sh",
+        "tools/lang/symbols-test.sh",
         "zig-out/bin/mcc",
     });
     symbols_test_cmd.step.dependOn(b.getInstallStep());
@@ -952,7 +952,7 @@ pub fn build(b: *std.Build) void {
 
     const socket_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/socket-test.sh",
+        "tools/net/socket-test.sh",
         "zig-out/bin/mcc",
     });
     socket_test_cmd.step.dependOn(b.getInstallStep());
@@ -961,7 +961,7 @@ pub fn build(b: *std.Build) void {
 
     const net_rx_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net-rx-test.sh",
+        "tools/net/net-rx-test.sh",
         "zig-out/bin/mcc",
     });
     net_rx_test_cmd.step.dependOn(b.getInstallStep());
@@ -970,7 +970,7 @@ pub fn build(b: *std.Build) void {
 
     const net_fuzz_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net-fuzz-test.sh",
+        "tools/net/net-fuzz-test.sh",
         "zig-out/bin/mcc",
     });
     net_fuzz_test_cmd.step.dependOn(b.getInstallStep());
@@ -979,7 +979,7 @@ pub fn build(b: *std.Build) void {
 
     const net_rx_live_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net-rx-live-test.sh",
+        "tools/net/net-rx-live-test.sh",
         "zig-out/bin/mcc",
     });
     net_rx_live_test_cmd.step.dependOn(b.getInstallStep());
@@ -988,7 +988,7 @@ pub fn build(b: *std.Build) void {
 
     const backtrace_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/backtrace-test.sh",
+        "tools/lang/backtrace-test.sh",
         "zig-out/bin/mcc",
     });
     backtrace_test_cmd.step.dependOn(b.getInstallStep());
@@ -997,7 +997,7 @@ pub fn build(b: *std.Build) void {
 
     const paging_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/paging-test.sh",
+        "tools/mem/paging-test.sh",
         "zig-out/bin/mcc",
     });
     paging_test_cmd.step.dependOn(b.getInstallStep());
@@ -1006,7 +1006,7 @@ pub fn build(b: *std.Build) void {
 
     const fnptr_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/fnptr-test.sh",
+        "tools/toolchain/fnptr-test.sh",
         "zig-out/bin/mcc",
     });
     fnptr_test_cmd.step.dependOn(b.getInstallStep());
@@ -1015,7 +1015,7 @@ pub fn build(b: *std.Build) void {
 
     const trap_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/trap-test.sh",
+        "tools/arch/trap-test.sh",
         "zig-out/bin/mcc",
     });
     trap_test_cmd.step.dependOn(b.getInstallStep());
@@ -1024,7 +1024,7 @@ pub fn build(b: *std.Build) void {
 
     const thread_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/thread-test.sh",
+        "tools/proc/thread-test.sh",
         "zig-out/bin/mcc",
     });
     thread_test_cmd.step.dependOn(b.getInstallStep());
@@ -1033,7 +1033,7 @@ pub fn build(b: *std.Build) void {
 
     const sched_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/sched-test.sh",
+        "tools/proc/sched-test.sh",
         "zig-out/bin/mcc",
     });
     sched_test_cmd.step.dependOn(b.getInstallStep());
@@ -1042,7 +1042,7 @@ pub fn build(b: *std.Build) void {
 
     const preempt_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/preempt-test.sh",
+        "tools/proc/preempt-test.sh",
         "zig-out/bin/mcc",
     });
     preempt_test_cmd.step.dependOn(b.getInstallStep());
@@ -1051,7 +1051,7 @@ pub fn build(b: *std.Build) void {
 
     const syscall_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/syscall-test.sh",
+        "tools/lang/syscall-test.sh",
         "zig-out/bin/mcc",
     });
     syscall_test_cmd.step.dependOn(b.getInstallStep());
@@ -1060,7 +1060,7 @@ pub fn build(b: *std.Build) void {
 
     const user_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/user-test.sh",
+        "tools/lang/user-test.sh",
         "zig-out/bin/mcc",
     });
     user_test_cmd.step.dependOn(b.getInstallStep());
@@ -1069,7 +1069,7 @@ pub fn build(b: *std.Build) void {
 
     const process_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/process-test.sh",
+        "tools/proc/process-test.sh",
         "zig-out/bin/mcc",
     });
     process_test_cmd.step.dependOn(b.getInstallStep());
@@ -1078,7 +1078,7 @@ pub fn build(b: *std.Build) void {
 
     const elf_run_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/elf-run-test.sh",
+        "tools/lang/elf-run-test.sh",
         "zig-out/bin/mcc",
     });
     elf_run_test_cmd.step.dependOn(b.getInstallStep());
@@ -1087,7 +1087,7 @@ pub fn build(b: *std.Build) void {
 
     const driver_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/driver-test.sh",
+        "tools/arch/driver-test.sh",
         "zig-out/bin/mcc",
     });
     driver_test_cmd.step.dependOn(b.getInstallStep());
@@ -1096,7 +1096,7 @@ pub fn build(b: *std.Build) void {
 
     const fs_syscall_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/fs-syscall-test.sh",
+        "tools/fs/fs-syscall-test.sh",
         "zig-out/bin/mcc",
     });
     fs_syscall_test_cmd.step.dependOn(b.getInstallStep());
@@ -1105,7 +1105,7 @@ pub fn build(b: *std.Build) void {
 
     const socket_syscall_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/socket-syscall-test.sh",
+        "tools/net/socket-syscall-test.sh",
         "zig-out/bin/mcc",
     });
     socket_syscall_test_cmd.step.dependOn(b.getInstallStep());
@@ -1114,7 +1114,7 @@ pub fn build(b: *std.Build) void {
 
     const exec_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/exec-test.sh",
+        "tools/lang/exec-test.sh",
         "zig-out/bin/mcc",
     });
     exec_test_cmd.step.dependOn(b.getInstallStep());
@@ -1123,7 +1123,7 @@ pub fn build(b: *std.Build) void {
 
     const paging_activate_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/paging-activate-test.sh",
+        "tools/mem/paging-activate-test.sh",
         "zig-out/bin/mcc",
     });
     paging_activate_test_cmd.step.dependOn(b.getInstallStep());
@@ -1132,7 +1132,7 @@ pub fn build(b: *std.Build) void {
 
     const kmain_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/kmain-test.sh",
+        "tools/proc/kmain-test.sh",
         "zig-out/bin/mcc",
     });
     kmain_test_cmd.step.dependOn(b.getInstallStep());
@@ -1141,7 +1141,7 @@ pub fn build(b: *std.Build) void {
 
     const kmain_net_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/kmain-net-test.sh",
+        "tools/net/kmain-net-test.sh",
         "zig-out/bin/mcc",
     });
     kmain_net_test_cmd.step.dependOn(b.getInstallStep());
@@ -1150,7 +1150,7 @@ pub fn build(b: *std.Build) void {
 
     const vm_switch_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/vm-switch-test.sh",
+        "tools/mem/vm-switch-test.sh",
         "zig-out/bin/mcc",
     });
     vm_switch_test_cmd.step.dependOn(b.getInstallStep());
@@ -1159,7 +1159,7 @@ pub fn build(b: *std.Build) void {
 
     const vmspace_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/vmspace-test.sh",
+        "tools/mem/vmspace-test.sh",
         "zig-out/bin/mcc",
     });
     vmspace_test_cmd.step.dependOn(b.getInstallStep());
@@ -1168,7 +1168,7 @@ pub fn build(b: *std.Build) void {
 
     const vmctx_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/vmctx-test.sh",
+        "tools/mem/vmctx-test.sh",
         "zig-out/bin/mcc",
     });
     vmctx_test_cmd.step.dependOn(b.getInstallStep());
@@ -1177,14 +1177,14 @@ pub fn build(b: *std.Build) void {
 
     const sched_vm_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/sched-vm-test.sh",
+        "tools/proc/sched-vm-test.sh",
         "zig-out/bin/mcc",
     });
     sched_vm_test_cmd.step.dependOn(b.getInstallStep());
     const sched_vm_test_step = b.step("sched-vm-test", "Scheduler switching per-process address spaces (proc_yield_vm) under QEMU");
     sched_vm_test_step.dependOn(&sched_vm_test_cmd.step);
 
-    const run_ushell_cmd = b.addSystemCommand(&.{ "sh", "tools/run-ushell.sh" });
+    const run_ushell_cmd = b.addSystemCommand(&.{ "sh", "tools/lang/run-ushell.sh" });
     run_ushell_cmd.step.dependOn(b.getInstallStep());
     run_ushell_cmd.stdio = .inherit; // connect the terminal so QEMU is interactive
     const run_ushell_step = b.step("run-ushell", "Build + boot the user-mode MC shell in QEMU (interactive)");
