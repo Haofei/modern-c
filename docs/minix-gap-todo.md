@@ -77,7 +77,13 @@ Legend: `[ ]` missing · `[~]` partial (note says what we already have) · `[x]`
 - [~] **POSIX syscall layer** — `kernel/core/posix`: getpid + open/write/read/close + ENOSYS
       over the dispatch table (`posix-test`). Full set (fork/exec/wait/dup/ioctl/...) TODO.
 - [~] **libc** — `std/libc`: minimal core (mc_memeq/mc_strlen/mc_atoi), `libc-test`. Full libc TODO.
-- [~] **A shell** — `kernel/core/shell`: parses the command word + dispatches builtins (`shell-test`). fork/exec of externals TODO.
+- [~] **A shell** — `kernel/core/shell` tokenizes + runs core builtins (`echo`/`true`/
+      `false`/`exit`); an interactive **user-mode** REPL (`shell_user_demo`) adds `top` in
+      its own layer (dispatched via `sh_arg_eq`), reading the real ProcTable through
+      SYS_PROC_* syscalls. Console I/O via SYS_GETC/SYS_PUTC (`ushell-test`, `shell2-test`;
+      `zig build run-ushell`). TODO before [x]: dispatch/run **external programs** (fork/exec
+      from `diskfs` via the ELF loader) so it's a real command surface, and a live PM-owned
+      process table feeding `top` (currently a spawned-but-unscheduled snapshot).
 - [~] **A userland** — `kernel/core/userland`: an `echo` utility over the args vector
       (`userland-test`) + shell builtins. Full utility set TODO (borrowed in MINIX).
 - [~] **Dynamic linking** — `kernel/core/dynlink`: R_RISCV_RELATIVE relocation pass for

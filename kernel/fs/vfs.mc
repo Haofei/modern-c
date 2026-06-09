@@ -83,37 +83,15 @@ fn fd_file(v: *mut Vfs, fd: usize) -> Result<usize, VfsError> {
 
 // Write `len` bytes from `src` to fd `fd`, advancing its position.
 export fn vfs_write(v: *mut Vfs, fd: usize, src: usize, len: usize) -> Result<usize, VfsError> {
-    var file_idx: usize = 0;
-    switch fd_file(v, fd) {
-        ok(idx) => {
-            file_idx = idx;
-        }
-        err(e) => {
-            return err(e);
-        }
-    }
-    switch ramfs_write((&v.fs) as *mut Ramfs, file_idx, src, len) {
-        ok(n) => {
-            v.fds[fd].pos = v.fds[fd].pos + n;
-            return ok(n);
-        }
-        err(e) => {
-            return err(.WriteFailed);
-        }
-    }
+    let file_idx: usize = fd_file(v, fd)?; // VfsError -> VfsError (plain propagate)
+    let n: usize = ramfs_write((&v.fs) as *mut Ramfs, file_idx, src, len)? else .WriteFailed;
+    v.fds[fd].pos = v.fds[fd].pos + n;
+    return ok(n);
 }
 
 // Read up to `len` bytes from fd `fd` (at its position) into `dst`, advancing it.
 export fn vfs_read(v: *mut Vfs, fd: usize, dst: usize, len: usize) -> Result<usize, VfsError> {
-    var file_idx: usize = 0;
-    switch fd_file(v, fd) {
-        ok(idx) => {
-            file_idx = idx;
-        }
-        err(e) => {
-            return err(e);
-        }
-    }
+    let file_idx: usize = fd_file(v, fd)?; // VfsError -> VfsError (plain propagate)
     let pos: usize = v.fds[fd].pos;
     let n: usize = ramfs_read_at((&v.fs) as *mut Ramfs, file_idx, pos, dst, len);
     v.fds[fd].pos = pos + n;

@@ -604,7 +604,7 @@ pub const Checker = struct {
                 }
             },
             .grouped => |inner| self.moveConsume(inner.*, state, aliases),
-            .try_expr => |inner| self.moveConsume(inner.*, state, aliases),
+            .try_expr => |inner| self.moveConsume(inner.operand.*, state, aliases),
             .cast => |c| self.moveConsume(c.value.*, state, aliases),
             .address_of => |inner| self.moveBorrow(inner.*, state),
             .member => |m| self.moveBorrow(m.base.*, state),
@@ -633,7 +633,8 @@ pub const Checker = struct {
                     if (!slot.live) self.errorCode(expr.span, "E_USE_AFTER_MOVE", "borrow of linear `move` value after it was moved");
                 }
             },
-            .grouped, .address_of, .deref, .try_expr => |inner| self.moveBorrow(inner.*, state),
+            .grouped, .address_of, .deref => |inner| self.moveBorrow(inner.*, state),
+            .try_expr => |inner| self.moveBorrow(inner.operand.*, state),
             .member => |m| self.moveBorrow(m.base.*, state),
             .index => |ix| self.moveBorrow(ix.base.*, state),
             .cast => |c| self.moveBorrow(c.value.*, state),
@@ -1435,11 +1436,11 @@ pub const Checker = struct {
                 if (ctx.no_lang_trap) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "unwrap may emit a language trap in #[no_lang_trap]");
                 }
-                const operand = self.checkExpr(inner.*, ctx);
+                const operand = self.checkExpr(inner.operand.*, ctx);
                 if (!isTryOperand(operand)) {
                     self.errorCode(expr.span, "E_TRY_REQUIRES_RESULT_OR_NULLABLE", "postfix '?' requires a Result or nullable operand");
                 }
-                if (tryPayloadType(inner.*, ctx)) |payload_ty| return classifyTypeCtx(payload_ty, ctx);
+                if (tryPayloadType(inner.operand.*, ctx)) |payload_ty| return classifyTypeCtx(payload_ty, ctx);
                 return tryResultType(operand);
             },
             .block => |block| {
@@ -4526,7 +4527,10 @@ fn addressableStorageIsMutable(expr: ast.Expr, ctx: Context) bool {
         },
         .deref => |inner| !constStorageBase(inner.*, ctx),
         .index => |node| !constStorageBase(node.base.*, ctx),
-        .member => |node| addressableStorageIsMutable(node.base.*, ctx),
+        // A field's assignability is the base's: through a non-const pointer it is mutable
+        // even though the pointer binding itself is immutable (a `*mut T` parameter permits
+        // `p.field = …`), so `&mut p.field` is allowed too. Mirrors the assignment check.
+        .member => |node| !immutableValueStorageBase(node.base.*, ctx) and !constStorageBase(node.base.*, ctx),
         .grouped => |inner| addressableStorageIsMutable(inner.*, ctx),
         else => false,
     };
@@ -4878,7 +4882,7 @@ fn globalClass(name: []const u8, ctx: Context) ?TypeClass {
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse atomicCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
-        .try_expr => |inner| tryPayloadType(inner.*, ctx),
+        .try_expr => |inner| tryPayloadType(inner.operand.*, ctx),
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),
         .index => |node| indexResultType(node, ctx),
@@ -6323,7 +6327,7 @@ fn resultSwitchHandlesLocal(name: []const u8, node: ast.Switch) bool {
 
 fn exprHandlesResultLocal(name: []const u8, expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .try_expr => |inner| exprIsIdentNamed(inner.*, name) or exprHandlesResultLocal(name, inner.*),
+        .try_expr => |inner| exprIsIdentNamed(inner.operand.*, name) or exprHandlesResultLocal(name, inner.operand.*),
         .grouped, .address_of, .deref => |inner| exprHandlesResultLocal(name, inner.*),
         .block => |block| blockHandlesResultLocal(name, block),
         .unary => |node| exprHandlesResultLocal(name, node.expr.*),

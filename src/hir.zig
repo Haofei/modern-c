@@ -424,7 +424,7 @@ const FunctionBuilder = struct {
             .grouped, .address_of, .deref => |inner| try self.buildExpr(inner.*),
             .try_expr => |inner| {
                 try self.addInstr("trap_edge", "Unwrap", "language_trap", expr.span);
-                try self.buildExpr(inner.*);
+                try self.buildExpr(inner.operand.*);
             },
             .block => |block| _ = try self.buildBlock(block),
             .unary => |node| {

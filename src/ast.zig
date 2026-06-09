@@ -379,7 +379,12 @@ pub const Expr = struct {
             base: *Expr,
             name: Ident,
         },
-        try_expr: *Expr,
+        // `EXPR?` (propagate the error as-is) or `EXPR? else MAPPED` (remap the error to
+        // `MAPPED`, of the enclosing function's error type, before propagating).
+        try_expr: struct {
+            operand: *Expr,
+            mapped: ?*Expr = null,
+        },
     };
 };
 

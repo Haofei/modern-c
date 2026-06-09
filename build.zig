@@ -415,6 +415,22 @@ pub fn build(b: *std.Build) void {
     const shell_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/shell-test.sh", "zig-out/bin/mcc",
     });
+    const shell2_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/shell2-test.sh", "zig-out/bin/mcc",
+    });
+    const ushell_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/ushell-test.sh", "zig-out/bin/mcc",
+    });
+    ushell_test_cmd.step.dependOn(b.getInstallStep());
+    const ushell_test_step = b.step("ushell-test", "Shell running in user mode via syscalls");
+    ushell_test_step.dependOn(&ushell_test_cmd.step);
+
+
+    shell2_test_cmd.step.dependOn(b.getInstallStep());
+    const shell2_test_step = b.step("shell2-test", "Shell: tokenize + builtins with output");
+    shell2_test_step.dependOn(&shell2_test_cmd.step);
+
+
     const vfsmount_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/vfsmount-test.sh", "zig-out/bin/mcc",
     });
@@ -425,6 +441,54 @@ pub fn build(b: *std.Build) void {
     const fdtable_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/fdtable-test.sh", "zig-out/bin/mcc",
     });
+    const slotmap_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/slotmap-test.sh", "zig-out/bin/mcc",
+    });
+    const mask_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/mask-test.sh", "zig-out/bin/mcc",
+    });
+    const mailbox_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/mailbox-test.sh", "zig-out/bin/mcc",
+    });
+    const tryelse_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/tryelse-test.sh", "zig-out/bin/mcc",
+    });
+    const byteview_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/byteview-test.sh", "zig-out/bin/mcc",
+    });
+    const scan_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/scan-test.sh", "zig-out/bin/mcc",
+    });
+    scan_test_cmd.step.dependOn(b.getInstallStep());
+    const scan_test_step = b.step("scan-test", "find_index/any closure scan");
+    scan_test_step.dependOn(&scan_test_cmd.step);
+
+
+    byteview_test_cmd.step.dependOn(b.getInstallStep());
+    const byteview_test_step = b.step("byteview-test", "ByteBuf<N> inline buffer view");
+    byteview_test_step.dependOn(&byteview_test_cmd.step);
+
+
+    tryelse_test_cmd.step.dependOn(b.getInstallStep());
+    const tryelse_test_step = b.step("tryelse-test", "EXPR? else MAPPED error remap");
+    tryelse_test_step.dependOn(&tryelse_test_cmd.step);
+
+
+    mailbox_test_cmd.step.dependOn(b.getInstallStep());
+    const mailbox_test_step = b.step("mailbox-test", "Mailbox<T,N> bounded queue + source filter");
+    mailbox_test_step.dependOn(&mailbox_test_cmd.step);
+
+
+    mask_test_cmd.step.dependOn(b.getInstallStep());
+    const mask_test_step = b.step("mask-test", "Mask32 bit set");
+    mask_test_step.dependOn(&mask_test_cmd.step);
+
+
+    slotmap_test_cmd.step.dependOn(b.getInstallStep());
+    const slotmap_test_step = b.step("slotmap-test", "SlotMap<T,N> index handle table");
+    slotmap_test_step.dependOn(&slotmap_test_cmd.step);
+
+
     const posix_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/posix-test.sh", "zig-out/bin/mcc",
     });
@@ -1056,6 +1120,12 @@ pub fn build(b: *std.Build) void {
     const sched_vm_test_step = b.step("sched-vm-test", "Scheduler switching per-process address spaces (proc_yield_vm) under QEMU");
     sched_vm_test_step.dependOn(&sched_vm_test_cmd.step);
 
+    const run_ushell_cmd = b.addSystemCommand(&.{ "sh", "tools/run-ushell.sh" });
+    run_ushell_cmd.step.dependOn(b.getInstallStep());
+    run_ushell_cmd.stdio = .inherit; // connect the terminal so QEMU is interactive
+    const run_ushell_step = b.step("run-ushell", "Build + boot the user-mode MC shell in QEMU (interactive)");
+    run_ushell_step.dependOn(&run_ushell_cmd.step);
+
     const m0_step = b.step("m0", "Run M0 conformance gates");
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);
@@ -1142,8 +1212,16 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&args_test_cmd.step);
     m0_step.dependOn(&libc_test_cmd.step);
     m0_step.dependOn(&shell_test_cmd.step);
+    m0_step.dependOn(&shell2_test_cmd.step);
+    m0_step.dependOn(&ushell_test_cmd.step);
     m0_step.dependOn(&vfsmount_test_cmd.step);
     m0_step.dependOn(&fdtable_test_cmd.step);
+    m0_step.dependOn(&slotmap_test_cmd.step);
+    m0_step.dependOn(&mask_test_cmd.step);
+    m0_step.dependOn(&mailbox_test_cmd.step);
+    m0_step.dependOn(&tryelse_test_cmd.step);
+    m0_step.dependOn(&byteview_test_cmd.step);
+    m0_step.dependOn(&scan_test_cmd.step);
     m0_step.dependOn(&posix_test_cmd.step);
     m0_step.dependOn(&userland_test_cmd.step);
     m0_step.dependOn(&smprq_test_cmd.step);

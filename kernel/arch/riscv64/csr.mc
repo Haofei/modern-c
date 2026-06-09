@@ -7,6 +7,7 @@
 
 const MSTATUS_MIE: usize = 0x8;  // machine global interrupt enable (mstatus.MIE)
 const MIE_MTIE: usize = 0x80;    // machine timer interrupt enable (mie.MTIE)
+const MIE_MEIE: usize = 0x800;   // machine external interrupt enable (mie.MEIE)
 
 // Set the machine trap vector base (mtvec) to `addr` (direct mode).
 export fn write_trap_vector(addr: usize) -> void {
@@ -68,6 +69,31 @@ export fn enable_timer_interrupt() -> void {
             asm precise volatile {
                 "csrs mie, %0"
                 in("r") bit: usize
+            }
+        }
+    }
+}
+
+// Enable the machine external interrupt source (set mie.MEIE) — PLIC-routed device IRQs.
+export fn enable_external_interrupt() -> void {
+    let bit: usize = MIE_MEIE;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm precise volatile {
+                "csrs mie, %0"
+                in("r") bit: usize
+            }
+        }
+    }
+}
+
+// Halt the hart until an interrupt is pending (idle, not spinning).
+export fn wait_for_interrupt() -> void {
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm opaque volatile {
+                "wfi"
+                clobber("memory")
             }
         }
     }

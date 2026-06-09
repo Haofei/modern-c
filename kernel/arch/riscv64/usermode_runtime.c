@@ -16,6 +16,34 @@ void mc_halt(void);
 void syscall_setup(void);
 uint64_t mc_syscall(uint64_t number, uint64_t arg0, uint64_t arg1, uint64_t arg2);
 
+// ---- UART RX interrupt: drain bytes into a ring so the shell can block (wfi) instead
+// of busy-polling. Only active if the kernel enables the UART IRQ + PLIC (irq_setup);
+// otherwise this code is never reached (e.g. the plain user-task test). ----
+#define UART_RBR 0x10000000UL
+#define UART_LSR 0x10000005UL
+#define PLIC_CLAIM 0x0C200004UL // hart 0, M-mode context
+#define UART_IRQ 10
+
+#define RX_CAP 64
+static volatile uint8_t rx_buf[RX_CAP];
+static volatile uint32_t rx_head = 0, rx_tail = 0;
+
+static void uart_rx_push(uint8_t ch) {
+    uint32_t next = (rx_head + 1) % RX_CAP;
+    if (next != rx_tail) { // drop on overflow
+        rx_buf[rx_head] = ch;
+        rx_head = next;
+    }
+}
+
+// Pop one received byte, or 0x100 if the ring is empty (called from SYS_GETC).
+uint64_t uart_rx_pop(void) {
+    if (rx_head == rx_tail) return 0x100;
+    uint8_t ch = rx_buf[rx_tail];
+    rx_tail = (rx_tail + 1) % RX_CAP;
+    return (uint64_t)ch;
+}
+
 typedef struct {
     uint64_t ra, t0, t1, t2, t3, t4, t5, t6;
     uint64_t a0, a1, a2, a3, a4, a5, a6, a7;
@@ -28,6 +56,19 @@ typedef struct {
 __attribute__((used)) void trap_entry(Frame *f) {
     uint64_t mcause;
     __asm__ volatile("csrr %0, mcause" : "=r"(mcause));
+    // Interrupt (high bit set)? Service the UART RX IRQ and resume (mepc unchanged).
+    if ((int64_t)mcause < 0) {
+        if ((mcause & 0xff) == 11) { // machine external interrupt
+            uint32_t irq = *(volatile uint32_t *)PLIC_CLAIM; // claim
+            if (irq == UART_IRQ) {
+                while (*(volatile uint8_t *)UART_LSR & 0x01) {
+                    uart_rx_push(*(volatile uint8_t *)UART_RBR); // drain the FIFO
+                }
+                *(volatile uint32_t *)PLIC_CLAIM = irq; // complete
+            }
+        }
+        return; // an interrupt resumes the interrupted instruction (no mepc bump)
+    }
     if (mcause == ECALL_FROM_U || mcause == ECALL_FROM_M) {
         if (f->a7 == SYS_EXIT) {
             puts_("\nUSER-EXIT from ");

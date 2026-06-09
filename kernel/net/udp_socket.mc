@@ -9,6 +9,7 @@
 
 import "std/bytes.mc";
 import "std/addr.mc";
+import "std/byteview.mc";
 
 const MAX_SOCKETS: usize = 8;
 const QDEPTH: usize = 8;
@@ -27,7 +28,7 @@ struct Datagram {
     src_ip: u32,
     src_port: u16,
     len: u16,
-    payload: [DGRAM_MAX]u8, // inline — no separate pool/offset bookkeeping needed
+    payload: ByteBuf<DGRAM_MAX>, // inline buffer (bulk copy via std/byteview)
 }
 
 struct SocketTable {
@@ -110,17 +111,12 @@ export fn socket_deliver(t: *mut SocketTable, dst_port: u16, src_ip: u32, src_po
     if slot >= QDEPTH {
         return err(.QueueFull);
     }
-    var r: ByteReader = byte_reader(pa(src_addr), len);
-    var j: usize = 0;
-    while j < len {
-        t.queue[slot].payload[j] = br_u8(&r, j); // inline payload (nested array)
-        j = j + 1;
-    }
+    let copied: usize = bytebuf_copy_from(DGRAM_MAX, &t.queue[slot].payload, pa(src_addr), len);
     t.queue[slot].valid = true;
     t.queue[slot].dst_port = dst_port;
     t.queue[slot].src_ip = src_ip;
     t.queue[slot].src_port = src_port;
-    t.queue[slot].len = len as u16;
+    t.queue[slot].len = copied as u16;
     return ok(true);
 }
 
@@ -154,14 +150,7 @@ export fn socket_recv(t: *mut SocketTable, idx: usize, out_addr: usize, max: usi
     if max < n {
         n = max;
     }
-    var j: usize = 0;
-    while j < n {
-        let b: u8 = t.queue[slot].payload[j]; // inline payload (nested array)
-        unsafe {
-            raw.store<u8>(phys(out_addr + j), b);
-        }
-        j = j + 1;
-    }
+    bytebuf_copy_to(DGRAM_MAX, &t.queue[slot].payload, phys(out_addr), n);
     t.socks[idx].last_src_ip = t.queue[slot].src_ip;
     t.socks[idx].last_src_port = t.queue[slot].src_port;
     t.queue[slot].valid = false;

@@ -1279,7 +1279,8 @@ const CEmitter = struct {
                 try self.collectExprTypeArtifacts(node.callee.*);
                 for (node.args) |arg| try self.collectExprTypeArtifacts(arg);
             },
-            .grouped, .address_of, .deref, .try_expr => |inner| try self.collectExprTypeArtifacts(inner.*),
+            .grouped, .address_of, .deref => |inner| try self.collectExprTypeArtifacts(inner.*),
+            .try_expr => |inner| try self.collectExprTypeArtifacts(inner.operand.*),
             .unary => |node| try self.collectExprTypeArtifacts(node.expr.*),
             .binary => |node| {
                 try self.collectExprTypeArtifacts(node.left.*);
@@ -5476,9 +5477,30 @@ const CEmitter = struct {
         return true;
     }
 
+    // Emit the `?` early-return on error: propagate the original error, or — for
+    // `EXPR? else MAPPED` — `err(MAPPED)` mapped into the enclosing error type.
+    fn emitTryErrReturn(self: *CEmitter, enclosing_return_ty: ast.TypeExpr, temp_name: []const u8, mapped: ?*ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        const ret_c = try self.cTypeFor(enclosing_return_ty, .typedef_name);
+        if (mapped) |m| {
+            try self.out.print(self.allocator, "return (({s}){{ .is_ok = false, .payload.err = ", .{ret_c});
+            if (resultPayloadTypeForTag(enclosing_return_ty, "err")) |err_ty| {
+                try self.emitExprWithTarget(m.*, locals, err_ty);
+            } else {
+                try self.emitExpr(m.*, locals);
+            }
+            try self.out.appendSlice(self.allocator, " });\n");
+        } else {
+            try self.out.print(self.allocator, "return (({s}){{ .is_ok = false, .payload.err = {s}.payload.err }});\n", .{ ret_c, temp_name });
+        }
+    }
+
     fn emitResultTryLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        const try_mapped: ?*ast.Expr = switch (initializer.kind) {
+            .try_expr => |inner| inner.mapped,
+            else => null,
+        };
         const operand = switch (initializer.kind) {
-            .try_expr => |inner| inner.*,
+            .try_expr => |inner| inner.operand.*,
             .grouped => |inner| return try self.emitResultTryLocalInit(name, decl_ty, inner.*, locals, return_ty),
             else => return false,
         };
@@ -5499,7 +5521,7 @@ const CEmitter = struct {
         try self.out.print(self.allocator, "if (!{s}.is_ok) {{\n", .{temp_name});
         self.indent += 1;
         try self.writeIndent();
-        try self.out.print(self.allocator, "return (({s}){{ .is_ok = false, .payload.err = {s}.payload.err }});\n", .{ try self.cTypeFor(enclosing_return_ty, .typedef_name), temp_name });
+        try self.emitTryErrReturn(enclosing_return_ty, temp_name, try_mapped, locals);
         self.indent -= 1;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "}\n");
@@ -5906,7 +5928,7 @@ const CEmitter = struct {
 
     fn emitResultTryReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
         const operand = switch (expr.kind) {
-            .try_expr => |inner| inner.*,
+            .try_expr => |inner| inner.operand.*,
             .grouped => |inner| return try self.emitResultTryReturn(inner.*, locals, return_ty),
             else => return false,
         };
@@ -7065,7 +7087,7 @@ const CEmitter = struct {
     fn collectResultTryHoistsForReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(TryReplacement)) !bool {
         switch (expr.kind) {
             .try_expr => |inner| {
-                const operand_result_ty = self.resultTypeForExpr(inner.*, locals) orelse return false;
+                const operand_result_ty = self.resultTypeForExpr(inner.operand.*, locals) orelse return false;
                 _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
                 _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
                 const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
@@ -7074,7 +7096,7 @@ const CEmitter = struct {
 
                 try self.writeIndent();
                 try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(operand_result_ty, .typedef_name), temp_name });
-                try self.emitExpr(inner.*, locals);
+                try self.emitExpr(inner.operand.*, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
 
                 try self.writeIndent();
@@ -7118,7 +7140,7 @@ const CEmitter = struct {
     fn collectResultTryHoistsForLocalInit(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr, replacements: *std.ArrayList(TryReplacement)) !bool {
         switch (expr.kind) {
             .try_expr => |inner| {
-                const operand_result_ty = self.resultTypeForExpr(inner.*, locals) orelse return false;
+                const operand_result_ty = self.resultTypeForExpr(inner.operand.*, locals) orelse return false;
                 _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return false;
                 _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return false;
                 const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
@@ -7127,14 +7149,14 @@ const CEmitter = struct {
 
                 try self.writeIndent();
                 try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(operand_result_ty, .typedef_name), temp_name });
-                try self.emitExpr(inner.*, locals);
+                try self.emitExpr(inner.operand.*, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
 
                 try self.writeIndent();
                 try self.out.print(self.allocator, "if (!{s}.is_ok) {{\n", .{temp_name});
                 self.indent += 1;
                 try self.writeIndent();
-                try self.out.print(self.allocator, "return (({s}){{ .is_ok = false, .payload.err = {s}.payload.err }});\n", .{ try self.cTypeFor(enclosing_return_ty, .typedef_name), temp_name });
+                try self.emitTryErrReturn(enclosing_return_ty, temp_name, inner.mapped, locals);
                 self.indent -= 1;
                 try self.writeIndent();
                 try self.out.appendSlice(self.allocator, "}\n");
@@ -7168,14 +7190,14 @@ const CEmitter = struct {
     fn collectNullableTryHoistsForReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(TryReplacement)) !bool {
         switch (expr.kind) {
             .try_expr => |inner| {
-                const inner_c_type = try self.nullableInnerCTypeForExpr(inner.*, locals) orelse return false;
+                const inner_c_type = try self.nullableInnerCTypeForExpr(inner.operand.*, locals) orelse return false;
                 const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
                 self.temp_index += 1;
                 try replacements.append(self.scratch.allocator(), .{ .span = expr.span, .temp_name = temp_name });
 
                 try self.writeIndent();
                 try self.out.print(self.allocator, "{s} {s} = ", .{ inner_c_type, temp_name });
-                try self.emitExpr(inner.*, locals);
+                try self.emitExpr(inner.operand.*, locals);
                 try self.out.appendSlice(self.allocator, ";\n");
 
                 try self.writeIndent();
@@ -7430,7 +7452,7 @@ const CEmitter = struct {
 
     fn emitNullableTryReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const operand = switch (expr.kind) {
-            .try_expr => |inner| inner.*,
+            .try_expr => |inner| inner.operand.*,
             .grouped => |inner| return try self.emitNullableTryReturn(inner.*, locals),
             else => return false,
         };
@@ -7793,7 +7815,7 @@ const CEmitter = struct {
 
     fn exprContainsResultTry(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
-            .try_expr => |inner| self.resultTypeForExpr(inner.*, locals) != null,
+            .try_expr => |inner| self.resultTypeForExpr(inner.operand.*, locals) != null,
             .grouped, .address_of, .deref => |inner| self.exprContainsResultTry(inner.*, locals),
             .unary => |node| self.exprContainsResultTry(node.expr.*, locals),
             .binary => |node| self.exprContainsResultTry(node.left.*, locals) or self.exprContainsResultTry(node.right.*, locals),
@@ -7817,7 +7839,7 @@ const CEmitter = struct {
 
     fn exprContainsNullableTry(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         return switch (expr.kind) {
-            .try_expr => |inner| (try self.nullableInnerCTypeForExpr(inner.*, locals)) != null,
+            .try_expr => |inner| (try self.nullableInnerCTypeForExpr(inner.operand.*, locals)) != null,
             .grouped, .address_of, .deref => |inner| try self.exprContainsNullableTry(inner.*, locals),
             .unary => |node| try self.exprContainsNullableTry(node.expr.*, locals),
             .binary => |node| (try self.exprContainsNullableTry(node.left.*, locals)) or (try self.exprContainsNullableTry(node.right.*, locals)),
@@ -8668,7 +8690,8 @@ const Inspector = struct {
             .int_literal, .float_literal, .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal, .unreachable_expr => {},
             .array_literal => |items| for (items) |item| try self.inspectExpr(item, ctx),
             .struct_literal => |fields| for (fields) |field| try self.inspectExpr(field.value, ctx),
-            .grouped, .address_of, .deref, .try_expr => |inner| try self.inspectExpr(inner.*, ctx),
+            .grouped, .address_of, .deref => |inner| try self.inspectExpr(inner.*, ctx),
+            .try_expr => |inner| try self.inspectExpr(inner.operand.*, ctx),
             .block => |body| try self.inspectBlock(body, ctx),
             .unary => |node| {
                 if (node.op == .neg) {
@@ -9680,7 +9703,8 @@ fn conditionOperandTypeForEmission(emitter: *CEmitter, expr: ast.Expr, locals: *
 fn exprContainsCall(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .call => true,
-        .grouped, .address_of, .deref, .try_expr => |inner| exprContainsCall(inner.*),
+        .grouped, .address_of, .deref => |inner| exprContainsCall(inner.*),
+        .try_expr => |inner| exprContainsCall(inner.operand.*),
         .unary => |node| exprContainsCall(node.expr.*),
         .binary => |node| exprContainsCall(node.left.*) or exprContainsCall(node.right.*),
         .index => |node| exprContainsCall(node.base.*) or exprContainsCall(node.index.*),
@@ -9944,7 +9968,7 @@ fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCase {
 
 fn resultTryOperand(expr: ast.Expr) ?ast.Expr {
     return switch (expr.kind) {
-        .try_expr => |inner| inner.*,
+        .try_expr => |inner| inner.operand.*,
         .grouped => |inner| resultTryOperand(inner.*),
         else => null,
     };
@@ -9955,7 +9979,7 @@ fn exprHasTryReplacement(expr: ast.Expr, replacements: []const TryReplacement) b
     return switch (expr.kind) {
         .grouped, .address_of, .deref => |inner| exprHasTryReplacement(inner.*, replacements),
         .unary => |node| exprHasTryReplacement(node.expr.*, replacements),
-        .try_expr => |inner| exprHasTryReplacement(inner.*, replacements),
+        .try_expr => |inner| exprHasTryReplacement(inner.operand.*, replacements),
         .binary => |node| exprHasTryReplacement(node.left.*, replacements) or exprHasTryReplacement(node.right.*, replacements),
         .call => |node| {
             for (node.args) |arg| if (exprHasTryReplacement(arg, replacements)) return true;
@@ -9973,7 +9997,7 @@ fn exprHasMmioReadReplacement(expr: ast.Expr, replacements: []const MmioReadRepl
     return switch (expr.kind) {
         .grouped, .address_of, .deref => |inner| exprHasMmioReadReplacement(inner.*, replacements),
         .unary => |node| exprHasMmioReadReplacement(node.expr.*, replacements),
-        .try_expr => |inner| exprHasMmioReadReplacement(inner.*, replacements),
+        .try_expr => |inner| exprHasMmioReadReplacement(inner.operand.*, replacements),
         .binary => |node| exprHasMmioReadReplacement(node.left.*, replacements) or exprHasMmioReadReplacement(node.right.*, replacements),
         .call => |node| {
             for (node.args) |arg| if (exprHasMmioReadReplacement(arg, replacements)) return true;

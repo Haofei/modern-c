@@ -58,9 +58,17 @@ const Rewriter = struct {
     arena: std.mem.Allocator,
     type_generic: *const std.StringHashMap(TypeGenericInfo),
     const_fns: *const std.StringHashMap(ast.FnDecl),
-    instances: *std.StringHashMap(Instance),
+    // Instances are arena-allocated (stable pointers) so adding one mid-pass — which a
+    // generic fn calling another generic fn does — never dangles an in-progress subst.
+    // The maps dedup by mangled name; the lists drive the worklist passes.
+    instances: *std.StringHashMap(*Instance),
+    inst_list: *std.ArrayList(*Instance),
     generic_structs: *const std.StringHashMap(ast.StructDecl),
-    struct_instances: *std.StringHashMap(StructInstance),
+    struct_instances: *std.StringHashMap(*StructInstance),
+    struct_list: *std.ArrayList(*StructInstance),
+    // Module-level integer `const`s, so a const can be used as a const-generic argument
+    // (`Ring<u32, RQ_CAP>`), not just an integer literal.
+    int_consts: *const std.StringHashMap(i128),
     oom: bool = false,
 };
 
@@ -68,6 +76,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
     var type_generic = std.StringHashMap(TypeGenericInfo).init(arena);
     var const_fns = std.StringHashMap(ast.FnDecl).init(arena);
     var generic_structs = std.StringHashMap(ast.StructDecl).init(arena);
+    var int_consts = std.StringHashMap(i128).init(arena);
     for (module.decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| {
@@ -79,6 +88,17 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
             .struct_decl => |sd| {
                 if (sd.type_params.len > 0) try generic_structs.put(sd.name.text, sd);
             },
+            // Record integer module consts (folded against earlier ones), so they can be
+            // used as const-generic arguments.
+            .global_decl => |g| {
+                if (g.is_const) {
+                    if (g.init) |init_expr| {
+                        if (foldIntConst(&const_fns, &int_consts, init_expr)) |value| {
+                            try int_consts.put(g.name.text, value);
+                        }
+                    }
+                }
+            },
             else => {},
         }
     }
@@ -87,15 +107,20 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
     // generic structs is returned unchanged, so existing code is untouched.
     if (type_generic.count() == 0 and generic_structs.count() == 0) return module;
 
-    var instances = std.StringHashMap(Instance).init(arena);
-    var struct_instances = std.StringHashMap(StructInstance).init(arena);
+    var instances = std.StringHashMap(*Instance).init(arena);
+    var struct_instances = std.StringHashMap(*StructInstance).init(arena);
+    var inst_list: std.ArrayList(*Instance) = .empty;
+    var struct_list: std.ArrayList(*StructInstance) = .empty;
     var rewriter = Rewriter{
         .arena = arena,
         .type_generic = &type_generic,
         .const_fns = &const_fns,
         .instances = &instances,
+        .inst_list = &inst_list,
         .generic_structs = &generic_structs,
         .struct_instances = &struct_instances,
+        .struct_list = &struct_list,
+        .int_consts = &int_consts,
     };
     const ctx = CloneCtx{ .arena = arena, .rewrite = &rewriter };
 
@@ -122,47 +147,37 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
     }
     if (rewriter.oom) return error.OutOfMemory;
 
-    // Pass 2a: specialize functions (with the rewriter, so generic-struct uses
-    // in a specialized body — e.g. `-> Stack<T>` becoming `Stack<u32>` — are
-    // rewritten and registered). A specialized body may call another generic
-    // function, growing the set, so iterate to a fixed point.
+    // Pass 2a: specialize functions (with the rewriter, so generic-struct uses in a
+    // specialized body are rewritten and registered). A specialized body may call another
+    // generic function, appending to inst_list; the index loop processes those too.
     {
-        var seen: usize = 0;
-        var guard: usize = 0;
-        while (instances.count() != seen and guard < 4096) : (guard += 1) {
-            seen = instances.count();
-            var it = instances.valueIterator();
-            while (it.next()) |inst| {
-                if (inst.generated) continue;
-                inst.generated = true;
-                var spec_ctx = CloneCtx{ .arena = arena, .subst = &inst.subst, .rewrite = &rewriter };
-                var spec = try cloneFnDeclCtx(&spec_ctx, inst.decl);
-                spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
-                spec.params = try dropComptimeParams(arena, spec.params);
-                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .kind = .{ .fn_decl = spec } });
-            }
+        var i: usize = 0;
+        while (i < inst_list.items.len) : (i += 1) {
+            const inst = inst_list.items[i]; // *Instance — stable across appends
+            if (inst.generated) continue;
+            inst.generated = true;
+            var spec_ctx = CloneCtx{ .arena = arena, .subst = &inst.subst, .rewrite = &rewriter };
+            var spec = try cloneFnDeclCtx(&spec_ctx, inst.decl);
+            spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
+            spec.params = try dropComptimeParams(arena, spec.params);
+            try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .kind = .{ .fn_decl = spec } });
         }
     }
     if (rewriter.oom) return error.OutOfMemory;
 
-    // Pass 2b: generate one concrete struct per instantiation. Field types may
-    // reference further generic-struct instantiations, so iterate to a fixed
-    // point as well.
+    // Pass 2b: generate one concrete struct per instantiation. Field types may reference
+    // further instantiations, appending to struct_list; the index loop processes those.
     {
-        var seen: usize = 0;
-        var guard: usize = 0;
-        while (struct_instances.count() != seen and guard < 4096) : (guard += 1) {
-            seen = struct_instances.count();
-            var sit = struct_instances.valueIterator();
-            while (sit.next()) |si| {
-                if (si.generated) continue;
-                si.generated = true;
-                var sctx = CloneCtx{ .arena = arena, .subst = &si.subst, .rewrite = &rewriter };
-                var spec = try cloneStructDeclCtx(&sctx, si.decl);
-                spec.name = .{ .text = si.mangled, .span = si.decl.name.span };
-                spec.type_params = &.{};
-                try out.append(arena, .{ .span = si.decl.name.span, .attrs = &.{}, .kind = .{ .struct_decl = spec } });
-            }
+        var i: usize = 0;
+        while (i < struct_list.items.len) : (i += 1) {
+            const si = struct_list.items[i];
+            if (si.generated) continue;
+            si.generated = true;
+            var sctx = CloneCtx{ .arena = arena, .subst = &si.subst, .rewrite = &rewriter };
+            var spec = try cloneStructDeclCtx(&sctx, si.decl);
+            spec.name = .{ .text = si.mangled, .span = si.decl.name.span };
+            spec.type_params = &.{};
+            try out.append(arena, .{ .span = si.decl.name.span, .attrs = &.{}, .kind = .{ .struct_decl = spec } });
         }
     }
     if (rewriter.oom) return error.OutOfMemory;
@@ -245,7 +260,8 @@ fn typeMentionsIdent(ty: ast.TypeExpr, name: []const u8) bool {
 fn exprMentionsIdent(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |id| std.mem.eql(u8, id.text, name),
-        .grouped, .address_of, .deref, .try_expr => |inner| exprMentionsIdent(inner.*, name),
+        .grouped, .address_of, .deref => |inner| exprMentionsIdent(inner.*, name),
+        .try_expr => |inner| exprMentionsIdent(inner.operand.*, name),
         .unary => |n| exprMentionsIdent(n.expr.*, name),
         .binary => |n| exprMentionsIdent(n.left.*, name) or exprMentionsIdent(n.right.*, name),
         .index => |n| exprMentionsIdent(n.base.*, name) or exprMentionsIdent(n.index.*, name),
@@ -287,7 +303,10 @@ fn cloneExprCtx(ctx: *const CloneCtx, expr: ast.Expr) anyerror!ast.Expr {
     const kind: ast.Expr.Kind = switch (expr.kind) {
         .ident => |ident| if (ctx.subst) |s| (if (s.get(ident.text)) |value| switch (value) {
             .int => |n| ast.Expr.Kind{ .int_literal = try std.fmt.allocPrint(ctx.arena, "{d}", .{n}) },
-            .type_name => ast.Expr.Kind{ .ident = ident }, // a type param never appears as a value expr
+            // A type param forwarded as a type-argument to a nested generic call
+            // (`inner(T, N, ...)`): substitute the concrete type name so the nested
+            // instantiation resolves (`inner(u32, 4, ...)`).
+            .type_name => |tn| ast.Expr.Kind{ .ident = .{ .text = tn, .span = ident.span } },
         } else ast.Expr.Kind{ .ident = ident }) else ast.Expr.Kind{ .ident = ident },
         .int_literal,
         .float_literal,
@@ -306,7 +325,7 @@ fn cloneExprCtx(ctx: *const CloneCtx, expr: ast.Expr) anyerror!ast.Expr {
         .cast => |node| .{ .cast = .{ .value = try clonePtr(ctx, node.value.*), .ty = try cloneTypePtr(ctx, node.ty.*) } },
         .address_of => |inner| .{ .address_of = try clonePtr(ctx, inner.*) },
         .deref => |inner| .{ .deref = try clonePtr(ctx, inner.*) },
-        .try_expr => |inner| .{ .try_expr = try clonePtr(ctx, inner.*) },
+        .try_expr => |inner| .{ .try_expr = .{ .operand = try clonePtr(ctx, inner.operand.*), .mapped = if (inner.mapped) |m| try clonePtr(ctx, m.*) else null } },
         .member => |node| .{ .member = .{ .base = try clonePtr(ctx, node.base.*), .name = node.name } },
         .index => |node| .{ .index = .{ .base = try clonePtr(ctx, node.base.*), .index = try clonePtr(ctx, node.index.*) } },
         .array_literal => |items| .{ .array_literal = try cloneExprSlice(ctx, items) },
@@ -344,24 +363,36 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
     try mangled.appendSlice(rw.arena, info.decl.name.text);
     var kept_args: std.ArrayList(ast.Expr) = .empty;
     for (info.decl.params, node.args) |param, arg| {
+        // Apply the enclosing substitution first, so a generic function that forwards its
+        // own comptime params to a nested generic call (`inner(T, N, ...)`) resolves them
+        // (T -> u32, N -> 4) before we read the type-arg name / fold the value.
+        const arg_clone = try cloneExprCtx(ctx, arg);
         if (param.is_comptime and isTypeParam(param)) {
             // `comptime T: type`: bind to the argument's type name.
-            const tn = typeArgName(arg) orelse return null;
+            const tn = typeArgName(arg_clone) orelse return null;
             try subst.put(param.name.text, .{ .type_name = tn });
             try mangled.appendSlice(rw.arena, "__");
             try mangled.appendSlice(rw.arena, tn);
         } else if (param.is_comptime) {
-            const value = foldConst(rw, arg) orelse return null; // not a constant -> leave call as-is (sema will diagnose)
+            const value = foldConst(rw, arg_clone) orelse return null; // not a constant -> leave call as-is (sema will diagnose)
             try subst.put(param.name.text, .{ .int = value });
             const seg = try std.fmt.allocPrint(rw.arena, "__{d}", .{value});
             try mangled.appendSlice(rw.arena, seg);
         } else {
-            try kept_args.append(rw.arena, try cloneExprCtx(ctx, arg));
+            try kept_args.append(rw.arena, arg_clone);
         }
     }
     const mangled_name = try mangled.toOwnedSlice(rw.arena);
     if (!rw.instances.contains(mangled_name)) {
-        rw.instances.put(mangled_name, .{ .decl = info.decl, .subst = subst, .mangled = mangled_name }) catch {
+        const inst = rw.arena.create(Instance) catch {
+            rw.oom = true;
+            return null;
+        };
+        inst.* = .{ .decl = info.decl, .subst = subst, .mangled = mangled_name };
+        rw.instances.put(mangled_name, inst) catch {
+            rw.oom = true;
+        };
+        rw.inst_list.append(rw.arena, inst) catch {
             rw.oom = true;
         };
     }
@@ -374,10 +405,25 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
 }
 
 fn foldConst(rw: *Rewriter, expr: ast.Expr) ?i128 {
+    return foldIntConst(rw.const_fns, rw.int_consts, expr);
+}
+
+// Fold `expr` to an integer at comptime, resolving module const-fn calls and integer
+// module consts (so a `const` can stand in for an integer literal, e.g. as a const-
+// generic argument). Returns null if it isn't a comptime integer.
+fn foldIntConst(
+    const_fns: *const std.StringHashMap(ast.FnDecl),
+    int_consts: *const std.StringHashMap(i128),
+    expr: ast.Expr,
+) ?i128 {
     var buf: [64 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     var scope = eval.ComptimeScope.init(fba.allocator());
-    scope.funcs = rw.const_fns;
+    scope.funcs = const_fns;
+    var it = int_consts.iterator();
+    while (it.next()) |entry| {
+        scope.bindings.put(entry.key_ptr.*, .{ .int = entry.value_ptr.* }) catch return null;
+    }
     return switch (eval.foldComptimeExpr(&scope, expr)) {
         .value => |v| switch (v) {
             .int => |n| n,
@@ -467,17 +513,32 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, sd: ast.StructDecl,
             .name => |n| n.text,
             else => return null,
         };
-        if (constGenericValue(tn)) |value| {
-            try subst.put(param.text, .{ .int = value });
-        } else {
-            try subst.put(param.text, .{ .type_name = tn });
-        }
         try mangled.appendSlice(rw.arena, "__");
-        try mangled.appendSlice(rw.arena, tn);
+        if (constGenericValue(tn)) |value| {
+            // an integer literal type-argument (`Ring<u32, 8>`)
+            try subst.put(param.text, .{ .int = value });
+            try mangled.appendSlice(rw.arena, tn);
+        } else if (rw.int_consts.get(tn)) |value| {
+            // a const used as a const-generic argument (`Ring<u32, RQ_CAP>`)
+            try subst.put(param.text, .{ .int = value });
+            try mangled.appendSlice(rw.arena, try std.fmt.allocPrint(rw.arena, "{d}", .{value}));
+        } else {
+            // a concrete type name (`Ring<u32, …>`'s `u32`)
+            try subst.put(param.text, .{ .type_name = tn });
+            try mangled.appendSlice(rw.arena, tn);
+        }
     }
     const name = try mangled.toOwnedSlice(rw.arena);
     if (!rw.struct_instances.contains(name)) {
-        rw.struct_instances.put(name, .{ .decl = sd, .subst = subst, .mangled = name }) catch {
+        const si = rw.arena.create(StructInstance) catch {
+            rw.oom = true;
+            return name;
+        };
+        si.* = .{ .decl = sd, .subst = subst, .mangled = name };
+        rw.struct_instances.put(name, si) catch {
+            rw.oom = true;
+        };
+        rw.struct_list.append(rw.arena, si) catch {
             rw.oom = true;
         };
     }

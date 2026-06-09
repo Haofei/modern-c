@@ -20,6 +20,9 @@ import "std/ring.mc";
 import "std/endian.mc";
 import "std/barrier.mc";
 
+// The TX descriptor ring (const-generic std Ring; zero-initialized as a global).
+global g_tx: Ring<usize, 16>;
+
 extern mmio struct Uart16550 {
     thr: Reg<u8, .write>,
     ier: Reg<u8, .read_write>,
@@ -54,9 +57,9 @@ export fn nic_transmit(uart: MmioPtr<Uart16550>, l: *SpinLock) -> void {
     // 2. Under the lock, enqueue the TX descriptor on the ring and dequeue it for
     //    transmit; order the descriptor write before the doorbell.
     let g: Guard = lock(l);
-    let tx0: Ring<usize> = empty(usize, 0);
-    let tx1: Ring<usize> = push(usize, tx0, desc_addr); // enqueue the descriptor
-    let queued: usize = front(usize, tx1);              // dequeue it for transmit
+    ring_init(usize, 16, &g_tx);
+    let pushed: bool = ring_push(usize, 16, &g_tx, desc_addr); // enqueue the descriptor
+    let queued: usize = ring_front(usize, 16, &g_tx);          // peek it for transmit
     wmb();
 
     // 3. Doorbell + payload: write the frame (fixed length) to the device

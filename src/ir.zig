@@ -304,7 +304,7 @@ const FunctionIrBuilder = struct {
             .grouped, .address_of, .deref => |inner| try self.collectExpr(inner.*),
             .try_expr => |inner| {
                 try self.addTrap(.Unknown, .unwrap, expr.span);
-                try self.collectExpr(inner.*);
+                try self.collectExpr(inner.operand.*);
             },
             .block => |body| try self.collectBlock(body),
             .unary => |node| {
@@ -932,7 +932,7 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
                     .{ ctx.function_name, ctx.unsafe_contract_depth, expr.span.line, expr.span.column },
                 );
             }
-            try writeExprFacts(collector, inner.*, writer, ctx);
+            try writeExprFacts(collector, inner.operand.*, writer, ctx);
         },
         .block => |body| try writeBlockFacts(collector, body, writer, ctx),
         .unary => |node| {
@@ -1329,7 +1329,8 @@ fn writeExprName(expr: ast.Expr, writer: anytype) anyerror!void {
             try writeExprName(inner.*, writer);
             try writer.print(".*", .{});
         },
-        .grouped, .address_of, .try_expr => |inner| try writeExprName(inner.*, writer),
+        .grouped, .address_of => |inner| try writeExprName(inner.*, writer),
+        .try_expr => |inner| try writeExprName(inner.operand.*, writer),
         else => try writer.print("<expr>", .{}),
     }
 }

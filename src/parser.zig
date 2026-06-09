@@ -887,7 +887,13 @@ pub const Parser = struct {
             }
             if (self.match(.question)) {
                 const inner = try ast.makePtr(self.allocator, expr);
-                expr = .{ .span = joinSpan(inner.span, self.lxTokenBeforeCurrent()), .kind = .{ .try_expr = inner } };
+                // `EXPR? else MAPPED`: on error, propagate `err(MAPPED)` (in the enclosing
+                // function's error type) instead of the original error.
+                var mapped: ?*ast.Expr = null;
+                if (self.match(.kw_else)) {
+                    mapped = try ast.makePtr(self.allocator, try self.parsePrimary());
+                }
+                expr = .{ .span = joinSpan(inner.span, self.lxTokenBeforeCurrent()), .kind = .{ .try_expr = .{ .operand = inner, .mapped = mapped } } };
                 continue;
             }
             break;

@@ -1939,7 +1939,7 @@ const FunctionBuilder = struct {
                 if (!isRawManyPointerValue(inner_ty)) try self.addRepresentationUseForExpr("deref_base", inner.*);
             },
             .try_expr => |inner| {
-                const inner_ty = self.exprType(inner.*);
+                const inner_ty = self.exprType(inner.operand.*);
                 if (isTryCapableType(inner_ty)) {
                     try self.addInstr(.result_check, "try_handled", inner_ty, expr.span);
                 } else {
@@ -1950,7 +1950,7 @@ const FunctionBuilder = struct {
                     try self.addRuntimeRepresentationCheck(try_ty, expr.span, exprText(expr));
                 }
                 try self.addTrapEdge(.Unwrap, .unwrap, expr.span);
-                try self.buildExpr(inner.*);
+                try self.buildExpr(inner.operand.*);
                 try self.addRepresentationUseForValue(try_ty, "try_unwrap", expr.span, exprText(expr));
             },
             .block => |block| _ = try self.buildBlock(block),
@@ -2666,7 +2666,7 @@ const FunctionBuilder = struct {
 
     fn exprHandlesResultLocal(self: *FunctionBuilder, name: []const u8, expr: ast.Expr) bool {
         return switch (expr.kind) {
-            .try_expr => |inner| exprIsIdentNamed(inner.*, name) or self.exprHandlesResultLocal(name, inner.*),
+            .try_expr => |inner| exprIsIdentNamed(inner.operand.*, name) or self.exprHandlesResultLocal(name, inner.operand.*),
             .grouped, .address_of, .deref => |inner| self.exprHandlesResultLocal(name, inner.*),
             .block => |body| self.blockHandlesResultLocal(name, body),
             .array_literal => |items| {
@@ -2921,7 +2921,7 @@ const FunctionBuilder = struct {
             .index => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
             .grouped => |inner| self.typeExprForExpr(inner.*),
             .cast => |node| node.ty.*,
-            .try_expr => |inner| if (self.typeExprForExpr(inner.*)) |ty| tryPayloadTypeExprAlias(ty, self.aliases) else null,
+            .try_expr => |inner| if (self.typeExprForExpr(inner.operand.*)) |ty| tryPayloadTypeExprAlias(ty, self.aliases) else null,
             else => null,
         };
     }
@@ -2941,7 +2941,7 @@ const FunctionBuilder = struct {
                 if (self.summaries.get(callee)) |summary| summary.return_ty else .unknown
             else
                 .unknown,
-            .try_expr => |inner| switch (self.exprType(inner.*)) {
+            .try_expr => |inner| switch (self.exprType(inner.operand.*)) {
                 .nullable_pointer => |name| .{ .pointer = name },
                 .result => |shape| valueTypeFromTypeName(shape.ok, self.enums, self.structs),
                 else => .unknown,

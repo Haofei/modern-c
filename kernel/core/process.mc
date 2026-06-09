@@ -9,6 +9,8 @@
 import "kernel/arch/riscv64/context.mc";
 import "kernel/core/ipc.mc";
 import "std/math.mc";
+import "std/mask.mc";
+import "std/mailbox.mc";
 
 const MAX_PROCS: usize = 8;
 const IPC_SLOTS: usize = 4; // mailbox depth per process
@@ -35,12 +37,10 @@ struct Process {
     parent: u32,    // pid of the spawning process
     exit_code: u32, // valid once state == Zombie
     satp: u64,      // this process's address space (Sv39 root); 0 = share the kernel's
-    mailbox: [IPC_SLOTS]Message, // multi-slot mailbox for kernel-mediated IPC
-    mbox_valid: [IPC_SLOTS]bool, // which mailbox slots hold a pending message
-    mbox_count: usize,           // number of pending messages
-    pending_sig: u32,            // bitmask of pending signals (a PM server builds on this)
-    allow_mask: u32,             // least privilege: bit p = may IPC-send to pid p
-    kcall_mask: u32,             // least privilege: bit op = may invoke kernel call `op`
+    inbox: Mailbox<Message, IPC_SLOTS>, // multi-slot mailbox for kernel-mediated IPC
+    pending_sig: Mask32,         // pending-signal set (a PM server builds on this)
+    allow_mask: Mask32,          // least privilege: bit p = may IPC-send to pid p
+    kcall_mask: Mask32,          // least privilege: bit op = may invoke kernel call `op`
     priority: u32,               // scheduling priority (policy set externally; higher runs first)
 }
 
@@ -54,6 +54,35 @@ fn is_runnable(s: ProcState) -> bool {
     return s == .Ready || s == .Running;
 }
 
+// ----- process introspection (for `ps`/`top`-style tools, via a kernel call) -----
+
+export fn proc_count(t: *mut ProcTable) -> usize {
+    return t.count;
+}
+
+export fn proc_pid_at(t: *mut ProcTable, idx: usize) -> u32 {
+    if idx < t.count {
+        return t.procs[idx].pid;
+    }
+    return 0;
+}
+
+// A stable numeric code for a slot's state: 0=Unused 1=Ready 2=Running 3=Blocked 4=Zombie.
+export fn proc_state_code(t: *mut ProcTable, idx: usize) -> u32 {
+    if idx >= t.count {
+        return 0;
+    }
+    let s: ProcState = t.procs[idx].state;
+    switch s {
+        .Unused => { return 0; }
+        .Ready => { return 1; }
+        .Running => { return 2; }
+        .BlockedRecv => { return 3; }
+        .Zombie => { return 4; }
+        .Dead => { return 5; }
+    }
+}
+
 export fn proc_table_init(t: *mut ProcTable) -> void {
     var i: usize = 0;
     while i < MAX_PROCS {
@@ -62,16 +91,11 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].parent = 0;
         t.procs[i].exit_code = 0;
         t.procs[i].satp = 0;
-        t.procs[i].mbox_count = 0;
-        t.procs[i].pending_sig = 0;
-        t.procs[i].allow_mask = 0xFFFF_FFFF; // permissive by default; restrict per server
-        t.procs[i].kcall_mask = 0xFFFF_FFFF;
+        mailbox_init(Message, IPC_SLOTS, &t.procs[i].inbox);
+        t.procs[i].pending_sig = mask32_zero();
+        t.procs[i].allow_mask = mask32_from(0xFFFF_FFFF); // permissive by default; restrict per server
+        t.procs[i].kcall_mask = mask32_from(0xFFFF_FFFF);
         t.procs[i].priority = 0;
-        var s: usize = 0;
-        while s < IPC_SLOTS {
-            t.procs[i].mbox_valid[s] = false;
-            s = s + 1;
-        }
         i = i + 1;
     }
     // Slot 0 is the running bootstrap context (filled on first switch out).
@@ -81,16 +105,41 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
 }
 
 export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -> u32 {
-    let slot: usize = t.count;
+    // Reuse a reaped (Unused) slot if one exists; otherwise grow the table. Without this,
+    // spawn/reap cycles would permanently exhaust the table even with free slots.
+    var slot: usize = MAX_PROCS;
+    var i: usize = 0;
+    var scanning: bool = true;
+    while scanning {
+        if i >= t.count {
+            scanning = false;
+        } else {
+            if t.procs[i].state == .Unused {
+                slot = i;
+                scanning = false;
+            } else {
+                i = i + 1;
+            }
+        }
+    }
     if slot >= MAX_PROCS {
-        unreachable; // process table full
+        if t.count >= MAX_PROCS {
+            unreachable; // process table full
+        }
+        slot = t.count;
+        t.count = t.count + 1;
     }
     mc_thread_init(&t.procs[slot].context, stack_top, entry);
     t.procs[slot].state = .Ready;
     t.procs[slot].pid = slot as u32;
     t.procs[slot].parent = t.procs[t.current].pid; // the spawner is the parent
     t.procs[slot].exit_code = 0;
-    t.count = t.count + 1;
+    // Reset per-process state in case this slot was reaped from an earlier process.
+    mailbox_init(Message, IPC_SLOTS, &t.procs[slot].inbox);
+    t.procs[slot].pending_sig = mask32_zero();
+    t.procs[slot].allow_mask = mask32_from(0xFFFF_FFFF);
+    t.procs[slot].kcall_mask = mask32_from(0xFFFF_FFFF);
+    t.procs[slot].priority = 0;
     return slot as u32;
 }
 
@@ -208,6 +257,9 @@ export fn proc_yield_vm(t: *mut ProcTable) -> void {
     mc_switch_context_vm(&t.procs[from].context, &t.procs[to].context, to_satp);
 }
 
+// Halt the machine (no return). Used when the scheduler has nothing left to run.
+extern fn mc_halt() -> void;
+
 // Terminate the current process with an exit code and switch to the next runnable
 // one. Never returns to the caller (its slot is now a Zombie awaiting reap).
 export fn proc_exit(t: *mut ProcTable, code: u32) -> void {
@@ -215,6 +267,13 @@ export fn proc_exit(t: *mut ProcTable, code: u32) -> void {
     t.procs[from].exit_code = code;
     t.procs[from].state = .Zombie;
     let to: usize = next_runnable(t, from);
+    if to == from {
+        // No other runnable process: the table holds only this (now Zombie) slot plus
+        // non-runnable ones. Do NOT set the zombie Running again (that would resurrect a
+        // dead process and switch into itself) — there is simply nothing left to run.
+        mc_halt();
+        return;
+    }
     t.procs[to].state = .Running;
     t.current = to;
     mc_switch_context(&t.procs[from].context, &t.procs[to].context);
@@ -299,7 +358,7 @@ enum KError {
 export fn proc_set_allow_mask(t: *mut ProcTable, pid: u32, mask: u32) -> void {
     let p: usize = pid as usize;
     if p < t.count {
-        t.procs[p].allow_mask = mask;
+        t.procs[p].allow_mask = mask32_from(mask);
     }
 }
 
@@ -307,7 +366,7 @@ export fn proc_set_allow_mask(t: *mut ProcTable, pid: u32, mask: u32) -> void {
 export fn proc_set_kcall_mask(t: *mut ProcTable, pid: u32, mask: u32) -> void {
     let p: usize = pid as usize;
     if p < t.count {
-        t.procs[p].kcall_mask = mask;
+        t.procs[p].kcall_mask = mask32_from(mask);
     }
 }
 
@@ -315,8 +374,7 @@ export fn proc_set_kcall_mask(t: *mut ProcTable, pid: u32, mask: u32) -> void {
 // Returns whether it was permitted (and sent).
 export fn ipc_try_send(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> bool {
     let cur: usize = t.current;
-    let bit: u32 = wrapping_shl_u32(1, dst_pid);
-    if (t.procs[cur].allow_mask & bit) == 0 {
+    if !mask32_contains(&t.procs[cur].allow_mask, dst_pid) {
         return false; // not permitted to send to this peer
     }
     ipc_send(t, dst_pid, tag, a0, a1, a2);
@@ -328,8 +386,7 @@ export fn ipc_try_send(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u
 // stand-in here; a real kernel would map/grant/program IRQs behind this gate.)
 export fn kcall(t: *mut ProcTable, op: u32, arg: u64) -> Result<u64, KError> {
     let cur: usize = t.current;
-    let bit: u32 = wrapping_shl_u32(1, op);
-    if (t.procs[cur].kcall_mask & bit) == 0 {
+    if !mask32_contains(&t.procs[cur].kcall_mask, op) {
         return err(.Denied);
     }
     return ok(arg); // performed (stand-in for the privileged operation's result)
@@ -345,8 +402,7 @@ export fn proc_kill(t: *mut ProcTable, target_pid: u32, sig: u32) -> void {
     if target >= t.count {
         return;
     }
-    let bit: u32 = wrapping_shl_u32(1, sig);
-    t.procs[target].pending_sig = t.procs[target].pending_sig | bit;
+    mask32_set(&t.procs[target].pending_sig, sig);
     let st: ProcState = t.procs[target].state;
     if st == .BlockedRecv {
         t.procs[target].state = .Ready;
@@ -355,23 +411,12 @@ export fn proc_kill(t: *mut ProcTable, target_pid: u32, sig: u32) -> void {
 
 // The current process's pending-signal bitmask.
 export fn proc_sigpending(t: *mut ProcTable) -> u32 {
-    return t.procs[t.current].pending_sig;
+    return mask32_raw(&t.procs[t.current].pending_sig);
 }
 
 // Take (clear + return) the lowest pending signal of the current process, or 32 if none.
 export fn proc_sigtake(t: *mut ProcTable) -> u32 {
-    let cur: usize = t.current;
-    let pending: u32 = t.procs[cur].pending_sig;
-    var sig: u32 = 0;
-    while sig < 32 {
-        let bit: u32 = wrapping_shl_u32(1, sig);
-        if (pending & bit) != 0 {
-            t.procs[cur].pending_sig = pending & (~bit);
-            return sig;
-        }
-        sig = sig + 1;
-    }
-    return 32; // none pending
+    return mask32_take_first(&t.procs[t.current].pending_sig);
 }
 
 // ----- kernel-mediated IPC (the microkernel backbone) -----
@@ -382,28 +427,8 @@ export fn proc_sigtake(t: *mut ProcTable) -> u32 {
 // mailbox; send blocks (yields) only when the mailbox is full, then wakes a blocked
 // receiver. Receive can take any message or filter by sender.
 
-// Index of a free mailbox slot in process `p`, or IPC_SLOTS if full.
-fn mbox_free_slot(t: *mut ProcTable, p: usize) -> usize {
-    var s: usize = 0;
-    while s < IPC_SLOTS {
-        if !t.procs[p].mbox_valid[s] {
-            return s;
-        }
-        s = s + 1;
-    }
-    return IPC_SLOTS;
-}
-
-fn mbox_deliver(t: *mut ProcTable, dst: usize, slot: usize, from: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> void {
-    t.procs[dst].mailbox[slot].from = from;
-    t.procs[dst].mailbox[slot].tag = tag;
-    t.procs[dst].mailbox[slot].a0 = a0;
-    t.procs[dst].mailbox[slot].a1 = a1;
-    t.procs[dst].mailbox[slot].a2 = a2;
-    t.procs[dst].mbox_valid[slot] = true;
-    t.procs[dst].mbox_count = t.procs[dst].mbox_count + 1;
-    let dstate: ProcState = t.procs[dst].state;
-    if dstate == .BlockedRecv {
+fn wake_if_blocked(t: *mut ProcTable, dst: usize) -> void {
+    if t.procs[dst].state == .BlockedRecv {
         t.procs[dst].state = .Ready; // wake the blocked receiver
     }
 }
@@ -414,92 +439,59 @@ export fn ipc_send(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, 
     if dst >= t.count {
         return; // no such process; a real kernel would return an error
     }
-    var slot: usize = mbox_free_slot(t, dst);
-    while slot >= IPC_SLOTS {
-        proc_yield(t); // mailbox full — let the receiver drain it
-        slot = mbox_free_slot(t, dst);
-    }
     let me: u32 = t.procs[t.current].pid;
-    mbox_deliver(t, dst, slot, me, tag, a0, a1, a2);
+    let msg: Message = .{ .from = me, .tag = tag, .a0 = a0, .a1 = a1, .a2 = a2 };
+    var delivered: bool = false;
+    while !delivered {
+        delivered = mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, me);
+        if !delivered {
+            proc_yield(t); // mailbox full -- let the receiver drain it
+        }
+    }
+    wake_if_blocked(t, dst);
 }
 
 // Asynchronous notification: deliver if there is room, else drop (non-blocking). Like
-// MINIX `notify` — fire-and-forget, never blocks the sender.
+// MINIX `notify` -- fire-and-forget, never blocks the sender.
 export fn ipc_notify(t: *mut ProcTable, dst_pid: u32, tag: u32) -> bool {
     let dst: usize = dst_pid as usize;
     if dst >= t.count {
         return false;
     }
-    let slot: usize = mbox_free_slot(t, dst);
-    if slot >= IPC_SLOTS {
-        return false; // mailbox full — notification dropped (caller may retry)
-    }
     let me: u32 = t.procs[t.current].pid;
-    mbox_deliver(t, dst, slot, me, tag, 0, 0, 0);
-    return true;
+    let msg: Message = .{ .from = me, .tag = tag, .a0 = 0, .a1 = 0, .a2 = 0 };
+    if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, me) {
+        wake_if_blocked(t, dst);
+        return true;
+    }
+    return false; // mailbox full -- notification dropped
 }
 
-// sendrec: send a request to `dst_pid` and block for the reply (the common client
-// pattern — request then wait — as one primitive, like MINIX's `sendrec`).
+// sendrec: send a request to `dst_pid` and block for the reply, as one primitive.
 export fn ipc_call(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, out: *mut Message) -> void {
     ipc_send(t, dst_pid, tag, a0, a1, a2);
     ipc_receive(t, out);
-}
-
-fn mbox_take(t: *mut ProcTable, cur: usize, slot: usize, out: *mut Message) -> void {
-    out.from = t.procs[cur].mailbox[slot].from;
-    out.tag = t.procs[cur].mailbox[slot].tag;
-    out.a0 = t.procs[cur].mailbox[slot].a0;
-    out.a1 = t.procs[cur].mailbox[slot].a1;
-    out.a2 = t.procs[cur].mailbox[slot].a2;
-    t.procs[cur].mbox_valid[slot] = false;
-    t.procs[cur].mbox_count = t.procs[cur].mbox_count - 1;
 }
 
 // Receive any message into `out`, blocking (yielding as BlockedRecv) until one arrives.
 export fn ipc_receive(t: *mut ProcTable, out: *mut Message) -> void {
     var got: bool = false;
     while !got {
-        let cur: usize = t.current;
-        var slot: usize = 0;
-        var found: usize = IPC_SLOTS;
-        while slot < IPC_SLOTS {
-            if t.procs[cur].mbox_valid[slot] {
-                found = slot;
-                slot = IPC_SLOTS; // stop at the first pending slot
-            } else {
-                slot = slot + 1;
-            }
-        }
-        if found < IPC_SLOTS {
-            mbox_take(t, cur, found, out);
-            got = true;
-        } else {
-            t.procs[cur].state = .BlockedRecv;
+        got = mailbox_take(Message, IPC_SLOTS, &t.procs[t.current].inbox, out);
+        if !got {
+            t.procs[t.current].state = .BlockedRecv;
             proc_yield(t);
         }
     }
 }
 
 // Receive with a timeout: poll the mailbox, yielding up to `max_yields` times. Returns
-// true if a message was taken into `out`, false if it timed out (no infinite block).
-// Polls as Ready (not BlockedRecv) so the scheduler keeps returning here to time out.
+// true if a message was taken, false if it timed out (no infinite block). Polls as Ready
+// (not BlockedRecv) so the scheduler keeps returning here to time out.
 export fn ipc_receive_timeout(t: *mut ProcTable, out: *mut Message, max_yields: u32) -> bool {
     var tries: u32 = 0;
     while tries <= max_yields {
-        let cur: usize = t.current;
-        var slot: usize = 0;
-        var found: usize = IPC_SLOTS;
-        while slot < IPC_SLOTS {
-            if t.procs[cur].mbox_valid[slot] {
-                found = slot;
-                slot = IPC_SLOTS;
-            } else {
-                slot = slot + 1;
-            }
-        }
-        if found < IPC_SLOTS {
-            mbox_take(t, cur, found, out);
+        if mailbox_take(Message, IPC_SLOTS, &t.procs[t.current].inbox, out) {
             return true;
         }
         if tries == max_yields {
@@ -515,26 +507,9 @@ export fn ipc_receive_timeout(t: *mut ProcTable, out: *mut Message, max_yields: 
 export fn ipc_receive_from(t: *mut ProcTable, src_pid: u32, out: *mut Message) -> void {
     var got: bool = false;
     while !got {
-        let cur: usize = t.current;
-        var slot: usize = 0;
-        var found: usize = IPC_SLOTS;
-        while slot < IPC_SLOTS {
-            if t.procs[cur].mbox_valid[slot] {
-                if t.procs[cur].mailbox[slot].from == src_pid {
-                    found = slot;
-                    slot = IPC_SLOTS;
-                } else {
-                    slot = slot + 1;
-                }
-            } else {
-                slot = slot + 1;
-            }
-        }
-        if found < IPC_SLOTS {
-            mbox_take(t, cur, found, out);
-            got = true;
-        } else {
-            t.procs[cur].state = .BlockedRecv;
+        got = mailbox_take_from(Message, IPC_SLOTS, &t.procs[t.current].inbox, src_pid, out);
+        if !got {
+            t.procs[t.current].state = .BlockedRecv;
             proc_yield(t);
         }
     }
