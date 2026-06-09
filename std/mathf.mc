@@ -26,12 +26,18 @@ extern "C" fn sin(x: f64) -> f64;
 extern "C" fn cos(x: f64) -> f64;
 extern "C" fn exp2(x: f64) -> f64;
 extern "C" fn log2(x: f64) -> f64;
+extern "C" fn exp(x: f64) -> f64;
+extern "C" fn log(x: f64) -> f64;
+extern "C" fn tanh(x: f64) -> f64;
 
 export fn sqrt_f64(x: f64) -> f64 { return sqrt(x); }
 export fn sin_f64(x: f64) -> f64 { return sin(x); }
 export fn cos_f64(x: f64) -> f64 { return cos(x); }
 export fn exp2_f64(x: f64) -> f64 { return exp2(x); }
 export fn log2_f64(x: f64) -> f64 { return log2(x); }
+export fn exp_f64(x: f64) -> f64 { return exp(x); }
+export fn log_f64(x: f64) -> f64 { return log(x); }
+export fn tanh_f64(x: f64) -> f64 { return tanh(x); }
 
 // ----- f32 (C `float`) intrinsics: the libm names take the `f` suffix -----
 
@@ -40,9 +46,15 @@ extern "C" fn sinf(x: f32) -> f32;
 extern "C" fn cosf(x: f32) -> f32;
 extern "C" fn exp2f(x: f32) -> f32;
 extern "C" fn log2f(x: f32) -> f32;
+extern "C" fn expf(x: f32) -> f32;
+extern "C" fn logf(x: f32) -> f32;
+extern "C" fn tanhf(x: f32) -> f32;
 
 export fn sqrt_f32(x: f32) -> f32 { return sqrtf(x); }
 export fn sin_f32(x: f32) -> f32 { return sinf(x); }
 export fn cos_f32(x: f32) -> f32 { return cosf(x); }
 export fn exp2_f32(x: f32) -> f32 { return exp2f(x); }
 export fn log2_f32(x: f32) -> f32 { return log2f(x); }
+export fn exp_f32(x: f32) -> f32 { return expf(x); }
+export fn log_f32(x: f32) -> f32 { return logf(x); }
+export fn tanh_f32(x: f32) -> f32 { return tanhf(x); }
