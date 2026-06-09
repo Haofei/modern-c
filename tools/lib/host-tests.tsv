@@ -1,0 +1,65 @@
+# name	fixture	mode	spec	mcc_flags	description
+fb-test	tests/qemu/arch/fb_demo.mc	entry	fb_run	-Wno-switch-bool	linear framebuffer device: set/get independent 32-bit pixels by coordinate
+fdt-test	tests/qemu/arch/fdt_demo.mc	entry	fdt_run	-Wno-switch-bool	device-tree (FDT) header parsing: magic validation + totalsize/version
+plugin-test	tests/qemu/arch/plugin_demo.mc	entry	plugin_run	-Wno-switch-bool -Wno-unused-parameter	pluggable boot flow: platform devices -> bus probe/attach (closure providers) -> registry of device-class endpoints -> service discovery by class; NoDriver/Unavailable typed
+bcache-test	tests/qemu/fs/bcache_demo.mc	entry	bcache_run	-Wno-switch-bool	write-back block cache: write stays dirty in cache, visible to reads, reaches device only on flush; hit/miss tracked
+blockfs-test	tests/qemu/fs/blockfs_demo.mc	driver			block-backed FS: multi-block write/read through the device vtable, data persisted on the block device, files on distinct blocks
+diskfs-test	tests/qemu/fs/diskfs_demo.mc	entry	diskfs_run		on-disk FS: format + create + write, then remount and read the file back from the device (persistent superblock/inode/data)
+fdspace-test	tests/qemu/fs/fdspace_demo.mc	entry	fdspace_run	-Wno-switch-bool	FdSpace (kernel/lib): alloc/reuse, kind/handle, readiness+select, close, BadFd/NoneReady (no sentinels)
+pipe-test	tests/qemu/fs/pipe_demo.mc	entry	pipe_run		pipe FIFO: ordered write/read, full/empty backpressure
+ramfs-test	tests/qemu/fs/ramfs_demo.mc	driver			in-memory FS: create / write / read-back / lookup / independence / not-found all correct
+vfs-test	tests/qemu/fs/vfs_demo.mc	driver			fd-table VFS over ramfs: open/write/read with positions, re-open, EOF, close, use-after-close
+vfsmount-test	tests/qemu/fs/vfsmount_demo.mc	entry	vfsmount_run	-Wno-switch-bool	VFS mount switch: mount/umount/resolve dispatches a path to its backing FS (ramfs/diskfs)
+endpoint-test	tests/qemu/ipc/endpoint_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	MINIX hardening: generation-checked endpoints (stale fails closed), derived runnable state (block reasons), death cleanup (waiter released with DEAD)
+grant-test	tests/qemu/ipc/grant_demo.mc	entry	grant_demo_run		memory grant: bounded delegation (OOB rejected) + revocation (stale ref caught)
+granttab-test	tests/qemu/ipc/granttab_demo.mc	entry	granttab_run	-Wno-switch-bool	granttab (kernel/lib): owner-tracked grants, bounded IPC sharing, revoke-on-death
+mailbox-test	tests/qemu/ipc/mailbox_demo.mc	entry	mailbox_run	-Wno-switch-bool	Mailbox<T,N>: post/take, source-filtered take_from, drop-when-full
+registry2-test	tests/qemu/ipc/registry2_demo.mc	entry	registry2_run	-Wno-switch-bool	Registry v2 (kernel/lib): multiple per class, enumerate, gen-checked, unregister-on-death
+service-test	tests/qemu/ipc/service_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	service (kernel/lib): request/reply over IPC, unknown-tag error reply, stateless loop with handler-held state
+args-test	tests/qemu/lang/args_demo.mc	entry	args_run	-Wno-switch-bool	argv/envp: packed NUL-terminated argument vector with per-arg offsets
+byteview-test	tests/qemu/lang/byteview_demo.mc	entry	byteview_run	-Wno-switch-bool	ByteBuf<N>: bounds-checked get + set/copy_from/copy_to return typed OutOfBounds (no silent clamp) on a PAddr
+closure-test	tests/qemu/lang/closure_demo.mc	driver			bind() closure captures a pointer + fn, callable with no ctx word/casts; capture mutated across calls
+constgen-test	tests/qemu/lang/constgen_demo.mc	entry	constgen_run		const-generic Ring<T,N> at two capacities (2 and 8): [N]T + % N specialize per instance
+dynlink-test	tests/qemu/lang/dynlink_demo.mc	entry	dynlink_run	-Wno-switch-bool	dynamic-linking core: R_RISCV_RELATIVE relocations patch a PIE image to its load base
+elf-test	tests/qemu/lang/elf_demo.mc	driver			ELF64 parse (header+phdr) + segment load (copy+bss zero-fill) + reject bad magic/truncation
+libc-test	tests/qemu/lang/libc_demo.mc	entry	libc_run	-Wno-switch-bool	minimal libc core: mc_memeq / mc_strlen / mc_atoi over typed addresses
+log-test	tests/qemu/lang/log_demo.mc	driver			leveled tracepoints: threshold filtering (dropped count), level+id+value recording, runtime verbosity change
+posix-test	tests/qemu/lang/posix_demo.mc	entry	posix_run	-Wno-switch-bool -Wno-unused-parameter	POSIX syscall surface: getpid + open/write/read/close file lifecycle + ENOSYS, over the dispatch table
+scan-test	tests/qemu/lang/scan_demo.mc	entry	scan_run	-Wno-switch-bool	find_index/any: bounded array search via a closure predicate (found index, not-found N, any)
+shell-test	tests/qemu/lang/shell_demo.mc	entry	shell_run	-Wno-switch-bool	minimal shell: parses the command word and dispatches builtins (true=0/false=1/unknown=127)
+shell2-test	tests/qemu/lang/shell2_demo.mc	entry	shell2_run	-Wno-switch-bool	shell: tokenizes a full command line into argv, runs builtins (echo with captured output, true=0/false=1, unknown=127), tolerates extra whitespace
+symbols-test	tests/qemu/lang/symbols_demo.mc	driver			symbol table symbolizes addresses to function+offset (binary search), rejects unsorted/below-first
+trace-test	tests/qemu/lang/trace_demo.mc	driver			trace ring buffer: ordered retention, wrap-around (oldest dropped), sequence numbering
+tryelse-test	tests/qemu/lang/tryelse_demo.mc	entry	tryelse_run		postfix-? with else remaps a subsystem error into the layer error type (ok + mapped-err paths)
+tty-test	tests/qemu/lang/tty_demo.mc	entry	tty_run	-Wno-switch-bool	TTY line discipline (canonical mode): backspace erase + newline-completed line buffering
+userland-test	tests/qemu/lang/userland_demo.mc	entry	userland_run	-Wno-switch-bool	userland echo utility: joins argv with spaces over the args vector + raw stores
+alloc-test	tests/qemu/mem/alloc_demo.mc	entry	alloc_demo_run		generic Allocator (std/alloc) over a captured bump heap: aligned, advancing allocation
+arc-pkt-test	tests/qemu/mem/arc_pkt_demo.mc	entry	arc_pkt_run		packet Arc-shared between two consumers, freed when the last owner drops (skb/mbuf pattern)
+arc-test	tests/qemu/mem/arc_demo.mc	entry	arc_demo_run		Arc<T> shared ownership: clone adds an owner, last drop frees (handles leak-checked at compile time)
+arena-test	tests/qemu/mem/arena_demo.mc	entry	arena_demo_run		move Arena: bump alloc, reset reclaims+reuses, destroy consumes the linear arena
+genref-test	tests/qemu/mem/genref_demo.mc	entry	genref_demo_run		generational handle resolves live, traps StaleHandle after reset (use-after-reset caught)
+mask-test	tests/qemu/mem/mask_demo.mc	entry	mask_run	-Wno-switch-bool	Mask32: bounds-checked set/clear/contains, take_first (ascending, removing), out-of-range bit ignored
+owned-test	tests/qemu/mem/owned_demo.mc	entry	owned_demo_run		create<T> typed linear allocation: write/read via address, own_free consumes (leak-checked)
+pool-test	tests/qemu/mem/pool_demo.mc	entry	pool_demo_run		generational pool: use-after-free, double-free, stale-after-reuse all caught (StaleHandle)
+ring-test	tests/qemu/mem/ring_demo.mc	driver			generic in-place Ring<T> (instantiated at u32): FIFO push/pop, len, empty/full, wrap-around
+slotmap-test	tests/qemu/mem/slotmap_demo.mc	entry	slotmap_run	-Wno-switch-bool	SlotMap<T,N>: stable index handles, alloc lowest-free, get/set/free bounds+liveness checked (BadHandle on use-after-free/double-free/oob), Full at capacity
+net-arena-test	tests/qemu/net/net_arena_demo.mc	driver			RX scratch from a move Arena (GenRef), per-packet reset, use-after-reset caught
+net-fuzz-test	tests/qemu/net/net_fuzz_demo.mc	driver			40000 random/UDP-shaped frames parsed with no out-of-bounds read; ok + rejected paths both exercised
+net-rx-test	tests/qemu/net/net_rx_demo.mc	driver			driver RX path: parse eth/IPv4/UDP frame -> socket_deliver -> recv payload (and drop unbound-port frames)
+socket-test	tests/qemu/net/socket_demo.mc	driver			UDP sockets: bind (+conflict), deliver demuxed by port (+no-listener), recv payload+sender per socket
+tcp-conn-test	tests/qemu/net/tcp_conn_demo.mc	driver			TCP state machine: passive + active open handshakes and both close paths transition correctly
+tcp-reasm-test	tests/qemu/net/tcp_reasm_demo.mc	driver			TCP reassembly (out-of-order buffering + coalescing, old dropped) + go-back-N retransmit
+tcp-rtx-test	tests/qemu/net/tcp_rtx_demo.mc	driver			retransmit timer: arm on send, fire go-back-N at RTO, re-arm, disarm on full ack
+tcp-test	tests/qemu/net/tcp_demo.mc	driver			TCP segment build/parse (ports/seq/ack/flags/window) + pseudo-header checksum + corruption detection
+tcp-window-test	tests/qemu/net/tcp_window_demo.mc	driver			TCP send window + ACK processing (dup/unsent rejected) + in-order receive + sequence wraparound
+udp-test	tests/qemu/net/udp_demo.mc	driver			UDP datagram build/parse + pseudo-header checksum (incl. corruption detection) correct
+info-test	tests/qemu/proc/info_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	info/snapshot service: top-style count/pid/state queries answered over the IPC service loop from a stable proc_snapshot
+liveupdate-test	tests/qemu/proc/liveupdate_demo.mc	entry	liveupdate_run	-Wno-switch-bool	live update: a service is checkpointed, a new version installed, and state restored into it (data survives the code update)
+manifest-test	tests/qemu/proc/manifest_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	enforced manifests: a service manifest's IPC allowlist + kcall mask applied to the process, then enforced by ipc_try_send/kcall
+perm-test	tests/qemu/proc/perm_demo.mc	entry	perm_run		POSIX uid/gid + rwx-mode permission checks (owner/group/other, root bypass)
+pgroup-test	tests/qemu/proc/pgroup_demo.mc	entry	pgroup_run		process groups + sessions: setsid/setpgid/getpgid/getsid
+scheduler-test	tests/qemu/proc/scheduler_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	scheduler service: kernel ticks/accounts quantum, notifies the sched endpoint on the expiry edge (from=expired task), service refreshes policy
+smprq-test	tests/qemu/proc/smprq_demo.mc	entry	smprq_run	-Wno-switch-bool	SMP per-core run queues + work stealing: an idle core steals from the busiest (FIFO, load-balanced)
+snapshot-test	tests/qemu/proc/snapshot_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	proc_snapshot (kernel/lib): stable pid/state enumeration + state summary, unaffected by later spawn/exit
+supervisor-test	tests/qemu/proc/supervisor_demo.mc	entry	supervisor_run	-Wno-switch-bool	service supervisor (kernel/lib): declarative manifests (privileges+policy as data), name discovery, restart OnFailure, core failure Fatal
+waitqueue-test	tests/qemu/proc/waitqueue_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	WaitQueue (kernel/lib): block current (park+yield), FIFO wake_one/wake_all, empty no-op, idle yield

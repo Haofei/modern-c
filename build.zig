@@ -251,8 +251,7 @@ pub fn build(b: *std.Build) void {
 
     const elf_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/lang/elf-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "elf-test",
     });
     elf_test_cmd.step.dependOn(b.getInstallStep());
     const elf_test_step = b.step("elf-test", "Link + run the ELF64 parser (header + program headers, bounds-checked)");
@@ -260,8 +259,7 @@ pub fn build(b: *std.Build) void {
 
     const ramfs_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/fs/ramfs-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "ramfs-test",
     });
     ramfs_test_cmd.step.dependOn(b.getInstallStep());
     const ramfs_test_step = b.step("ramfs-test", "Link + run the in-memory filesystem (create/write/read/lookup)");
@@ -269,8 +267,7 @@ pub fn build(b: *std.Build) void {
 
     const vfs_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/fs/vfs-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "vfs-test",
     });
     vfs_test_cmd.step.dependOn(b.getInstallStep());
     const vfs_test_step = b.step("vfs-test", "Link + run the fd-table VFS over ramfs (open/read/write/close)");
@@ -278,8 +275,7 @@ pub fn build(b: *std.Build) void {
 
     const blockfs_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/fs/blockfs-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "blockfs-test",
     });
     blockfs_test_cmd.step.dependOn(b.getInstallStep());
     const blockfs_test_step = b.step("blockfs-test", "Link + run the block-backed file store (block device vtable)");
@@ -287,8 +283,7 @@ pub fn build(b: *std.Build) void {
 
     const udp_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net/udp-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "udp-test",
     });
     udp_test_cmd.step.dependOn(b.getInstallStep());
     const udp_test_step = b.step("udp-test", "Link + run the UDP datagram build/parse + checksum");
@@ -296,8 +291,7 @@ pub fn build(b: *std.Build) void {
 
     const arena_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mem/arena-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arena-test",
     });
     arena_test_cmd.step.dependOn(b.getInstallStep());
     const arena_test_step = b.step("arena-test", "move Arena: bump alloc, reset/reuse, destroy");
@@ -305,8 +299,7 @@ pub fn build(b: *std.Build) void {
 
     const genref_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mem/genref-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "genref-test",
     });
     genref_test_cmd.step.dependOn(b.getInstallStep());
     const genref_test_step = b.step("genref-test", "generational handle: live resolve, stale-after-reset trap");
@@ -314,8 +307,7 @@ pub fn build(b: *std.Build) void {
 
     const owned_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mem/owned-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "owned-test",
     });
     owned_test_cmd.step.dependOn(b.getInstallStep());
     const owned_test_step = b.step("owned-test", "create<T> typed linear allocation, leak-checked");
@@ -323,8 +315,7 @@ pub fn build(b: *std.Build) void {
 
     const net_arena_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net/net-arena-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "net-arena-test",
     });
     net_arena_test_cmd.step.dependOn(b.getInstallStep());
     const net_arena_test_step = b.step("net-arena-test", "RX scratch from a move Arena + generational handle");
@@ -332,8 +323,7 @@ pub fn build(b: *std.Build) void {
 
     const pool_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mem/pool-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pool-test",
     });
     pool_test_cmd.step.dependOn(b.getInstallStep());
     const pool_test_step = b.step("pool-test", "generational pool: use-after-free/double-free caught");
@@ -368,55 +358,54 @@ pub fn build(b: *std.Build) void {
 
     const constgen_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/lang/constgen-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "constgen-test",
     });
     constgen_test_cmd.step.dependOn(b.getInstallStep());
     const constgen_test_step = b.step("constgen-test", "Const-generic Ring<T,N> at two capacities");
     constgen_test_step.dependOn(&constgen_test_cmd.step);
 
     const pipe_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/fs/pipe-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pipe-test",
     });
     pipe_test_cmd.step.dependOn(b.getInstallStep());
     const pipe_test_step = b.step("pipe-test", "Pipe FIFO");
     pipe_test_step.dependOn(&pipe_test_cmd.step);
 
     const bcache_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/fs/bcache-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "bcache-test",
     });
     const perm_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/proc/perm-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "perm-test",
     });
     perm_test_cmd.step.dependOn(b.getInstallStep());
     const perm_test_step = b.step("perm-test", "POSIX permission checks");
     perm_test_step.dependOn(&perm_test_cmd.step);
 
     const pgroup_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/proc/pgroup-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pgroup-test",
     });
     const tty_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/tty-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tty-test",
     });
     tty_test_cmd.step.dependOn(b.getInstallStep());
     const tty_test_step = b.step("tty-test", "TTY line discipline");
     tty_test_step.dependOn(&tty_test_cmd.step);
 
     const args_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/args-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "args-test",
     });
     const libc_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/libc-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "libc-test",
     });
     libc_test_cmd.step.dependOn(b.getInstallStep());
     const libc_test_step = b.step("libc-test", "Minimal libc core");
     libc_test_step.dependOn(&libc_test_cmd.step);
 
     const shell_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/shell-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "shell-test",
     });
     const shell2_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/shell2-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "shell2-test",
     });
     const ushell_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lang/ushell-test.sh", "zig-out/bin/mcc",
@@ -432,32 +421,32 @@ pub fn build(b: *std.Build) void {
 
 
     const vfsmount_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/fs/vfsmount-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "vfsmount-test",
     });
     vfsmount_test_cmd.step.dependOn(b.getInstallStep());
     const vfsmount_test_step = b.step("vfsmount-test", "VFS mount switch");
     vfsmount_test_step.dependOn(&vfsmount_test_cmd.step);
 
     const fdspace_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/fs/fdspace-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
     const slotmap_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/mem/slotmap-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "slotmap-test",
     });
     const mask_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/mem/mask-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mask-test",
     });
     const mailbox_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/ipc/mailbox-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mailbox-test",
     });
     const tryelse_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/tryelse-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tryelse-test",
     });
     const byteview_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/byteview-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "byteview-test",
     });
     const scan_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/scan-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "scan-test",
     });
     scan_test_cmd.step.dependOn(b.getInstallStep());
     const scan_test_step = b.step("scan-test", "find_index/any closure scan");
@@ -490,13 +479,13 @@ pub fn build(b: *std.Build) void {
 
 
     const posix_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/posix-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "posix-test",
     });
     const userland_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/userland-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "userland-test",
     });
     const smprq_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/proc/smprq-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "smprq-test",
     });
     const rtc_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/arch/rtc-test.sh", "zig-out/bin/mcc",
@@ -508,23 +497,23 @@ pub fn build(b: *std.Build) void {
         "sh", "tools/net/tcp-server-test.sh", "zig-out/bin/mcc",
     });
     const fdt_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/arch/fdt-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test",
     });
     fdt_test_cmd.step.dependOn(b.getInstallStep());
     const fdt_test_step = b.step("fdt-test", "Device-tree (FDT) header parsing");
     fdt_test_step.dependOn(&fdt_test_cmd.step);
 
     const fb_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/arch/fb-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fb-test",
     });
     const dynlink_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/dynlink-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "dynlink-test",
     });
     const aarch64_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc",
     });
     const liveupdate_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/proc/liveupdate-test.sh", "zig-out/bin/mcc",
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "liveupdate-test",
     });
     const sbi_boot_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc",
@@ -595,57 +584,57 @@ pub fn build(b: *std.Build) void {
     fdspace_test_cmd.step.dependOn(b.getInstallStep());
     const fdspace_test_step = b.step("fdspace-test", "FdSpace (kernel/lib): fd alloc/select, sentinel-free");
     fdspace_test_step.dependOn(&fdspace_test_cmd.step);
-    const snapshot_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/snapshot-test.sh", "zig-out/bin/mcc" });
+    const snapshot_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "snapshot-test" });
     snapshot_test_cmd.step.dependOn(b.getInstallStep());
     const snapshot_test_step = b.step("snapshot-test", "proc_snapshot (kernel/lib): stable process enumeration");
     snapshot_test_step.dependOn(&snapshot_test_cmd.step);
 
-    const waitqueue_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/waitqueue-test.sh", "zig-out/bin/mcc" });
+    const waitqueue_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "waitqueue-test" });
     waitqueue_test_cmd.step.dependOn(b.getInstallStep());
     const waitqueue_test_step = b.step("waitqueue-test", "WaitQueue (kernel/lib): block/wake/idle policy");
     waitqueue_test_step.dependOn(&waitqueue_test_cmd.step);
 
-    const service_test_cmd = b.addSystemCommand(&.{ "sh", "tools/ipc/service-test.sh", "zig-out/bin/mcc" });
+    const service_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "service-test" });
     service_test_cmd.step.dependOn(b.getInstallStep());
     const service_test_step = b.step("service-test", "service (kernel/lib): request/reply server loop");
     service_test_step.dependOn(&service_test_cmd.step);
 
-    const plugin_test_cmd = b.addSystemCommand(&.{ "sh", "tools/arch/plugin-test.sh", "zig-out/bin/mcc" });
+    const plugin_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "plugin-test" });
     plugin_test_cmd.step.dependOn(b.getInstallStep());
     const plugin_test_step = b.step("plugin-test", "pluggable boot flow: device/bus probe-attach + registry + discovery");
     plugin_test_step.dependOn(&plugin_test_cmd.step);
 
-    const endpoint_test_cmd = b.addSystemCommand(&.{ "sh", "tools/ipc/endpoint-test.sh", "zig-out/bin/mcc" });
+    const endpoint_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "endpoint-test" });
     endpoint_test_cmd.step.dependOn(b.getInstallStep());
     const endpoint_test_step = b.step("endpoint-test", "MINIX hardening: endpoints/generations, derived runnable, death cleanup");
     endpoint_test_step.dependOn(&endpoint_test_cmd.step);
 
-    const supervisor_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/supervisor-test.sh", "zig-out/bin/mcc" });
+    const supervisor_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "supervisor-test" });
     supervisor_test_cmd.step.dependOn(b.getInstallStep());
     const supervisor_test_step = b.step("supervisor-test", "service supervisor: declarative manifests + restart policy");
     supervisor_test_step.dependOn(&supervisor_test_cmd.step);
 
-    const registry2_test_cmd = b.addSystemCommand(&.{ "sh", "tools/ipc/registry2-test.sh", "zig-out/bin/mcc" });
+    const registry2_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "registry2-test" });
     registry2_test_cmd.step.dependOn(b.getInstallStep());
     const registry2_test_step = b.step("registry2-test", "Registry v2: multiple-per-class, generations, unregister-on-death");
     registry2_test_step.dependOn(&registry2_test_cmd.step);
 
-    const manifest_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/manifest-test.sh", "zig-out/bin/mcc" });
+    const manifest_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "manifest-test" });
     manifest_test_cmd.step.dependOn(b.getInstallStep());
     const manifest_test_step = b.step("manifest-test", "enforced service manifests: privileges applied + enforced");
     manifest_test_step.dependOn(&manifest_test_cmd.step);
 
-    const scheduler_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/scheduler-test.sh", "zig-out/bin/mcc" });
+    const scheduler_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "scheduler-test" });
     scheduler_test_cmd.step.dependOn(b.getInstallStep());
     const scheduler_test_step = b.step("scheduler-test", "scheduler service: quantum expiry notify + refresh");
     scheduler_test_step.dependOn(&scheduler_test_cmd.step);
 
-    const info_test_cmd = b.addSystemCommand(&.{ "sh", "tools/proc/info-test.sh", "zig-out/bin/mcc" });
+    const info_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "info-test" });
     info_test_cmd.step.dependOn(b.getInstallStep());
     const info_test_step = b.step("info-test", "info/snapshot service: top queries over IPC");
     info_test_step.dependOn(&info_test_cmd.step);
 
-    const granttab_test_cmd = b.addSystemCommand(&.{ "sh", "tools/ipc/granttab-test.sh", "zig-out/bin/mcc" });
+    const granttab_test_cmd = b.addSystemCommand(&.{ "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "granttab-test" });
     granttab_test_cmd.step.dependOn(b.getInstallStep());
     const granttab_test_step = b.step("granttab-test", "owner-tracked grants: bounded IPC sharing + revoke-on-death");
     granttab_test_step.dependOn(&granttab_test_cmd.step);
@@ -736,8 +725,7 @@ pub fn build(b: *std.Build) void {
 
     const diskfs_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/fs/diskfs-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "diskfs-test",
     });
     diskfs_test_cmd.step.dependOn(b.getInstallStep());
     const diskfs_test_step = b.step("diskfs-test", "On-disk FS: persistent format + inodes + named lookup");
@@ -799,8 +787,7 @@ pub fn build(b: *std.Build) void {
 
     const grant_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/ipc/grant-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "grant-test",
     });
     grant_test_cmd.step.dependOn(b.getInstallStep());
     const grant_test_step = b.step("grant-test", "Memory grant: bounded delegation + revocation");
@@ -835,8 +822,7 @@ pub fn build(b: *std.Build) void {
 
     const arc_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mem/arc-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arc-test",
     });
     arc_test_cmd.step.dependOn(b.getInstallStep());
     const arc_test_step = b.step("arc-test", "Arc<T> shared ownership: clone/last-drop-frees, handles leak-checked");
@@ -844,8 +830,7 @@ pub fn build(b: *std.Build) void {
 
     const arc_pkt_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mem/arc-pkt-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arc-pkt-test",
     });
     arc_pkt_test_cmd.step.dependOn(b.getInstallStep());
     const arc_pkt_test_step = b.step("arc-pkt-test", "packet Arc-shared between two consumers (skb/mbuf pattern)");
@@ -853,8 +838,7 @@ pub fn build(b: *std.Build) void {
 
     const alloc_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mem/alloc-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "alloc-test",
     });
     alloc_test_cmd.step.dependOn(b.getInstallStep());
     const alloc_test_step = b.step("alloc-test", "Link + run the type-erased std/alloc Allocator over a captured heap");
@@ -862,8 +846,7 @@ pub fn build(b: *std.Build) void {
 
     const closure_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/lang/closure-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "closure-test",
     });
     closure_test_cmd.step.dependOn(b.getInstallStep());
     const closure_test_step = b.step("closure-test", "Link + run a bind() closure (capture + call across calls)");
@@ -871,8 +854,7 @@ pub fn build(b: *std.Build) void {
 
     const ring_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/mem/ring-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "ring-test",
     });
     ring_test_cmd.step.dependOn(b.getInstallStep());
     const ring_test_step = b.step("ring-test", "Link + run the generic in-place Ring<T> (push/pop/wrap)");
@@ -880,8 +862,7 @@ pub fn build(b: *std.Build) void {
 
     const trace_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/lang/trace-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "trace-test",
     });
     trace_test_cmd.step.dependOn(b.getInstallStep());
     const trace_test_step = b.step("trace-test", "Link + run the trace ring buffer (retention/wrap/sequence)");
@@ -889,8 +870,7 @@ pub fn build(b: *std.Build) void {
 
     const log_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/lang/log-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "log-test",
     });
     log_test_cmd.step.dependOn(b.getInstallStep());
     const log_test_step = b.step("log-test", "Link + run the leveled tracepoint logger (threshold/levels)");
@@ -898,8 +878,7 @@ pub fn build(b: *std.Build) void {
 
     const tcp_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net/tcp-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tcp-test",
     });
     tcp_test_cmd.step.dependOn(b.getInstallStep());
     const tcp_test_step = b.step("tcp-test", "Link + run the TCP segment build/parse + checksum");
@@ -907,8 +886,7 @@ pub fn build(b: *std.Build) void {
 
     const tcp_conn_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net/tcp-conn-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tcp-conn-test",
     });
     tcp_conn_test_cmd.step.dependOn(b.getInstallStep());
     const tcp_conn_test_step = b.step("tcp-conn-test", "Link + run the TCP connection state machine (handshake/close)");
@@ -916,8 +894,7 @@ pub fn build(b: *std.Build) void {
 
     const tcp_window_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net/tcp-window-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tcp-window-test",
     });
     tcp_window_test_cmd.step.dependOn(b.getInstallStep());
     const tcp_window_test_step = b.step("tcp-window-test", "Link + run the TCP send/recv window + ACK processing (data plane)");
@@ -925,8 +902,7 @@ pub fn build(b: *std.Build) void {
 
     const tcp_reasm_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net/tcp-reasm-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tcp-reasm-test",
     });
     tcp_reasm_test_cmd.step.dependOn(b.getInstallStep());
     const tcp_reasm_test_step = b.step("tcp-reasm-test", "Link + run TCP reassembly + go-back-N retransmit");
@@ -934,8 +910,7 @@ pub fn build(b: *std.Build) void {
 
     const tcp_rtx_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net/tcp-rtx-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tcp-rtx-test",
     });
     tcp_rtx_test_cmd.step.dependOn(b.getInstallStep());
     const tcp_rtx_test_step = b.step("tcp-rtx-test", "Link + run the TCP retransmit timer (RTO -> go-back-N)");
@@ -943,8 +918,7 @@ pub fn build(b: *std.Build) void {
 
     const symbols_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/lang/symbols-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "symbols-test",
     });
     symbols_test_cmd.step.dependOn(b.getInstallStep());
     const symbols_test_step = b.step("symbols-test", "Link + run the symbol table (symbolize address -> function+offset)");
@@ -952,8 +926,7 @@ pub fn build(b: *std.Build) void {
 
     const socket_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net/socket-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "socket-test",
     });
     socket_test_cmd.step.dependOn(b.getInstallStep());
     const socket_test_step = b.step("socket-test", "Link + run the UDP socket layer (bind/deliver/recv demux)");
@@ -961,8 +934,7 @@ pub fn build(b: *std.Build) void {
 
     const net_rx_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net/net-rx-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "net-rx-test",
     });
     net_rx_test_cmd.step.dependOn(b.getInstallStep());
     const net_rx_test_step = b.step("net-rx-test", "Link + run the RX demux path (frame -> socket_deliver -> recv)");
@@ -970,8 +942,7 @@ pub fn build(b: *std.Build) void {
 
     const net_fuzz_test_cmd = b.addSystemCommand(&.{
         "sh",
-        "tools/net/net-fuzz-test.sh",
-        "zig-out/bin/mcc",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "net-fuzz-test",
     });
     net_fuzz_test_cmd.step.dependOn(b.getInstallStep());
     const net_fuzz_test_step = b.step("net-fuzz-test", "Fuzz the RX parser with random frames (no OOB)");
