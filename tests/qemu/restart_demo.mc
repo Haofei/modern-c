@@ -4,6 +4,7 @@
 // nonzero code, and re-spawns it; the second incarnation completes cleanly.
 
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/console.mc";
 import "kernel/core/heap.mc";
 import "std/addr.mc";
@@ -36,6 +37,7 @@ fn alloc_stack(h: *mut Heap) -> usize {
 export fn restart_demo(region_base: usize, region_len: usize) -> u32 {
     var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     g_incarnation = 0;
     g_completed = false;
     var restarts: u32 = 0;
@@ -45,7 +47,7 @@ export fn restart_demo(region_base: usize, region_len: usize) -> u32 {
     while supervising {
         switch proc_wait(&g_procs, 0) {
             ok(info) => {
-                let code: u32 = (info & 0x0000_0000_FFFF_FFFF) as u32;
+                let code: u32 = info.code;
                 if code != 0 {
                     if restarts < MAX_RESTARTS {
                         restarts = restarts + 1;

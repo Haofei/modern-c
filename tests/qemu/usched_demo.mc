@@ -4,6 +4,7 @@
 // kernel's built-in round-robin. Each worker records itself then parks (non-runnable).
 
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/heap.mc";
 import "std/addr.mc";
 
@@ -31,6 +32,7 @@ fn alloc_stack(h: *mut Heap) -> usize {
 export fn usched_run(region_base: usize, region_len: usize) -> u32 {
     var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     g_n = 0;
     let a: u32 = proc_spawn(&g_procs, alloc_stack(&heap), worker_a);
     let b: u32 = proc_spawn(&g_procs, alloc_stack(&heap), worker_b);

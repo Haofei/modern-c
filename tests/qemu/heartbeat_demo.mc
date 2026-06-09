@@ -4,6 +4,7 @@
 // the second instance heartbeats and signals done. Composes notify + timeout + restart.
 
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/ipc.mc";
 import "kernel/core/heap.mc";
 import "std/addr.mc";
@@ -35,6 +36,7 @@ fn alloc_stack(h: *mut Heap) -> usize {
 export fn heartbeat_demo(region_base: usize, region_len: usize) -> u32 {
     var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     g_gen = 0;
     var restarts: u32 = 0;
     var healthy: bool = false;

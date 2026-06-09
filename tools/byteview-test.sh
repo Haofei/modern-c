@@ -10,5 +10,5 @@ extern uint32_t byteview_run(void);
 int main(void){ return byteview_run()==1 ? 0 : 1; }
 EOF
 "$CLANG" -std=c11 -Wall -Wextra -Werror "$WORK/driver.c" "$WORK/byteview.o" -o "$WORK/app"
-if "$WORK/app"; then echo "PASS: byteview-test — ByteBuf<N>: bounds-checked get/set + bulk copy_from/copy_to a PAddr (clamped to N)"; exit 0; fi
+if "$WORK/app"; then echo "PASS: byteview-test — ByteBuf<N>: bounds-checked get + set/copy_from/copy_to return typed OutOfBounds (no silent clamp) on a PAddr"; exit 0; fi
 echo "FAIL: byteview-test"; exit 1

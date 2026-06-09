@@ -9,10 +9,18 @@ export fn smprq_run() -> u32 {
     if !rq_push(&g_rq, 0, 102) { pass = 0; }
     if rq_count(&g_rq, 0) != 3 { pass = 0; }
 
-    if rq_pop(&g_rq, 1) != 0xFFFFFFFF { pass = 0; } // core 1 empty
-    let stolen: u32 = rq_steal(&g_rq, 1);            // core 1 steals from core 0
-    if stolen != 100 { pass = 0; }                   // takes core 0's head (FIFO)
-    if rq_count(&g_rq, 0) != 2 { pass = 0; }         // core 0 shrank
-    if rq_pop(&g_rq, 0) != 101 { pass = 0; }         // core 0 continues FIFO
+    switch rq_pop(&g_rq, 1) {                         // core 1 empty -> Empty
+        ok(v) => { pass = 0; }
+        err(e) => {}
+    }
+    switch rq_steal(&g_rq, 1) {                       // core 1 steals from core 0
+        ok(v) => { if v != 100 { pass = 0; } }       // takes core 0's head (FIFO)
+        err(e) => { pass = 0; }
+    }
+    if rq_count(&g_rq, 0) != 2 { pass = 0; }          // core 0 shrank
+    switch rq_pop(&g_rq, 0) {                         // core 0 continues FIFO
+        ok(v) => { if v != 101 { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
     return pass;
 }

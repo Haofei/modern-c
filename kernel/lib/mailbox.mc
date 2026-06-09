@@ -1,4 +1,4 @@
-// MC standard library — `mailbox`: a bounded message queue with a per-message source key,
+// kernel/lib/mailbox — `mailbox`: a bounded message queue with a per-message source key,
 // so a receiver can take the next message or filter by sender. Posting to a full mailbox
 // fails (drop policy); a blocking policy is layered by the caller (yield + retry). This is
 // the kernel IPC mailbox pattern without the hand-rolled slot bookkeeping.

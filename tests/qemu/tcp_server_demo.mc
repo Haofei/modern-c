@@ -3,6 +3,7 @@
 // kernel IPC, and the connection reaches ESTABLISHED — TCP as an isolated service.
 
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/ipc.mc";
 import "kernel/core/heap.mc";
 import "kernel/net/tcp_conn.mc";
@@ -79,6 +80,7 @@ fn alloc_stack(h: *mut Heap) -> usize {
 export fn tcp_server_run(region_base: usize, region_len: usize) -> u32 {
     var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     g_result = 0;
     proc_spawn(&g_procs, alloc_stack(&heap), tcp_server);
     proc_spawn(&g_procs, alloc_stack(&heap), client);

@@ -1,4 +1,4 @@
-import "std/mailbox.mc";
+import "kernel/lib/mailbox.mc";
 global g_mb: Mailbox<u32, 4>;
 export fn mailbox_run() -> u32 {
     var pass: u32 = 1;

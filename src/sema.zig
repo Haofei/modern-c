@@ -27,6 +27,9 @@ pub const Checker = struct {
     // duration of checkModule so the move/liveness pass (D.7) can classify
     // bindings. Empty for the common case (no move types → the pass is a no-op).
     move_types: ?*const std.StringHashMap(void) = null,
+    // A module-level Context used during the move pass to infer a switch subject's Result
+    // type, so an arm binding (`ok(p)`) can be recognized as a linear `move` value.
+    move_ctx: ?*const Context = null,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -128,6 +131,16 @@ pub const Checker = struct {
         // Linear `move`/liveness pass (section 18.1, annex D.7). No-op unless the
         // module declares `move` types.
         if (move_types.count() > 0) {
+            var move_ctx = Context{
+                .functions = &functions,
+                .globals = &globals,
+                .type_aliases = &type_aliases,
+                .structs = &structs,
+                .enums = &enums,
+                .tagged_unions = &tagged_unions,
+            };
+            self.move_ctx = &move_ctx;
+            defer self.move_ctx = null;
             for (module.decls) |decl| {
                 if (decl.kind == .fn_decl) self.checkMoveLinearity(decl.kind.fn_decl, &type_aliases);
             }
@@ -580,10 +593,49 @@ pub const Checker = struct {
                 // consumed (a plain `if cond` desugars to a switch on `cond`; borrow
                 // operands `&x` and non-move subjects stay no-ops in moveConsume).
                 self.moveConsume(sw.subject, state, aliases);
-                for (sw.arms) |arm| switch (arm.body) {
-                    .block => |b| self.moveBlock(b, state, aliases),
-                    .expr => |e| self.moveConsume(e, state, aliases),
-                };
+                // Infer the subject's type so a pattern binding (`ok(p)`) that names a `move`
+                // value is tracked inside the arm — otherwise use-after-move / a leak through a
+                // switch arm goes undetected.
+                const subject_ty: ?ast.TypeExpr = if (self.move_ctx) |ctx| exprResultType(sw.subject, ctx.*) else null;
+                for (sw.arms) |arm| {
+                    var bound_name: ?[]const u8 = null;
+                    for (arm.patterns) |pat| {
+                        const payload_ty: ?ast.TypeExpr = switch (pat.kind) {
+                            .bind => subject_ty, // binds the whole value
+                            .tag_bind => |tb| if (subject_ty) |sty| resultPayloadType(sty, tb.tag.text) else null,
+                            else => null,
+                        };
+                        const name: ?ast.Ident = switch (pat.kind) {
+                            .bind => |id| id,
+                            .tag_bind => |tb| tb.binding,
+                            else => null,
+                        };
+                        if (name) |id| {
+                            if (payload_ty) |pty| {
+                                if (self.isMoveTypeName(pty, aliases)) {
+                                    state.put(id.text, .{ .live = true, .span = id.span }) catch {
+                                        self.oom = true;
+                                    };
+                                    bound_name = id.text;
+                                }
+                            }
+                        }
+                    }
+                    switch (arm.body) {
+                        .block => |b| self.moveBlock(b, state, aliases),
+                        .expr => |e| self.moveConsume(e, state, aliases),
+                    }
+                    // A `move` value bound by this arm must be consumed within it; then it leaves
+                    // scope (remove it so a later arm's same-named binding starts fresh).
+                    if (bound_name) |bn| {
+                        if (state.getPtr(bn)) |slot| {
+                            if (slot.live and !slot.deferred) {
+                                self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in a switch arm is never consumed (must be moved, returned, or freed)");
+                            }
+                        }
+                        _ = state.remove(bn);
+                    }
+                }
             },
             .@"break", .@"continue", .asm_stmt => {},
         }

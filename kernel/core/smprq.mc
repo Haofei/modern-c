@@ -7,7 +7,10 @@ import "std/ring.mc";
 
 const NCORES: usize = 2;
 const RQ_CAP: usize = 8;
-const RQ_NONE: u32 = 0xFFFF_FFFF;
+
+enum RqError {
+    Empty, // the run queue (or all steal targets) had no task
+}
 
 struct RunQueues {
     q: [NCORES]Ring<u32, RQ_CAP>, // one FIFO ring per core
@@ -25,19 +28,19 @@ export fn rq_push(rq: *mut RunQueues, core: usize, p: u32) -> bool {
     return ring_push(u32, RQ_CAP, &rq.q[core], p);
 }
 
-export fn rq_pop(rq: *mut RunQueues, core: usize) -> u32 {
+export fn rq_pop(rq: *mut RunQueues, core: usize) -> Result<u32, RqError> {
     if ring_is_empty(u32, RQ_CAP, &rq.q[core]) {
-        return RQ_NONE;
+        return err(.Empty);
     }
-    return ring_pop(u32, RQ_CAP, &rq.q[core]);
+    return ok(ring_pop(u32, RQ_CAP, &rq.q[core]));
 }
 
 export fn rq_count(rq: *mut RunQueues, core: usize) -> usize {
     return ring_len(u32, RQ_CAP, &rq.q[core]);
 }
 
-// Idle `core` steals one task from the busiest other core; RQ_NONE if none available.
-export fn rq_steal(rq: *mut RunQueues, core: usize) -> u32 {
+// Idle `core` steals one task from the busiest other core; Empty if none available.
+export fn rq_steal(rq: *mut RunQueues, core: usize) -> Result<u32, RqError> {
     var best: usize = core;
     var best_count: usize = 0;
     var c: usize = 0;
@@ -52,7 +55,7 @@ export fn rq_steal(rq: *mut RunQueues, core: usize) -> u32 {
         c = c + 1;
     }
     if best == core {
-        return RQ_NONE; // nothing to steal
+        return err(.Empty); // nothing to steal
     }
     return rq_pop(rq, best);
 }

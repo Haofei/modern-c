@@ -58,3 +58,35 @@ fn reject_copy() -> u32 {
     let y: Token = t;
     return consume(x) + consume(y);
 }
+
+// --- move values bound in a switch arm are tracked too (regression: ok(t) must be linear) ---
+
+enum MoveErr { Bad }
+extern fn try_make() -> Result<Token, MoveErr>;
+
+// accepted: the arm binding is consumed exactly once
+fn accept_switch_consume() -> u32 {
+    switch try_make() {
+        ok(t) => { return consume(t); }
+        err(e) => { return 0; }
+    }
+}
+
+// rejected: the bound move value is used twice inside the arm
+fn reject_switch_use_after_move() -> u32 {
+    switch try_make() {
+        ok(t) => {
+            let a: u32 = consume(t);
+            return consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+        }
+        err(e) => { return 0; }
+    }
+}
+
+// rejected: the bound move value is never consumed in the arm (leak)
+fn reject_switch_leak() -> u32 {
+    switch try_make() {
+        ok(t) => { return 0; } // EXPECT_ERROR: E_RESOURCE_LEAK
+        err(e) => { return 0; }
+    }
+}

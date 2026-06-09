@@ -8,6 +8,8 @@ import "kernel/core/shell.mc";
 import "kernel/core/tty.mc";
 import "kernel/core/syscall.mc";
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
+import "kernel/lib/proc_snapshot.mc"; // proc_info_encode/pid/state (named SYS_PROC_INFO ABI)
 import "kernel/core/heap.mc";
 import "kernel/arch/riscv64/csr.mc"; // wait_for_interrupt + enable_external_interrupt (MC asm)
 import "std/addr.mc";
@@ -95,7 +97,7 @@ fn sys_proc_count(a: u64, b: u64, c: u64) -> u64 {
 fn sys_proc_info(idx: u64, b: u64, c: u64) -> u64 {
     let i: usize = idx as usize;
     if i < proc_count(&g_procs) {
-        return ((proc_pid_at(&g_procs, i) << 4) | proc_state_code(&g_procs, i)) as u64;
+        return proc_info_encode(proc_pid_at(&g_procs, i), proc_state_code(&g_procs, i));
     }
     return 0;
 }
@@ -111,6 +113,7 @@ export fn syscall_setup() -> void {
     // reflects actual scheduler state (Running for the active slot, Ready for spawned).
     g_heap = heap_new(phys_range(pa((&g_heapmem[0]) as usize), 65536));
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     proc_spawn(&g_procs, alloc_stack(), dummy_task);
     proc_spawn(&g_procs, alloc_stack(), dummy_task);
     proc_spawn(&g_procs, alloc_stack(), dummy_task);
@@ -168,8 +171,8 @@ fn u_top() -> void {
     var i: u64 = 0;
     while i < n {
         let info: u64 = do_ecall(SYS_PROC_INFO as u64, i, 0, 0);
-        let pid: u64 = info >> 4; // full pid (no truncation)
-        let st: u64 = info & 0xF;
+        let pid: u64 = proc_info_pid(info) as u64;
+        let st: u64 = proc_info_state(info) as u64;
         u_print_dec(pid);
         u_putc(0x20);
         u_putc(0x20);

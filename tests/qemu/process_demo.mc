@@ -6,6 +6,7 @@
 // (123). Returns the number reaped.
 
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/console.mc";
 import "kernel/core/heap.mc";
 import "std/addr.mc";
@@ -37,7 +38,7 @@ fn alloc_stack(h: *mut Heap) -> usize {
 fn wait_one(t: *mut ProcTable) -> u32 {
     switch proc_wait(t, 0) {
         ok(info) => {
-            let code: u32 = (info & 0x0000_0000_FFFF_FFFF) as u32;
+            let code: u32 = info.code;
             console_putc((('0' as u32) + code) as u8);
             return 1;
         }
@@ -50,6 +51,7 @@ fn wait_one(t: *mut ProcTable) -> u32 {
 export fn process_demo(region_base: usize, region_len: usize) -> u32 {
     var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     proc_spawn(&g_procs, alloc_stack(&heap), proc_a);
     proc_spawn(&g_procs, alloc_stack(&heap), proc_b);
     proc_spawn(&g_procs, alloc_stack(&heap), proc_c);

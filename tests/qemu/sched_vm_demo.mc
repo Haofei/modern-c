@@ -6,6 +6,7 @@
 
 import "kernel/arch/riscv64/paging.mc";
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/heap.mc";
 import "std/addr.mc";
 
@@ -71,6 +72,7 @@ export fn sched_vm_setup(region_base: usize, region_len: usize) -> void {
     let satp_b: u64 = build_space(&heap, 0x0000_000B);
 
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     proc_set_satp(&g_procs, 0, g_kernel_satp); // the bootstrap runs in the kernel map
     let pid_a: u32 = proc_spawn(&g_procs, alloc_stack(&heap), worker_a);
     let pid_b: u32 = proc_spawn(&g_procs, alloc_stack(&heap), worker_b);

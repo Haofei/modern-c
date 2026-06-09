@@ -3,12 +3,14 @@
 // is Denied. This is MINIX's per-server privilege model, enforced at the kernel gate.
 
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/ipc.mc";
 
 global g_procs: ProcTable;
 
 export fn privilege_demo() -> u32 {
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     var pass: u32 = 1;
     let me: u32 = proc_pid(&g_procs); // pid 0 (bootstrap)
 

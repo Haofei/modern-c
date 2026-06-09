@@ -8,10 +8,17 @@ import "std/libc.mc";
 import "std/addr.mc";
 import "kernel/core/args.mc";
 
-const SH_NOTFOUND: u32 = 127;
-const SH_EXIT: u32 = 255; // the `exit` builtin: tell the interactive loop to stop
+const SH_NOTFOUND: u32 = 127; // POSIX "command not found" exit status
 const SH_OUT: usize = 128;
 const SPACE: u8 = 0x20;
+
+// Loop control, kept distinct from the numeric exit status: a command either ran (its
+// POSIX status is in `code`) or asked the interactive loop to stop. The old SH_EXIT=255
+// overloaded the exit-status field with a control signal; this names the intent instead.
+enum ShOutcome {
+    Ran,
+    Exit,
+}
 
 // --- one-word skeleton (kept for the original gate) ---
 export fn sh_exec(line: PAddr, len: usize) -> u32 {
@@ -51,7 +58,8 @@ export fn sh_exec(line: PAddr, len: usize) -> u32 {
 struct Shell {
     out: [SH_OUT]u8, // captured stdout of the last command
     out_len: usize,
-    code: u32, // exit status of the last command
+    code: u32,           // POSIX-style exit status of the last command (0 ok, 1 false, 127 not found)
+    outcome: ShOutcome,  // loop control: did the last command request exit?
 }
 
 // Scratch argv for the command being parsed (the address of a nested struct field can't
@@ -61,6 +69,7 @@ global g_cmd: Args;
 export fn sh_init(sh: *mut Shell) -> void {
     sh.out_len = 0;
     sh.code = 0;
+    sh.outcome = .Ran;
 }
 
 // Accessors (reading a global aggregate's array field directly is not supported; go
@@ -162,6 +171,7 @@ fn sh_echo(sh: *mut Shell) -> void {
 export fn sh_run(sh: *mut Shell, line: PAddr, len: usize) -> void {
     sh_tokenize(line, len);
     sh.out_len = 0;
+    sh.outcome = .Ran; // reset loop control each command
     if args_count(&g_cmd) == 0 {
         sh.code = 0; // empty line
         return;
@@ -184,7 +194,8 @@ export fn sh_run(sh: *mut Shell, line: PAddr, len: usize) -> void {
     }
     var ext: [4]u8 = .{ 0x65, 0x78, 0x69, 0x74 }; // "exit"
     if sh_arg_eq(0, pa((&ext[0]) as usize), 4) {
-        sh.code = SH_EXIT;
+        sh.code = 0;          // exiting cleanly
+        sh.outcome = .Exit;   // control: stop the interactive loop
         return;
     }
     sh.code = SH_NOTFOUND; // command not found
@@ -192,6 +203,10 @@ export fn sh_run(sh: *mut Shell, line: PAddr, len: usize) -> void {
 
 // True if the last command was `exit` (the interactive loop should stop).
 export fn sh_is_exit(sh: *mut Shell) -> bool {
-    return sh.code == SH_EXIT;
+    let o: ShOutcome = sh.outcome;
+    switch o {
+        .Ran => { return false; }
+        .Exit => { return true; }
+    }
 }
 

@@ -10,6 +10,7 @@ import "kernel/core/device.mc";
 import "kernel/core/log.mc";
 import "kernel/fs/vfs.mc";
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "std/arena.mc";
 import "std/pool.mc";
 import "std/addr.mc";
@@ -260,6 +261,7 @@ export fn kmain(region_base: usize, region_len: usize) -> u32 {
 
     // 5) Process scheduler: spawn two processes that print + exit.
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     proc_spawn(&g_procs, alloc_stack(&heap), worker_a);
     proc_spawn(&g_procs, alloc_stack(&heap), worker_b);
     proc_yield(&g_procs); // run them (they print A, B) and return here when both exit

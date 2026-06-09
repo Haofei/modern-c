@@ -111,7 +111,7 @@ export fn socket_deliver(t: *mut SocketTable, dst_port: u16, src_ip: u32, src_po
     if slot >= QDEPTH {
         return err(.QueueFull);
     }
-    let copied: usize = bytebuf_copy_from(DGRAM_MAX, &t.queue[slot].payload, pa(src_addr), len);
+    let copied: usize = bytebuf_copy_from(DGRAM_MAX, &t.queue[slot].payload, pa(src_addr), len)? else .TooLarge;
     t.queue[slot].valid = true;
     t.queue[slot].dst_port = dst_port;
     t.queue[slot].src_ip = src_ip;
@@ -150,7 +150,7 @@ export fn socket_recv(t: *mut SocketTable, idx: usize, out_addr: usize, max: usi
     if max < n {
         n = max;
     }
-    bytebuf_copy_to(DGRAM_MAX, &t.queue[slot].payload, phys(out_addr), n);
+    bytebuf_copy_to(DGRAM_MAX, &t.queue[slot].payload, phys(out_addr), n)? else .TooLarge;
     t.socks[idx].last_src_ip = t.queue[slot].src_ip;
     t.socks[idx].last_src_port = t.queue[slot].src_port;
     t.queue[slot].valid = false;

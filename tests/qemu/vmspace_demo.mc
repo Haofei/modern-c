@@ -6,6 +6,7 @@
 
 import "kernel/arch/riscv64/paging.mc";
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/heap.mc";
 import "std/addr.mc";
 
@@ -32,6 +33,7 @@ fn build_space(heap: *mut Heap, value: u32) -> u64 {
 export fn vmspace_setup(region_base: usize, region_len: usize) -> void {
     var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     proc_set_satp(&g_procs, 0, build_space(&heap, 0xAAAA_0000));
     proc_set_satp(&g_procs, 1, build_space(&heap, 0xBBBB_0001));
     proc_set_satp(&g_procs, 2, build_space(&heap, 0xCCCC_0002));

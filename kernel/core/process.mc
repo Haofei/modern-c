@@ -10,7 +10,7 @@ import "kernel/arch/riscv64/context.mc";
 import "kernel/core/ipc.mc";
 import "std/math.mc";
 import "std/mask.mc";
-import "std/mailbox.mc";
+import "kernel/lib/mailbox.mc";
 
 const MAX_PROCS: usize = 8;
 const IPC_SLOTS: usize = 4; // mailbox depth per process
@@ -30,28 +30,101 @@ enum ReapError {
     NoZombieYet, // children exist but none have exited
 }
 
+// The result of reaping a child: its pid and exit code. A named struct (these are in-kernel
+// values, no register-ABI constraint) instead of a (pid << 32 | code) packed u64.
+struct ReapInfo {
+    pid: u32,
+    code: u32,
+}
+
+// A capability-style reference to a process: the slot plus the *generation* it held when the
+// reference was taken. Slots are reused (proc_spawn), so a bare slot/pid can silently refer
+// to a different process after reuse; an Endpoint is validated against the live generation,
+// so a stale reference fails closed (DeadEndpoint) instead of hitting the wrong process.
+struct Endpoint {
+    slot: usize,
+    gen: u32,
+}
+
+enum EpError {
+    DeadEndpoint, // the slot is free, or now holds a different generation
+}
+
+// Block reasons (bits in Process.block_reasons). A process is runnable only when its block
+// set is empty — runnable state is *derived* from these flags, not set ad hoc, so a missed
+// state transition can't leave a blocked process on the run queue (MINIX RTS_* pattern).
+const BLOCK_RECV: u32 = 0; // waiting to receive a message
+const BLOCK_SEND: u32 = 1; // waiting for room in a destination mailbox
+const BLOCK_WAIT: u32 = 2; // waiting for a child to exit
+
 struct Process {
     context: Context,
     state: ProcState,
     pid: u32,
+    gen: u32,       // generation: bumped each time this slot is (re)used, for Endpoint validation
     parent: u32,    // pid of the spawning process
     exit_code: u32, // valid once state == Zombie
     satp: u64,      // this process's address space (Sv39 root); 0 = share the kernel's
     inbox: Mailbox<Message, IPC_SLOTS>, // multi-slot mailbox for kernel-mediated IPC
+    block_reasons: Mask32,       // set of BLOCK_* reasons; runnable iff empty (derived state)
+    wait_slot: usize,            // the slot this process is blocked receiving-from (for death cleanup)
+    wait_gen: u32,               // the generation of wait_slot when it began waiting
     pending_sig: Mask32,         // pending-signal set (a PM server builds on this)
     allow_mask: Mask32,          // least privilege: bit p = may IPC-send to pid p
     kcall_mask: Mask32,          // least privilege: bit op = may invoke kernel call `op`
     priority: u32,               // scheduling priority (policy set externally; higher runs first)
+    quantum: u32,                // remaining scheduling quantum in ticks (0 = expired)
+    ticks: u32,                  // accounting: total ticks this incarnation has consumed
+    sched_endpoint: u32,         // the scheduler service to notify on quantum expiry (0 = none)
 }
+
+const QUANTUM_DEFAULT: u32 = 10;
 
 struct ProcTable {
     procs: [MAX_PROCS]Process,
     count: usize,   // slots in use (slot 0 = bootstrap)
     current: usize, // running slot
+    // The platform's CPU-idle action (e.g. `wfi`), invoked when a process blocks and nothing
+    // else is runnable — so the kernel sleeps until an interrupt instead of busy-spinning as a
+    // blocked "current" process. Defaults to a no-op (set by the platform via proc_set_idle).
+    idle_hook: closure() -> void,
 }
 
-fn is_runnable(s: ProcState) -> bool {
-    return s == .Ready || s == .Running;
+// The no-op default idle action (a closure needs a captured env; this one is empty).
+struct IdleEnv { unused: u32 }
+global g_idle_env: IdleEnv;
+fn idle_noop(e: *mut IdleEnv) -> void {}
+
+// Runnable state is DERIVED: a process runs only when it is Ready/Running *and* has no
+// outstanding block reasons. Nothing sets a "runnable" bit directly — proc_block/proc_unblock
+// own the block set, so a process can never be left wrongly on or off the run queue.
+fn is_runnable(t: *mut ProcTable, slot: usize) -> bool {
+    let s: ProcState = t.procs[slot].state;
+    if s != .Ready {
+        if s != .Running {
+            return false;
+        }
+    }
+    return mask32_is_empty(&t.procs[slot].block_reasons);
+}
+
+// True if `slot` holds a live process that can receive IPC — i.e. not free, exited, or dead.
+// A blocked process is still live (it is Ready with block reasons set, and sending wakes it).
+fn proc_is_live(t: *mut ProcTable, slot: usize) -> bool {
+    if slot >= t.count {
+        return false;
+    }
+    let s: ProcState = t.procs[slot].state;
+    if s == .Unused {
+        return false;
+    }
+    if s == .Zombie {
+        return false;
+    }
+    if s == .Dead {
+        return false;
+    }
+    return true;
 }
 
 // ----- process introspection (for `ps`/`top`-style tools, via a kernel call) -----
@@ -73,10 +146,11 @@ export fn proc_state_code(t: *mut ProcTable, idx: usize) -> u32 {
         return 0;
     }
     let s: ProcState = t.procs[idx].state;
+    let blocked: bool = !mask32_is_empty(&t.procs[idx].block_reasons);
     switch s {
         .Unused => { return 0; }
-        .Ready => { return 1; }
-        .Running => { return 2; }
+        .Ready => { if blocked { return 3; } return 1; }   // Ready + block reasons = Blocked
+        .Running => { if blocked { return 3; } return 2; } // a blocked process reads as Blocked
         .BlockedRecv => { return 3; }
         .Zombie => { return 4; }
         .Dead => { return 5; }
@@ -88,20 +162,41 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
     while i < MAX_PROCS {
         t.procs[i].state = .Unused;
         t.procs[i].pid = 0;
+        t.procs[i].gen = 0;
         t.procs[i].parent = 0;
         t.procs[i].exit_code = 0;
         t.procs[i].satp = 0;
         mailbox_init(Message, IPC_SLOTS, &t.procs[i].inbox);
+        t.procs[i].block_reasons = mask32_zero();
+        t.procs[i].wait_slot = MAX_PROCS; // no waiter target
+        t.procs[i].wait_gen = 0;
         t.procs[i].pending_sig = mask32_zero();
         t.procs[i].allow_mask = mask32_from(0xFFFF_FFFF); // permissive by default; restrict per server
         t.procs[i].kcall_mask = mask32_from(0xFFFF_FFFF);
         t.procs[i].priority = 0;
+        t.procs[i].quantum = QUANTUM_DEFAULT;
+        t.procs[i].ticks = 0;
+        t.procs[i].sched_endpoint = 0;
         i = i + 1;
     }
     // Slot 0 is the running bootstrap context (filled on first switch out).
     t.procs[0].state = .Running;
     t.count = 1;
     t.current = 0;
+    t.idle_hook = bind(&g_idle_env, idle_noop); // platform overrides with wfi via proc_set_idle
+}
+
+// Set the platform's CPU-idle action (e.g. a `wfi` wrapper). Called when the scheduler has
+// nothing runnable, so a blocked kernel sleeps instead of spinning. The wfi itself lives in
+// arch code (this module stays host-portable); the platform installs it at boot.
+export fn proc_set_idle(t: *mut ProcTable, hook: closure() -> void) -> void {
+    t.idle_hook = hook;
+}
+
+// Run the platform idle action once (sleep until an interrupt, on a real machine).
+fn proc_idle(t: *mut ProcTable) -> void {
+    let hook: closure() -> void = t.idle_hook;
+    hook();
 }
 
 export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -> u32 {
@@ -132,31 +227,46 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     mc_thread_init(&t.procs[slot].context, stack_top, entry);
     t.procs[slot].state = .Ready;
     t.procs[slot].pid = slot as u32;
+    t.procs[slot].gen = t.procs[slot].gen + 1; // a new incarnation: invalidates old endpoints
     t.procs[slot].parent = t.procs[t.current].pid; // the spawner is the parent
     t.procs[slot].exit_code = 0;
     // Reset per-process state in case this slot was reaped from an earlier process.
     mailbox_init(Message, IPC_SLOTS, &t.procs[slot].inbox);
+    t.procs[slot].block_reasons = mask32_zero();
+    t.procs[slot].wait_slot = MAX_PROCS;
+    t.procs[slot].wait_gen = 0;
     t.procs[slot].pending_sig = mask32_zero();
     t.procs[slot].allow_mask = mask32_from(0xFFFF_FFFF);
     t.procs[slot].kcall_mask = mask32_from(0xFFFF_FFFF);
     t.procs[slot].priority = 0;
+    t.procs[slot].quantum = QUANTUM_DEFAULT;
+    t.procs[slot].ticks = 0;
+    t.procs[slot].sched_endpoint = 0;
     return slot as u32;
 }
 
-// The next runnable slot after `from` (round-robin), or `from` if none other.
-fn next_runnable(t: *mut ProcTable, from: usize) -> usize {
+enum SchedError {
+    NoRunnable, // no process other than `from` is runnable
+}
+
+// The next runnable slot after `from` (round-robin), or NoRunnable if none other is
+// runnable — an explicit result so callers handle "nothing to run" rather than receiving
+// `from` back and having to special-case it.
+fn next_runnable(t: *mut ProcTable, from: usize) -> Result<usize, SchedError> {
+    // Scan the other slots round-robin (i in 1..MAX_PROCS-1, so idx never wraps back to
+    // `from`); `from` itself is never returned, so a lone runnable current process yields
+    // NoRunnable rather than "switch to yourself".
     var i: usize = 1;
-    while i <= MAX_PROCS {
+    while i < MAX_PROCS {
         let idx: usize = (from + i) % MAX_PROCS;
         if idx < t.count {
-            let s: ProcState = t.procs[idx].state;
-            if is_runnable(s) {
-                return idx;
+            if is_runnable(t, idx) {
+                return ok(idx);
             }
         }
         i = i + 1;
     }
-    return from;
+    return err(.NoRunnable);
 }
 
 // ----- userspace-set scheduling policy. The kernel keeps the *mechanism* (context
@@ -171,6 +281,87 @@ export fn proc_set_priority(t: *mut ProcTable, pid: u32, prio: u32) -> void {
     }
 }
 
+// schedctl: the single sanctioned path for setting scheduling policy (priority, quantum, and
+// the scheduler endpoint to notify on expiry). The kernel owns the mechanism (run queues,
+// context switch); policy is set here by the scheduler service, not poked field-by-field by
+// arbitrary code — so accounting and quantum stay consistent.
+export fn proc_schedctl(t: *mut ProcTable, pid: u32, prio: u32, quantum: u32, sched_endpoint: u32) -> void {
+    let p: usize = pid as usize;
+    if p < t.count {
+        t.procs[p].priority = prio;
+        t.procs[p].quantum = quantum;
+        t.procs[p].sched_endpoint = sched_endpoint;
+    }
+}
+
+// Account one timer tick to the current process; returns true if its quantum just expired
+// (the kernel marks it out-of-time and the timer path notifies its scheduler endpoint to
+// pick the next process / refresh the quantum — policy stays in the scheduler service).
+export fn proc_tick(t: *mut ProcTable) -> bool {
+    let cur: usize = t.current;
+    t.procs[cur].ticks = t.procs[cur].ticks + 1;
+    if t.procs[cur].quantum == 0 {
+        return false; // already expired — edge-triggered, so do not re-notify the scheduler
+    }
+    t.procs[cur].quantum = t.procs[cur].quantum - 1;
+    return t.procs[cur].quantum == 0; // true only on the 1 -> 0 transition (quantum just expired)
+}
+
+export fn proc_quantum(t: *mut ProcTable, pid: u32) -> u32 {
+    let p: usize = pid as usize;
+    if p < t.count {
+        return t.procs[p].quantum;
+    }
+    return 0;
+}
+export fn proc_ticks(t: *mut ProcTable, pid: u32) -> u32 {
+    let p: usize = pid as usize;
+    if p < t.count {
+        return t.procs[p].ticks;
+    }
+    return 0;
+}
+export fn proc_sched_endpoint(t: *mut ProcTable, pid: u32) -> u32 {
+    let p: usize = pid as usize;
+    if p < t.count {
+        return t.procs[p].sched_endpoint;
+    }
+    return 0;
+}
+
+// Refresh a process's quantum (the scheduler service's policy action after an expiry).
+export fn proc_refresh_quantum(t: *mut ProcTable, pid: u32, quantum: u32) -> void {
+    let p: usize = pid as usize;
+    if p < t.count {
+        t.procs[p].quantum = quantum;
+    }
+}
+
+// How many messages are pending in a process's inbox (introspection: for an info/sched service).
+export fn proc_inbox_count(t: *mut ProcTable, pid: u32) -> usize {
+    let p: usize = pid as usize;
+    if p < t.count {
+        return mailbox_count(Message, IPC_SLOTS, &t.procs[p].inbox);
+    }
+    return 0;
+}
+
+// Timer hook: account a tick to the current process and, when its quantum just expired (edge-
+// triggered), notify its scheduler service (TAG_QUANTUM, from = the expired process) so the
+// scheduler can apply policy — refresh the quantum, demote/boost, reassign CPU. The kernel
+// keeps the mechanism (accounting + the edge); the *policy* lives in the scheduler service.
+// Returns true on the expiry edge.
+export fn proc_tick_notify(t: *mut ProcTable) -> bool {
+    let expired: bool = proc_tick(t);
+    if expired {
+        let sched: u32 = t.procs[t.current].sched_endpoint;
+        if sched != 0 { // 0 = no scheduler service assigned
+            ipc_notify(t, sched, TAG_QUANTUM); // fire-and-forget expiry notification
+        }
+    }
+    return expired;
+}
+
 // Policy: the highest-priority runnable process other than `from` (ties: lowest pid),
 // or `from` if no other is runnable.
 fn sched_next_priority(t: *mut ProcTable, from: usize) -> usize {
@@ -180,8 +371,7 @@ fn sched_next_priority(t: *mut ProcTable, from: usize) -> usize {
     var i: usize = 0;
     while i < t.count {
         if i != from {
-            let s: ProcState = t.procs[i].state;
-            if is_runnable(s) {
+            if is_runnable(t, i) {
                 let p: u32 = t.procs[i].priority;
                 if !found {
                     best = i;
@@ -200,10 +390,83 @@ fn sched_next_priority(t: *mut ProcTable, from: usize) -> usize {
     return best;
 }
 
-// Park the current process: make it non-runnable so the scheduler won't pick it again
-// (until something wakes it). Used by a process that has finished its turn of work.
+// Add a block reason: the process becomes non-runnable until every reason clears. The single
+// owner of "stop running this process" — the scheduler derives runnability, so no caller
+// hand-edits a state field and risks leaving the process wrongly (un)scheduled.
+export fn proc_block(t: *mut ProcTable, slot: usize, reason: u32) -> void {
+    if slot < t.count {
+        mask32_set(&t.procs[slot].block_reasons, reason);
+    }
+}
+
+// Clear a block reason; the process is runnable again once no reasons remain.
+export fn proc_unblock(t: *mut ProcTable, slot: usize, reason: u32) -> void {
+    if slot < t.count {
+        mask32_clear(&t.procs[slot].block_reasons, reason);
+    }
+}
+
+// Park the current process (generic block): non-runnable until woken.
 export fn proc_park(t: *mut ProcTable) -> void {
-    t.procs[t.current].state = .BlockedRecv;
+    proc_block(t, t.current, BLOCK_RECV);
+}
+
+// The pid of the currently-running process.
+export fn proc_self(t: *mut ProcTable) -> u32 {
+    return t.procs[t.current].pid;
+}
+
+// Wake process `pid`: clear its receive-block so it can run again. No-op otherwise.
+export fn proc_wake(t: *mut ProcTable, pid: u32) -> void {
+    proc_unblock(t, pid as usize, BLOCK_RECV);
+}
+
+// The endpoint (slot + current generation) of process `pid`.
+export fn proc_endpoint(t: *mut ProcTable, pid: u32) -> Endpoint {
+    let s: usize = pid as usize;
+    if s < t.count {
+        return .{ .slot = s, .gen = t.procs[s].gen };
+    }
+    return .{ .slot = MAX_PROCS, .gen = 0 };
+}
+
+// The current process's endpoint.
+export fn proc_self_endpoint(t: *mut ProcTable) -> Endpoint {
+    return proc_endpoint(t, proc_self(t));
+}
+
+// Validate an endpoint: returns its slot if it still refers to the same live incarnation,
+// else DeadEndpoint (the slot was freed, reused by a newer generation, or has died/exited).
+export fn endpoint_slot(t: *mut ProcTable, ep: Endpoint) -> Result<usize, EpError> {
+    if ep.slot >= t.count {
+        return err(.DeadEndpoint);
+    }
+    if t.procs[ep.slot].gen != ep.gen {
+        return err(.DeadEndpoint);
+    }
+    let s: ProcState = t.procs[ep.slot].state;
+    if s == .Unused {
+        return err(.DeadEndpoint);
+    }
+    if s == .Zombie {
+        return err(.DeadEndpoint);
+    }
+    if s == .Dead {
+        return err(.DeadEndpoint);
+    }
+    return ok(ep.slot);
+}
+
+// True if the endpoint still refers to the same live process.
+export fn endpoint_live(t: *mut ProcTable, ep: Endpoint) -> bool {
+    switch endpoint_slot(t, ep) {
+        ok(s) => {
+            return true;
+        }
+        err(e) => {
+            return false;
+        }
+    }
 }
 
 // Yield, choosing the next process by the priority policy instead of round-robin.
@@ -225,9 +488,10 @@ export fn proc_yield_priority(t: *mut ProcTable) -> void {
 // Cooperatively yield to the next runnable process. No-op if none other is ready.
 export fn proc_yield(t: *mut ProcTable) -> void {
     let from: usize = t.current;
-    let to: usize = next_runnable(t, from);
-    if to == from {
-        return;
+    var to: usize = from;
+    switch next_runnable(t, from) {
+        ok(n) => { to = n; }
+        err(e) => { return; } // nothing else runnable
     }
     let from_state: ProcState = t.procs[from].state;
     if from_state == .Running {
@@ -238,14 +502,37 @@ export fn proc_yield(t: *mut ProcTable) -> void {
     mc_switch_context(&t.procs[from].context, &t.procs[to].context);
 }
 
+// Yield for a *blocked* process: switch to the next runnable one, or — if nothing else is
+// runnable — run the platform idle action (wfi) instead of returning to spin in the caller's
+// block loop. This is the path the IPC/wait blocking loops use, so a blocked kernel sleeps
+// until an interrupt rather than burning the CPU as a "blocked current process".
+export fn proc_yield_or_idle(t: *mut ProcTable) -> void {
+    let from: usize = t.current;
+    switch next_runnable(t, from) {
+        ok(to) => {
+            let from_state: ProcState = t.procs[from].state;
+            if from_state == .Running {
+                t.procs[from].state = .Ready;
+            }
+            t.procs[to].state = .Running;
+            t.current = to;
+            mc_switch_context(&t.procs[from].context, &t.procs[to].context);
+        }
+        err(e) => {
+            proc_idle(t); // nothing else runnable: sleep until an interrupt, do not busy-spin
+        }
+    }
+}
+
 // Cooperatively yield, switching the address space too: the next process's page
 // table (its `satp`) is loaded as part of the context switch, so each process runs in
 // its own address space. Requires paging (S-mode). No-op if none other is ready.
 export fn proc_yield_vm(t: *mut ProcTable) -> void {
     let from: usize = t.current;
-    let to: usize = next_runnable(t, from);
-    if to == from {
-        return;
+    var to: usize = from;
+    switch next_runnable(t, from) {
+        ok(n) => { to = n; }
+        err(e) => { return; } // nothing else runnable
     }
     let from_state: ProcState = t.procs[from].state;
     if from_state == .Running {
@@ -257,33 +544,84 @@ export fn proc_yield_vm(t: *mut ProcTable) -> void {
     mc_switch_context_vm(&t.procs[from].context, &t.procs[to].context, to_satp);
 }
 
-// Halt the machine (no return). Used when the scheduler has nothing left to run.
-extern fn mc_halt() -> void;
+// The reserved IPC tag the kernel delivers to a receiver that was blocked on a process which
+// then died: the message's `from` is the dead pid and `tag` is TAG_DEAD, so the receiver
+// learns the endpoint is gone (a dead-endpoint error) instead of blocking forever.
+const TAG_DEAD: u32 = 0xDEAD;
+
+export fn ipc_tag_dead() -> u32 {
+    return TAG_DEAD;
+}
+
+// The IPC tag the kernel sends to a process's scheduler service when its quantum expires; the
+// notification's `from` is the expired process, so the scheduler knows whom to reschedule.
+const TAG_QUANTUM: u32 = 0xDEAD + 1;
+
+export fn ipc_tag_quantum() -> u32 {
+    return TAG_QUANTUM;
+}
+
+// Central process-death cleanup: clear the dying process's IPC state and release everyone
+// waiting on it, so no caller is left blocked on a dead endpoint and a reused slot starts
+// clean. (MINIX clears IPC references on exit instead of leaving dangling waiters.)
+fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
+    let dead_gen: u32 = t.procs[dead].gen;
+    // Drop the dead process's own pending IPC + signals + wait state.
+    mailbox_init(Message, IPC_SLOTS, &t.procs[dead].inbox);
+    t.procs[dead].pending_sig = mask32_zero();
+    t.procs[dead].wait_slot = MAX_PROCS;
+    // Wake anyone blocked receiving-from this exact incarnation. We do NOT post a DEAD message
+    // (a full inbox could swallow it); instead the woken receiver re-checks the source's
+    // liveness in ipc_receive_from and synthesizes the DEAD result out-of-band — guaranteed.
+    var i: usize = 0;
+    while i < t.count {
+        if i != dead {
+            if t.procs[i].wait_slot == dead {
+                if t.procs[i].wait_gen == dead_gen {
+                    t.procs[i].wait_slot = MAX_PROCS;
+                    proc_unblock(t, i, BLOCK_RECV);
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
 
 // Terminate the current process with an exit code and switch to the next runnable
 // one. Never returns to the caller (its slot is now a Zombie awaiting reap).
 export fn proc_exit(t: *mut ProcTable, code: u32) -> void {
     let from: usize = t.current;
     t.procs[from].exit_code = code;
+    proc_death_cleanup(t, from); // release waiters + clear IPC before the slot becomes a zombie
     t.procs[from].state = .Zombie;
-    let to: usize = next_runnable(t, from);
-    if to == from {
-        // No other runnable process: the table holds only this (now Zombie) slot plus
-        // non-runnable ones. Do NOT set the zombie Running again (that would resurrect a
-        // dead process and switch into itself) — there is simply nothing left to run.
-        mc_halt();
-        return;
+    // Wake the parent if it is blocked in proc_wait — this exit is the event it was waiting for.
+    proc_unblock(t, t.procs[from].parent as usize, BLOCK_WAIT);
+    var target: usize = from;
+    var picking: bool = true;
+    while picking {
+        switch next_runnable(t, from) {
+            ok(n) => {
+                target = n;
+                picking = false;
+            }
+            err(e) => {
+                // No runnable process: enter the idle/reaper path instead of resurrecting the
+                // zombie or panicking. Idle (wfi) until an interrupt wakes a blocked process,
+                // then dispatch it. The exiting process never runs again.
+                proc_idle(t);
+            }
+        }
     }
-    t.procs[to].state = .Running;
-    t.current = to;
-    mc_switch_context(&t.procs[from].context, &t.procs[to].context);
+    t.procs[target].state = .Running;
+    t.current = target;
+    mc_switch_context(&t.procs[from].context, &t.procs[target].context);
 }
 
-// Reap one exited child of `parent_pid`: return its (pid, exit_code) packed as
-// (pid << 32 | code) and free the slot. A non-blocking `wait` — errors if the caller
-// has no children, or has children but none have exited yet (the caller can yield
-// and retry). Reaping is what turns a Zombie back into a free (Unused) slot.
-export fn proc_reap(t: *mut ProcTable, parent_pid: u32) -> Result<u64, ReapError> {
+// Reap one exited child of `parent_pid`: return its `ReapInfo` (pid + exit_code) and free
+// the slot. A non-blocking `wait` — errors if the caller has no children, or has children
+// but none have exited yet (the caller can yield and retry). Reaping is what turns a Zombie
+// back into a free (Unused) slot.
+export fn proc_reap(t: *mut ProcTable, parent_pid: u32) -> Result<ReapInfo, ReapError> {
     var any_child: bool = false;
     var i: usize = 0;
     while i < t.count {
@@ -295,7 +633,7 @@ export fn proc_reap(t: *mut ProcTable, parent_pid: u32) -> Result<u64, ReapError
                 if st == .Zombie {
                     let code: u32 = t.procs[i].exit_code;
                     t.procs[i].state = .Unused;
-                    return ok(((pid as u64) << 32) | (code as u64));
+                    return ok(.{ .pid = pid, .code = code });
                 }
                 if st != .Unused {
                     any_child = true; // a still-running child
@@ -312,9 +650,9 @@ export fn proc_reap(t: *mut ProcTable, parent_pid: u32) -> Result<u64, ReapError
 
 // Block until a child of `parent_pid` exits, then reap it. While no child has
 // exited, yield so the runnable children get to run (and eventually exit). Returns
-// the reaped child's (pid << 32 | code), or `NoChildren` if the caller has none.
-export fn proc_wait(t: *mut ProcTable, parent_pid: u32) -> Result<u64, ReapError> {
-    var result: u64 = 0;
+// the reaped child's `ReapInfo`, or `NoChildren` if the caller has none.
+export fn proc_wait(t: *mut ProcTable, parent_pid: u32) -> Result<ReapInfo, ReapError> {
+    var result: ReapInfo = .{ .pid = 0, .code = 0 };
     var done: bool = false;
     while !done {
         switch proc_reap(t, parent_pid) {
@@ -327,10 +665,14 @@ export fn proc_wait(t: *mut ProcTable, parent_pid: u32) -> Result<u64, ReapError
                 if reason == .NoChildren {
                     return err(reason); // nothing to wait for
                 }
-                proc_yield(t); // NoZombieYet: run the children, then retry
+                // NoZombieYet: block on child-exit. A child's proc_exit clears this BLOCK_WAIT,
+                // so we sleep (not busy-poll) until a child actually exits, then retry the reap.
+                proc_block(t, t.current, BLOCK_WAIT);
+                proc_yield_or_idle(t);
             }
         }
     }
+    proc_unblock(t, t.current, BLOCK_WAIT); // clear the wait-block on the way out
     return ok(result);
 }
 
@@ -403,10 +745,7 @@ export fn proc_kill(t: *mut ProcTable, target_pid: u32, sig: u32) -> void {
         return;
     }
     mask32_set(&t.procs[target].pending_sig, sig);
-    let st: ProcState = t.procs[target].state;
-    if st == .BlockedRecv {
-        t.procs[target].state = .Ready;
-    }
+    proc_unblock(t, target, BLOCK_RECV); // a pending signal wakes a blocked receiver
 }
 
 // The current process's pending-signal bitmask.
@@ -428,35 +767,90 @@ export fn proc_sigtake(t: *mut ProcTable) -> u32 {
 // receiver. Receive can take any message or filter by sender.
 
 fn wake_if_blocked(t: *mut ProcTable, dst: usize) -> void {
-    if t.procs[dst].state == .BlockedRecv {
-        t.procs[dst].state = .Ready; // wake the blocked receiver
-    }
+    proc_unblock(t, dst, BLOCK_RECV); // wake a receiver blocked on its inbox
 }
 
-// Send `tag`/payload to `dst_pid`. Blocks (yields) only while the mailbox is full.
-export fn ipc_send(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> void {
+// Non-blocking send: deliver if the mailbox has room, else false (the caller decides
+// whether to retry, drop, or block). This is the primitive both send policies build on,
+// so a caller never has to spin against a full mailbox unless it explicitly chooses to.
+export fn ipc_send_try(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> bool {
     let dst: usize = dst_pid as usize;
-    if dst >= t.count {
-        return; // no such process; a real kernel would return an error
+    if !proc_is_live(t, dst) {
+        return false; // no such process, or it has exited/died — never post into a dead slot
     }
     let me: u32 = t.procs[t.current].pid;
     let msg: Message = .{ .from = me, .tag = tag, .a0 = a0, .a1 = a1, .a2 = a2 };
-    var delivered: bool = false;
-    while !delivered {
-        delivered = mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, me);
-        if !delivered {
-            proc_yield(t); // mailbox full -- let the receiver drain it
+    if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, me) {
+        wake_if_blocked(t, dst);
+        return true;
+    }
+    return false; // mailbox full
+}
+
+// Endpoint-validated send: the hardened path. Rejects a stale endpoint (slot reused by a new
+// generation, or freed/dead) with DeadEndpoint before touching any mailbox. `ok(false)` means
+// the destination's mailbox was full.
+export fn ipc_send_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a2: u64) -> Result<bool, EpError> {
+    switch endpoint_slot(t, ep) {
+        ok(dst) => {
+            let me: u32 = t.procs[t.current].pid;
+            let msg: Message = .{ .from = me, .tag = tag, .a0 = a0, .a1 = a1, .a2 = a2 };
+            if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, me) {
+                wake_if_blocked(t, dst);
+                return ok(true);
+            }
+            return ok(false); // mailbox full
+        }
+        err(e) => {
+            return err(.DeadEndpoint);
         }
     }
-    wake_if_blocked(t, dst);
+}
+
+// Bounded blocking send: retry up to `max_yields` times (yielding so the receiver can
+// drain), returning false on timeout instead of spinning forever. Symmetric with
+// ipc_receive_timeout — the timeout variant the blocking policy is layered over.
+export fn ipc_send_timeout(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, max_yields: u32) -> bool {
+    var tries: u32 = 0;
+    while tries <= max_yields {
+        if ipc_send_try(t, dst_pid, tag, a0, a1, a2) {
+            return true;
+        }
+        if tries == max_yields {
+            return false; // timed out: mailbox stayed full
+        }
+        proc_yield(t);
+        tries = tries + 1;
+    }
+    return false;
+}
+
+// Send `tag`/payload to `dst_pid`. Blocks (yields) only while the mailbox is full. This is
+// the unbounded blocking *policy*; callers that must not spin forever use ipc_send_try
+// (non-blocking) or ipc_send_timeout (bounded) instead.
+export fn ipc_send(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> void {
+    let dst: usize = dst_pid as usize;
+    var sending: bool = true;
+    while sending {
+        // Re-check liveness every iteration: a destination that never existed, or that exits
+        // while we wait for mailbox room, must end the loop — otherwise ipc_send_try returns
+        // false forever and we spin yielding against a dead slot.
+        if !proc_is_live(t, dst) {
+            return; // destination gone — give up rather than spin
+        }
+        if ipc_send_try(t, dst_pid, tag, a0, a1, a2) {
+            return; // delivered
+        }
+        proc_yield_or_idle(t); // mailbox full -- let the receiver drain it, or idle if none runnable
+    }
 }
 
 // Asynchronous notification: deliver if there is room, else drop (non-blocking). Like
 // MINIX `notify` -- fire-and-forget, never blocks the sender.
 export fn ipc_notify(t: *mut ProcTable, dst_pid: u32, tag: u32) -> bool {
     let dst: usize = dst_pid as usize;
-    if dst >= t.count {
-        return false;
+    if !proc_is_live(t, dst) {
+        return false; // never notify a free/exited/dead slot
     }
     let me: u32 = t.procs[t.current].pid;
     let msg: Message = .{ .from = me, .tag = tag, .a0 = 0, .a1 = 0, .a2 = 0 };
@@ -467,10 +861,47 @@ export fn ipc_notify(t: *mut ProcTable, dst_pid: u32, tag: u32) -> bool {
     return false; // mailbox full -- notification dropped
 }
 
+// Endpoint-validated notify: rejects a stale endpoint with DeadEndpoint; ok(false) = dropped
+// because the mailbox was full.
+export fn ipc_notify_ep(t: *mut ProcTable, ep: Endpoint, tag: u32) -> Result<bool, EpError> {
+    switch endpoint_slot(t, ep) {
+        ok(dst) => {
+            let me: u32 = t.procs[t.current].pid;
+            let msg: Message = .{ .from = me, .tag = tag, .a0 = 0, .a1 = 0, .a2 = 0 };
+            if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, me) {
+                wake_if_blocked(t, dst);
+                return ok(true);
+            }
+            return ok(false);
+        }
+        err(e) => {
+            return err(.DeadEndpoint);
+        }
+    }
+}
+
 // sendrec: send a request to `dst_pid` and block for the reply, as one primitive.
 export fn ipc_call(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, out: *mut Message) -> void {
     ipc_send(t, dst_pid, tag, a0, a1, a2);
     ipc_receive(t, out);
+}
+
+// Endpoint-validated sendrec — the recommended hardened call path. Rejects a stale endpoint
+// up front (DeadEndpoint) rather than sending to whoever now occupies the slot. ipc_send_ep /
+// ipc_notify_ep / ipc_call_ep are the primary IPC API; the raw-pid forms remain for callers
+// that hold a pid directly (and self-validate via proc_is_live on every send).
+export fn ipc_call_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a2: u64, out: *mut Message) -> Result<bool, EpError> {
+    switch endpoint_slot(t, ep) {
+        ok(dst) => {
+            let dst_pid: u32 = t.procs[dst].pid;
+            ipc_send(t, dst_pid, tag, a0, a1, a2); // blocking; re-checks liveness each iteration
+            ipc_receive(t, out);
+            return ok(true);
+        }
+        err(e) => {
+            return err(.DeadEndpoint);
+        }
+    }
 }
 
 // Receive any message into `out`, blocking (yielding as BlockedRecv) until one arrives.
@@ -479,10 +910,11 @@ export fn ipc_receive(t: *mut ProcTable, out: *mut Message) -> void {
     while !got {
         got = mailbox_take(Message, IPC_SLOTS, &t.procs[t.current].inbox, out);
         if !got {
-            t.procs[t.current].state = .BlockedRecv;
-            proc_yield(t);
+            proc_block(t, t.current, BLOCK_RECV);
+            proc_yield_or_idle(t);
         }
     }
+    proc_unblock(t, t.current, BLOCK_RECV); // clear the receive-block on the way out
 }
 
 // Receive with a timeout: poll the mailbox, yielding up to `max_yields` times. Returns
@@ -505,12 +937,32 @@ export fn ipc_receive_timeout(t: *mut ProcTable, out: *mut Message, max_yields: 
 
 // Receive only a message from `src_pid`, blocking until one arrives (source filtering).
 export fn ipc_receive_from(t: *mut ProcTable, src_pid: u32, out: *mut Message) -> void {
+    let src: usize = src_pid as usize;
+    // Capture the awaited source's generation up front; if that exact incarnation dies, the
+    // endpoint stops validating and we synthesize a DEAD result rather than blocking forever.
+    var src_gen: u32 = 0;
+    if src < t.count {
+        src_gen = t.procs[src].gen;
+    }
+    let src_ep: Endpoint = .{ .slot = src, .gen = src_gen };
     var got: bool = false;
     while !got {
         got = mailbox_take_from(Message, IPC_SLOTS, &t.procs[t.current].inbox, src_pid, out);
         if !got {
-            t.procs[t.current].state = .BlockedRecv;
-            proc_yield(t);
+            // The awaited source died: stop waiting and report DEAD out-of-band (not via the
+            // mailbox, which could be full) — guaranteed delivery of the dead-endpoint result.
+            if !endpoint_live(t, src_ep) {
+                let dead_msg: Message = .{ .from = src_pid, .tag = TAG_DEAD, .a0 = 0, .a1 = 0, .a2 = 0 };
+                out.* = dead_msg;
+                got = true;
+            } else {
+                t.procs[t.current].wait_slot = src;
+                t.procs[t.current].wait_gen = src_gen;
+                proc_block(t, t.current, BLOCK_RECV);
+                proc_yield_or_idle(t);
+            }
         }
     }
+    t.procs[t.current].wait_slot = MAX_PROCS;
+    proc_unblock(t, t.current, BLOCK_RECV);
 }

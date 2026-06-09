@@ -1,8 +1,16 @@
-// MC standard library — `slotmap`: a fixed-capacity table of T with stable small-integer
-// handles (the slot index). Allocate returns the lowest free index; get/set/free are
-// bounds- and liveness-checked, so use-after-free / bad handles fail closed (BadHandle).
-// This is the index-handle table the kernel hand-rolls everywhere (fd tables, mount
-// tables, socket tables, ...). For generation-checked object storage use `std/pool`.
+// MC standard library — `slotmap`: a fixed-capacity table of T with small-integer handles
+// (the slot index). Allocate returns the lowest free index; get/set/free are bounds- and
+// liveness-checked, so an out-of-range handle, or one whose slot is *currently* free,
+// fails closed with BadHandle. This is the index-handle table the kernel hand-rolls
+// everywhere (fd tables, mount tables, socket tables, ...).
+//
+// CONTRACT — the handle is a bare index, NOT generational. After a slot is freed AND
+// reallocated, an old handle to that index becomes valid again and silently refers to the
+// NEW occupant (the classic ABA problem). SlotMap therefore detects use-after-free only
+// until the slot is reused, not across reuse. This matches POSIX fd semantics (a closed fd
+// number is later reused) and is fine for that. If you need a handle that goes permanently
+// invalid after free — detecting stale references across reuse — use `std/pool`, whose
+// generation counter makes a reused slot reject the old handle.
 
 struct SlotMap<T, N> {
     slots: [N]T,
@@ -12,7 +20,7 @@ struct SlotMap<T, N> {
 
 enum SlotError {
     Full,
-    BadHandle, // out of range, or the slot is free
+    BadHandle, // out of range, or the slot is currently free (see the ABA note above)
 }
 
 export fn slotmap_init(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>) -> void {

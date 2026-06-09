@@ -4,6 +4,7 @@
 // trips a value, then shuts both down.
 
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/ipc.mc";
 import "kernel/core/heap.mc";
 import "std/addr.mc";
@@ -91,6 +92,7 @@ fn alloc_stack(h: *mut Heap) -> usize {
 export fn registry_demo(region_base: usize, region_len: usize) -> u32 {
     var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     g_result = 0;
     proc_spawn(&g_procs, alloc_stack(&heap), registry_server); // pid 1
     proc_spawn(&g_procs, alloc_stack(&heap), echo_service);    // pid 2

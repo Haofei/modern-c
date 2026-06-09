@@ -1687,7 +1687,10 @@ const CEmitter = struct {
                 try self.writeIndent();
                 if (self.globalAssignmentTarget(node.target, locals)) |target| {
                     try self.emitGlobalStorePrefix(target);
-                    try self.emitExpr(node.value, locals);
+                    // Pass the global's type as the value target, so a struct-literal value
+                    // (`g = .{ … }`) lowers to a typed compound literal like the non-global
+                    // path; scalars/pointers are unaffected by the extra type hint.
+                    try self.emitExprWithTarget(node.value, locals, simpleNameType(target.info.type_name, node.value.span));
                     try self.emitGlobalStoreSuffix(target);
                 } else {
                     try self.emitExpr(node.target, locals);
@@ -4706,6 +4709,19 @@ const CEmitter = struct {
     }
 
     fn emitGlobalArrayElementLoadExpr(self: *CEmitter, access: GlobalArrayElementAccess, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        if (access.element_info.aggregate) {
+            // Plain aggregate read: no scalar race helper exists for a struct/closure.
+            try self.out.print(self.allocator, "({s}.elems[mc_check_index_usize(", .{access.base_name});
+            try self.emitExpr(access.index, locals);
+            try self.out.print(self.allocator, ", {s})])", .{access.len});
+            return;
+        }
+        if (access.element_info.pointer_like) {
+            try self.out.print(self.allocator, "(({s})__atomic_load_n(&{s}.elems[mc_check_index_usize(", .{ access.element_info.c_type, access.base_name });
+            try self.emitExpr(access.index, locals);
+            try self.out.print(self.allocator, ", {s})], __ATOMIC_RELAXED))", .{access.len});
+            return;
+        }
         try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&{s}.elems[mc_check_index_usize(", .{ access.element_info.c_type, access.element_info.race_type_name, access.base_name });
         try self.emitExpr(access.index, locals);
         try self.out.print(self.allocator, ", {s})]))", .{access.len});
@@ -4721,6 +4737,23 @@ const CEmitter = struct {
         const index_temp = try self.emitSequencedCallArgTemp(access.index, locals, simpleNameType("usize", access.index.span));
         const value_temp = try self.emitSequencedCallArgTemp(assignment.value, locals, access.element_info.source_ty);
         try self.writeIndent();
+        if (access.element_info.aggregate) {
+            // Plain aggregate store: a struct/closure element has no scalar race helper.
+            try self.out.print(
+                self.allocator,
+                "{s}.elems[mc_check_index_usize({s}, {s})] = ({s}){s};\n",
+                .{ access.base_name, index_temp.name, access.len, access.element_info.c_type, value_temp.name },
+            );
+            return true;
+        }
+        if (access.element_info.pointer_like) {
+            try self.out.print(
+                self.allocator,
+                "__atomic_store_n(&{s}.elems[mc_check_index_usize({s}, {s})], ({s}){s}, __ATOMIC_RELAXED);\n",
+                .{ access.base_name, index_temp.name, access.len, access.element_info.c_type, value_temp.name },
+            );
+            return true;
+        }
         try self.out.print(
             self.allocator,
             "mc_race_store_{s}(&{s}.elems[mc_check_index_usize({s}, {s})], ({s}){s});\n",
@@ -7991,6 +8024,32 @@ const CEmitter = struct {
                 .array_len = try self.arrayLenText(resolved_ty),
             };
         }
+        // A closure field is a `{ code, env }` fat struct: read/write it as a plain
+        // aggregate copy, not via a (nonexistent) per-type race helper. A function-pointer
+        // field is a single scalar pointer: the relaxed-atomic pointer path fits it.
+        if (resolved_ty.kind == .closure_type) {
+            return .{
+                .type_name = name,
+                .c_type = c_type,
+                .race_type_name = name,
+                .race_c_type = c_type,
+                .width_bits = widthBits(name),
+                .pointer_like = false,
+                .aggregate = true,
+                .source_ty = resolved_ty,
+            };
+        }
+        if (resolved_ty.kind == .fn_pointer) {
+            return .{
+                .type_name = name,
+                .c_type = c_type,
+                .race_type_name = name,
+                .race_c_type = c_type,
+                .width_bits = widthBits(name),
+                .pointer_like = true,
+                .source_ty = resolved_ty,
+            };
+        }
         if (self.enums.get(name)) |enum_decl| {
             if (enum_decl.repr) |repr| {
                 const repr_name = typeName(repr) orelse name;
@@ -8080,11 +8139,19 @@ const CEmitter = struct {
                 .race_c_type = packed_bits.repr_c_type,
             };
         }
+        // Struct/union/closure elements have no scalar race helper: access them as plain
+        // aggregates. Function-pointer elements are scalar pointers (relaxed-atomic).
+        const is_aggregate = self.structs.contains(name) or
+            self.overlay_unions.contains(name) or
+            self.tagged_unions.contains(name) or
+            resolved_ty.kind == .closure_type;
         return .{
             .source_ty = resolved_ty,
             .c_type = c_type,
             .race_type_name = name,
             .race_c_type = c_type,
+            .aggregate = is_aggregate,
+            .pointer_like = resolved_ty.kind == .fn_pointer,
         };
     }
 
@@ -9200,6 +9267,8 @@ const GlobalElementInfo = struct {
     c_type: []const u8,
     race_type_name: []const u8,
     race_c_type: []const u8,
+    aggregate: bool = false,    // struct/union/closure element -> plain `.elems[i]` access
+    pointer_like: bool = false, // pointer / fn-pointer element -> relaxed-atomic access
 };
 
 const GlobalAccess = struct {

@@ -5,6 +5,7 @@
 // This is the MINIX driver-isolation pattern, with least privilege enforced by types.
 
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/ipc.mc";
 import "kernel/core/capability.mc";
 import "kernel/core/heap.mc";
@@ -56,6 +57,7 @@ fn alloc_stack(h: *mut Heap) -> usize {
 export fn cap_demo(region_base: usize, region_len: usize) -> u32 {
     var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     g_reaped = 0;
     proc_spawn(&g_procs, alloc_stack(&heap), console_server); // pid 1
     proc_spawn(&g_procs, alloc_stack(&heap), client); // pid 2

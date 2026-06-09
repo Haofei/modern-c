@@ -4,6 +4,7 @@
 // A's, then a non-blocking notify from B.
 
 import "kernel/core/process.mc";
+import "kernel/arch/riscv64/idle.mc";
 import "kernel/core/ipc.mc";
 import "kernel/core/heap.mc";
 import "std/addr.mc";
@@ -50,6 +51,7 @@ fn alloc_stack(h: *mut Heap) -> usize {
 export fn ipc2_demo(region_base: usize, region_len: usize) -> u32 {
     var heap: Heap = heap_new(phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
+    install_idle(&g_procs); // wfi when nothing runnable
     g_pass = 0;
     proc_spawn(&g_procs, alloc_stack(&heap), server);   // pid 1
     proc_spawn(&g_procs, alloc_stack(&heap), client_a); // pid 2

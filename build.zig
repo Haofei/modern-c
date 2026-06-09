@@ -438,8 +438,8 @@ pub fn build(b: *std.Build) void {
     const vfsmount_test_step = b.step("vfsmount-test", "VFS mount switch");
     vfsmount_test_step.dependOn(&vfsmount_test_cmd.step);
 
-    const fdtable_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/fdtable-test.sh", "zig-out/bin/mcc",
+    const fdspace_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/fdspace-test.sh", "zig-out/bin/mcc",
     });
     const slotmap_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/slotmap-test.sh", "zig-out/bin/mcc",
@@ -592,9 +592,73 @@ pub fn build(b: *std.Build) void {
     posix_test_step.dependOn(&posix_test_cmd.step);
 
 
-    fdtable_test_cmd.step.dependOn(b.getInstallStep());
-    const fdtable_test_step = b.step("fdtable-test", "File-descriptor table + select");
-    fdtable_test_step.dependOn(&fdtable_test_cmd.step);
+    fdspace_test_cmd.step.dependOn(b.getInstallStep());
+    const fdspace_test_step = b.step("fdspace-test", "FdSpace (kernel/lib): fd alloc/select, sentinel-free");
+    fdspace_test_step.dependOn(&fdspace_test_cmd.step);
+    const snapshot_test_cmd = b.addSystemCommand(&.{ "sh", "tools/snapshot-test.sh", "zig-out/bin/mcc" });
+    snapshot_test_cmd.step.dependOn(b.getInstallStep());
+    const snapshot_test_step = b.step("snapshot-test", "proc_snapshot (kernel/lib): stable process enumeration");
+    snapshot_test_step.dependOn(&snapshot_test_cmd.step);
+
+    const waitqueue_test_cmd = b.addSystemCommand(&.{ "sh", "tools/waitqueue-test.sh", "zig-out/bin/mcc" });
+    waitqueue_test_cmd.step.dependOn(b.getInstallStep());
+    const waitqueue_test_step = b.step("waitqueue-test", "WaitQueue (kernel/lib): block/wake/idle policy");
+    waitqueue_test_step.dependOn(&waitqueue_test_cmd.step);
+
+    const service_test_cmd = b.addSystemCommand(&.{ "sh", "tools/service-test.sh", "zig-out/bin/mcc" });
+    service_test_cmd.step.dependOn(b.getInstallStep());
+    const service_test_step = b.step("service-test", "service (kernel/lib): request/reply server loop");
+    service_test_step.dependOn(&service_test_cmd.step);
+
+    const plugin_test_cmd = b.addSystemCommand(&.{ "sh", "tools/plugin-test.sh", "zig-out/bin/mcc" });
+    plugin_test_cmd.step.dependOn(b.getInstallStep());
+    const plugin_test_step = b.step("plugin-test", "pluggable boot flow: device/bus probe-attach + registry + discovery");
+    plugin_test_step.dependOn(&plugin_test_cmd.step);
+
+    const endpoint_test_cmd = b.addSystemCommand(&.{ "sh", "tools/endpoint-test.sh", "zig-out/bin/mcc" });
+    endpoint_test_cmd.step.dependOn(b.getInstallStep());
+    const endpoint_test_step = b.step("endpoint-test", "MINIX hardening: endpoints/generations, derived runnable, death cleanup");
+    endpoint_test_step.dependOn(&endpoint_test_cmd.step);
+
+    const supervisor_test_cmd = b.addSystemCommand(&.{ "sh", "tools/supervisor-test.sh", "zig-out/bin/mcc" });
+    supervisor_test_cmd.step.dependOn(b.getInstallStep());
+    const supervisor_test_step = b.step("supervisor-test", "service supervisor: declarative manifests + restart policy");
+    supervisor_test_step.dependOn(&supervisor_test_cmd.step);
+
+    const registry2_test_cmd = b.addSystemCommand(&.{ "sh", "tools/registry2-test.sh", "zig-out/bin/mcc" });
+    registry2_test_cmd.step.dependOn(b.getInstallStep());
+    const registry2_test_step = b.step("registry2-test", "Registry v2: multiple-per-class, generations, unregister-on-death");
+    registry2_test_step.dependOn(&registry2_test_cmd.step);
+
+    const manifest_test_cmd = b.addSystemCommand(&.{ "sh", "tools/manifest-test.sh", "zig-out/bin/mcc" });
+    manifest_test_cmd.step.dependOn(b.getInstallStep());
+    const manifest_test_step = b.step("manifest-test", "enforced service manifests: privileges applied + enforced");
+    manifest_test_step.dependOn(&manifest_test_cmd.step);
+
+    const scheduler_test_cmd = b.addSystemCommand(&.{ "sh", "tools/scheduler-test.sh", "zig-out/bin/mcc" });
+    scheduler_test_cmd.step.dependOn(b.getInstallStep());
+    const scheduler_test_step = b.step("scheduler-test", "scheduler service: quantum expiry notify + refresh");
+    scheduler_test_step.dependOn(&scheduler_test_cmd.step);
+
+    const info_test_cmd = b.addSystemCommand(&.{ "sh", "tools/info-test.sh", "zig-out/bin/mcc" });
+    info_test_cmd.step.dependOn(b.getInstallStep());
+    const info_test_step = b.step("info-test", "info/snapshot service: top queries over IPC");
+    info_test_step.dependOn(&info_test_cmd.step);
+
+    const granttab_test_cmd = b.addSystemCommand(&.{ "sh", "tools/granttab-test.sh", "zig-out/bin/mcc" });
+    granttab_test_cmd.step.dependOn(b.getInstallStep());
+    const granttab_test_step = b.step("granttab-test", "owner-tracked grants: bounded IPC sharing + revoke-on-death");
+    granttab_test_step.dependOn(&granttab_test_cmd.step);
+
+    const x86_sched_test_cmd = b.addSystemCommand(&.{ "sh", "tools/x86-sched-test.sh", "zig-out/bin/mcc" });
+    x86_sched_test_cmd.step.dependOn(b.getInstallStep());
+    const x86_sched_test_step = b.step("x86-sched-test", "x86-64 arch port: cooperative context switch (native)");
+    x86_sched_test_step.dependOn(&x86_sched_test_cmd.step);
+
+    const x86_qemu_test_cmd = b.addSystemCommand(&.{ "sh", "tools/x86-qemu-test.sh", "zig-out/bin/mcc" });
+    x86_qemu_test_cmd.step.dependOn(b.getInstallStep());
+    const x86_qemu_test_step = b.step("x86-qemu-test", "x86-64 kernel boots under QEMU (multiboot -> long mode)");
+    x86_qemu_test_step.dependOn(&x86_qemu_test_cmd.step);
 
 
     shell_test_cmd.step.dependOn(b.getInstallStep());
@@ -1215,7 +1279,20 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&shell2_test_cmd.step);
     m0_step.dependOn(&ushell_test_cmd.step);
     m0_step.dependOn(&vfsmount_test_cmd.step);
-    m0_step.dependOn(&fdtable_test_cmd.step);
+    m0_step.dependOn(&fdspace_test_cmd.step);
+    m0_step.dependOn(&snapshot_test_cmd.step);
+    m0_step.dependOn(&waitqueue_test_cmd.step);
+    m0_step.dependOn(&service_test_cmd.step);
+    m0_step.dependOn(&plugin_test_cmd.step);
+    m0_step.dependOn(&endpoint_test_cmd.step);
+    m0_step.dependOn(&supervisor_test_cmd.step);
+    m0_step.dependOn(&registry2_test_cmd.step);
+    m0_step.dependOn(&manifest_test_cmd.step);
+    m0_step.dependOn(&scheduler_test_cmd.step);
+    m0_step.dependOn(&info_test_cmd.step);
+    m0_step.dependOn(&granttab_test_cmd.step);
+    m0_step.dependOn(&x86_sched_test_cmd.step);
+    m0_step.dependOn(&x86_qemu_test_cmd.step);
     m0_step.dependOn(&slotmap_test_cmd.step);
     m0_step.dependOn(&mask_test_cmd.step);
     m0_step.dependOn(&mailbox_test_cmd.step);
