@@ -26,7 +26,7 @@ const usage =
     \\  mcc verify <file.mc>
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
-    \\  mcc emit-c <file.mc>
+    \\  mcc emit-c <file.mc> [--profile=kernel|hosted]
     \\
 ;
 
@@ -48,7 +48,27 @@ pub fn main(init: std.process.Init) !void {
     _ = args.next();
     const command = args.next() orelse return failUsage();
     const path = args.next() orelse return failUsage();
-    if (args.next() != null) return failUsage();
+    // Optional flags follow the path. Only `emit-c` accepts one today:
+    // `--profile=kernel` (default) or `--profile=hosted`.
+    var profile: lower_c.Profile = .kernel;
+    var saw_flag = false;
+    while (args.next()) |flag| {
+        saw_flag = true;
+        if (std.mem.startsWith(u8, flag, "--profile=")) {
+            const value = flag["--profile=".len..];
+            if (std.mem.eql(u8, value, "kernel")) {
+                profile = .kernel;
+            } else if (std.mem.eql(u8, value, "hosted")) {
+                profile = .hosted;
+            } else {
+                return failUsage();
+            }
+        } else {
+            return failUsage();
+        }
+    }
+    // Only `emit-c` consumes flags; any flag with another command is an error.
+    if (saw_flag and !std.mem.eql(u8, command, "emit-c")) return failUsage();
 
     const root_source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(root_source);
@@ -80,7 +100,7 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        try runEmitC(allocator, path, source);
+        try runEmitC(allocator, path, source, profile);
     } else {
         return failUsage();
     }
@@ -344,7 +364,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     writeStdout(output.items);
 }
 
-fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -375,7 +395,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_c.appendC(allocator, module, &output);
+    try lower_c.appendCProfile(allocator, module, &output, profile);
     writeStdout(output.items);
 }
 
