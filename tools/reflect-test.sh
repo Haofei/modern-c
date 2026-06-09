@@ -6,7 +6,7 @@
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/toolchain/reflect.mc"
 CLANG="${CLANG:-clang}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: reflect-test (clang not found)"; exit 0; }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"; HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MCC="${1:-zig-out/bin/mcc}"; HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: x86-sched-test (no clang)"; exit 0; }
 case "$(uname -m)" in x86_64|amd64) ;; *) echo "SKIP: x86-sched-test (host not x86-64)"; exit 0;; esac
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT

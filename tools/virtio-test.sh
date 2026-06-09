@@ -12,7 +12,7 @@
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/demo/virtio-net/virtio_net.mc"
 RUNTIME="$HERE/demo/virtio-net/runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"

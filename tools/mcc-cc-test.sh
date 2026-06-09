@@ -4,7 +4,7 @@
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/toolchain/lib.mc"
 SYM="mc_add3"
 

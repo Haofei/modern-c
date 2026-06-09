@@ -2,7 +2,7 @@
 # Second-architecture gate: an MC computation compiled for aarch64 + a minimal ARM64
 # boot runtime, booted on qemu-system-aarch64 'virt'. Proves portability beyond riscv64.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"; HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MCC="${1:-zig-out/bin/mcc}"; HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; QEMU="${QEMU:-qemu-system-aarch64}"
 skip(){ echo "SKIP: aarch64-test ($1)"; exit 0; }
 command -v "$CLANG" >/dev/null 2>&1 || skip "no clang"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"; HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MCC="${1:-zig-out/bin/mcc}"; HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: scheduler-test (no clang)"; exit 0; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 MCC="$MCC" "$HERE/tools/mcc-cc.sh" "$HERE/tests/qemu/proc/scheduler_demo.mc" -o "$WORK/s.o" -Wno-switch-bool -Wno-unused-parameter >/dev/null

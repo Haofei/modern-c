@@ -21,7 +21,7 @@
 set -euo pipefail
 
 MCC="${MCC:-zig-out/bin/mcc}"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 
 cmd="${1:-}"
 arg="${2:-mcpkg.txt}"

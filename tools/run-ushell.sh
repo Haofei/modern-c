@@ -2,7 +2,7 @@
 # Build + boot the user-mode MC shell in QEMU. Commands run in U-mode; the kernel mediates
 # console I/O via syscalls. Type echo/true/false/exit. Quit QEMU with Ctrl-A then X.
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 MCC="${MCC:-zig-out/bin/mcc}"; CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; QEMU="${QEMU:-qemu-system-riscv64}"
 [ -x "$MCC" ] || zig build >/dev/null
 CF=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wno-switch-bool -Wno-parentheses-equality)

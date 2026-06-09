@@ -2,7 +2,7 @@
 # Build a bootable x86-64 multiboot kernel (32->64-bit long mode) and boot it under
 # qemu-system-x86_64; the kmain runs the cooperative scheduler and reports over COM1.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"; HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MCC="${1:-zig-out/bin/mcc}"; HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; OBJCOPY="${OBJCOPY:-llvm-objcopy}"; QEMU="${QEMU:-qemu-system-x86_64}"
 ARCH="$HERE/kernel/arch/x86_64"
 skip() { echo "SKIP: x86-qemu-test ($1)"; exit 0; }

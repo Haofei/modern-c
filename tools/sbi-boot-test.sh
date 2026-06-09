@@ -2,7 +2,7 @@
 # Real boot path: boot our kernel under OpenSBI (QEMU default firmware, the bootloader
 # used on real RISC-V hardware) in S-mode, talking to console/power via SBI ecalls.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"; HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MCC="${1:-zig-out/bin/mcc}"; HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; QEMU="${QEMU:-qemu-system-riscv64}"
 skip(){ echo "SKIP: sbi-boot-test ($1)"; exit 0; }
 command -v "$CLANG" >/dev/null 2>&1 || skip "no clang"

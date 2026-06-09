@@ -11,7 +11,7 @@
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 SRC="$HERE/tests/qemu/proc/sched_vm_demo.mc"
 RUNTIME="$HERE/kernel/arch/riscv64/sched_vm_runtime.c"
 SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
