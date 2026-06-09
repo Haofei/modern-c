@@ -62,8 +62,11 @@ fn arena_free_noop(a: *mut Arena, addr: PAddr, size: usize) -> void {
     if pa_lt(a.end, addr) {
         unreachable; // address past the arena
     }
-    if size > pa_diff(a.base, a.end) {
-        unreachable; // nonsensical size
+    // The freed range must lie fully within the arena: addr + size <= end. Checked as
+    // `size > end - addr` (overflow-safe, addr <= end established above) so a bogus subrange
+    // that starts inside the arena but runs past its end is rejected, not just an oversized one.
+    if size > pa_diff(addr, a.end) {
+        unreachable; // range extends past the arena end
     }
 }
 

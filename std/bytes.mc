@@ -120,11 +120,13 @@ export fn bw_u8(w: *ByteWriter, off: usize, value: u8) -> void {
 }
 
 export fn bw_be16(w: *ByteWriter, off: usize, value: u16) -> void {
+    bw_check(w, off, 2); // check the full width up front: never partially store before trapping
     bw_u8(w, off, (value >> 8) as u8);
     bw_u8(w, off + 1, (value & 0x00FF) as u8);
 }
 
 export fn bw_be32(w: *ByteWriter, off: usize, value: u32) -> void {
+    bw_check(w, off, 4); // check the full width up front: never partially store before trapping
     bw_u8(w, off, (value >> 24) as u8);
     bw_u8(w, off + 1, ((value >> 16) & 0x0000_00FF) as u8);
     bw_u8(w, off + 2, ((value >> 8) & 0x0000_00FF) as u8);

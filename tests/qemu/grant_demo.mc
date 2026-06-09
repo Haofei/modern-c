@@ -20,14 +20,22 @@ export fn grant_demo_run() -> u32 {
     var pass: u32 = 1;
 
     let dst: PAddr = pa((&g_dst[0]) as usize);
-    switch grant_copy_out(&r, 0, dst, 8) { // in-bounds
+    switch grant_copy_out(&g, r, 0, dst, 8) { // in-bounds, validated against the live grant
         ok(b) => {}
         err(e) => { pass = 0; }
     }
     if g_dst[0] != 1 { pass = 0; }
     if g_dst[7] != 8 { pass = 0; }
 
-    switch grant_copy_out(&r, 4, dst, 8) { // 4+8 > 8 -> rejected, not a wild read
+    switch grant_copy_out(&g, r, 4, dst, 8) { // 4+8 > 8 -> rejected, not a wild read
+        ok(b) => { pass = 0; }
+        err(e) => {}
+    }
+
+    // A forged/widened ref (claims a 64-byte region) cannot escape the 8-byte grant: bounds
+    // come from the live grant, so the access fails closed instead of reading past it.
+    var forged: GrantRef = .{ .base = pa((&g_src[0]) as usize), .len = 64, .gen = r.gen };
+    switch grant_copy_out(&g, forged, 0, dst, 16) {
         ok(b) => { pass = 0; }
         err(e) => {}
     }

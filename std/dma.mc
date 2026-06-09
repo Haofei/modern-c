@@ -75,6 +75,18 @@ export fn cpu_len(b: *CpuBuffer) -> usize {
 // offsets trap. Multi-byte accessors are big-endian (network order); little-
 // endian variants follow the same shape.
 
+// Bounds-check a `[offset, offset+n)` access against the buffer, overflow-safe. Multi-byte
+// writers call this up front so an out-of-bounds access traps *before* any partial store.
+fn cpu_check(b: *CpuBuffer, offset: usize, n: usize) -> void {
+    if offset > b.len {
+        unreachable; // out of bounds
+    }
+    let room: usize = b.len - offset;
+    if n > room {
+        unreachable; // out of bounds
+    }
+}
+
 export fn write_u8(b: *CpuBuffer, offset: usize, value: u8) -> void {
     if offset >= b.len {
         unreachable; // out of bounds
@@ -94,6 +106,7 @@ export fn read_u8(b: *CpuBuffer, offset: usize) -> u8 {
 }
 
 export fn write_be16(b: *CpuBuffer, offset: usize, value: u16) -> void {
+    cpu_check(b, offset, 2); // full-width check up front: no partial store before a trap
     write_u8(b, offset, (value >> 8) as u8);
     write_u8(b, offset + 1, (value & 0x00FF) as u8);
 }
@@ -105,6 +118,7 @@ export fn read_be16(b: *CpuBuffer, offset: usize) -> u16 {
 }
 
 export fn write_be32(b: *CpuBuffer, offset: usize, value: u32) -> void {
+    cpu_check(b, offset, 4); // full-width check up front: no partial store before a trap
     write_u8(b, offset, (value >> 24) as u8);
     write_u8(b, offset + 1, ((value >> 16) & 0x0000_00FF) as u8);
     write_u8(b, offset + 2, ((value >> 8) & 0x0000_00FF) as u8);
@@ -122,11 +136,13 @@ export fn read_be32(b: *CpuBuffer, offset: usize) -> u32 {
 // Little-endian accessors (virtio structures are little-endian).
 
 export fn write_le16(b: *CpuBuffer, offset: usize, value: u16) -> void {
+    cpu_check(b, offset, 2); // full-width check up front: no partial store before a trap
     write_u8(b, offset, (value & 0x00FF) as u8);
     write_u8(b, offset + 1, (value >> 8) as u8);
 }
 
 export fn write_le32(b: *CpuBuffer, offset: usize, value: u32) -> void {
+    cpu_check(b, offset, 4); // full-width check up front: no partial store before a trap
     write_u8(b, offset, (value & 0x0000_00FF) as u8);
     write_u8(b, offset + 1, ((value >> 8) & 0x0000_00FF) as u8);
     write_u8(b, offset + 2, ((value >> 16) & 0x0000_00FF) as u8);
@@ -134,6 +150,7 @@ export fn write_le32(b: *CpuBuffer, offset: usize, value: u32) -> void {
 }
 
 export fn write_le64(b: *CpuBuffer, offset: usize, value: u64) -> void {
+    cpu_check(b, offset, 8); // full-width check up front: no partial store before a trap
     write_le32(b, offset, (value & 0x0000_0000_FFFF_FFFF) as u32);
     write_le32(b, offset + 4, (value >> 32) as u32);
 }

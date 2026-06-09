@@ -9,9 +9,10 @@ import "std/addr.mc";
 const GRANTTAB_MAX: usize = 8;
 
 enum GrantTabError {
-    Full,    // no free grant slot
-    BadId,   // no grant with that id
-    Revoked, // the grant was revoked (e.g. the owner died) since this ref was issued
+    Full,        // no free grant slot
+    BadId,       // no grant with that id
+    Revoked,     // the grant was revoked (e.g. the owner died) since this ref was issued
+    OutOfBounds, // the requested copy falls outside the granted region (or a forged ref)
 }
 
 struct GrantSlot {
@@ -82,6 +83,57 @@ export fn grant_table_open(tab: *mut GrantTable, id: usize, r: GrantRef) -> Resu
         }
         err(e) => {
             return err(.Revoked); // gen mismatch -> revoked since the ref was issued
+        }
+    }
+}
+
+// Copy `n` bytes out of grant `id`'s region (at offset `off`) to `dst`, validating the
+// (untrusted) ref against the live grant in the table. Bounds come from the stored grant, so a
+// forged/widened ref or a revoked grant fails closed rather than reaching the client's memory.
+export fn grant_table_copy_out(tab: *mut GrantTable, id: usize, r: GrantRef, off: usize, dst: PAddr, n: usize) -> Result<bool, GrantTabError> {
+    if id >= GRANTTAB_MAX {
+        return err(.BadId);
+    }
+    if !tab.slots[id].present {
+        return err(.BadId);
+    }
+    let p: *GrantSlot = &tab.slots[id];
+    // Distinguish the two failure modes up front so the caller learns why it was rejected:
+    // a generation mismatch means the grant was revoked (e.g. its owner died) since the ref
+    // was issued; anything grant_copy_out rejects after that is a forged/widened ref or an
+    // out-of-range length.
+    if r.gen != p.grant.gen {
+        return err(.Revoked);
+    }
+    switch grant_copy_out(&p.grant, r, off, dst, n) {
+        ok(b) => {
+            return ok(true);
+        }
+        err(e) => {
+            return err(.OutOfBounds); // forged/widened ref or out-of-range copy
+        }
+    }
+}
+
+// Copy `n` bytes from `src` into grant `id`'s region (at offset `off`), validated against the
+// live grant exactly as `grant_table_copy_out`.
+export fn grant_table_copy_in(tab: *mut GrantTable, id: usize, r: GrantRef, off: usize, src: PAddr, n: usize) -> Result<bool, GrantTabError> {
+    if id >= GRANTTAB_MAX {
+        return err(.BadId);
+    }
+    if !tab.slots[id].present {
+        return err(.BadId);
+    }
+    let p: *GrantSlot = &tab.slots[id];
+    if r.gen != p.grant.gen {
+        return err(.Revoked); // grant revoked (e.g. owner died) since the ref was issued
+    }
+    switch grant_copy_in(&p.grant, r, off, src, n) {
+        ok(b) => {
+            return ok(true);
+        }
+        err(e) => {
+            return err(.OutOfBounds); // forged/widened ref or out-of-range copy
         }
     }
 }

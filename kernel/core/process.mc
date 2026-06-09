@@ -712,15 +712,27 @@ export fn proc_set_kcall_mask(t: *mut ProcTable, pid: u32, mask: u32) -> void {
     }
 }
 
-// Privilege-checked send: deliver only if the caller is allowed to reach `dst_pid`.
-// Returns whether it was permitted (and sent).
+// Privilege-checked send: deliver only if the caller is allowed to reach `dst_pid`. Returns
+// whether the message was permitted *and* delivered. Blocks (yields) while the mailbox is full,
+// like `ipc_send`, but reports false — rather than a phantom success — when the destination
+// never existed or exits before the message lands, so a dead peer is not mistaken for delivery.
 export fn ipc_try_send(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> bool {
     let cur: usize = t.current;
     if !mask32_contains(&t.procs[cur].allow_mask, dst_pid) {
         return false; // not permitted to send to this peer
     }
-    ipc_send(t, dst_pid, tag, a0, a1, a2);
-    return true;
+    let dst: usize = dst_pid as usize;
+    var sending: bool = true;
+    while sending {
+        if !proc_is_live(t, dst) {
+            return false; // destination gone (never existed, or exited while we waited) — not sent
+        }
+        if ipc_send_try(t, dst_pid, tag, a0, a1, a2) {
+            return true; // delivered
+        }
+        proc_yield_or_idle(t); // mailbox full -- let the receiver drain it, or idle if none runnable
+    }
+    return false;
 }
 
 // Kernel-call gateway: a server requests a privileged op through one checked entry
@@ -891,17 +903,27 @@ export fn ipc_call(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, 
 // ipc_notify_ep / ipc_call_ep are the primary IPC API; the raw-pid forms remain for callers
 // that hold a pid directly (and self-validate via proc_is_live on every send).
 export fn ipc_call_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a2: u64, out: *mut Message) -> Result<bool, EpError> {
-    switch endpoint_slot(t, ep) {
-        ok(dst) => {
-            let dst_pid: u32 = t.procs[dst].pid;
-            ipc_send(t, dst_pid, tag, a0, a1, a2); // blocking; re-checks liveness each iteration
-            ipc_receive(t, out);
-            return ok(true);
-        }
-        err(e) => {
-            return err(.DeadEndpoint);
+    // Re-validate the endpoint on *every* delivery attempt via ipc_send_ep, not just once up
+    // front. The blocking raw-pid path captured a pid and could deliver to a new incarnation if
+    // the slot died and was reused while we waited for mailbox room; here, if the endpoint dies
+    // before the message lands, the next ipc_send_ep fails DeadEndpoint instead of misdelivering.
+    var sending: bool = true;
+    while sending {
+        switch ipc_send_ep(t, ep, tag, a0, a1, a2) {
+            ok(delivered) => {
+                if delivered {
+                    sending = false; // landed in the (still-valid) endpoint's mailbox
+                } else {
+                    proc_yield_or_idle(t); // mailbox full -- retry, re-validating the endpoint
+                }
+            }
+            err(e) => {
+                return err(.DeadEndpoint); // endpoint died/reused before delivery
+            }
         }
     }
+    ipc_receive(t, out);
+    return ok(true);
 }
 
 // Receive any message into `out`, blocking (yielding as BlockedRecv) until one arrives.

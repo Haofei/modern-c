@@ -34,17 +34,25 @@ export fn granttab_run() -> u32 {
         err(oe) => { pass = 0; }
     }
 
-    // bounded copy out: read 3 bytes from inside the granted region
-    switch grant_copy_out(&gref, 0, pa((&g_dst[0]) as usize), 3) {
+    // bounded copy out: read 3 bytes from inside the granted region (validated against the
+    // live grant in the table, not the untrusted ref the server carries)
+    switch grant_table_copy_out(&g_tab, id, gref, 0, pa((&g_dst[0]) as usize), 3) {
         ok(cb) => {}
         err(ce) => { pass = 0; }
     }
     if g_dst[0] != 0xAA { pass = 0; }
     if g_dst[2] != 0xCC { pass = 0; }
     // out of bounds: copying past the granted length fails closed (no wild access)
-    switch grant_copy_out(&gref, 0, pa((&g_dst[0]) as usize), 99) {
+    switch grant_table_copy_out(&g_tab, id, gref, 0, pa((&g_dst[0]) as usize), 99) {
         ok(cb2) => { pass = 0; }
         err(ce2) => {}
+    }
+    // a forged ref that widens its claimed length cannot escape the grant: bounds come from
+    // the live grant in the table, so the over-long copy fails closed
+    var forged: GrantRef = .{ .base = pa((&g_src[0]) as usize), .len = 4096, .gen = gref.gen };
+    switch grant_table_copy_out(&g_tab, id, forged, 0, pa((&g_dst[0]) as usize), 64) {
+        ok(cb3) => { pass = 0; }
+        err(ce3) => {}
     }
 
     // REVOKE ON DEATH: client pid 5 exits -> the kernel revokes all of its grants
