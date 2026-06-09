@@ -102,7 +102,16 @@ Available commands:
 - `verify <file.mc>`
 - `lower-ir <file.mc>`
 - `lower-c <file.mc>`
-- `emit-c <file.mc>`
+- `emit-c <file.mc> [--profile=kernel|hosted]`
+
+`emit-c` defaults to the **kernel / freestanding** profile (no ambient I/O).
+`--profile=hosted` selects an opt-in **hosted** profile that links a host C
+runtime (libc + `-lm`); it stamps a `/* mc-profile: hosted */` marker and is the
+target for programs that use `std/hosted_io` (explicit, fallible byte I/O —
+`io_open`/`io_read`/`io_write`/`io_close`/`io_printf_f64`, each returning a
+`Result`) and `std/mathf` (the libm float intrinsics `sqrt`/`sin`/`cos`/`exp2`/
+`log2` for `f32`/`f64`). See `demo/hosted/` for the stdin→stdout float
+round-trip; run it with `zig build hosted-test`.
 
 ## Conformance Snapshot
 

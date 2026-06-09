@@ -401,6 +401,17 @@ pub fn build(b: *std.Build) void {
     const libc_test_step = b.step("libc-test", "Minimal libc core");
     libc_test_step.dependOn(&libc_test_cmd.step);
 
+    // hosted-test runs the hosted-profile float round-trip end to end: MC ->
+    // C (--profile=hosted) -> clang -lm -> execute, feeding a binary f32 buffer
+    // on stdin and verifying the f32 results on stdout. Self-skips without
+    // clang/python3.
+    const hosted_test_cmd = b.addSystemCommand(&.{
+        "sh", "demo/hosted/run.sh", "zig-out/bin/mcc",
+    });
+    hosted_test_cmd.step.dependOn(b.getInstallStep());
+    const hosted_test_step = b.step("hosted-test", "Hosted-profile elementwise float kernel: stdin/stdout f32 round-trip via libc/libm");
+    hosted_test_step.dependOn(&hosted_test_cmd.step);
+
     const shell_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "shell-test",
     });
@@ -1246,6 +1257,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&tty_test_cmd.step);
     m0_step.dependOn(&args_test_cmd.step);
     m0_step.dependOn(&libc_test_cmd.step);
+    // hosted-test runs the hosted-profile float I/O round-trip (needs clang+python3).
+    m0_step.dependOn(&hosted_test_cmd.step);
     m0_step.dependOn(&shell_test_cmd.step);
     m0_step.dependOn(&shell2_test_cmd.step);
     m0_step.dependOn(&ushell_test_cmd.step);

@@ -12,7 +12,23 @@ pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *
     try inspector.inspectModule(module);
 }
 
+// The target conformance profile (spec §0). `kernel` is freestanding-by-default
+// and has no ambient I/O. `hosted` opts in to a host C runtime (libc/libm); it
+// changes only the toolchain link step (link libc + `-lm`) — the generated C is
+// the same shape, so emitting hosted code with no hosted features is harmless.
+// The profile is stamped into the C as a marker so the toolchain driver and a
+// reader can see which target was selected.
+pub const Profile = enum { kernel, hosted };
+
 pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
+    return appendCProfile(allocator, module, out, .kernel);
+}
+
+pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
+    switch (profile) {
+        .kernel => try out.appendSlice(allocator, "/* mc-profile: kernel (freestanding) */\n"),
+        .hosted => try out.appendSlice(allocator, "/* mc-profile: hosted (links libc + -lm) */\n"),
+    }
     try out.appendSlice(allocator,
         \\#include <stdint.h>
         \\#include <stdbool.h>
@@ -236,6 +252,8 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\MC_DEFINE_RAW_STORE(i32, int32_t)
         \\MC_DEFINE_RAW_STORE(i64, int64_t)
         \\MC_DEFINE_RAW_STORE(isize, intptr_t)
+        \\MC_DEFINE_RAW_STORE(f32, float)
+        \\MC_DEFINE_RAW_STORE(f64, double)
         \\
         \\MC_DEFINE_RAW_LOAD(bool, bool)
         \\MC_DEFINE_RAW_LOAD(u8, uint8_t)
@@ -248,6 +266,8 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
         \\MC_DEFINE_RAW_LOAD(i32, int32_t)
         \\MC_DEFINE_RAW_LOAD(i64, int64_t)
         \\MC_DEFINE_RAW_LOAD(isize, intptr_t)
+        \\MC_DEFINE_RAW_LOAD(f32, float)
+        \\MC_DEFINE_RAW_LOAD(f64, double)
         \\
         \\MC_UNUSED static inline void mc_cpu_pause(void) {
         \\#if defined(__i386__) || defined(__x86_64__)
@@ -3071,7 +3091,7 @@ const CEmitter = struct {
         if (!isRawStoreCall(call.callee.*)) return false;
         if (call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedCEmission;
         const type_name = typeName(call.type_args[0]) orelse return error.UnsupportedCEmission;
-        const suffix = checkedTypeSuffix(type_name) orelse return error.UnsupportedCEmission;
+        const suffix = rawScalarSuffix(type_name) orelse return error.UnsupportedCEmission;
 
         const addr_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, simpleNameType("PAddr", call.args[0].span));
         const value_temp = try self.emitSequencedCallArgTemp(call.args[1], locals, call.type_args[0]);
@@ -3486,7 +3506,7 @@ const CEmitter = struct {
                 if (isRawLoadCall(node.callee.*)) {
                     if (node.type_args.len != 1 or node.args.len != 1) return error.UnsupportedCEmission;
                     const type_name = typeName(node.type_args[0]) orelse return error.UnsupportedCEmission;
-                    const suffix = checkedTypeSuffix(type_name) orelse return error.UnsupportedCEmission;
+                    const suffix = rawScalarSuffix(type_name) orelse return error.UnsupportedCEmission;
                     try self.out.print(self.allocator, "mc_raw_load_{s}(", .{suffix});
                     try self.emitExpr(node.args[0], locals);
                     try self.out.appendSlice(self.allocator, ")");
@@ -9541,6 +9561,17 @@ fn checkedTypeSuffix(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "i32")) return "i32";
     if (std.mem.eql(u8, name, "i64")) return "i64";
     if (std.mem.eql(u8, name, "isize")) return "isize";
+    return null;
+}
+
+// Scalar element types valid for `raw.load`/`raw.store`. A superset of the
+// checked-arithmetic scalars: it also admits the IEEE floats `f32`/`f64`, which
+// are legal raw memory cells (the round-trip float-buffer kernel reads/writes
+// them) even though they have no checked-arithmetic helpers.
+fn rawScalarSuffix(name: []const u8) ?[]const u8 {
+    if (checkedTypeSuffix(name)) |s| return s;
+    if (std.mem.eql(u8, name, "f32")) return "f32";
+    if (std.mem.eql(u8, name, "f64")) return "f64";
     return null;
 }
 
