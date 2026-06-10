@@ -918,7 +918,10 @@ pub const Checker = struct {
                     if (local.names.len != 1) continue;
                     const init_expr = local.init orelse continue;
                     switch (eval.foldComptimeExpr(scope, init_expr)) {
-                        .value => |value| scope.bind(local.names[0].text, value) catch {},
+                        .value => |value| {
+                            scope.bind(local.names[0].text, value) catch {};
+                            if (local.ty) |lty| if (eval.comptimeTypeBitWidth(lty)) |bits| scope.bindWidth(local.names[0].text, bits);
+                        },
                         .trap => self.errorCode(span, "E_COMPTIME_TRAP", "trap during const eval is a compile error"),
                         .unknown => {},
                     }
@@ -1560,8 +1563,21 @@ pub const Checker = struct {
                 if ((isArithmeticBinary(node.op) or isBitwiseBinary(node.op) or isComparisonBinary(node.op) or isLogicalBinary(node.op)) and (isAddressClass(left) or isAddressClass(right))) {
                     self.errorCode(expr.span, "E_ADDRESS_CLASS_OPERATION", "opaque address classes do not support this operator");
                 }
-                if (isArithmeticBinary(node.op) or isComparisonBinary(node.op)) {
+                if (isArithmeticBinary(node.op) or isComparisonBinary(node.op) or
+                    node.op == .bit_and or node.op == .bit_or or node.op == .bit_xor)
+                {
+                    // `& | ^` must width-match their operands like `+ - * /` do; otherwise a
+                    // narrow target plus a narrow left operand lets `mergeArithmetic` pick the
+                    // narrow type and silently drop the wide operand's high bits. Shifts are
+                    // excluded: a shift count is not width-matched to the shifted value.
                     self.checkCheckedIntegerBinaryOperands(expr.span, left, right);
+                }
+                // `& | ^` (but not the shifts) also adapt a literal operand to the other
+                // operand's width, so range-check there too. Shift counts are not width-matched.
+                if (isArithmeticBinary(node.op) or isComparisonBinary(node.op) or
+                    node.op == .bit_and or node.op == .bit_or or node.op == .bit_xor)
+                {
+                    self.checkBinaryLiteralOperandRange(node.left.*, left, node.right.*, right);
                 }
                 if (isComparisonBinary(node.op)) {
                     self.checkPointerComparison(expr.span, node.op, node.left.*, left, node.right.*, right, ctx);
@@ -2939,6 +2955,31 @@ pub const Checker = struct {
             },
             .grouped => |inner| return self.checkTargetlessLiteralInitializer(inner.*),
             else => return false,
+        }
+    }
+
+    // An integer literal used as a binary operand adapts to the other operand's type and is
+    // emitted as a temporary of that width *before* the checked operation runs, so an
+    // out-of-range literal is silently truncated by the C compiler, defeating the overflow
+    // check (e.g. `x * 300` with `x: u8` stores `uint8_t = 300` -> 44, then checks `5 * 44`).
+    // Range-check each literal operand against the other operand's checked-integer bounds, the
+    // same way an initializer is checked by checkIntegerLiteralInitializer.
+    fn checkBinaryLiteralOperandRange(self: *Checker, left_expr: ast.Expr, left: TypeClass, right_expr: ast.Expr, right: TypeClass) void {
+        self.checkLiteralOperandAgainstClass(left_expr, right);
+        self.checkLiteralOperandAgainstClass(right_expr, left);
+    }
+
+    fn checkLiteralOperandAgainstClass(self: *Checker, expr: ast.Expr, target: TypeClass) void {
+        const value = integerLiteralValue(expr) orelse return;
+        const bounds = checkedIntBounds(target) orelse return;
+        if (value.negative) {
+            if (!bounds.signed or value.magnitude > bounds.min_abs) {
+                self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
+            }
+            return;
+        }
+        if (value.magnitude > bounds.max) {
+            self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
         }
     }
 
@@ -4482,6 +4523,9 @@ fn isStaticGlobalInitializer(expr: ast.Expr, ctx: Context) bool {
         .int_literal, .bool_literal, .null_literal, .void_literal, .enum_literal => true,
         .ident => |ident| if (ctx.globals) |globals| globals.contains(ident.text) else false,
         .unary => |node| node.op == .neg and integerLiteralValue(node.expr.*) != null,
+        // An explicit conversion of a static operand (`0 as u32`) is itself static;
+        // the comptime folder applies the cast, and the C backend emits it inline.
+        .cast => |node| isStaticGlobalInitializer(node.value.*, ctx),
         .grouped => |inner| isStaticGlobalInitializer(inner.*, ctx),
         .address_of => |inner| isStaticGlobalAddressTarget(inner.*, ctx),
         .array_literal => |items| allStaticGlobalInitializerItems(items, ctx),
@@ -4712,13 +4756,13 @@ fn parseIntegerLiteral(raw: []const u8) ?u128 {
     var cleaned: [128]u8 = undefined;
     if (raw.len > cleaned.len) return null;
     var len: usize = 0;
-    var index: usize = 0;
-    while (index < raw.len) : (index += 1) {
-        const ch = raw[index];
-        if (ch == '_') {
-            if (index + 1 < raw.len and std.ascii.isAlphabetic(raw[index + 1])) break;
-            continue;
-        }
+    // Strip every `_` digit-group separator and parse the full magnitude, matching the C
+    // backend (appendCIntLiteral / parseI128Literal) and eval.zig. Do NOT break at `_<letter>`:
+    // in a hex literal the letter can be a hex digit (`0xAB_C` == 0xABC), and treating it as a
+    // type-suffix boundary truncated the value, letting an out-of-range literal slip past the
+    // range check into a narrower, truncating C emission.
+    for (raw) |ch| {
+        if (ch == '_') continue;
         cleaned[len] = ch;
         len += 1;
     }

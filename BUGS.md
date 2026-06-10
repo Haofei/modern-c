@@ -4,6 +4,11 @@ Found by a white-box audit of the compiler on **2026-06-10**, reproduced against
 from commit `05ff744` (`zig-out/bin/mcc`). Every item below was reproduced; the HIGH items were
 additionally re-verified by hand.
 
+> **Resolution (2026-06-10):** all 9 items were re-verified against `mcc` and **fixed**. Each
+> entry carries a `**FIXED:**` note describing the change. The full `zig build test` / `sweep` /
+> `c-test` suites pass, and the HIGH soundness repros now error at `verify` (or emit correct C
+> and run correctly, for MC-1/MC-5). New behaviour was confirmed with the same repro recipe below.
+
 Run recipe used for all repros (run `mcc` from the repo root so `import "std/..."` resolves):
 
 ```sh
@@ -48,6 +53,9 @@ clang -std=c11 prec_neg.c driver.c -o p && ./p           # prints -13
   `mc_checked_neg_i32(mc_checked_add_i32(a,b))`). Also silently breaks the in-tree `neg_f64` test
   (`-a + bias`), and false-rejects valid `*p + b` (parsed `*(p+b)` → E_POINTER_ARITH_SINGLE_OBJECT).
 - **Fix:** parse prefix operands at a binding power above all binary operators (≥ 21).
+- **FIXED:** `src/parser.zig` — prefix/`unary`/deref/addr-of operands now parse at
+  `prefix_operand_bp = 21` (above the max binary `left_bp` of 19). `-a + b` emits `(-a) + b`
+  and the compiled C now returns `7`.
 
 ### MC-2 — Underscore-before-hexletter truncates the literal in the range check (unsound → miscompile)
 - **Class:** soundness (false-accept) → runtime miscompile
@@ -70,6 +78,9 @@ $MCC emit-c unsound.mc | grep 'x ='          # uint8_t x = 0xABC;  -> clang trun
   value 188.
 - **Fix:** strip *all* underscores before parsing magnitude in both `mir.zig:3618` and
   `sema.zig:4719`.
+- **FIXED:** both `parseIntegerLiteral` copies (`src/mir.zig`, `src/sema.zig`) now strip every
+  `_` and parse the full magnitude (matching the C backend and `eval.zig`). `0xAB_C` is read as
+  `2748` and rejected; `0x20_u8` and `1_000` still behave correctly.
 
 ### MC-3 — Out-of-range literal as a binary operand is never range-checked, then truncated (unsound)
 - **Class:** soundness — defeats checked arithmetic
@@ -88,6 +99,9 @@ export fn defeats_check() -> u8 { let x: u8 = 5; let y: u8 = x * 300; return y; 
   `mc_checked_mul_u8(5, 44)` returns 220 instead of erroring on `5 * 300`.
 - **Fix:** run `checkIntegerLiteralInitializer` on binary operands against the operation's context
   type.
+- **FIXED:** `src/sema.zig` — the binary arm now calls `checkBinaryLiteralOperandRange`, which
+  range-checks each literal operand against the other operand's checked-integer bounds for
+  arithmetic, comparison, and `& | ^`. `x * 300` (x:u8) and `x < 300` are now rejected.
 
 ### MC-4 — Bitwise `& | ^` accept mismatched-width unsigned operands, silently narrowing (unsound)
 - **Class:** soundness — miscompile, data loss
@@ -110,6 +124,9 @@ export fn truncates_u64() -> u8 {
 - **Expected:** `E_NO_IMPLICIT_INTEGER_PROMOTION` (as `u8 + u64` correctly gets). **Actual:**
   accepted; result `1` (upper 32 bits lost).
 - **Fix:** call `checkCheckedIntegerBinaryOperands` for `& | ^` as well.
+- **FIXED:** `src/sema.zig` — the binary arm now also runs `checkCheckedIntegerBinaryOperands`
+  for `bit_and`/`bit_or`/`bit_xor` (shifts excluded, since a shift count is not width-matched).
+  `lo | wide` (u8 | u64) now errors `E_NO_IMPLICIT_INTEGER_PROMOTION`; same-width `a | b` is fine.
 
 ### MC-5 — emit-c rejects valid float arithmetic over members / derefs / casts
 - **Class:** miscompile (valid program won't emit)
@@ -130,6 +147,9 @@ export fn sum(v: Vec2) -> f64 { return v.x + v.y; }
   Blocks vectors, matrices, dot products, int→float conversion. (The OR-heuristic is sound because
   the checker forbids mixed int/float, so this is purely false-reject.)
 - **Fix:** add `.member` / `.deref` / `.cast` / global-ident arms to `exprResolvesToFloat`.
+- **FIXED:** `src/lower_c.zig` — `exprResolvesToFloat` gained `.member` (via `operandEmitType`,
+  which also resolves global idents), `.deref` (via `derefPointeeType`), and `.cast` (target
+  type) arms. `v.x + v.y`, `*p + *q`, and `n as f64 + 1.0` now emit correct float arithmetic.
 
 ---
 
@@ -142,6 +162,9 @@ export fn sum(v: Vec2) -> f64 { return v.x + v.y; }
   structs. Valid `first(0x10, b)` is rejected (`E_NO_IMPLICIT_CONVERSION`) and duplicate structs are
   emitted. Other paths use the canonical `{d}` form.
 - **Fix:** append `allocPrint("{d}", value)` at `:520`.
+- **FIXED:** `src/monomorphize.zig` — the integer-literal const-generic arm now mangles from the
+  parsed value's canonical `{d}` form, so `Tag<u32, 0x10>`, `Tag<u32, 16>`, and a folded
+  `Tag<u32, N>` all name one instance. The previously-rejected cross-form call now type-checks.
 
 ### MC-7 — Comptime `~` is not masked to the operand width
 - **Source:** `src/eval.zig:755-758` (`foldComptimeUnary .bit_not` does `~v` on i128, no width mask;
@@ -151,6 +174,11 @@ export fn sum(v: Vec2) -> f64 { return v.x + v.y; }
   rejected (`E_COMPTIME_TRAP`) and diverges from the runtime result (true). Hits the canonical
   register-mask identity that std/kernel code relies on.
 - **Fix:** mask the comptime result to the operand width, as the runtime path does.
+- **FIXED:** `src/eval.zig` — `ComptimeScope` now tracks the declared bit-width of bound names
+  (const-fn params, comptime locals), and `foldComptimeUnary`'s `.bit_not` masks `~v` to the
+  operand's width (folding to `.unknown` when the width is unknown rather than guessing).
+  `~zero == 0xFFFFFFFF` (u32) is now true; `~zero == 5` still traps; `align_up`'s `& ~(a-1)`
+  still folds.
 
 ---
 
@@ -163,6 +191,10 @@ export fn sum(v: Vec2) -> f64 { return v.x + v.y; }
   same cast inside a local `let` are accepted. Also affects `(5 as u32) & 0xFF`, `(0xFF as u32) << 2`,
   `~(0 as u32)`.
 - **Fix:** add a cast arm to both the static-initializer recognizer and the comptime folder.
+- **FIXED:** `src/eval.zig` `foldComptimeExpr` gained a `.cast` arm (via `comptimeCastValue`,
+  which applies C truncation/sign-extension to T's width) and `src/sema.zig`
+  `isStaticGlobalInitializer` gained a `.cast` arm. `const G: u32 = 0 as u32`, `(5 as u32) & 0xFF`,
+  `(0xFF as u32) << 2`, and `~(0 as u32)` all type-check and emit the correct constant.
 
 ### MC-9 — `run-trap` interpreter panics (SIGABRT) on integer widths ≥ 128 / signed width 0
 - **Source:** `src/eval.zig:105-117` (`IntInfo.min/max/contains`), `:854-867` (`intInfo`).
@@ -172,3 +204,6 @@ export fn sum(v: Vec2) -> f64 { return v.x + v.y; }
   diagnostic. The surrounding code already has `error.UnsupportedRunTrapFixture` for this case.
 - **Fix:** validate the width in `intInfo`; return `error.UnsupportedRunTrapFixture` for
   N ∉ {8,16,32,64}.
+- **FIXED:** `src/eval.zig` — `intInfo` now returns `error.UnsupportedRunTrapFixture` for any
+  width ∉ {8,16,32,64}. A `u128` / `i128` / `i0` run-trap fixture exits with a clean error
+  (exit 1) instead of a Zig panic (exit 134); valid u8/16/32/64 fixtures are unaffected.

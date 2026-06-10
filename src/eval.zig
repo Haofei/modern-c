@@ -295,19 +295,87 @@ pub const ComptimeScope = struct {
     reflect_ctx: ?*anyopaque = null,
     // Nested const-fn call depth, bounded by comptime_call_fuel.
     call_depth: u32 = 0,
+    // Declared integer bit-width of bound names (params, comptime locals), so a
+    // width-dependent fold like `~x` can mask to the operand's type. The comptime
+    // model otherwise works in untyped i128, where `~0` is -1 rather than the
+    // width-bounded `0xFFFFFFFF` a u32 would produce at runtime.
+    widths: std.StringHashMap(u16),
 
     pub fn init(allocator: std.mem.Allocator) ComptimeScope {
-        return .{ .bindings = std.StringHashMap(ComptimeValue).init(allocator) };
+        return .{
+            .bindings = std.StringHashMap(ComptimeValue).init(allocator),
+            .widths = std.StringHashMap(u16).init(allocator),
+        };
     }
 
     pub fn deinit(self: *ComptimeScope) void {
         self.bindings.deinit();
+        self.widths.deinit();
     }
 
     pub fn bind(self: *ComptimeScope, name: []const u8, value: ComptimeValue) !void {
         try self.bindings.put(name, value);
     }
+
+    pub fn bindWidth(self: *ComptimeScope, name: []const u8, bits: u16) void {
+        self.widths.put(name, bits) catch {};
+    }
 };
+
+// The declared bit-width of an integer type expression, or null for non-integer
+// (or width-unknown) types. usize/isize follow the 64-bit C ABI this backend targets.
+pub fn comptimeTypeBitWidth(ty: ast.TypeExpr) ?u16 {
+    const name = switch (ty.kind) {
+        .name => |n| n.text,
+        else => return null,
+    };
+    if (name.len < 2) return null;
+    if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return 64;
+    if (name[0] != 'u' and name[0] != 'i') return null;
+    const bits = std.fmt.parseInt(u16, name[1..], 10) catch return null;
+    return switch (bits) {
+        8, 16, 32, 64 => bits,
+        else => null,
+    };
+}
+
+// Apply an `as T` integer conversion to a comptime value, mirroring C cast
+// semantics: mask to T's width, sign-extending for signed targets. Returns null
+// for non-integer values or non-integer (width-unknown) targets, so those casts
+// simply stay unfolded rather than producing a wrong constant.
+fn comptimeCastValue(value: ComptimeValue, ty: ast.TypeExpr) ?ComptimeValue {
+    const v = switch (value) {
+        .int => |n| n,
+        else => return null,
+    };
+    const bits = comptimeTypeBitWidth(ty) orelse return null;
+    if (bits >= 128) return .{ .int = v };
+    const mask: u128 = (@as(u128, 1) << @intCast(bits)) - 1;
+    const raw: u128 = @as(u128, @bitCast(v)) & mask;
+    const signed = switch (ty.kind) {
+        .name => |n| n.text.len > 0 and (n.text[0] == 'i'),
+        else => false,
+    };
+    if (signed and (raw >> @intCast(bits - 1)) & 1 == 1) {
+        return .{ .int = @bitCast(raw | ~mask) };
+    }
+    return .{ .int = @intCast(raw) };
+}
+
+// The declared integer width of a comptime expression, resolved through bound
+// names and width-preserving operators (so `~(a - 1)` masks to `a`'s width). The
+// checker forbids mixed-width operands, so taking the left operand's width (then
+// the right's) is sufficient.
+fn comptimeExprWidth(scope: *const ComptimeScope, expr: ast.Expr) ?u16 {
+    return switch (expr.kind) {
+        .ident => |id| scope.widths.get(id.text),
+        .grouped => |inner| comptimeExprWidth(scope, inner.*),
+        .unary => |node| comptimeExprWidth(scope, node.expr.*),
+        .binary => |node| comptimeExprWidth(scope, node.left.*) orelse comptimeExprWidth(scope, node.right.*),
+        .cast => |node| comptimeTypeBitWidth(node.ty.*),
+        else => null,
+    };
+}
 
 // Fold every `const NAME: T = …` global to a comptime value, populating `out`
 // (keyed by name). Earlier const globals are visible to later ones. Globals
@@ -366,6 +434,15 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
             else
                 .unknown,
             else => |f| f,
+        },
+        // An explicit integer conversion (`v as T`): fold the operand, then apply T's
+        // width as C would (truncate, sign-extend for signed). Non-integer targets
+        // (floats, pointers) are not folded. This makes a cast usable in a const
+        // global / array-length context instead of being rejected as non-static.
+        .cast => |node| switch (foldComptimeExpr(scope, node.value.*)) {
+            .value => |v| if (comptimeCastValue(v, node.ty.*)) |cv| .{ .value = cv } else .unknown,
+            .trap => .trap,
+            .unknown => .unknown,
         },
         .array_literal => |items| foldComptimeArrayLiteral(scope, items),
         .index => |node| foldComptimeIndex(scope, node.base.*, node.index.*),
@@ -476,6 +553,7 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
             .unknown => return .unknown,
         };
         callee_scope.bind(param.name.text, value) catch return .unknown;
+        if (comptimeTypeBitWidth(param.ty)) |bits| callee_scope.bindWidth(param.name.text, bits);
     }
     return foldComptimeFnBody(&callee_scope, body);
 }
@@ -511,7 +589,10 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                 if (local.names.len != 1) return .unknown;
                 const init_expr = local.init orelse return .unknown;
                 switch (foldComptimeExpr(scope, init_expr)) {
-                    .value => |value| scope.bind(local.names[0].text, value) catch return .unknown,
+                    .value => |value| {
+                        scope.bind(local.names[0].text, value) catch return .unknown;
+                        if (local.ty) |lty| if (comptimeTypeBitWidth(lty)) |bits| scope.bindWidth(local.names[0].text, bits);
+                    },
                     .trap => return .trap,
                     .unknown => return .unknown,
                 }
@@ -753,7 +834,15 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
             .boolean, .array, .@"struct" => .unknown,
         },
         .bit_not => switch (operand) {
-            .int => |v| .{ .value = .{ .int = ~v } },
+            // Mask the complement to the operand's declared width. Without a known
+            // width we cannot pick the right mask, so fold to .unknown rather than
+            // the unmasked (negative) i128 value — that previously made identities
+            // like `~zero == 0xFFFFFFFF` (u32) wrongly fail as a comptime trap.
+            .int => |v| if (comptimeExprWidth(scope, operand_expr)) |bits| blk: {
+                const mask: u128 = if (bits >= 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(bits)) - 1;
+                const masked: u128 = (~@as(u128, @bitCast(v))) & mask;
+                break :blk .{ .value = .{ .int = @intCast(masked) } };
+            } else .unknown,
             .boolean, .array, .@"struct" => .unknown,
         },
         .logical_not => switch (operand) {
@@ -863,6 +952,13 @@ fn intInfo(ty: ast.TypeExpr) EvalError!IntInfo {
         else => return error.UnsupportedRunTrapFixture,
     };
     const bits = std.fmt.parseInt(u8, name[1..], 10) catch return error.UnsupportedRunTrapFixture;
+    // Only the four supported checked-integer widths have well-defined i128 bounds.
+    // A wider (u128/i128) or zero width would overflow/underflow IntInfo.min/max
+    // (`1 << bits`), panicking the interpreter; report it as an unsupported fixture.
+    switch (bits) {
+        8, 16, 32, 64 => {},
+        else => return error.UnsupportedRunTrapFixture,
+    }
     return .{ .signed = signed, .bits = bits };
 }
 

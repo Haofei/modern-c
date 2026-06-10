@@ -3614,13 +3614,13 @@ fn parseIntegerLiteral(raw: []const u8) ?u128 {
     var cleaned: [128]u8 = undefined;
     if (raw.len > cleaned.len) return null;
     var len: usize = 0;
-    var index: usize = 0;
-    while (index < raw.len) : (index += 1) {
-        const ch = raw[index];
-        if (ch == '_') {
-            if (index + 1 < raw.len and std.ascii.isAlphabetic(raw[index + 1])) break;
-            continue;
-        }
+    // Strip every `_` digit-group separator and parse the full magnitude, matching the C
+    // backend (appendCIntLiteral / parseI128Literal) and eval.zig. Do NOT break at `_<letter>`:
+    // in a hex literal the letter can be a hex digit (`0xAB_C` == 0xABC), and treating it as a
+    // type-suffix boundary truncated the value, letting an out-of-range literal slip past the
+    // range check into a narrower, truncating C emission.
+    for (raw) |ch| {
+        if (ch == '_') continue;
         cleaned[len] = ch;
         len += 1;
     }

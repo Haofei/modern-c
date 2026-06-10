@@ -5499,12 +5499,24 @@ const CEmitter = struct {
 
     fn exprResolvesToFloat(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
-            .ident => |ident| blk: {
-                const local_set = locals orelse break :blk false;
-                const info = local_set.get(ident.text) orelse break :blk false;
-                const source_ty = info.source_ty orelse break :blk false;
-                break :blk floatCTypeName(source_ty) != null;
+            // A local or global float-typed identifier. operandEmitType resolves both.
+            .ident => blk: {
+                const ty = self.operandEmitType(expr, locals) orelse break :blk false;
+                break :blk floatCTypeName(ty) != null;
             },
+            // A float struct field (`v.x`), nested member, or array-element member —
+            // operandEmitType walks the struct/array layout to the field type.
+            .member => blk: {
+                const ty = self.operandEmitType(expr, locals) orelse break :blk false;
+                break :blk floatCTypeName(ty) != null;
+            },
+            // Dereferencing a pointer-to-float (`*p` where `p: *f64`).
+            .deref => |inner| blk: {
+                const ty = self.derefPointeeType(inner.*, locals) orelse break :blk false;
+                break :blk floatCTypeName(ty) != null;
+            },
+            // An explicit cast to a float type (`x as f64`, including int->float).
+            .cast => |node| floatCTypeName(node.ty.*) != null,
             .grouped => |inner| self.exprResolvesToFloat(inner.*, locals),
             .unary => |node| self.exprResolvesToFloat(node.expr.*, locals),
             .binary => |node| self.exprResolvesToFloat(node.left.*, locals) or self.exprResolvesToFloat(node.right.*, locals),

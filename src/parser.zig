@@ -776,12 +776,12 @@ pub const Parser = struct {
         if (self.match(.bang)) return self.unary(.logical_not);
         if (self.match(.star)) {
             const start = self.lxTokenBeforeCurrent();
-            const value = try ast.makePtr(self.allocator, try self.parseExpr(14));
+            const value = try ast.makePtr(self.allocator, try self.parseExpr(prefix_operand_bp));
             return .{ .span = joinSpan(start, value.span), .kind = .{ .deref = value } };
         }
         if (self.match(.amp)) {
             const start = self.lxTokenBeforeCurrent();
-            const value = try ast.makePtr(self.allocator, try self.parseExpr(14));
+            const value = try ast.makePtr(self.allocator, try self.parseExpr(prefix_operand_bp));
             return .{ .span = joinSpan(start, value.span), .kind = .{ .address_of = value } };
         }
         return self.parsePrimary();
@@ -789,7 +789,7 @@ pub const Parser = struct {
 
     fn unary(self: *Parser, op: ast.UnaryOp) anyerror!ast.Expr {
         const start = self.lxTokenBeforeCurrent();
-        const value = try ast.makePtr(self.allocator, try self.parseExpr(14));
+        const value = try ast.makePtr(self.allocator, try self.parseExpr(prefix_operand_bp));
         return .{ .span = joinSpan(start, value.span), .kind = .{ .unary = .{ .op = op, .expr = value } } };
     }
 
@@ -1122,6 +1122,12 @@ const Infix = struct {
     right_bp: u8,
     op: ast.BinaryOp,
 };
+
+// Prefix operators (`-`, `~`, `!`, deref `*`, addr-of `&`) must bind tighter than every
+// binary operator so that `-a + b` parses as `(-a) + b`, matching C. The highest binary
+// `left_bp` is 19 (`* / %`), so any value above 20 keeps binary ops from binding into the
+// operand while still allowing postfix `.`/`[]`/`()` (handled in parseExpr, not by binding power).
+const prefix_operand_bp: u8 = 21;
 
 fn infix(kind: token.Kind) ?Infix {
     return switch (kind) {

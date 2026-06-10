@@ -515,9 +515,11 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, sd: ast.StructDecl,
         };
         try mangled.appendSlice(rw.arena, "__");
         if (constGenericValue(tn)) |value| {
-            // an integer literal type-argument (`Ring<u32, 8>`)
+            // an integer literal type-argument (`Ring<u32, 8>`). Mangle from the parsed
+            // value's canonical decimal form, not the raw lexeme, so `Buf<0x10>`,
+            // `Buf<16>`, and a folded const `Buf<N>` all name the same instance.
             try subst.put(param.text, .{ .int = value });
-            try mangled.appendSlice(rw.arena, tn);
+            try mangled.appendSlice(rw.arena, try std.fmt.allocPrint(rw.arena, "{d}", .{value}));
         } else if (rw.int_consts.get(tn)) |value| {
             // a const used as a const-generic argument (`Ring<u32, RQ_CAP>`)
             try subst.put(param.text, .{ .int = value });
