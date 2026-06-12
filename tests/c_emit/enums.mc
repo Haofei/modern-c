@@ -21,6 +21,7 @@ open enum DeviceState: u8 {
 }
 
 global default_error: OpenError = .denied;
+global default_errors: [2]OpenError = .{ .not_found, .denied };
 
 extern fn takes_open_error(error: OpenError) -> void;
 
@@ -41,6 +42,11 @@ fn enum_assignment() -> OpenError {
     var error: OpenError = .not_found;
     error = .denied;
     return error;
+}
+
+fn enum_array_literal() -> OpenError {
+    let errors: [2]OpenError = .{ .not_found, .bad_path };
+    return errors[1];
 }
 
 fn open_enum_integer_cast(value: u8) -> DeviceState {

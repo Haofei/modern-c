@@ -15,6 +15,7 @@ enum OtherError {
 }
 
 global default_error: OpenError = .denied;
+global default_errors: [2]OpenError = .{ .not_found, .denied };
 // EXPECT_ERROR: E_GLOBAL_REQUIRES_TYPE
 global reject_targetless_global_error = .denied;
 // EXPECT_ERROR: E_UNKNOWN_ENUM_CASE
@@ -118,6 +119,11 @@ fn accept_enum_assignment() -> OpenError {
     var error: OpenError = .not_found;
     error = .denied;
     return error;
+}
+
+fn accept_enum_array_literal() -> OpenError {
+    let errors: [2]OpenError = .{ .not_found, .bad_path };
+    return errors[1];
 }
 
 fn reject_unknown_enum_assignment() -> OpenError {
