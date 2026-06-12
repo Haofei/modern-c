@@ -3981,11 +3981,14 @@ field-address taking. Scalar fixed-array and scalar-struct globals support stati
 literals plus element/field access. Scalar aggregate function returns,
 parameters, and direct calls are supported for fixed arrays and plain structs.
 Nested fixed-array/struct element and field access works for the covered
-aggregate subset. Core slice values lower as `{ ptr, len }` values with checked
-indexing, `.len`, direct returns/params, and range slicing from arrays or slices.
+aggregate subset, including materialized aggregate rvalues from direct calls
+when indexing, field access, slicing, or array iteration needs an address. Core
+slice values lower as `{ ptr, len }` values with checked indexing, `.len`,
+direct returns/params, and range slicing from arrays or slices.
 Scalar `switch` lowering covers bool and integer subjects, including
 multi-pattern literal arms and wildcard defaults. Core loop CFG covers `while`
-and `for` over arrays/slices with loop-local bindings plus `break`/`continue`.
+and `for` over arrays/slices, including array-valued call results, with
+loop-local bindings plus `break`/`continue`.
 Scalar expression lowering covers integer casts, unsigned bitwise operations,
 bitwise not, and checked unsigned shifts with invalid-count and shifted-out-bit
 traps.

@@ -509,13 +509,19 @@ const LlvmEmitter = struct {
 
         var iterable_slot: ?LocalSlot = null;
         var iterable_ptr: ?[]const u8 = null;
-        if (iterable_ty.kind == .slice) {
-            const ptr = try self.nextTemp();
-            const value = try self.emitExpr(iterable, iterable_ty);
-            try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(iterable_ty) });
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(iterable_ty), value, ptr });
-            iterable_slot = .{ .ty = iterable_ty, .ptr = ptr };
-            iterable_ptr = ptr;
+        switch (iterable_ty.kind) {
+            .slice => {
+                const ptr = try self.nextTemp();
+                const value = try self.emitExpr(iterable, iterable_ty);
+                try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(iterable_ty) });
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(iterable_ty), value, ptr });
+                iterable_slot = .{ .ty = iterable_ty, .ptr = ptr };
+                iterable_ptr = ptr;
+            },
+            .array => if (!self.isStableAggregateAddress(iterable)) {
+                iterable_ptr = try self.aggregateBasePointer(iterable);
+            },
+            else => {},
         }
 
         const old_type = self.local_types.fetchRemove(binding.text);
@@ -576,7 +582,7 @@ const LlvmEmitter = struct {
     fn emitForElementPtr(self: *LlvmEmitter, iterable: ast.Expr, iterable_ty: ast.TypeExpr, iterable_ptr: ?[]const u8, index: []const u8) ![]const u8 {
         return switch (iterable_ty.kind) {
             .array => blk: {
-                const base_ptr = try self.arrayBasePointer(iterable);
+                const base_ptr = iterable_ptr orelse try self.arrayBasePointer(iterable);
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(iterable_ty), base_ptr, index });
                 break :blk result;
@@ -789,7 +795,29 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.aggregateBasePointer(inner.*),
             .index => |node| self.emitIndexAddress(node),
             .member => |node| self.emitMemberAddress(node),
+            .call, .array_literal, .struct_literal => self.materializeAggregateRvalue(expr),
             else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn materializeAggregateRvalue(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+        const ty = self.exprType(expr) orelse return error.UnsupportedLlvmEmission;
+        if (!self.isAggregateType(ty)) return error.UnsupportedLlvmEmission;
+        const value = try self.emitExpr(expr, ty);
+        const ptr = try self.nextTemp();
+        const llvm_ty = try self.llvmType(ty);
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, llvm_ty });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+        return ptr;
+    }
+
+    fn isStableAggregateAddress(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .ident => |ident| self.local_slots.contains(ident.text) or self.global_types.contains(ident.text),
+            .grouped => |inner| self.isStableAggregateAddress(inner.*),
+            .index => |node| self.isStableAggregateAddress(node.base.*),
+            .member => |node| self.isStableAggregateAddress(node.base.*),
+            else => false,
         };
     }
 
