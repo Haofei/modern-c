@@ -231,6 +231,10 @@ const LlvmEmitter = struct {
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
             .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
+            .ident => |ident| if (self.isFnPointerType(ty) and self.fn_sigs.contains(ident.text))
+                try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
+            else
+                error.UnsupportedLlvmEmission,
             .address_of => |inner| switch (inner.kind) {
                 .ident => |ident| if (self.global_types.contains(ident.text))
                     try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
@@ -339,11 +343,13 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(slot.ty), slot.ptr });
             return result;
         }
+        if (self.local_types.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text});
         if (self.global_types.get(ident.text)) |ty| {
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = load {s}, ptr @{s}\n", .{ result, try self.llvmType(ty), ident.text });
             return result;
         }
+        if (self.fn_sigs.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
         return try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text});
     }
 
@@ -1012,11 +1018,15 @@ const LlvmEmitter = struct {
 
     fn emitMemberAddress(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
-        const struct_decl = self.structDeclForType(base_ty) orelse return error.UnsupportedLlvmEmission;
+        const struct_ty = self.memberBaseStructType(base_ty) orelse return error.UnsupportedLlvmEmission;
+        const struct_decl = self.structDeclForType(struct_ty) orelse return error.UnsupportedLlvmEmission;
         const index = structFieldIndex(struct_decl, node.name.text) orelse return error.UnsupportedLlvmEmission;
-        const base_ptr = try self.aggregateBasePointer(node.base.*);
+        const base_ptr = if (self.resolveAliasType(base_ty).kind == .pointer)
+            try self.emitExpr(node.base.*, base_ty)
+        else
+            try self.aggregateBasePointer(node.base.*);
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 {d}\n", .{ result, try self.llvmType(base_ty), base_ptr, index });
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 {d}\n", .{ result, try self.llvmType(struct_ty), base_ptr, index });
         return result;
     }
 
@@ -1216,10 +1226,14 @@ const LlvmEmitter = struct {
 
     fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
         if (try self.emitBuiltinValueCall(call, expected_ty)) |value| return value;
-        const callee = switch (call.callee.kind) {
-            .ident => |ident| ident.text,
-            else => return error.UnsupportedLlvmEmission,
-        };
+        if (self.directCallName(call.callee.*)) |callee| {
+            return try self.emitDirectCall(callee, call, expected_ty);
+        }
+        const fn_ty = self.fnPointerCalleeType(call.callee.*) orelse return error.UnsupportedLlvmEmission;
+        return try self.emitFnPointerCall(call.callee.*, call.args, fn_ty);
+    }
+
+    fn emitDirectCall(self: *LlvmEmitter, callee: []const u8, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
         const ret_ast_ty = if (self.fn_sigs.get(callee)) |sig| sig.ret else expected_ty;
         const ret_ty = try self.llvmType(ret_ast_ty);
         if (typeNameEql(ret_ast_ty, "void")) return error.UnsupportedLlvmEmission;
@@ -1231,6 +1245,27 @@ const LlvmEmitter = struct {
         }
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = call {s} @{s}(", .{ result, ret_ty, callee });
+        for (args.items, 0..) |arg, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
+        }
+        try self.out.appendSlice(self.allocator, ")\n");
+        return result;
+    }
+
+    fn emitFnPointerCall(self: *LlvmEmitter, callee_expr: ast.Expr, args_expr: []const ast.Expr, fn_ty: ast.TypeExpr) ![]const u8 {
+        const sig = fn_ty.kind.fn_pointer;
+        if (typeNameEql(sig.ret.*, "void")) return error.UnsupportedLlvmEmission;
+        if (args_expr.len != sig.params.len) return error.UnsupportedLlvmEmission;
+        const callee = try self.emitExpr(callee_expr, fn_ty);
+        var args: std.ArrayList(ArgValue) = .empty;
+        defer args.deinit(self.allocator);
+        for (args_expr, 0..) |arg, i| {
+            const arg_ty = sig.params[i];
+            try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExpr(arg, arg_ty) });
+        }
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = call {s} {s}(", .{ result, try self.llvmType(sig.ret.*), callee });
         for (args.items, 0..) |arg, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
@@ -1634,6 +1669,7 @@ const LlvmEmitter = struct {
             .pointer, .raw_many_pointer, .nullable => "ptr",
             .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
             .slice => "{ ptr, i64 }",
+            .fn_pointer => "ptr",
             .generic => |node| if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1)
                 try self.atomicStorageLlvmType(node.args[0])
             else
@@ -1656,7 +1692,7 @@ const LlvmEmitter = struct {
 
     fn exprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
-            .ident => |ident| self.local_types.get(ident.text) orelse self.global_types.get(ident.text),
+            .ident => |ident| self.local_types.get(ident.text) orelse self.global_types.get(ident.text) orelse self.fnPointerTypeForName(ident.text),
             .bool_literal => simpleType(expr.span, "bool"),
             .unary => |node| if (node.op == .logical_not) simpleType(expr.span, "bool") else self.exprType(node.expr.*),
             .int_literal => null,
@@ -1766,6 +1802,19 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn memberBaseStructType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .pointer => |node| node.child.*,
+            else => ty,
+        };
+    }
+
+    fn memberBaseStructDecl(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.StructDecl {
+        const struct_ty = self.memberBaseStructType(ty) orelse return null;
+        return self.structDeclForType(struct_ty);
+    }
+
     fn enumReprType(enum_decl: ast.EnumDecl) ast.TypeExpr {
         return enum_decl.repr orelse simpleType(enum_decl.name.span, "isize");
     }
@@ -1823,7 +1872,7 @@ const LlvmEmitter = struct {
 
     fn memberField(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) ?ast.Field {
         const base_ty = self.exprType(base) orelse return null;
-        const struct_decl = self.structDeclForType(base_ty) orelse return null;
+        const struct_decl = self.memberBaseStructDecl(base_ty) orelse return null;
         for (struct_decl.fields) |field| {
             if (std.mem.eql(u8, field.name.text, field_name)) return field;
         }
@@ -1836,6 +1885,39 @@ const LlvmEmitter = struct {
         return sig.params[index].ty;
     }
 
+    fn directCallName(self: *LlvmEmitter, callee: ast.Expr) ?[]const u8 {
+        return switch (callee.kind) {
+            .ident => |ident| if (self.fn_sigs.contains(ident.text)) ident.text else null,
+            .grouped => |inner| self.directCallName(inner.*),
+            else => null,
+        };
+    }
+
+    fn fnPointerCalleeType(self: *LlvmEmitter, callee: ast.Expr) ?ast.TypeExpr {
+        const ty = self.exprType(callee) orelse return null;
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .fn_pointer => resolved_ty,
+            else => null,
+        };
+    }
+
+    fn fnPointerTypeForName(self: *LlvmEmitter, name: []const u8) ?ast.TypeExpr {
+        const sig = self.fn_sigs.get(name) orelse return null;
+        const params = self.scratch.allocator().alloc(ast.TypeExpr, sig.params.len) catch return null;
+        for (sig.params, 0..) |param, i| params[i] = param.ty;
+        const ret = self.scratch.allocator().create(ast.TypeExpr) catch return null;
+        ret.* = sig.ret;
+        return .{
+            .span = sig.ret.span,
+            .kind = .{ .fn_pointer = .{ .params = params, .ret = ret } },
+        };
+    }
+
+    fn isFnPointerType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        return self.resolveAliasType(ty).kind == .fn_pointer;
+    }
+
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
         if (builtinCallReturnType(call)) |ty| return ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
@@ -1844,10 +1926,8 @@ const LlvmEmitter = struct {
             if (std.mem.eql(u8, info.op, "store")) return simpleType(call.callee.*.span, "void");
         }
         if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
-        const callee = switch (call.callee.kind) {
-            .ident => |ident| ident.text,
-            else => return null,
-        };
+        if (self.fnPointerCalleeType(call.callee.*)) |fn_ty| return fn_ty.kind.fn_pointer.ret.*;
+        const callee = self.directCallName(call.callee.*) orelse return null;
         return if (self.fn_sigs.get(callee)) |sig| sig.ret else null;
     }
 

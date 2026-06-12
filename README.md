@@ -86,6 +86,9 @@ enums, and enum switches. Nullable pointer lowering covers nullable pointer ABI,
 nullable `if let`, and simple nullable switches. Atomic lowering covers
 `atomic<T>` scalar storage, `atomic.init`, `load`, `store`, `fetch_add`, and
 `fetch_sub` with LLVM atomic memory orderings for local and global atomics.
+Function-pointer lowering covers `fn(...) -> T` values as opaque pointers,
+static function-name initializers, indirect calls through parameters, locals,
+globals, arrays, and struct fields, plus function-pointer returns.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the
 covered textual IR subset to linkable object files through `llc`, and
 `zig build llvm-obj-test` validates representative scalar, statement-workflow,
@@ -211,3 +214,5 @@ semantics.
 
 LLVM atomics are covered for scalar `atomic<T>` storage, `atomic.init`,
 `load`, `store`, `fetch_add`, and `fetch_sub` over local and global atomics.
+LLVM function-pointer coverage includes static function-name initializers,
+indirect calls, arrays/struct fields, locals/params/globals, and returns.
