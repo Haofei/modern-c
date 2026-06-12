@@ -325,13 +325,23 @@ pub fn build(b: *std.Build) void {
     sync_test_step.dependOn(&sync_test_cmd.step);
 
     const nic_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/net/nic-test.sh",
         "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_nic_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/net/nic-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
     });
     nic_test_cmd.step.dependOn(b.getInstallStep());
     const nic_test_step = b.step("nic-test", "Build and run the demo NIC driver (driver-library profile) under QEMU");
     nic_test_step.dependOn(&nic_test_cmd.step);
+    llvm_nic_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_nic_test_step = b.step("llvm-nic-test", "Build and run the LLVM-lowered demo NIC driver under QEMU");
+    llvm_nic_test_step.dependOn(&llvm_nic_test_cmd.step);
 
     const virtio_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -1989,6 +1999,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_udp_net_test_cmd.step);
     m0_step.dependOn(&llvm_blk_test_cmd.step);
     m0_step.dependOn(&llvm_net_test_cmd.step);
+    m0_step.dependOn(&llvm_nic_test_cmd.step);
     m0_step.dependOn(&llvm_e1000_test_cmd.step);
     m0_step.dependOn(&llvm_net_rx_live_test_cmd.step);
 

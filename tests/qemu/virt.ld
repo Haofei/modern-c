@@ -14,6 +14,10 @@ SECTIONS {
         *(.rodata .rodata.*)
     }
 
+    .eh_frame : {
+        *(.eh_frame .eh_frame.*)
+    }
+
     .data : {
         *(.data .data.*)
     }
