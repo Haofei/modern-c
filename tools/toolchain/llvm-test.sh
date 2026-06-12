@@ -670,6 +670,8 @@ grep -q 'define i64 @token_value({ i32, \[4 x i8\], \[2 x i64\] } %token)' "$OUT
 grep -q 'define i64 @token_call_seed_value()' "$OUT_DIR/tagged_union.ll"
 grep -q 'switch i32 .*%union_switch_arm' "$OUT_DIR/tagged_union.ll"
 grep -q '\], !dbg !' "$OUT_DIR/tagged_union.ll"
+grep -q 'store { i32, \[4 x i8\], \[2 x i64\] } .* ptr %t.*, !dbg !' "$OUT_DIR/tagged_union.ll"
+grep -q 'load i32, ptr %t.*, !dbg !' "$OUT_DIR/tagged_union.ll"
 grep -q 'store i64 .* ptr %v.addr, !dbg !' "$OUT_DIR/tagged_union.ll"
 grep -q 'store { ptr, i64 } .* ptr %s.addr, !dbg !' "$OUT_DIR/tagged_union.ll"
 grep -q '@raws = global \[2 x ptr\] \[ptr getelementptr' "$OUT_DIR/global_initializers.ll"

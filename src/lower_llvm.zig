@@ -1603,9 +1603,9 @@ const LlvmEmitter = struct {
         const tag = try self.nextTemp();
         const union_llvm = try self.llvmType(subject_ty);
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ subject_ptr, union_llvm });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ union_llvm, subject, subject_ptr });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ union_llvm, subject, subject_ptr, try self.debugCallSuffix() });
         try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, subject_ptr });
-        try self.out.print(self.allocator, "  {s} = load i32, ptr {s}\n", .{ tag, tag_ptr });
+        try self.out.print(self.allocator, "  {s} = load i32, ptr {s}{s}\n", .{ tag, tag_ptr, try self.debugCallSuffix() });
 
         const end_label = try self.nextLabel("union_switch_end");
         const trap_label = try self.nextLabel("union_switch_trap");

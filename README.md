@@ -145,8 +145,9 @@ volatile raw/MMIO stores, atomic stores, precise asm output stores, volatile
 raw/MMIO loads, atomic loads and read-modify-write operations, fences,
 returns, call instructions, loop/break/continue branch terminators,
 switch/if-let dispatches, nullable/Result/tagged-union and for-loop binding
-stores, and trap-path plus `?` propagation, short-circuit boolean, and if-let
-join branch terminators for the covered backend subset, plus
+stores, tagged-union switch subject stores and tag loads, and trap-path plus `?`
+propagation, short-circuit boolean, and if-let join branch terminators for the
+covered backend subset, plus
 branch terminators in compiler-expanded `mem.bytes_equal` and `reduce.*` helper
 loops.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles textual IR
@@ -183,8 +184,9 @@ Prototype or incomplete:
   index access, aggregate literal/member field, `MaybeUninit`, volatile
   raw/MMIO, and atomics, loop/break/continue branch terminators, precise asm
   output stores, atomic RMWs, fences, switch/if-let dispatches,
-  nullable/Result/tagged-union and for-loop binding stores, and trap-path plus
-  `?` propagation and short-circuit boolean and if-let join branch terminators, plus
+  nullable/Result/tagged-union and for-loop binding stores, tagged-union switch
+  subject stores and tag loads, and trap-path plus `?` propagation and
+  short-circuit boolean and if-let join branch terminators, plus
   compiler-expanded `mem.bytes_equal` and `reduce.*` helper loop branch
   terminators. DWARF-quality native debug mapping with richer
   statement/expression coverage is still pending.
