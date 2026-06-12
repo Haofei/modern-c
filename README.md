@@ -92,6 +92,9 @@ globals, arrays, and struct fields, plus function-pointer returns.
 Aggregate assignment lowering covers `uninit` aggregate storage, whole
 array/struct literal assignment, aggregate copies from nested elements/fields,
 and nested aggregate stores through globals, arrays, and struct fields.
+LLVM debug metadata now includes `source_filename`, a compile unit/file record,
+function `DISubprogram` records, and line/column locations on returns and call
+instructions for the covered backend subset.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the
 covered textual IR subset to linkable object files through `llc`, and
 `zig build llvm-obj-test` validates representative scalar, statement-workflow,
@@ -120,15 +123,17 @@ Prototype or incomplete:
 - Debug mapping: `emit-c` writes `#line` source hints for generated C, and
   `emit-map` emits an initial `.mcmap`-style source/generated-C map, including
   global initializer, statement/expression, and deferred cleanup spans.
-  DWARF-quality native debug mapping is still pending.
+  `emit-llvm` now emits initial LLVM debug metadata for source files,
+  functions, calls, and returns. DWARF-quality native debug mapping with richer
+  statement/expression coverage is still pending.
 
 Deferred:
 
 - LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
   `emit-llvm` support exists for a scalar/control-flow subset and validates
   through `llvm-as`; the `mcc-llvm-cc.sh` driver compiles covered LLVM IR to
-  object files with `llc`. Debug-info lowering, richer iterable forms, broader
-  aggregate ABI/layout cases, and broader slice/pattern workflows are still
+  object files with `llc`. Richer iterable forms, broader aggregate ABI/layout
+  cases, broader slice/pattern workflows, and fuller debug mapping are still
   pending.
 
 ## Requirements
@@ -221,3 +226,5 @@ LLVM function-pointer coverage includes static function-name initializers,
 indirect calls, arrays/struct fields, locals/params/globals, and returns.
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
+LLVM debug metadata coverage includes compile-unit/file records, function
+subprograms, and call/return line locations for the covered subset.

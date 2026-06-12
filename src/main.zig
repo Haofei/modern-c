@@ -473,7 +473,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_llvm.appendLlvm(allocator, module, &output);
+    try lower_llvm.appendLlvmWithSourcePath(allocator, module, &output, path);
     writeStdout(output.items);
 }
 

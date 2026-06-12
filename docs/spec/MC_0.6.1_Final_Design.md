@@ -4014,13 +4014,16 @@ globals, arrays, and struct fields, plus function-pointer returns.
 Aggregate assignment lowering covers `uninit` aggregate storage, whole
 array/struct literal assignment, aggregate copies from nested elements/fields,
 and nested aggregate stores through globals, arrays, and struct fields.
+LLVM debug metadata includes `source_filename`, compile-unit/file records,
+function `DISubprogram` records, and line/column locations on returns and call
+instructions for the covered backend subset.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
 textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
-Full aggregate ABI breadth, debug-info lowering, richer iterable forms, and
-broader slice/pattern workflows remain future work.
+Full aggregate ABI breadth, richer iterable forms, broader slice/pattern
+workflows, and fuller debug mapping remain future work.
 
 LLVM lowering examples:
 

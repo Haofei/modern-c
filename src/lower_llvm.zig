@@ -5,9 +5,16 @@ const eval = @import("eval.zig");
 const mir = @import("mir.zig");
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
+    try appendLlvmWithSourcePath(allocator, module, out, "input.mc");
+}
+
+pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8) !void {
     var module_mir = try mir.build(allocator, module);
     defer module_mir.deinit();
 
+    const escaped_source_path = try escapedLlvmString(allocator, source_path);
+    defer allocator.free(escaped_source_path);
+    try out.print(allocator, "source_filename = \"{s}\"\n", .{escaped_source_path});
     try out.appendSlice(allocator, "; MC LLVM IR backend v0\n");
     try out.appendSlice(allocator, "; semantic source: verified MC MIR\n\n");
     try emitTrapDecl(allocator, out);
@@ -31,6 +38,9 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
+        .debug_functions = std.ArrayList(DebugFunction).empty,
+        .debug_locations = std.ArrayList(DebugLocation).empty,
+        .source_path = source_path,
     };
     defer ctx.deinit();
     for (module.decls) |decl| {
@@ -73,6 +83,7 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
         }
     }
     try ctx.emitIntrinsicDecls();
+    try ctx.emitDebugMetadata();
 }
 
 fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
@@ -107,6 +118,12 @@ const LlvmEmitter = struct {
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
     loop_stack: std.ArrayList(LoopLabels) = undefined,
+    debug_functions: std.ArrayList(DebugFunction) = undefined,
+    debug_locations: std.ArrayList(DebugLocation) = undefined,
+    debug_next_id: usize = 6,
+    current_debug_scope: ?usize = null,
+    current_debug_span: ?ast.Span = null,
+    source_path: []const u8,
 
     fn deinit(self: *LlvmEmitter) void {
         self.need_uadd.deinit();
@@ -123,6 +140,8 @@ const LlvmEmitter = struct {
         self.local_types.deinit();
         self.local_slots.deinit();
         self.loop_stack.deinit(self.allocator);
+        self.debug_functions.deinit(self.allocator);
+        self.debug_locations.deinit(self.allocator);
         self.scratch.deinit();
     }
 
@@ -148,7 +167,18 @@ const LlvmEmitter = struct {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         _ = try self.llvmType(ret_ty);
         for (fn_decl.params) |param| _ = try self.llvmType(param.ty);
-        try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params });
+        const debug_id: ?usize = if (fn_decl.body != null) blk: {
+            const id = self.debug_next_id;
+            self.debug_next_id += 1;
+            try self.debug_functions.append(self.allocator, .{
+                .id = id,
+                .name = fn_decl.name.text,
+                .line = debugLine(fn_decl.name.span),
+                .column = debugColumn(fn_decl.name.span),
+            });
+            break :blk id;
+        } else null;
+        try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .debug_id = debug_id });
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
@@ -269,12 +299,24 @@ const LlvmEmitter = struct {
     fn emitFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, body: ast.Block) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
+        const old_scope = self.current_debug_scope;
+        const old_span = self.current_debug_span;
+        self.current_debug_scope = if (self.fn_sigs.get(fn_decl.name.text)) |sig| sig.debug_id else null;
+        self.current_debug_span = fn_decl.name.span;
+        defer {
+            self.current_debug_scope = old_scope;
+            self.current_debug_span = old_span;
+        }
         try self.out.print(self.allocator, "define {s} @{s}(", .{ ret_llvm, fn_decl.name.text });
         for (fn_decl.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, "{s} %{s}", .{ try self.llvmType(param.ty), param.name.text });
         }
-        try self.out.appendSlice(self.allocator, ") {\nentry:\n");
+        if (self.current_debug_scope) |scope| {
+            try self.out.print(self.allocator, ") !dbg !{d} {{\nentry:\n", .{scope});
+        } else {
+            try self.out.appendSlice(self.allocator, ") {\nentry:\n");
+        }
         self.temp_index = 0;
         self.trap_index = 0;
         self.local_types.clearRetainingCapacity();
@@ -291,7 +333,7 @@ const LlvmEmitter = struct {
 
         if (!try self.emitBlock(body, ret_ty)) {
             if (typeNameEql(ret_ty, "void")) {
-                try self.out.appendSlice(self.allocator, "  ret void\n");
+                try self.emitReturnVoid(fn_decl.name.span);
             } else {
                 return error.UnsupportedLlvmEmission;
             }
@@ -382,13 +424,13 @@ const LlvmEmitter = struct {
                             .grouped => |inner| if ((inner.*).kind != .void_literal) return error.UnsupportedLlvmEmission,
                             else => return error.UnsupportedLlvmEmission,
                         };
-                        try self.out.appendSlice(self.allocator, "  ret void\n");
+                        try self.emitReturnVoid(stmt.span);
                     } else if (typeNameEql(ret_ty, "never")) {
                         return error.UnsupportedLlvmEmission;
                     } else {
                         const expr = maybe_expr orelse return error.UnsupportedLlvmEmission;
                         const value = try self.emitExpr(expr, ret_ty);
-                        try self.out.print(self.allocator, "  ret {s} {s}\n", .{ try self.llvmType(ret_ty), value });
+                        try self.emitReturnValue(ret_ty, value, stmt.span);
                     }
                     return true;
                 },
@@ -477,7 +519,7 @@ const LlvmEmitter = struct {
         const condition = try self.emitExpr(expr, ty);
         const cont = try self.nextLabel("assert_ok");
         const trap = try self.nextLabel("trap_assert");
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Assert()\n  unreachable\n{s}:\n", .{ condition, cont, trap, trap, cont });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Assert(){s}\n  unreachable\n{s}:\n", .{ condition, cont, trap, trap, try self.debugCallSuffix(), cont });
     }
 
     fn emitTryExpr(self: *LlvmEmitter, operand: ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
@@ -495,7 +537,7 @@ const LlvmEmitter = struct {
         const trap = try self.nextLabel("trap_null");
         const cont = try self.nextLabel("nonnull");
         try self.out.print(self.allocator, "  {s} = icmp eq ptr {s}, null\n", .{ is_null, value });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_NullUnwrap()\n  unreachable\n{s}:\n", .{ is_null, trap, cont, trap, cont });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_NullUnwrap(){s}\n  unreachable\n{s}:\n", .{ is_null, trap, cont, trap, try self.debugCallSuffix(), cont });
     }
 
     fn emitNullableIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr) !bool {
@@ -541,11 +583,11 @@ const LlvmEmitter = struct {
     fn emitNeverExpr(self: *LlvmEmitter, expr: ast.Expr) !bool {
         switch (expr.kind) {
             .unreachable_expr => {
-                try self.out.appendSlice(self.allocator, "  call void @mc_trap_Unreachable()\n  unreachable\n");
+                try self.out.print(self.allocator, "  call void @mc_trap_Unreachable(){s}\n  unreachable\n", .{try self.debugCallSuffix()});
                 return true;
             },
             .call => |call| if (trapHelperForCall(call)) |helper| {
-                try self.out.print(self.allocator, "  call void @{s}()\n  unreachable\n", .{helper});
+                try self.out.print(self.allocator, "  call void @{s}(){s}\n  unreachable\n", .{ helper, try self.debugCallSuffix() });
                 return true;
             },
             .grouped => |inner| return try self.emitNeverExpr(inner.*),
@@ -646,7 +688,7 @@ const LlvmEmitter = struct {
         }
         if (isCpuPauseCall(call.callee.*)) {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
-            try self.out.appendSlice(self.allocator, "  call void asm sideeffect \"pause\", \"~{memory}\"()\n");
+            try self.out.print(self.allocator, "  call void asm sideeffect \"pause\", \"~{{memory}}\"(){s}\n", .{try self.debugCallSuffix()});
             return true;
         }
         if (self.atomicCallInfo(call)) |info| {
@@ -916,7 +958,7 @@ const LlvmEmitter = struct {
         if (wildcard_index == null and !typeNameEql(self.resolveAliasType(subject_ty), "bool") and self.enumDeclForType(subject_ty) == null) all_terminated = false;
         if (all_terminated) {
             if (wildcard_index == null) {
-                try self.out.print(self.allocator, "{s}:\n  call void @mc_trap_InvalidRepresentation()\n  unreachable\n", .{end_label});
+                try self.out.print(self.allocator, "{s}:\n  call void @mc_trap_InvalidRepresentation(){s}\n  unreachable\n", .{ end_label, try self.debugCallSuffix() });
             }
             return true;
         }
@@ -976,10 +1018,26 @@ const LlvmEmitter = struct {
             .block => |block| try self.emitBlock(block, ret_ty),
             .expr => |expr| blk: {
                 const value = try self.emitExpr(expr, ret_ty);
-                try self.out.print(self.allocator, "  ret {s} {s}\n", .{ try self.llvmType(ret_ty), value });
+                try self.emitReturnValue(ret_ty, value, expr.span);
                 break :blk true;
             },
         };
+    }
+
+    fn emitReturnVoid(self: *LlvmEmitter, span: ast.Span) !void {
+        if (try self.debugLocation(span)) |dbg| {
+            try self.out.print(self.allocator, "  ret void, !dbg !{d}\n", .{dbg});
+        } else {
+            try self.out.appendSlice(self.allocator, "  ret void\n");
+        }
+    }
+
+    fn emitReturnValue(self: *LlvmEmitter, ret_ty: ast.TypeExpr, value: []const u8, span: ast.Span) !void {
+        if (try self.debugLocation(span)) |dbg| {
+            try self.out.print(self.allocator, "  ret {s} {s}, !dbg !{d}\n", .{ try self.llvmType(ret_ty), value, dbg });
+        } else {
+            try self.out.print(self.allocator, "  ret {s} {s}\n", .{ try self.llvmType(ret_ty), value });
+        }
     }
 
     fn emitAddressOf(self: *LlvmEmitter, target: ast.Expr) ![]const u8 {
@@ -1115,7 +1173,7 @@ const LlvmEmitter = struct {
         const trap = try self.nextLabel("trap_bounds");
         const cont = try self.nextLabel("bounds_ok");
         try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {d}\n", .{ ok, index, len });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds()\n  unreachable\n{s}:\n", .{ ok, cont, trap, trap, cont });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds(){s}\n  unreachable\n{s}:\n", .{ ok, cont, trap, trap, try self.debugCallSuffix(), cont });
     }
 
     fn emitDynamicBoundsCheck(self: *LlvmEmitter, index: []const u8, len: []const u8) !void {
@@ -1123,7 +1181,7 @@ const LlvmEmitter = struct {
         const trap = try self.nextLabel("trap_bounds");
         const cont = try self.nextLabel("bounds_ok");
         try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n", .{ ok, index, len });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds()\n  unreachable\n{s}:\n", .{ ok, cont, trap, trap, cont });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds(){s}\n  unreachable\n{s}:\n", .{ ok, cont, trap, trap, try self.debugCallSuffix(), cont });
     }
 
     fn emitSliceBoundsCheck(self: *LlvmEmitter, start: []const u8, end: []const u8, len: []const u8) !void {
@@ -1135,7 +1193,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = icmp ule i64 {s}, {s}\n", .{ ordered, start, end });
         try self.out.print(self.allocator, "  {s} = icmp ule i64 {s}, {s}\n", .{ in_len, end, len });
         try self.out.print(self.allocator, "  {s} = and i1 {s}, {s}\n", .{ ok, ordered, in_len });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds()\n  unreachable\n{s}:\n", .{ ok, cont, trap, trap, cont });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds(){s}\n  unreachable\n{s}:\n", .{ ok, cont, trap, trap, try self.debugCallSuffix(), cont });
     }
 
     fn emitSlice(self: *LlvmEmitter, node: anytype) ![]const u8 {
@@ -1252,7 +1310,7 @@ const LlvmEmitter = struct {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
         }
-        try self.out.appendSlice(self.allocator, ")\n");
+        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
         return result;
     }
 
@@ -1273,7 +1331,7 @@ const LlvmEmitter = struct {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
         }
-        try self.out.appendSlice(self.allocator, ")\n");
+        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
         return result;
     }
 
@@ -1364,7 +1422,7 @@ const LlvmEmitter = struct {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
         }
-        try self.out.appendSlice(self.allocator, ")\n");
+        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
     }
 
     fn emitBinary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {
@@ -1505,14 +1563,14 @@ const LlvmEmitter = struct {
         const left = try self.emitExpr(node.left.*, ty);
         const right = try self.emitExpr(node.right.*, ty);
         const pair = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}, {s} {s})\n", .{ pair, pair_ty, intrinsic, llvm_ty, left, llvm_ty, right });
+        try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}, {s} {s}){s}\n", .{ pair, pair_ty, intrinsic, llvm_ty, left, llvm_ty, right, try self.debugCallSuffix() });
         const value = try self.nextTemp();
         const overflow = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ value, pair_ty, pair });
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ overflow, pair_ty, pair });
         const cont = try self.nextLabel("cont");
         const trap = try self.nextLabel("trap_overflow");
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_IntegerOverflow()\n  unreachable\n{s}:\n", .{ overflow, trap, cont, trap, cont });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_IntegerOverflow(){s}\n  unreachable\n{s}:\n", .{ overflow, trap, cont, trap, try self.debugCallSuffix(), cont });
         return value;
     }
 
@@ -1524,7 +1582,7 @@ const LlvmEmitter = struct {
         const zero_trap = try self.nextLabel("trap_div_zero");
         const nonzero = try self.nextLabel("div_nonzero");
         try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, 0\n", .{ zero_cmp, llvm_ty, right });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_DivideByZero()\n  unreachable\n{s}:\n", .{ zero_cmp, zero_trap, nonzero, zero_trap, nonzero });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_DivideByZero(){s}\n  unreachable\n{s}:\n", .{ zero_cmp, zero_trap, nonzero, zero_trap, try self.debugCallSuffix(), nonzero });
 
         if (self.isSignedIntegerType(ty)) {
             const min_literal = self.signedMinLiteralOf(ty) orelse return error.UnsupportedLlvmEmission;
@@ -1536,7 +1594,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, {s}\n", .{ min_cmp, llvm_ty, left, min_literal });
             try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, -1\n", .{ neg_one_cmp, llvm_ty, right });
             try self.out.print(self.allocator, "  {s} = and i1 {s}, {s}\n", .{ overflow_cmp, min_cmp, neg_one_cmp });
-            try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_IntegerOverflow()\n  unreachable\n{s}:\n", .{ overflow_cmp, overflow_trap, safe, overflow_trap, safe });
+            try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_IntegerOverflow(){s}\n  unreachable\n{s}:\n", .{ overflow_cmp, overflow_trap, safe, overflow_trap, try self.debugCallSuffix(), safe });
         }
 
         const op: []const u8 = switch (node.op) {
@@ -1576,7 +1634,7 @@ const LlvmEmitter = struct {
             const neg_trap = try self.nextLabel("trap_shift_neg");
             const nonnegative = try self.nextLabel("shift_nonnegative");
             try self.out.print(self.allocator, "  {s} = icmp slt {s} {s}, 0\n", .{ negative, amount_llvm, amount });
-            try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_InvalidShift()\n  unreachable\n{s}:\n", .{ negative, neg_trap, nonnegative, neg_trap, nonnegative });
+            try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_InvalidShift(){s}\n  unreachable\n{s}:\n", .{ negative, neg_trap, nonnegative, neg_trap, try self.debugCallSuffix(), nonnegative });
         }
 
         const too_large = try self.nextTemp();
@@ -1584,7 +1642,7 @@ const LlvmEmitter = struct {
         const valid = try self.nextLabel("shift_count_ok");
         const pred: []const u8 = if (self.isSignedIntegerType(amount_ty)) "sge" else "uge";
         try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{ too_large, pred, amount_llvm, amount, shifted_bits });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_InvalidShift()\n  unreachable\n{s}:\n", .{ too_large, invalid, valid, invalid, valid });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_InvalidShift(){s}\n  unreachable\n{s}:\n", .{ too_large, invalid, valid, invalid, try self.debugCallSuffix(), valid });
     }
 
     fn emitLeftShiftOverflowCheck(self: *LlvmEmitter, result: []const u8, left: []const u8, amount: []const u8, ty: ast.TypeExpr, llvm_ty: []const u8) !void {
@@ -1594,7 +1652,7 @@ const LlvmEmitter = struct {
         const overflow_trap = try self.nextLabel("trap_shift_overflow");
         const ok = try self.nextLabel("shift_overflow_ok");
         try self.out.print(self.allocator, "  {s} = icmp ne {s} {s}, {s}\n", .{ overflow, llvm_ty, reversed, left });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_IntegerOverflow()\n  unreachable\n{s}:\n", .{ overflow, overflow_trap, ok, overflow_trap, ok });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_IntegerOverflow(){s}\n  unreachable\n{s}:\n", .{ overflow, overflow_trap, ok, overflow_trap, try self.debugCallSuffix(), ok });
     }
 
     fn emitPlainBinary(self: *LlvmEmitter, op: []const u8, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
@@ -1642,6 +1700,53 @@ const LlvmEmitter = struct {
             const bits = intrinsicBits(name.*) orelse continue;
             try self.out.print(self.allocator, "declare {{ i{d}, i1 }} @{s}(i{d}, i{d})\n", .{ bits, name.*, bits, bits });
         }
+    }
+
+    fn emitDebugMetadata(self: *LlvmEmitter) !void {
+        if (self.debug_functions.items.len == 0) return;
+        const escaped_path = try escapedLlvmString(self.scratch.allocator(), self.source_path);
+        try self.out.appendSlice(self.allocator, "\n!llvm.dbg.cu = !{!0}\n");
+        try self.out.appendSlice(self.allocator, "!llvm.module.flags = !{!2, !3}\n");
+        try self.out.print(self.allocator, "!0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, producer: \"mcc emit-llvm\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug)\n", .{});
+        try self.out.print(self.allocator, "!1 = !DIFile(filename: \"{s}\", directory: \".\")\n", .{escaped_path});
+        try self.out.appendSlice(self.allocator, "!2 = !{i32 2, !\"Debug Info Version\", i32 3}\n");
+        try self.out.appendSlice(self.allocator, "!3 = !{i32 1, !\"wchar_size\", i32 4}\n");
+        try self.out.appendSlice(self.allocator, "!4 = !DISubroutineType(types: !5)\n");
+        try self.out.appendSlice(self.allocator, "!5 = !{null}\n");
+        for (self.debug_functions.items) |function| {
+            const name = try escapedLlvmString(self.scratch.allocator(), function.name);
+            try self.out.print(
+                self.allocator,
+                "!{d} = distinct !DISubprogram(name: \"{s}\", linkageName: \"{s}\", scope: !1, file: !1, line: {d}, type: !4, scopeLine: {d}, spFlags: DISPFlagDefinition, unit: !0)\n",
+                .{ function.id, name, name, function.line, function.line },
+            );
+        }
+        for (self.debug_locations.items) |location| {
+            try self.out.print(
+                self.allocator,
+                "!{d} = !DILocation(line: {d}, column: {d}, scope: !{d})\n",
+                .{ location.id, location.line, location.column, location.scope },
+            );
+        }
+    }
+
+    fn debugLocation(self: *LlvmEmitter, span: ast.Span) !?usize {
+        const scope = self.current_debug_scope orelse return null;
+        const id = self.debug_next_id;
+        self.debug_next_id += 1;
+        try self.debug_locations.append(self.allocator, .{
+            .id = id,
+            .scope = scope,
+            .line = debugLine(span),
+            .column = debugColumn(span),
+        });
+        return id;
+    }
+
+    fn debugCallSuffix(self: *LlvmEmitter) ![]const u8 {
+        const span = self.current_debug_span orelse return "";
+        const location = (try self.debugLocation(span)) orelse return "";
+        return try std.fmt.allocPrint(self.scratch.allocator(), ", !dbg !{d}", .{location});
     }
 
     fn llvmType(self: *LlvmEmitter, ty: ast.TypeExpr) anyerror![]const u8 {
@@ -2063,11 +2168,26 @@ const LocalSlot = struct {
 const FnSig = struct {
     ret: ast.TypeExpr,
     params: []const ast.Param,
+    debug_id: ?usize = null,
 };
 
 const ArgValue = struct {
     ty: ast.TypeExpr,
     value: []const u8,
+};
+
+const DebugFunction = struct {
+    id: usize,
+    name: []const u8,
+    line: usize,
+    column: usize,
+};
+
+const DebugLocation = struct {
+    id: usize,
+    scope: usize,
+    line: usize,
+    column: usize,
 };
 
 const LoopLabels = struct {
@@ -2139,6 +2259,29 @@ fn structLiteralField(fields: []const ast.StructLiteralField, field_name: []cons
 
 fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .span = span, .text = name } } };
+}
+
+fn debugLine(span: ast.Span) usize {
+    return if (span.line == 0) 1 else span.line;
+}
+
+fn debugColumn(span: ast.Span) usize {
+    return if (span.column == 0) 1 else span.column;
+}
+
+fn escapedLlvmString(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    var escaped: std.ArrayList(u8) = .empty;
+    for (text) |ch| {
+        switch (ch) {
+            '\\' => try escaped.appendSlice(allocator, "\\5C"),
+            '"' => try escaped.appendSlice(allocator, "\\22"),
+            '\n' => try escaped.appendSlice(allocator, "\\0A"),
+            '\r' => try escaped.appendSlice(allocator, "\\0D"),
+            '\t' => try escaped.appendSlice(allocator, "\\09"),
+            else => try escaped.append(allocator, ch),
+        }
+    }
+    return escaped.toOwnedSlice(allocator);
 }
 
 fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
