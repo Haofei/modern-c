@@ -2654,7 +2654,7 @@ pub const Checker = struct {
                 self.errorCode(target.args[0].span, "E_REFLECTION_FIELD_LITERAL", "field reflection requires an enum-literal field name");
                 return reflectionReturnClass(kind);
             };
-            self.checkReflectedField(reflected_ty, field, ctx);
+            self.checkReflectedField(kind, reflected_ty, field, ctx);
         } else if (target.args.len != 0) {
             self.errorCode(span, "E_CALL_ARG_COUNT", "type reflection builtin does not take runtime arguments");
         }
@@ -2719,7 +2719,7 @@ pub const Checker = struct {
         }
     }
 
-    fn checkReflectedField(self: *Checker, ty: ast.TypeExpr, field: ast.Ident, ctx: Context) void {
+    fn checkReflectedField(self: *Checker, kind: ReflectionKind, ty: ast.TypeExpr, field: ast.Ident, ctx: Context) void {
         const name = typeName(ty) orelse {
             self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "field reflection requires a known field-bearing layout type");
             return;
@@ -2727,6 +2727,22 @@ pub const Checker = struct {
         if (layoutFieldInfo(name, ctx)) |info| {
             if (!info.fields.contains(field.text)) {
                 self.errorCode(field.span, "E_UNKNOWN_STRUCT_FIELD", "layout type has no field with this name");
+            }
+        } else if (kind == .field_type) {
+            const tagged_unions = ctx.tagged_unions orelse {
+                self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "field reflection requires a known field-bearing layout type");
+                return;
+            };
+            const union_info = tagged_unions.get(name) orelse {
+                self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "field reflection requires a known field-bearing layout type");
+                return;
+            };
+            const payload_ty = union_info.cases.get(field.text) orelse {
+                self.errorCode(field.span, "E_UNKNOWN_STRUCT_FIELD", "layout type has no field with this name");
+                return;
+            };
+            if (payload_ty == null) {
+                self.errorCode(field.span, "E_UNION_CASE_HAS_NO_PAYLOAD", "union case has no payload type");
             }
         } else {
             self.errorCode(ty.span, "E_REFLECTION_UNKNOWN_TYPE", "field reflection requires a known field-bearing layout type");
@@ -5488,8 +5504,10 @@ fn fieldTypeArgName(call: anytype, ctx: Context) ?[]const u8 {
 
 fn reflectedFieldType(ty: ast.TypeExpr, field: []const u8, ctx: Context) ?ast.TypeExpr {
     const name = typeName(ty) orelse return null;
-    const layout = layoutFieldInfo(name, ctx) orelse return null;
-    return layout.fields.get(field);
+    if (layoutFieldInfo(name, ctx)) |layout| return layout.fields.get(field);
+    const tagged_unions = ctx.tagged_unions orelse return null;
+    const union_info = tagged_unions.get(name) orelse return null;
+    return union_info.cases.get(field) orelse null;
 }
 
 // The struct name a type expression directly names (a known struct/move type),

@@ -93,3 +93,10 @@ fn reflect_identity(comptime T: type, value: T) -> T {
 fn accept_field_type_type_arg(packet: Packet) -> u16 {
     return reflect_identity(field_type(Packet, .len), packet.len);
 }
+
+fn accept_tagged_union_payload_field_type(token: ReflectToken) -> u32 {
+    switch token {
+        number(n) => { return reflect_identity(field_type(ReflectToken, .number), n); },
+        .eof => { return 0; },
+    }
+}

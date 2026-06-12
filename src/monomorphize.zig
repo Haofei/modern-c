@@ -100,6 +100,9 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
             .overlay_union_decl => |ou| {
                 try collectFieldTypes(arena, &field_types, ou.name.text, ou.fields);
             },
+            .union_decl => |u| {
+                try collectUnionCaseTypes(arena, &field_types, u);
+            },
             // Record integer module consts (folded against earlier ones), so they can be
             // used as const-generic arguments.
             .global_decl => |g| {
@@ -214,6 +217,16 @@ fn collectFieldTypes(arena: std.mem.Allocator, out: *std.StringHashMap(std.Strin
         if (!map.contains(field.name.text)) try map.put(field.name.text, field.ty);
     }
     try out.put(name, map);
+}
+
+fn collectUnionCaseTypes(arena: std.mem.Allocator, out: *std.StringHashMap(std.StringHashMap(ast.TypeExpr)), union_decl: ast.UnionDecl) !void {
+    if (out.contains(union_decl.name.text)) return;
+    var map = std.StringHashMap(ast.TypeExpr).init(arena);
+    for (union_decl.cases) |case| {
+        const ty = case.ty orelse continue;
+        if (!map.contains(case.name.text)) try map.put(case.name.text, ty);
+    }
+    try out.put(union_decl.name.text, map);
 }
 
 // Returns the names of the comptime parameters a function is generic over (used

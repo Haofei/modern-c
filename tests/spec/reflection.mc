@@ -112,6 +112,13 @@ fn accept_field_type_type_arg(packet: Packet) -> void {
     accept_reflected_field_type_arg(field_type(Packet, .len), packet.len);
 }
 
+fn accept_tagged_union_payload_field_type(token: ReflectToken) -> void {
+    switch token {
+        number(n) => { accept_reflected_field_type_arg(field_type(ReflectToken, .number), n); },
+        .eof => {},
+    }
+}
+
 fn reject_field_type_value() -> usize {
     // EXPECT_ERROR: E_REFLECTION_TYPE_VALUE
     return field_type(Packet, .len);

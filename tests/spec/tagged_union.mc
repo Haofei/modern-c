@@ -67,6 +67,11 @@ fn reject_union_field_reflection() -> usize {
     return field_offset<Token>(.int);
 }
 
+fn reject_payloadless_union_field_type() -> usize {
+    // EXPECT_ERROR: E_UNION_CASE_HAS_NO_PAYLOAD
+    return field_type<Token>(.eof);
+}
+
 fn reject_comptime_union_layout_reflection() -> void {
     comptime {
         // EXPECT_ERROR: E_COMPTIME_TRAP

@@ -63,7 +63,8 @@ Prototype or incomplete:
   loops/for/switch/asserts, top-level comptime block assignments/loops/switches,
   aggregate literals and mutable aggregate updates, comptime/type feedback, and
   C-ABI layout reflection for size/alignment/offsets/repr, including slices and
-  tagged unions, plus `field_type` in type-argument position; broader arbitrary
+  tagged unions, plus `field_type` in type-argument position for fields and
+  tagged-union payload cases; broader arbitrary
   interpreter coverage is still incomplete.
 - Production MIR optimizer use: MIR records and consumes scoped no-overflow
   range facts for covered unchecked arithmetic; broader range algebra and
