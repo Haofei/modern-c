@@ -4698,7 +4698,7 @@ fn isAddressClass(kind: TypeClass) bool {
 }
 
 fn isBitcastLayoutClass(kind: TypeClass) bool {
-    return isCheckedInt(kind) or kind == .bool or isPointerLike(kind) or isAddressClass(kind);
+    return isCheckedInt(kind) or isFloat(kind) or kind == .bool or isPointerLike(kind) or isAddressClass(kind);
 }
 
 fn isBitcastLayoutType(ty: ast.TypeExpr, ctx: Context) bool {

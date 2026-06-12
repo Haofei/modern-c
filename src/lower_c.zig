@@ -7863,6 +7863,7 @@ const CEmitter = struct {
                 break :blk info.return_type;
             },
             .cast => |node| node.ty.*,
+            .index => |node| if (locals) |local_set| CEmitter.localIndexElementType(node.base.*, local_set) else null,
             .grouped => |inner| self.exprSourceTypeForEmission(inner.*, locals),
             else => null,
         };

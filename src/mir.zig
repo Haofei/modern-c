@@ -4567,7 +4567,7 @@ fn assignmentTargetIdentName(expr: ast.Expr) ?[]const u8 {
 // `.unknown` is treated as valid to avoid false positives.
 fn isMirBitcastLayout(ty: ValueType) bool {
     return switch (ty) {
-        .integer, .bool, .pointer, .nullable_pointer, .address, .unknown => true,
+        .integer, .float, .bool, .pointer, .nullable_pointer, .address, .unknown => true,
         else => false,
     };
 }
