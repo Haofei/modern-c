@@ -8,9 +8,14 @@ struct MatrixBox {
     rows: [2][2]u32,
 }
 
+struct RowBox {
+    row: [2]u32,
+}
+
 global default_cells: [2]Cell = .{ .{ .value = 1 }, .{ .value = 2 } };
 global default_matrix: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };
 global default_box: MatrixBox = .{ .rows = .{ .{ 1, 2 }, .{ 3, 4 } } };
+global default_row_boxes: [2]RowBox = .{ .{ .row = .{ 1, 2 } }, .{ .row = .{ 3, 4 } } };
 
 extern fn consume_array(xs: [2]u32) -> void;
 
@@ -75,4 +80,24 @@ fn struct_field_nested_array_element() -> u32 {
 
 fn struct_field_nested_array_row() -> [2]u32 {
     return default_box.rows[1];
+}
+
+fn assign_struct_field_nested_array_element() -> void {
+    default_box.rows[1][0] = 9;
+}
+
+fn assign_struct_field_nested_array_row() -> void {
+    default_box.rows[0] = .{10, 11};
+}
+
+fn array_struct_field_array_element() -> u32 {
+    return default_row_boxes[1].row[0];
+}
+
+fn assign_array_struct_field_array_element() -> void {
+    default_row_boxes[1].row[0] = 9;
+}
+
+fn assign_array_struct_field_array() -> void {
+    default_row_boxes[0].row = .{10, 11};
 }
