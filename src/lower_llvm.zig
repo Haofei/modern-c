@@ -1751,6 +1751,7 @@ const LlvmEmitter = struct {
             const value = try self.emitExpr(call.args[0], source_ty);
             if (std.mem.eql(u8, info.op, "trap_from")) return try self.emitTrapConversion(value, source_ty, info.target_ty);
             if (std.mem.eql(u8, info.op, "sat_from")) return try self.emitSaturatingConversion(value, source_ty, info.target_ty);
+            if (std.mem.eql(u8, info.op, "try_from")) return try self.emitTryConversion(value, source_ty, info.target_ty);
             if (!std.mem.eql(u8, info.op, "from") and !std.mem.eql(u8, info.op, "wrap_from") and !std.mem.eql(u8, info.op, "from_mod")) return error.UnsupportedLlvmEmission;
             return try self.castValue(value, source_ty, info.target_ty);
         }
@@ -2047,6 +2048,21 @@ const LlvmEmitter = struct {
         return try self.castValue(current, source_ty, target_ty);
     }
 
+    fn emitTryConversion(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+        const result_ty = try self.resultType(target_ty, simpleType(target_ty.span, "ConversionError"), target_ty.span);
+        const converted = try self.castValue(value, source_ty, target_ty);
+        const out_of_range = try self.emitConversionOutOfRange(value, source_ty, target_ty);
+        if (out_of_range) |check| {
+            const tag = try self.nextTemp();
+            const selected_payload = try self.nextTemp();
+            const target_llvm = try self.resultPayloadLlvmType(target_ty);
+            try self.out.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ tag, check });
+            try self.out.print(self.allocator, "  {s} = select i1 {s}, {s} {s}, {s} {s}\n", .{ selected_payload, check, target_llvm, try self.resultPayloadZero(target_ty), target_llvm, converted });
+            return try self.emitResultValue(result_ty, tag, selected_payload, "0");
+        }
+        return try self.emitResultValue(result_ty, "true", converted, "0");
+    }
+
     fn emitConversionOutOfRange(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) !?[]const u8 {
         const src_range = self.intRangeOf(source_ty) orelse return error.UnsupportedLlvmEmission;
         const dst_range = self.intRangeOf(target_ty) orelse return error.UnsupportedLlvmEmission;
@@ -2277,6 +2293,18 @@ const LlvmEmitter = struct {
         return with_err;
     }
 
+    fn emitResultValue(self: *LlvmEmitter, result_ty: ast.TypeExpr, is_ok: []const u8, ok_value: []const u8, err_value: []const u8) ![]const u8 {
+        const info = self.resultInfo(result_ty) orelse return error.UnsupportedLlvmEmission;
+        const result_llvm = try self.llvmType(result_ty);
+        const tagged = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} undef, i1 {s}, 0\n", .{ tagged, result_llvm, is_ok });
+        const with_ok = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ with_ok, result_llvm, tagged, try self.resultPayloadLlvmType(info.ok_ty), ok_value });
+        const with_err = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 2\n", .{ with_err, result_llvm, with_ok, try self.resultPayloadLlvmType(info.err_ty), err_value });
+        return with_err;
+    }
+
     fn emitResultPayloadExpr(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
         if (typeNameEql(self.resolveAliasType(ty), "void")) return "0";
         return try self.emitExpr(expr, ty);
@@ -2287,9 +2315,16 @@ const LlvmEmitter = struct {
         return try self.zeroInitializer(ty);
     }
 
+    fn resultType(self: *LlvmEmitter, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr, span: ast.Span) !ast.TypeExpr {
+        const args = try self.scratch.allocator().alloc(ast.TypeExpr, 2);
+        args[0] = ok_ty;
+        args[1] = err_ty;
+        return .{ .span = span, .kind = .{ .generic = .{ .base = .{ .text = "Result", .span = span }, .args = args } } };
+    }
+
     fn emitDomainOpCall(self: *LlvmEmitter, call: anytype, info: DomainOpCallInfo) ![]const u8 {
         if (call.type_args.len != 0) return error.UnsupportedLlvmEmission;
-        const expected_args: usize = if (std.mem.eql(u8, info.op, "elapsed_assume_within")) 3 else 2;
+        const expected_args: usize = if (std.mem.eql(u8, info.op, "elapsed_assume_within") or std.mem.eql(u8, info.op, "elapsed_bounded")) 3 else 2;
         if (call.args.len != expected_args) return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(info.payload_ty);
         const left = try self.emitExpr(call.args[0], info.domain_ty);
@@ -2301,7 +2336,39 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, 0\n", .{ result, pred, llvm_ty, diff });
             return result;
         }
+        if (std.mem.eql(u8, info.op, "compare")) {
+            const min = try self.signedWindowMinLiteral(info.payload_ty);
+            const ambiguous = try self.nextTemp();
+            const not_ambiguous = try self.nextTemp();
+            const is_lt = try self.nextTemp();
+            const is_gt = try self.nextTemp();
+            const nonnegative_order = try self.nextTemp();
+            const order = try self.nextTemp();
+            const selected_order = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, {s}\n", .{ ambiguous, llvm_ty, diff, min });
+            try self.out.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ not_ambiguous, ambiguous });
+            try self.out.print(self.allocator, "  {s} = icmp slt {s} {s}, 0\n", .{ is_lt, llvm_ty, diff });
+            try self.out.print(self.allocator, "  {s} = icmp sgt {s} {s}, 0\n", .{ is_gt, llvm_ty, diff });
+            try self.out.print(self.allocator, "  {s} = select i1 {s}, i8 1, i8 0\n", .{ nonnegative_order, is_gt });
+            try self.out.print(self.allocator, "  {s} = select i1 {s}, i8 -1, i8 {s}\n", .{ order, is_lt, nonnegative_order });
+            try self.out.print(self.allocator, "  {s} = select i1 {s}, i8 0, i8 {s}\n", .{ selected_order, ambiguous, order });
+            return try self.emitResultValue(info.return_ty, not_ambiguous, selected_order, "0");
+        }
+        if (std.mem.eql(u8, info.op, "elapsed_bounded")) {
+            const max = try self.emitExpr(call.args[2], try self.durationType(info.payload_ty, call.args[2].span));
+            const in_range = try self.nextTemp();
+            const selected_delta = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = icmp ule {s} {s}, {s}\n", .{ in_range, llvm_ty, diff, max });
+            try self.out.print(self.allocator, "  {s} = select i1 {s}, {s} {s}, {s} 0\n", .{ selected_delta, in_range, llvm_ty, diff, llvm_ty });
+            return try self.emitResultValue(info.return_ty, in_range, selected_delta, "0");
+        }
         return diff;
+    }
+
+    fn durationType(self: *LlvmEmitter, payload_ty: ast.TypeExpr, span: ast.Span) !ast.TypeExpr {
+        const args = try self.scratch.allocator().alloc(ast.TypeExpr, 1);
+        args[0] = payload_ty;
+        return .{ .span = span, .kind = .{ .generic = .{ .base = .{ .text = "Duration", .span = span }, .args = args } } };
     }
 
     fn overflowIntrinsic(self: *LlvmEmitter, op: ast.BinaryOp, signed: bool, bits: u16) ![]const u8 {
@@ -2821,7 +2888,12 @@ const LlvmEmitter = struct {
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
         if (self.domainOpCallInfo(call)) |info| return info.return_ty;
-        if (self.conversionCallInfo(call)) |info| return info.target_ty;
+        if (self.conversionCallInfo(call)) |info| {
+            if (std.mem.eql(u8, info.op, "try_from")) {
+                return self.resultType(info.target_ty, simpleType(call.callee.*.span, "ConversionError"), call.callee.*.span) catch null;
+            }
+            return info.target_ty;
+        }
         if (uncheckedBuiltinOp(call.callee.*) != null and call.args.len == 2) return self.exprType(call.args[0]);
         if (self.atomicCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
@@ -2887,7 +2959,8 @@ const LlvmEmitter = struct {
             !std.mem.eql(u8, member.name.text, "wrap_from") and
             !std.mem.eql(u8, member.name.text, "from_mod") and
             !std.mem.eql(u8, member.name.text, "trap_from") and
-            !std.mem.eql(u8, member.name.text, "sat_from"))
+            !std.mem.eql(u8, member.name.text, "sat_from") and
+            !std.mem.eql(u8, member.name.text, "try_from"))
         {
             return null;
         }
@@ -2913,9 +2986,11 @@ const LlvmEmitter = struct {
         const op = member.name.text;
         const is_serial_op = std.mem.eql(u8, op, "before") or
             std.mem.eql(u8, op, "after") or
-            std.mem.eql(u8, op, "distance");
+            std.mem.eql(u8, op, "distance") or
+            std.mem.eql(u8, op, "compare");
         const is_counter_op = std.mem.eql(u8, op, "delta_mod") or
-            std.mem.eql(u8, op, "elapsed_assume_within");
+            std.mem.eql(u8, op, "elapsed_assume_within") or
+            std.mem.eql(u8, op, "elapsed_bounded");
         if (!is_serial_op and !is_counter_op) return null;
         const ident = switch (member.base.kind) {
             .ident => |id| id,
@@ -2931,10 +3006,15 @@ const LlvmEmitter = struct {
         const is_serial = std.mem.eql(u8, generic.base.text, "serial");
         const is_counter = std.mem.eql(u8, generic.base.text, "counter");
         if ((is_serial_op and !is_serial) or (is_counter_op and !is_counter)) return null;
+        const duration_ty: ast.TypeExpr = .{ .span = member.name.span, .kind = .{ .generic = .{ .base = .{ .text = "Duration", .span = member.name.span }, .args = generic.args } } };
         const return_ty: ast.TypeExpr = if (std.mem.eql(u8, op, "before") or std.mem.eql(u8, op, "after"))
             simpleType(member.name.span, "bool")
+        else if (std.mem.eql(u8, op, "compare"))
+            self.resultType(simpleType(member.name.span, "Order"), simpleType(member.name.span, "AmbiguousSerialOrder"), member.name.span) catch return null
         else if (std.mem.eql(u8, op, "elapsed_assume_within"))
-            .{ .span = member.name.span, .kind = .{ .generic = .{ .base = .{ .text = "Duration", .span = member.name.span }, .args = generic.args } } }
+            duration_ty
+        else if (std.mem.eql(u8, op, "elapsed_bounded"))
+            self.resultType(duration_ty, simpleType(member.name.span, "AmbiguousCounterInterval"), member.name.span) catch return null
         else
             .{ .span = member.name.span, .kind = .{ .generic = .{ .base = .{ .text = "wrap", .span = member.name.span }, .args = generic.args } } };
         return .{ .domain_ty = domain_ty, .payload_ty = generic.args[0], .return_ty = return_ty, .op = op };
@@ -3264,6 +3344,12 @@ const LlvmEmitter = struct {
     fn signedMinLiteralOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?[]const u8 {
         if (self.enumDeclForType(ty)) |enum_decl| return self.signedMinLiteralOf(enumReprType(enum_decl));
         return signedMinLiteral(self.resolveAliasType(ty));
+    }
+
+    fn signedWindowMinLiteral(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
+        const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const value = -(@as(i128, 1) << @intCast(bits - 1));
+        return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 
     fn rawManyOffsetCallInfo(self: *LlvmEmitter, call: anytype) ?RawManyOffsetInfo {

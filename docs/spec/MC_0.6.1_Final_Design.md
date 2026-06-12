@@ -4013,9 +4013,10 @@ Floating-point scalar lowering covers `f32`/`f64` literals, globals, calls,
 locals, arithmetic, comparison, and unary negation. Domain scalar lowering covers
 `wrap<T>`/`sat<T>` payload representation, `serial<T>`/`counter<T>`/`Duration<T>`
 scalar storage, `wrap` modular add/sub/mul/bitwise/shift and unary negation,
-unsigned `sat` add/sub/mul, serial `before`/`after`/`distance`, counter
-`delta_mod`, scalar conversion calls `from`/`trap_from`/`sat_from`/`wrap_from`/
-`from_mod`, `wrap.residue()`, and `wrapping.add`/`sub`/`mul`. Statement workflow covers
+unsigned `sat` add/sub/mul, serial `before`/`after`/`distance`/`compare`,
+counter `delta_mod`/`elapsed_assume_within`/`elapsed_bounded`, scalar conversion
+calls `from`/`try_from`/`trap_from`/`sat_from`/`wrap_from`/`from_mod`,
+`wrap.residue()`, and `wrapping.add`/`sub`/`mul`. Statement workflow covers
 expression statements, void calls, `assert`, nested blocks, unsafe blocks, and
 transparent unsafe-contract blocks. Unsafe-contract arithmetic lowering covers
 `unchecked.add`/`sub`/`mul` as plain arithmetic after semantic contract
@@ -4056,7 +4057,7 @@ object-output coverage in `zig build llvm-obj-test`.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
 Full aggregate ABI breadth, richer iterable forms, broader slice/pattern
-workflows, and fuller debug mapping remain future work.
+workflows, full `?` propagation, and fuller debug mapping remain future work.
 
 LLVM lowering examples:
 
