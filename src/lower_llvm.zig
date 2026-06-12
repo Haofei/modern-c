@@ -58,6 +58,12 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
             if (fn_decl.is_const and !ctx.const_fns.contains(fn_decl.name.text)) try ctx.const_fns.put(fn_decl.name.text, fn_decl);
         }
     }
+    try ctx.preRegisterTypeDecls(module);
+    try eval.collectConstGlobalsWithOptions(allocator, module, &ctx.const_fns, &ctx.const_globals, .{
+        .reflect = llvmComptimeReflectThunk,
+        .reflect_ctx = &ctx,
+    });
+    try ctx.collectConstGlobalWidths(module);
     for (module.decls) |decl| {
         switch (decl.kind) {
             .packed_bits_decl => |packed_bits| try ctx.collectPackedBits(packed_bits),
@@ -79,11 +85,6 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
             else => {},
         }
     }
-    try eval.collectConstGlobalsWithOptions(allocator, module, &ctx.const_fns, &ctx.const_globals, .{
-        .reflect = llvmComptimeReflectThunk,
-        .reflect_ctx = &ctx,
-    });
-    try ctx.collectConstGlobalWidths(module);
     for (module.decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| try ctx.collectFunction(fn_decl),
@@ -203,6 +204,28 @@ const LlvmEmitter = struct {
             const ty = global.ty orelse continue;
             const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
             try self.const_global_widths.put(global.name.text, bits);
+        }
+    }
+
+    fn preRegisterTypeDecls(self: *LlvmEmitter, module: ast.Module) !void {
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
+                .enum_decl => |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl),
+                .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
+                .packed_bits_decl => |packed_bits| try self.packed_bits.put(packed_bits.name.text, .{
+                    .repr = packed_bits.repr,
+                    .fields = packed_bits.fields,
+                }),
+                .struct_decl => |struct_decl| {
+                    if (struct_decl.type_params.len != 0) return error.UnsupportedLlvmEmission;
+                    if (struct_decl.abi) |abi| {
+                        if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
+                    }
+                    try self.struct_types.put(struct_decl.name.text, struct_decl);
+                },
+                else => {},
+            }
         }
     }
 
@@ -906,6 +929,10 @@ const LlvmEmitter = struct {
 
     fn emitExprStatement(self: *LlvmEmitter, expr: ast.Expr) !void {
         switch (expr.kind) {
+            .unreachable_expr => {
+                _ = try self.emitNeverExpr(expr);
+                return;
+            },
             .call => |call| {
                 if (isDropCall(call.callee.*)) {
                     if (call.args.len != 1) return error.UnsupportedLlvmEmission;
@@ -915,18 +942,8 @@ const LlvmEmitter = struct {
                 }
                 if (try self.emitBuiltinVoidCall(call)) return;
                 if (self.callReturnType(call)) |ret_ty| {
-                    if (!typeNameEql(ret_ty, "void")) {
-                        _ = try self.emitCall(call, ret_ty);
-                        return;
-                    }
-                }
-                const callee = switch (call.callee.kind) {
-                    .ident => |ident| ident.text,
-                    else => return error.UnsupportedLlvmEmission,
-                };
-                if (self.callReturnType(call)) |ret_ty| {
                     if (typeNameEql(ret_ty, "void")) {
-                        try self.emitVoidCall(callee, call);
+                        try self.emitVoidStatementCall(call);
                         return;
                     }
                     _ = try self.emitCall(call, ret_ty);
@@ -2174,6 +2191,25 @@ const LlvmEmitter = struct {
         return result;
     }
 
+    fn emitFnPointerVoidCall(self: *LlvmEmitter, callee_expr: ast.Expr, args_expr: []const ast.Expr, fn_ty: ast.TypeExpr) !void {
+        const sig = fn_ty.kind.fn_pointer;
+        if (!typeNameEql(sig.ret.*, "void")) return error.UnsupportedLlvmEmission;
+        if (args_expr.len != sig.params.len) return error.UnsupportedLlvmEmission;
+        const callee = try self.emitExpr(callee_expr, fn_ty);
+        var args: std.ArrayList(ArgValue) = .empty;
+        defer args.deinit(self.allocator);
+        for (args_expr, 0..) |arg, i| {
+            const arg_ty = sig.params[i];
+            try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExpr(arg, arg_ty) });
+        }
+        try self.out.print(self.allocator, "  call void {s}(", .{callee});
+        for (args.items, 0..) |arg, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
+        }
+        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
+    }
+
     fn emitClosureCall(self: *LlvmEmitter, callee_expr: ast.Expr, args_expr: []const ast.Expr, closure_ty: ast.TypeExpr) ![]const u8 {
         const sig = closure_ty.kind.closure_type;
         if (typeNameEql(sig.ret.*, "void")) return error.UnsupportedLlvmEmission;
@@ -2196,6 +2232,28 @@ const LlvmEmitter = struct {
         }
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
         return result;
+    }
+
+    fn emitClosureVoidCall(self: *LlvmEmitter, callee_expr: ast.Expr, args_expr: []const ast.Expr, closure_ty: ast.TypeExpr) !void {
+        const sig = closure_ty.kind.closure_type;
+        if (!typeNameEql(sig.ret.*, "void")) return error.UnsupportedLlvmEmission;
+        if (args_expr.len != sig.params.len) return error.UnsupportedLlvmEmission;
+        const callee = try self.emitExpr(callee_expr, closure_ty);
+        const code = try self.nextTemp();
+        const env = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ code, try self.llvmType(closure_ty), callee });
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ env, try self.llvmType(closure_ty), callee });
+        var args: std.ArrayList(ArgValue) = .empty;
+        defer args.deinit(self.allocator);
+        for (args_expr, 0..) |arg, i| {
+            const arg_ty = sig.params[i];
+            try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExpr(arg, arg_ty) });
+        }
+        try self.out.print(self.allocator, "  call void {s}(ptr {s}", .{ code, env });
+        for (args.items) |arg| {
+            try self.out.print(self.allocator, ", {s} {s}", .{ try self.llvmType(arg.ty), arg.value });
+        }
+        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
     }
 
     fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) !?[]const u8 {
@@ -2383,6 +2441,22 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
         }
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
+    }
+
+    fn emitVoidStatementCall(self: *LlvmEmitter, call: anytype) !void {
+        if (self.directCallName(call.callee.*)) |callee| {
+            try self.emitVoidCall(callee, call);
+            return;
+        }
+        if (self.closureCalleeType(call.callee.*)) |closure_ty| {
+            try self.emitClosureVoidCall(call.callee.*, call.args, closure_ty);
+            return;
+        }
+        if (self.fnPointerCalleeType(call.callee.*)) |fn_ty| {
+            try self.emitFnPointerVoidCall(call.callee.*, call.args, fn_ty);
+            return;
+        }
+        return error.UnsupportedLlvmEmission;
     }
 
     fn emitBinary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {

@@ -4157,6 +4157,10 @@ object files under the same hidden-assumption token check.
 The `zig build llvm-hosted-demo-test` gate links and runs the hosted
 elementwise demo through LLVM, libc, and libm, then verifies its binary
 stdin/stdout `f32` round trip.
+The `zig build llvm-host-suite-test` gate reuses selected data-driven host
+tests (`byteview-test`, `constgen-test`, `arena-test`, `ring-test`,
+`ramfs-test`, and `udp-test`) with each MC fixture compiled through LLVM,
+linked to the existing C host driver, and run.
 These LLVM IR, object, and link/run gates are included in the `zig build m0`
 milestone gate.
 It intentionally emits no hidden optimizer-assumption tokens outside proven

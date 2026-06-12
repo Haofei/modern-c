@@ -8,6 +8,10 @@ fn unreachable_as_value() -> u32 {
     return unreachable;
 }
 
+fn unreachable_statement() -> void {
+    unreachable;
+}
+
 fn never_returns_by_trap() -> never {
     return trap(.Assert);
 }

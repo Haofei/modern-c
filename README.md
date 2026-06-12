@@ -256,6 +256,7 @@ zig build llvm-std-test
 zig build llvm-pkg-test
 zig build llvm-demo-test
 zig build llvm-hosted-demo-test
+zig build llvm-host-suite-test
 ```
 
 Run the compiler prototype:
@@ -327,7 +328,11 @@ llvm-demo-test` compiles the framebuffer/gpio/irq/spi/timer/uart hardware demo
 drivers and the hosted elementwise demo through LLVM to non-empty objects under
 the same hidden-assumption token check. `zig build llvm-hosted-demo-test`
 links and runs the hosted elementwise demo through LLVM, libc, and libm, then
-verifies the binary stdin/stdout `f32` round trip.
+verifies the binary stdin/stdout `f32` round trip. `zig build
+llvm-host-suite-test` reuses selected data-driven host tests
+(`byteview-test`, `constgen-test`, `arena-test`, `ring-test`, `ramfs-test`,
+and `udp-test`) with each MC fixture compiled through LLVM, linked to the
+existing C host driver, and run.
 
 ## Conformance Snapshot
 
