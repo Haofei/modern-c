@@ -3984,7 +3984,9 @@ Nested fixed-array/struct element and field access works for the covered
 aggregate subset, including materialized aggregate rvalues from direct calls
 when indexing, field access, slicing, or array iteration needs an address. Core
 slice values lower as `{ ptr, len }` values with checked indexing, `.len`,
-const fixed-array access, direct returns/params, and range slicing from arrays or slices.
+const fixed-array access, direct returns/params, range slicing from arrays or
+slices, mutable slice stores, pointer/slice identity, and direct call/local
+array-or-slice indexing workflows.
 Scalar `switch` lowering covers bool and integer subjects, including
 multi-pattern literal arms and wildcard defaults. Core loop CFG covers `while`
 and `for` over arrays/slices, including array-valued call results, with
@@ -4090,8 +4092,7 @@ textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
-Full aggregate ABI breadth, broader slice/pattern workflows, and fuller debug
-mapping remain future work.
+Full aggregate ABI breadth and fuller debug mapping remain future work.
 
 LLVM lowering examples:
 
