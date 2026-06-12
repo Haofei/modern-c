@@ -772,8 +772,38 @@ fn comptimeValueEql(a: ComptimeValue, b: ComptimeValue) bool {
             .tag => |bv| std.mem.eql(u8, av, bv),
             else => false,
         },
-        .array, .@"struct" => false,
+        .array => |av| switch (b) {
+            .array => |bv| comptimeArrayEql(av, bv),
+            else => false,
+        },
+        .@"struct" => |av| switch (b) {
+            .@"struct" => |bv| comptimeStructEql(av, bv),
+            else => false,
+        },
     };
+}
+
+fn comptimeArrayEql(a: []const ComptimeValue, b: []const ComptimeValue) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |av, bv| {
+        if (!comptimeValueEql(av, bv)) return false;
+    }
+    return true;
+}
+
+fn comptimeStructEql(a: []const ComptimeStructField, b: []const ComptimeStructField) bool {
+    if (a.len != b.len) return false;
+    for (a) |af| {
+        var found = false;
+        for (b) |bf| {
+            if (!std.mem.eql(u8, af.name, bf.name)) continue;
+            if (!comptimeValueEql(af.value, bf.value)) return false;
+            found = true;
+            break;
+        }
+        if (!found) return false;
+    }
+    return true;
 }
 
 const AssignResult = enum { ok, trap, unknown };
@@ -970,8 +1000,8 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         .unknown => return .unknown,
     };
 
-    // Equality is defined for both ints and bools; ordering and arithmetic are
-    // integer-only.
+    // Equality is defined for comptime values, including aggregate values from
+    // section 22. Ordering and arithmetic remain integer-only.
     if (op == .eq or op == .ne) {
         const equal = switch (left) {
             .int => |l| switch (right) {
@@ -986,7 +1016,14 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
                 .tag => |r| std.mem.eql(u8, l, r),
                 .int, .boolean, .array, .@"struct" => return .unknown,
             },
-            .array, .@"struct" => return .unknown,
+            .array => switch (right) {
+                .array => comptimeValueEql(left, right),
+                .int, .boolean, .tag, .@"struct" => return .unknown,
+            },
+            .@"struct" => switch (right) {
+                .@"struct" => comptimeValueEql(left, right),
+                .int, .boolean, .tag, .array => return .unknown,
+            },
         };
         return .{ .value = .{ .boolean = if (op == .eq) equal else !equal } };
     }
@@ -1344,6 +1381,34 @@ test "foldComptimeExpr folds comptime array literals and indexing" {
     // arr[4] -> out-of-bounds trap
     const idx4 = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .index = .{ .base = arr, .index = try testInt(a, "4") } } });
     try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, idx4.*)) == .trap);
+}
+
+test "foldComptimeExpr folds comptime aggregate equality" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var scope = ComptimeScope.init(a);
+    defer scope.deinit();
+
+    const arr_eq = try testBinary(a, .eq, try testArrayLit(a, &.{ 1, 2, 3 }), try testArrayLit(a, &.{ 1, 2, 3 }));
+    try std.testing.expect(foldComptimeExpr(&scope, arr_eq.*).value.boolean);
+
+    const arr_ne = try testBinary(a, .ne, try testArrayLit(a, &.{ 1, 2, 3 }), try testArrayLit(a, &.{ 1, 2, 4 }));
+    try std.testing.expect(foldComptimeExpr(&scope, arr_ne.*).value.boolean);
+
+    const left_fields = try a.dupe(ast.StructLiteralField, &.{
+        .{ .name = .{ .text = "w", .span = zero_span }, .value = (try testInt(a, "3")).* },
+        .{ .name = .{ .text = "h", .span = zero_span }, .value = (try testInt(a, "4")).* },
+    });
+    const right_fields = try a.dupe(ast.StructLiteralField, &.{
+        .{ .name = .{ .text = "h", .span = zero_span }, .value = (try testInt(a, "4")).* },
+        .{ .name = .{ .text = "w", .span = zero_span }, .value = (try testInt(a, "3")).* },
+    });
+    const left = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .struct_literal = left_fields } });
+    const right = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .struct_literal = right_fields } });
+    const struct_eq = try testBinary(a, .eq, left, right);
+    try std.testing.expect(foldComptimeExpr(&scope, struct_eq.*).value.boolean);
 }
 
 test "foldComptimeExpr folds a const fn with a for loop over an array" {

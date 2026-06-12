@@ -341,6 +341,20 @@ fn reject_comptime_const_array_global() -> void {
     }
 }
 
+fn accept_comptime_array_equality() -> void {
+    comptime {
+        assert(.{ 1, 2, 3 } == .{ 1, 2, 3 });
+        assert(.{ 1, 2, 3 } != .{ 1, 2, 4 });
+    }
+}
+
+fn reject_comptime_array_equality() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(.{ 1, 2, 3 } == .{ 1, 2, 4 });
+    }
+}
+
 // Comptime struct values: a const fn folds over a struct argument's fields.
 fn accept_comptime_struct_fold() -> void {
     comptime {
@@ -366,6 +380,20 @@ fn reject_comptime_const_struct_global() -> void {
     comptime {
         // EXPECT_ERROR: E_COMPTIME_TRAP
         assert(DEFAULT_RECT.h == 5);
+    }
+}
+
+fn accept_comptime_struct_equality() -> void {
+    comptime {
+        assert(.{ .w = 3, .h = 4 } == .{ .h = 4, .w = 3 });
+        assert(.{ .w = 3, .h = 4 } != .{ .w = 3, .h = 5 });
+    }
+}
+
+fn reject_comptime_struct_equality() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(.{ .w = 3, .h = 4 } == .{ .w = 3, .h = 5 });
     }
 }
 
