@@ -4096,8 +4096,9 @@ array rows, aggregate fields, direct-call aggregate fields, and direct-call
 array/slice results.
 LLVM debug metadata includes `source_filename`, compile-unit/file records,
 function `DISubprogram` records, and statement-scoped line/column locations on
-returns, calls, checked-arithmetic trap paths, inline asm, and related runtime
-helper calls for the covered backend subset.
+local initialization stores, direct assignment stores, returns, calls,
+checked-arithmetic trap paths, inline asm, and related runtime helper calls for
+the covered backend subset.
 Valid `#[no_lang_trap]` functions lower when the shared verifier proves they
 contain no language-trap edge; naked/boot-style opaque asm functions returning
 `never` lower fallthrough as LLVM `unreachable`.

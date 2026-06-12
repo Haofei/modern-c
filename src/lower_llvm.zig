@@ -1132,7 +1132,7 @@ const LlvmEmitter = struct {
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
         if (isUninitExpr(init)) {
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, try self.zeroInitializer(ty), ptr });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, try self.zeroInitializer(ty), ptr, try self.debugCallSuffix() });
             return;
         }
         if (resolved_ty.kind == .array) {
@@ -1140,7 +1140,7 @@ const LlvmEmitter = struct {
                 try self.emitArrayLiteralStores(ptr, resolved_ty, init.kind.array_literal);
             } else {
                 const value = try self.emitExpr(init, ty);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
             }
             return;
         }
@@ -1149,12 +1149,12 @@ const LlvmEmitter = struct {
                 try self.emitStructLiteralStores(ptr, resolved_ty, init.kind.struct_literal);
             } else {
                 const value = try self.emitExpr(init, ty);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
             }
             return;
         }
         const value = try self.emitExpr(init, ty);
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
     }
 
     fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !void {
@@ -1164,13 +1164,13 @@ const LlvmEmitter = struct {
             if (self.local_slots.get(ident.text)) |slot| {
                 const llvm_ty = try self.llvmType(slot.ty);
                 const value = try self.emitExpr(value_expr, slot.ty);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, slot.ptr });
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
                 return;
             }
             if (self.global_types.get(ident.text)) |ty| {
                 const llvm_ty = try self.llvmType(ty);
                 const value = try self.emitExpr(value_expr, ty);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr @{s}\n", .{ llvm_ty, value, ident.text });
+                try self.out.print(self.allocator, "  store {s} {s}, ptr @{s}{s}\n", .{ llvm_ty, value, ident.text, try self.debugCallSuffix() });
                 return;
             }
             return error.UnsupportedLlvmEmission;
@@ -1180,7 +1180,7 @@ const LlvmEmitter = struct {
             const llvm_ty = try self.llvmType(pointee_ty);
             const ptr = try self.emitExpr(ptr_expr, try self.pointerTypeFor(pointee_ty));
             const value = try self.emitExpr(value_expr, pointee_ty);
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
             return;
         }
         return error.UnsupportedLlvmEmission;

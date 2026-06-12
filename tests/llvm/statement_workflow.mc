@@ -31,6 +31,12 @@ fn contract_block_call(value: u32) -> void {
     }
 }
 
+fn assignment_workflow(value: u32) -> u32 {
+    var out: u32 = value;
+    out = combine(out, 1);
+    return out;
+}
+
 fn contract_block_return(value: u32) -> u32 {
     #[unsafe_contract(no_overflow)]
     {

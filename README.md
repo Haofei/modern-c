@@ -133,8 +133,9 @@ structs containing arrays/slices, slices of structs/arrays, and nested array
 indexing. Static aggregate global coverage includes nested array/struct
 literals plus const-folded `sizeof`/`alignof`/`field_offset` array lengths.
 LLVM debug metadata now includes `source_filename`, a compile unit/file record,
-function `DISubprogram` records, and line/column locations on returns and call
-instructions for the covered backend subset.
+function `DISubprogram` records, and line/column locations on local
+initialization stores, direct assignment stores, returns, and call instructions
+for the covered backend subset.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles textual IR
 to linkable object files through `llc`, and
 `zig build llvm-obj-test` validates representative scalar, statement-workflow,
