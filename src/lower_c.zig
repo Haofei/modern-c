@@ -8574,6 +8574,7 @@ const CEmitter = struct {
                 .race_c_type = c_type,
                 .width_bits = widthBits(name),
                 .pointer_like = false,
+                .aggregate = true,
                 .source_ty = resolved_ty,
                 .array_element_info = element_info,
                 .array_len = try self.arrayLenText(resolved_ty),
@@ -8694,9 +8695,10 @@ const CEmitter = struct {
                 .race_c_type = packed_bits.repr_c_type,
             };
         }
-        // Struct/union/closure elements have no scalar race helper: access them as plain
+        // Array/struct/union/closure elements have no scalar race helper: access them as plain
         // aggregates. Function-pointer elements are scalar pointers (relaxed-atomic).
-        const is_aggregate = self.structs.contains(name) or
+        const is_aggregate = resolved_ty.kind == .array or
+            self.structs.contains(name) or
             self.overlay_unions.contains(name) or
             self.tagged_unions.contains(name) or
             resolved_ty.kind == .closure_type;
@@ -9875,12 +9877,14 @@ fn globalInfoFromType(ty: ast.TypeExpr) GlobalInfo {
             .race_c_type = cType(ty),
             .width_bits = widthBits(name),
             .pointer_like = false,
+            .aggregate = true,
             .source_ty = ty,
             .array_element_info = .{
                 .source_ty = element_ty,
                 .c_type = cType(element_ty),
                 .race_type_name = element_name,
                 .race_c_type = cType(element_ty),
+                .aggregate = element_ty.kind == .array,
             },
             .array_len = globalArrayLenText(ty),
         };
