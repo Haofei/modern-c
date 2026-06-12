@@ -235,6 +235,8 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         \\MC_DEFINE_RACE_SCALAR(i32, int32_t)
         \\MC_DEFINE_RACE_SCALAR(i64, int64_t)
         \\MC_DEFINE_RACE_SCALAR(isize, intptr_t)
+        \\MC_DEFINE_RACE_SCALAR(f32, float)
+        \\MC_DEFINE_RACE_SCALAR(f64, double)
         \\
         \\#define MC_DEFINE_RAW_STORE(NAME, TYPE) \
         \\MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) { \
@@ -5288,12 +5290,28 @@ const CEmitter = struct {
             },
             .unary => |node| {
                 if (node.op != .neg) return false;
-                const literal = switch (node.expr.kind) {
-                    .int_literal => |value| value,
-                    else => return false,
-                };
+                if (!isNegativeStaticCOperand(node.expr.*)) return false;
                 try self.out.appendSlice(self.allocator, "-");
+                return try self.emitStaticNegativeOperand(node.expr.*);
+            },
+            else => return false,
+        }
+    }
+
+    fn emitStaticNegativeOperand(self: *CEmitter, expr: ast.Expr) !bool {
+        switch (expr.kind) {
+            .int_literal => |literal| {
                 try appendCIntLiteral(self.allocator, self.out, literal);
+                return true;
+            },
+            .float_literal => |literal| {
+                try self.out.appendSlice(self.allocator, literal);
+                return true;
+            },
+            .grouped => |inner| {
+                try self.out.appendSlice(self.allocator, "(");
+                if (!try self.emitStaticNegativeOperand(inner.*)) return false;
+                try self.out.appendSlice(self.allocator, ")");
                 return true;
             },
             else => return false,
@@ -10260,13 +10278,10 @@ fn ptrCType(child: ast.TypeExpr, mutability: ast.Mutability) []const u8 {
 
 fn isStaticCInitializer(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .int_literal, .bool_literal, .null_literal, .void_literal, .enum_literal, .string_literal, .char_literal => true,
+        .int_literal, .float_literal, .bool_literal, .null_literal, .void_literal, .enum_literal, .string_literal, .char_literal => true,
         .address_of => true,
         .cast => |node| isStaticCInitializer(node.value.*),
-        .unary => |node| node.op == .neg and switch (node.expr.kind) {
-            .int_literal => true,
-            else => false,
-        },
+        .unary => |node| node.op == .neg and isNegativeStaticCOperand(node.expr.*),
         .grouped => |inner| isStaticCInitializer(inner.*),
         else => false,
     };
@@ -10298,11 +10313,16 @@ fn boolLiteralValue(expr: ast.Expr) ?bool {
 
 fn isDirectStaticCInitializer(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .unary => |node| node.op == .neg and switch (node.expr.kind) {
-            .int_literal => true,
-            else => false,
-        },
+        .unary => |node| node.op == .neg and isNegativeStaticCOperand(node.expr.*),
         .grouped => |inner| isDirectStaticCInitializer(inner.*),
+        else => false,
+    };
+}
+
+fn isNegativeStaticCOperand(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .int_literal, .float_literal => true,
+        .grouped => |inner| isNegativeStaticCOperand(inner.*),
         else => false,
     };
 }

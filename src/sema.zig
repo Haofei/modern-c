@@ -4703,9 +4703,9 @@ fn isUninitLiteral(expr: ast.Expr) bool {
 
 fn isStaticGlobalInitializer(expr: ast.Expr, ctx: Context) bool {
     return switch (expr.kind) {
-        .int_literal, .bool_literal, .null_literal, .void_literal, .enum_literal, .string_literal, .char_literal => true,
+        .int_literal, .float_literal, .bool_literal, .null_literal, .void_literal, .enum_literal, .string_literal, .char_literal => true,
         .ident => |ident| if (ctx.globals) |globals| globals.contains(ident.text) else false,
-        .unary => |node| node.op == .neg and integerLiteralValue(node.expr.*) != null,
+        .unary => |node| node.op == .neg and (integerLiteralValue(node.expr.*) != null or negativeFloatLiteralOperand(node.expr.*)),
         // An explicit conversion of a static operand (`0 as u32`) is itself static;
         // the comptime folder applies the cast, and the C backend emits it inline.
         .cast => |node| isStaticGlobalInitializer(node.value.*, ctx),
@@ -4717,6 +4717,14 @@ fn isStaticGlobalInitializer(expr: ast.Expr, ctx: Context) bool {
         // global atomic with a static seed (e.g. an interrupt-shared counter) is a
         // valid static global.
         .call => |node| isAtomicInitCallee(node.callee.*) and node.args.len == 1 and isStaticGlobalInitializer(node.args[0], ctx),
+        else => false,
+    };
+}
+
+fn negativeFloatLiteralOperand(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .float_literal => true,
+        .grouped => |inner| negativeFloatLiteralOperand(inner.*),
         else => false,
     };
 }

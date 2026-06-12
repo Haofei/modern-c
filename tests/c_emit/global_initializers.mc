@@ -6,6 +6,8 @@ global shared_cell: u32 = 0;
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
 global letter: u8 = 'A';
+global gain: f32 = 1.5;
+global bias: f64 = -(0.25);
 global cast_seed: u32 = 1 as u32;
 global cast_copied_seed: u32 = seed as u32;
 global signed_seed: i32 = -1;
@@ -30,6 +32,14 @@ fn read_copied_seed() -> u32 {
 
 fn read_letter() -> u8 {
     return letter;
+}
+
+fn read_gain() -> f32 {
+    return gain;
+}
+
+fn read_bias() -> f64 {
+    return bias;
 }
 
 fn read_cast_seed() -> u32 {
