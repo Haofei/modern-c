@@ -6,6 +6,9 @@
 fn add(a: u32, b: u32) -> u32 { return a + b; }
 fn mul(a: u32, b: u32) -> u32 { return a * b; }
 
+global default_op: fn(u32, u32) -> u32 = add;
+global default_ops: [2]fn(u32, u32) -> u32 = .{ add, mul };
+
 // fn-pointer as a parameter (callback).
 fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 {
     return op(x, y);
@@ -25,6 +28,18 @@ fn tick() -> void {}
 
 fn entry_of() -> fn() -> void {
     return tick;
+}
+
+fn global_op_call(x: u32, y: u32) -> u32 {
+    return default_op(x, y);
+}
+
+fn global_op_array_call(x: u32, y: u32) -> u32 {
+    return default_ops[1](x, y);
+}
+
+fn global_op_array_get() -> fn(u32, u32) -> u32 {
+    return default_ops[0];
 }
 
 // 3+4 (callback) + 3*4 (vtable) = 19

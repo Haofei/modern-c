@@ -7,6 +7,9 @@
 fn add(a: u32, b: u32) -> u32 { return a + b; }
 fn negate(a: u32) -> u32 { return 0 - a; }
 
+global default_op: fn(u32, u32) -> u32 = add;
+global default_ops: [2]fn(u32, u32) -> u32 = .{ add, add };
+
 // A function-pointer parameter (callback) called with the right arity/types.
 fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 {
     return op(x, y);
@@ -15,6 +18,14 @@ fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 {
 // A function name is a function-pointer value matching the parameter's signature.
 fn use_callback() -> u32 {
     return apply(add, 3, 4);
+}
+
+fn use_global_callback() -> u32 {
+    return default_op(3, 4);
+}
+
+fn use_global_callback_array() -> u32 {
+    return default_ops[0](3, 4);
 }
 
 // A function-pointer struct field (vtable) and a dispatch through it.
@@ -36,4 +47,14 @@ fn reject_wrong_arity(op: fn(u32, u32) -> u32) -> u32 {
 fn reject_wrong_signature_function() -> u32 {
     // EXPECT_ERROR: E_FN_POINTER_SIGNATURE_MISMATCH
     return apply(negate, 1, 2);
+}
+
+// EXPECT_ERROR: E_FN_POINTER_SIGNATURE_MISMATCH
+global reject_wrong_signature_global: fn(u32, u32) -> u32 = negate;
+
+fn reject_wrong_signature_array() -> void {
+    let ops: [1]fn(u32, u32) -> u32 = .{
+        // EXPECT_ERROR: E_FN_POINTER_SIGNATURE_MISMATCH
+        negate,
+    };
 }

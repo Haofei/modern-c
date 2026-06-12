@@ -5322,7 +5322,7 @@ const CEmitter = struct {
 
     fn staticCInitializer(self: *CEmitter, expr: ast.Expr) ?ast.Expr {
         return switch (expr.kind) {
-            .ident => |ident| self.static_initializers.get(ident.text),
+            .ident => |ident| self.static_initializers.get(ident.text) orelse if (self.functions.contains(ident.text)) expr else null,
             .grouped => |inner| if (self.staticCInitializer(inner.*)) |resolved| resolved else if (isStaticCInitializer(expr)) expr else null,
             .cast => |node| if (self.staticCInitializer(node.value.*)) |resolved| blk: {
                 const value = self.scratch.allocator().create(ast.Expr) catch break :blk null;

@@ -798,11 +798,12 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(ty, initializer, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(ty, initializer, ctx);
         const address_checked = self.checkAddressOfInitializer(target, ty, initializer, ctx);
+        const fn_pointer_checked = self.checkFunctionPointerInitializer(ty, initializer, ctx);
         const address_class_checked = checkAddressClassConversion(self, initializer.span, target, source);
         const enum_checked = self.checkEnumValueCompatibility(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion") else false;
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, source)) {
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, source)) {
             self.errorCode(initializer.span, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         }
         // A `const` global's initializer is a compile-time constant by
@@ -1458,13 +1459,14 @@ pub const Checker = struct {
                 const pointer_conversion_checked = if (local.ty) |ty| self.checkPointerViewInitializer(ty, expr, ctx) else false;
                 const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
                 const address_checked = if (local.ty) |ty| self.checkAddressOfInitializer(kind, ty, expr, ctx) else false;
+                const fn_pointer_checked = if (local.ty) |ty| self.checkFunctionPointerInitializer(ty, expr, ctx) else false;
                 const address_class_checked = if (local.ty != null) checkAddressClassConversion(self, expr.span, kind, initializer) else false;
                 const enum_checked = if (local.ty) |ty| self.checkEnumValueCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 const union_checked = if (local.ty) |ty| self.checkTaggedUnionConstructorCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 if (local.ty == null and untargeted_union_checked) {
                     // The diagnostic was emitted above; constructor calls need an explicit union target.
-                } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(kind, initializer)) {
+                } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(kind, initializer)) {
                     self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                 }
             }
@@ -1540,11 +1542,12 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, value, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, value, ctx);
         const address_checked = self.checkAddressOfInitializer(target_class, target_ty, value, ctx);
+        const fn_pointer_checked = self.checkFunctionPointerInitializer(target_ty, value, ctx);
         const address_class_checked = checkAddressClassConversion(self, value.span, target_class, value_class);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion") else false;
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target_class, value_class)) {
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
     }
@@ -1909,6 +1912,9 @@ pub const Checker = struct {
                 if (isKnownTaggedUnionConstructorName(ident.text, ctx)) return;
                 if (ctx.functions != null and ctx.functions.?.contains(ident.text)) return;
                 if (ctx.scope != null and ctx.scope.?.contains(ident.text)) return;
+                if (globalType(ident.text, ctx)) |ty| {
+                    if (classifyTypeCtx(ty, ctx) == .fn_pointer) return;
+                }
                 self.errorCode(ident.span, "E_UNKNOWN_FUNCTION", "unknown function");
             },
             .member => |node| {
@@ -2701,11 +2707,12 @@ pub const Checker = struct {
             const pointer_conversion_checked = self.checkPointerViewInitializer(element_ty, item, ctx);
             const c_void_conversion_checked = self.checkCVoidPointerConversion(element_ty, item, ctx);
             const address_checked = self.checkAddressOfInitializer(element_class, element_ty, item, ctx);
+            const fn_pointer_checked = self.checkFunctionPointerInitializer(element_ty, item, ctx);
             const address_class_checked = checkAddressClassConversion(self, item.span, element_class, item_class);
             const enum_checked = self.checkEnumValueCompatibility(element_ty, item, ctx, code, message);
             const union_checked = self.checkTaggedUnionConstructorCompatibility(element_ty, item, ctx, code, message);
             const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(item, ctx, code, message) else false;
-            if (!literal_checked and !null_checked and !array_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(element_class, item_class)) {
+            if (!literal_checked and !null_checked and !array_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(element_class, item_class)) {
                 self.errorCode(item.span, code, message);
             }
         }
@@ -2754,11 +2761,12 @@ pub const Checker = struct {
             const pointer_conversion_checked = self.checkPointerViewInitializer(field_ty, field.value, ctx);
             const c_void_conversion_checked = self.checkCVoidPointerConversion(field_ty, field.value, ctx);
             const address_checked = self.checkAddressOfInitializer(field_class, field_ty, field.value, ctx);
+            const fn_pointer_checked = self.checkFunctionPointerInitializer(field_ty, field.value, ctx);
             const address_class_checked = checkAddressClassConversion(self, field.value.span, field_class, value_class);
             const enum_checked = self.checkEnumValueCompatibility(field_ty, field.value, ctx, code, message);
             const union_checked = self.checkTaggedUnionConstructorCompatibility(field_ty, field.value, ctx, code, message);
             const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(field.value, ctx, code, message) else false;
-            if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(field_class, value_class)) {
+            if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(field_class, value_class)) {
                 self.errorCode(field.value.span, code, message);
             }
         }
@@ -2821,6 +2829,24 @@ pub const Checker = struct {
         return true;
     }
 
+    fn checkFunctionPointerInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
+        if (classifyTypeCtx(target_ty, ctx) != .fn_pointer) return false;
+        if (directCallName(expr)) |name| {
+            if (ctx.functions != null and ctx.functions.?.contains(name)) {
+                if (!functionMatchesFnPointer(name, target_ty, ctx)) {
+                    self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "function signature does not match the expected function-pointer type");
+                }
+                return true;
+            }
+        }
+        const source_ty = exprDeclaredType(expr, ctx) orelse return false;
+        if (classifyTypeCtx(source_ty, ctx) != .fn_pointer) return false;
+        if (!sameTypeSyntaxCtx(source_ty, target_ty, ctx)) {
+            self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "function-pointer signature does not match the expected type");
+        }
+        return true;
+    }
+
     fn checkPointerViewInitializer(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         const source = exprResultType(expr, ctx) orelse return false;
         if (nullablePointerWideningCtx(target, source, ctx)) return true;
@@ -2847,12 +2873,13 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewReturn(target_ty, expr, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, expr, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, expr, ctx);
+        const fn_pointer_checked = self.checkFunctionPointerInitializer(target_ty, expr, ctx);
         const address_class_checked = checkAddressClassConversion(self, expr.span, target, returned);
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type") else false;
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, returned)) {
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
@@ -4704,7 +4731,8 @@ fn isUninitLiteral(expr: ast.Expr) bool {
 fn isStaticGlobalInitializer(expr: ast.Expr, ctx: Context) bool {
     return switch (expr.kind) {
         .int_literal, .float_literal, .bool_literal, .null_literal, .void_literal, .enum_literal, .string_literal, .char_literal => true,
-        .ident => |ident| if (ctx.globals) |globals| globals.contains(ident.text) else false,
+        .ident => |ident| (if (ctx.globals) |globals| globals.contains(ident.text) else false) or
+            (if (ctx.functions) |functions| functions.contains(ident.text) else false),
         .unary => |node| node.op == .neg and (integerLiteralValue(node.expr.*) != null or negativeFloatLiteralOperand(node.expr.*)),
         // An explicit conversion of a static operand (`0 as u32`) is itself static;
         // the comptime folder applies the cast, and the C backend emits it inline.
