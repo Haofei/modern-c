@@ -77,6 +77,26 @@ fn accept_spec_repr_of_tagged_union() -> usize {
     return repr_of(ReflectToken);
 }
 
+fn accept_spec_repr_of_struct() -> usize {
+    return repr_of(Packet);
+}
+
+fn accept_spec_repr_of_array() -> usize {
+    return repr_of([3]u16);
+}
+
+fn accept_spec_repr_of_slice() -> usize {
+    return repr_of([]u8);
+}
+
+fn accept_spec_repr_of_mmio_ptr() -> usize {
+    return repr_of(MmioPtr<Uart16550>);
+}
+
+fn accept_spec_repr_of_dma_buf() -> usize {
+    return repr_of(DmaBuf<Packet, .coherent>);
+}
+
 fn accept_spec_sizeof_default_enum() -> usize {
     return sizeof(DefaultMode);
 }
@@ -130,6 +150,11 @@ fn accept_comptime_reflection_offsets() -> void {
         assert(alignof(Packet) == 2);
         assert(repr_of(Mode) == 1);
         assert(repr_of(ReflectToken) == 4);
+        assert(repr_of(Packet) == 4);
+        assert(repr_of([3]u16) == 6);
+        assert(repr_of([]u8) == 16);
+        assert(repr_of(MmioPtr<Uart16550>) == 8);
+        assert(repr_of(DmaBuf<Packet, .coherent>) == 8);
         assert(sizeof(DefaultMode) == 8);
         assert(alignof(DefaultMode) == 8);
         assert(repr_of(DefaultMode) == 8);

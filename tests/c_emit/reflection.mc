@@ -66,6 +66,26 @@ fn accept_spec_repr_of_tagged_union() -> usize {
     return repr_of(ReflectToken);
 }
 
+fn accept_spec_repr_of_struct() -> usize {
+    return repr_of(Packet);
+}
+
+fn accept_spec_repr_of_array() -> usize {
+    return repr_of([3]u16);
+}
+
+fn accept_spec_repr_of_slice() -> usize {
+    return repr_of([]u8);
+}
+
+fn accept_spec_repr_of_mmio_ptr() -> usize {
+    return repr_of(MmioPtr<Uart16550>);
+}
+
+fn accept_spec_repr_of_dma_buf() -> usize {
+    return repr_of(DmaBuf<Packet, .coherent>);
+}
+
 fn accept_field_offset() -> usize {
     return field_offset<Packet>(.len);
 }

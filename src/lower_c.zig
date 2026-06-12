@@ -1053,17 +1053,24 @@ const CEmitter = struct {
 
     fn comptimeReprOf(self: *CEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
         if (depth > 32) return null;
-        const name = typeName(ty) orelse return null;
-        if (self.type_aliases.get(name)) |aliased| return self.comptimeReprOf(aliased, depth + 1);
-        if (self.enums.get(name)) |info| {
-            const repr = info.repr orelse simpleNameType("isize", ty.span);
-            return self.comptimeSizeOf(repr, depth + 1);
+        switch (ty.kind) {
+            .name => |name| {
+                if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
+                if (self.type_aliases.get(name.text)) |aliased| return self.comptimeReprOf(aliased, depth + 1);
+                if (self.enums.get(name.text)) |info| {
+                    const repr = info.repr orelse simpleNameType("isize", ty.span);
+                    return self.comptimeSizeOf(repr, depth + 1);
+                }
+                if (self.packed_bits.get(name.text)) |info| {
+                    return self.comptimeSizeOf(simpleNameType(info.repr_name, ty.span), depth + 1);
+                }
+                if (self.tagged_unions.contains(name.text)) return cTaggedUnionTagSize();
+                return self.comptimeSizeOf(ty, depth + 1);
+            },
+            .pointer, .raw_many_pointer, .slice, .array, .generic => return self.comptimeSizeOf(ty, depth + 1),
+            .qualified => |node| return self.comptimeReprOf(node.child.*, depth + 1),
+            else => return null,
         }
-        if (self.packed_bits.get(name)) |info| {
-            return self.comptimeSizeOf(simpleNameType(info.repr_name, ty.span), depth + 1);
-        }
-        if (self.tagged_unions.contains(name)) return cTaggedUnionTagSize();
-        return null;
     }
 
     fn emitComptimeValueInitializer(self: *CEmitter, value: eval.ComptimeValue, target_ty: ast.TypeExpr) anyerror!void {
@@ -4561,21 +4568,23 @@ const CEmitter = struct {
             },
             .repr => {
                 if (call.args.len != 0) return error.UnsupportedCEmission;
-                const type_name = typeName(target_ty) orelse return error.UnsupportedCEmission;
-                if (self.enums.get(type_name)) |enum_decl| {
-                    const repr = enum_decl.repr orelse simpleNameType("isize", target_ty.span);
-                    try self.out.print(self.allocator, "((uintptr_t)sizeof({s}))", .{try self.reflectionCTypeFor(repr)});
-                    return true;
+                if (typeName(target_ty)) |type_name| {
+                    if (self.enums.get(type_name)) |enum_decl| {
+                        const repr = enum_decl.repr orelse simpleNameType("isize", target_ty.span);
+                        try self.out.print(self.allocator, "((uintptr_t)sizeof({s}))", .{try self.reflectionCTypeFor(repr)});
+                        return true;
+                    }
+                    if (self.packed_bits.get(type_name)) |info| {
+                        try self.out.print(self.allocator, "((uintptr_t)sizeof({s}))", .{info.repr_c_type});
+                        return true;
+                    }
+                    if (self.tagged_unions.contains(type_name)) {
+                        try self.out.print(self.allocator, "((uintptr_t)sizeof({s}Tag))", .{type_name});
+                        return true;
+                    }
                 }
-                if (self.packed_bits.get(type_name)) |info| {
-                    try self.out.print(self.allocator, "((uintptr_t)sizeof({s}))", .{info.repr_c_type});
-                    return true;
-                }
-                if (self.tagged_unions.contains(type_name)) {
-                    try self.out.print(self.allocator, "((uintptr_t)sizeof({s}Tag))", .{type_name});
-                    return true;
-                }
-                return error.UnsupportedCEmission;
+                try self.out.print(self.allocator, "((uintptr_t)sizeof({s}))", .{try self.reflectionCTypeFor(target_ty)});
+                return true;
             },
         }
     }

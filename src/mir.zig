@@ -3778,15 +3778,22 @@ fn mirComptimeAlignOf(env: *const MirReflectEnv, ty: ast.TypeExpr, depth: usize)
 
 fn mirComptimeReprOf(env: *const MirReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
     if (depth > 32) return null;
-    const name = mirTypeName(ty) orelse return null;
-    if (env.aliases.get(name)) |aliased| return mirComptimeReprOf(env, aliased, depth + 1);
-    if (env.enums.get(name)) |info| {
-        const repr = info.repr orelse mirSimpleNameType("isize", ty.span);
-        return mirComptimeSizeOf(env, repr, depth + 1);
-    }
-    if (env.packed_bits.get(name)) |info| return mirComptimeSizeOf(env, info.repr, depth + 1);
-    if (env.unions.contains(name)) return mirTaggedUnionTagSize();
-    return null;
+    return switch (ty.kind) {
+        .name => |name| {
+            if (mirScalarLayout(name.text)) |layout| return @intCast(layout.size);
+            if (env.aliases.get(name.text)) |aliased| return mirComptimeReprOf(env, aliased, depth + 1);
+            if (env.enums.get(name.text)) |info| {
+                const repr = info.repr orelse mirSimpleNameType("isize", ty.span);
+                return mirComptimeSizeOf(env, repr, depth + 1);
+            }
+            if (env.packed_bits.get(name.text)) |info| return mirComptimeSizeOf(env, info.repr, depth + 1);
+            if (env.unions.contains(name.text)) return mirTaggedUnionTagSize();
+            return mirComptimeSizeOf(env, ty, depth + 1);
+        },
+        .pointer, .raw_many_pointer, .slice, .array, .generic => mirComptimeSizeOf(env, ty, depth + 1),
+        .qualified => |node| mirComptimeReprOf(env, node.child.*, depth + 1),
+        else => null,
+    };
 }
 
 fn mirComptimeFieldOffset(env: *const MirReflectEnv, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {

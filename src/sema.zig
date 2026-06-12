@@ -1194,19 +1194,26 @@ pub const Checker = struct {
 
     fn comptimeReprOf(self: *Checker, ty: ast.TypeExpr, depth: usize) ?i128 {
         if (depth > 32) return null;
-        const name = typeName(ty) orelse return null;
-        const env = self.reflect_env orelse return null;
-        if (env.aliases.get(name)) |aliased| return self.comptimeReprOf(aliased, depth + 1);
-        if (env.enums.get(name)) |info| {
-            const repr = info.repr orelse simpleNameType("isize", ty.span);
-            return self.comptimeSizeOf(repr, depth + 1);
+        switch (ty.kind) {
+            .name => |name| {
+                if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
+                const env = self.reflect_env orelse return null;
+                if (env.aliases.get(name.text)) |aliased| return self.comptimeReprOf(aliased, depth + 1);
+                if (env.enums.get(name.text)) |info| {
+                    const repr = info.repr orelse simpleNameType("isize", ty.span);
+                    return self.comptimeSizeOf(repr, depth + 1);
+                }
+                if (env.packed_bits.get(name.text)) |info| {
+                    const repr = info.repr orelse return null;
+                    return self.comptimeSizeOf(repr, depth + 1);
+                }
+                if (env.tagged_unions.contains(name.text)) return c_tagged_union_tag_size;
+                return self.comptimeSizeOf(ty, depth + 1);
+            },
+            .pointer, .raw_many_pointer, .slice, .array, .generic => return self.comptimeSizeOf(ty, depth + 1),
+            .qualified => |node| return self.comptimeReprOf(node.child.*, depth + 1),
+            else => return null,
         }
-        if (env.packed_bits.get(name)) |info| {
-            const repr = info.repr orelse return null;
-            return self.comptimeSizeOf(repr, depth + 1);
-        }
-        if (env.tagged_unions.contains(name)) return c_tagged_union_tag_size;
-        return null;
     }
 
     const ComptimeStructLayout = struct {
