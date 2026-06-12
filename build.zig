@@ -715,7 +715,10 @@ pub fn build(b: *std.Build) void {
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "smprq-test",
     });
     const rtc_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/arch/rtc-test.sh", "zig-out/bin/mcc",
+        "bash", "tools/arch/rtc-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_rtc_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/rtc-test.sh", "zig-out/bin/mcc", "llvm",
     });
     const contain_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "c",
@@ -797,6 +800,9 @@ pub fn build(b: *std.Build) void {
     rtc_test_cmd.step.dependOn(b.getInstallStep());
     const rtc_test_step = b.step("rtc-test", "Wall-clock via goldfish-RTC");
     rtc_test_step.dependOn(&rtc_test_cmd.step);
+    llvm_rtc_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_rtc_test_step = b.step("llvm-rtc-test", "Run LLVM-lowered goldfish-RTC MMIO under QEMU");
+    llvm_rtc_test_step.dependOn(&llvm_rtc_test_cmd.step);
 
 
     smprq_test_cmd.step.dependOn(b.getInstallStep());
@@ -943,13 +949,24 @@ pub fn build(b: *std.Build) void {
     llvm_usched_test_step.dependOn(&llvm_usched_test_cmd.step);
 
     const userserver_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/lang/userserver-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     userserver_test_cmd.step.dependOn(b.getInstallStep());
     const userserver_test_step = b.step("userserver-test", "A server running in user mode via syscalls");
     userserver_test_step.dependOn(&userserver_test_cmd.step);
+
+    const llvm_userserver_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/lang/userserver-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_userserver_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_userserver_test_step = b.step("llvm-userserver-test", "Run LLVM-lowered user-mode server under QEMU");
+    llvm_userserver_test_step.dependOn(&llvm_userserver_test_cmd.step);
 
     const isolation_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -1345,13 +1362,24 @@ pub fn build(b: *std.Build) void {
     net_rx_live_test_step.dependOn(&net_rx_live_test_cmd.step);
 
     const backtrace_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/lang/backtrace-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     backtrace_test_cmd.step.dependOn(b.getInstallStep());
     const backtrace_test_step = b.step("backtrace-test", "Walk the frame-pointer chain and symbolize the frames under QEMU");
     backtrace_test_step.dependOn(&backtrace_test_cmd.step);
+
+    const llvm_backtrace_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/lang/backtrace-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_backtrace_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_backtrace_test_step = b.step("llvm-backtrace-test", "Run LLVM-lowered backtrace symbolization under QEMU");
+    llvm_backtrace_test_step.dependOn(&llvm_backtrace_test_cmd.step);
 
     const paging_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1432,13 +1460,24 @@ pub fn build(b: *std.Build) void {
     llvm_sched_test_step.dependOn(&llvm_sched_test_cmd.step);
 
     const preempt_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/preempt-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     preempt_test_cmd.step.dependOn(b.getInstallStep());
     const preempt_test_step = b.step("preempt-test", "Run the timer-driven preemptive scheduler under QEMU");
     preempt_test_step.dependOn(&preempt_test_cmd.step);
+
+    const llvm_preempt_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/preempt-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_preempt_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_preempt_test_step = b.step("llvm-preempt-test", "Run LLVM-lowered timer-driven preemption under QEMU");
+    llvm_preempt_test_step.dependOn(&llvm_preempt_test_cmd.step);
 
     const syscall_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -1521,13 +1560,24 @@ pub fn build(b: *std.Build) void {
     llvm_elf_run_test_step.dependOn(&llvm_elf_run_test_cmd.step);
 
     const driver_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/arch/driver-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     driver_test_cmd.step.dependOn(b.getInstallStep());
     const driver_test_step = b.step("driver-test", "Run the char-device driver framework (vtable dispatch) under QEMU");
     driver_test_step.dependOn(&driver_test_cmd.step);
+
+    const llvm_driver_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/driver-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_driver_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_driver_test_step = b.step("llvm-driver-test", "Run LLVM-lowered char-device driver framework under QEMU");
+    llvm_driver_test_step.dependOn(&llvm_driver_test_cmd.step);
 
     const fs_syscall_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -1795,6 +1845,11 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_block_server_test_cmd.step);
     m0_step.dependOn(&llvm_fs_server_test_cmd.step);
     m0_step.dependOn(&llvm_net_server_test_cmd.step);
+    m0_step.dependOn(&llvm_rtc_test_cmd.step);
+    m0_step.dependOn(&llvm_userserver_test_cmd.step);
+    m0_step.dependOn(&llvm_backtrace_test_cmd.step);
+    m0_step.dependOn(&llvm_driver_test_cmd.step);
+    m0_step.dependOn(&llvm_preempt_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
