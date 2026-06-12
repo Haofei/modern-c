@@ -1248,40 +1248,84 @@ pub fn build(b: *std.Build) void {
     preempt_test_step.dependOn(&preempt_test_cmd.step);
 
     const syscall_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/lang/syscall-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     syscall_test_cmd.step.dependOn(b.getInstallStep());
     const syscall_test_step = b.step("syscall-test", "Run the ecall syscall dispatch skeleton under QEMU");
     syscall_test_step.dependOn(&syscall_test_cmd.step);
 
+    const llvm_syscall_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/lang/syscall-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_syscall_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_syscall_test_step = b.step("llvm-syscall-test", "Run the LLVM-lowered ecall syscall dispatch skeleton under QEMU");
+    llvm_syscall_test_step.dependOn(&llvm_syscall_test_cmd.step);
+
     const user_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/lang/user-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     user_test_cmd.step.dependOn(b.getInstallStep());
     const user_test_step = b.step("user-test", "Run the M->U privilege drop + user-mode syscalls under QEMU");
     user_test_step.dependOn(&user_test_cmd.step);
 
+    const llvm_user_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/lang/user-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_user_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_user_test_step = b.step("llvm-user-test", "Run the LLVM-lowered M->U privilege drop + user-mode syscalls under QEMU");
+    llvm_user_test_step.dependOn(&llvm_user_test_cmd.step);
+
     const process_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/process-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     process_test_cmd.step.dependOn(b.getInstallStep());
     const process_test_step = b.step("process-test", "Run process lifecycle (spawn/run/exit) under QEMU");
     process_test_step.dependOn(&process_test_cmd.step);
 
+    const llvm_process_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/process-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_process_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_process_test_step = b.step("llvm-process-test", "Run the LLVM-lowered process lifecycle under QEMU");
+    llvm_process_test_step.dependOn(&llvm_process_test_cmd.step);
+
     const elf_run_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/lang/elf-run-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     elf_run_test_cmd.step.dependOn(b.getInstallStep());
     const elf_run_test_step = b.step("elf-run-test", "Load an ELF64 and run it in U-mode under QEMU");
     elf_run_test_step.dependOn(&elf_run_test_cmd.step);
+
+    const llvm_elf_run_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/lang/elf-run-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_elf_run_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_elf_run_test_step = b.step("llvm-elf-run-test", "Load an ELF64 from an LLVM-lowered kernel image and run it in U-mode under QEMU");
+    llvm_elf_run_test_step.dependOn(&llvm_elf_run_test_cmd.step);
 
     const driver_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1293,31 +1337,64 @@ pub fn build(b: *std.Build) void {
     driver_test_step.dependOn(&driver_test_cmd.step);
 
     const fs_syscall_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/fs/fs-syscall-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     fs_syscall_test_cmd.step.dependOn(b.getInstallStep());
     const fs_syscall_test_step = b.step("fs-syscall-test", "Run U-mode file syscalls (open/write/read/close) over the VFS under QEMU");
     fs_syscall_test_step.dependOn(&fs_syscall_test_cmd.step);
 
+    const llvm_fs_syscall_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/fs/fs-syscall-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_fs_syscall_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_fs_syscall_test_step = b.step("llvm-fs-syscall-test", "Run LLVM-lowered U-mode file syscalls over the VFS under QEMU");
+    llvm_fs_syscall_test_step.dependOn(&llvm_fs_syscall_test_cmd.step);
+
     const socket_syscall_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/net/socket-syscall-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     socket_syscall_test_cmd.step.dependOn(b.getInstallStep());
     const socket_syscall_test_step = b.step("socket-syscall-test", "Run U-mode recvfrom over the UDP socket layer under QEMU");
     socket_syscall_test_step.dependOn(&socket_syscall_test_cmd.step);
 
+    const llvm_socket_syscall_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/net/socket-syscall-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_socket_syscall_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_socket_syscall_test_step = b.step("llvm-socket-syscall-test", "Run LLVM-lowered U-mode recvfrom over the UDP socket layer under QEMU");
+    llvm_socket_syscall_test_step.dependOn(&llvm_socket_syscall_test_cmd.step);
+
     const exec_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/lang/exec-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     exec_test_cmd.step.dependOn(b.getInstallStep());
     const exec_test_step = b.step("exec-test", "Run sys_exec: a U-mode program loads + runs another ELF under QEMU");
     exec_test_step.dependOn(&exec_test_cmd.step);
+
+    const llvm_exec_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/lang/exec-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_exec_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_exec_test_step = b.step("llvm-exec-test", "Run LLVM-lowered sys_exec under QEMU");
+    llvm_exec_test_step.dependOn(&llvm_exec_test_cmd.step);
 
     const paging_activate_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1438,6 +1515,13 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_trap_test_cmd.step);
     m0_step.dependOn(&llvm_thread_test_cmd.step);
     m0_step.dependOn(&llvm_sched_test_cmd.step);
+    m0_step.dependOn(&llvm_syscall_test_cmd.step);
+    m0_step.dependOn(&llvm_user_test_cmd.step);
+    m0_step.dependOn(&llvm_process_test_cmd.step);
+    m0_step.dependOn(&llvm_elf_run_test_cmd.step);
+    m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
+    m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);
+    m0_step.dependOn(&llvm_exec_test_cmd.step);
     m0_step.dependOn(&llvm_kmain_test_cmd.step);
     m0_step.dependOn(&llvm_kmain_net_test_cmd.step);
 
