@@ -57,10 +57,12 @@ assumption tokens (`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`
 and hidden fast-math flags, with `reassoc` allowed only for explicit
 `reduce.sum_fast` floating reductions)
 across the swept IR. `zig build llvm-c-sweep` applies the same IR checks to all 109
-current `tests/c_emit` fixtures; `zig build llvm-spec-obj-sweep` compiles the
-same valid spec-corpus surface to LLVM object files with `llc`, and `zig build
-llvm-c-obj-sweep` compiles the C-emission fixture set to LLVM object files with
-`llc`. Scalar/pointer globals are covered for
+current `tests/c_emit` fixtures; `zig build llvm-opt-sweep` runs the same
+hidden-assumption policy plus LLVM verifier and `default<O2>` pipeline checks
+over the valid spec corpus and all current `tests/c_emit` fixtures. `zig build
+llvm-spec-obj-sweep` compiles the same valid spec-corpus surface to LLVM object
+files with `llc`, and `zig build llvm-c-obj-sweep` compiles the C-emission
+fixture set to LLVM object files with `llc`. Scalar/pointer globals are covered for
 literal and address-of-global initializers. Local fixed arrays of scalar
 elements support literals, checked indexing, element assignment, and
 element-address taking. Plain local structs with scalar fields support literals,
@@ -212,8 +214,9 @@ Deferred:
   coverage for the framebuffer/gpio/irq/spi/timer/uart hardware demos and the
   hosted elementwise demo, and LLVM link/run coverage for the hosted
   elementwise stdin/stdout round trip. LLVM object debug info is smoke-tested
-  for DWARF file/function/source line mappings.
-  Remaining work is additional runtime/toolchain coverage, deeper optimizer
+  for DWARF file/function/source line mappings, and the broad emitted-IR corpus
+  is accepted by LLVM verifier and `default<O2>` pipelines.
+  Remaining work is additional runtime/toolchain coverage, production optimizer
   proof work, and fuller native debug mapping.
 
 ## Requirements
@@ -221,6 +224,7 @@ Deferred:
 - Zig `0.16.0`
 - `clang` for `zig build c-test`
 - `llvm-as` for `zig build llvm-test`
+- `opt` for `zig build llvm-opt-sweep`
 - `llc` for LLVM object-output gates such as `zig build llvm-obj-test`,
   `zig build llvm-spec-obj-sweep`, and `zig build llvm-c-obj-sweep`
 
@@ -242,6 +246,7 @@ zig build llvm-debug-test
 zig build llvm-sweep
 zig build llvm-spec-obj-sweep
 zig build llvm-c-sweep
+zig build llvm-opt-sweep
 zig build llvm-c-obj-sweep
 zig build llvm-cc-test
 zig build llvm-move-test
@@ -300,7 +305,9 @@ llvm-sweep`, and `zig build llvm-c-sweep` check LLVM IR with `llvm-as`; the two
 sweep gates also reject hidden optimizer assumption tokens
 (`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef` and
 hidden fast-math flags, with `reassoc` allowed only for explicit
-`reduce.sum_fast` floating reductions).
+`reduce.sum_fast` floating reductions). `zig build llvm-opt-sweep` applies that
+policy to emitted IR, then runs LLVM `verify` and `default<O2>` pipeline checks
+over the valid spec corpus and all current `tests/c_emit` fixtures.
 `tools/toolchain/mcc-llvm-cc.sh` compiles an MC module through `emit-llvm` and
 `llc -filetype=obj`; `zig build llvm-obj-test` checks representative LLVM object
 output, `zig build llvm-debug-test` verifies selected DWARF source mappings in

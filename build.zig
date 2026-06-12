@@ -111,6 +111,17 @@ pub fn build(b: *std.Build) void {
     const llvm_c_sweep_step = b.step("llvm-c-sweep", "Emit LLVM IR for every checked C-emission fixture and validate it with llvm-as");
     llvm_c_sweep_step.dependOn(&llvm_c_sweep_cmd.step);
 
+    const llvm_opt_sweep_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/toolchain/llvm-opt-sweep.py",
+        "zig-out/bin/mcc",
+        "tests/spec",
+        "tests/c_emit/*.mc",
+    });
+    llvm_opt_sweep_cmd.step.dependOn(b.getInstallStep());
+    const llvm_opt_sweep_step = b.step("llvm-opt-sweep", "Run LLVM verifier and O2 optimizer checks over broad emitted IR");
+    llvm_opt_sweep_step.dependOn(&llvm_opt_sweep_cmd.step);
+
     const llvm_c_obj_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/llvm-c-obj-sweep.py",
@@ -1327,6 +1338,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_sweep_cmd.step);
     m0_step.dependOn(&llvm_spec_obj_sweep_cmd.step);
     m0_step.dependOn(&llvm_c_sweep_cmd.step);
+    m0_step.dependOn(&llvm_opt_sweep_cmd.step);
     m0_step.dependOn(&llvm_c_obj_sweep_cmd.step);
     m0_step.dependOn(&llvm_cc_test_cmd.step);
     m0_step.dependOn(&llvm_move_test_cmd.step);
