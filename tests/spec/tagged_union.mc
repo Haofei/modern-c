@@ -2,12 +2,17 @@
 // SPEC: milestone=tagged-union-declarations
 // SPEC: phase=parse,sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_DUPLICATE_UNION_CASE,E_REFLECTION_UNKNOWN_TYPE,E_UNKNOWN_UNION_CASE,E_UNION_CASE_HAS_NO_PAYLOAD,E_DUPLICATE_SWITCH_CASE,E_RETURN_TYPE_MISMATCH,E_RETURN_MISSING,E_CALL_ARG_COUNT,E_NO_IMPLICIT_CONVERSION,E_UNKNOWN_FUNCTION
+// SPEC: check=E_DUPLICATE_UNION_CASE,E_REFLECTION_UNKNOWN_TYPE,E_UNKNOWN_UNION_CASE,E_UNION_CASE_HAS_NO_PAYLOAD,E_DUPLICATE_SWITCH_CASE,E_RETURN_TYPE_MISMATCH,E_RETURN_MISSING,E_CALL_ARG_COUNT,E_NO_IMPLICIT_CONVERSION,E_UNKNOWN_FUNCTION,E_COMPTIME_TRAP
 
 union Token {
     int: i64,
     ident: []const u8,
     eof,
+}
+
+union Signal {
+    ready,
+    closed,
 }
 
 fn accept_union_sizeof() -> usize {
@@ -16,6 +21,15 @@ fn accept_union_sizeof() -> usize {
 
 fn accept_union_alignof() -> usize {
     return alignof(Token);
+}
+
+fn accept_comptime_union_layout_reflection() -> void {
+    comptime {
+        assert(sizeof(Token) == 24);
+        assert(alignof(Token) == 8);
+        assert(sizeof(Signal) == 4);
+        assert(alignof(Signal) == 4);
+    }
 }
 
 fn accept_union_payload_binding_type(token: Token) -> i64 {
@@ -51,6 +65,13 @@ union RejectDuplicateUnionCase {
 fn reject_union_field_reflection() -> usize {
     // EXPECT_ERROR: E_REFLECTION_UNKNOWN_TYPE
     return field_offset<Token>(.int);
+}
+
+fn reject_comptime_union_layout_reflection() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(sizeof(Token) == 16);
+    }
 }
 
 fn reject_unknown_union_switch_case(token: Token) -> u32 {

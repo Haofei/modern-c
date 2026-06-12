@@ -116,6 +116,8 @@ fn accept_comptime_reflection_offsets() -> void {
         assert(sizeof(DefaultMode) == 8);
         assert(alignof(DefaultMode) == 8);
         assert(repr_of(DefaultMode) == 8);
+        assert(sizeof([]u8) == 16);
+        assert(alignof([]u8) == 8);
         assert(field_offset(Packet, .len) == 0);
         assert(field_offset(Packet, .tag) == 2);
         assert(field_offset(Uart16550, .lsr) == 1);

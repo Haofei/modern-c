@@ -2070,6 +2070,8 @@ extern struct
 extern mmio struct
 packed struct
 packed bits
+safe tagged union
+arrays and slices
 Reg<T, access>
 RegBits<T, Layout, access>
 MmioPtr<T>
@@ -3913,7 +3915,8 @@ trap lowering
 #[no_lang_trap] verifier
 #[unsafe_contract] markers
 narrow const globals and const-fn comptime folding
-layout reflection for size/alignment/field offsets/bit offsets/repr
+layout reflection for size/alignment/field offsets/bit offsets/repr,
+including slices and tagged unions
 C source-line hints and line-oriented .mcmap output
 ```
 

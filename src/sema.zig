@@ -123,6 +123,7 @@ pub const Checker = struct {
             .structs = &structs,
             .packed_bits = &packed_bits,
             .overlay_unions = &overlay_unions,
+            .tagged_unions = &tagged_unions,
             .enums = &enums,
             .aliases = &type_aliases,
         };
@@ -1030,6 +1031,7 @@ pub const Checker = struct {
                 if (self.reflect_env) |env| {
                     if (env.aliases.get(name.text)) |aliased| return self.comptimeSizeOf(aliased, depth + 1);
                     if (env.structs.get(name.text)) |info| return self.comptimeStructSize(info, depth);
+                    if (env.tagged_unions.get(name.text)) |info| return self.comptimeTaggedUnionSize(info, depth);
                     if (env.enums.get(name.text)) |info| {
                         const repr = info.repr orelse simpleNameType("isize", ty.span);
                         return self.comptimeSizeOf(repr, depth + 1);
@@ -1037,7 +1039,8 @@ pub const Checker = struct {
                 }
                 return null;
             },
-            .pointer, .raw_many_pointer, .slice => return 8,
+            .pointer, .raw_many_pointer => return 8,
+            .slice => return 16,
             .generic => |g| {
                 if (isPointerLikeGeneric(g.base.text)) return 8;
                 if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
@@ -1064,6 +1067,7 @@ pub const Checker = struct {
                 if (self.reflect_env) |env| {
                     if (env.aliases.get(name.text)) |aliased| return self.comptimeAlignOf(aliased, depth + 1);
                     if (env.structs.get(name.text)) |info| return self.comptimeStructAlign(info, depth);
+                    if (env.tagged_unions.get(name.text)) |info| return self.comptimeTaggedUnionAlign(info, depth);
                     if (env.enums.get(name.text)) |info| {
                         const repr = info.repr orelse simpleNameType("isize", ty.span);
                         return self.comptimeAlignOf(repr, depth + 1);
@@ -1101,6 +1105,55 @@ pub const Checker = struct {
             if (alignment > max_align) max_align = alignment;
         }
         return max_align;
+    }
+
+    const TaggedUnionPayloadLayout = struct {
+        has_payload: bool,
+        size: i128,
+        alignment: i128,
+    };
+
+    fn comptimeTaggedUnionSize(self: *Checker, info: UnionInfo, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        const payload = self.comptimeTaggedUnionPayloadLayout(info, depth + 1) orelse return null;
+        var offset: i128 = c_tagged_union_tag_size;
+        var max_align: i128 = c_tagged_union_tag_align;
+        if (payload.has_payload) {
+            if (payload.alignment > max_align) max_align = payload.alignment;
+            offset = alignForward(offset, payload.alignment) orelse return null;
+            offset += payload.size;
+        }
+        return alignForward(offset, max_align);
+    }
+
+    fn comptimeTaggedUnionAlign(self: *Checker, info: UnionInfo, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        const payload = self.comptimeTaggedUnionPayloadLayout(info, depth + 1) orelse return null;
+        return if (payload.has_payload and payload.alignment > c_tagged_union_tag_align)
+            payload.alignment
+        else
+            c_tagged_union_tag_align;
+    }
+
+    fn comptimeTaggedUnionPayloadLayout(self: *Checker, info: UnionInfo, depth: usize) ?TaggedUnionPayloadLayout {
+        var has_payload = false;
+        var max_size: i128 = 0;
+        var max_align: i128 = 1;
+        var it = info.cases.valueIterator();
+        while (it.next()) |maybe_payload| {
+            const payload_ty = maybe_payload.* orelse continue;
+            has_payload = true;
+            const size = self.comptimeSizeOf(payload_ty, depth + 1) orelse return null;
+            const alignment = self.comptimeAlignOf(payload_ty, depth + 1) orelse return null;
+            if (alignment <= 0) return null;
+            if (size > max_size) max_size = size;
+            if (alignment > max_align) max_align = alignment;
+        }
+        return .{
+            .has_payload = has_payload,
+            .size = alignForward(max_size, max_align) orelse return null,
+            .alignment = max_align,
+        };
     }
 
     fn comptimeFieldOffset(self: *Checker, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
@@ -6043,11 +6096,18 @@ const ReflectEnv = struct {
     structs: *const std.StringHashMap(StructInfo),
     packed_bits: *const std.StringHashMap(LayoutFieldInfo),
     overlay_unions: *const std.StringHashMap(LayoutFieldInfo),
+    tagged_unions: *const std.StringHashMap(UnionInfo),
     enums: *const std.StringHashMap(EnumInfo),
     aliases: *const std.StringHashMap(ast.TypeExpr),
 };
 
 const ScalarLayout = struct { size: u32, alignment: u32 };
+
+// The C backend lowers tagged unions as a C enum tag followed by an optional
+// payload union. Clang/GCC use a 32-bit enum for this generated tag on the
+// supported LP64 targets.
+const c_tagged_union_tag_size: i128 = 4;
+const c_tagged_union_tag_align: i128 = 4;
 
 // Sizes/alignments that are identical across the supported LP64 C ABIs, so a
 // comptime fold agrees with clang's runtime `sizeof`/`alignof`.
