@@ -3084,6 +3084,7 @@ const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "/* unsupported for loop without iterable */\n");
             return error.UnsupportedCEmission;
         };
+        if (try self.emitForLoopSequencedIterable(loop, iterable, locals, return_ty)) return;
         if (try self.emitForLoopCallIterable(loop, binding, iterable, locals, return_ty)) return;
         const iterable_array_ty = self.arrayTypeForExpr(iterable, locals);
         const element_ty = if (iterable_array_ty) |array_ty| CEmitter.arrayElementType(array_ty) else null;
@@ -3152,6 +3153,21 @@ const CEmitter = struct {
         if (jumps.brk) try self.out.print(self.allocator, "    mc_break_{d}:;\n", .{id});
     }
 
+    fn emitForLoopSequencedIterable(self: *CEmitter, loop: ast.Loop, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+        if (!exprContainsCall(iterable)) return false;
+        const iterable_ty = self.iterableTypeForExpr(iterable, locals) orelse return false;
+        const temp = try self.emitSequencedCallArgTemp(iterable, locals, iterable_ty);
+
+        var loop_locals = try cloneLocals(self.allocator, locals.*);
+        defer loop_locals.deinit();
+        try loop_locals.put(temp.name, try self.localInfoFromType(iterable_ty));
+
+        var rewritten = loop;
+        rewritten.iterable = ast.Expr{ .span = iterable.span, .kind = .{ .ident = .{ .span = iterable.span, .text = temp.name } } };
+        try self.emitForLoop(rewritten, &loop_locals, return_ty);
+        return true;
+    }
+
     fn emitForLoopCallIterable(self: *CEmitter, loop: ast.Loop, binding: ast.Ident, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
         _ = binding;
         const call = switch (iterable.kind) {
@@ -3174,6 +3190,15 @@ const CEmitter = struct {
         rewritten.iterable = ident;
         try self.emitForLoop(rewritten, &loop_locals, return_ty);
         return true;
+    }
+
+    fn iterableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return null;
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .array, .slice => ty,
+            else => null,
+        };
     }
 
     fn emitSwitchPatternLabel(self: *CEmitter, pattern: ast.Pattern, subject_enum_name: ?[]const u8) !void {

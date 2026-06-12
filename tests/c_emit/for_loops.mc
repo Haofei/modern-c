@@ -11,6 +11,13 @@ struct ForBag {
     rows: [2][2]u32,
 }
 
+struct SliceBag {
+    values: []const u32,
+}
+
+extern fn make_for_bag() -> ForBag;
+extern fn make_slice_bag() -> SliceBag;
+
 fn first_from_slice(xs: []const u32) -> u32 {
     for x in xs {
         return x;
@@ -49,6 +56,20 @@ fn first_from_array_field(bag: ForBag) -> u32 {
 fn second_from_field_nested_row(bag: ForBag) -> u32 {
     for row in bag.rows {
         return row[1];
+    }
+    return 0;
+}
+
+fn first_from_call_array_field() -> u32 {
+    for x in make_for_bag().values {
+        return x;
+    }
+    return 0;
+}
+
+fn first_from_call_slice_field() -> u32 {
+    for x in make_slice_bag().values {
+        return x;
     }
     return 0;
 }
