@@ -39,6 +39,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
+        .global_initializers = std.StringHashMap(ast.Expr).init(allocator),
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
@@ -142,6 +143,7 @@ const LlvmEmitter = struct {
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
+    global_initializers: std.StringHashMap(ast.Expr) = undefined,
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
     loop_stack: std.ArrayList(LoopLabels) = undefined,
@@ -169,6 +171,7 @@ const LlvmEmitter = struct {
         self.struct_types.deinit();
         self.fn_sigs.deinit();
         self.global_types.deinit();
+        self.global_initializers.deinit();
         self.local_types.deinit();
         self.local_slots.deinit();
         self.loop_stack.deinit(self.allocator);
@@ -239,6 +242,7 @@ const LlvmEmitter = struct {
         const ty = global.ty orelse return error.UnsupportedLlvmEmission;
         _ = try self.llvmType(ty);
         try self.global_types.put(global.name.text, ty);
+        if (global.init) |expr| try self.global_initializers.put(global.name.text, expr);
     }
 
     fn emitGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
@@ -271,6 +275,17 @@ const LlvmEmitter = struct {
                 .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
                 else => try self.emitGlobalInitializer(expr, info.repr),
             };
+        }
+        switch (expr.kind) {
+            .ident => |ident| {
+                if (!self.isFnPointerType(ty)) {
+                    if (self.global_initializers.get(ident.text)) |initializer| {
+                        return try self.emitGlobalInitializer(initializer, ty);
+                    }
+                }
+            },
+            .cast => |node| return try self.emitGlobalInitializer(node.value.*, node.ty.*),
+            else => {},
         }
         switch (resolved_ty.kind) {
             .array => |array| {

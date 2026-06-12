@@ -108,8 +108,9 @@ Result switches including wildcard fallback arms. Atomic lowering covers
 `atomic<T>` scalar storage, `atomic.init`, `load`, `store`, `fetch_add`, and
 `fetch_sub` with LLVM atomic memory orderings for local and global atomics.
 Function-pointer lowering covers `fn(...) -> T` values as opaque pointers,
-static function-name initializers, indirect calls through parameters, locals,
-globals, arrays, and struct fields, plus function-pointer returns.
+static function-name initializers, copied function-pointer aggregate globals,
+indirect calls through parameters, locals, globals, arrays, and struct fields,
+plus function-pointer returns.
 Aggregate assignment lowering covers `uninit` aggregate storage, whole
 array/struct literal assignment, aggregate copies from nested elements/fields,
 and nested aggregate stores through globals, arrays, and struct fields. Inferred
@@ -249,7 +250,8 @@ semantics.
 LLVM atomics are covered for scalar `atomic<T>` storage, `atomic.init`,
 `load`, `store`, `fetch_add`, and `fetch_sub` over local and global atomics.
 LLVM function-pointer coverage includes static function-name initializers,
-indirect calls, arrays/struct fields, locals/params/globals, and returns.
+copied aggregate globals, indirect calls, arrays/struct fields,
+locals/params/globals, and returns.
 LLVM string literal coverage includes `*const u8`/raw-many `u8` pointer targets
 for returns, locals, and call arguments, including MC escape sequences.
 LLVM packed-bits coverage uses the declared integer representation for ABI,
@@ -271,6 +273,8 @@ struct locals in covered expression and assignment workflows.
 LLVM aggregate layout coverage includes dependency-ordered struct/array/slice
 combinations and target-typed integer coercions such as `usize` slice lengths
 returned as narrower integer types after MIR verification.
+LLVM static global initializer coverage includes scalar copies, casted scalar
+copies, function-pointer globals, and copied function-pointer aggregate globals.
 LLVM domain coverage includes payload ABI lowering for `wrap<T>`/`sat<T>`,
 `serial<T>`/`counter<T>`/`Duration<T>` scalar storage, modular `wrap` arithmetic
 and shifts, unsigned saturating arithmetic, serial

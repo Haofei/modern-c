@@ -4041,8 +4041,9 @@ Atomic lowering covers `atomic<T>` scalar storage, `atomic.init`, `load`,
 `store`, `fetch_add`, and `fetch_sub` with LLVM atomic memory orderings for
 local and global atomics.
 Function-pointer lowering covers `fn(...) -> T` values as opaque pointers,
-static function-name initializers, indirect calls through parameters, locals,
-globals, arrays, and struct fields, plus function-pointer returns.
+static function-name initializers, copied function-pointer aggregate globals,
+indirect calls through parameters, locals, globals, arrays, and struct fields,
+plus function-pointer returns.
 Aggregate assignment lowering covers `uninit` aggregate storage, whole
 array/struct literal assignment, aggregate copies from nested elements/fields,
 and nested aggregate stores through globals, arrays, and struct fields. Inferred
@@ -4050,7 +4051,8 @@ local lowering covers initializer-derived scalar, slice, array, and struct
 storage for the covered backend subset. Aggregate layout coverage includes
 structs containing arrays/slices, slices of structs/arrays, and nested array
 indexing. Static aggregate global coverage includes nested array/struct
-literals plus const-folded `sizeof`/`alignof`/`field_offset` array lengths.
+literals, scalar and function-pointer aggregate global copies, plus
+const-folded `sizeof`/`alignof`/`field_offset` array lengths.
 LLVM debug metadata includes `source_filename`, compile-unit/file records,
 function `DISubprogram` records, and line/column locations on returns and call
 instructions for the covered backend subset.
