@@ -460,13 +460,23 @@ pub fn build(b: *std.Build) void {
     demo_test_step.dependOn(&demo_test_cmd.step);
 
     const net_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/net/net-test.sh",
         "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_net_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/net/net-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
     });
     net_test_cmd.step.dependOn(b.getInstallStep());
     const net_test_step = b.step("net-test", "Run the kernel virtio-net RX/TX ARP exchange under QEMU");
     net_test_step.dependOn(&net_test_cmd.step);
+    llvm_net_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_net_test_step = b.step("llvm-net-test", "Run the LLVM-lowered kernel virtio-net RX/TX ARP exchange under QEMU");
+    llvm_net_test_step.dependOn(&llvm_net_test_cmd.step);
 
     const kernel_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1962,6 +1972,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_virtio_test_cmd.step);
     m0_step.dependOn(&llvm_udp_net_test_cmd.step);
     m0_step.dependOn(&llvm_blk_test_cmd.step);
+    m0_step.dependOn(&llvm_net_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
