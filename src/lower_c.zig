@@ -408,7 +408,10 @@ const SourceMapEmitter = struct {
     fn emitModule(self: *SourceMapEmitter, module: ast.Module) !void {
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .global_decl => |global| try self.emitEntry("global", global.name.text, global.name.span, global.name.text, "mir:global:init"),
+                .global_decl => |global| {
+                    try self.emitEntry("global", global.name.text, global.name.span, global.name.text, "mir:global:init");
+                    if (global.init) |init| try self.emitEntry("global_initializer_expr", global.name.text, init.span, global.name.text, "mir:global:init");
+                },
                 .fn_decl => |fn_decl| if (fn_decl.body) |body| {
                     try self.emitEntry("function", fn_decl.name.text, fn_decl.name.span, fn_decl.name.text, "mir:function:entry");
                     const previous_function = self.current_function;
@@ -11802,6 +11805,7 @@ test "C source map records source spans and generated C lines" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "# mcmap v0\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"global\" symbol=\"count\" source_line=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"global_initializer_expr\" symbol=\"count\" source_line=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"function\" symbol=\"add_one\" source_line=3") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"let_decl\" symbol=\"add_one\" source_line=4") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"initializer_expr\" symbol=\"add_one\" source_line=4") != null);
@@ -11811,6 +11815,7 @@ test "C source map records source spans and generated C lines" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "source_path=\"debug_map.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "generated_c_path=\"debug_map.c\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:function:add_one@3:4\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:global_initializer_expr:count@1:21\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:initializer_expr:add_one@4:18\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:return_expr:add_one@5:12\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mir_block=\"mir:add_one:block:") != null);

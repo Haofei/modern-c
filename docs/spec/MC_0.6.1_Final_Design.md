@@ -3918,8 +3918,8 @@ narrow scalar/aggregate const globals, typed static global initializers, and
 const-fn comptime folding
 layout reflection for size/alignment/field offsets/bit offsets/repr,
 including slices and tagged unions
-C source-line hints and line-oriented .mcmap output, including deferred cleanup
-spans
+C source-line hints and line-oriented .mcmap output, including global
+initializer and deferred cleanup spans
 ```
 
 ---
