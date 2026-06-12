@@ -251,6 +251,7 @@ const LlvmEmitter = struct {
             .address_of => |inner| try self.emitAddressOf(inner.*),
             .deref => |inner| try self.emitDeref(inner.*, expected_ty),
             .index => |node| try self.emitIndexLoad(node),
+            .slice => |node| try self.emitSlice(node),
             .member => |node| try self.emitMemberLoad(node),
             else => error.UnsupportedLlvmEmission,
         };
@@ -462,6 +463,13 @@ const LlvmEmitter = struct {
     }
 
     fn emitMemberLoad(self: *LlvmEmitter, node: anytype) ![]const u8 {
+        const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        if (base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) {
+            const base = try self.emitExpr(node.base.*, base_ty);
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ result, try self.llvmType(base_ty), base });
+            return result;
+        }
         const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
         const ptr = try self.emitMemberAddress(node);
         const result = try self.nextTemp();
@@ -488,18 +496,31 @@ const LlvmEmitter = struct {
     }
 
     fn emitIndexAddress(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
-        const array_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
-        const array = switch (array_ty.kind) {
-            .array => |array| array,
+        const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        const index = try self.emitExpr(node.index.*, simpleType((node.index.*).span, "usize"));
+        return switch (base_ty.kind) {
+            .array => |array| blk: {
+                const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+                const base_ptr = try self.arrayBasePointer(node.base.*);
+                try self.emitBoundsCheck(index, len);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(base_ty), base_ptr, index });
+                break :blk result;
+            },
+            .slice => |slice| blk: {
+                const base = try self.emitExpr(node.base.*, base_ty);
+                const base_llvm = try self.llvmType(base_ty);
+                const ptr = try self.nextTemp();
+                const len = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ ptr, base_llvm, base });
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ len, base_llvm, base });
+                try self.emitDynamicBoundsCheck(index, len);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(slice.child.*), ptr, index });
+                break :blk result;
+            },
             else => return error.UnsupportedLlvmEmission,
         };
-        const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
-        const base_ptr = try self.arrayBasePointer(node.base.*);
-        const index = try self.emitExpr(node.index.*, simpleType((node.index.*).span, "usize"));
-        try self.emitBoundsCheck(index, len);
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(array_ty), base_ptr, index });
-        return result;
     }
 
     fn arrayBasePointer(self: *LlvmEmitter, expr: ast.Expr) anyerror![]const u8 {
@@ -526,6 +547,67 @@ const LlvmEmitter = struct {
         const cont = try self.nextLabel("bounds_ok");
         try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {d}\n", .{ ok, index, len });
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds()\n  unreachable\n{s}:\n", .{ ok, cont, trap, trap, cont });
+    }
+
+    fn emitDynamicBoundsCheck(self: *LlvmEmitter, index: []const u8, len: []const u8) !void {
+        const ok = try self.nextTemp();
+        const trap = try self.nextLabel("trap_bounds");
+        const cont = try self.nextLabel("bounds_ok");
+        try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n", .{ ok, index, len });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds()\n  unreachable\n{s}:\n", .{ ok, cont, trap, trap, cont });
+    }
+
+    fn emitSliceBoundsCheck(self: *LlvmEmitter, start: []const u8, end: []const u8, len: []const u8) !void {
+        const ordered = try self.nextTemp();
+        const in_len = try self.nextTemp();
+        const ok = try self.nextTemp();
+        const trap = try self.nextLabel("trap_bounds");
+        const cont = try self.nextLabel("bounds_ok");
+        try self.out.print(self.allocator, "  {s} = icmp ule i64 {s}, {s}\n", .{ ordered, start, end });
+        try self.out.print(self.allocator, "  {s} = icmp ule i64 {s}, {s}\n", .{ in_len, end, len });
+        try self.out.print(self.allocator, "  {s} = and i1 {s}, {s}\n", .{ ok, ordered, in_len });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds()\n  unreachable\n{s}:\n", .{ ok, cont, trap, trap, cont });
+    }
+
+    fn emitSlice(self: *LlvmEmitter, node: anytype) ![]const u8 {
+        const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        const slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedLlvmEmission;
+        const slice = switch (slice_ty.kind) {
+            .slice => |slice| slice,
+            else => return error.UnsupportedLlvmEmission,
+        };
+        const start = try self.emitExpr(node.start.*, simpleType((node.start.*).span, "usize"));
+        const end = try self.emitExpr(node.end.*, simpleType((node.end.*).span, "usize"));
+        const base_ptr = switch (base_ty.kind) {
+            .array => |array| blk: {
+                const array_ptr = try self.arrayBasePointer(node.base.*);
+                const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+                const elem_ptr = try self.nextTemp();
+                try self.emitSliceBoundsCheck(start, end, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{len}));
+                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ elem_ptr, try self.llvmType(base_ty), array_ptr, start });
+                break :blk elem_ptr;
+            },
+            .slice => blk: {
+                const base = try self.emitExpr(node.base.*, base_ty);
+                const base_llvm = try self.llvmType(base_ty);
+                const ptr = try self.nextTemp();
+                const len = try self.nextTemp();
+                const elem_ptr = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ ptr, base_llvm, base });
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ len, base_llvm, base });
+                try self.emitSliceBoundsCheck(start, end, len);
+                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ elem_ptr, try self.llvmType(slice.child.*), ptr, start });
+                break :blk elem_ptr;
+            },
+            else => return error.UnsupportedLlvmEmission,
+        };
+        const result0 = try self.nextTemp();
+        const slice_len = try self.nextTemp();
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} undef, ptr {s}, 0\n", .{ result0, try self.llvmType(slice_ty), base_ptr });
+        try self.out.print(self.allocator, "  {s} = sub i64 {s}, {s}\n", .{ slice_len, end, start });
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i64 {s}, 1\n", .{ result, try self.llvmType(slice_ty), result0, slice_len });
+        return result;
     }
 
     fn emitArrayLiteralStores(self: *LlvmEmitter, array_ptr: []const u8, array_ty: ast.TypeExpr, items: []const ast.Expr) !void {
@@ -745,6 +827,7 @@ const LlvmEmitter = struct {
                 error.UnsupportedLlvmEmission,
             .pointer, .raw_many_pointer => "ptr",
             .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
+            .slice => "{ ptr, i64 }",
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -767,10 +850,16 @@ const LlvmEmitter = struct {
             .bool_literal, .unary => simpleType(expr.span, "bool"),
             .int_literal => null,
             .grouped => |inner| self.exprType(inner.*),
+            .call => |call| self.callReturnType(call),
             .address_of => |inner| if (self.exprType(inner.*)) |ty| self.pointerTypeFor(ty) catch null else null,
             .deref => |inner| self.derefPointeeType(inner.*),
             .index => |node| self.indexElementType(node.base.*),
-            .member => |node| if (self.memberField(node.base.*, node.name.text)) |field| field.ty else null,
+            .slice => |node| if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
+            .member => |node| if (self.exprType(node.base.*)) |base_ty| blk: {
+                if (base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
+                if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
+                break :blk null;
+            } else null,
             .binary => |node| if (binaryIsComparison(node.op)) simpleType(expr.span, "bool") else self.exprType(node.left.*),
             else => null,
         };
@@ -798,6 +887,16 @@ const LlvmEmitter = struct {
         const ty = self.exprType(base) orelse return null;
         return switch (ty.kind) {
             .array => |array| array.child.*,
+            .slice => |slice| slice.child.*,
+            else => null,
+        };
+    }
+
+    fn sliceTypeForBase(self: *LlvmEmitter, ty: ast.TypeExpr, span: ast.Span) ?ast.TypeExpr {
+        _ = self;
+        return switch (ty.kind) {
+            .slice => ty,
+            .array => |node| .{ .span = span, .kind = .{ .slice = .{ .mutability = .mut, .child = node.child } } },
             else => null,
         };
     }
@@ -835,9 +934,18 @@ const LlvmEmitter = struct {
         return sig.params[index].ty;
     }
 
+    fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+        const callee = switch (call.callee.kind) {
+            .ident => |ident| ident.text,
+            else => return null,
+        };
+        return if (self.fn_sigs.get(callee)) |sig| sig.ret else null;
+    }
+
     fn isAggregateType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         return switch (ty.kind) {
             .array => true,
+            .slice => true,
             .name => self.structDeclForType(ty) != null,
             else => false,
         };

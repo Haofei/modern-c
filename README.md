@@ -61,7 +61,9 @@ field load/store, and field-address taking. Scalar fixed-array and scalar-struct
 globals support static literals plus element/field access. Scalar aggregate
 function returns, parameters, and direct calls are supported for fixed arrays and
 plain structs. Nested fixed-array/struct element and field access works for the
-covered aggregate subset.
+covered aggregate subset. Core slice values lower as `{ ptr, len }` values with
+checked indexing, `.len`, direct returns/params, and range slicing from arrays or
+slices.
 
 Prototype or incomplete:
 
@@ -92,8 +94,8 @@ Deferred:
 
 - LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
   `emit-llvm` support exists for a scalar/control-flow subset and validates
-  through `llvm-as`; slices, full aggregate ABI, object emission, broader
-  CFG/phi lowering, and debug-info lowering are still pending.
+  through `llvm-as`; full aggregate ABI, object emission, broader CFG/phi
+  lowering, debug-info lowering, and broader slice workflows are still pending.
 
 ## Requirements
 

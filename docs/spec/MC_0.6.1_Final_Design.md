@@ -3981,10 +3981,12 @@ field-address taking. Scalar fixed-array and scalar-struct globals support stati
 literals plus element/field access. Scalar aggregate function returns,
 parameters, and direct calls are supported for fixed arrays and plain structs.
 Nested fixed-array/struct element and field access works for the covered
-aggregate subset. It intentionally emits no
+aggregate subset. Core slice values lower as `{ ptr, len }` values with checked
+indexing, `.len`, direct returns/params, and range slicing from arrays or slices.
+It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
-Broader CFG/phi lowering, slices, full aggregate ABI, object emission, and
-debug-info lowering remain future work.
+Broader CFG/phi lowering, full aggregate ABI, object emission, debug-info
+lowering, and broader slice workflows remain future work.
 
 LLVM lowering examples:
 
