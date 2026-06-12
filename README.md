@@ -127,7 +127,8 @@ target for programs that use `std/hosted_io` (explicit, fallible byte I/O —
 `exp2`/`log2`/`exp`/`log`/`tanh` for `f32`/`f64`). See `demo/hosted/` for the
 stdin-to-stdout float round-trip; run it with `zig build hosted-test`.
 `emit-map` uses the same verified C-emission path and writes a line-oriented
-`.mcmap` artifact to stdout.
+`.mcmap` artifact to stdout, including statement and selected expression spans
+with typed-AST and MIR labels.
 
 ## Conformance Snapshot
 

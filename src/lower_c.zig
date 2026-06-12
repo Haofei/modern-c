@@ -401,7 +401,6 @@ const SourceMapEmitter = struct {
     generated_c_path: []const u8,
     line_index: []const GeneratedLine,
     mir_module: *const mir.Module,
-    line_cursor: usize = 0,
     current_function: ?[]const u8 = null,
 
     fn emitModule(self: *SourceMapEmitter, module: ast.Module) !void {
@@ -449,6 +448,31 @@ const SourceMapEmitter = struct {
         const mir_block = try std.fmt.allocPrint(self.allocator, "mir:{s}:span:{d}:{d}", .{ symbol, stmt.span.line, stmt.span.column });
         defer self.allocator.free(mir_block);
         try self.emitEntry(@tagName(stmt.kind), symbol, stmt.span, symbol, mir_block);
+        try self.emitStmtExpressions(stmt);
+    }
+
+    fn emitStmtExpressions(self: *SourceMapEmitter, stmt: ast.Stmt) !void {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| if (local.init) |init| try self.emitExprEntry("initializer_expr", init.span),
+            .assignment => |node| {
+                try self.emitExprEntry("assignment_target_expr", node.target.span);
+                try self.emitExprEntry("assignment_value_expr", node.value.span);
+            },
+            .@"return" => |maybe_expr| if (maybe_expr) |expr| try self.emitExprEntry("return_expr", expr.span),
+            .assert => |expr| try self.emitExprEntry("assert_expr", expr.span),
+            .loop => |loop| if (loop.iterable) |expr| try self.emitExprEntry(if (loop.kind == .@"while") "while_condition_expr" else "for_iterable_expr", expr.span),
+            .if_let => |node| try self.emitExprEntry("if_let_value_expr", node.value.span),
+            .@"switch" => |node| try self.emitExprEntry("switch_subject_expr", node.subject.span),
+            .@"defer", .expr => |expr| try self.emitExprEntry("expr", expr.span),
+            else => {},
+        }
+    }
+
+    fn emitExprEntry(self: *SourceMapEmitter, kind: []const u8, span: ast.Span) !void {
+        const symbol = self.current_function orelse "-";
+        const mir_block = try std.fmt.allocPrint(self.allocator, "mir:{s}:expr:{d}:{d}", .{ symbol, span.line, span.column });
+        defer self.allocator.free(mir_block);
+        try self.emitEntry(kind, symbol, span, symbol, mir_block);
     }
 
     fn emitEntry(self: *SourceMapEmitter, kind: []const u8, symbol: []const u8, span: ast.Span, object_symbol: []const u8, mir_block: []const u8) !void {
@@ -511,11 +535,10 @@ const SourceMapEmitter = struct {
     }
 
     fn generatedLineForSource(self: *SourceMapEmitter, source_line: usize) usize {
-        var index = self.line_cursor;
+        var index: usize = 0;
         while (index < self.line_index.len) : (index += 1) {
             const entry = self.line_index[index];
             if (entry.source_line == source_line) {
-                self.line_cursor = index + 1;
                 return entry.generated_line;
             }
         }
@@ -11524,11 +11547,15 @@ test "C source map records source spans and generated C lines" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"global\" symbol=\"count\" source_line=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"function\" symbol=\"add_one\" source_line=3") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"let_decl\" symbol=\"add_one\" source_line=4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"initializer_expr\" symbol=\"add_one\" source_line=4") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"return\" symbol=\"add_one\" source_line=5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"return_expr\" symbol=\"add_one\" source_line=5") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "generated_c_line=0") == null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "source_path=\"debug_map.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "generated_c_path=\"debug_map.c\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:function:add_one@3:4\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:initializer_expr:add_one@4:18\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:return_expr:add_one@5:12\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mir_block=\"mir:add_one:block:") != null);
 }
 
