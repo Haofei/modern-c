@@ -249,8 +249,8 @@ LLVM initialization coverage materializes observable `uninit` storage with
 concrete zero values and lowers `MaybeUninit<T>.write/assume_init` through the
 payload storage representation.
 LLVM opaque-address coverage lowers `PAddr`/`VAddr` representation-preserving
-casts as `i64`, including the std/addr helpers used by raw float buffers and
-fixed-lane helper arrays.
+casts as `i64`, including `UserPtr<T>`/`PhysPtr<T>` wrapper ABI and the std/addr
+helpers used by raw float buffers and fixed-lane helper arrays.
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function

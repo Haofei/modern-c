@@ -4006,9 +4006,9 @@ semantic checking.
 Initialization lowering materializes observable `uninit` storage with concrete
 zero values and lowers `MaybeUninit<T>.write/assume_init` through the payload
 storage representation.
-Opaque-address lowering represents `PAddr`/`VAddr` as `i64` and treats explicit
-representation-preserving casts to/from same-width integer storage as no-op IR
-value conversions.
+Opaque-address lowering represents `PAddr`/`VAddr` and `UserPtr<T>`/`PhysPtr<T>`
+as `i64` and treats explicit representation-preserving casts to/from same-width
+integer storage as no-op IR value conversions.
 Floating-point scalar lowering covers `f32`/`f64` literals, globals, calls,
 locals, arithmetic, comparison, and unary negation. Domain scalar lowering covers
 `wrap<T>`/`sat<T>` payload representation, `wrap` modular add/sub/mul/bitwise/

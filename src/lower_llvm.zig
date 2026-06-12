@@ -2220,6 +2220,8 @@ const LlvmEmitter = struct {
                 try self.llvmType(node.args[0])
             else if ((std.mem.eql(u8, node.base.text, "wrap") or std.mem.eql(u8, node.base.text, "sat")) and node.args.len == 1)
                 try self.llvmType(node.args[0])
+            else if (isOpaqueAddressGenericName(node.base.text) and node.args.len == 1)
+                "i64"
             else
                 error.UnsupportedLlvmEmission,
             else => error.UnsupportedLlvmEmission,
@@ -2802,6 +2804,7 @@ const LlvmEmitter = struct {
             .nullable => |child| if (isPointerLikeType(child.*)) 8 else null,
             .slice => 16,
             .generic => |g| {
+                if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat")) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
@@ -2831,6 +2834,7 @@ const LlvmEmitter = struct {
             .pointer, .raw_many_pointer, .slice => 8,
             .nullable => |child| if (isPointerLikeType(child.*)) 8 else null,
             .generic => |g| {
+                if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat")) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
@@ -2923,6 +2927,7 @@ const LlvmEmitter = struct {
             else
                 null,
             .pointer, .raw_many_pointer, .nullable, .slice, .fn_pointer => 64,
+            .generic => |node| if (isOpaqueAddressGenericName(node.base.text) and node.args.len == 1) 64 else null,
             .qualified => |node| self.fixedLayoutBitsOf(node.child.*),
             else => null,
         };
@@ -3475,6 +3480,11 @@ fn isOpaqueAddressTypeName(name: []const u8) bool {
     return std.mem.eql(u8, name, "PAddr") or
         std.mem.eql(u8, name, "VAddr") or
         std.mem.eql(u8, name, "DmaAddr");
+}
+
+fn isOpaqueAddressGenericName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "UserPtr") or
+        std.mem.eql(u8, name, "PhysPtr");
 }
 
 fn trapHelperForCall(call: anytype) ?[]const u8 {
