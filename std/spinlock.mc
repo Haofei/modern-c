@@ -19,8 +19,9 @@ export fn spinlock_init(l: *mut Spinlock) -> void {
 export fn spin_lock(l: *mut Spinlock) -> void {
     let my: u32 = l.next_ticket.fetch_add(1, .acq_rel);
     var served: bool = false;
+    var cur: u32 = 0;
     while !served {
-        let cur: u32 = l.now_serving.load(.acquire);
+        cur = l.now_serving.load(.acquire);
         if cur == my {
             served = true;
         }

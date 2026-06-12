@@ -361,31 +361,64 @@ pub fn build(b: *std.Build) void {
     udp_net_test_step.dependOn(&udp_net_test_cmd.step);
 
     const smp_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/smp-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     smp_test_cmd.step.dependOn(b.getInstallStep());
     const smp_test_step = b.step("smp-test", "Boot multiple harts and synchronize on a shared atomic under QEMU");
     smp_test_step.dependOn(&smp_test_cmd.step);
 
+    const llvm_smp_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/smp-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_smp_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_smp_test_step = b.step("llvm-smp-test", "Run LLVM-lowered SMP boot/sync under QEMU");
+    llvm_smp_test_step.dependOn(&llvm_smp_test_cmd.step);
+
     const smp_lock_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/smp-lock-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     smp_lock_test_cmd.step.dependOn(b.getInstallStep());
     const smp_lock_test_step = b.step("smp-lock-test", "Contend a ticket spinlock across harts under QEMU (mutual exclusion)");
     smp_lock_test_step.dependOn(&smp_lock_test_cmd.step);
 
+    const llvm_smp_lock_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/smp-lock-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_smp_lock_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_smp_lock_test_step = b.step("llvm-smp-lock-test", "Run LLVM-lowered SMP ticket-lock contention under QEMU");
+    llvm_smp_lock_test_step.dependOn(&llvm_smp_lock_test_cmd.step);
+
     const ipi_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/ipi-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     ipi_test_cmd.step.dependOn(b.getInstallStep());
     const ipi_test_step = b.step("ipi-test", "Send a CLINT software interrupt (IPI) between harts under QEMU");
     ipi_test_step.dependOn(&ipi_test_cmd.step);
+
+    const llvm_ipi_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/ipi-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_ipi_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_ipi_test_step = b.step("llvm-ipi-test", "Run LLVM-lowered inter-processor interrupt under QEMU");
+    llvm_ipi_test_step.dependOn(&llvm_ipi_test_cmd.step);
 
     const demo_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1886,6 +1919,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_page_test_cmd.step);
     m0_step.dependOn(&llvm_heap_test_cmd.step);
     m0_step.dependOn(&llvm_paging_test_cmd.step);
+    m0_step.dependOn(&llvm_smp_test_cmd.step);
+    m0_step.dependOn(&llvm_smp_lock_test_cmd.step);
+    m0_step.dependOn(&llvm_ipi_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

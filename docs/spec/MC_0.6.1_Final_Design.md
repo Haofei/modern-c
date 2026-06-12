@@ -4182,18 +4182,20 @@ llvm-mmap-test`, `zig build llvm-contain-test`, `zig build llvm-cow-test`, and
 llvm-fs-server-test`, `zig build llvm-net-server-test`, `zig build
 llvm-rtc-test`, `zig build llvm-userserver-test`, `zig build
 llvm-backtrace-test`, `zig build llvm-driver-test`, and `zig build
-llvm-preempt-test` gates boot LLVM-lowered bare-metal RISC-V QEMU images for
-typed MMIO, timer traps, cooperative context switching, round-robin scheduling,
-syscall dispatch, U-mode entry, process lifecycle, ELF load/run, VFS syscalls,
-socket syscalls, exec, `satp` address-space switching, per-process page tables,
-context switches that swap address spaces, scheduler VM switching, IPC
-request/reply, multi-slot IPC, registry lookup, IPC timeout, signal delivery,
-capability-scoped server access, restart supervision, heartbeat liveness,
-least-privilege gates, userspace-set scheduling policy, Sv39 activation, demand
-paging, anonymous mmap, crash containment, copy-on-write, per-server MMU
-isolation, user-mode block/filesystem/network servers, RTC MMIO, user-mode
-server syscalls, backtrace symbolization, char-device driver dispatch, and timer
-preemption.
+llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
+llvm-smp-lock-test`, and `zig build llvm-ipi-test` gates boot LLVM-lowered
+bare-metal RISC-V QEMU images for typed MMIO, timer traps, cooperative context
+switching, round-robin scheduling, syscall dispatch, U-mode entry, process
+lifecycle, ELF load/run, VFS syscalls, socket syscalls, exec, `satp`
+address-space switching, per-process page tables, context switches that swap
+address spaces, scheduler VM switching, IPC request/reply, multi-slot IPC,
+registry lookup, IPC timeout, signal delivery, capability-scoped server access,
+restart supervision, heartbeat liveness, least-privilege gates,
+userspace-set scheduling policy, Sv39 activation, demand paging, anonymous mmap,
+crash containment, copy-on-write, per-server MMU isolation, user-mode
+block/filesystem/network servers, RTC MMIO, user-mode server syscalls,
+backtrace symbolization, char-device driver dispatch, timer preemption, SMP
+boot/sync, SMP ticket-lock mutual exclusion, and inter-processor interrupts.
 The `zig build llvm-kmain-test` and `zig build llvm-kmain-net-test` gates boot
 LLVM-lowered integrated RISC-V kernel images under QEMU; the network variant also
 checks that QEMU captures the expected transmitted UDP payload.
