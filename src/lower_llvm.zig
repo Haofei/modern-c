@@ -73,6 +73,7 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(allocator, "declare void @mc_trap_InvalidRepresentation() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_Bounds() noreturn\n\n");
     try out.appendSlice(allocator, "declare void @mc_trap_Assert() noreturn\n\n");
+    try out.appendSlice(allocator, "declare void @mc_trap_Unreachable() noreturn\n\n");
 }
 
 const LlvmEmitter = struct {
@@ -319,8 +320,18 @@ const LlvmEmitter = struct {
                 },
                 .assert => |expr| try self.emitAssert(expr),
                 .@"return" => |maybe_expr| {
-                    if (ret_ty.kind == .name and std.mem.eql(u8, ret_ty.kind.name.text, "void")) {
+                    if (maybe_expr) |expr| {
+                        if (try self.emitNeverExpr(expr)) return true;
+                    }
+                    if (typeNameEql(ret_ty, "void")) {
+                        if (maybe_expr) |expr| switch (expr.kind) {
+                            .void_literal => {},
+                            .grouped => |inner| if ((inner.*).kind != .void_literal) return error.UnsupportedLlvmEmission,
+                            else => return error.UnsupportedLlvmEmission,
+                        };
                         try self.out.appendSlice(self.allocator, "  ret void\n");
+                    } else if (typeNameEql(ret_ty, "never")) {
+                        return error.UnsupportedLlvmEmission;
                     } else {
                         const expr = maybe_expr orelse return error.UnsupportedLlvmEmission;
                         const value = try self.emitExpr(expr, ret_ty);
@@ -403,6 +414,22 @@ const LlvmEmitter = struct {
         const cont = try self.nextLabel("assert_ok");
         const trap = try self.nextLabel("trap_assert");
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Assert()\n  unreachable\n{s}:\n", .{ condition, cont, trap, trap, cont });
+    }
+
+    fn emitNeverExpr(self: *LlvmEmitter, expr: ast.Expr) !bool {
+        switch (expr.kind) {
+            .unreachable_expr => {
+                try self.out.appendSlice(self.allocator, "  call void @mc_trap_Unreachable()\n  unreachable\n");
+                return true;
+            },
+            .call => |call| if (trapHelperForCall(call)) |helper| {
+                try self.out.print(self.allocator, "  call void @{s}()\n  unreachable\n", .{helper});
+                return true;
+            },
+            .grouped => |inner| return try self.emitNeverExpr(inner.*),
+            else => return false,
+        }
+        return false;
     }
 
     fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl) !void {
@@ -1284,6 +1311,8 @@ const LlvmEmitter = struct {
         return switch (ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "void"))
                 "void"
+            else if (std.mem.eql(u8, name.text, "never"))
+                "void"
             else if (std.mem.eql(u8, name.text, "bool"))
                 "i1"
             else if (std.mem.eql(u8, name.text, "f32"))
@@ -1493,6 +1522,37 @@ fn typeNameEql(ty: ast.TypeExpr, expected: []const u8) bool {
         .name => |name| std.mem.eql(u8, name.text, expected),
         else => false,
     };
+}
+
+fn trapHelperForCall(call: anytype) ?[]const u8 {
+    const callee = switch (call.callee.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| switch (inner.kind) {
+            .ident => |ident| ident.text,
+            else => return null,
+        },
+        else => return null,
+    };
+    if (!std.mem.eql(u8, callee, "trap") or call.type_args.len != 0 or call.args.len != 1) return null;
+    return switch (call.args[0].kind) {
+        .enum_literal => |literal| trapHelperForKind(literal.text),
+        .grouped => |inner| switch (inner.kind) {
+            .enum_literal => |literal| trapHelperForKind(literal.text),
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn trapHelperForKind(kind: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, kind, "Bounds")) return "mc_trap_Bounds";
+    if (std.mem.eql(u8, kind, "IntegerOverflow")) return "mc_trap_IntegerOverflow";
+    if (std.mem.eql(u8, kind, "DivideByZero")) return "mc_trap_DivideByZero";
+    if (std.mem.eql(u8, kind, "InvalidShift")) return "mc_trap_InvalidShift";
+    if (std.mem.eql(u8, kind, "InvalidRepresentation")) return "mc_trap_InvalidRepresentation";
+    if (std.mem.eql(u8, kind, "Assert")) return "mc_trap_Assert";
+    if (std.mem.eql(u8, kind, "Unreachable")) return "mc_trap_Unreachable";
+    return null;
 }
 
 fn findBoolSwitchArm(arms: []const ast.SwitchArm, value: bool) ?ast.SwitchArm {

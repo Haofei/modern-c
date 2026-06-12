@@ -3995,7 +3995,9 @@ invalid-count and shifted-out-bit traps.
 Floating-point scalar lowering covers `f32`/`f64` literals, globals, calls,
 locals, arithmetic, comparison, and unary negation. Statement workflow covers
 expression statements, void calls, `assert`, nested blocks, unsafe blocks, and
-transparent unsafe-contract blocks.
+transparent unsafe-contract blocks. The LLVM backend also lowers `trap(...)`,
+`unreachable`, `never` functions, and `never` coercion in return position for
+the covered trap kinds.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
 textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.
