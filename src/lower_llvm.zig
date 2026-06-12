@@ -2441,18 +2441,18 @@ const LlvmEmitter = struct {
         const short_label = try self.nextLabel(if (node.op == .logical_and) "logic_and_false" else "logic_or_true");
         const end_label = try self.nextLabel("logic_end");
         switch (node.op) {
-            .logical_and => try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ left, rhs_label, short_label }),
-            .logical_or => try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ left, short_label, rhs_label }),
+            .logical_and => try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n", .{ left, rhs_label, short_label, try self.debugCallSuffix() }),
+            .logical_or => try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n", .{ left, short_label, rhs_label, try self.debugCallSuffix() }),
             else => unreachable,
         }
 
         try self.out.print(self.allocator, "{s}:\n", .{rhs_label});
         const right = try self.emitExpr(node.right.*, right_ty);
         try self.out.print(self.allocator, "  store i1 {s}, ptr {s}\n", .{ right, result_ptr });
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ end_label, short_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ end_label, try self.debugCallSuffix(), short_label });
         const short_value = if (node.op == .logical_and) "0" else "1";
         try self.out.print(self.allocator, "  store i1 {s}, ptr {s}\n", .{ short_value, result_ptr });
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ end_label, end_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ end_label, try self.debugCallSuffix(), end_label });
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load i1, ptr {s}\n", .{ result, result_ptr });
         return result;
