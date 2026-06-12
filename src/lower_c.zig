@@ -2786,14 +2786,7 @@ const CEmitter = struct {
     }
 
     fn emitTaggedUnionSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
-        const subject = if (self.taggedUnionSubjectForExpr(node.subject, locals)) |subject|
-            subject
-        else blk: {
-            const union_ty = self.taggedUnionReturnTypeForExpr(node.subject) orelse return false;
-            const temp = try self.emitSequencedCallArgTemp(node.subject, locals, union_ty);
-            try locals.put(temp.name, try self.localInfoFromType(union_ty));
-            break :blk self.taggedUnionSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = node.subject.span } }, .span = node.subject.span }, locals).?;
-        };
+        const subject = (try self.taggedUnionSubjectForValueExpr(node.subject, locals)) orelse return false;
         var emitted_any = false;
         var has_wildcard = false;
         for (node.arms) |arm| {
@@ -2963,6 +2956,14 @@ const CEmitter = struct {
         return .{ .name = name, .type_name = type_name, .decl = union_decl };
     }
 
+    fn taggedUnionSubjectForValueExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?TaggedUnionSwitchSubject {
+        if (self.taggedUnionSubjectForExpr(expr, locals)) |subject| return subject;
+        const union_ty = self.taggedUnionTypeForExpr(expr, locals) orelse return null;
+        const temp = try self.emitSequencedCallArgTemp(expr, locals, union_ty);
+        try locals.put(temp.name, try self.localInfoFromType(union_ty));
+        return self.taggedUnionSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = expr.span } }, .span = expr.span }, locals);
+    }
+
     fn nullableSwitchSubjectForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?NullableSwitchSubject {
         return try self.nullableSubjectForExpr(expr, locals);
     }
@@ -3007,12 +3008,23 @@ const CEmitter = struct {
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
                 const ret_ty = info.return_type orelse break :blk null;
-                const type_name = typeName(ret_ty) orelse break :blk null;
+                const type_name = typeName(self.resolveAliasType(ret_ty)) orelse break :blk null;
                 break :blk if (self.tagged_unions.contains(type_name)) ret_ty else null;
             },
             .grouped => |inner| self.taggedUnionReturnTypeForExpr(inner.*),
             else => null,
         };
+    }
+
+    fn taggedUnionTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const ty = switch (expr.kind) {
+            .call => self.taggedUnionReturnTypeForExpr(expr) orelse return null,
+            .cast => |node| node.ty.*,
+            .grouped => |inner| return self.taggedUnionTypeForExpr(inner.*, locals),
+            else => self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return null,
+        };
+        const type_name = typeName(self.resolveAliasType(ty)) orelse return null;
+        return if (self.tagged_unions.contains(type_name)) ty else null;
     }
 
     fn taggedUnionSwitchBranch(self: *CEmitter, patterns: []const ast.Pattern, subject: TaggedUnionSwitchSubject) !?TaggedUnionSwitchBranch {

@@ -44,6 +44,25 @@ fn token_kind(token: Token) -> u32 {
     }
 }
 
+struct TokenBox {
+    token: Token,
+}
+
+fn token_field_value(box: TokenBox) -> usize {
+    switch box.token {
+        number(v) => { return v; },
+        ident(s) => { return s.len; },
+        .eof => { return 0; },
+    }
+}
+
+fn token_field_kind(box: TokenBox) -> u32 {
+    switch box.token {
+        .number => { return 1; },
+        .ident, .eof => { return 0; },
+    }
+}
+
 fn token_call_value() -> usize {
     switch make_token() {
         number(v) => { return v; },
