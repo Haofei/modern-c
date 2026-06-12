@@ -873,13 +873,24 @@ pub fn build(b: *std.Build) void {
     cow_test_step.dependOn(&cow_test_cmd.step);
 
     const usched_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/usched-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     usched_test_cmd.step.dependOn(b.getInstallStep());
     const usched_test_step = b.step("usched-test", "Userspace-set scheduling policy (priority)");
     usched_test_step.dependOn(&usched_test_cmd.step);
+
+    const llvm_usched_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/usched-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_usched_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_usched_test_step = b.step("llvm-usched-test", "Run LLVM-lowered userspace-set scheduling policy under QEMU");
+    llvm_usched_test_step.dependOn(&llvm_usched_test_cmd.step);
 
     const userserver_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -926,13 +937,24 @@ pub fn build(b: *std.Build) void {
     diskfs_test_step.dependOn(&diskfs_test_cmd.step);
 
     const heartbeat_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/heartbeat-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     heartbeat_test_cmd.step.dependOn(b.getInstallStep());
     const heartbeat_test_step = b.step("heartbeat-test", "Reincarnation with heartbeat liveness detection");
     heartbeat_test_step.dependOn(&heartbeat_test_cmd.step);
+
+    const llvm_heartbeat_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/heartbeat-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_heartbeat_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_heartbeat_test_step = b.step("llvm-heartbeat-test", "Run LLVM-lowered heartbeat restart detection under QEMU");
+    llvm_heartbeat_test_step.dependOn(&llvm_heartbeat_test_cmd.step);
 
     const timeout_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -955,13 +977,24 @@ pub fn build(b: *std.Build) void {
     llvm_timeout_test_step.dependOn(&llvm_timeout_test_cmd.step);
 
     const privilege_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/privilege-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     privilege_test_cmd.step.dependOn(b.getInstallStep());
     const privilege_test_step = b.step("privilege-test", "Least privilege: IPC allow-list + kernel-call gate");
     privilege_test_step.dependOn(&privilege_test_cmd.step);
+
+    const llvm_privilege_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/privilege-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_privilege_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_privilege_test_step = b.step("llvm-privilege-test", "Run LLVM-lowered least-privilege IPC and kcall gates under QEMU");
+    llvm_privilege_test_step.dependOn(&llvm_privilege_test_cmd.step);
 
     const signal_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -1052,22 +1085,44 @@ pub fn build(b: *std.Build) void {
     llvm_ipc_test_step.dependOn(&llvm_ipc_test_cmd.step);
 
     const cap_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/cap-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     cap_test_cmd.step.dependOn(b.getInstallStep());
     const cap_test_step = b.step("cap-test", "capability least-privilege: driver-as-server holds the console cap");
     cap_test_step.dependOn(&cap_test_cmd.step);
 
+    const llvm_cap_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/cap-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_cap_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_cap_test_step = b.step("llvm-cap-test", "Run LLVM-lowered capability least-privilege server under QEMU");
+    llvm_cap_test_step.dependOn(&llvm_cap_test_cmd.step);
+
     const restart_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/restart-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     restart_test_cmd.step.dependOn(b.getInstallStep());
     const restart_test_step = b.step("restart-test", "reincarnation: supervisor restarts a crashed server");
     restart_test_step.dependOn(&restart_test_cmd.step);
+
+    const llvm_restart_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/restart-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_restart_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_restart_test_step = b.step("llvm-restart-test", "Run LLVM-lowered reincarnation restart under QEMU");
+    llvm_restart_test_step.dependOn(&llvm_restart_test_cmd.step);
 
     const arc_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1632,6 +1687,11 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_registry_test_cmd.step);
     m0_step.dependOn(&llvm_ipc2_test_cmd.step);
     m0_step.dependOn(&llvm_ipc_test_cmd.step);
+    m0_step.dependOn(&llvm_usched_test_cmd.step);
+    m0_step.dependOn(&llvm_heartbeat_test_cmd.step);
+    m0_step.dependOn(&llvm_privilege_test_cmd.step);
+    m0_step.dependOn(&llvm_cap_test_cmd.step);
+    m0_step.dependOn(&llvm_restart_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
