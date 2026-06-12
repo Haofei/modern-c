@@ -1067,6 +1067,9 @@ const CEmitter = struct {
                 if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1) {
                     return self.appendType(out, node.args[0], style);
                 }
+                if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2) {
+                    return self.appendPointerType(out, node.args[0], .mut, style);
+                }
                 if (std.mem.eql(u8, node.base.text, "UserPtr") or std.mem.eql(u8, node.base.text, "PhysPtr")) {
                     return out.appendSlice(self.scratch.allocator(), "uintptr_t");
                 }
@@ -1513,7 +1516,16 @@ const CEmitter = struct {
             .nullable => |child| try self.collectSliceType(child.*),
             .qualified => |node| try self.collectSliceType(node.child.*),
             .array => |node| try self.collectSliceType(node.child.*),
-            .generic => |node| for (node.args) |arg| try self.collectSliceType(arg),
+            .generic => |node| {
+                if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2) {
+                    const name = try self.sliceTypeName(node.args[0], .mut);
+                    if (!self.slice_types.contains(name)) {
+                        const ptr_type = try self.pointerTypeForSliceElement(node.args[0], .mut);
+                        try self.slice_types.put(name, .{ .name = name, .ptr_type = ptr_type });
+                    }
+                }
+                for (node.args) |arg| try self.collectSliceType(arg);
+            },
             .member => |node| try self.collectSliceType(node.base.*),
             else => {},
         }
@@ -3528,6 +3540,7 @@ const CEmitter = struct {
                 if (try self.emitEnumRawCall(node, locals)) return;
                 if (try self.emitConversionCall(node, locals)) return;
                 if (try self.emitBitcastCall(node, locals)) return;
+                if (try self.emitDmaCall(node, locals)) return;
                 if (try self.emitResidueCall(node, locals)) return;
                 if (try self.emitDomainOpCall(node, locals)) return;
                 if (try self.emitReflectionCall(node)) return;
@@ -4088,6 +4101,45 @@ const CEmitter = struct {
         try self.out.print(self.allocator, "); __int128 mc_acc{d} = 0; for (uintptr_t mc_i{d} = 0; mc_i{d} < mc_xs{d}.len; mc_i{d}++) mc_acc{d} += (__int128)mc_xs{d}.ptr[mc_i{d}]; ", .{ n, n, n, n, n, n, n, n });
         try self.out.print(self.allocator, "(mc_acc{d} < (__int128)({s}) || mc_acc{d} > (__int128)({s})) ? (({s}){{ .is_ok = false, .payload.err = 0 }}) : (({s}){{ .is_ok = true, .payload.ok = ({s})mc_acc{d} }}); }})", .{ n, range.c_min, n, range.c_max, struct_name, struct_name, t_cty, n });
         return true;
+    }
+
+    fn emitDmaCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+
+        if (isIdentNamed(member.base.*, "cache")) {
+            if (!std.mem.eql(u8, member.name.text, "clean") and !std.mem.eql(u8, member.name.text, "invalidate")) return false;
+            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
+            try self.out.appendSlice(self.allocator, if (std.mem.eql(u8, member.name.text, "clean")) "mc_barrier_release_before()" else "mc_barrier_acquire_after()");
+            return true;
+        }
+
+        const local_set = locals orelse return false;
+        const base_name = switch (member.base.kind) {
+            .ident => |ident| ident.text,
+            else => return false,
+        };
+        const info = local_set.get(base_name) orelse return false;
+        const dma = dmaBufInfo(info.source_ty orelse return false) orelse return false;
+
+        if (std.mem.eql(u8, member.name.text, "dma_addr")) {
+            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedCEmission;
+            try self.out.print(self.allocator, "((uintptr_t){s})", .{try self.cIdent(base_name)});
+            return true;
+        }
+        if (std.mem.eql(u8, member.name.text, "as_slice")) {
+            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedCEmission;
+            const slice_name = try self.sliceTypeName(dma.payload, .mut);
+            try self.out.print(self.allocator, "(({s}){{ .ptr = {s}, .len = 1 }})", .{ slice_name, try self.cIdent(base_name) });
+            return true;
+        }
+        return false;
     }
 
     fn emitAssumeNoaliasCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
