@@ -23,6 +23,7 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
+        .local_slots = std.StringHashMap(LocalSlot).init(allocator),
     };
     defer ctx.deinit();
     for (module.decls) |decl| {
@@ -55,6 +56,7 @@ const LlvmEmitter = struct {
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
+    local_slots: std.StringHashMap(LocalSlot) = undefined,
 
     fn deinit(self: *LlvmEmitter) void {
         self.need_uadd.deinit();
@@ -64,6 +66,7 @@ const LlvmEmitter = struct {
         self.need_ssub.deinit();
         self.need_smul.deinit();
         self.local_types.deinit();
+        self.local_slots.deinit();
         self.scratch.deinit();
     }
 
@@ -79,9 +82,10 @@ const LlvmEmitter = struct {
         self.temp_index = 0;
         self.trap_index = 0;
         self.local_types.clearRetainingCapacity();
+        self.local_slots.clearRetainingCapacity();
         for (fn_decl.params) |param| try self.local_types.put(param.name.text, param.ty);
 
-        if (!try self.emitTerminatingBlock(body, ret_ty)) return error.UnsupportedLlvmEmission;
+        if (!try self.emitBlock(body, ret_ty)) return error.UnsupportedLlvmEmission;
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
@@ -97,7 +101,7 @@ const LlvmEmitter = struct {
 
     fn emitExpr(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
         return switch (expr.kind) {
-            .ident => |ident| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text}),
+            .ident => |ident| try self.emitIdent(ident),
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .bool_literal => |value| if (value) "1" else "0",
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
@@ -108,9 +112,24 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitTerminatingBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) anyerror!bool {
+    fn emitIdent(self: *LlvmEmitter, ident: ast.Ident) ![]const u8 {
+        if (self.local_slots.get(ident.text)) |slot| {
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(slot.ty), slot.ptr });
+            return result;
+        }
+        return try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text});
+    }
+
+    fn emitBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) anyerror!bool {
         for (block.items) |stmt| {
             switch (stmt.kind) {
+                .let_decl => |local| try self.emitLocalDecl(local),
+                .var_decl => |local| try self.emitLocalDecl(local),
+                .assignment => |node| try self.emitAssignment(node.target, node.value),
+                .loop => |node| {
+                    if (try self.emitWhile(node, ret_ty)) return true;
+                },
                 .@"return" => |maybe_expr| {
                     if (ret_ty.kind == .name and std.mem.eql(u8, ret_ty.kind.name.text, "void")) {
                         try self.out.appendSlice(self.allocator, "  ret void\n");
@@ -125,6 +144,47 @@ const LlvmEmitter = struct {
                 else => return error.UnsupportedLlvmEmission,
             }
         }
+        return false;
+    }
+
+    fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl) !void {
+        if (local.names.len != 1) return error.UnsupportedLlvmEmission;
+        const ty = local.ty orelse return error.UnsupportedLlvmEmission;
+        const init = local.init orelse return error.UnsupportedLlvmEmission;
+        const llvm_ty = try self.llvmType(ty);
+        const name = local.names[0].text;
+        const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{name});
+        const value = try self.emitExpr(init, ty);
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, llvm_ty });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+        try self.local_types.put(name, ty);
+        try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
+    }
+
+    fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !void {
+        const ident = assignmentIdent(target) orelse return error.UnsupportedLlvmEmission;
+        const slot = self.local_slots.get(ident.text) orelse return error.UnsupportedLlvmEmission;
+        const llvm_ty = try self.llvmType(slot.ty);
+        const value = try self.emitExpr(value_expr, slot.ty);
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, slot.ptr });
+    }
+
+    fn emitWhile(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
+        if (loop.kind != .@"while") return error.UnsupportedLlvmEmission;
+        const condition_expr = loop.iterable orelse return error.UnsupportedLlvmEmission;
+        const condition_ty = self.exprType(condition_expr) orelse return error.UnsupportedLlvmEmission;
+        if (!typeNameEql(condition_ty, "bool")) return error.UnsupportedLlvmEmission;
+
+        const cond_label = try self.nextLabel("while_cond");
+        const body_label = try self.nextLabel("while_body");
+        const end_label = try self.nextLabel("while_end");
+
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
+        const condition = try self.emitExpr(condition_expr, condition_ty);
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ condition, body_label, end_label, body_label });
+        const body_terminated = try self.emitBlock(loop.body, ret_ty);
+        if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{cond_label});
+        try self.out.print(self.allocator, "{s}:\n", .{end_label});
         return false;
     }
 
@@ -149,7 +209,7 @@ const LlvmEmitter = struct {
 
     fn emitSwitchBody(self: *LlvmEmitter, body: ast.SwitchBody, ret_ty: ast.TypeExpr) !bool {
         return switch (body) {
-            .block => |block| try self.emitTerminatingBlock(block, ret_ty),
+            .block => |block| try self.emitBlock(block, ret_ty),
             .expr => |expr| blk: {
                 const value = try self.emitExpr(expr, ret_ty);
                 try self.out.print(self.allocator, "  ret {s} {s}\n", .{ try self.llvmType(ret_ty), value });
@@ -309,6 +369,19 @@ const LlvmEmitter = struct {
         };
     }
 };
+
+const LocalSlot = struct {
+    ty: ast.TypeExpr,
+    ptr: []const u8,
+};
+
+fn assignmentIdent(target: ast.Expr) ?ast.Ident {
+    return switch (target.kind) {
+        .ident => |ident| ident,
+        .grouped => |inner| assignmentIdent(inner.*),
+        else => null,
+    };
+}
 
 fn expected_tyForCallArg(module_mir: mir.Module, callee: []const u8, index: usize) ?ast.TypeExpr {
     _ = module_mir;
