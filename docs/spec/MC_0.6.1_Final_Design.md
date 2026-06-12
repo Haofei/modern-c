@@ -4034,8 +4034,9 @@ classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`,
 opaque inline asm, unsafe-block raw stores, and raw-many pointer `.offset(...)`.
 LLVM MMIO lowering covers `MmioPtr<T>` as a pointer ABI, `Reg`/`RegBits`
 storage-width access, explicit `@offset(...)` register addressing, volatile
-typed register reads/writes, `.acquire`/`.release` fences, and irq-context MMIO
-fixtures. DMA/IRQ marker lowering covers `DmaAddr`/`DmaBuf<T, mode>` as opaque
+typed register reads/writes, `.acquire`/`.release` fences, irq-context MMIO
+fixtures, and atomic operations through irq-context parameters and aliases.
+DMA/IRQ marker lowering covers `DmaAddr`/`DmaBuf<T, mode>` as opaque
 address-width values, `cache.clean`/`cache.invalidate` fences,
 `dma_addr()`/`as_slice()` bridges, and `IrqOff` as a witness ABI value.
 Strict unsafe-context lowering includes `mmio.map<T>(pa)?` as a nullable

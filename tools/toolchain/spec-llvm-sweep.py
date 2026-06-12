@@ -24,7 +24,6 @@ import tempfile
 OUT_OF_SCOPE = {
     "dma_ownership.mc": "linear move typestate/DMA ownership lowering",
     "drop_intrinsic.mc": "drop(...) over move values",
-    "irq_context.mc": "irq-context verifier inspection fixture",
     "move_linear.mc": "linear move value lowering",
     "no_lang_trap.mc": "no_lang_trap verifier edge fixture",
 }

@@ -617,7 +617,7 @@ const LlvmEmitter = struct {
         self.defer_stack.clearRetainingCapacity();
         for (fn_decl.params) |param| {
             try self.local_types.put(param.name.text, param.ty);
-            if (self.isAggregateType(param.ty)) {
+            if (self.isAggregateType(param.ty) or self.atomicPayloadType(param.ty) != null) {
                 const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{param.name.text});
                 try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(param.ty) });
                 try self.out.print(self.allocator, "  store {s} %{s}, ptr {s}\n", .{ try self.llvmType(param.ty), param.name.text, ptr });
