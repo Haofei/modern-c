@@ -120,6 +120,15 @@ pub fn build(b: *std.Build) void {
     const cc_test_step = b.step("cc-test", "Compile an MC module to an object with mcc-cc, link, and run it");
     cc_test_step.dependOn(&cc_test_cmd.step);
 
+    const llvm_cc_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/mcc-llvm-cc-test.sh",
+        "zig-out/bin/mcc",
+    });
+    llvm_cc_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_cc_test_step = b.step("llvm-cc-test", "Compile an MC module to an object with mcc-llvm-cc, link, and run it");
+    llvm_cc_test_step.dependOn(&llvm_cc_test_cmd.step);
+
     const std_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/std-test.sh",
@@ -182,6 +191,15 @@ pub fn build(b: *std.Build) void {
     move_test_cmd.step.dependOn(b.getInstallStep());
     const move_test_step = b.step("move-test", "Build, link, and run a linear `move` handle through the toolchain");
     move_test_step.dependOn(&move_test_cmd.step);
+
+    const llvm_move_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/llvm-move-test.sh",
+        "zig-out/bin/mcc",
+    });
+    llvm_move_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_move_test_step = b.step("llvm-move-test", "Build, link, and run a linear `move` handle through the LLVM toolchain");
+    llvm_move_test_step.dependOn(&llvm_move_test_cmd.step);
 
     const sync_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1227,6 +1245,15 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);
     m0_step.dependOn(&sweep_cmd.step);
+    // LLVM backend gates: IR assembly, object lowering, spec sweep, broad
+    // c_emit fixture sweeps, and host link/run smoke tests.
+    m0_step.dependOn(&llvm_test_cmd.step);
+    m0_step.dependOn(&llvm_obj_test_cmd.step);
+    m0_step.dependOn(&llvm_sweep_cmd.step);
+    m0_step.dependOn(&llvm_c_sweep_cmd.step);
+    m0_step.dependOn(&llvm_c_obj_sweep_cmd.step);
+    m0_step.dependOn(&llvm_cc_test_cmd.step);
+    m0_step.dependOn(&llvm_move_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

@@ -4111,6 +4111,9 @@ LLVM IR. The current sweep has no allowlisted LLVM backend gaps. The
 `tests/c_emit` fixture emits assemblable LLVM IR, keeping the broad C-backend
 regression corpus covered by LLVM emission. The `zig build llvm-c-obj-sweep`
 gate compiles the same fixture set to non-empty LLVM object files with `llc`.
+The `zig build llvm-cc-test` and `zig build llvm-move-test` gates link and run
+LLVM-produced objects against C drivers, including a linear `move` handle
+roundtrip through the LLVM ABI.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
 Broader runtime/toolchain coverage, optimizer proof work, and fuller native
