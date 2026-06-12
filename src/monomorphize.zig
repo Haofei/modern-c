@@ -69,6 +69,10 @@ const Rewriter = struct {
     // Module-level integer `const`s, so a const can be used as a const-generic argument
     // (`Ring<u32, RQ_CAP>`), not just an integer literal.
     int_consts: *const std.StringHashMap(i128),
+    // Field lookup for `field_type(T, .field)` when used as a `comptime T: type`
+    // argument. This intentionally resolves only fields whose type is a named type,
+    // matching the existing type-parameter substitution model.
+    field_types: *const std.StringHashMap(std.StringHashMap(ast.TypeExpr)),
     oom: bool = false,
 };
 
@@ -77,6 +81,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
     var const_fns = std.StringHashMap(ast.FnDecl).init(arena);
     var generic_structs = std.StringHashMap(ast.StructDecl).init(arena);
     var int_consts = std.StringHashMap(i128).init(arena);
+    var field_types = std.StringHashMap(std.StringHashMap(ast.TypeExpr)).init(arena);
     for (module.decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| {
@@ -87,6 +92,13 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
             },
             .struct_decl => |sd| {
                 if (sd.type_params.len > 0) try generic_structs.put(sd.name.text, sd);
+                try collectFieldTypes(arena, &field_types, sd.name.text, sd.fields);
+            },
+            .packed_bits_decl => |pb| {
+                try collectFieldTypes(arena, &field_types, pb.name.text, pb.fields);
+            },
+            .overlay_union_decl => |ou| {
+                try collectFieldTypes(arena, &field_types, ou.name.text, ou.fields);
             },
             // Record integer module consts (folded against earlier ones), so they can be
             // used as const-generic arguments.
@@ -121,6 +133,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
         .struct_instances = &struct_instances,
         .struct_list = &struct_list,
         .int_consts = &int_consts,
+        .field_types = &field_types,
     };
     const ctx = CloneCtx{ .arena = arena, .rewrite = &rewriter };
 
@@ -191,6 +204,15 @@ fn dropComptimeParams(arena: std.mem.Allocator, params: []const ast.Param) ![]as
         if (!p.is_comptime) try kept.append(arena, p);
     }
     return kept.toOwnedSlice(arena);
+}
+
+fn collectFieldTypes(arena: std.mem.Allocator, out: *std.StringHashMap(std.StringHashMap(ast.TypeExpr)), name: []const u8, fields: []const ast.Field) !void {
+    if (out.contains(name)) return;
+    var map = std.StringHashMap(ast.TypeExpr).init(arena);
+    for (fields) |field| {
+        if (!map.contains(field.name.text)) try map.put(field.name.text, field.ty);
+    }
+    try out.put(name, map);
 }
 
 // Returns the names of the comptime parameters a function is generic over (used
@@ -369,7 +391,7 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
         const arg_clone = try cloneExprCtx(ctx, arg);
         if (param.is_comptime and isTypeParam(param)) {
             // `comptime T: type`: bind to the argument's type name.
-            const tn = typeArgName(arg_clone) orelse return null;
+            const tn = typeArgName(arg_clone, rw.field_types) orelse return null;
             try subst.put(param.name.text, .{ .type_name = tn });
             try mangled.appendSlice(rw.arena, "__");
             try mangled.appendSlice(rw.arena, tn);
@@ -440,10 +462,38 @@ fn isTypeParam(param: ast.Param) bool {
     };
 }
 
-fn typeArgName(arg: ast.Expr) ?[]const u8 {
+fn typeArgName(arg: ast.Expr, field_types: *const std.StringHashMap(std.StringHashMap(ast.TypeExpr))) ?[]const u8 {
     return switch (arg.kind) {
         .ident => |id| id.text,
-        .grouped => |inner| typeArgName(inner.*),
+        .grouped => |inner| typeArgName(inner.*, field_types),
+        .call => |node| fieldTypeArgName(node, field_types),
+        else => null,
+    };
+}
+
+fn fieldTypeArgName(call: anytype, field_types: *const std.StringHashMap(std.StringHashMap(ast.TypeExpr))) ?[]const u8 {
+    const callee = calleeName(call.callee.*) orelse return null;
+    if (!std.mem.eql(u8, callee, "field_type")) return null;
+    if (call.type_args.len != 1 or call.args.len != 1) return null;
+    const type_name = typeName(call.type_args[0]) orelse return null;
+    const field_name = enumLiteralName(call.args[0]) orelse return null;
+    const fields = field_types.get(type_name) orelse return null;
+    const field_ty = fields.get(field_name) orelse return null;
+    return typeName(field_ty);
+}
+
+fn typeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |name| name.text,
+        .qualified => |node| typeName(node.child.*),
+        else => null,
+    };
+}
+
+fn enumLiteralName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .enum_literal => |literal| literal.text,
+        .grouped => |inner| enumLiteralName(inner.*),
         else => null,
     };
 }

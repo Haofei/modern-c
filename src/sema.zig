@@ -1781,7 +1781,7 @@ pub const Checker = struct {
                         for (function.params, node.args) |param, arg| {
                             if (!param.is_comptime) continue;
                             if (isTypeName(param.ty, "type")) {
-                                if (typeArgName(arg)) |tn| {
+                                if (typeArgName(arg, ctx)) |tn| {
                                     if (!isKnownTypeName(tn, ctx)) self.errorCode(arg.span, "E_TYPE_ARG_REQUIRED", "type parameter requires a known type argument");
                                 } else {
                                     self.errorCode(arg.span, "E_TYPE_ARG_REQUIRED", "type parameter requires a type argument");
@@ -5299,13 +5299,30 @@ fn directCallFunction(callee: ast.Expr, ctx: Context) ?FunctionInfo {
     return functions.get(ident.text);
 }
 
-// The type name of a type-parameter argument (a bare type-name ident).
-fn typeArgName(arg: ast.Expr) ?[]const u8 {
+// The type name of a type-parameter argument: either a bare type-name ident or
+// the named field type from `field_type(T, .field)`.
+fn typeArgName(arg: ast.Expr, ctx: Context) ?[]const u8 {
     return switch (arg.kind) {
         .ident => |id| id.text,
-        .grouped => |inner| typeArgName(inner.*),
+        .grouped => |inner| typeArgName(inner.*, ctx),
+        .call => |node| fieldTypeArgName(node, ctx),
         else => null,
     };
+}
+
+fn fieldTypeArgName(call: anytype, ctx: Context) ?[]const u8 {
+    const kind = reflectionKind(call.callee.*) orelse return null;
+    if (kind != .field_type) return null;
+    const ty = reflectionTypeFromCall(call) orelse return null;
+    const field = reflectionFieldFromCall(call) orelse return null;
+    const field_ty = reflectedFieldType(ty, field, ctx) orelse return null;
+    return typeName(field_ty);
+}
+
+fn reflectedFieldType(ty: ast.TypeExpr, field: []const u8, ctx: Context) ?ast.TypeExpr {
+    const name = typeName(ty) orelse return null;
+    const layout = layoutFieldInfo(name, ctx) orelse return null;
+    return layout.fields.get(field);
 }
 
 // The struct name a type expression directly names (a known struct/move type),

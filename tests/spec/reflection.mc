@@ -83,6 +83,13 @@ fn accept_bit_offset() -> usize {
     return bit_offset<Packet>(.tag);
 }
 
+fn accept_reflected_field_type_arg(comptime T: type, value: T) -> void {
+}
+
+fn accept_field_type_type_arg(packet: Packet) -> void {
+    accept_reflected_field_type_arg(field_type(Packet, .len), packet.len);
+}
+
 fn accept_comptime_reflection_offsets() -> void {
     comptime {
         assert(sizeof(Packet) == 4);

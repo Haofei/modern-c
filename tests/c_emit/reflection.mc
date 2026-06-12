@@ -76,3 +76,11 @@ fn accept_spec_mmio_field_offset() -> usize {
 fn accept_bit_offset() -> usize {
     return bit_offset<Packet>(.tag);
 }
+
+fn reflect_identity(comptime T: type, value: T) -> T {
+    return value;
+}
+
+fn accept_field_type_type_arg(packet: Packet) -> u16 {
+    return reflect_identity(field_type(Packet, .len), packet.len);
+}
