@@ -794,11 +794,61 @@ const LlvmEmitter = struct {
     }
 
     fn emitAsmStmt(self: *LlvmEmitter, asm_stmt: ast.AsmStmt) !void {
+        if (asm_stmt.form == .precise) return self.emitPreciseAsmStmt(asm_stmt);
         if (asm_stmt.form != .@"opaque" or asm_stmt.inputs.len != 0 or asm_stmt.outputs.len != 0) return error.UnsupportedLlvmEmission;
         const template = try llvmAsmTemplate(self.scratch.allocator(), asm_stmt.templates);
         const constraints = try llvmAsmClobbers(self.scratch.allocator(), asm_stmt.clobbers);
         const sideeffect: []const u8 = if (asm_stmt.is_volatile) " sideeffect" else "";
         try self.out.print(self.allocator, "  call void asm{s} \"{s}\", \"{s}\"(){s}\n", .{ sideeffect, template, constraints, try self.debugCallSuffix() });
+    }
+
+    fn emitPreciseAsmStmt(self: *LlvmEmitter, asm_stmt: ast.AsmStmt) !void {
+        const template = try llvmPreciseAsmTemplate(self.scratch.allocator(), asm_stmt.templates);
+        const constraints = try llvmPreciseAsmConstraints(self.scratch.allocator(), asm_stmt);
+        const ret_ty = try self.preciseAsmReturnType(asm_stmt.outputs);
+        const sideeffect: []const u8 = if (asm_stmt.is_volatile) " sideeffect" else "";
+
+        var args: std.ArrayList(ArgValue) = .empty;
+        defer args.deinit(self.allocator);
+        for (asm_stmt.inputs) |input| {
+            try args.append(self.allocator, .{ .ty = input.ty, .value = try self.emitExpr(input.value, input.ty) });
+        }
+
+        const result: ?[]const u8 = if (asm_stmt.outputs.len == 0) null else try self.nextTemp();
+        if (result) |name| {
+            try self.out.print(self.allocator, "  {s} = call {s} asm{s} \"{s}\", \"{s}\"(", .{ name, ret_ty, sideeffect, template, constraints });
+        } else {
+            try self.out.print(self.allocator, "  call void asm{s} \"{s}\", \"{s}\"(", .{ sideeffect, template, constraints });
+        }
+        for (args.items, 0..) |arg, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
+        }
+        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
+
+        const asm_result = result orelse return;
+        for (asm_stmt.outputs, 0..) |output, i| {
+            const slot = self.local_slots.get(output.name.text) orelse return error.UnsupportedLlvmEmission;
+            const value = if (asm_stmt.outputs.len == 1) asm_result else blk: {
+                const extracted = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ extracted, ret_ty, asm_result, i });
+                break :blk extracted;
+            };
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(output.ty), value, slot.ptr });
+        }
+    }
+
+    fn preciseAsmReturnType(self: *LlvmEmitter, outputs: []const ast.AsmOutput) ![]const u8 {
+        if (outputs.len == 0) return "void";
+        if (outputs.len == 1) return try self.llvmType(outputs[0].ty);
+        var text: std.ArrayList(u8) = .empty;
+        try text.appendSlice(self.scratch.allocator(), "{ ");
+        for (outputs, 0..) |output, i| {
+            if (i != 0) try text.appendSlice(self.scratch.allocator(), ", ");
+            try text.appendSlice(self.scratch.allocator(), try self.llvmType(output.ty));
+        }
+        try text.appendSlice(self.scratch.allocator(), " }");
+        return text.toOwnedSlice(self.scratch.allocator());
     }
 
     fn emitExprStatement(self: *LlvmEmitter, expr: ast.Expr) !void {
@@ -4706,6 +4756,25 @@ fn llvmAsmTemplate(allocator: std.mem.Allocator, templates: []const []const u8) 
     return escaped.toOwnedSlice(allocator);
 }
 
+fn llvmPreciseAsmTemplate(allocator: std.mem.Allocator, templates: []const []const u8) ![]const u8 {
+    const template = try llvmAsmTemplate(allocator, templates);
+    var converted: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < template.len) {
+        if (template[i] == '%' and i + 1 < template.len and std.ascii.isDigit(template[i + 1])) {
+            try converted.append(allocator, '$');
+            i += 1;
+            while (i < template.len and std.ascii.isDigit(template[i])) : (i += 1) {
+                try converted.append(allocator, template[i]);
+            }
+            continue;
+        }
+        try converted.append(allocator, template[i]);
+        i += 1;
+    }
+    return converted.toOwnedSlice(allocator);
+}
+
 fn llvmAsmClobbers(allocator: std.mem.Allocator, clobbers: []const []const u8) ![]const u8 {
     var constraints: std.ArrayList(u8) = .empty;
     if (clobbers.len == 0) {
@@ -4715,6 +4784,28 @@ fn llvmAsmClobbers(allocator: std.mem.Allocator, clobbers: []const []const u8) !
     for (clobbers, 0..) |clobber, i| {
         const name = try stringLiteralText(allocator, clobber);
         if (i != 0) try constraints.append(allocator, ',');
+        try constraints.print(allocator, "~{{{s}}}", .{name});
+    }
+    return constraints.toOwnedSlice(allocator);
+}
+
+fn llvmPreciseAsmConstraints(allocator: std.mem.Allocator, asm_stmt: ast.AsmStmt) ![]const u8 {
+    var constraints: std.ArrayList(u8) = .empty;
+    var first = true;
+    for (asm_stmt.outputs) |_| {
+        if (!first) try constraints.append(allocator, ',');
+        first = false;
+        try constraints.appendSlice(allocator, "=r");
+    }
+    for (asm_stmt.inputs) |_| {
+        if (!first) try constraints.append(allocator, ',');
+        first = false;
+        try constraints.append(allocator, 'r');
+    }
+    for (asm_stmt.clobbers) |clobber| {
+        const name = try stringLiteralText(allocator, clobber);
+        if (!first) try constraints.append(allocator, ',');
+        first = false;
         try constraints.print(allocator, "~{{{s}}}", .{name});
     }
     return constraints.toOwnedSlice(allocator);

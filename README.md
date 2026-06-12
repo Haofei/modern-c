@@ -168,8 +168,8 @@ Deferred:
   `emit-llvm` support exists for a scalar/control-flow/domain subset and
   validates through `llvm-as`; the `mcc-llvm-cc.sh` driver compiles covered
   LLVM IR to object files with `llc`. Richer iterable forms, broader aggregate
-  ABI/layout cases, broader slice/pattern workflows, precise asm operands,
-  full `?` propagation, and fuller debug mapping are still pending.
+  ABI/layout cases, broader slice/pattern workflows, defer cleanup, closure
+  values, and fuller debug mapping are still pending.
 
 ## Requirements
 
@@ -281,8 +281,8 @@ LLVM opaque-address coverage lowers `PAddr`/`VAddr` representation-preserving
 casts as `i64`, including `UserPtr<T>`/`PhysPtr<T>` wrapper ABI and the std/addr
 helpers used by raw float buffers and fixed-lane helper arrays.
 LLVM unsafe machine coverage includes volatile raw loads/stores, raw pointers,
-raw-many offsets, `cpu.pause()`, and opaque inline asm with explicit LLVM
-clobbers. Precise asm operands remain pending.
+raw-many offsets, `cpu.pause()`, opaque inline asm with explicit LLVM clobbers,
+and precise asm operands with input/output constraints.
 LLVM MMIO coverage includes `MmioPtr<T>` ABI lowering, `Reg`/`RegBits`
 storage-width lowering, explicit `@offset(...)` register addressing, volatile
 typed register reads/writes, `.acquire`/`.release` fences, and irq-context MMIO

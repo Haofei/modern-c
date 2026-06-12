@@ -4045,7 +4045,9 @@ slice/Result/tagged-union zero initializers. Reflection lowering covers
 `field_type(...)` in monomorphized type-argument position. Result `?`
 propagation lowers to early `err(...)` returns in `Result`-returning functions,
 and unsafe-contract noalias scopes lower `compiler.assume_noalias_unchecked(...)`
-as a checked identity with pointer-to-address raw-store coercion. Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
+as a checked identity with pointer-to-address raw-store coercion. Precise asm
+lowering covers operand templates, scalar output storage, input constraints, and
+declared clobbers. Alias and enum lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
 globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
 enums, enum switches over direct calls, and void switch expression arms.
