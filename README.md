@@ -49,11 +49,11 @@ The type-checking surface covered by the core language fixtures is implemented,
 and the valid declarations in the current spec fixture suite lower to
 clang-checked C without `unsupported` emission placeholders. The non-LLVM finish
 line is the C backend plus verifier/tooling contract in
-`docs/spec/MC_0.6.1_Final_Design.md`. LLVM now has an initial MIR-backed
-textual IR path for scalar functions, calls, checked integer arithmetic,
-checked division/remainder, boolean control flow with simple joins, simple
-scalar locals/while loops, and basic pointer load/store operations, but it is
-not yet a complete lowering target. Scalar/pointer globals are covered for
+`docs/spec/MC_0.6.1_Final_Design.md`. LLVM now has a MIR-backed textual IR path
+that runs after the same semantic and MIR verification gates as C emission. The
+valid declarations in the current spec fixture suite emit assemblable LLVM IR
+through `zig build llvm-sweep`, and the valid `tests/c_emit` fixture audit emits
+LLVM for all 109 currently checked fixtures. Scalar/pointer globals are covered for
 literal and address-of-global initializers. Local fixed arrays of scalar
 elements support literals, checked indexing, element assignment, and
 element-address taking. Plain local structs with scalar fields support literals,
@@ -112,6 +112,9 @@ early-returns `err(...)` from `Result`-returning functions, while non-Result
 return contexts retain trap unwrap semantics. Atomic lowering covers
 `atomic<T>` scalar storage, `atomic.init`, `load`, `store`, `fetch_add`, and
 `fetch_sub` with LLVM atomic memory orderings for local and global atomics.
+Linear `move` resource types lower through the ordinary struct ABI after sema's
+move/liveness verifier; by-value uses are normal value transfers and `drop(x)`
+is erased after evaluating its argument.
 Tagged-union lowering covers aligned tag-plus-payload ABI, constructors,
 direct calls, returns, locals, struct fields, and pattern switches including
 payload bindings and wildcard fallback arms.
@@ -130,8 +133,8 @@ literals plus const-folded `sizeof`/`alignof`/`field_offset` array lengths.
 LLVM debug metadata now includes `source_filename`, a compile unit/file record,
 function `DISubprogram` records, and line/column locations on returns and call
 instructions for the covered backend subset.
-The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the
-covered textual IR subset to linkable object files through `llc`, and
+The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles textual IR
+to linkable object files through `llc`, and
 `zig build llvm-obj-test` validates representative scalar, statement-workflow,
 and aggregate objects.
 
@@ -164,11 +167,11 @@ Prototype or incomplete:
 
 Deferred:
 
-- LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
-  `emit-llvm` support exists for a scalar/control-flow/domain subset and
-  validates through `llvm-as`; the `mcc-llvm-cc.sh` driver compiles covered
-  LLVM IR to object files with `llc`. Broader aggregate ABI/layout cases,
-  broader slice/pattern workflows, and fuller debug mapping are still pending.
+- LLVM backend production hardening (see Appendix M of
+  `docs/spec/MC_0.6.1_Final_Design.md`). The current spec sweep is clear for
+  valid declarations and representative object output works through `llc`.
+  Remaining work is broader runtime/toolchain coverage, optimizer proof work,
+  and fuller native debug mapping.
 
 ## Requirements
 

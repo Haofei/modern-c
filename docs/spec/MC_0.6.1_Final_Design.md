@@ -4039,6 +4039,10 @@ fixtures, and atomic operations through irq-context parameters and aliases.
 DMA/IRQ marker lowering covers `DmaAddr`/`DmaBuf<T, mode>` as opaque
 address-width values, `cache.clean`/`cache.invalidate` fences,
 `dma_addr()`/`as_slice()` bridges, and `IrqOff` as a witness ABI value.
+Linear `move` resource types lower through the ordinary struct ABI after the
+shared sema move/liveness verifier proves single-use ownership. By-value move
+uses are emitted as normal value transfers, and `drop(x)` evaluates and
+discards its argument with no runtime linearity state.
 Strict unsafe-context lowering includes `mmio.map<T>(pa)?` as a nullable
 `MmioPtr<T>` address conversion with a null-unwrapping trap on the `?`.
 Packed-bits lowering covers representation ABI, static/dynamic
@@ -4094,15 +4098,19 @@ LLVM debug metadata includes `source_filename`, compile-unit/file records,
 function `DISubprogram` records, and statement-scoped line/column locations on
 returns, calls, checked-arithmetic trap paths, inline asm, and related runtime
 helper calls for the covered backend subset.
+Valid `#[no_lang_trap]` functions lower when the shared verifier proves they
+contain no language-trap edge; naked/boot-style opaque asm functions returning
+`never` lower fallthrough as LLVM `unreachable`.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
 textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.
 The `zig build llvm-sweep` gate strips expected-reject declarations from the
 spec corpus and verifies every in-scope valid spec fixture emits assemblable
-LLVM IR.
+LLVM IR. The current sweep has no allowlisted LLVM backend gaps.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
-Full aggregate ABI breadth and fuller debug mapping remain future work.
+Broader runtime/toolchain coverage, optimizer proof work, and fuller native
+debug mapping remain future work.
 
 LLVM lowering examples:
 

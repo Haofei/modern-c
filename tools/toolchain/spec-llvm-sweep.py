@@ -6,8 +6,8 @@ an EXPECT_ERROR comment, normalize top-level `fn foo(...);` prototypes to
 `extern fn foo(...);`, then `emit-llvm` the remaining valid declarations and
 assemble the textual IR with llvm-as.
 
-The explicit allowlist is the current LLVM backend finish-line delta. Any new
-valid-spec LLVM failure outside that set fails the gate.
+The allowlist is intentionally empty now that the current spec corpus lowers to
+assemblable LLVM IR. Any valid-spec LLVM failure fails the gate.
 
 Usage:
     tools/toolchain/spec-llvm-sweep.py [<mcc-binary> [<spec-dir>]]
@@ -21,12 +21,7 @@ import subprocess
 import sys
 import tempfile
 
-OUT_OF_SCOPE = {
-    "dma_ownership.mc": "linear move typestate/DMA ownership lowering",
-    "drop_intrinsic.mc": "drop(...) over move values",
-    "move_linear.mc": "linear move value lowering",
-    "no_lang_trap.mc": "no_lang_trap verifier edge fixture",
-}
+OUT_OF_SCOPE = {}
 
 
 def split_top_level(src):

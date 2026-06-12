@@ -207,7 +207,7 @@ const LlvmEmitter = struct {
     }
 
     fn collectStruct(self: *LlvmEmitter, struct_decl: ast.StructDecl) !void {
-        if (struct_decl.type_params.len != 0 or struct_decl.is_move) return error.UnsupportedLlvmEmission;
+        if (struct_decl.type_params.len != 0) return error.UnsupportedLlvmEmission;
         if (struct_decl.abi) |abi| {
             if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
         }
@@ -628,6 +628,8 @@ const LlvmEmitter = struct {
         if (!try self.emitBlock(body, ret_ty)) {
             if (typeNameEql(ret_ty, "void")) {
                 try self.emitReturnVoid(fn_decl.name.span);
+            } else if (typeNameEql(ret_ty, "never")) {
+                try self.out.appendSlice(self.allocator, "  unreachable\n");
             } else {
                 return error.UnsupportedLlvmEmission;
             }
@@ -905,6 +907,12 @@ const LlvmEmitter = struct {
     fn emitExprStatement(self: *LlvmEmitter, expr: ast.Expr) !void {
         switch (expr.kind) {
             .call => |call| {
+                if (isDropCall(call.callee.*)) {
+                    if (call.args.len != 1) return error.UnsupportedLlvmEmission;
+                    const arg_ty = self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission;
+                    _ = try self.emitExpr(call.args[0], arg_ty);
+                    return;
+                }
                 if (try self.emitBuiltinVoidCall(call)) return;
                 if (self.callReturnType(call)) |ret_ty| {
                     if (!typeNameEql(ret_ty, "void")) {
@@ -2099,6 +2107,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+        if (isDropCall(call.callee.*)) return error.UnsupportedLlvmEmission;
         if (isBindCallByNode(call)) return try self.emitBindValue(call, expected_ty);
         if (try self.emitTaggedUnionConstructor(call, expected_ty)) |value| return value;
         if (try self.emitBuiltinValueCall(call, expected_ty)) |value| return value;
@@ -5219,6 +5228,10 @@ fn isPhysCall(callee: ast.Expr) bool {
         .grouped => |inner| isPhysCall(inner.*),
         else => false,
     };
+}
+
+fn isDropCall(callee: ast.Expr) bool {
+    return isIdentNamed(callee, "drop");
 }
 
 fn isMmioMapCallName(callee: ast.Expr) bool {
