@@ -3049,7 +3049,9 @@ const CEmitter = struct {
             return error.UnsupportedCEmission;
         };
         if (try self.emitForLoopCallIterable(loop, binding, iterable, locals, return_ty)) return;
-        const element_c_type = iterableElementCTypeForExpr(iterable, locals) orelse {
+        const iterable_array_ty = self.arrayTypeForExpr(iterable, locals);
+        const element_ty = if (iterable_array_ty) |array_ty| CEmitter.arrayElementType(array_ty) else null;
+        const element_c_type = iterableElementCTypeForExpr(iterable, locals) orelse if (element_ty) |ty| try self.cTypeFor(ty, .typedef_name) else {
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "/* unsupported for iterable */\n");
             return error.UnsupportedCEmission;
@@ -3064,6 +3066,9 @@ const CEmitter = struct {
             try self.out.print(self.allocator, ".{s}", .{slice.len_field});
         } else if (arrayLenForExpr(iterable, locals)) |len| {
             try self.out.appendSlice(self.allocator, len);
+        } else if (iterable_array_ty) |array_ty| {
+            const len = (try self.arrayLenText(array_ty)) orelse return error.UnsupportedCEmission;
+            try self.out.appendSlice(self.allocator, len);
         } else {
             try self.out.appendSlice(self.allocator, "0");
         }
@@ -3077,7 +3082,11 @@ const CEmitter = struct {
 
         var nested = try cloneLocals(self.allocator, locals.*);
         defer nested.deinit();
-        try nested.put(binding.text, .{ .c_type = element_c_type });
+        if (element_ty) |ty| {
+            try nested.put(binding.text, try self.localInfoFromType(ty));
+        } else {
+            try nested.put(binding.text, .{ .c_type = element_c_type });
+        }
 
         self.indent += 1;
         try self.writeIndent();
@@ -3089,6 +3098,8 @@ const CEmitter = struct {
             try self.emitExpr(iterable, locals);
             if (arrayElemsFieldForExpr(iterable, locals)) |elems_field| {
                 try self.out.print(self.allocator, ".{s}[{s}]", .{ elems_field, index_name });
+            } else if (iterable_array_ty != null) {
+                try self.out.print(self.allocator, ".elems[{s}]", .{index_name});
             } else {
                 try self.out.print(self.allocator, "[{s}]", .{index_name});
             }

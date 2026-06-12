@@ -1879,7 +1879,58 @@ const FunctionBuilder = struct {
         self.current = body_id;
         try self.break_targets.append(self.allocator, after_id);
         try self.continue_targets.append(self.allocator, header_id);
+        var had_previous_type = false;
+        var previous_type: ValueType = .unknown;
+        var had_previous_type_expr = false;
+        var previous_type_expr: ast.TypeExpr = undefined;
+        var had_previous_mutability = false;
+        var previous_mutability = false;
+        const for_binding_ty_expr = if (node.kind == .@"for" and node.label != null and node.iterable != null)
+            if (self.typeExprForExpr(node.iterable.?)) |iterable_ty| storageElementTypeAlias(iterable_ty, self.aliases) else null
+        else
+            null;
+        if (node.kind == .@"for" and node.label != null) {
+            const binding = node.label.?;
+            if (self.local_types.get(binding.text)) |old| {
+                had_previous_type = true;
+                previous_type = old;
+            }
+            if (self.local_type_exprs.get(binding.text)) |old| {
+                had_previous_type_expr = true;
+                previous_type_expr = old;
+                _ = self.local_type_exprs.remove(binding.text);
+            }
+            if (self.local_mutability.get(binding.text)) |old| {
+                had_previous_mutability = true;
+                previous_mutability = old;
+            }
+            if (for_binding_ty_expr) |ty_expr| {
+                try self.local_types.put(binding.text, valueTypeFromTypeAlias(ty_expr, self.enums, self.structs, self.packed_bits, self.aliases));
+                try self.local_type_exprs.put(binding.text, ty_expr);
+            } else {
+                try self.local_types.put(binding.text, .value);
+            }
+            try self.local_mutability.put(binding.text, false);
+        }
         const terminated = try self.buildBlock(node.body);
+        if (node.kind == .@"for" and node.label != null) {
+            const binding = node.label.?;
+            if (had_previous_type) {
+                try self.local_types.put(binding.text, previous_type);
+            } else {
+                _ = self.local_types.remove(binding.text);
+            }
+            if (had_previous_type_expr) {
+                try self.local_type_exprs.put(binding.text, previous_type_expr);
+            } else {
+                _ = self.local_type_exprs.remove(binding.text);
+            }
+            if (had_previous_mutability) {
+                try self.local_mutability.put(binding.text, previous_mutability);
+            } else {
+                _ = self.local_mutability.remove(binding.text);
+            }
+        }
         _ = self.break_targets.pop();
         _ = self.continue_targets.pop();
         if (!terminated) {

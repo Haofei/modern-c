@@ -3,6 +3,14 @@ extern fn make_u32_slice_from(seed: u32) -> []const u32;
 extern fn make_u32_array_from(seed: u32) -> [4]u32;
 extern fn next_seed() -> u32;
 
+global global_xs: [3]u32 = .{ 1, 2, 3 };
+global global_matrix: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };
+
+struct ForBag {
+    values: [3]u32,
+    rows: [2][2]u32,
+}
+
 fn first_from_slice(xs: []const u32) -> u32 {
     for x in xs {
         return x;
@@ -13,6 +21,34 @@ fn first_from_slice(xs: []const u32) -> u32 {
 fn first_from_array(xs: [4]u32) -> u32 {
     for x in xs {
         return x;
+    }
+    return 0;
+}
+
+fn first_from_global_array() -> u32 {
+    for x in global_xs {
+        return x;
+    }
+    return 0;
+}
+
+fn second_from_global_nested_row() -> u32 {
+    for row in global_matrix {
+        return row[1];
+    }
+    return 0;
+}
+
+fn first_from_array_field(bag: ForBag) -> u32 {
+    for x in bag.values {
+        return x;
+    }
+    return 0;
+}
+
+fn second_from_field_nested_row(bag: ForBag) -> u32 {
+    for row in bag.rows {
+        return row[1];
     }
     return 0;
 }
