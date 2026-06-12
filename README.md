@@ -223,8 +223,9 @@ LLVM backend status:
   liveness, least-privilege gates, userspace-set scheduling policy, Sv39
   activation, demand paging, anonymous mmap, crash containment, copy-on-write,
   per-server MMU isolation, user-mode block/filesystem/network servers, RTC
-  MMIO, user-mode server syscalls, backtrace symbolization, char-device driver
-  dispatch, timer preemption, SMP boot/sync, SMP ticket-lock mutual exclusion,
+  MMIO, user-mode server syscalls, a user-mode TCP passive-open server
+  handshake, backtrace symbolization, char-device driver dispatch, timer
+  preemption, SMP boot/sync, SMP ticket-lock mutual exclusion,
   inter-processor interrupts, the integrated RISC-V kernel image, and the
   integrated kernel+network image, LLVM link/run coverage for the hosted
   elementwise stdin/stdout round trip, LLVM host link/run coverage for the frame
@@ -365,19 +366,20 @@ llvm-block-server-test`, `zig build llvm-fs-server-test`, `zig build
 llvm-net-server-test`, `zig build llvm-rtc-test`, `zig build
 llvm-userserver-test`, `zig build llvm-backtrace-test`, `zig build
 llvm-driver-test`, `zig build llvm-preempt-test`, `zig build llvm-smp-test`,
-`zig build llvm-smp-lock-test`, and `zig build llvm-ipi-test` for typed MMIO,
-timer traps, cooperative context switching, round-robin scheduling, syscall
-dispatch, U-mode entry, process lifecycle, ELF load/run, VFS syscalls, socket
-syscalls, exec, `satp` address-space switching, per-process page tables, context
-switches that swap address spaces, scheduler VM switching, IPC request/reply,
-multi-slot IPC, registry lookup, IPC timeout, signal delivery,
-capability-scoped server access, restart supervision, heartbeat liveness,
-least-privilege gates, userspace-set scheduling policy, Sv39 activation, demand
-paging, anonymous mmap, crash containment, copy-on-write, per-server MMU
-isolation, user-mode block/filesystem/network servers, RTC MMIO, user-mode
-server syscalls, backtrace symbolization, char-device driver dispatch, timer
-preemption, SMP boot/sync, SMP ticket-lock mutual exclusion, and
-inter-processor interrupts. `zig build llvm-kmain-test` boots the integrated
+`zig build llvm-smp-lock-test`, `zig build llvm-ipi-test`, and `zig build
+llvm-tcp-server-test` for typed MMIO, timer traps, cooperative context
+switching, round-robin scheduling, syscall dispatch, U-mode entry, process
+lifecycle, ELF load/run, VFS syscalls, socket syscalls, exec, `satp`
+address-space switching, per-process page tables, context switches that swap
+address spaces, scheduler VM switching, IPC request/reply, multi-slot IPC,
+registry lookup, IPC timeout, signal delivery, capability-scoped server access,
+restart supervision, heartbeat liveness, least-privilege gates,
+userspace-set scheduling policy, Sv39 activation, demand paging, anonymous mmap,
+crash containment, copy-on-write, per-server MMU isolation, user-mode
+block/filesystem/network servers, RTC MMIO, user-mode server syscalls,
+backtrace symbolization, char-device driver dispatch, timer preemption, SMP
+boot/sync, SMP ticket-lock mutual exclusion, inter-processor interrupts, and a
+user-mode TCP passive-open server handshake. `zig build llvm-kmain-test` boots the integrated
 kernel image from an LLVM-lowered MC object under QEMU, and `zig build llvm-kmain-net-test`
 boots the integrated kernel+network image and verifies the transmitted UDP packet
 in the QEMU pcap. `zig build llvm-page-test`, `zig build llvm-heap-test`, and

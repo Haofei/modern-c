@@ -782,7 +782,10 @@ pub fn build(b: *std.Build) void {
         "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "llvm",
     });
     const tcp_server_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/net/tcp-server-test.sh", "zig-out/bin/mcc",
+        "bash", "tools/net/tcp-server-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_tcp_server_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/net/tcp-server-test.sh", "zig-out/bin/mcc", "llvm",
     });
     const fdt_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test",
@@ -842,6 +845,9 @@ pub fn build(b: *std.Build) void {
     tcp_server_test_cmd.step.dependOn(b.getInstallStep());
     const tcp_server_test_step = b.step("tcp-server-test", "TCP connection state machine as a server");
     tcp_server_test_step.dependOn(&tcp_server_test_cmd.step);
+    llvm_tcp_server_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_tcp_server_test_step = b.step("llvm-tcp-server-test", "LLVM-lowered TCP connection state machine as a server");
+    llvm_tcp_server_test_step.dependOn(&llvm_tcp_server_test_cmd.step);
 
 
     contain_test_cmd.step.dependOn(b.getInstallStep());
@@ -1922,6 +1928,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_smp_test_cmd.step);
     m0_step.dependOn(&llvm_smp_lock_test_cmd.step);
     m0_step.dependOn(&llvm_ipi_test_cmd.step);
+    m0_step.dependOn(&llvm_tcp_server_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
