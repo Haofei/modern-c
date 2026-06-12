@@ -868,7 +868,16 @@ pub const Parser = struct {
                 continue;
             }
             if (self.match(.l_bracket)) {
-                const idx = try ast.makePtr(self.allocator, try self.parseExpr(0));
+                const first = try self.parseExpr(0);
+                if (self.match(.dot_dot)) {
+                    const end_expr = try ast.makePtr(self.allocator, try self.parseExpr(0));
+                    const close = try self.expectTok(.r_bracket, "expected ']' after slice range");
+                    const base = try ast.makePtr(self.allocator, expr);
+                    const start_expr = try ast.makePtr(self.allocator, first);
+                    expr = .{ .span = joinSpan(base.span, close.span), .kind = .{ .slice = .{ .base = base, .start = start_expr, .end = end_expr } } };
+                    continue;
+                }
+                const idx = try ast.makePtr(self.allocator, first);
                 const end = try self.expectTok(.r_bracket, "expected ']' after index");
                 const base = try ast.makePtr(self.allocator, expr);
                 expr = .{ .span = joinSpan(base.span, end.span), .kind = .{ .index = .{ .base = base, .index = idx } } };

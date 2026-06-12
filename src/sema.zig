@@ -1970,6 +1970,25 @@ pub const Checker = struct {
                 if (indexResultType(node, ctx)) |ty| return classifyTypeCtx(ty, ctx);
                 return .unknown;
             },
+            .slice => |node| {
+                if (ctx.no_lang_trap) {
+                    self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "range slicing may trap in #[no_lang_trap]");
+                }
+                const base_class = self.checkExpr(node.base.*, ctx);
+                if (!isIndexableBase(base_class)) {
+                    self.errorCode(node.base.span, "E_INDEX_BASE_NOT_ARRAY_OR_SLICE", "slicing is defined only for arrays and slices");
+                }
+                const start_class = self.checkExpr(node.start.*, ctx);
+                if (!isIndexType(start_class)) {
+                    self.errorCode(node.start.span, "E_INDEX_NOT_USIZE", "slice range bounds must be checked usize");
+                }
+                const end_class = self.checkExpr(node.end.*, ctx);
+                if (!isIndexType(end_class)) {
+                    self.errorCode(node.end.span, "E_INDEX_NOT_USIZE", "slice range bounds must be checked usize");
+                }
+                if (sliceResultType(node, ctx)) |ty| return classifyTypeCtx(ty, ctx);
+                return .unknown;
+            },
             .deref => |inner| {
                 const inner_class = self.checkExpr(inner.*, ctx);
                 if (ctx.in_comptime and isRuntimePointerDerefClass(inner_class)) {
@@ -5479,6 +5498,7 @@ fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),
         .index => |node| indexResultType(node, ctx),
+        .slice => |node| sliceResultType(node, ctx),
         .member => |node| memberResultFieldType(node, ctx),
         .grouped => |inner| exprResultType(inner.*, ctx),
         // Comparison and logical operators yield `bool`; surfacing that lets a
@@ -5624,6 +5644,20 @@ fn derefResultType(base: ast.Expr, ctx: Context) ?ast.TypeExpr {
 fn indexResultType(index: anytype, ctx: Context) ?ast.TypeExpr {
     const base_ty = exprResultType(index.base.*, ctx) orelse return null;
     return storageElementType(base_ty);
+}
+
+fn sliceResultType(slice: anytype, ctx: Context) ?ast.TypeExpr {
+    const base_ty = exprResultType(slice.base.*, ctx) orelse exprStorageType(slice.base.*, ctx) orelse return null;
+    return sliceTypeForBase(base_ty, slice.base.*.span);
+}
+
+fn sliceTypeForBase(base_ty: ast.TypeExpr, span: diagnostics.Span) ?ast.TypeExpr {
+    return switch (base_ty.kind) {
+        .slice => base_ty,
+        .array => |node| .{ .span = span, .kind = .{ .slice = .{ .mutability = .mut, .child = node.child } } },
+        .qualified => |node| sliceTypeForBase(node.child.*, span),
+        else => null,
+    };
 }
 
 fn memberFieldType(member: anytype, ctx: Context) ?ast.TypeExpr {

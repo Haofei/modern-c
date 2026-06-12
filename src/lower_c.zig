@@ -4193,6 +4193,7 @@ const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, "]");
                 }
             },
+            .slice => |node| try self.emitSliceExpr(node, locals),
             .address_of => |inner| {
                 try self.out.appendSlice(self.allocator, "&");
                 try self.emitAddressOperand(inner.*, locals);
@@ -6280,6 +6281,47 @@ const CEmitter = struct {
         return null;
     }
 
+    fn emitSliceExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
+        const slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedCEmission;
+        const slice_name = try self.sliceTypeName(slice_ty.kind.slice.child.*, slice_ty.kind.slice.mutability);
+        const resolved = self.resolveAliasType(base_ty);
+        const n = self.temp_index;
+        self.temp_index += 1;
+
+        try self.out.print(self.allocator, "({{ uintptr_t mc_start{d} = (", .{n});
+        try self.emitExpr(node.start.*, locals);
+        try self.out.print(self.allocator, "); uintptr_t mc_end{d} = (", .{n});
+        try self.emitExpr(node.end.*, locals);
+        try self.out.print(self.allocator, "); uintptr_t mc_len{d} = ", .{n});
+
+        switch (resolved.kind) {
+            .slice => {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitExpr(node.base.*, locals);
+                try self.out.appendSlice(self.allocator, ").len");
+            },
+            .array => |array| try self.out.appendSlice(self.allocator, try self.arrayLenTextForExpr(array.len)),
+            else => return error.UnsupportedCEmission,
+        }
+
+        try self.out.print(self.allocator, "; if (mc_start{d} > mc_end{d} || mc_end{d} > mc_len{d}) mc_trap_Bounds(); ({s}){{ .ptr = ", .{ n, n, n, n, slice_name });
+        switch (resolved.kind) {
+            .slice => {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitExpr(node.base.*, locals);
+                try self.out.appendSlice(self.allocator, ").ptr");
+            },
+            .array => {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitExpr(node.base.*, locals);
+                try self.out.appendSlice(self.allocator, ").elems");
+            },
+            else => return error.UnsupportedCEmission,
+        }
+        try self.out.print(self.allocator, " + mc_start{d}, .len = mc_end{d} - mc_start{d} }}; }})", .{ n, n, n });
+    }
+
     fn emitArrayCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const array_ty = self.arrayReturnTypeForExpr(initializer) orelse return false;
         try locals.put(name, try self.localInfoFromType(array_ty));
@@ -6288,15 +6330,7 @@ const CEmitter = struct {
     }
 
     fn emitSliceCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const call = switch (initializer.kind) {
-            .call => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .call => |node| node,
-                else => return false,
-            },
-            else => return false,
-        };
-        const slice_ty = self.sliceReturnTypeForCall(call) orelse return false;
+        const slice_ty = self.sliceReturnTypeForExpr(initializer, locals) orelse return false;
         try locals.put(name, try self.localInfoFromType(slice_ty));
         try self.emitInferredCallLocalInitValue(name, slice_ty, initializer, locals);
         return true;
@@ -8524,6 +8558,15 @@ const CEmitter = struct {
         return if (return_ty.kind == .slice) return_ty else null;
     }
 
+    fn sliceReturnTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .call => |call| self.sliceReturnTypeForCall(call),
+            .slice => |node| if (self.exprSourceTypeForEmission(node.base.*, locals)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
+            .grouped => |inner| self.sliceReturnTypeForExpr(inner.*, locals),
+            else => null,
+        };
+    }
+
     fn sliceReturnTypeForIndexBase(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
             .call => |call| self.sliceReturnTypeForCall(call),
@@ -8536,6 +8579,15 @@ const CEmitter = struct {
         return switch (ty.kind) {
             .slice => |node| node.child.*,
             .qualified => |node| sliceElementType(node.child.*),
+            else => null,
+        };
+    }
+
+    fn sliceTypeForBase(self: *CEmitter, ty: ast.TypeExpr, span: ast.Span) ?ast.TypeExpr {
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .slice => resolved,
+            .array => |node| .{ .span = span, .kind = .{ .slice = .{ .mutability = .mut, .child = node.child } } },
             else => null,
         };
     }
@@ -8858,6 +8910,7 @@ const CEmitter = struct {
             },
             .cast => |node| node.ty.*,
             .index => |node| if (locals) |local_set| CEmitter.localIndexElementType(node.base.*, local_set) else null,
+            .slice => |node| if (self.exprSourceTypeForEmission(node.base.*, locals)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
             .grouped => |inner| self.exprSourceTypeForEmission(inner.*, locals),
             else => null,
         };
@@ -9789,6 +9842,11 @@ const Inspector = struct {
             .grouped, .address_of, .deref => |inner| try self.inspectExpr(inner.*, ctx),
             .try_expr => |inner| try self.inspectExpr(inner.operand.*, ctx),
             .block => |body| try self.inspectBlock(body, ctx),
+            .slice => |node| {
+                try self.inspectExpr(node.base.*, ctx);
+                try self.inspectExpr(node.start.*, ctx);
+                try self.inspectExpr(node.end.*, ctx);
+            },
             .unary => |node| {
                 if (node.op == .neg) {
                     if (exprType(node.expr.*, ctx)) |ty| {

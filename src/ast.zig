@@ -374,6 +374,11 @@ pub const Expr = struct {
             base: *Expr,
             index: *Expr,
         },
+        slice: struct {
+            base: *Expr,
+            start: *Expr,
+            end: *Expr,
+        },
         deref: *Expr,
         member: struct {
             base: *Expr,

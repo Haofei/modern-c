@@ -464,6 +464,13 @@ const FunctionBuilder = struct {
                 try self.buildExpr(node.base.*);
                 try self.buildExpr(node.index.*);
             },
+            .slice => |node| {
+                try self.addInstr("slice", "bounds_checked", "value", expr.span);
+                try self.addInstr("trap_edge", "Bounds", "language_trap", expr.span);
+                try self.buildExpr(node.base.*);
+                try self.buildExpr(node.start.*);
+                try self.buildExpr(node.end.*);
+            },
             .member => |node| {
                 try self.addInstr("member", node.name.text, "value", expr.span);
                 try self.buildExpr(node.base.*);

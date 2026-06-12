@@ -1845,6 +1845,7 @@ const FunctionBuilder = struct {
             },
             .deref => |inner| self.constStorageBase(inner.*),
             .index => |node| self.constStorageBase(node.base.*),
+            .slice => |node| self.constStorageBase(node.base.*),
             .member => |node| self.constStorageBase(node.base.*),
             .grouped => |inner| self.constStorageBase(inner.*),
             .cast => |node| isConstStorageTypeAlias(node.ty.*, self.aliases),
@@ -2197,6 +2198,17 @@ const FunctionBuilder = struct {
                 try self.buildExpr(node.base.*);
                 try self.buildExpr(node.index.*);
             },
+            .slice => |node| {
+                try self.addIndexBaseCheck(node.base.*, node.base.span);
+                try self.addIndexOperandCheck(node.start.*, node.start.span);
+                try self.addIndexOperandCheck(node.end.*, node.end.span);
+                try self.addInstr(.cmp_bounds, "start <= end <= len", .bool, expr.span);
+                try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
+                try self.addInstr(.index, "range_slice", self.exprType(expr), expr.span);
+                try self.buildExpr(node.base.*);
+                try self.buildExpr(node.start.*);
+                try self.buildExpr(node.end.*);
+            },
             .member => |node| {
                 if (isMirCVoidPointer(self.exprType(node.base.*))) {
                     try self.addInstr(.ffi_check, "c_void_no_layout", .unknown, expr.span);
@@ -2508,7 +2520,7 @@ const FunctionBuilder = struct {
             .cast => |node| exprNeedsTargetRepresentationCheck(node.value.*),
             .address_of => true,
             .call => true,
-            .member, .index, .deref => true,
+            .member, .index, .slice, .deref => true,
             // A string literal is a non-null pointer to static storage by
             // construction, so its representation is statically proven at the
             // target site (like address_of); emitting the dominating check
@@ -2760,6 +2772,7 @@ const FunctionBuilder = struct {
             .cast => |node| self.exprHandlesResultLocal(name, node.value.*),
             .call => |node| self.callHandlesResultLocal(name, node),
             .index => |node| self.exprHandlesResultLocal(name, node.base.*) or self.exprHandlesResultLocal(name, node.index.*),
+            .slice => |node| self.exprHandlesResultLocal(name, node.base.*) or self.exprHandlesResultLocal(name, node.start.*) or self.exprHandlesResultLocal(name, node.end.*),
             .member => |node| self.exprHandlesResultLocal(name, node.base.*),
             else => false,
         };
@@ -2930,6 +2943,7 @@ const FunctionBuilder = struct {
             .ident => |id| self.let_local_names.contains(id.text),
             .member => |node| self.escapeStorageRoot(node.base.*),
             .index => |node| self.indexedArrayStorageRoot(node.base.*),
+            .slice => |node| self.indexedArrayStorageRoot(node.base.*),
             .grouped => |inner| self.escapeStorageRoot(inner.*),
             else => false,
         };
@@ -2974,6 +2988,7 @@ const FunctionBuilder = struct {
             },
             .deref => |inner| if (self.typeExprForExpr(inner.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
             .index => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
+            .slice => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| sliceTypeForBaseAlias(base_ty, node.base.*.span, self.aliases) else null,
             .grouped => |inner| self.typeExprForAssignmentTarget(inner.*),
             else => null,
         };
@@ -2995,6 +3010,7 @@ const FunctionBuilder = struct {
                 if (self.summaries.get(self.calleeName(node.callee.*))) |summary| summary.return_type_expr else null,
             .deref => |inner| if (self.typeExprForExpr(inner.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
             .index => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
+            .slice => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| sliceTypeForBaseAlias(base_ty, node.base.*.span, self.aliases) else null,
             .grouped => |inner| self.typeExprForExpr(inner.*),
             .cast => |node| node.ty.*,
             .try_expr => |inner| if (mmioMapPayloadTypeForExpr(inner.operand.*)) |ty| ty else if (self.typeExprForExpr(inner.operand.*)) |ty| tryPayloadTypeExprAlias(ty, self.aliases) else null,
@@ -3037,7 +3053,7 @@ const FunctionBuilder = struct {
             else
                 self.exprType(node.left.*),
             .member => |node| self.memberType(node),
-            .deref, .index => if (self.typeExprForExpr(expr)) |ty|
+            .deref, .index, .slice => if (self.typeExprForExpr(expr)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
             else
                 .unknown,
@@ -4318,6 +4334,7 @@ fn exprHandlesAnyResult(expr: ast.Expr) bool {
         .cast => |node| exprHandlesAnyResult(node.value.*),
         .call => |node| callHandlesAnyResult(node),
         .index => |node| exprHandlesAnyResult(node.base.*) or exprHandlesAnyResult(node.index.*),
+        .slice => |node| exprHandlesAnyResult(node.base.*) or exprHandlesAnyResult(node.start.*) or exprHandlesAnyResult(node.end.*),
         .member => |node| exprHandlesAnyResult(node.base.*),
         else => false,
     };
@@ -4506,6 +4523,21 @@ fn storageElementTypeAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHash
         .slice => |node| node.child.*,
         .array => |node| node.child.*,
         .qualified => |node| storageElementTypeAliasDepth(node.child.*, aliases, depth + 1),
+        else => null,
+    };
+}
+
+fn sliceTypeForBaseAlias(ty: ast.TypeExpr, span: ast.Span, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ast.TypeExpr {
+    return sliceTypeForBaseAliasDepth(ty, span, aliases, 0);
+}
+
+fn sliceTypeForBaseAliasDepth(ty: ast.TypeExpr, span: ast.Span, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) ?ast.TypeExpr {
+    if (depth > 64) return null;
+    return switch (ty.kind) {
+        .name => |name| if (aliases.get(name.text)) |resolved| sliceTypeForBaseAliasDepth(resolved, span, aliases, depth + 1) else null,
+        .slice => ty,
+        .array => |node| .{ .span = span, .kind = .{ .slice = .{ .mutability = .mut, .child = node.child } } },
+        .qualified => |node| sliceTypeForBaseAliasDepth(node.child.*, span, aliases, depth + 1),
         else => null,
     };
 }

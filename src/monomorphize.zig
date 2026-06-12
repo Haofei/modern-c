@@ -424,6 +424,7 @@ fn cloneExprCtx(ctx: *const CloneCtx, expr: ast.Expr) anyerror!ast.Expr {
         .try_expr => |inner| .{ .try_expr = .{ .operand = try clonePtr(ctx, inner.operand.*), .mapped = if (inner.mapped) |m| try clonePtr(ctx, m.*) else null } },
         .member => |node| .{ .member = .{ .base = try clonePtr(ctx, node.base.*), .name = node.name } },
         .index => |node| .{ .index = .{ .base = try clonePtr(ctx, node.base.*), .index = try clonePtr(ctx, node.index.*) } },
+        .slice => |node| .{ .slice = .{ .base = try clonePtr(ctx, node.base.*), .start = try clonePtr(ctx, node.start.*), .end = try clonePtr(ctx, node.end.*) } },
         .array_literal => |items| .{ .array_literal = try cloneExprSlice(ctx, items) },
         .struct_literal => |fields| blk: {
             var out = try ctx.arena.alloc(ast.StructLiteralField, fields.len);

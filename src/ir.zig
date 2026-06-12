@@ -349,6 +349,12 @@ const FunctionIrBuilder = struct {
                 try self.collectExpr(node.base.*);
                 try self.collectExpr(node.index.*);
             },
+            .slice => |node| {
+                try self.addTrap(.Bounds, .index, expr.span);
+                try self.collectExpr(node.base.*);
+                try self.collectExpr(node.start.*);
+                try self.collectExpr(node.end.*);
+            },
             .member => |node| try self.collectExpr(node.base.*),
         }
     }
@@ -1011,6 +1017,14 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
             }
             try writeExprFacts(collector, node.index.*, writer, ctx);
         },
+        .slice => |node| {
+            if (ctx.no_lang_trap) {
+                try writeIndexFact(expr.span, writer, ctx);
+            }
+            try writeExprFacts(collector, node.base.*, writer, ctx);
+            try writeExprFacts(collector, node.start.*, writer, ctx);
+            try writeExprFacts(collector, node.end.*, writer, ctx);
+        },
         .member => |node| {
             if (collector.ordinaryGlobalTarget(expr, ctx)) |target| {
                 defer if (target.owned) collector.allocator.free(target.name);
@@ -1324,6 +1338,10 @@ fn writeExprName(expr: ast.Expr, writer: anytype) anyerror!void {
         .index => |node| {
             try writeExprName(node.base.*, writer);
             try writer.print("[]", .{});
+        },
+        .slice => |node| {
+            try writeExprName(node.base.*, writer);
+            try writer.print("[..]", .{});
         },
         .deref => |inner| {
             try writeExprName(inner.*, writer);
