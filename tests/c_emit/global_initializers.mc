@@ -5,6 +5,9 @@ global cast_seed: u32 = 1 as u32;
 global cast_copied_seed: u32 = seed as u32;
 global signed_seed: i32 = -1;
 global grouped_signed_seed: i16 = (-12);
+global first_index: usize = 0;
+global values: [2]u32 = .{ 7, 8 };
+global first_value_ptr: *const u32 = &values[first_index];
 global global_const_ptr: *const u32 = &shared_cell;
 global global_mut_ptr: *mut u32 = &shared_cell;
 global nullable_handle: ?*mut u8 = null;
@@ -31,6 +34,10 @@ fn read_signed_seed() -> i32 {
 
 fn read_grouped_signed_seed() -> i16 {
     return grouped_signed_seed;
+}
+
+fn read_first_value_ptr() -> u32 {
+    return first_value_ptr.*;
 }
 
 fn read_global_const_ptr() -> u32 {

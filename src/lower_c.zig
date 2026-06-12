@@ -3894,10 +3894,17 @@ const CEmitter = struct {
                     // bounds check. Mirrors the value-read path so `&arr[i]` and
                     // `arr[i]` agree.
                     try self.emitAddressOperand(node.base.*, locals);
-                    try self.out.appendSlice(self.allocator, ".elems[mc_check_index_usize(");
-                    try self.emitExpr(node.index.*, locals);
                     const len = try self.arrayLenTextForExpr(base_arr.kind.array.len);
-                    try self.out.print(self.allocator, ", {s})]", .{len});
+                    if (locals == null) {
+                        try self.out.appendSlice(self.allocator, ".elems[");
+                        const static_index = self.staticCInitializer(node.index.*) orelse node.index.*;
+                        if (!try self.emitStaticCInitializer(static_index)) try self.emitExpr(static_index, locals);
+                        try self.out.appendSlice(self.allocator, "]");
+                    } else {
+                        try self.out.appendSlice(self.allocator, ".elems[mc_check_index_usize(");
+                        try self.emitExpr(node.index.*, locals);
+                        try self.out.print(self.allocator, ", {s})]", .{len});
+                    }
                 } else {
                     try self.emitAddressOperand(node.base.*, locals);
                     try self.out.appendSlice(self.allocator, "[");
@@ -8100,18 +8107,20 @@ const CEmitter = struct {
     }
 
     fn arrayTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const local_set = locals orelse return null;
         switch (expr.kind) {
             .ident => |ident| {
                 // A local array, or — falling back — a global array (so taking the
                 // address of a global array element, `&g_buf[i]`, indexes `.elems`).
-                const source_ty = if (local_set.get(ident.text)) |info|
-                    (info.source_ty orelse return null)
-                else if (self.globals.get(ident.text)) |g|
+                const source_ty = if (locals) |local_set| blk: {
+                    if (local_set.get(ident.text)) |info| break :blk info.source_ty orelse return null;
+                    if (local_set.contains(ident.text)) return null;
+                    break :blk null;
+                } else null;
+                const resolved_source_ty = source_ty orelse if (self.globals.get(ident.text)) |g|
                     (g.source_ty orelse return null)
                 else
                     return null;
-                const resolved = self.resolveAliasType(source_ty);
+                const resolved = self.resolveAliasType(resolved_source_ty);
                 return if (resolved.kind == .array) resolved else null;
             },
             .grouped => |inner| return self.arrayTypeForExpr(inner.*, locals),
