@@ -250,6 +250,15 @@ pub fn build(b: *std.Build) void {
     const llvm_demo_test_step = b.step("llvm-demo-test", "Compile supported demo drivers through LLVM to objects");
     llvm_demo_test_step.dependOn(&llvm_demo_test_cmd.step);
 
+    const llvm_kernel_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/llvm-kernel-test.sh",
+        "zig-out/bin/mcc",
+    });
+    llvm_kernel_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_kernel_test_step = b.step("llvm-kernel-test", "Compile kernel modules through LLVM to target objects");
+    llvm_kernel_test_step.dependOn(&llvm_kernel_test_cmd.step);
+
     const llvm_hosted_demo_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/llvm-hosted-demo-test.sh",
@@ -1356,6 +1365,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_toolchain_test_cmd.step);
     m0_step.dependOn(&llvm_pkg_test_cmd.step);
     m0_step.dependOn(&llvm_demo_test_cmd.step);
+    m0_step.dependOn(&llvm_kernel_test_cmd.step);
     m0_step.dependOn(&llvm_hosted_demo_test_cmd.step);
     m0_step.dependOn(&llvm_host_suite_test_cmd.step);
 

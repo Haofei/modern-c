@@ -11,7 +11,7 @@ Legend:
 Current baseline evidence:
 
 - `zig build m0` passes with C, LLVM IR, LLVM object, LLVM O2/object, package,
-  std, demo, host-suite, and QEMU gates.
+  std, demo, kernel-module LLVM object, host-suite, and QEMU gates.
 - `docs/spec/MC_0.6.1_Final_Design.md` Appendix M describes LLVM as complete for
   the current spec surface.
 - `docs/spec/MC_0.6.1_Final_Design.md` L.3 and README "Prototype or incomplete"

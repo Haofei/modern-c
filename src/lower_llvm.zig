@@ -1147,7 +1147,7 @@ const LlvmEmitter = struct {
         const llvm_ty = try self.llvmType(ty);
         const resolved_ty = self.resolveAliasType(ty);
         const name = local.names[0].text;
-        const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{name});
+        const ptr = try self.nextBindingPtr(name);
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, llvm_ty });
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });

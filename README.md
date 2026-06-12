@@ -212,7 +212,8 @@ LLVM backend status:
   lowering, manifest package builds, and multi-object
   `std/{core,bits,math,ascii,fmt,addr}` runtime checks, plus LLVM object
   coverage for the framebuffer/gpio/irq/spi/timer/uart hardware demos and the
-  hosted elementwise demo, LLVM link/run coverage for the hosted elementwise
+  hosted elementwise demo, LLVM target-object coverage for every non-bad
+  `kernel/` module, LLVM link/run coverage for the hosted elementwise
   stdin/stdout round trip, and LLVM link/run coverage for every current
   data-driven host-driver manifest row. LLVM object debug info is verified for
   DWARF file/function/source line mappings across calls, control flow,
@@ -330,7 +331,9 @@ against a C driver. `zig build llvm-pkg-test` builds the package-manifest demo
 through LLVM, links the resulting object, and runs it. `zig build
 llvm-demo-test` compiles the framebuffer/gpio/irq/spi/timer/uart hardware demo
 drivers and the hosted elementwise demo through LLVM to non-empty objects under
-the same hidden-assumption token check. `zig build llvm-hosted-demo-test`
+the same hidden-assumption token check. `zig build llvm-kernel-test` compiles
+every non-bad `kernel/` module through LLVM to assemblable IR and non-empty
+target objects. `zig build llvm-hosted-demo-test`
 links and runs the hosted elementwise demo through LLVM, libc, and libm, then
 verifies the binary stdin/stdout `f32` round trip. `zig build
 llvm-host-suite-test` reuses every current data-driven host test manifest row
