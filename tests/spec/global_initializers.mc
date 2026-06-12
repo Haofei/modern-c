@@ -9,6 +9,8 @@ extern fn make_seed() -> u32;
 
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
+global cast_seed: u32 = 1 as u32;
+global cast_copied_seed: u32 = seed as u32;
 global nullable_handle: ?*mut u8 = null;
 
 // EXPECT_ERROR: E_VOID_STORAGE

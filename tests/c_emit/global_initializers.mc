@@ -1,6 +1,8 @@
 global shared_cell: u32 = 0;
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
+global cast_seed: u32 = 1 as u32;
+global cast_copied_seed: u32 = seed as u32;
 global signed_seed: i32 = -1;
 global grouped_signed_seed: i16 = (-12);
 global global_const_ptr: *const u32 = &shared_cell;
@@ -13,6 +15,14 @@ fn read_shared_cell() -> u32 {
 
 fn read_copied_seed() -> u32 {
     return copied_seed;
+}
+
+fn read_cast_seed() -> u32 {
+    return cast_seed;
+}
+
+fn read_cast_copied_seed() -> u32 {
+    return cast_copied_seed;
 }
 
 fn read_signed_seed() -> i32 {

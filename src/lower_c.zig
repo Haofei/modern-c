@@ -5297,6 +5297,11 @@ const CEmitter = struct {
         return switch (expr.kind) {
             .ident => |ident| self.static_initializers.get(ident.text),
             .grouped => |inner| if (self.staticCInitializer(inner.*)) |resolved| resolved else if (isStaticCInitializer(expr)) expr else null,
+            .cast => |node| if (self.staticCInitializer(node.value.*)) |resolved| blk: {
+                const value = self.scratch.allocator().create(ast.Expr) catch break :blk null;
+                value.* = resolved;
+                break :blk .{ .span = expr.span, .kind = .{ .cast = .{ .value = value, .ty = node.ty } } };
+            } else if (isStaticCInitializer(expr)) expr else null,
             // `atomic.init(X)` initializes the underlying scalar directly (an
             // `atomic<u32>` lowers to `uint32_t`), so a global atomic seeds from X.
             .call => |node| if (isAtomicInitCallee(node.callee.*) and node.args.len == 1) self.staticCInitializer(node.args[0]) else null,
@@ -10242,6 +10247,7 @@ fn isStaticCInitializer(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .int_literal, .bool_literal, .null_literal, .void_literal, .enum_literal => true,
         .address_of => true,
+        .cast => |node| isStaticCInitializer(node.value.*),
         .unary => |node| node.op == .neg and switch (node.expr.kind) {
             .int_literal => true,
             else => false,
