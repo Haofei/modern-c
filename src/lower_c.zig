@@ -25,6 +25,10 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
 }
 
 pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
+    return appendCProfileWithSourcePath(allocator, module, out, profile, null);
+}
+
+pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8) anyerror!void {
     switch (profile) {
         .kernel => try out.appendSlice(allocator, "/* mc-profile: kernel (freestanding) */\n"),
         .hosted => try out.appendSlice(allocator, "/* mc-profile: hosted (links libc + -lm) */\n"),
@@ -326,7 +330,7 @@ pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *st
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
 
-    var emitter = CEmitter.init(allocator, out, &typed_mir);
+    var emitter = CEmitter.init(allocator, out, &typed_mir, source_path);
     try emitter.emitModule(module);
 }
 
@@ -365,6 +369,7 @@ const CEmitter = struct {
     fn_ptr_types: std.StringHashMap(ast.TypeExpr),
     closure_types: std.StringHashMap(ast.TypeExpr),
     mir_module: *const mir.Module,
+    source_path: ?[]const u8,
     current_function: ?[]const u8 = null,
     temp_index: usize,
     indent: usize,
@@ -374,7 +379,7 @@ const CEmitter = struct {
     loop_ids: std.ArrayList(u32) = .empty,
     next_loop_id: u32 = 0,
 
-    fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8), mir_module: *const mir.Module) CEmitter {
+    fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8), mir_module: *const mir.Module, source_path: ?[]const u8) CEmitter {
         return .{
             .allocator = allocator,
             .out = out,
@@ -397,6 +402,7 @@ const CEmitter = struct {
             .fn_ptr_types = std.StringHashMap(ast.TypeExpr).init(allocator),
             .closure_types = std.StringHashMap(ast.TypeExpr).init(allocator),
             .mir_module = mir_module,
+            .source_path = source_path,
             .temp_index = 0,
             .indent = 0,
         };
@@ -544,6 +550,7 @@ const CEmitter = struct {
     }
 
     fn emitGlobal(self: *CEmitter, global: ast.GlobalDecl) !void {
+        try self.writeLineDirective(global.name.span);
         try self.out.appendSlice(self.allocator, "static MC_UNUSED ");
         if (global.ty) |global_ty| {
             try self.emitDeclarator(global_ty, global.name.text);
@@ -976,6 +983,7 @@ const CEmitter = struct {
     }
 
     fn emitFunction(self: *CEmitter, fn_decl: ast.FnDecl, body: ast.Block) anyerror!void {
+        try self.writeLineDirective(fn_decl.name.span);
         try self.emitFunctionSignature(fn_decl, !fn_decl.exported);
         try self.out.appendSlice(self.allocator, " {\n");
 
@@ -1611,6 +1619,7 @@ const CEmitter = struct {
     }
 
     fn emitStmt(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        try self.writeLineDirective(stmt.span);
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
                 const is_let = std.meta.activeTag(stmt.kind) == .let_decl;
@@ -2321,6 +2330,7 @@ const CEmitter = struct {
     }
 
     fn emitDeferredCleanup(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        try self.writeLineDirective(expr.span);
         switch (expr.kind) {
             .block => |block| {
                 try self.writeIndent();
@@ -2352,6 +2362,14 @@ const CEmitter = struct {
 
     fn writeIndent(self: *CEmitter) !void {
         for (0..self.indent) |_| try self.out.appendSlice(self.allocator, "    ");
+    }
+
+    fn writeLineDirective(self: *CEmitter, span: ast.Span) !void {
+        const path = self.source_path orelse return;
+        if (span.line == 0) return;
+        try self.out.print(self.allocator, "#line {d} \"", .{span.line});
+        try appendCPreprocessorString(self.out, self.allocator, path);
+        try self.out.appendSlice(self.allocator, "\"\n");
     }
 
     fn writeUnsupportedStmt(self: *CEmitter, stmt: ast.Stmt) !void {
@@ -9426,7 +9444,7 @@ const GlobalElementInfo = struct {
     c_type: []const u8,
     race_type_name: []const u8,
     race_c_type: []const u8,
-    aggregate: bool = false,    // struct/union/closure element -> plain `.elems[i]` access
+    aggregate: bool = false, // struct/union/closure element -> plain `.elems[i]` access
     pointer_like: bool = false, // pointer / fn-pointer element -> relaxed-atomic access
 };
 
@@ -10976,6 +10994,21 @@ fn contractName(attr: ast.Attr) []const u8 {
     };
 }
 
+fn appendCPreprocessorString(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
+    for (text) |ch| switch (ch) {
+        '\\' => try out.appendSlice(allocator, "\\\\"),
+        '"' => try out.appendSlice(allocator, "\\\""),
+        '\n' => try out.appendSlice(allocator, "\\n"),
+        '\r' => try out.appendSlice(allocator, "\\r"),
+        '\t' => try out.appendSlice(allocator, "\\t"),
+        else => if (ch < 0x20 or ch == 0x7f) {
+            try out.print(allocator, "\\x{X:0>2}", .{ch});
+        } else {
+            try out.append(allocator, ch);
+        },
+    };
+}
+
 test "emits inspection markers for lowering-sensitive spec behavior" {
     const source =
         \\global shared_counter: u32 = 0;
@@ -11080,6 +11113,37 @@ test "emits C support helpers used by lower-c evidence" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_thread_fence(__ATOMIC_RELEASE)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_thread_fence(__ATOMIC_ACQUIRE)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_signal_fence") == null);
+}
+
+test "path-aware C emission writes source line hints" {
+    const source =
+        \\global count: u32 = 1;
+        \\
+        \\fn add_one(x: u32) -> u32 {
+        \\    let y: u32 = x + 1;
+        \\    return y;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "debug_map.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc");
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 1 \"debug\\\"map\\\\case.mc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 3 \"debug\\\"map\\\\case.mc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 4 \"debug\\\"map\\\\case.mc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 5 \"debug\\\"map\\\\case.mc\"") != null);
 }
 
 test "emits C for simple MMIO register access" {

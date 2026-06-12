@@ -395,7 +395,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_c.appendCProfile(allocator, module, &output, profile);
+    try lower_c.appendCProfileWithSourcePath(allocator, module, &output, profile, path);
     writeStdout(output.items);
 }
 

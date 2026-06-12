@@ -150,7 +150,7 @@
 | `[x]` | `mmio.map(...)` emit try on `MmioPtr` | 已接入 sema / MIR / C emission；移出 spec sweep allowlist | 继续扩展 MMIO map 组合用例 |
 | `[x]` | `Result<GenericStruct, E>` 名字混淆 | 已有 `tests/c_emit/generic_structs.mc` 覆盖 lower-C monomorphized ABI | 继续扩展嵌套泛型 ABI regression |
 | `[ ]` | LLVM backend | 未开始 | C backend 稳定后再做 |
-| `[ ]` | debug info | 只有 `#line` hint | DWARF 或至少 source map |
+| `[~]` | debug info | `emit-c` 已输出 `#line` source hint | 生成 `.mcmap`，长期再接 DWARF |
 | `[~]` | package manager | `mcc-pkg.sh` 有本地 manifest/deps/build | 需要 registry、版本解析、发布 |
 | `[ ]` | LSP / formatter | 没有 | 开发体验必需 |
 

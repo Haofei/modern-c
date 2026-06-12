@@ -61,6 +61,8 @@ Prototype or incomplete:
   and the address-class rules are implemented; a complete coherence simulation
   is not.
 - Hardware MMIO execution tests.
+- Debug mapping: `emit-c` writes `#line` source hints for generated C; richer
+  `.mcmap`/DWARF-quality mapping is still pending.
 
 Deferred:
 
