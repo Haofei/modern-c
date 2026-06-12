@@ -339,6 +339,9 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
     defer generated_c.deinit(allocator);
     try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path);
 
+    var typed_mir = try mir.build(allocator, module);
+    defer typed_mir.deinit();
+
     var line_index = try buildGeneratedLineIndex(allocator, generated_c.items);
     defer line_index.deinit(allocator);
 
@@ -350,6 +353,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
         .source_path = source_path,
         .generated_c_path = generated_c_path orelse "-",
         .line_index = line_index.items,
+        .mir_module = &typed_mir,
     };
     try mapper.emitModule(module);
 }
@@ -396,6 +400,7 @@ const SourceMapEmitter = struct {
     source_path: []const u8,
     generated_c_path: []const u8,
     line_index: []const GeneratedLine,
+    mir_module: *const mir.Module,
     line_cursor: usize = 0,
     current_function: ?[]const u8 = null,
 
@@ -466,10 +471,43 @@ const SourceMapEmitter = struct {
         try self.out.appendSlice(self.allocator, ":");
         try appendMapStringContents(self.out, self.allocator, symbol);
         try self.out.print(self.allocator, "@{d}:{d}\" mir_block=", .{ span.line, span.column });
-        try appendMapString(self.out, self.allocator, mir_block);
+        if (try self.mirLabelFor(symbol, span)) |mir_label| {
+            defer self.allocator.free(mir_label);
+            try appendMapString(self.out, self.allocator, mir_label);
+        } else {
+            try appendMapString(self.out, self.allocator, mir_block);
+        }
         try self.out.appendSlice(self.allocator, " object_symbol=");
         try appendMapString(self.out, self.allocator, object_symbol);
         try self.out.appendSlice(self.allocator, "\n");
+    }
+
+    fn mirLabelFor(self: *SourceMapEmitter, symbol: []const u8, span: ast.Span) !?[]const u8 {
+        const function = self.mirFunctionByName(symbol) orelse return null;
+        if (try self.mirLabelForMatch(function, span, true)) |label| return label;
+        return try self.mirLabelForMatch(function, span, false);
+    }
+
+    fn mirFunctionByName(self: *SourceMapEmitter, name: []const u8) ?mir.Function {
+        for (self.mir_module.functions) |function| {
+            if (std.mem.eql(u8, function.name, name)) return function;
+        }
+        return null;
+    }
+
+    fn mirLabelForMatch(self: *SourceMapEmitter, function: mir.Function, span: ast.Span, exact_column: bool) !?[]const u8 {
+        for (function.blocks) |block| {
+            for (block.instructions, 0..) |instruction, instruction_index| {
+                if (instruction.line != span.line) continue;
+                if (exact_column and instruction.column != span.column) continue;
+                return try std.fmt.allocPrint(
+                    self.allocator,
+                    "mir:{s}:block:{d}:instr:{d}:{s}",
+                    .{ function.name, block.id, instruction_index, @tagName(instruction.kind) },
+                );
+            }
+        }
+        return null;
     }
 
     fn generatedLineForSource(self: *SourceMapEmitter, source_line: usize) usize {
@@ -11449,7 +11487,7 @@ test "C source map records source spans and generated C lines" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "source_path=\"debug_map.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "generated_c_path=\"debug_map.c\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:function:add_one@3:4\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mir_block=\"mir:add_one:span:4:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mir_block=\"mir:add_one:block:") != null);
 }
 
 test "C emission materializes closure callees once" {
