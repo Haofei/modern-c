@@ -935,13 +935,24 @@ pub fn build(b: *std.Build) void {
     heartbeat_test_step.dependOn(&heartbeat_test_cmd.step);
 
     const timeout_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/ipc/timeout-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     timeout_test_cmd.step.dependOn(b.getInstallStep());
     const timeout_test_step = b.step("timeout-test", "IPC timeout: bounded receive, no infinite block");
     timeout_test_step.dependOn(&timeout_test_cmd.step);
+
+    const llvm_timeout_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/ipc/timeout-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_timeout_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_timeout_test_step = b.step("llvm-timeout-test", "Run LLVM-lowered IPC timeout under QEMU");
+    llvm_timeout_test_step.dependOn(&llvm_timeout_test_cmd.step);
 
     const privilege_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -953,31 +964,64 @@ pub fn build(b: *std.Build) void {
     privilege_test_step.dependOn(&privilege_test_cmd.step);
 
     const signal_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/ipc/signal-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     signal_test_cmd.step.dependOn(b.getInstallStep());
     const signal_test_step = b.step("signal-test", "Signals: deliver + poll + take an async signal");
     signal_test_step.dependOn(&signal_test_cmd.step);
 
+    const llvm_signal_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/ipc/signal-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_signal_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_signal_test_step = b.step("llvm-signal-test", "Run LLVM-lowered signal delivery under QEMU");
+    llvm_signal_test_step.dependOn(&llvm_signal_test_cmd.step);
+
     const registry_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/ipc/registry-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     registry_test_cmd.step.dependOn(b.getInstallStep());
     const registry_test_step = b.step("registry-test", "Name/registry server: lookup a service by name");
     registry_test_step.dependOn(&registry_test_cmd.step);
 
+    const llvm_registry_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/ipc/registry-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_registry_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_registry_test_step = b.step("llvm-registry-test", "Run LLVM-lowered name/registry server under QEMU");
+    llvm_registry_test_step.dependOn(&llvm_registry_test_cmd.step);
+
     const ipc2_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/ipc/ipc2-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     ipc2_test_cmd.step.dependOn(b.getInstallStep());
     const ipc2_test_step = b.step("ipc2-test", "IPC completeness: multi-slot + source filter + notify");
     ipc2_test_step.dependOn(&ipc2_test_cmd.step);
+
+    const llvm_ipc2_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/ipc/ipc2-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_ipc2_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_ipc2_test_step = b.step("llvm-ipc2-test", "Run LLVM-lowered IPC multi-slot/source-filter/notify under QEMU");
+    llvm_ipc2_test_step.dependOn(&llvm_ipc2_test_cmd.step);
 
     const grant_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -988,13 +1032,24 @@ pub fn build(b: *std.Build) void {
     grant_test_step.dependOn(&grant_test_cmd.step);
 
     const ipc_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/ipc/ipc-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     ipc_test_cmd.step.dependOn(b.getInstallStep());
     const ipc_test_step = b.step("ipc-test", "kernel-mediated IPC: client/server message round-trip");
     ipc_test_step.dependOn(&ipc_test_cmd.step);
+
+    const llvm_ipc_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/ipc/ipc-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_ipc_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_ipc_test_step = b.step("llvm-ipc-test", "Run LLVM-lowered kernel-mediated IPC under QEMU");
+    llvm_ipc_test_step.dependOn(&llvm_ipc_test_cmd.step);
 
     const cap_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1572,6 +1627,11 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_vmspace_test_cmd.step);
     m0_step.dependOn(&llvm_vmctx_test_cmd.step);
     m0_step.dependOn(&llvm_sched_vm_test_cmd.step);
+    m0_step.dependOn(&llvm_timeout_test_cmd.step);
+    m0_step.dependOn(&llvm_signal_test_cmd.step);
+    m0_step.dependOn(&llvm_registry_test_cmd.step);
+    m0_step.dependOn(&llvm_ipc2_test_cmd.step);
+    m0_step.dependOn(&llvm_ipc_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

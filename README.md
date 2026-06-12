@@ -217,8 +217,10 @@ LLVM backend status:
   cooperative thread switching, round-robin scheduling, syscall dispatch,
   U-mode entry, process lifecycle, ELF load/run, exec, U-mode file syscalls,
   U-mode socket syscalls, `satp` address-space switching, per-process page
-  tables, context switches that swap address spaces, scheduler VM switching, the
-  integrated RISC-V kernel image, and the integrated kernel+network image, LLVM
+  tables, context switches that swap address spaces, scheduler VM switching,
+  IPC request/reply, multi-slot IPC, registry lookup, IPC timeout, signal
+  delivery, the integrated RISC-V kernel image, and the integrated
+  kernel+network image, LLVM
   link/run coverage for the hosted elementwise
   stdin/stdout round trip, and LLVM link/run coverage for every current
   data-driven host-driver manifest row. LLVM object debug info is verified for
@@ -339,22 +341,24 @@ llvm-demo-test` compiles the framebuffer/gpio/irq/spi/timer/uart hardware demo
 drivers and the hosted elementwise demo through LLVM to non-empty objects under
 the same hidden-assumption token check. `zig build llvm-kernel-test` compiles
 every non-bad `kernel/` module through LLVM to assemblable IR and non-empty
-target objects. `zig build llvm-qemu-test`, `zig build llvm-trap-test`, `zig
-build llvm-thread-test`, `zig build llvm-sched-test`, `zig build
-llvm-syscall-test`, `zig build llvm-user-test`, `zig build
-llvm-process-test`, `zig build llvm-elf-run-test`, `zig build
-llvm-fs-syscall-test`, `zig build llvm-socket-syscall-test`, and `zig build
+target objects. LLVM QEMU gates now include `zig build llvm-qemu-test`, `zig
+build llvm-trap-test`, `zig build llvm-thread-test`, `zig build
+llvm-sched-test`, `zig build llvm-syscall-test`, `zig build llvm-user-test`,
+`zig build llvm-process-test`, `zig build llvm-elf-run-test`, `zig build
+llvm-fs-syscall-test`, `zig build llvm-socket-syscall-test`, `zig build
 llvm-exec-test`, `zig build llvm-vm-switch-test`, `zig build
-llvm-vmspace-test`, `zig build llvm-vmctx-test`, and `zig build
-llvm-sched-vm-test` boot LLVM-lowered bare-metal RISC-V QEMU images for typed
-MMIO, timer traps, cooperative context switching, round-robin scheduling,
-syscall dispatch, U-mode entry, process lifecycle, ELF load/run, VFS syscalls,
-socket syscalls, exec, `satp` address-space switching, per-process page tables,
-context switches that swap address spaces, and scheduler VM switching. `zig
-build llvm-kmain-test` boots the integrated kernel image from an LLVM-lowered MC
-object under QEMU, and `zig build llvm-kmain-net-test` boots the integrated
-kernel+network image and verifies the transmitted UDP packet in the QEMU pcap.
-`zig build llvm-hosted-demo-test`
+llvm-vmspace-test`, `zig build llvm-vmctx-test`, `zig build
+llvm-sched-vm-test`, `zig build llvm-ipc-test`, `zig build llvm-ipc2-test`,
+`zig build llvm-registry-test`, `zig build llvm-timeout-test`, and `zig build
+llvm-signal-test` for typed MMIO, timer traps, cooperative context switching,
+round-robin scheduling, syscall dispatch, U-mode entry, process lifecycle, ELF
+load/run, VFS syscalls, socket syscalls, exec, `satp` address-space switching,
+per-process page tables, context switches that swap address spaces, scheduler VM
+switching, IPC request/reply, multi-slot IPC, registry lookup, IPC timeout, and
+signal delivery. `zig build llvm-kmain-test` boots the integrated kernel image
+from an LLVM-lowered MC object under QEMU, and `zig build llvm-kmain-net-test`
+boots the integrated kernel+network image and verifies the transmitted UDP packet
+in the QEMU pcap. `zig build llvm-hosted-demo-test`
 links and runs the hosted elementwise demo through LLVM, libc, and libm, then
 verifies the binary stdin/stdout `f32` round trip. `zig build
 llvm-host-suite-test` reuses every current data-driven host test manifest row

@@ -4171,12 +4171,15 @@ llvm-thread-test`, `zig build llvm-sched-test`, `zig build llvm-syscall-test`,
 llvm-elf-run-test`, `zig build llvm-fs-syscall-test`, `zig build
 llvm-socket-syscall-test`, `zig build llvm-exec-test`, `zig build
 llvm-vm-switch-test`, `zig build llvm-vmspace-test`, `zig build
-llvm-vmctx-test`, and `zig build llvm-sched-vm-test` gates boot LLVM-lowered
+llvm-vmctx-test`, `zig build llvm-sched-vm-test`, `zig build llvm-ipc-test`,
+`zig build llvm-ipc2-test`, `zig build llvm-registry-test`, `zig build
+llvm-timeout-test`, and `zig build llvm-signal-test` gates boot LLVM-lowered
 bare-metal RISC-V QEMU images for typed MMIO, timer traps, cooperative context
 switching, round-robin scheduling, syscall dispatch, U-mode entry, process
 lifecycle, ELF load/run, VFS syscalls, socket syscalls, exec, `satp`
 address-space switching, per-process page tables, context switches that swap
-address spaces, and scheduler VM switching.
+address spaces, scheduler VM switching, IPC request/reply, multi-slot IPC,
+registry lookup, IPC timeout, and signal delivery.
 The `zig build llvm-kmain-test` and `zig build llvm-kmain-net-test` gates boot
 LLVM-lowered integrated RISC-V kernel images under QEMU; the network variant also
 checks that QEMU captures the expected transmitted UDP payload.
