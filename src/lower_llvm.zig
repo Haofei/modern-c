@@ -1580,6 +1580,7 @@ const LlvmEmitter = struct {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(info.base, info.domain_ty);
         }
+        if (self.domainOpCallInfo(call)) |info| return try self.emitDomainOpCall(call, info);
         if (self.conversionCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const source_ty = self.exprType(call.args[0]) orelse info.target_ty;
@@ -2077,6 +2078,23 @@ const LlvmEmitter = struct {
         return result;
     }
 
+    fn emitDomainOpCall(self: *LlvmEmitter, call: anytype, info: DomainOpCallInfo) ![]const u8 {
+        if (call.type_args.len != 0) return error.UnsupportedLlvmEmission;
+        const expected_args: usize = if (std.mem.eql(u8, info.op, "elapsed_assume_within")) 3 else 2;
+        if (call.args.len != expected_args) return error.UnsupportedLlvmEmission;
+        const llvm_ty = try self.llvmType(info.payload_ty);
+        const left = try self.emitExpr(call.args[0], info.domain_ty);
+        const right = try self.emitExpr(call.args[1], info.domain_ty);
+        const diff = try self.emitPlainBinaryValues("sub", llvm_ty, left, right);
+        if (std.mem.eql(u8, info.op, "before") or std.mem.eql(u8, info.op, "after")) {
+            const pred: []const u8 = if (std.mem.eql(u8, info.op, "before")) "slt" else "sgt";
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, 0\n", .{ result, pred, llvm_ty, diff });
+            return result;
+        }
+        return diff;
+    }
+
     fn overflowIntrinsic(self: *LlvmEmitter, op: ast.BinaryOp, signed: bool, bits: u16) ![]const u8 {
         const prefix = if (signed) "s" else "u";
         const name = switch (op) {
@@ -2218,7 +2236,7 @@ const LlvmEmitter = struct {
                 try self.atomicStorageLlvmType(node.args[0])
             else if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1)
                 try self.llvmType(node.args[0])
-            else if ((std.mem.eql(u8, node.base.text, "wrap") or std.mem.eql(u8, node.base.text, "sat")) and node.args.len == 1)
+            else if (isPayloadDomainGenericName(node.base.text) and node.args.len == 1)
                 try self.llvmType(node.args[0])
             else if (isOpaqueAddressGenericName(node.base.text) and node.args.len == 1)
                 "i64"
@@ -2323,7 +2341,7 @@ const LlvmEmitter = struct {
         const resolved_ty = self.resolveAliasType(ty);
         return switch (resolved_ty.kind) {
             .generic => |node| {
-                if ((!std.mem.eql(u8, node.base.text, "wrap") and !std.mem.eql(u8, node.base.text, "sat")) or node.args.len != 1) return null;
+                if (!isPayloadDomainGenericName(node.base.text) or node.args.len != 1) return null;
                 return node.args[0];
             },
             .qualified => |node| self.domainPayloadType(node.child.*),
@@ -2565,6 +2583,7 @@ const LlvmEmitter = struct {
         if (builtinCallReturnType(call)) |ty| return ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
+        if (self.domainOpCallInfo(call)) |info| return info.return_ty;
         if (self.conversionCallInfo(call)) |info| return info.target_ty;
         if (self.atomicCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
@@ -2641,6 +2660,46 @@ const LlvmEmitter = struct {
         const target_ty = self.resolveAliasType(simpleType(ident.span, ident.text));
         if (self.integerBitsOf(target_ty) == null) return null;
         return .{ .target_ty = target_ty, .op = member.name.text };
+    }
+
+    fn domainOpCallInfo(self: *LlvmEmitter, call: anytype) ?DomainOpCallInfo {
+        if (call.type_args.len != 0) return null;
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        const op = member.name.text;
+        const is_serial_op = std.mem.eql(u8, op, "before") or
+            std.mem.eql(u8, op, "after") or
+            std.mem.eql(u8, op, "distance");
+        const is_counter_op = std.mem.eql(u8, op, "delta_mod") or
+            std.mem.eql(u8, op, "elapsed_assume_within");
+        if (!is_serial_op and !is_counter_op) return null;
+        const ident = switch (member.base.kind) {
+            .ident => |id| id,
+            else => return null,
+        };
+        if (self.local_types.contains(ident.text)) return null;
+        const domain_ty = self.resolveAliasType(simpleType(ident.span, ident.text));
+        const generic = switch (domain_ty.kind) {
+            .generic => |node| node,
+            else => return null,
+        };
+        if (generic.args.len != 1) return null;
+        const is_serial = std.mem.eql(u8, generic.base.text, "serial");
+        const is_counter = std.mem.eql(u8, generic.base.text, "counter");
+        if ((is_serial_op and !is_serial) or (is_counter_op and !is_counter)) return null;
+        const return_ty: ast.TypeExpr = if (std.mem.eql(u8, op, "before") or std.mem.eql(u8, op, "after"))
+            simpleType(member.name.span, "bool")
+        else if (std.mem.eql(u8, op, "elapsed_assume_within"))
+            .{ .span = member.name.span, .kind = .{ .generic = .{ .base = .{ .text = "Duration", .span = member.name.span }, .args = generic.args } } }
+        else
+            .{ .span = member.name.span, .kind = .{ .generic = .{ .base = .{ .text = "wrap", .span = member.name.span }, .args = generic.args } } };
+        return .{ .domain_ty = domain_ty, .payload_ty = generic.args[0], .return_ty = return_ty, .op = op };
     }
 
     fn constGetCallInfo(self: *LlvmEmitter, call: anytype) ?ConstGetCallInfo {
@@ -2807,7 +2866,7 @@ const LlvmEmitter = struct {
                 if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
-                if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat")) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                if (isPayloadDomainGenericName(g.base.text) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 return null;
             },
             .array => |node| {
@@ -2837,7 +2896,7 @@ const LlvmEmitter = struct {
                 if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
-                if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat")) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                if (isPayloadDomainGenericName(g.base.text) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 return null;
             },
             .array => |node| self.comptimeAlignOf(node.child.*, depth + 1),
@@ -3030,6 +3089,13 @@ const DomainResidueCallInfo = struct {
     base: ast.Expr,
     domain_ty: ast.TypeExpr,
     payload_ty: ast.TypeExpr,
+};
+
+const DomainOpCallInfo = struct {
+    domain_ty: ast.TypeExpr,
+    payload_ty: ast.TypeExpr,
+    return_ty: ast.TypeExpr,
+    op: []const u8,
 };
 
 const ConversionCallInfo = struct {
@@ -3485,6 +3551,14 @@ fn isOpaqueAddressTypeName(name: []const u8) bool {
 fn isOpaqueAddressGenericName(name: []const u8) bool {
     return std.mem.eql(u8, name, "UserPtr") or
         std.mem.eql(u8, name, "PhysPtr");
+}
+
+fn isPayloadDomainGenericName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "wrap") or
+        std.mem.eql(u8, name, "sat") or
+        std.mem.eql(u8, name, "serial") or
+        std.mem.eql(u8, name, "counter") or
+        std.mem.eql(u8, name, "Duration");
 }
 
 fn trapHelperForCall(call: anytype) ?[]const u8 {

@@ -261,5 +261,7 @@ LLVM aggregate layout coverage includes dependency-ordered struct/array/slice
 combinations and target-typed integer coercions such as `usize` slice lengths
 returned as narrower integer types after MIR verification.
 LLVM domain coverage includes payload ABI lowering for `wrap<T>`/`sat<T>`,
-modular `wrap` arithmetic and shifts, unsigned saturating arithmetic,
-checked/clamping scalar conversions, residue extraction, and wrapping builtins.
+`serial<T>`/`counter<T>`/`Duration<T>` scalar storage, modular `wrap` arithmetic
+and shifts, unsigned saturating arithmetic, serial `before`/`after`/`distance`,
+counter `delta_mod`, checked/clamping scalar conversions, residue extraction,
+and wrapping builtins.

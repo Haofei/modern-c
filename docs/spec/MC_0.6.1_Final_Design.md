@@ -4011,10 +4011,11 @@ as `i64` and treats explicit representation-preserving casts to/from same-width
 integer storage as no-op IR value conversions.
 Floating-point scalar lowering covers `f32`/`f64` literals, globals, calls,
 locals, arithmetic, comparison, and unary negation. Domain scalar lowering covers
-`wrap<T>`/`sat<T>` payload representation, `wrap` modular add/sub/mul/bitwise/
-shift and unary negation, unsigned `sat` add/sub/mul, scalar conversion calls
-`from`/`trap_from`/`sat_from`/`wrap_from`/`from_mod`, `wrap.residue()`, and
-`wrapping.add`/`sub`/`mul`. Statement workflow covers
+`wrap<T>`/`sat<T>` payload representation, `serial<T>`/`counter<T>`/`Duration<T>`
+scalar storage, `wrap` modular add/sub/mul/bitwise/shift and unary negation,
+unsigned `sat` add/sub/mul, serial `before`/`after`/`distance`, counter
+`delta_mod`, scalar conversion calls `from`/`trap_from`/`sat_from`/`wrap_from`/
+`from_mod`, `wrap.residue()`, and `wrapping.add`/`sub`/`mul`. Statement workflow covers
 expression statements, void calls, `assert`, nested blocks, unsafe blocks, and
 transparent unsafe-contract blocks. The LLVM backend also lowers `trap(...)`,
 `unreachable`, `never` functions, and `never` coercion in return position for
