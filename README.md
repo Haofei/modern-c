@@ -68,7 +68,9 @@ multi-pattern literal arms and wildcard defaults. Core loop CFG covers `while`
 and `for` over arrays/slices with loop-local bindings plus `break`/`continue`.
 Scalar expression lowering covers integer casts, unsigned bitwise operations,
 bitwise not, and checked unsigned shifts with invalid-count and shifted-out-bit
-traps.
+traps. The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the
+covered textual IR subset to linkable object files through `llc`, and
+`zig build llvm-obj-test` validates representative scalar and aggregate objects.
 
 Prototype or incomplete:
 
@@ -99,14 +101,17 @@ Deferred:
 
 - LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
   `emit-llvm` support exists for a scalar/control-flow subset and validates
-  through `llvm-as`; object emission, debug-info lowering, richer iterable
-  forms, broader aggregate ABI/layout cases, and broader slice/pattern workflows
-  are still pending.
+  through `llvm-as`; the `mcc-llvm-cc.sh` driver compiles covered LLVM IR to
+  object files with `llc`. Debug-info lowering, richer iterable forms, broader
+  aggregate ABI/layout cases, and broader slice/pattern workflows are still
+  pending.
 
 ## Requirements
 
 - Zig `0.16.0`
 - `clang` for `zig build c-test`
+- `llvm-as` for `zig build llvm-test`
+- `llc` for `zig build llvm-obj-test`
 
 The generated C targets **Clang/GCC only**: the runtime helpers use compiler
 builtins (`__builtin_trap`, `__builtin_*_overflow`, `__atomic_*`) and a few
@@ -165,7 +170,9 @@ stdin-to-stdout float round-trip; run it with `zig build hosted-test`.
 expression spans, plus global initializer spans, with typed-AST and MIR labels.
 `emit-llvm` uses the same semantic/MIR verification gate and emits textual LLVM
 IR for the initial scalar/control-flow backend slice; `zig build llvm-test`
-checks that output with `llvm-as`.
+checks that output with `llvm-as`. `tools/toolchain/mcc-llvm-cc.sh` compiles an
+MC module through `emit-llvm` and `llc -filetype=obj`; `zig build llvm-obj-test`
+checks representative LLVM object output.
 
 ## Conformance Snapshot
 

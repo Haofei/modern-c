@@ -3989,10 +3989,13 @@ and `for` over arrays/slices with loop-local bindings plus `break`/`continue`.
 Scalar expression lowering covers integer casts, unsigned bitwise operations,
 bitwise not, and checked unsigned shifts with invalid-count and shifted-out-bit
 traps.
+The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
+textual IR subset to linkable object files through `llc`, with representative
+object-output coverage in `zig build llvm-obj-test`.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
-Full aggregate ABI, object emission, debug-info lowering, richer iterable forms,
-and broader slice/pattern workflows remain future work.
+Full aggregate ABI breadth, debug-info lowering, richer iterable forms, and
+broader slice/pattern workflows remain future work.
 
 LLVM lowering examples:
 

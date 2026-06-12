@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# mcc-llvm-cc: compile an MC module to a linkable object through LLVM IR.
+#
+# Usage: tools/toolchain/mcc-llvm-cc.sh <input.mc> [-o output.o] [llc args...]
+# Defaults the object name to the input stem + ".o". Additional arguments are
+# passed through to llc, so callers can provide target/relocation options.
+
+MCC="${MCC:-mcc}"
+LLC="${LLC:-llc}"
+
+if [ "$#" -lt 1 ]; then
+    echo "usage: mcc-llvm-cc.sh <input.mc> [-o output.o] [llc args...]" >&2
+    exit 2
+fi
+
+INPUT="$1"
+shift
+OUT="${INPUT%.*}.o"
+LLC_ARGS=()
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o)
+            [ "$#" -ge 2 ] || { echo "mcc-llvm-cc: -o requires an argument" >&2; exit 2; }
+            OUT="$2"
+            shift 2
+            ;;
+        *)
+            LLC_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+command -v "$LLC" >/dev/null 2>&1 || { echo "mcc-llvm-cc: llc not found" >&2; exit 1; }
+
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+LL="$TMP_DIR/module.ll"
+
+"$MCC" emit-llvm "$INPUT" > "$LL"
+"$LLC" -filetype=obj "$LL" -o "$OUT" "${LLC_ARGS[@]}"

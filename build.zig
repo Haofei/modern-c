@@ -51,6 +51,16 @@ pub fn build(b: *std.Build) void {
     const llvm_test_step = b.step("llvm-test", "Emit LLVM IR for the initial backend slice and validate it with llvm-as");
     llvm_test_step.dependOn(&llvm_test_cmd.step);
 
+    const llvm_obj_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/llvm-obj-test.sh",
+        "zig-out/bin/mcc",
+        "zig-out/llvm-obj-test",
+    });
+    llvm_obj_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_obj_test_step = b.step("llvm-obj-test", "Compile LLVM backend fixtures to object files with llc");
+    llvm_obj_test_step.dependOn(&llvm_obj_test_cmd.step);
+
     const sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-emit-sweep.py",
