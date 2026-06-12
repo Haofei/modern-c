@@ -12,7 +12,8 @@ than invisible optimizer assumptions. MC is not a memory-safe language.
 
 Implemented today:
 
-- Lexer, parser, semantic checker, fact/inspection output, and partial C output.
+- Lexer, parser, semantic checker, fact/inspection output, and checked C output
+  for the implemented conformance slice.
 - Typed MIR basic-block CFG lowering with explicit language-trap edges,
   contract-region markers, and a MIR verifier used by `emit-c`.
 - A spec-driven fixture suite under `tests/spec`.
@@ -45,8 +46,9 @@ Implemented today:
   transitive version checks, and `build` through the `mcc-cc` driver.
 
 The type-checking surface covered by the core language fixtures is implemented,
-and most operations covered by the current spec fixtures lower to clang-checked
-C. The non-LLVM finish line is the C backend plus verifier/tooling contract in
+and the valid declarations in the current spec fixture suite lower to
+clang-checked C without `unsupported` emission placeholders. The non-LLVM finish
+line is the C backend plus verifier/tooling contract in
 `docs/spec/MC_0.6.1_Final_Design.md`; LLVM remains a deferred backend, not a
 requirement for the current implementation profile.
 

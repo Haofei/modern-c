@@ -3,9 +3,9 @@
 
 For every tests/spec/*.mc fixture, drop the functions that carry an
 EXPECT_ERROR comment (the intentional compile-error cases), then `emit-c` the
-remaining valid declarations and compile-check the output with clang. This is a
-regression gate for "lower_c.zig emits every sema-accepted construct as
-compilable C".
+remaining valid declarations and compile-check the output with clang. The sweep
+also rejects `/* unsupported ... */` placeholders, so a sema-accepted construct
+cannot satisfy the gate by emitting placeholder C that happens to compile.
 
 Usage:
     tools/toolchain/spec-emit-sweep.py [<mcc-binary> [<spec-dir>]]
@@ -72,6 +72,10 @@ def main():
         if emit.returncode != 0:
             first = next((l for l in emit.stderr.splitlines() if "error:" in l), "?")
             bucket.append((name, "EMIT", first.strip()))
+            continue
+        unsupported = next((l for l in emit.stdout.splitlines() if "/* unsupported" in l), None)
+        if unsupported is not None:
+            bucket.append((name, "UNSUPPORTED", unsupported.strip()))
             continue
         clang = subprocess.run(CLANG, input=emit.stdout, capture_output=True, text=True)
         if clang.returncode != 0:
