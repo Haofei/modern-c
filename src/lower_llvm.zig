@@ -22,10 +22,23 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
         .need_sadd = std.StringHashMap(void).init(allocator),
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
+        .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
     };
     defer ctx.deinit();
+    for (module.decls) |decl| {
+        switch (decl.kind) {
+            .global_decl => |global| try ctx.collectGlobal(global),
+            else => {},
+        }
+    }
+    for (module.decls) |decl| {
+        switch (decl.kind) {
+            .global_decl => |global| try ctx.emitGlobal(global),
+            else => {},
+        }
+    }
     for (module.decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| if (fn_decl.body) |body| try ctx.emitFunction(fn_decl, body),
@@ -55,6 +68,7 @@ const LlvmEmitter = struct {
     need_sadd: std.StringHashMap(void) = undefined,
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
+    global_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
 
@@ -65,9 +79,49 @@ const LlvmEmitter = struct {
         self.need_sadd.deinit();
         self.need_ssub.deinit();
         self.need_smul.deinit();
+        self.global_types.deinit();
         self.local_types.deinit();
         self.local_slots.deinit();
         self.scratch.deinit();
+    }
+
+    fn collectGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
+        const ty = global.ty orelse return error.UnsupportedLlvmEmission;
+        _ = try self.llvmType(ty);
+        try self.global_types.put(global.name.text, ty);
+    }
+
+    fn emitGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
+        const ty = global.ty orelse return error.UnsupportedLlvmEmission;
+        const llvm_ty = try self.llvmType(ty);
+        const linkage: []const u8 = if (global.is_const) "constant" else "global";
+        const init = if (global.init) |expr| try self.emitGlobalInitializer(expr, ty) else try self.zeroInitializer(ty);
+        try self.out.print(self.allocator, "@{s} = {s} {s} {s}\n", .{ global.name.text, linkage, llvm_ty, init });
+    }
+
+    fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
+        return switch (expr.kind) {
+            .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
+            .bool_literal => |value| if (value) "1" else "0",
+            .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
+            .address_of => |inner| switch (inner.kind) {
+                .ident => |ident| if (self.global_types.contains(ident.text))
+                    try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
+                else
+                    error.UnsupportedLlvmEmission,
+                else => error.UnsupportedLlvmEmission,
+            },
+            else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn zeroInitializer(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
+        _ = self;
+        return switch (ty.kind) {
+            .name => |name| if (std.mem.eql(u8, name.text, "bool")) "0" else if (integerBits(ty) != null) "0" else error.UnsupportedLlvmEmission,
+            .pointer, .raw_many_pointer => "null",
+            else => error.UnsupportedLlvmEmission,
+        };
     }
 
     fn emitFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, body: ast.Block) !void {
@@ -120,6 +174,11 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(slot.ty), slot.ptr });
             return result;
         }
+        if (self.global_types.get(ident.text)) |ty| {
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = load {s}, ptr @{s}\n", .{ result, try self.llvmType(ty), ident.text });
+            return result;
+        }
         return try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text});
     }
 
@@ -167,11 +226,19 @@ const LlvmEmitter = struct {
 
     fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !void {
         if (assignmentIdent(target)) |ident| {
-            const slot = self.local_slots.get(ident.text) orelse return error.UnsupportedLlvmEmission;
-            const llvm_ty = try self.llvmType(slot.ty);
-            const value = try self.emitExpr(value_expr, slot.ty);
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, slot.ptr });
-            return;
+            if (self.local_slots.get(ident.text)) |slot| {
+                const llvm_ty = try self.llvmType(slot.ty);
+                const value = try self.emitExpr(value_expr, slot.ty);
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, slot.ptr });
+                return;
+            }
+            if (self.global_types.get(ident.text)) |ty| {
+                const llvm_ty = try self.llvmType(ty);
+                const value = try self.emitExpr(value_expr, ty);
+                try self.out.print(self.allocator, "  store {s} {s}, ptr @{s}\n", .{ llvm_ty, value, ident.text });
+                return;
+            }
+            return error.UnsupportedLlvmEmission;
         }
         if (derefTarget(target)) |ptr_expr| {
             const pointee_ty = self.derefPointeeType(ptr_expr) orelse return error.UnsupportedLlvmEmission;
@@ -241,8 +308,9 @@ const LlvmEmitter = struct {
     fn emitAddressOf(self: *LlvmEmitter, target: ast.Expr) ![]const u8 {
         switch (target.kind) {
             .ident => |ident| {
-                const slot = self.local_slots.get(ident.text) orelse return error.UnsupportedLlvmEmission;
-                return slot.ptr;
+                if (self.local_slots.get(ident.text)) |slot| return slot.ptr;
+                if (self.global_types.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
+                return error.UnsupportedLlvmEmission;
             },
             .grouped => |inner| return self.emitAddressOf(inner.*),
             .deref => |inner| return self.emitExpr(inner.*, self.exprType(inner.*) orelse return error.UnsupportedLlvmEmission),
@@ -434,7 +502,7 @@ const LlvmEmitter = struct {
 
     fn exprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
-            .ident => |ident| self.local_types.get(ident.text),
+            .ident => |ident| self.local_types.get(ident.text) orelse self.global_types.get(ident.text),
             .bool_literal, .unary => simpleType(expr.span, "bool"),
             .int_literal => null,
             .grouped => |inner| self.exprType(inner.*),

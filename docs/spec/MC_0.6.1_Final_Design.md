@@ -3973,10 +3973,11 @@ slice. It runs after the same semantic and MIR verification gates as C emission,
 and currently covers scalar functions, direct calls, checked integer arithmetic,
 checked division/remainder, bool switch/if control flow with simple joins,
 simple scalar locals, direct scalar assignment, simple `while` loops, and basic
-pointer load/store operations. It intentionally emits no
+pointer load/store operations. Scalar/pointer globals are supported for literal
+and address-of-global initializers. It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
-Broader CFG/phi lowering, aggregates, slices/arrays, ABI, object emission, and
-debug-info lowering remain future work.
+Broader CFG/phi lowering, aggregates, aggregate globals, slices/arrays, ABI,
+object emission, and debug-info lowering remain future work.
 
 LLVM lowering examples:
 
