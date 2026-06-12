@@ -52,10 +52,11 @@ line is the C backend plus verifier/tooling contract in
 `docs/spec/MC_0.6.1_Final_Design.md`. LLVM now has a MIR-backed textual IR path
 that runs after the same semantic and MIR verification gates as C emission. The
 valid declarations in the current spec fixture suite emit assemblable LLVM IR
-through `zig build llvm-sweep`, and `zig build llvm-c-sweep` verifies all 109
-current `tests/c_emit` fixtures emit assemblable LLVM IR; `zig build
-llvm-c-obj-sweep` compiles the same fixture set to LLVM object files with
-`llc`. Scalar/pointer globals are covered for
+through `zig build llvm-sweep`, and that gate also rejects hidden optimizer
+assumption tokens (`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`) across
+the swept IR. `zig build llvm-c-sweep` applies the same IR checks to all 109
+current `tests/c_emit` fixtures; `zig build llvm-c-obj-sweep` compiles the same
+fixture set to LLVM object files with `llc`. Scalar/pointer globals are covered for
 literal and address-of-global initializers. Local fixed arrays of scalar
 elements support literals, checked indexing, element assignment, and
 element-address taking. Plain local structs with scalar fields support literals,
@@ -172,11 +173,13 @@ Deferred:
 
 - LLVM backend production hardening (see Appendix M of
   `docs/spec/MC_0.6.1_Final_Design.md`). The current spec sweep is clear for
-  valid declarations, all current C-emission fixtures emit assemblable LLVM IR,
-  and all current C-emission fixtures compile to LLVM object files with `llc`.
-  The LLVM toolchain has link-and-run smoke coverage, including a linear `move`
-  handle ABI roundtrip. Remaining work is broader runtime/toolchain coverage,
-  optimizer proof work, and fuller native debug mapping.
+  valid declarations and rejects hidden optimizer assumption tokens in swept IR;
+  all current C-emission fixtures emit assemblable LLVM IR under the same
+  assumption-token gate, and all current C-emission fixtures compile to LLVM
+  object files with `llc`. The LLVM toolchain has link-and-run smoke coverage,
+  including a linear `move` handle ABI roundtrip. Remaining work is broader
+  runtime/toolchain coverage, deeper optimizer proof work, and fuller native
+  debug mapping.
 
 ## Requirements
 
@@ -249,7 +252,9 @@ stdin-to-stdout float round-trip; run it with `zig build hosted-test`.
 expression spans, plus global initializer spans, with typed-AST and MIR labels.
 `emit-llvm` uses the same semantic/MIR verification gate and emits textual LLVM
 IR for the covered backend surface. `zig build llvm-test`, `zig build
-llvm-sweep`, and `zig build llvm-c-sweep` check LLVM IR with `llvm-as`.
+llvm-sweep`, and `zig build llvm-c-sweep` check LLVM IR with `llvm-as`; the two
+sweep gates also reject hidden optimizer assumption tokens
+(`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`).
 `tools/toolchain/mcc-llvm-cc.sh` compiles an MC module through `emit-llvm` and
 `llc -filetype=obj`; `zig build llvm-obj-test` checks representative LLVM object
 output, and `zig build llvm-c-obj-sweep` compiles every current `tests/c_emit`

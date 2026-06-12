@@ -4,7 +4,8 @@
 For every tests/spec/*.mc fixture, drop the functions/declarations that carry
 an EXPECT_ERROR comment, normalize top-level `fn foo(...);` prototypes to
 `extern fn foo(...);`, then `emit-llvm` the remaining valid declarations and
-assemble the textual IR with llvm-as.
+assemble the textual IR with llvm-as, and reject hidden optimizer-assumption
+tokens that the LLVM appendix forbids outside proven verifier conditions.
 
 The allowlist is intentionally empty now that the current spec corpus lowers to
 assemblable LLVM IR. Any valid-spec LLVM failure fails the gate.
@@ -22,6 +23,8 @@ import sys
 import tempfile
 
 OUT_OF_SCOPE = {}
+FORBIDDEN_ASSUMPTIONS = ("nuw", "nsw", "nonnull", "noalias", "noundef", "poison")
+FORBIDDEN_RE = re.compile(r"(^|[ ,(])(" + "|".join(FORBIDDEN_ASSUMPTIONS) + r")([ ,)]|$)")
 
 
 def split_top_level(src):
@@ -60,6 +63,14 @@ def first_error(stderr):
     return next((l for l in stderr.splitlines() if "error:" in l), stderr.splitlines()[0] if stderr else "?").strip()
 
 
+def forbidden_assumption(ir):
+    for line_no, line in enumerate(ir.splitlines(), 1):
+        match = FORBIDDEN_RE.search(line)
+        if match:
+            return match.group(2), line_no, line.strip()
+    return None
+
+
 def main():
     mcc = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/mcc"
     spec_dir = sys.argv[2] if len(sys.argv) > 2 else "tests/spec"
@@ -79,6 +90,11 @@ def main():
             bucket = oos_failures if name in OUT_OF_SCOPE else failures
             if emit.returncode != 0:
                 bucket.append((name, "EMIT", first_error(emit.stderr)))
+                continue
+            forbidden = forbidden_assumption(emit.stdout)
+            if forbidden:
+                token, line_no, line = forbidden
+                bucket.append((name, "ASSUMPTION", f"forbidden LLVM assumption token '{token}' at line {line_no}: {line}"))
                 continue
             asm = subprocess.run(["llvm-as", "-o", os.devnull], input=emit.stdout, capture_output=True, text=True)
             if asm.returncode != 0:
