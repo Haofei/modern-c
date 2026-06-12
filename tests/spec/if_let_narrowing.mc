@@ -172,6 +172,22 @@ fn reject_switch_multi_pattern_binding(result: Result<u32, Error>) -> u32 {
     }
 }
 
+fn reject_switch_single_binding_mixed_with_result_tag(result: Result<u32, Error>) -> u32 {
+    switch result {
+        // EXPECT_ERROR: E_SWITCH_MULTI_BINDING_ARM
+        ok(v), .err => { return 1; },
+    }
+    return 0;
+}
+
+fn reject_switch_single_binding_mixed_with_nullable_wildcard(maybe: ?*mut u8) -> u32 {
+    switch maybe {
+        // EXPECT_ERROR: E_SWITCH_MULTI_BINDING_ARM
+        p, _ => { return 1; },
+    }
+    return 0;
+}
+
 fn reject_switch_duplicate_result_ok(result: Result<u32, Error>) -> u32 {
     switch result {
         ok(v) => { return v; },

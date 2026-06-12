@@ -2,7 +2,7 @@
 // SPEC: milestone=tagged-union-declarations
 // SPEC: phase=parse,sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_DUPLICATE_UNION_CASE,E_REFLECTION_UNKNOWN_TYPE,E_UNKNOWN_UNION_CASE,E_UNION_CASE_HAS_NO_PAYLOAD,E_DUPLICATE_SWITCH_CASE,E_RETURN_TYPE_MISMATCH,E_RETURN_MISSING,E_CALL_ARG_COUNT,E_NO_IMPLICIT_CONVERSION,E_UNKNOWN_FUNCTION,E_COMPTIME_TRAP
+// SPEC: check=E_DUPLICATE_UNION_CASE,E_REFLECTION_UNKNOWN_TYPE,E_UNKNOWN_UNION_CASE,E_UNION_CASE_HAS_NO_PAYLOAD,E_DUPLICATE_SWITCH_CASE,E_SWITCH_MULTI_BINDING_ARM,E_RETURN_TYPE_MISMATCH,E_RETURN_MISSING,E_CALL_ARG_COUNT,E_NO_IMPLICIT_CONVERSION,E_UNKNOWN_FUNCTION,E_COMPTIME_TRAP
 
 union Token {
     int: i64,
@@ -101,6 +101,14 @@ fn reject_duplicate_union_switch_case(token: Token) -> u32 {
         .ident => { return 3; },
         .eof => { return 0; },
     }
+}
+
+fn reject_union_switch_single_binding_mixed_with_tag(token: Token) -> u32 {
+    switch token {
+        // EXPECT_ERROR: E_SWITCH_MULTI_BINDING_ARM
+        int(v), .eof => { return 1; },
+    }
+    return 0;
 }
 
 fn reject_union_switch_case_after_wildcard(token: Token) -> u32 {

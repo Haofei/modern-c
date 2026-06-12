@@ -3625,7 +3625,7 @@ pub const Checker = struct {
                 .wildcard => {},
             }
         }
-        if (binding_pattern_count > 1) {
+        if (patterns.len > 1 and binding_pattern_count > 0) {
             self.errorCode(patterns[0].span, "E_SWITCH_MULTI_BINDING_ARM", "switch arms with multiple patterns cannot introduce bindings");
         }
     }
