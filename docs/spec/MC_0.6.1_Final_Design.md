@@ -4098,7 +4098,8 @@ LLVM debug metadata includes `source_filename`, compile-unit/file records,
 function `DISubprogram` records, and statement-scoped line/column locations on
 local initialization stores, direct assignment stores, aggregate literal/member
 field stores, volatile raw/MMIO stores, atomic stores, precise asm output
-stores, returns, calls, checked-arithmetic trap paths, inline asm, related runtime helper calls,
+stores, volatile raw/MMIO loads, atomic loads and read-modify-write operations,
+fences, returns, calls, checked-arithmetic trap paths, inline asm, related runtime helper calls,
 loop/break/continue branch terminators, switch/if-let dispatches, and trap-path
 plus `?` propagation, short-circuit boolean, and if-let join branch terminators
 for the covered backend subset, plus branch terminators in compiler-expanded

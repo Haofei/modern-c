@@ -141,6 +141,7 @@ LLVM debug metadata now includes `source_filename`, a compile unit/file record,
 function `DISubprogram` records, and line/column locations on local
 initialization stores, direct assignment stores, aggregate literal/member field
 stores, volatile raw/MMIO stores, atomic stores, precise asm output stores,
+volatile raw/MMIO loads, atomic loads and read-modify-write operations, fences,
 returns, call instructions, loop/break/continue branch terminators,
 switch/if-let dispatches, and trap-path plus `?` propagation, short-circuit
 boolean, and if-let join branch terminators for the covered backend subset, plus
@@ -178,7 +179,8 @@ Prototype or incomplete:
   `emit-llvm` now emits initial LLVM debug metadata for source files,
   functions, calls, returns, stores including aggregate literal/member field,
   volatile raw/MMIO, and atomic stores, loop/break/continue branch terminators,
-  precise asm output stores, switch/if-let dispatches, and trap-path plus `?`
+  precise asm output stores, volatile raw/MMIO loads, atomic loads/RMWs, fences,
+  switch/if-let dispatches, and trap-path plus `?`
   propagation and short-circuit boolean and if-let join branch terminators, plus
   compiler-expanded `mem.bytes_equal` and `reduce.*` helper loop branch
   terminators. DWARF-quality native debug mapping with richer
@@ -352,7 +354,7 @@ LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function
 subprograms, precise-asm output stores, aggregate literal/member field stores,
-volatile raw/MMIO stores, atomic stores, and
+volatile raw/MMIO stores and loads, atomic stores/loads/RMWs, fences, and
 call/return/loop-branch/switch/if-let/trap-path/`?`
 propagation/short-circuit/if-let-join/helper-loop branch line locations for the
 covered subset.

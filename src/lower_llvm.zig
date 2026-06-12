@@ -1248,9 +1248,9 @@ const LlvmEmitter = struct {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             _ = try self.emitExpr(call.args[0], info.dma_ty);
             if (std.mem.eql(u8, info.op, "clean")) {
-                try self.out.appendSlice(self.allocator, "  fence release\n");
+                try self.out.print(self.allocator, "  fence release{s}\n", .{try self.debugCallSuffix()});
             } else if (std.mem.eql(u8, info.op, "invalidate")) {
-                try self.out.appendSlice(self.allocator, "  fence acquire\n");
+                try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()});
             } else {
                 return error.UnsupportedLlvmEmission;
             }
@@ -2260,7 +2260,7 @@ const LlvmEmitter = struct {
             const ordering = orderingArg(call.args[0]) orelse return error.UnsupportedLlvmEmission;
             const ptr = try self.emitMmioRegisterAddress(info);
             const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}\n", .{ result, try self.llvmType(info.storage_ty), ptr });
+            try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, try self.llvmType(info.storage_ty), ptr, try self.debugCallSuffix() });
             try self.emitMmioFence(ordering, .after_load);
             if (std.mem.eql(u8, try self.llvmType(info.storage_ty), try self.llvmType(info.value_ty))) return result;
             return try self.castValue(result, info.storage_ty, info.value_ty);
@@ -2282,7 +2282,7 @@ const LlvmEmitter = struct {
             const result = try self.nextTemp();
             const llvm_ty = try self.llvmType(value_ty);
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
-            try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}\n", .{ result, llvm_ty, ptr });
+            try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, llvm_ty, ptr, try self.debugCallSuffix() });
             return result;
         }
         if (isRawPtrCall(call.callee.*)) {
@@ -2336,7 +2336,7 @@ const LlvmEmitter = struct {
                 const llvm_order = atomicLlvmOrdering(ordering, .load) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.atomicBaseAddress(info.base);
                 const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = load atomic {s}, ptr {s} {s}, align {d}\n", .{ result, try self.atomicStorageLlvmType(info.payload_ty), ptr, llvm_order, self.llvmAlignOf(info.payload_ty) });
+                try self.out.print(self.allocator, "  {s} = load atomic {s}, ptr {s} {s}, align {d}{s}\n", .{ result, try self.atomicStorageLlvmType(info.payload_ty), ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
                 if (typeNameEql(info.payload_ty, "bool")) {
                     const bool_result = try self.nextTemp();
                     try self.out.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ bool_result, result });
@@ -2353,7 +2353,7 @@ const LlvmEmitter = struct {
                 const delta = try self.emitExpr(call.args[0], info.payload_ty);
                 const result = try self.nextTemp();
                 const op: []const u8 = if (std.mem.eql(u8, info.op, "fetch_sub")) "sub" else "add";
-                try self.out.print(self.allocator, "  {s} = atomicrmw {s} ptr {s}, {s} {s} {s}\n", .{ result, op, ptr, try self.llvmType(info.payload_ty), delta, llvm_order });
+                try self.out.print(self.allocator, "  {s} = atomicrmw {s} ptr {s}, {s} {s} {s}{s}\n", .{ result, op, ptr, try self.llvmType(info.payload_ty), delta, llvm_order, try self.debugCallSuffix() });
                 return result;
             }
         }
@@ -3545,7 +3545,7 @@ const LlvmEmitter = struct {
             else
                 null,
         };
-        if (fence) |kind| try self.out.print(self.allocator, "  fence {s}\n", .{kind});
+        if (fence) |kind| try self.out.print(self.allocator, "  fence {s}{s}\n", .{ kind, try self.debugCallSuffix() });
     }
 
     fn mmioPointerType(self: *LlvmEmitter, child_ty: ast.TypeExpr, span: ast.Span) !ast.TypeExpr {
