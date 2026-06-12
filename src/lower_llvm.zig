@@ -1465,6 +1465,15 @@ const LlvmEmitter = struct {
     }
 
     fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) !?[]const u8 {
+        if (self.constGetCallInfo(call)) |info| {
+            if (call.args.len != 0) return error.UnsupportedLlvmEmission;
+            const base_ptr = try self.arrayBasePointer(info.base);
+            const ptr = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(info.array_ty), base_ptr, info.index });
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(info.element_ty), ptr });
+            return result;
+        }
         if (bitcastTargetType(call)) |target_ty| {
             if (call.args.len != 1) return error.UnsupportedLlvmEmission;
             const source_ty = self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission;
@@ -2389,6 +2398,7 @@ const LlvmEmitter = struct {
     }
 
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+        if (self.constGetCallInfo(call)) |info| return info.element_ty;
         if (bitcastTargetType(call)) |ty| return ty;
         if (builtinCallReturnType(call)) |ty| return ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
@@ -2465,6 +2475,38 @@ const LlvmEmitter = struct {
         const target_ty = self.resolveAliasType(simpleType(ident.span, ident.text));
         if (self.integerBitsOf(target_ty) == null) return null;
         return .{ .target_ty = target_ty, .op = member.name.text };
+    }
+
+    fn constGetCallInfo(self: *LlvmEmitter, call: anytype) ?ConstGetCallInfo {
+        if (call.type_args.len != 1) return null;
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "const_get")) return null;
+        const index = constGetIndexArg(call.type_args[0]) orelse return null;
+        const base_ty = self.exprType(member.base.*) orelse return null;
+        const array_ty = self.resolveAliasType(base_ty);
+        const array = switch (array_ty.kind) {
+            .array => |node| node,
+            .qualified => |node| switch (self.resolveAliasType(node.child.*).kind) {
+                .array => |array_node| array_node,
+                else => return null,
+            },
+            else => return null,
+        };
+        const len = self.arrayLenValue(array.len) orelse return null;
+        if (index >= len) return null;
+        return .{
+            .base = member.base.*,
+            .array_ty = array_ty,
+            .element_ty = array.child.*,
+            .index = index,
+        };
     }
 
     fn atomicCallInfo(self: *LlvmEmitter, call: anytype) ?AtomicCallInfo {
@@ -2783,6 +2825,13 @@ const ConversionCallInfo = struct {
     op: []const u8,
 };
 
+const ConstGetCallInfo = struct {
+    base: ast.Expr,
+    array_ty: ast.TypeExpr,
+    element_ty: ast.TypeExpr,
+    index: u64,
+};
+
 const IntRange = struct {
     min: i128,
     max: i128,
@@ -2991,6 +3040,14 @@ fn bitcastTargetType(call: anytype) ?ast.TypeExpr {
     };
     if (!std.mem.eql(u8, callee.text, "bitcast") or call.type_args.len != 1) return null;
     return call.type_args[0];
+}
+
+fn constGetIndexArg(ty: ast.TypeExpr) ?u64 {
+    return switch (ty.kind) {
+        .name => |name| parseU64Literal(name.text),
+        .qualified => |node| constGetIndexArg(node.child.*),
+        else => null,
+    };
 }
 
 fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {

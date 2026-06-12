@@ -64,7 +64,7 @@ plain structs. Nested fixed-array/struct element and field access works for the
 covered aggregate subset, including materialized aggregate rvalues from direct
 calls when indexing, field access, slicing, or array iteration needs an address.
 Core slice values lower as `{ ptr, len }` values with checked
-indexing, `.len`, direct returns/params, and range slicing from arrays or slices.
+indexing, const fixed-array access, `.len`, direct returns/params, and range slicing from arrays or slices.
 Scalar `switch` lowering covers bool and integer subjects, including
 multi-pattern literal arms and wildcard defaults. Core loop CFG covers `while`
 and `for` over arrays/slices, including array-valued call results, with
