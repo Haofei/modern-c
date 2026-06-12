@@ -2673,13 +2673,13 @@ const LlvmEmitter = struct {
         const equal_label = try self.nextLabel("bytes_equal_true");
         const done_label = try self.nextLabel("bytes_equal_done");
         try self.out.print(self.allocator, "  {s} = icmp eq i64 {s}, {s}\n", .{ len_match, left_len, right_len });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ len_match, cond_label, done_label, cond_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ len_match, cond_label, done_label, try self.debugCallSuffix(), cond_label });
 
         const index = try self.nextTemp();
         const in_range = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ index, index_ptr });
         try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n", .{ in_range, index, left_len });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ in_range, body_label, equal_label, body_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ in_range, body_label, equal_label, try self.debugCallSuffix(), body_label });
 
         const left_elem_ptr = try self.nextTemp();
         const right_elem_ptr = try self.nextTemp();
@@ -2691,14 +2691,14 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = load i8, ptr {s}\n", .{ left_byte, left_elem_ptr });
         try self.out.print(self.allocator, "  {s} = load i8, ptr {s}\n", .{ right_byte, right_elem_ptr });
         try self.out.print(self.allocator, "  {s} = icmp eq i8 {s}, {s}\n", .{ same, left_byte, right_byte });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ same, step_label, done_label, step_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ same, step_label, done_label, try self.debugCallSuffix(), step_label });
 
         const next_index = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = add i64 {s}, 1\n", .{ next_index, index });
         try self.out.print(self.allocator, "  store i64 {s}, ptr {s}\n", .{ next_index, index_ptr });
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, equal_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ cond_label, try self.debugCallSuffix(), equal_label });
         try self.out.print(self.allocator, "  store i1 1, ptr {s}\n", .{result_ptr});
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ done_label, done_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ done_label, try self.debugCallSuffix(), done_label });
 
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load i1, ptr {s}\n", .{ result, result_ptr });
@@ -3107,12 +3107,12 @@ const LlvmEmitter = struct {
         const cond_label = try self.nextLabel("reduce_cond");
         const body_label = try self.nextLabel("reduce_body");
         const done_label = try self.nextLabel("reduce_done");
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ cond_label, try self.debugCallSuffix(), cond_label });
         const index = try self.nextTemp();
         const in_range = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ index, index_ptr });
         try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n", .{ in_range, index, len });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ in_range, body_label, done_label, body_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ in_range, body_label, done_label, try self.debugCallSuffix(), body_label });
 
         const element_ptr = try self.nextTemp();
         const element = try self.nextTemp();
@@ -3133,7 +3133,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  store i128 {s}, ptr {s}\n", .{ next_acc, acc_ptr });
         try self.out.print(self.allocator, "  {s} = add i64 {s}, 1\n", .{ next_index, index });
         try self.out.print(self.allocator, "  store i64 {s}, ptr {s}\n", .{ next_index, index_ptr });
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, done_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ cond_label, try self.debugCallSuffix(), done_label });
 
         const final_acc = try self.nextTemp();
         const below = try self.nextTemp();
@@ -3175,12 +3175,12 @@ const LlvmEmitter = struct {
         const cond_label = try self.nextLabel("reduce_cond");
         const body_label = try self.nextLabel("reduce_body");
         const done_label = try self.nextLabel("reduce_done");
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ cond_label, try self.debugCallSuffix(), cond_label });
         const index = try self.nextTemp();
         const in_range = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ index, index_ptr });
         try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n", .{ in_range, index, len });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ in_range, body_label, done_label, body_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ in_range, body_label, done_label, try self.debugCallSuffix(), body_label });
 
         const element_ptr = try self.nextTemp();
         const element = try self.nextTemp();
@@ -3195,7 +3195,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ element_llvm, next_acc, acc_ptr });
         try self.out.print(self.allocator, "  {s} = add i64 {s}, 1\n", .{ next_index, index });
         try self.out.print(self.allocator, "  store i64 {s}, ptr {s}\n", .{ next_index, index_ptr });
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, done_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ cond_label, try self.debugCallSuffix(), done_label });
 
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, element_llvm, acc_ptr });

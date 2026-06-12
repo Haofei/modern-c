@@ -4100,7 +4100,8 @@ local initialization stores, direct assignment stores, returns, calls,
 checked-arithmetic trap paths, inline asm, related runtime helper calls,
 loop/break/continue branch terminators, switch/if-let dispatches, and trap-path
 plus `?` propagation and short-circuit boolean branch terminators for the
-covered backend subset.
+covered backend subset, plus branch terminators in compiler-expanded
+`mem.bytes_equal` and `reduce.*` helper loops.
 Valid `#[no_lang_trap]` functions lower when the shared verifier proves they
 contain no language-trap edge; naked/boot-style opaque asm functions returning
 `never` lower fallthrough as LLVM `unreachable`.
