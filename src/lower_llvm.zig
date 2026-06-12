@@ -36,6 +36,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
         .enum_types = std.StringHashMap(ast.EnumDecl).init(allocator),
         .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
+        .overlay_unions = std.StringHashMap(OverlayUnionInfo).init(allocator),
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
@@ -58,6 +59,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
     for (module.decls) |decl| {
         switch (decl.kind) {
             .packed_bits_decl => |packed_bits| try ctx.collectPackedBits(packed_bits),
+            .overlay_union_decl => |overlay_union| try ctx.collectOverlayUnion(overlay_union),
             else => {},
         }
     }
@@ -140,6 +142,7 @@ const LlvmEmitter = struct {
     type_aliases: std.StringHashMap(ast.TypeExpr) = undefined,
     enum_types: std.StringHashMap(ast.EnumDecl) = undefined,
     packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
+    overlay_unions: std.StringHashMap(OverlayUnionInfo) = undefined,
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
@@ -168,6 +171,7 @@ const LlvmEmitter = struct {
         self.type_aliases.deinit();
         self.enum_types.deinit();
         self.packed_bits.deinit();
+        self.overlay_unions.deinit();
         self.struct_types.deinit();
         self.fn_sigs.deinit();
         self.global_types.deinit();
@@ -226,6 +230,21 @@ const LlvmEmitter = struct {
         try self.packed_bits.put(packed_bits.name.text, .{
             .repr = packed_bits.repr,
             .fields = packed_bits.fields,
+        });
+    }
+
+    fn collectOverlayUnion(self: *LlvmEmitter, overlay_union: ast.OverlayUnionDecl) !void {
+        var size: u64 = 1;
+        var alignment: u64 = 1;
+        for (overlay_union.fields) |field| {
+            const layout = self.overlayFieldLayout(field.ty, 0) orelse return error.UnsupportedLlvmEmission;
+            size = @max(size, layout.size);
+            alignment = @max(alignment, layout.alignment);
+        }
+        try self.overlay_unions.put(overlay_union.name.text, .{
+            .fields = overlay_union.fields,
+            .size = size,
+            .alignment = alignment,
         });
     }
 
@@ -452,6 +471,8 @@ const LlvmEmitter = struct {
                 "0.0"
             else if (self.integerBitsOf(resolved_ty) != null or self.enumDeclForType(resolved_ty) != null)
                 "0"
+            else if (self.overlayInfoForType(resolved_ty) != null)
+                "zeroinitializer"
             else if (self.structDeclForType(resolved_ty) != null)
                 "zeroinitializer"
             else if (libraryScalarLlvmType(name.text) != null)
@@ -542,7 +563,7 @@ const LlvmEmitter = struct {
             .call => |call| try self.emitCall(call, expected_ty),
             .array_literal => |items| try self.emitArrayLiteralValue(expected_ty, items),
             .struct_literal => |fields| if (self.packedBitsInfoForType(expected_ty)) |info|
-                try self.packedBitsLiteralValue(info, fields)
+                try self.emitPackedBitsLiteralValue(info, fields)
             else
                 try self.emitStructLiteralValue(expected_ty, fields),
             .binary => |node| try self.emitBinary(node, expected_ty),
@@ -940,6 +961,15 @@ const LlvmEmitter = struct {
     fn emitIndexAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {
         return switch (target.kind) {
             .index => |node| blk: {
+                if (overlayMemberFromIndexBase(node.base.*)) |member| {
+                    if (self.overlayField(member.base.*, member.name.text)) |field| {
+                        const element_ty = overlayByteArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
+                        const ptr = try self.emitIndexAddress(node);
+                        const value = try self.emitExpr(value_expr, element_ty);
+                        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(element_ty), value, ptr });
+                        break :blk true;
+                    }
+                }
                 const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitIndexAddress(node);
                 const value = try self.emitExpr(value_expr, element_ty);
@@ -1007,6 +1037,30 @@ const LlvmEmitter = struct {
     fn emitMemberAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {
         return switch (target.kind) {
             .member => |node| blk: {
+                const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+                if (self.packedBitsInfoForType(base_ty)) |info| {
+                    const bit_index = self.packedBitsFieldIndex(info, node.name.text) orelse return error.UnsupportedLlvmEmission;
+                    const ptr = try self.packedBitsBaseAddress(node.base.*);
+                    const llvm_ty = try self.llvmType(info.repr);
+                    const current = try self.nextTemp();
+                    const set_value = try self.nextTemp();
+                    const clear_value = try self.nextTemp();
+                    const result = try self.nextTemp();
+                    const flag = try self.emitExpr(value_expr, simpleType(value_expr.span, "bool"));
+                    try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ current, llvm_ty, ptr });
+                    try self.out.print(self.allocator, "  {s} = or {s} {s}, {d}\n", .{ set_value, llvm_ty, current, packedBitsMask(bit_index) });
+                    try self.out.print(self.allocator, "  {s} = and {s} {s}, {d}\n", .{ clear_value, llvm_ty, current, packedBitsClearMask(info, bit_index) orelse return error.UnsupportedLlvmEmission });
+                    try self.out.print(self.allocator, "  {s} = select i1 {s}, {s} {s}, {s} {s}\n", .{ result, flag, llvm_ty, set_value, llvm_ty, clear_value });
+                    try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, result, ptr });
+                    break :blk true;
+                }
+                if (self.overlayField(node.base.*, node.name.text)) |field| {
+                    if (overlayByteArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
+                    const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
+                    const value = try self.emitExpr(value_expr, field.ty);
+                    try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(field.ty), value, ptr });
+                    break :blk true;
+                }
                 const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitMemberAddress(node);
                 const value = try self.emitExpr(value_expr, field.ty);
@@ -1464,6 +1518,13 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = icmp ne {s} {s}, 0\n", .{ result, try self.llvmType(info.repr), masked });
             return result;
         }
+        if (self.overlayField(node.base.*, node.name.text)) |field| {
+            if (overlayByteArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
+            const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(field.ty), ptr });
+            return result;
+        }
         const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
         const ptr = try self.emitMemberAddress(node);
         const result = try self.nextTemp();
@@ -1494,6 +1555,15 @@ const LlvmEmitter = struct {
     }
 
     fn emitIndexLoad(self: *LlvmEmitter, node: anytype) ![]const u8 {
+        if (overlayMemberFromIndexBase(node.base.*)) |member| {
+            if (self.overlayField(member.base.*, member.name.text)) |field| {
+                const element_ty = overlayByteArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
+                const ptr = try self.emitIndexAddress(node);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(element_ty), ptr });
+                return result;
+            }
+        }
         const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const ptr = try self.emitIndexAddress(node);
         const result = try self.nextTemp();
@@ -1505,6 +1575,21 @@ const LlvmEmitter = struct {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const resolved_base_ty = self.resolveAliasType(base_ty);
         const index = try self.emitExpr(node.index.*, simpleType((node.index.*).span, "usize"));
+        if (overlayMemberFromIndexBase(node.base.*)) |member| {
+            if (self.overlayField(member.base.*, member.name.text)) |field| {
+                const element_ty = overlayByteArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
+                const array = switch (field.ty.kind) {
+                    .array => |array| array,
+                    else => return error.UnsupportedLlvmEmission,
+                };
+                const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+                const base_ptr = try self.aggregateBasePointer(member.base.*);
+                try self.emitBoundsCheck(index, len);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(element_ty), base_ptr, index });
+                return result;
+            }
+        }
         return switch (resolved_base_ty.kind) {
             .array => |array| blk: {
                 const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
@@ -1738,6 +1823,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) !?[]const u8 {
+        if (self.reflectionCallValue(call)) |value| return value;
         if (self.constGetCallInfo(call)) |info| {
             if (call.args.len != 0) return error.UnsupportedLlvmEmission;
             const base_ptr = try self.arrayBasePointer(info.base);
@@ -2794,6 +2880,8 @@ const LlvmEmitter = struct {
                 try self.llvmType(enumReprType(enum_decl))
             else if (self.packed_bits.get(name.text)) |info|
                 try self.llvmType(info.repr)
+            else if (self.overlay_unions.get(name.text)) |info|
+                try self.overlayLlvmType(info)
             else if (self.struct_types.get(name.text)) |struct_decl|
                 try self.structLlvmType(struct_decl)
             else if (libraryScalarLlvmType(name.text)) |library_ty|
@@ -2865,6 +2953,7 @@ const LlvmEmitter = struct {
                 if (self.packedBitsInfoForType(base_ty)) |info| {
                     if (self.packedBitsFieldIndex(info, node.name.text) != null) break :blk simpleType(expr.span, "bool");
                 }
+                if (self.overlayField(node.base.*, node.name.text)) |field| break :blk field.ty;
                 if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
                 break :blk null;
             } else null,
@@ -3095,12 +3184,32 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn overlayInfoForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?OverlayUnionInfo {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .name => |name| self.overlay_unions.get(name.text),
+            else => null,
+        };
+    }
+
     fn packedBitsFieldIndex(self: *LlvmEmitter, info: PackedBitsInfo, field_name: []const u8) ?usize {
         _ = self;
         for (info.fields, 0..) |field, i| {
             if (std.mem.eql(u8, field.name.text, field_name)) return i;
         }
         return null;
+    }
+
+    fn packedBitsBaseAddress(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| blk: {
+                if (self.local_slots.get(ident.text)) |slot| break :blk slot.ptr;
+                if (self.global_types.contains(ident.text)) break :blk try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
+                break :blk error.UnsupportedLlvmEmission;
+            },
+            .grouped => |inner| self.packedBitsBaseAddress(inner.*),
+            else => error.UnsupportedLlvmEmission,
+        };
     }
 
     fn enumDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.EnumDecl {
@@ -3179,6 +3288,31 @@ const LlvmEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 
+    fn emitPackedBitsLiteralValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const ast.StructLiteralField) ![]const u8 {
+        if (self.staticPackedBitsLiteralValue(info, fields)) |value| return value;
+        const llvm_ty = try self.llvmType(info.repr);
+        var current: []const u8 = "0";
+        for (fields) |field| {
+            const bit_index = self.packedBitsFieldIndex(info, field.name.text) orelse return error.UnsupportedLlvmEmission;
+            const flag = try self.emitExpr(field.value, simpleType(field.value.span, "bool"));
+            const widened = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = zext i1 {s} to {s}\n", .{ widened, flag, llvm_ty });
+            const shifted = if (bit_index == 0) widened else blk: {
+                const shifted = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = shl {s} {s}, {d}\n", .{ shifted, llvm_ty, widened, bit_index });
+                break :blk shifted;
+            };
+            const next = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = or {s} {s}, {s}\n", .{ next, llvm_ty, current, shifted });
+            current = next;
+        }
+        return current;
+    }
+
+    fn staticPackedBitsLiteralValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const ast.StructLiteralField) ?[]const u8 {
+        return self.packedBitsLiteralValue(info, fields) catch null;
+    }
+
     fn packedBitsComptimeValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const eval.ComptimeStructField) ![]const u8 {
         var value: u64 = 0;
         for (fields) |field| {
@@ -3212,6 +3346,24 @@ const LlvmEmitter = struct {
         }
         try text.appendSlice(self.scratch.allocator(), " }");
         return text.toOwnedSlice(self.scratch.allocator());
+    }
+
+    fn overlayLlvmType(self: *LlvmEmitter, info: OverlayUnionInfo) ![]const u8 {
+        return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i8]", .{info.size});
+    }
+
+    fn overlayField(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) ?ast.Field {
+        const base_ty = self.exprType(base) orelse return null;
+        const info = self.overlayInfoForType(base_ty) orelse return null;
+        for (info.fields) |field| {
+            if (std.mem.eql(u8, field.name.text, field_name)) return field;
+        }
+        return null;
+    }
+
+    fn emitOverlayFieldAddress(self: *LlvmEmitter, base: ast.Expr, field: ast.Field) ![]const u8 {
+        _ = field;
+        return try self.aggregateBasePointer(base);
     }
 
     fn memberField(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) ?ast.Field {
@@ -3265,6 +3417,23 @@ const LlvmEmitter = struct {
         return null;
     }
 
+    fn overlayFieldLayout(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?OverlayLayout {
+        if (depth > 32) return null;
+        return switch (ty.kind) {
+            .array => |node| {
+                const child = self.overlayFieldLayout(node.child.*, depth + 1) orelse return null;
+                const len = self.arrayLenValue(node.len) orelse return null;
+                return .{ .size = child.size * len, .alignment = child.alignment };
+            },
+            .qualified => |node| self.overlayFieldLayout(node.child.*, depth + 1),
+            else => blk: {
+                const size = self.comptimeSizeOf(ty, depth + 1) orelse return null;
+                const alignment = self.comptimeAlignOf(ty, depth + 1) orelse return null;
+                break :blk .{ .size = @intCast(size), .alignment = @intCast(alignment) };
+            },
+        };
+    }
+
     fn expectedTyForCallArg(self: *LlvmEmitter, callee: []const u8, index: usize) ?ast.TypeExpr {
         const sig = self.fn_sigs.get(callee) orelse return null;
         if (index >= sig.params.len) return null;
@@ -3305,6 +3474,7 @@ const LlvmEmitter = struct {
     }
 
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+        if (reflectionCallKind(call.callee.*) != null) return simpleType(call.callee.*.span, "usize");
         if (self.constGetCallInfo(call)) |info| return info.element_ty;
         if (bitcastTargetType(call)) |ty| return ty;
         if (builtinCallReturnType(call)) |ty| return ty;
@@ -3611,13 +3781,36 @@ const LlvmEmitter = struct {
             else => return null,
         };
         const kind = reflectionCallKind(node.callee.*) orelse return null;
-        if (node.type_args.len != 1) return null;
-        const ty = node.type_args[0];
+        const ty = self.reflectionTypeArg(node) orelse return null;
+        const field_arg_index: usize = if (node.type_args.len == 1) 0 else 1;
         return switch (kind) {
-            .size => if (node.args.len == 0) self.comptimeSizeOf(ty, 0) else null,
-            .alignment => if (node.args.len == 0) self.comptimeAlignOf(ty, 0) else null,
-            .field_offset => if (node.args.len == 1) self.comptimeFieldOffset(ty, reflectionFieldName(node.args[0]) orelse return null, 0) else null,
+            .size => self.comptimeSizeOf(ty, 0),
+            .alignment => self.comptimeAlignOf(ty, 0),
+            .field_offset => if (field_arg_index < node.args.len) self.comptimeFieldOffset(ty, reflectionFieldName(node.args[field_arg_index]) orelse return null, 0) else null,
+            .bit_offset => if (field_arg_index < node.args.len) self.comptimeBitOffset(ty, reflectionFieldName(node.args[field_arg_index]) orelse return null) else null,
         };
+    }
+
+    fn reflectionTypeArg(self: *LlvmEmitter, node: anytype) ?ast.TypeExpr {
+        _ = self;
+        if (node.type_args.len == 1) return node.type_args[0];
+        if (node.type_args.len != 0 or node.args.len == 0) return null;
+        return exprAsType(node.args[0]);
+    }
+
+    fn reflectionCallValue(self: *LlvmEmitter, call: anytype) ?[]const u8 {
+        const expr: ast.Expr = .{ .span = call.callee.*.span, .kind = .{ .call = call } };
+        const value = self.comptimeReflect(expr) orelse return null;
+        return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value}) catch null;
+    }
+
+    fn comptimeBitOffset(self: *LlvmEmitter, ty: ast.TypeExpr, field: []const u8) ?i128 {
+        if (self.packedBitsInfoForType(ty)) |info| {
+            const index = self.packedBitsFieldIndex(info, field) orelse return null;
+            return @intCast(index);
+        }
+        const byte_offset = self.comptimeFieldOffset(ty, field, 0) orelse return null;
+        return byte_offset * 8;
     }
 
     fn comptimeSizeOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
@@ -3626,6 +3819,7 @@ const LlvmEmitter = struct {
             .name => |name| {
                 if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
                 if (self.type_aliases.get(name.text)) |aliased| return self.comptimeSizeOf(aliased, depth + 1);
+                if (self.overlay_unions.get(name.text)) |info| return @intCast(info.size);
                 if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructSize(struct_decl, depth + 1);
                 if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeSizeOf(enumReprType(enum_decl), depth + 1);
                 if (self.packed_bits.get(name.text)) |info| return self.comptimeSizeOf(info.repr, depth + 1);
@@ -3673,6 +3867,7 @@ const LlvmEmitter = struct {
             .name => |name| {
                 if (scalarLayout(name.text)) |layout| return @intCast(layout.alignment);
                 if (self.type_aliases.get(name.text)) |aliased| return self.comptimeAlignOf(aliased, depth + 1);
+                if (self.overlay_unions.get(name.text)) |info| return @intCast(info.alignment);
                 if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructAlign(struct_decl, depth + 1);
                 if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeAlignOf(enumReprType(enum_decl), depth + 1);
                 if (self.packed_bits.get(name.text)) |info| return self.comptimeAlignOf(info.repr, depth + 1);
@@ -3728,6 +3923,11 @@ const LlvmEmitter = struct {
         if (self.struct_types.get(name)) |struct_decl| {
             const layout = self.comptimeStructLayout(struct_decl, field, depth + 1) orelse return null;
             return layout.field_offset;
+        }
+        if (self.overlay_unions.get(name)) |info| {
+            for (info.fields) |overlay_field| {
+                if (std.mem.eql(u8, overlay_field.name.text, field)) return 0;
+            }
         }
         return null;
     }
@@ -3837,7 +4037,7 @@ const LlvmEmitter = struct {
         return switch (resolved_ty.kind) {
             .array => true,
             .slice => true,
-            .name => self.structDeclForType(resolved_ty) != null,
+            .name => self.structDeclForType(resolved_ty) != null or self.overlayInfoForType(resolved_ty) != null,
             .generic => |node| std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2,
             else => false,
         };
@@ -3858,6 +4058,17 @@ const FnSig = struct {
 const PackedBitsInfo = struct {
     repr: ast.TypeExpr,
     fields: []const ast.Field,
+};
+
+const OverlayUnionInfo = struct {
+    fields: []const ast.Field,
+    size: u64,
+    alignment: u64,
+};
+
+const OverlayLayout = struct {
+    size: u64,
+    alignment: u64,
 };
 
 const MmioFieldInfo = struct {
@@ -4029,6 +4240,26 @@ fn structLiteralField(fields: []const ast.StructLiteralField, field_name: []cons
     return null;
 }
 
+fn overlayByteArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .array => |node| {
+            const child_name = typeName(node.child.*) orelse return null;
+            if (!std.mem.eql(u8, child_name, "u8")) return null;
+            return node.child.*;
+        },
+        .qualified => |node| overlayByteArrayElementType(node.child.*),
+        else => null,
+    };
+}
+
+fn overlayMemberFromIndexBase(expr: ast.Expr) ?@TypeOf(expr.kind.member) {
+    return switch (expr.kind) {
+        .member => |member| member,
+        .grouped => |inner| overlayMemberFromIndexBase(inner.*),
+        else => null,
+    };
+}
+
 fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .span = span, .text = name } } };
 }
@@ -4143,6 +4374,12 @@ fn hexDigit(value: u8) u8 {
 
 fn packedBitsMask(bit_index: usize) u64 {
     return @as(u64, 1) << @intCast(bit_index);
+}
+
+fn packedBitsClearMask(info: PackedBitsInfo, bit_index: usize) ?u64 {
+    const bits = integerBits(info.repr) orelse return null;
+    if (bits >= 64) return ~packedBitsMask(bit_index);
+    return ((@as(u64, 1) << @intCast(bits)) - 1) & ~packedBitsMask(bit_index);
 }
 
 fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
@@ -4422,6 +4659,7 @@ const ReflectionCallKind = enum {
     size,
     alignment,
     field_offset,
+    bit_offset,
 };
 
 fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
@@ -4430,6 +4668,7 @@ fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
             if (std.mem.eql(u8, ident.text, "size_of") or std.mem.eql(u8, ident.text, "sizeof")) return .size;
             if (std.mem.eql(u8, ident.text, "alignof")) return .alignment;
             if (std.mem.eql(u8, ident.text, "field_offset")) return .field_offset;
+            if (std.mem.eql(u8, ident.text, "bit_offset")) return .bit_offset;
             return null;
         },
         .grouped => |inner| reflectionCallKind(inner.*),
@@ -4441,6 +4680,14 @@ fn reflectionFieldName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .enum_literal => |literal| literal.text,
         .grouped => |inner| reflectionFieldName(inner.*),
+        else => null,
+    };
+}
+
+fn exprAsType(expr: ast.Expr) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .ident => |ident| simpleType(ident.span, ident.text),
+        .grouped => |inner| exprAsType(inner.*),
         else => null,
     };
 }

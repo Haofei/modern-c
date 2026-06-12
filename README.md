@@ -258,7 +258,10 @@ locals/params/globals, and returns.
 LLVM string literal coverage includes `*const u8`/raw-many `u8` pointer targets
 for returns, locals, and call arguments, including MC escape sequences.
 LLVM packed-bits coverage uses the declared integer representation for ABI,
-globals, aliases, literals, and boolean field mask tests.
+globals, aliases, static/dynamic literals, boolean field mask tests, and
+read-modify-write field updates.
+LLVM overlay-union coverage uses byte storage rather than C/LLVM union punning,
+including scalar field writes, byte-array reads, and overlay field reflection.
 LLVM byte-view coverage includes `mem.as_bytes(&value)` and `mem.bytes_equal`
 over direct byte views and local byte-view slice values.
 LLVM comptime block coverage omits accepted pure `comptime { ... }` blocks from

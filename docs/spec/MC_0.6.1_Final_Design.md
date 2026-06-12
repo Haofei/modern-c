@@ -4033,7 +4033,10 @@ opaque inline asm, unsafe-block raw stores, and raw-many pointer `.offset(...)`.
 LLVM MMIO lowering covers `MmioPtr<T>` as a pointer ABI, `Reg`/`RegBits`
 storage-width access, explicit `@offset(...)` register addressing, volatile
 typed register reads/writes, `.acquire`/`.release` fences, and irq-context MMIO
-fixtures. Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
+fixtures. Packed-bits lowering covers representation ABI, static/dynamic
+literals, mask tests, and read-modify-write field updates. Overlay-union
+lowering uses byte storage with typed scalar field writes, byte-array reads, and
+field reflection. Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
 globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
 enums, enum switches over direct calls, and void switch expression arms.
