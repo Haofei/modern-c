@@ -1787,6 +1787,14 @@ const LlvmEmitter = struct {
     }
 
     fn castValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+        const source_llvm = try self.llvmType(source_ty);
+        const target_llvm = try self.llvmType(target_ty);
+        if (std.mem.eql(u8, source_llvm, target_llvm) and
+            self.fixedLayoutBitsOf(source_ty) != null and
+            self.fixedLayoutBitsOf(target_ty) != null)
+        {
+            return value;
+        }
         if ((self.integerBitsOf(source_ty) != null or self.enumDeclForType(source_ty) != null) and
             (self.integerBitsOf(target_ty) != null or self.enumDeclForType(target_ty) != null))
         {
