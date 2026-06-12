@@ -887,7 +887,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ extracted, ret_ty, asm_result, i });
                 break :blk extracted;
             };
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(output.ty), value, slot.ptr });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(output.ty), value, slot.ptr, try self.debugCallSuffix() });
         }
     }
 

@@ -137,11 +137,12 @@ indexing. Static aggregate global coverage includes nested array/struct
 literals plus const-folded `sizeof`/`alignof`/`field_offset` array lengths.
 LLVM debug metadata now includes `source_filename`, a compile unit/file record,
 function `DISubprogram` records, and line/column locations on local
-initialization stores, direct assignment stores, returns, call instructions,
-loop/break/continue branch terminators, switch/if-let dispatches, and trap-path
-plus `?` propagation, short-circuit boolean, and if-let join branch terminators
-for the covered backend subset, plus branch terminators in compiler-expanded
-`mem.bytes_equal` and `reduce.*` helper loops.
+initialization stores, direct assignment stores, precise asm output stores,
+returns, call instructions, loop/break/continue branch terminators,
+switch/if-let dispatches, and trap-path plus `?` propagation, short-circuit
+boolean, and if-let join branch terminators for the covered backend subset, plus
+branch terminators in compiler-expanded `mem.bytes_equal` and `reduce.*` helper
+loops.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles textual IR
 to linkable object files through `llc`, and
 `zig build llvm-obj-test` validates representative scalar, statement-workflow,
@@ -172,8 +173,8 @@ Prototype or incomplete:
   global initializer, statement/expression, and deferred cleanup spans.
   `emit-llvm` now emits initial LLVM debug metadata for source files,
   functions, calls, returns, stores, loop/break/continue branch terminators,
-  switch/if-let dispatches, and trap-path plus `?` propagation and
-  short-circuit boolean and if-let join branch terminators, plus
+  precise asm output stores, switch/if-let dispatches, and trap-path plus `?`
+  propagation and short-circuit boolean and if-let join branch terminators, plus
   compiler-expanded `mem.bytes_equal` and `reduce.*` helper loop branch
   terminators. DWARF-quality native debug mapping with richer
   statement/expression coverage is still pending.
@@ -341,7 +342,8 @@ address-width values, `cache.clean`/`cache.invalidate` fences,
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function
-subprograms, and call/return/loop-branch/switch/if-let/trap-path/`?`
+subprograms, precise-asm output stores, and
+call/return/loop-branch/switch/if-let/trap-path/`?`
 propagation/short-circuit/if-let-join/helper-loop branch line locations for the
 covered subset.
 LLVM inferred-local coverage includes initializer-derived slice, array, and
