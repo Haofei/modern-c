@@ -1,0 +1,6 @@
+# A transitive dependency used by mathlib; mcc-pkg must resolve and version-check
+# it even though the top-level demo package does not name it directly.
+name = baselib
+version = 0.1.0
+entry = lib.mc
+output = baselib.o

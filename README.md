@@ -41,6 +41,8 @@ Implemented today:
   `std/sync`, `std/ring`, `std/dma`, `std/endian`, `std/time`, `std/barrier`,
   `std/virtio`, `std/virtqueue`, hosted I/O, float math intrinsics, and fixed
   `f32x4` lane helpers in `std/vec`.
+- Local package manifests via `mcc-pkg.sh`: `info`, recursive `deps` with
+  transitive version checks, and `build` through the `mcc-cc` driver.
 
 The full type-checking surface of the core language spec is implemented, and
 most operations covered by the current spec fixtures lower to clang-checked C.
@@ -50,7 +52,7 @@ initial MC-C0 snapshot.
 Prototype or incomplete:
 
 - Production-grade typed MIR/CFG and verifier.
-- Package manager, releases, and production toolchain support.
+- Package registry, releases/publishing, and production toolchain support.
 - Full comptime execution (§22): the evaluator handles scalar folding, const
   globals, const-fn calls with loops/for/switch/asserts, top-level comptime
   block assignments/loops/switches, aggregate literals and mutable aggregate

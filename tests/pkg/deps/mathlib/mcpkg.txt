@@ -3,3 +3,6 @@ name = mathlib
 version = 0.1.0
 entry = lib.mc
 output = mathlib.o
+
+[deps]
+baselib = ../baselib@0.1.0

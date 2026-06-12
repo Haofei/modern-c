@@ -18,9 +18,31 @@ MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" info "$PKG" | grep -q "package: de
     exit 1
 }
 
-# `deps` must resolve the declared dependency at its required version.
-MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" deps "$PKG" | grep -q "dep: mathlib 0.1.0" || {
+DEPS_OUT="$(MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" deps "$PKG")"
+
+# `deps` must resolve the declared dependency and its transitive dependency at
+# their required versions.
+printf '%s\n' "$DEPS_OUT" | grep -q "dep: mathlib 0.1.0" || {
     echo "FAIL: pkg-test — mcc-pkg deps did not resolve mathlib@0.1.0"
+    exit 1
+}
+printf '%s\n' "$DEPS_OUT" | grep -q "dep: baselib 0.1.0" || {
+    echo "FAIL: pkg-test — mcc-pkg deps did not resolve transitive baselib@0.1.0"
+    exit 1
+}
+
+BADPKG="$WORK/badpkg"
+cp -R "$PKG" "$BADPKG"
+awk '{ if ($1 == "version") print "version = 9.9.9"; else print }' \
+    "$BADPKG/deps/baselib/mcpkg.txt" >"$BADPKG/deps/baselib/mcpkg.txt.tmp"
+mv "$BADPKG/deps/baselib/mcpkg.txt.tmp" "$BADPKG/deps/baselib/mcpkg.txt"
+if MCC="$MCC" "$HERE/tools/toolchain/mcc-pkg.sh" deps "$BADPKG" >"$WORK/bad_deps.out" 2>&1; then
+    echo "FAIL: pkg-test — transitive dependency version mismatch was accepted"
+    exit 1
+fi
+grep -q "dependency 'baselib' version mismatch" "$WORK/bad_deps.out" || {
+    echo "FAIL: pkg-test — transitive version mismatch did not report baselib"
+    cat "$WORK/bad_deps.out"
     exit 1
 }
 

@@ -151,7 +151,7 @@
 | `[x]` | `Result<GenericStruct, E>` 名字混淆 | 已有 `tests/c_emit/generic_structs.mc` 覆盖 lower-C monomorphized ABI | 继续扩展嵌套泛型 ABI regression |
 | `[ ]` | LLVM backend | 未开始 | C backend 稳定后再做 |
 | `[~]` | debug info | `emit-c` 已输出 `#line` source hint；`emit-map` 已输出初始 `.mcmap`，含可匹配的 MIR block/instr label | 扩充覆盖范围 / native DWARF 映射 |
-| `[~]` | package manager | `mcc-pkg.sh` 有本地 manifest/deps/build | 需要 registry、版本解析、发布 |
+| `[~]` | package manager | `mcc-pkg.sh` 有本地 manifest/info、递归 deps 解析 + 版本校验、manifest build | 需要 registry、版本解析、发布 |
 | `[ ]` | LSP / formatter | 没有 | 开发体验必需 |
 
 ---

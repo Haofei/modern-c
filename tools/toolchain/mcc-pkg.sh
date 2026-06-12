@@ -29,7 +29,7 @@ arg="${2:-mcpkg.txt}"
 MANIFEST="$arg"
 
 if [ -z "$cmd" ] || [ ! -f "$MANIFEST" ]; then
-    echo "usage: mcc-pkg.sh {info|build} [manifest|dir]" >&2
+    echo "usage: mcc-pkg.sh {info|deps|build} [manifest|dir]" >&2
     exit 2
 fi
 
@@ -62,12 +62,15 @@ PKG_ENTRY="$(field entry)"
 PKG_OUTPUT="$(field output)"
 MANIFEST_DIR="$(cd "$(dirname "$MANIFEST")" && pwd)"
 
-# Resolve every declared dependency: locate its manifest and verify its version
-# matches the requested one. Fails on a missing dep or a version mismatch.
-resolve_deps() {
-    deps_of "$MANIFEST" | while read -r name path ver; do
+# Resolve every declared dependency transitively: locate each manifest and verify
+# its requested version. Fails on a missing dep or a version mismatch.
+resolve_manifest_deps() {
+    local manifest="$1"
+    local base_dir="$2"
+    local seen="${3:-}"
+    deps_of "$manifest" | while read -r name path ver; do
         [ -n "$name" ] || continue
-        local dep_manifest="$MANIFEST_DIR/$path/mcpkg.txt"
+        local dep_manifest="$base_dir/$path/mcpkg.txt"
         if [ ! -f "$dep_manifest" ]; then
             echo "mcc-pkg: dependency '$name' not found at $path/mcpkg.txt" >&2
             exit 1
@@ -79,7 +82,17 @@ resolve_deps() {
             exit 1
         fi
         echo "$name $path ${have:-?}"
+        local dep_dir
+        dep_dir="$(cd "$(dirname "$dep_manifest")" && pwd)"
+        case " $seen " in
+            *" $dep_manifest "*) ;;
+            *) resolve_manifest_deps "$dep_manifest" "$dep_dir" "$seen $dep_manifest" ;;
+        esac
     done
+}
+
+resolve_deps() {
+    resolve_manifest_deps "$MANIFEST" "$MANIFEST_DIR" "$MANIFEST"
 }
 
 case "$cmd" in
