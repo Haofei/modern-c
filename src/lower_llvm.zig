@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const eval = @import("eval.zig");
 const mir = @import("mir.zig");
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -68,6 +69,7 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(allocator, "declare void @mc_trap_IntegerOverflow() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_DivideByZero() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_InvalidShift() noreturn\n\n");
+    try out.appendSlice(allocator, "declare void @mc_trap_InvalidRepresentation() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_Bounds() noreturn\n\n");
 }
 
@@ -291,7 +293,7 @@ const LlvmEmitter = struct {
                     return true;
                 },
                 .@"switch" => |node| {
-                    if (try self.emitBoolSwitch(node, ret_ty)) return true;
+                    if (try self.emitScalarSwitch(node, ret_ty)) return true;
                 },
                 else => return error.UnsupportedLlvmEmission,
             }
@@ -405,28 +407,90 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitBoolSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
+    fn emitScalarSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
         const subject_ty = self.exprType(node.subject) orelse return error.UnsupportedLlvmEmission;
-        if (!typeNameEql(subject_ty, "bool")) return error.UnsupportedLlvmEmission;
-
-        const true_arm = findBoolSwitchArm(node.arms, true);
-        const false_arm = findBoolSwitchArm(node.arms, false) orelse findWildcardSwitchArm(node.arms);
-        if (true_arm == null or false_arm == null) return error.UnsupportedLlvmEmission;
+        if (!typeNameEql(subject_ty, "bool") and integerBits(subject_ty) == null) return error.UnsupportedLlvmEmission;
 
         const subject = try self.emitExpr(node.subject, subject_ty);
-        const true_label = try self.nextLabel("switch_true");
-        const false_label = try self.nextLabel("switch_false");
+        const subject_llvm = try self.llvmType(subject_ty);
         const end_label = try self.nextLabel("switch_end");
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ subject, true_label, false_label });
-        try self.out.print(self.allocator, "{s}:\n", .{true_label});
-        const true_terminated = try self.emitSwitchBody(true_arm.?.body, ret_ty);
-        if (!true_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
-        try self.out.print(self.allocator, "{s}:\n", .{false_label});
-        const false_terminated = try self.emitSwitchBody(false_arm.?.body, ret_ty);
-        if (!false_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
-        if (true_terminated and false_terminated) return true;
+        var arm_labels = try self.scratch.allocator().alloc([]const u8, node.arms.len);
+        var wildcard_index: ?usize = null;
+        for (node.arms, 0..) |arm, i| {
+            arm_labels[i] = try self.nextLabel("switch_arm");
+            for (arm.patterns) |pattern| {
+                if (pattern.kind == .wildcard and wildcard_index == null) wildcard_index = i;
+            }
+        }
+
+        const default_label = if (wildcard_index) |index| arm_labels[index] else end_label;
+        try self.out.print(self.allocator, "  switch {s} {s}, label %{s} [\n", .{ subject_llvm, subject, default_label });
+        for (node.arms, 0..) |arm, i| {
+            for (arm.patterns) |pattern| {
+                if (pattern.kind == .wildcard) continue;
+                const value = try self.switchPatternValue(pattern, subject_ty);
+                try self.out.print(self.allocator, "    {s} {s}, label %{s}\n", .{ subject_llvm, value, arm_labels[i] });
+            }
+        }
+        try self.out.appendSlice(self.allocator, "  ]\n");
+
+        var all_terminated = true;
+        for (node.arms, 0..) |arm, i| {
+            try self.out.print(self.allocator, "{s}:\n", .{arm_labels[i]});
+            const terminated = try self.emitSwitchBody(arm.body, ret_ty);
+            if (!terminated) {
+                all_terminated = false;
+                try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+            }
+        }
+        if (wildcard_index == null and !typeNameEql(subject_ty, "bool")) all_terminated = false;
+        if (all_terminated) {
+            if (wildcard_index == null) {
+                try self.out.print(self.allocator, "{s}:\n  call void @mc_trap_InvalidRepresentation()\n  unreachable\n", .{end_label});
+            }
+            return true;
+        }
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
         return false;
+    }
+
+    fn switchPatternValue(self: *LlvmEmitter, pattern: ast.Pattern, subject_ty: ast.TypeExpr) ![]const u8 {
+        const expr = switch (pattern.kind) {
+            .literal => |expr| expr,
+            else => return error.UnsupportedLlvmEmission,
+        };
+        if (typeNameEql(subject_ty, "bool")) {
+            return switch (expr.kind) {
+                .bool_literal => |value| if (value) "1" else "0",
+                .grouped => |inner| self.switchLiteralValue(inner.*, subject_ty),
+                else => error.UnsupportedLlvmEmission,
+            };
+        }
+        return self.switchLiteralValue(expr, subject_ty);
+    }
+
+    fn switchLiteralValue(self: *LlvmEmitter, expr: ast.Expr, subject_ty: ast.TypeExpr) ![]const u8 {
+        return switch (expr.kind) {
+            .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
+            .char_literal => |literal| if (eval.parseCharLiteral(literal)) |value|
+                try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value})
+            else
+                error.UnsupportedLlvmEmission,
+            .grouped => |inner| self.switchLiteralValue(inner.*, subject_ty),
+            .unary => |node| blk: {
+                if (node.op != .neg) break :blk error.UnsupportedLlvmEmission;
+                const literal = switch ((node.expr.*).kind) {
+                    .int_literal => |literal| literal,
+                    .grouped => |inner| switch (inner.kind) {
+                        .int_literal => |literal| literal,
+                        else => break :blk error.UnsupportedLlvmEmission,
+                    },
+                    else => break :blk error.UnsupportedLlvmEmission,
+                };
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedIntLiteral(self.scratch.allocator(), literal)});
+            },
+            else => error.UnsupportedLlvmEmission,
+        };
     }
 
     fn emitSwitchBody(self: *LlvmEmitter, body: ast.SwitchBody, ret_ty: ast.TypeExpr) !bool {

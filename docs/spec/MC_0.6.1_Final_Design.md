@@ -3983,10 +3983,11 @@ parameters, and direct calls are supported for fixed arrays and plain structs.
 Nested fixed-array/struct element and field access works for the covered
 aggregate subset. Core slice values lower as `{ ptr, len }` values with checked
 indexing, `.len`, direct returns/params, and range slicing from arrays or slices.
-It intentionally emits no
+Scalar `switch` lowering covers bool and integer subjects, including
+multi-pattern literal arms and wildcard defaults. It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
-Broader CFG/phi lowering, full aggregate ABI, object emission, debug-info
-lowering, and broader slice workflows remain future work.
+For/break/continue control flow, full aggregate ABI, object emission, debug-info
+lowering, and broader slice/pattern workflows remain future work.
 
 LLVM lowering examples:
 

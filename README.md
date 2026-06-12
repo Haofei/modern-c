@@ -63,7 +63,8 @@ function returns, parameters, and direct calls are supported for fixed arrays an
 plain structs. Nested fixed-array/struct element and field access works for the
 covered aggregate subset. Core slice values lower as `{ ptr, len }` values with
 checked indexing, `.len`, direct returns/params, and range slicing from arrays or
-slices.
+slices. Scalar `switch` lowering covers bool and integer subjects, including
+multi-pattern literal arms and wildcard defaults.
 
 Prototype or incomplete:
 
@@ -94,8 +95,9 @@ Deferred:
 
 - LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
   `emit-llvm` support exists for a scalar/control-flow subset and validates
-  through `llvm-as`; full aggregate ABI, object emission, broader CFG/phi
-  lowering, debug-info lowering, and broader slice workflows are still pending.
+  through `llvm-as`; full aggregate ABI, object emission, for/break/continue
+  control flow, debug-info lowering, and broader slice/pattern workflows are
+  still pending.
 
 ## Requirements
 
