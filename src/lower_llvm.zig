@@ -1227,7 +1227,7 @@ const LlvmEmitter = struct {
             const ptr = try self.nextTemp();
             const llvm_ty = try self.llvmType(value_ty);
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
-            try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+            try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
             return true;
         }
         if (self.mmioAccessInfo(call)) |info| {
@@ -1241,7 +1241,7 @@ const LlvmEmitter = struct {
                 try self.castValue(raw_value, info.value_ty, info.storage_ty);
             try self.emitMmioFence(ordering, .before_store);
             const ptr = try self.emitMmioRegisterAddress(info);
-            try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}\n", .{ try self.llvmType(info.storage_ty), value, ptr });
+            try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.storage_ty), value, ptr, try self.debugCallSuffix() });
             return true;
         }
         if (self.dmaCacheCallInfo(call)) |info| {
@@ -1268,7 +1268,7 @@ const LlvmEmitter = struct {
             const llvm_order = atomicLlvmOrdering(ordering, .store) orelse return error.UnsupportedLlvmEmission;
             const ptr = try self.atomicBaseAddress(info.base);
             const value = try self.emitAtomicValueForStorage(call.args[0], info.payload_ty);
-            try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}\n", .{ try self.atomicStorageLlvmType(info.payload_ty), value, ptr, llvm_order, self.llvmAlignOf(info.payload_ty) });
+            try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}{s}\n", .{ try self.atomicStorageLlvmType(info.payload_ty), value, ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
             return true;
         }
         return false;
