@@ -4030,7 +4030,10 @@ verification. The LLVM backend also lowers `trap(...)`,
 the covered trap kinds. Unsafe machine-operation lowering covers opaque address
 classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`,
 opaque inline asm, unsafe-block raw stores, and raw-many pointer `.offset(...)`.
-Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
+LLVM MMIO lowering covers `MmioPtr<T>` as a pointer ABI, `Reg`/`RegBits`
+storage-width access, explicit `@offset(...)` register addressing, volatile
+typed register reads/writes, `.acquire`/`.release` fences, and irq-context MMIO
+fixtures. Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
 globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
 enums, enum switches over direct calls, and void switch expression arms.

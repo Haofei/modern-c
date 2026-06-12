@@ -163,8 +163,8 @@ Deferred:
   `emit-llvm` support exists for a scalar/control-flow/domain subset and
   validates through `llvm-as`; the `mcc-llvm-cc.sh` driver compiles covered
   LLVM IR to object files with `llc`. Richer iterable forms, broader aggregate
-  ABI/layout cases, broader slice/pattern workflows, full `?` propagation, and
-  fuller debug mapping are still pending.
+  ABI/layout cases, broader slice/pattern workflows, precise asm operands,
+  full `?` propagation, and fuller debug mapping are still pending.
 
 ## Requirements
 
@@ -272,6 +272,10 @@ helpers used by raw float buffers and fixed-lane helper arrays.
 LLVM unsafe machine coverage includes volatile raw loads/stores, raw pointers,
 raw-many offsets, `cpu.pause()`, and opaque inline asm with explicit LLVM
 clobbers. Precise asm operands remain pending.
+LLVM MMIO coverage includes `MmioPtr<T>` ABI lowering, `Reg`/`RegBits`
+storage-width lowering, explicit `@offset(...)` register addressing, volatile
+typed register reads/writes, `.acquire`/`.release` fences, and irq-context MMIO
+fixtures.
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function

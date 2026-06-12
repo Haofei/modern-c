@@ -195,8 +195,17 @@ const LlvmEmitter = struct {
     }
 
     fn collectStruct(self: *LlvmEmitter, struct_decl: ast.StructDecl) !void {
-        if (struct_decl.type_params.len != 0 or struct_decl.is_move or struct_decl.abi != null) return error.UnsupportedLlvmEmission;
-        for (struct_decl.fields) |field| _ = try self.llvmType(field.ty);
+        if (struct_decl.type_params.len != 0 or struct_decl.is_move) return error.UnsupportedLlvmEmission;
+        if (struct_decl.abi) |abi| {
+            if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
+        }
+        for (struct_decl.fields) |field| {
+            if (isMmioStructAbi(struct_decl)) {
+                _ = self.mmioFieldInfo(field) orelse return error.UnsupportedLlvmEmission;
+            } else {
+                _ = try self.llvmType(field.ty);
+            }
+        }
         try self.struct_types.put(struct_decl.name.text, struct_decl);
     }
 
@@ -963,6 +972,20 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
             return true;
         }
+        if (self.mmioAccessInfo(call)) |info| {
+            if (!std.mem.eql(u8, info.op, "write")) return false;
+            if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
+            const ordering = orderingArg(call.args[1]) orelse return error.UnsupportedLlvmEmission;
+            const raw_value = try self.emitExpr(call.args[0], info.value_ty);
+            const value = if (std.mem.eql(u8, try self.llvmType(info.value_ty), try self.llvmType(info.storage_ty)))
+                raw_value
+            else
+                try self.castValue(raw_value, info.value_ty, info.storage_ty);
+            try self.emitMmioFence(ordering, .before_store);
+            const ptr = try self.emitMmioRegisterAddress(info);
+            try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}\n", .{ try self.llvmType(info.storage_ty), value, ptr });
+            return true;
+        }
         if (isCpuPauseCall(call.callee.*)) {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             try self.out.print(self.allocator, "  call void asm sideeffect \"pause\", \"~{{memory}}\"(){s}\n", .{try self.debugCallSuffix()});
@@ -1452,6 +1475,14 @@ const LlvmEmitter = struct {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const struct_ty = self.memberBaseStructType(base_ty) orelse return error.UnsupportedLlvmEmission;
         const struct_decl = self.structDeclForType(struct_ty) orelse return error.UnsupportedLlvmEmission;
+        if (isMmioStructAbi(struct_decl)) {
+            const offset = self.mmioFieldOffset(struct_decl, node.name.text) orelse return error.UnsupportedLlvmEmission;
+            const base_ptr = try self.emitExpr(node.base.*, base_ty);
+            if (offset == 0) return base_ptr;
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr inbounds i8, ptr {s}, i64 {d}\n", .{ result, base_ptr, offset });
+            return result;
+        }
         const index = structFieldIndex(struct_decl, node.name.text) orelse return error.UnsupportedLlvmEmission;
         const base_ptr = if (self.resolveAliasType(base_ty).kind == .pointer)
             try self.emitExpr(node.base.*, base_ty)
@@ -1731,6 +1762,17 @@ const LlvmEmitter = struct {
             const payload_ty = self.atomicPayloadType(expected_ty) orelse return error.UnsupportedLlvmEmission;
             return try self.emitAtomicValueForStorage(call.args[0], payload_ty);
         }
+        if (self.mmioAccessInfo(call)) |info| {
+            if (!std.mem.eql(u8, info.op, "read")) return null;
+            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const ordering = orderingArg(call.args[0]) orelse return error.UnsupportedLlvmEmission;
+            const ptr = try self.emitMmioRegisterAddress(info);
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}\n", .{ result, try self.llvmType(info.storage_ty), ptr });
+            try self.emitMmioFence(ordering, .after_load);
+            if (std.mem.eql(u8, try self.llvmType(info.storage_ty), try self.llvmType(info.value_ty))) return result;
+            return try self.castValue(result, info.storage_ty, info.value_ty);
+        }
         if (self.maybeUninitCallInfo(call)) |info| {
             if (!std.mem.eql(u8, info.op, "assume_init")) return null;
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
@@ -1998,6 +2040,16 @@ const LlvmEmitter = struct {
             (self.integerBitsOf(target_ty) != null or self.enumDeclForType(target_ty) != null))
         {
             return try self.castIntegerValue(value, source_ty, target_ty);
+        }
+        if (typeNameEql(self.resolveAliasType(source_ty), "bool") and self.integerBitsOf(target_ty) != null) {
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = zext i1 {s} to {s}\n", .{ result, value, target_llvm });
+            return result;
+        }
+        if (self.integerBitsOf(source_ty) != null and typeNameEql(self.resolveAliasType(target_ty), "bool")) {
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = icmp ne {s} {s}, 0\n", .{ result, source_llvm, value });
+            return result;
         }
         return error.UnsupportedLlvmEmission;
     }
@@ -2758,6 +2810,10 @@ const LlvmEmitter = struct {
                 try self.atomicStorageLlvmType(node.args[0])
             else if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1)
                 try self.llvmType(node.args[0])
+            else if ((std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits")) and node.args.len >= 1)
+                try self.llvmType(node.args[0])
+            else if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1)
+                "ptr"
             else if (isPayloadDomainGenericName(node.base.text) and node.args.len == 1)
                 try self.llvmType(node.args[0])
             else if (isOpaqueAddressGenericName(node.base.text) and node.args.len == 1)
@@ -2869,6 +2925,78 @@ const LlvmEmitter = struct {
             .qualified => |node| self.maybeUninitPayloadType(node.child.*),
             else => null,
         };
+    }
+
+    fn mmioAccessInfo(self: *LlvmEmitter, call: anytype) ?MmioAccessInfo {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        const op = if (std.mem.eql(u8, member.name.text, "read"))
+            "read"
+        else if (std.mem.eql(u8, member.name.text, "write"))
+            "write"
+        else
+            return null;
+        const reg_member = switch (member.base.kind) {
+            .member => |node| node,
+            else => return null,
+        };
+        const base_ty = self.exprType(reg_member.base.*) orelse return null;
+        const struct_ty = self.memberBaseStructType(base_ty) orelse return null;
+        const struct_decl = self.structDeclForType(struct_ty) orelse return null;
+        if (!isMmioStructAbi(struct_decl)) return null;
+        const field = self.mmioStructField(struct_decl, reg_member.name.text) orelse return null;
+        const field_info = self.mmioFieldInfo(field) orelse return null;
+        const offset = self.mmioFieldOffset(struct_decl, reg_member.name.text) orelse return null;
+        return .{
+            .op = op,
+            .base = reg_member.base.*,
+            .struct_ty = struct_ty,
+            .storage_ty = field_info.storage_ty,
+            .value_ty = field_info.value_ty,
+            .offset = offset,
+        };
+    }
+
+    fn emitMmioRegisterAddress(self: *LlvmEmitter, info: MmioAccessInfo) ![]const u8 {
+        const base = try self.emitExpr(info.base, try self.mmioPointerType(info.struct_ty, info.base.span));
+        if (info.offset == 0) return base;
+        const ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds i8, ptr {s}, i64 {d}\n", .{ ptr, base, info.offset });
+        return ptr;
+    }
+
+    fn emitMmioFence(self: *LlvmEmitter, ordering: []const u8, placement: MmioFencePlacement) !void {
+        const fence: ?[]const u8 = switch (placement) {
+            .before_store => if (std.mem.eql(u8, ordering, "release"))
+                "release"
+            else if (std.mem.eql(u8, ordering, "acq_rel"))
+                "release"
+            else if (std.mem.eql(u8, ordering, "seq_cst"))
+                "seq_cst"
+            else
+                null,
+            .after_load => if (std.mem.eql(u8, ordering, "acquire"))
+                "acquire"
+            else if (std.mem.eql(u8, ordering, "acq_rel"))
+                "acquire"
+            else if (std.mem.eql(u8, ordering, "seq_cst"))
+                "seq_cst"
+            else
+                null,
+        };
+        if (fence) |kind| try self.out.print(self.allocator, "  fence {s}\n", .{kind});
+    }
+
+    fn mmioPointerType(self: *LlvmEmitter, child_ty: ast.TypeExpr, span: ast.Span) !ast.TypeExpr {
+        const args = try self.scratch.allocator().alloc(ast.TypeExpr, 1);
+        args[0] = child_ty;
+        return .{ .span = span, .kind = .{ .generic = .{ .base = .{ .text = "MmioPtr", .span = span }, .args = args } } };
     }
 
     fn resultInfo(self: *LlvmEmitter, ty: ast.TypeExpr) ?ResultTypeInfo {
@@ -2987,6 +3115,7 @@ const LlvmEmitter = struct {
         const resolved_ty = self.resolveAliasType(ty);
         return switch (resolved_ty.kind) {
             .pointer => |node| node.child.*,
+            .generic => |node| if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1) node.args[0] else ty,
             else => ty,
         };
     }
@@ -3075,7 +3204,11 @@ const LlvmEmitter = struct {
         try text.appendSlice(self.scratch.allocator(), "{ ");
         for (struct_decl.fields, 0..) |field, i| {
             if (i != 0) try text.appendSlice(self.scratch.allocator(), ", ");
-            try text.appendSlice(self.scratch.allocator(), try self.llvmType(field.ty));
+            const field_ty = if (isMmioStructAbi(struct_decl))
+                (self.mmioFieldInfo(field) orelse return error.UnsupportedLlvmEmission).storage_ty
+            else
+                field.ty;
+            try text.appendSlice(self.scratch.allocator(), try self.llvmType(field_ty));
         }
         try text.appendSlice(self.scratch.allocator(), " }");
         return text.toOwnedSlice(self.scratch.allocator());
@@ -3086,6 +3219,48 @@ const LlvmEmitter = struct {
         const struct_decl = self.memberBaseStructDecl(base_ty) orelse return null;
         for (struct_decl.fields) |field| {
             if (std.mem.eql(u8, field.name.text, field_name)) return field;
+        }
+        return null;
+    }
+
+    fn mmioStructField(self: *LlvmEmitter, struct_decl: ast.StructDecl, field_name: []const u8) ?ast.Field {
+        _ = self;
+        for (struct_decl.fields) |field| {
+            if (std.mem.eql(u8, field.name.text, field_name)) return field;
+        }
+        return null;
+    }
+
+    fn mmioFieldInfo(self: *LlvmEmitter, field: ast.Field) ?MmioFieldInfo {
+        _ = self;
+        const generic = switch (field.ty.kind) {
+            .generic => |node| node,
+            else => return null,
+        };
+        if (std.mem.eql(u8, generic.base.text, "Reg")) {
+            if (generic.args.len != 2) return null;
+            return .{ .storage_ty = generic.args[0], .value_ty = generic.args[0] };
+        }
+        if (std.mem.eql(u8, generic.base.text, "RegBits")) {
+            if (generic.args.len != 3) return null;
+            return .{ .storage_ty = generic.args[0], .value_ty = generic.args[1] };
+        }
+        return null;
+    }
+
+    fn mmioFieldOffset(self: *LlvmEmitter, struct_decl: ast.StructDecl, field_name: []const u8) ?u64 {
+        var offset: i128 = 0;
+        for (struct_decl.fields) |field| {
+            const info = self.mmioFieldInfo(field) orelse return null;
+            const size = self.comptimeSizeOf(info.storage_ty, 0) orelse return null;
+            const alignment = self.comptimeAlignOf(info.storage_ty, 0) orelse return null;
+            if (field.offset) |explicit| {
+                offset = @intCast(explicit);
+            } else {
+                offset = alignForward(offset, alignment) orelse return null;
+            }
+            if (std.mem.eql(u8, field.name.text, field_name)) return @intCast(offset);
+            offset += size;
         }
         return null;
     }
@@ -3151,6 +3326,10 @@ const LlvmEmitter = struct {
         if (self.atomicCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
             if (std.mem.eql(u8, info.op, "store")) return simpleType(call.callee.*.span, "void");
+        }
+        if (self.mmioAccessInfo(call)) |info| {
+            if (std.mem.eql(u8, info.op, "read")) return info.value_ty;
+            if (std.mem.eql(u8, info.op, "write")) return simpleType(call.callee.*.span, "void");
         }
         if (self.maybeUninitCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "assume_init")) return info.payload_ty;
@@ -3473,6 +3652,8 @@ const LlvmEmitter = struct {
                 if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                if (std.mem.eql(u8, g.base.text, "MmioPtr") and g.args.len == 1) return 8;
                 if (isPayloadDomainGenericName(g.base.text) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 return null;
             },
@@ -3509,6 +3690,8 @@ const LlvmEmitter = struct {
                 if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                if (std.mem.eql(u8, g.base.text, "MmioPtr") and g.args.len == 1) return 8;
                 if (isPayloadDomainGenericName(g.base.text) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 return null;
             },
@@ -3559,7 +3742,11 @@ const LlvmEmitter = struct {
             const alignment = self.comptimeAlignOf(field.ty, depth + 1) orelse return null;
             if (alignment <= 0) return null;
             if (alignment > max_align) max_align = alignment;
-            offset = alignForward(offset, alignment) orelse return null;
+            if (field.offset) |explicit| {
+                offset = @intCast(explicit);
+            } else {
+                offset = alignForward(offset, alignment) orelse return null;
+            }
             if (wanted_field) |wanted| {
                 if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
             }
@@ -3671,6 +3858,25 @@ const FnSig = struct {
 const PackedBitsInfo = struct {
     repr: ast.TypeExpr,
     fields: []const ast.Field,
+};
+
+const MmioFieldInfo = struct {
+    storage_ty: ast.TypeExpr,
+    value_ty: ast.TypeExpr,
+};
+
+const MmioAccessInfo = struct {
+    op: []const u8,
+    base: ast.Expr,
+    struct_ty: ast.TypeExpr,
+    storage_ty: ast.TypeExpr,
+    value_ty: ast.TypeExpr,
+    offset: u64,
+};
+
+const MmioFencePlacement = enum {
+    before_store,
+    after_load,
 };
 
 const ArgValue = struct {
@@ -4166,6 +4372,14 @@ fn atomicOrderingExpr(expr: ast.Expr) ?[]const u8 {
         .grouped => |inner| atomicOrderingExpr(inner.*),
         else => null,
     };
+}
+
+fn orderingArg(expr: ast.Expr) ?[]const u8 {
+    return atomicOrderingExpr(expr);
+}
+
+fn isMmioStructAbi(struct_decl: ast.StructDecl) bool {
+    return if (struct_decl.abi) |abi| std.mem.eql(u8, abi, "mmio") else false;
 }
 
 fn atomicLlvmOrdering(ordering: []const u8, context: AtomicOrderContext) ?[]const u8 {
