@@ -246,6 +246,7 @@ const LlvmEmitter = struct {
         }
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
+            .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(ty)),
             .unary => |node| if (node.op == .neg and self.isFloatTypeOf(ty)) blk: {
                 const literal = switch ((node.expr.*).kind) {
@@ -355,6 +356,7 @@ const LlvmEmitter = struct {
         const value = try switch (expr.kind) {
             .ident => |ident| try self.emitIdent(ident),
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
+            .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(expected_ty)),
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
@@ -2569,6 +2571,11 @@ fn normalizedFloatLiteral(allocator: std.mem.Allocator, literal: []const u8, f32
     const widened: f64 = parsed;
     const bits: u64 = @bitCast(widened);
     return std.fmt.allocPrint(allocator, "0x{X:0>16}", .{bits});
+}
+
+fn charLiteralValue(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
+    const value = eval.parseCharLiteral(literal) orelse return error.UnsupportedLlvmEmission;
+    return std.fmt.allocPrint(allocator, "{d}", .{value});
 }
 
 fn arrayLenValue(expr: ast.Expr) ?u64 {
