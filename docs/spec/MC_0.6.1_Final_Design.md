@@ -4017,7 +4017,9 @@ unsigned `sat` add/sub/mul, serial `before`/`after`/`distance`, counter
 `delta_mod`, scalar conversion calls `from`/`trap_from`/`sat_from`/`wrap_from`/
 `from_mod`, `wrap.residue()`, and `wrapping.add`/`sub`/`mul`. Statement workflow covers
 expression statements, void calls, `assert`, nested blocks, unsafe blocks, and
-transparent unsafe-contract blocks. The LLVM backend also lowers `trap(...)`,
+transparent unsafe-contract blocks. Unsafe-contract arithmetic lowering covers
+`unchecked.add`/`sub`/`mul` as plain arithmetic after semantic contract
+verification. The LLVM backend also lowers `trap(...)`,
 `unreachable`, `never` functions, and `never` coercion in return position for
 the covered trap kinds. Unsafe machine-operation lowering covers opaque address
 classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`, and

@@ -1761,6 +1761,13 @@ const LlvmEmitter = struct {
             const right = try self.emitExpr(call.args[1], expected_ty);
             return try self.emitPlainBinaryValues(op, try self.llvmType(expected_ty), left, right);
         }
+        if (uncheckedBuiltinOp(call.callee.*)) |op| {
+            if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
+            if (self.integerBitsOf(expected_ty) == null) return error.UnsupportedLlvmEmission;
+            const left = try self.emitExpr(call.args[0], expected_ty);
+            const right = try self.emitExpr(call.args[1], expected_ty);
+            return try self.emitPlainBinaryValues(op, try self.llvmType(expected_ty), left, right);
+        }
         if (self.atomicCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "load")) {
                 if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
@@ -2815,6 +2822,7 @@ const LlvmEmitter = struct {
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
         if (self.domainOpCallInfo(call)) |info| return info.return_ty;
         if (self.conversionCallInfo(call)) |info| return info.target_ty;
+        if (uncheckedBuiltinOp(call.callee.*) != null and call.args.len == 2) return self.exprType(call.args[0]);
         if (self.atomicCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
             if (std.mem.eql(u8, info.op, "store")) return simpleType(call.callee.*.span, "void");
@@ -3633,6 +3641,24 @@ fn wrappingBuiltinOp(callee: ast.Expr) ?[]const u8 {
         else
             null,
         .grouped => |inner| wrappingBuiltinOp(inner.*),
+        else => null,
+    };
+}
+
+fn uncheckedBuiltinOp(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .member => |member| if (isIdentNamed(member.base.*, "unchecked"))
+            if (std.mem.eql(u8, member.name.text, "add"))
+                "add"
+            else if (std.mem.eql(u8, member.name.text, "sub"))
+                "sub"
+            else if (std.mem.eql(u8, member.name.text, "mul"))
+                "mul"
+            else
+                null
+        else
+            null,
+        .grouped => |inner| uncheckedBuiltinOp(inner.*),
         else => null,
     };
 }

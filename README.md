@@ -85,7 +85,9 @@ Domain scalar lowering covers `wrap<T>`/`sat<T>` payload representation,
 Statement workflow covers expression statements, void calls, `assert`,
 nested blocks, unsafe blocks, transparent unsafe-contract blocks, `trap(...)`,
 `unreachable`, `never` functions, and `never` coercion in return position for
-the covered trap kinds. Unsafe machine-operation lowering covers opaque address
+the covered trap kinds. Unsafe-contract arithmetic lowering covers
+`unchecked.add`/`sub`/`mul` as plain arithmetic after semantic contract
+verification. Unsafe machine-operation lowering covers opaque address
 classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`, and
 raw-many pointer `.offset(...)`. Alias and enum lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
