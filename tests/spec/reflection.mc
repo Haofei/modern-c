@@ -83,6 +83,17 @@ fn accept_bit_offset() -> usize {
     return bit_offset<Packet>(.tag);
 }
 
+fn accept_comptime_reflection_offsets() -> void {
+    comptime {
+        assert(sizeof(Packet) == 4);
+        assert(alignof(Packet) == 2);
+        assert(field_offset(Packet, .len) == 0);
+        assert(field_offset(Packet, .tag) == 2);
+        assert(field_offset(Uart16550, .lsr) == 1);
+        assert(bit_offset(Packet, .tag) == 16);
+    }
+}
+
 fn reject_unknown_reflection_field() -> usize {
     // EXPECT_ERROR: E_UNKNOWN_STRUCT_FIELD
     return field_offset<Packet>(.missing);

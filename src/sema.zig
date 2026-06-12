@@ -110,7 +110,13 @@ pub const Checker = struct {
         self.comptime_fns = &comptime_fns;
         defer self.comptime_fns = null;
 
-        var reflect_env = ReflectEnv{ .structs = &structs, .enums = &enums, .aliases = &type_aliases };
+        var reflect_env = ReflectEnv{
+            .structs = &structs,
+            .packed_bits = &packed_bits,
+            .overlay_unions = &overlay_unions,
+            .enums = &enums,
+            .aliases = &type_aliases,
+        };
         self.reflect_env = &reflect_env;
         defer self.reflect_env = null;
 
@@ -263,7 +269,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        structs.put(struct_decl.name.text, .{ .fields = fields }) catch {
+        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields }) catch {
             fields.deinit();
         };
     }
@@ -316,7 +322,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        infos.put(name, .{ .fields = fields }) catch {
+        infos.put(name, .{ .fields = fields, .ordered = fields_in }) catch {
             fields.deinit();
         };
     }
@@ -977,7 +983,9 @@ pub const Checker = struct {
         return switch (kind) {
             .size => self.comptimeSizeOf(ty, 0),
             .alignment => self.comptimeAlignOf(ty, 0),
-            else => null, // field/bit offsets need field order; not modeled
+            .field_offset => self.comptimeFieldOffset(ty, reflectionFieldFromCall(node) orelse return null, 0),
+            .bit_offset => self.comptimeBitOffset(ty, reflectionFieldFromCall(node) orelse return null, 0),
+            else => null,
         };
     }
 
@@ -996,6 +1004,10 @@ pub const Checker = struct {
             .pointer, .raw_many_pointer, .slice => return 8,
             .generic => |g| {
                 if (isPointerLikeGeneric(g.base.text)) return 8;
+                if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
+                if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                if ((std.mem.eql(u8, g.base.text, "atomic") or std.mem.eql(u8, g.base.text, "MaybeUninit")) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                if (isArithmeticLayoutGeneric(g.base.text) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 return null;
             },
             .array => |node| {
@@ -1023,6 +1035,10 @@ pub const Checker = struct {
             .pointer, .raw_many_pointer, .slice => return 8,
             .generic => |g| {
                 if (isPointerLikeGeneric(g.base.text)) return 8;
+                if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
+                if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                if ((std.mem.eql(u8, g.base.text, "atomic") or std.mem.eql(u8, g.base.text, "MaybeUninit")) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                if (isArithmeticLayoutGeneric(g.base.text) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 return null;
             },
             .array => |node| return self.comptimeAlignOf(node.child.*, depth + 1),
@@ -1031,23 +1047,11 @@ pub const Checker = struct {
         }
     }
 
-    // Size of a plain struct, but only when all fields share one alignment (so
-    // there is no order-dependent padding) — otherwise null. Tail padding is a
-    // no-op in that case (every field size is a multiple of the common align).
+    // C-ABI struct layout over the supported reflection subset. Explicit
+    // `@offset(N)` fields are honored for MMIO register maps.
     fn comptimeStructSize(self: *Checker, info: StructInfo, depth: usize) ?i128 {
-        var total: i128 = 0;
-        var common_align: ?i128 = null;
-        var it = info.fields.valueIterator();
-        while (it.next()) |field_ty| {
-            const size = self.comptimeSizeOf(field_ty.*, depth + 1) orelse return null;
-            const alignment = self.comptimeAlignOf(field_ty.*, depth + 1) orelse return null;
-            if (common_align) |a| {
-                if (a != alignment) return null; // mixed alignment: order matters
-            } else common_align = alignment;
-            if (alignment == 0 or @rem(size, alignment) != 0) return null;
-            total += size;
-        }
-        return total;
+        const layout = self.comptimeStructLayout(info, null, depth) orelse return null;
+        return layout.size;
     }
 
     fn comptimeStructAlign(self: *Checker, info: StructInfo, depth: usize) ?i128 {
@@ -1058,6 +1062,68 @@ pub const Checker = struct {
             if (alignment > max_align) max_align = alignment;
         }
         return max_align;
+    }
+
+    fn comptimeFieldOffset(self: *Checker, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        const name = typeName(ty) orelse return null;
+        const env = self.reflect_env orelse return null;
+        if (env.aliases.get(name)) |aliased| return self.comptimeFieldOffset(aliased, field, depth + 1);
+        if (env.structs.get(name)) |info| {
+            const layout = self.comptimeStructLayout(info, field, depth + 1) orelse return null;
+            return layout.field_offset;
+        }
+        if (env.overlay_unions.get(name)) |info| {
+            if (info.fields.contains(field)) return 0;
+        }
+        return null;
+    }
+
+    fn comptimeBitOffset(self: *Checker, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        const name = typeName(ty) orelse return null;
+        const env = self.reflect_env orelse return null;
+        if (env.aliases.get(name)) |aliased| return self.comptimeBitOffset(aliased, field, depth + 1);
+        if (env.packed_bits.get(name)) |info| {
+            for (info.ordered, 0..) |packed_field, bit| {
+                if (std.mem.eql(u8, packed_field.name.text, field)) return @intCast(bit);
+            }
+            return null;
+        }
+        const byte_offset = self.comptimeFieldOffset(ty, field, depth + 1) orelse return null;
+        return byte_offset * 8;
+    }
+
+    const ComptimeStructLayout = struct {
+        size: i128,
+        field_offset: ?i128 = null,
+    };
+
+    fn comptimeStructLayout(self: *Checker, info: StructInfo, want_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
+        var offset: i128 = 0;
+        var max_align: i128 = 1;
+        var found: ?i128 = null;
+        for (info.ordered) |field| {
+            const size = self.comptimeSizeOf(field.ty, depth + 1) orelse return null;
+            const alignment = self.comptimeAlignOf(field.ty, depth + 1) orelse return null;
+            if (alignment <= 0) return null;
+            if (alignment > max_align) max_align = alignment;
+            if (field.offset) |explicit| {
+                const explicit_offset: i128 = @intCast(explicit);
+                if (explicit_offset < offset) return null;
+                offset = explicit_offset;
+            } else {
+                offset = alignForward(offset, alignment) orelse return null;
+            }
+            if (want_field) |wanted| {
+                if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
+            }
+            offset += size;
+        }
+        return .{
+            .size = alignForward(offset, max_align) orelse return null,
+            .field_offset = found,
+        };
     }
 
     // Returns the folded comptime value of `expr`, or null if it is not a
@@ -3541,6 +3607,7 @@ const MmioRegisterAccess = enum {
 
 const StructInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
+    ordered: []const ast.Field,
 };
 
 // Liveness slot for a linear `move` binding (section 18.1 / annex D.7).
@@ -3553,6 +3620,7 @@ const MoveSlot = struct {
 
 const LayoutFieldInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
+    ordered: []const ast.Field,
 };
 
 const EnumInfo = struct {
@@ -5834,6 +5902,8 @@ fn reflectionTypeExprFromArg(expr: ast.Expr) ?ast.TypeExpr {
 // Type registries used by the comptime reflection layout model.
 const ReflectEnv = struct {
     structs: *const std.StringHashMap(StructInfo),
+    packed_bits: *const std.StringHashMap(LayoutFieldInfo),
+    overlay_unions: *const std.StringHashMap(LayoutFieldInfo),
     enums: *const std.StringHashMap(EnumInfo),
     aliases: *const std.StringHashMap(ast.TypeExpr),
 };
@@ -5862,11 +5932,38 @@ fn isPointerLikeGeneric(name: []const u8) bool {
     return std.mem.eql(u8, name, "MmioPtr") or std.mem.eql(u8, name, "UserPtr");
 }
 
+fn isArithmeticLayoutGeneric(name: []const u8) bool {
+    return std.mem.eql(u8, name, "wrap") or
+        std.mem.eql(u8, name, "sat") or
+        std.mem.eql(u8, name, "serial") or
+        std.mem.eql(u8, name, "counter") or
+        std.mem.eql(u8, name, "Duration");
+}
+
+fn alignForward(value: i128, alignment: i128) ?i128 {
+    if (alignment <= 0) return null;
+    const rem = @rem(value, alignment);
+    if (rem == 0) return value;
+    return std.math.add(i128, value, alignment - rem) catch null;
+}
+
 // Extract the reflected type from a reflection call's `type_args` or first arg.
 fn reflectionTypeFromCall(node: anytype) ?ast.TypeExpr {
     if (node.type_args.len == 1) return node.type_args[0];
     if (node.args.len >= 1) return reflectionTypeExprFromArg(node.args[0]);
     return null;
+}
+
+fn reflectionFieldFromCall(node: anytype) ?[]const u8 {
+    const field_expr = if (node.type_args.len == 1) blk: {
+        if (node.args.len != 1) return null;
+        break :blk node.args[0];
+    } else blk: {
+        if (node.args.len != 2) return null;
+        break :blk node.args[1];
+    };
+    const field = enumLiteralName(field_expr) orelse return null;
+    return field.text;
 }
 
 fn reflectionRequiresField(kind: ReflectionKind) bool {
@@ -6019,7 +6116,7 @@ fn knownTaggedUnionName(name: []const u8, ctx: Context) bool {
 
 fn layoutFieldInfo(name: []const u8, ctx: Context) ?LayoutFieldInfo {
     if (ctx.structs) |structs| {
-        if (structs.get(name)) |info| return .{ .fields = info.fields };
+        if (structs.get(name)) |info| return .{ .fields = info.fields, .ordered = info.ordered };
     }
     if (ctx.packed_bits) |packed_bits| {
         if (packed_bits.get(name)) |info| return info;
