@@ -27,3 +27,11 @@ fn switch_expr_arm(n: u32) -> u32 {
         _ => { return 30; },
     }
 }
+
+fn classify_char(c: u8) -> u32 {
+    switch c {
+        'A' => { return 1; },
+        '\n' => { return 2; },
+        _ => { return 0; },
+    }
+}

@@ -3131,6 +3131,8 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, "case ");
                 try appendCIntLiteral(self.allocator, self.out, literal);
                 try self.out.appendSlice(self.allocator, ":\n");
+            } else if (charLiteralText(expr)) |literal| {
+                try self.out.print(self.allocator, "case {s}:\n", .{literal});
             } else if (boolLiteralValue(expr)) |value| {
                 try self.out.print(self.allocator, "case {d}:\n", .{@intFromBool(value)});
             } else {
@@ -10348,6 +10350,14 @@ fn intLiteralText(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .int_literal => |literal| literal,
         .grouped => |inner| intLiteralText(inner.*),
+        else => null,
+    };
+}
+
+fn charLiteralText(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .char_literal => |literal| literal,
+        .grouped => |inner| charLiteralText(inner.*),
         else => null,
     };
 }

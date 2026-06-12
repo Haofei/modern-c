@@ -4565,6 +4565,10 @@ fn integerLiteralValue(expr: ast.Expr) ?LiteralValue {
             .negative = false,
             .magnitude = magnitude,
         } else null,
+        .char_literal => |literal| if (parseCharLiteral(literal)) |value| .{
+            .negative = false,
+            .magnitude = value,
+        } else null,
         .grouped => |inner| integerLiteralValue(inner.*),
         .unary => |node| {
             if (node.op != .neg) return null;
@@ -4572,6 +4576,23 @@ fn integerLiteralValue(expr: ast.Expr) ?LiteralValue {
             if (literal.negative) return null;
             return .{ .negative = true, .magnitude = literal.magnitude };
         },
+        else => null,
+    };
+}
+
+fn parseCharLiteral(literal: []const u8) ?u128 {
+    if (literal.len < 3 or literal[0] != '\'' or literal[literal.len - 1] != '\'') return null;
+    const body = literal[1 .. literal.len - 1];
+    if (body.len == 1) return body[0];
+    if (body.len != 2 or body[0] != '\\') return null;
+    return switch (body[1]) {
+        '\\' => '\\',
+        '\'' => '\'',
+        '"' => '"',
+        '0' => 0,
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
         else => null,
     };
 }

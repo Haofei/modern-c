@@ -67,3 +67,28 @@ fn reject_integer_switch_bool_pattern(n: u32) -> u32 {
         _ => { return 0; },
     }
 }
+
+fn accept_integer_switch_char_pattern(c: u8) -> u32 {
+    switch c {
+        'A' => { return 1; },
+        '\n' => { return 2; },
+        _ => { return 0; },
+    }
+}
+
+fn reject_integer_switch_duplicate_char_canonical(c: u8) -> u32 {
+    switch c {
+        'A' => { return 1; },
+        // EXPECT_ERROR: E_DUPLICATE_SWITCH_CASE
+        65 => { return 2; },
+        _ => { return 0; },
+    }
+}
+
+fn reject_bool_switch_char_pattern(flag: bool) -> u32 {
+    switch flag {
+        // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
+        'A' => { return 1; },
+        _ => { return 0; },
+    }
+}
