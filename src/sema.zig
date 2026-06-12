@@ -3519,8 +3519,14 @@ pub const Checker = struct {
             return;
         }
         if (isIntegerLike(subject_class)) {
-            if (integerLiteralValue(expr) == null) {
+            const literal = integerLiteralValue(expr) orelse {
                 self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "switch literal pattern must match the subject type");
+                return;
+            };
+            if (checkedIntBounds(subject_class)) |bounds| {
+                if (!enumValueFits(enumValueKey(literal), bounds)) {
+                    self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "switch literal pattern must match the subject type");
+                }
             }
             return;
         }

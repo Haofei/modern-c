@@ -3128,12 +3128,10 @@ const CEmitter = struct {
     fn emitSwitchPatternLabel(self: *CEmitter, pattern: ast.Pattern, subject_enum_name: ?[]const u8) !void {
         try self.writeIndent();
         switch (pattern.kind) {
-            .literal => |expr| if (intLiteralText(expr)) |literal| {
+            .literal => |expr| if (switchCaseValueSupported(expr)) {
                 try self.out.appendSlice(self.allocator, "case ");
-                try appendCIntLiteral(self.allocator, self.out, literal);
+                try self.emitSwitchCaseValue(expr);
                 try self.out.appendSlice(self.allocator, ":\n");
-            } else if (charLiteralText(expr)) |literal| {
-                try self.out.print(self.allocator, "case {s}:\n", .{literal});
             } else if (boolLiteralValue(expr)) |value| {
                 try self.out.print(self.allocator, "case {d}:\n", .{@intFromBool(value)});
             } else {
@@ -3152,6 +3150,19 @@ const CEmitter = struct {
                 try self.out.print(self.allocator, "/* unsupported switch pattern: {s} */\n", .{@tagName(pattern.kind)});
                 return error.UnsupportedCEmission;
             },
+        }
+    }
+
+    fn emitSwitchCaseValue(self: *CEmitter, expr: ast.Expr) !void {
+        switch (expr.kind) {
+            .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
+            .char_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+            .grouped => |inner| try self.emitSwitchCaseValue(inner.*),
+            .unary => |node| {
+                try self.out.appendSlice(self.allocator, "-");
+                try self.emitSwitchCaseValue(node.expr.*);
+            },
+            else => unreachable,
         }
     }
 
@@ -10355,11 +10366,20 @@ fn intLiteralText(expr: ast.Expr) ?[]const u8 {
     };
 }
 
-fn charLiteralText(expr: ast.Expr) ?[]const u8 {
+fn switchCaseValueSupported(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .char_literal => |literal| literal,
-        .grouped => |inner| charLiteralText(inner.*),
-        else => null,
+        .int_literal, .char_literal => true,
+        .grouped => |inner| switchCaseValueSupported(inner.*),
+        .unary => |node| node.op == .neg and switchCaseUnsignedValue(node.expr.*),
+        else => false,
+    };
+}
+
+fn switchCaseUnsignedValue(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .int_literal, .char_literal => true,
+        .grouped => |inner| switchCaseUnsignedValue(inner.*),
+        else => false,
     };
 }
 

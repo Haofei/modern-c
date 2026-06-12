@@ -68,6 +68,31 @@ fn reject_integer_switch_bool_pattern(n: u32) -> u32 {
     }
 }
 
+fn accept_signed_switch_negative_pattern(n: i32) -> u32 {
+    switch n {
+        -1 => { return 1; },
+        0 => { return 2; },
+        _ => { return 0; },
+    }
+}
+
+fn reject_unsigned_switch_negative_pattern(n: u32) -> u32 {
+    switch n {
+        // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
+        -1 => { return 1; },
+        _ => { return 0; },
+    }
+}
+
+fn reject_signed_switch_duplicate_negative_canonical(n: i32) -> u32 {
+    switch n {
+        -1 => { return 1; },
+        // EXPECT_ERROR: E_DUPLICATE_SWITCH_CASE
+        -0x1 => { return 2; },
+        _ => { return 0; },
+    }
+}
+
 fn accept_integer_switch_char_pattern(c: u8) -> u32 {
     switch c {
         'A' => { return 1; },

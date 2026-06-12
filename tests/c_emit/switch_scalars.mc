@@ -35,3 +35,11 @@ fn classify_char(c: u8) -> u32 {
         _ => { return 0; },
     }
 }
+
+fn classify_signed(n: i32) -> u32 {
+    switch n {
+        -1 => { return 1; },
+        0 => { return 2; },
+        _ => { return 0; },
+    }
+}

@@ -625,7 +625,7 @@ pub const Parser = struct {
             }
             return .{ .span = tok.span, .kind = .{ .bind = name } };
         }
-        if (self.current.kind == .integer_literal or self.current.kind == .char_literal or self.current.kind == .string_literal or self.current.kind == .kw_true or self.current.kind == .kw_false) {
+        if (self.current.kind == .minus or self.current.kind == .integer_literal or self.current.kind == .char_literal or self.current.kind == .string_literal or self.current.kind == .kw_true or self.current.kind == .kw_false) {
             const expr = try self.parseExpr(0);
             return .{ .span = expr.span, .kind = .{ .literal = expr } };
         }

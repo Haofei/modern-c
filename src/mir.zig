@@ -1601,6 +1601,10 @@ const FunctionBuilder = struct {
                             }
                         } else if (isMirIntegerLike(subject_ty)) {
                             if (integerLiteralValue(literal)) |value| {
+                                if (integerLiteralRangeFinding(subject_ty, literal) != null) {
+                                    try self.addInstr(.switch_check, "switch_literal_type_mismatch", subject_ty, literal.span);
+                                    continue;
+                                }
                                 if (integer_cases_seen.contains(value)) {
                                     try self.addInstr(.switch_check, "duplicate_switch_case", subject_ty, pattern.span);
                                 } else {
