@@ -20,3 +20,13 @@ fn explicit_uninit_array() -> u8 {
     buf[0] = 7;
     return buf[0];
 }
+
+fn read_materialized_uninit_scalar() -> u32 {
+    var x: u32 = uninit;
+    return x;
+}
+
+fn read_materialized_uninit_byte() -> u8 {
+    var buf: [4]u8 = uninit;
+    return buf[0];
+}

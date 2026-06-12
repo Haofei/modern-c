@@ -2189,7 +2189,11 @@ const CEmitter = struct {
                         try self.out.print(self.allocator, "uint32_t {s}", .{name.text});
                     }
                     if (local.init) |initializer| {
-                        if (!isUninitLiteral(initializer)) {
+                        if (isUninitLiteral(initializer)) {
+                            if (local.ty) |decl_ty| {
+                                try self.emitMaterializedUninitInitializer(decl_ty);
+                            }
+                        } else {
                             try self.out.appendSlice(self.allocator, " = ");
                             if (local.ty) |decl_ty| {
                                 try self.emitExprWithTarget(initializer, locals, decl_ty);
@@ -2885,6 +2889,15 @@ const CEmitter = struct {
             .{@tagName(stmt.kind)},
         );
         return error.UnsupportedCEmission;
+    }
+
+    fn emitMaterializedUninitInitializer(self: *CEmitter, ty: ast.TypeExpr) !void {
+        try self.out.appendSlice(self.allocator, " = ");
+        if (self.zeroInitializerRequiresBraces(ty)) {
+            try self.out.appendSlice(self.allocator, "{0}");
+        } else {
+            try self.out.appendSlice(self.allocator, "0");
+        }
     }
 
     fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {

@@ -27,6 +27,16 @@ fn accept_maybe_uninit_storage() -> u32 {
     return 0;
 }
 
+fn accept_read_materialized_uninit_scalar() -> u32 {
+    var x: u32 = uninit;
+    return x;
+}
+
+fn accept_read_materialized_uninit_byte() -> u8 {
+    var buf: [4]u8 = uninit;
+    return buf[0];
+}
+
 fn reject_uninitialized_var() -> u32 {
     // EXPECT_ERROR: E_LOCAL_REQUIRES_INITIALIZER
     var x: i32;
