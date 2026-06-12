@@ -4088,8 +4088,9 @@ Iterable lowering covers arrays and slices from parameters, globals, nested
 array rows, aggregate fields, direct-call aggregate fields, and direct-call
 array/slice results.
 LLVM debug metadata includes `source_filename`, compile-unit/file records,
-function `DISubprogram` records, and line/column locations on returns and call
-instructions for the covered backend subset.
+function `DISubprogram` records, and statement-scoped line/column locations on
+returns, calls, checked-arithmetic trap paths, inline asm, and related runtime
+helper calls for the covered backend subset.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
 textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.

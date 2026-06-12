@@ -713,6 +713,10 @@ const LlvmEmitter = struct {
         const defer_start = self.defer_stack.items.len;
         errdefer self.defer_stack.items.len = defer_start;
         for (block.items) |stmt| {
+            const old_debug_span = self.current_debug_span;
+            self.current_debug_span = stmt.span;
+            defer self.current_debug_span = old_debug_span;
+
             switch (stmt.kind) {
                 .let_decl => |local| try self.emitLocalDecl(local),
                 .var_decl => |local| try self.emitLocalDecl(local),
