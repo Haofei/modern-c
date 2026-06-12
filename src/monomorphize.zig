@@ -239,12 +239,37 @@ fn blockTypeMentions(block: ast.Block, name: []const u8) bool {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| if (local.ty) |ty| {
                 if (typeMentionsIdent(ty, name)) return true;
+                if (local.init) |expr| if (exprTypeMentions(expr, name)) return true;
+            } else if (local.init) |expr| {
+                if (exprTypeMentions(expr, name)) return true;
             },
-            .loop => |loop| if (blockTypeMentions(loop.body, name)) return true,
+            .loop => |loop| {
+                if (loop.iterable) |expr| if (exprTypeMentions(expr, name)) return true;
+                if (blockTypeMentions(loop.body, name)) return true;
+            },
             .block, .unsafe_block, .comptime_block => |b| if (blockTypeMentions(b, name)) return true,
+            .contract_block => |node| if (blockTypeMentions(node.block, name)) return true,
             .if_let => |n| {
+                if (exprTypeMentions(n.value, name)) return true;
                 if (blockTypeMentions(n.then_block, name)) return true;
                 if (n.else_block) |b| if (blockTypeMentions(b, name)) return true;
+            },
+            .@"switch" => |node| {
+                if (exprTypeMentions(node.subject, name)) return true;
+                for (node.arms) |arm| {
+                    for (arm.patterns) |pattern| if (patternTypeMentions(pattern, name)) return true;
+                    switch (arm.body) {
+                        .block => |b| if (blockTypeMentions(b, name)) return true,
+                        .expr => |expr| if (exprTypeMentions(expr, name)) return true,
+                    }
+                }
+            },
+            .@"return" => |maybe| if (maybe) |expr| {
+                if (exprTypeMentions(expr, name)) return true;
+            },
+            .@"defer", .assert, .expr => |expr| if (exprTypeMentions(expr, name)) return true,
+            .assignment => |node| {
+                if (exprTypeMentions(node.target, name) or exprTypeMentions(node.value, name)) return true;
             },
             else => {},
         }
@@ -289,6 +314,41 @@ fn exprMentionsIdent(expr: ast.Expr, name: []const u8) bool {
         .index => |n| exprMentionsIdent(n.base.*, name) or exprMentionsIdent(n.index.*, name),
         .member => |n| exprMentionsIdent(n.base.*, name),
         .cast => |n| exprMentionsIdent(n.value.*, name),
+        else => false,
+    };
+}
+
+fn exprTypeMentions(expr: ast.Expr, name: []const u8) bool {
+    return switch (expr.kind) {
+        .grouped, .address_of, .deref => |inner| exprTypeMentions(inner.*, name),
+        .try_expr => |inner| exprTypeMentions(inner.operand.*, name) or if (inner.mapped) |mapped| exprTypeMentions(mapped.*, name) else false,
+        .unary => |node| exprTypeMentions(node.expr.*, name),
+        .binary => |node| exprTypeMentions(node.left.*, name) or exprTypeMentions(node.right.*, name),
+        .index => |node| exprTypeMentions(node.base.*, name) or exprTypeMentions(node.index.*, name),
+        .member => |node| exprTypeMentions(node.base.*, name),
+        .cast => |node| typeMentionsIdent(node.ty.*, name) or exprTypeMentions(node.value.*, name),
+        .call => |node| blk: {
+            if (exprTypeMentions(node.callee.*, name)) break :blk true;
+            for (node.type_args) |ty| if (typeMentionsIdent(ty, name)) break :blk true;
+            for (node.args) |arg| if (exprTypeMentions(arg, name)) break :blk true;
+            break :blk false;
+        },
+        .array_literal => |items| blk: {
+            for (items) |item| if (exprTypeMentions(item, name)) break :blk true;
+            break :blk false;
+        },
+        .struct_literal => |fields| blk: {
+            for (fields) |field| if (exprTypeMentions(field.value, name)) break :blk true;
+            break :blk false;
+        },
+        .block => |block| blockTypeMentions(block, name),
+        else => false,
+    };
+}
+
+fn patternTypeMentions(pattern: ast.Pattern, name: []const u8) bool {
+    return switch (pattern.kind) {
+        .literal => |expr| exprTypeMentions(expr, name),
         else => false,
     };
 }

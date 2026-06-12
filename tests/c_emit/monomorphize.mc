@@ -26,3 +26,19 @@ fn first_of_small() -> u8 {
     let a: [4]u8 = fill(4, 9);
     return a[0];
 }
+
+struct ReflectBox<T> {
+    value: T,
+}
+
+fn reflected_box_size(comptime T: type) -> usize {
+    return sizeof(ReflectBox<T>);
+}
+
+fn reflected_box_alignment(comptime T: type) -> usize {
+    return alignof(ReflectBox<T>);
+}
+
+fn use_reflected_box_layout() -> usize {
+    return reflected_box_size(u32) + reflected_box_alignment(u32);
+}

@@ -24,12 +24,28 @@ fn double(comptime N: usize) -> usize {
     return N + N;
 }
 
+struct LayoutBox<T> {
+    value: T,
+}
+
+fn layout_box_size(comptime T: type) -> usize {
+    return sizeof(LayoutBox<T>);
+}
+
+fn layout_box_alignment(comptime T: type) -> usize {
+    return alignof(LayoutBox<T>);
+}
+
 fn accept_power_of_two_capacity() -> usize {
     return make_ring(16);
 }
 
 fn accept_plain_comptime_param() -> usize {
     return double(21);
+}
+
+fn accept_generic_reflection_layout() -> usize {
+    return layout_box_size(u32) + layout_box_alignment(u32);
 }
 
 fn reject_non_power_of_two_capacity() -> usize {

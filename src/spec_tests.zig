@@ -1,11 +1,13 @@
 const std = @import("std");
 
+const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const hir = @import("hir.zig");
 const ir = @import("ir.zig");
 const lower_c = @import("lower_c.zig");
 const mir = @import("mir.zig");
+const monomorphize = @import("monomorphize.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
@@ -332,8 +334,7 @@ test "tests/spec fixtures produce declared semantic error codes" {
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        var p = parser.Parser.init(source, &reporter);
-        const module = try p.parseModule(parse_allocator);
+        const module = try parseSpecModule(source, parse_allocator, &reporter);
         defer module.deinit(parse_allocator);
 
         var checker = sema.Checker.init(&reporter);
@@ -390,8 +391,7 @@ test "tests/spec inline EXPECT_ERROR comments match diagnostic lines" {
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        var p = parser.Parser.init(source, &reporter);
-        const module = try p.parseModule(parse_allocator);
+        const module = try parseSpecModule(source, parse_allocator, &reporter);
         defer module.deinit(parse_allocator);
 
         var checker = sema.Checker.init(&reporter);
@@ -456,8 +456,7 @@ test "tests/spec semantic errors are all explicitly expected" {
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        var p = parser.Parser.init(source, &reporter);
-        const module = try p.parseModule(parse_allocator);
+        const module = try parseSpecModule(source, parse_allocator, &reporter);
         defer module.deinit(parse_allocator);
 
         var checker = sema.Checker.init(&reporter);
@@ -516,8 +515,7 @@ test "tests/spec inline run trap expectations are reached by arithmetic evaluato
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        var p = parser.Parser.init(source, &reporter);
-        const module = try p.parseModule(parse_allocator);
+        const module = try parseSpecModule(source, parse_allocator, &reporter);
         defer module.deinit(parse_allocator);
 
         for (expectations.items) |expectation| {
@@ -588,8 +586,7 @@ test "tests/spec fixtures produce declared IR inspection facts" {
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        var p = parser.Parser.init(source, &reporter);
-        const module = try p.parseModule(parse_allocator);
+        const module = try parseSpecModule(source, parse_allocator, &reporter);
         defer module.deinit(parse_allocator);
 
         var facts: std.ArrayList(u8) = .empty;
@@ -674,8 +671,7 @@ test "tests/spec fixtures produce declared lower-c inspection markers" {
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        var p = parser.Parser.init(source, &reporter);
-        const module = try p.parseModule(parse_allocator);
+        const module = try parseSpecModule(source, parse_allocator, &reporter);
         defer module.deinit(parse_allocator);
 
         var output: std.ArrayList(u8) = .empty;
@@ -812,6 +808,12 @@ fn allMetadataValuesSupported(path: []const u8, key: []const u8, value: []const 
         ok = false;
     }
     return ok;
+}
+
+fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !ast.Module {
+    var p = parser.Parser.init(source, reporter);
+    const module = try p.parseModule(allocator);
+    return try monomorphize.transform(allocator, module);
 }
 
 fn isSupportedPhase(phase: []const u8) bool {

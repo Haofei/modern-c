@@ -21,15 +21,9 @@ move struct Arc<T> {
     block: PAddr,
 }
 
-// Block storage: `value` (size sizeof(T)) + the u32 count + padding. We over-allocate
-// `sizeof(T) + 16` at 16-byte alignment rather than `sizeof(ArcBlock<T>)`, because
-// reflection on a generic type inside a generic body isn't monomorphized yet; the
-// `raw.ptr` cast still uses ArcBlock<T>'s real C field offsets, so this is sound.
-const ARC_HEADER: usize = 16;
-
 // Allocate a new refcounted block holding `value`, with one owner.
 export fn arc_new(comptime T: type, a: *Allocator, value: T) -> Arc<T> {
-    let addr: PAddr = alloc_bytes(a, sizeof(T) + ARC_HEADER, ARC_HEADER);
+    let addr: PAddr = alloc_bytes(a, sizeof(ArcBlock<T>), alignof(ArcBlock<T>));
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(addr);
     blk.count.store(1, .release);
     blk.value = value;
@@ -39,7 +33,7 @@ export fn arc_new(comptime T: type, a: *Allocator, value: T) -> Arc<T> {
 // Allocate a refcounted block with one owner but an *uninitialized* value — the caller
 // fills it via `arc_get` (the natural form for buffers populated after allocation).
 export fn arc_new_uninit(comptime T: type, a: *Allocator) -> Arc<T> {
-    let addr: PAddr = alloc_bytes(a, sizeof(T) + ARC_HEADER, ARC_HEADER);
+    let addr: PAddr = alloc_bytes(a, sizeof(ArcBlock<T>), alignof(ArcBlock<T>));
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(addr);
     blk.count.store(1, .release);
     return .{ .block = addr };
@@ -72,7 +66,7 @@ export fn arc_drop(comptime T: type, a: *Allocator, h: Arc<T>) -> bool {
     var freed: bool = false;
     if prev == 1 {
         fence.acquire(); // synchronize with prior releases before freeing
-        free_bytes(a, h.block, sizeof(T) + ARC_HEADER);
+        free_bytes(a, h.block, sizeof(ArcBlock<T>));
         freed = true;
     }
     drop(h); // consume the linear handle
