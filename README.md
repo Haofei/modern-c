@@ -107,7 +107,9 @@ Nullable pointer lowering covers nullable pointer ABI,
 nullable `if let`, and simple nullable switches. Result lowering covers
 aggregate ABI, `ok(...)`/`err(...)` constructors, `Result<void, E>` marker
 payloads, postfix `?` trap unwrap, `if let ok/err` narrowing, and two-arm
-Result switches including wildcard fallback arms. Atomic lowering covers
+Result switches including wildcard fallback arms. Result `?` propagation now
+early-returns `err(...)` from `Result`-returning functions, while non-Result
+return contexts retain trap unwrap semantics. Atomic lowering covers
 `atomic<T>` scalar storage, `atomic.init`, `load`, `store`, `fetch_add`, and
 `fetch_sub` with LLVM atomic memory orderings for local and global atomics.
 Tagged-union lowering covers aligned tag-plus-payload ABI, constructors,
@@ -301,6 +303,9 @@ and copied function-pointer aggregate globals.
 LLVM reflection coverage includes `sizeof`/`alignof`, `repr_of`, field and bit
 offsets, `DmaBuf`/MMIO register wrapper layouts, and `field_type(...)` in
 monomorphized type-argument position.
+LLVM unsafe-contract scope coverage includes nested contract blocks,
+post-contract checked arithmetic, `compiler.assume_noalias_unchecked(...)` as a
+contract-scoped identity, and pointer-to-address coercion for raw stores.
 LLVM domain coverage includes payload ABI lowering for `wrap<T>`/`sat<T>`,
 `serial<T>`/`counter<T>`/`Duration<T>` scalar storage, modular `wrap` arithmetic
 and shifts, unsigned saturating arithmetic, serial

@@ -4042,7 +4042,10 @@ with payload bindings and wildcard fallback arms. Static global initializer
 lowering covers string pointer arrays, constant address-of globals, and default
 slice/Result/tagged-union zero initializers. Reflection lowering covers
 `sizeof`/`alignof`, `repr_of`, field/bit offsets, MMIO wrapper layouts, and
-`field_type(...)` in monomorphized type-argument position. Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
+`field_type(...)` in monomorphized type-argument position. Result `?`
+propagation lowers to early `err(...)` returns in `Result`-returning functions,
+and unsafe-contract noalias scopes lower `compiler.assume_noalias_unchecked(...)`
+as a checked identity with pointer-to-address raw-store coercion. Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
 globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
 enums, enum switches over direct calls, and void switch expression arms.
