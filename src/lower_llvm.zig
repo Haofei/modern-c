@@ -469,7 +469,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitMemberAddress(self: *LlvmEmitter, node: anytype) ![]const u8 {
+    fn emitMemberAddress(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const struct_decl = self.structDeclForType(base_ty) orelse return error.UnsupportedLlvmEmission;
         const index = structFieldIndex(struct_decl, node.name.text) orelse return error.UnsupportedLlvmEmission;
@@ -487,7 +487,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitIndexAddress(self: *LlvmEmitter, node: anytype) ![]const u8 {
+    fn emitIndexAddress(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
         const array_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const array = switch (array_ty.kind) {
             .array => |array| array,
@@ -502,11 +502,11 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn arrayBasePointer(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+    fn arrayBasePointer(self: *LlvmEmitter, expr: ast.Expr) anyerror![]const u8 {
         return self.aggregateBasePointer(expr);
     }
 
-    fn aggregateBasePointer(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+    fn aggregateBasePointer(self: *LlvmEmitter, expr: ast.Expr) anyerror![]const u8 {
         return switch (expr.kind) {
             .ident => |ident| blk: {
                 if (self.local_slots.get(ident.text)) |slot| break :blk slot.ptr;
@@ -514,6 +514,8 @@ const LlvmEmitter = struct {
                 break :blk error.UnsupportedLlvmEmission;
             },
             .grouped => |inner| self.aggregateBasePointer(inner.*),
+            .index => |node| self.emitIndexAddress(node),
+            .member => |node| self.emitMemberAddress(node),
             else => error.UnsupportedLlvmEmission,
         };
     }

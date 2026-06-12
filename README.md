@@ -60,7 +60,8 @@ element-address taking. Plain local structs with scalar fields support literals,
 field load/store, and field-address taking. Scalar fixed-array and scalar-struct
 globals support static literals plus element/field access. Scalar aggregate
 function returns, parameters, and direct calls are supported for fixed arrays and
-plain structs.
+plain structs. Nested fixed-array/struct element and field access works for the
+covered aggregate subset.
 
 Prototype or incomplete:
 
@@ -91,7 +92,7 @@ Deferred:
 
 - LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
   `emit-llvm` support exists for a scalar/control-flow subset and validates
-  through `llvm-as`; slices, nested aggregate ABI, object emission, broader
+  through `llvm-as`; slices, full aggregate ABI, object emission, broader
   CFG/phi lowering, and debug-info lowering are still pending.
 
 ## Requirements

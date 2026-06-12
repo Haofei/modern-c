@@ -149,7 +149,7 @@
 | `[~]` | closure/global lowering | global closure / fn pointer、global array element field read/write、direct closure call regression 已有 | 扩更多 nested aggregate/global assignment case |
 | `[x]` | `mmio.map(...)` emit try on `MmioPtr` | 已接入 sema / MIR / C emission；移出 spec sweep allowlist | 继续扩展 MMIO map 组合用例 |
 | `[x]` | `Result<GenericStruct, E>` 名字混淆 | 已有 `tests/c_emit/generic_structs.mc` 覆盖 lower-C monomorphized ABI | 继续扩展嵌套泛型 ABI regression |
-| `[~]` | LLVM backend | 已有初始 `emit-llvm`：MIR 验证后输出 scalar 函数 / call / checked integer arithmetic / checked div-rem / bool switch-if control flow with simple joins / simple scalar local / while loop / basic pointer load-store / scalar-pointer global / local fixed scalar array / local scalar struct / scalar aggregate global / scalar aggregate ABI 的 textual LLVM IR，并用 `llvm-as` 验证 smoke | 扩 slice、nested aggregate ABI/object emission、broader CFG/phi lowering、debug info |
+| `[~]` | LLVM backend | 已有初始 `emit-llvm`：MIR 验证后输出 scalar 函数 / call / checked integer arithmetic / checked div-rem / bool switch-if control flow with simple joins / simple scalar local / while loop / basic pointer load-store / scalar-pointer global / local fixed scalar array / local scalar struct / scalar aggregate global / scalar aggregate ABI / nested aggregate access 的 textual LLVM IR，并用 `llvm-as` 验证 smoke | 扩 slice、full aggregate ABI/object emission、broader CFG/phi lowering、debug info |
 | `[~]` | debug info | `emit-c` 已输出 `#line` source hint；`emit-map` 已输出初始 `.mcmap`，含 deferred cleanup spans 和可匹配的 MIR block/instr label | 继续扩充覆盖范围 / native DWARF 映射 |
 | `[~]` | package manager | `mcc-pkg.sh` 有本地 manifest/info、递归 deps 解析 + 版本校验、manifest build | 需要 registry、版本解析、发布 |
 | `[ ]` | LSP / formatter | 没有 | 开发体验必需 |
