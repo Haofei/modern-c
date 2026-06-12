@@ -55,8 +55,10 @@ valid declarations in the current spec fixture suite emit assemblable LLVM IR
 through `zig build llvm-sweep`, and that gate also rejects hidden optimizer
 assumption tokens (`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`) across
 the swept IR. `zig build llvm-c-sweep` applies the same IR checks to all 109
-current `tests/c_emit` fixtures; `zig build llvm-c-obj-sweep` compiles the same
-fixture set to LLVM object files with `llc`. Scalar/pointer globals are covered for
+current `tests/c_emit` fixtures; `zig build llvm-spec-obj-sweep` compiles the
+same valid spec-corpus surface to LLVM object files with `llc`, and `zig build
+llvm-c-obj-sweep` compiles the C-emission fixture set to LLVM object files with
+`llc`. Scalar/pointer globals are covered for
 literal and address-of-global initializers. Local fixed arrays of scalar
 elements support literals, checked indexing, element assignment, and
 element-address taking. Plain local structs with scalar fields support literals,
@@ -174,6 +176,7 @@ Deferred:
 - LLVM backend production hardening (see Appendix M of
   `docs/spec/MC_0.6.1_Final_Design.md`). The current spec sweep is clear for
   valid declarations and rejects hidden optimizer assumption tokens in swept IR;
+  the same valid spec-corpus surface compiles to LLVM object files with `llc`;
   all current C-emission fixtures emit assemblable LLVM IR under the same
   assumption-token gate, and all current C-emission fixtures compile to LLVM
   object files with `llc`. The LLVM toolchain has link-and-run smoke coverage,
@@ -186,7 +189,8 @@ Deferred:
 - Zig `0.16.0`
 - `clang` for `zig build c-test`
 - `llvm-as` for `zig build llvm-test`
-- `llc` for `zig build llvm-obj-test`
+- `llc` for LLVM object-output gates such as `zig build llvm-obj-test`,
+  `zig build llvm-spec-obj-sweep`, and `zig build llvm-c-obj-sweep`
 
 The generated C targets **Clang/GCC only**: the runtime helpers use compiler
 builtins (`__builtin_trap`, `__builtin_*_overflow`, `__atomic_*`) and a few
@@ -203,6 +207,7 @@ zig build sweep
 zig build llvm-test
 zig build llvm-obj-test
 zig build llvm-sweep
+zig build llvm-spec-obj-sweep
 zig build llvm-c-sweep
 zig build llvm-c-obj-sweep
 zig build llvm-cc-test
@@ -257,10 +262,11 @@ sweep gates also reject hidden optimizer assumption tokens
 (`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`).
 `tools/toolchain/mcc-llvm-cc.sh` compiles an MC module through `emit-llvm` and
 `llc -filetype=obj`; `zig build llvm-obj-test` checks representative LLVM object
-output, and `zig build llvm-c-obj-sweep` compiles every current `tests/c_emit`
-fixture to an object file. `zig build llvm-cc-test` links and runs a simple
-exported function through the LLVM driver, and `zig build llvm-move-test` links
-and runs a linear `move` handle ABI roundtrip.
+output, `zig build llvm-spec-obj-sweep` compiles every in-scope valid spec
+fixture to an object file, and `zig build llvm-c-obj-sweep` compiles every
+current `tests/c_emit` fixture to an object file. `zig build llvm-cc-test` links
+and runs a simple exported function through the LLVM driver, and `zig build
+llvm-move-test` links and runs a linear `move` handle ABI roundtrip.
 
 ## Conformance Snapshot
 

@@ -4113,8 +4113,10 @@ current sweep has no allowlisted LLVM backend gaps. The
 `zig build llvm-c-sweep` gate additionally verifies every current
 `tests/c_emit` fixture emits assemblable LLVM IR under the same
 assumption-token check, keeping the broad C-backend regression corpus covered
-by LLVM emission. The `zig build llvm-c-obj-sweep` gate compiles the same
-fixture set to non-empty LLVM object files with `llc`.
+by LLVM emission. The `zig build llvm-spec-obj-sweep` gate compiles every
+in-scope valid spec fixture to a non-empty LLVM object file with `llc`, and the
+`zig build llvm-c-obj-sweep` gate compiles the current C-emission fixture set
+to non-empty LLVM object files with `llc`.
 The `zig build llvm-cc-test` and `zig build llvm-move-test` gates link and run
 LLVM-produced objects against C drivers, including a linear `move` handle
 roundtrip through the LLVM ABI.

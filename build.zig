@@ -81,6 +81,17 @@ pub fn build(b: *std.Build) void {
     const llvm_sweep_step = b.step("llvm-sweep", "Emit LLVM IR for every in-scope valid spec-corpus fixture and validate it with llvm-as");
     llvm_sweep_step.dependOn(&llvm_sweep_cmd.step);
 
+    const llvm_spec_obj_sweep_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/toolchain/spec-llvm-obj-sweep.py",
+        "zig-out/bin/mcc",
+        "tests/spec",
+        "zig-out/llvm-spec-obj-sweep",
+    });
+    llvm_spec_obj_sweep_cmd.step.dependOn(b.getInstallStep());
+    const llvm_spec_obj_sweep_step = b.step("llvm-spec-obj-sweep", "Compile every in-scope valid spec-corpus fixture to an LLVM object with llc");
+    llvm_spec_obj_sweep_step.dependOn(&llvm_spec_obj_sweep_cmd.step);
+
     const llvm_c_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/llvm-c-emit-sweep.py",
