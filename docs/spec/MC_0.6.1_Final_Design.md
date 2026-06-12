@@ -4005,6 +4005,9 @@ globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
 enums, and enum switches. Nullable pointer lowering covers nullable pointer ABI,
 `null`, non-null-to-nullable widening, postfix `?` null-unwrapping traps,
 nullable `if let`, and simple nullable switches.
+Atomic lowering covers `atomic<T>` scalar storage, `atomic.init`, `load`,
+`store`, `fetch_add`, and `fetch_sub` with LLVM atomic memory orderings for
+local and global atomics.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
 textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.

@@ -167,6 +167,10 @@ const LlvmEmitter = struct {
 
     fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
         const resolved_ty = self.resolveAliasType(ty);
+        if (self.atomicPayloadType(resolved_ty)) |payload_ty| {
+            if (isAtomicInitExpr(expr)) return try self.emitGlobalInitializer(atomicInitValue(expr).?, payload_ty);
+            return try self.emitGlobalInitializer(expr, payload_ty);
+        }
         if (self.enumDeclForType(ty)) |enum_decl| {
             return switch (expr.kind) {
                 .enum_literal => |literal| try self.enumCaseValueByName(enum_decl, literal.text),
@@ -240,6 +244,7 @@ const LlvmEmitter = struct {
 
     fn zeroInitializer(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
         const resolved_ty = self.resolveAliasType(ty);
+        if (self.atomicPayloadType(resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
         return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "bool"))
                 "0"
@@ -432,6 +437,12 @@ const LlvmEmitter = struct {
         switch (expr.kind) {
             .call => |call| {
                 if (try self.emitBuiltinVoidCall(call)) return;
+                if (self.callReturnType(call)) |ret_ty| {
+                    if (!typeNameEql(ret_ty, "void")) {
+                        _ = try self.emitCall(call, ret_ty);
+                        return;
+                    }
+                }
                 const callee = switch (call.callee.kind) {
                     .ident => |ident| ident.text,
                     else => return error.UnsupportedLlvmEmission,
@@ -627,6 +638,16 @@ const LlvmEmitter = struct {
         if (isCpuPauseCall(call.callee.*)) {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             try self.out.appendSlice(self.allocator, "  call void asm sideeffect \"pause\", \"~{memory}\"()\n");
+            return true;
+        }
+        if (self.atomicCallInfo(call)) |info| {
+            if (!std.mem.eql(u8, info.op, "store")) return false;
+            if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
+            const ordering = atomicOrderingArg(call.args, 1) orelse return error.UnsupportedLlvmEmission;
+            const llvm_order = atomicLlvmOrdering(ordering, .store) orelse return error.UnsupportedLlvmEmission;
+            const ptr = try self.atomicBaseAddress(info.base);
+            const value = try self.emitAtomicValueForStorage(call.args[0], info.payload_ty);
+            try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}\n", .{ try self.atomicStorageLlvmType(info.payload_ty), value, ptr, llvm_order, self.llvmAlignOf(info.payload_ty) });
             return true;
         }
         return false;
@@ -1219,10 +1240,14 @@ const LlvmEmitter = struct {
     }
 
     fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) !?[]const u8 {
-        _ = expected_ty;
         if (isPhysCall(call.callee.*)) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
+        }
+        if (isAtomicInitCall(call.callee.*)) {
+            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const payload_ty = self.atomicPayloadType(expected_ty) orelse return error.UnsupportedLlvmEmission;
+            return try self.emitAtomicValueForStorage(call.args[0], payload_ty);
         }
         if (isRawLoadCall(call.callee.*)) {
             if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
@@ -1247,6 +1272,34 @@ const LlvmEmitter = struct {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             const value = try self.emitExpr(info.base, info.enum_ty);
             return try self.castValue(value, info.enum_ty, info.repr_ty);
+        }
+        if (self.atomicCallInfo(call)) |info| {
+            if (std.mem.eql(u8, info.op, "load")) {
+                if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+                const ordering = atomicOrderingArg(call.args, 0) orelse return error.UnsupportedLlvmEmission;
+                const llvm_order = atomicLlvmOrdering(ordering, .load) orelse return error.UnsupportedLlvmEmission;
+                const ptr = try self.atomicBaseAddress(info.base);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = load atomic {s}, ptr {s} {s}, align {d}\n", .{ result, try self.atomicStorageLlvmType(info.payload_ty), ptr, llvm_order, self.llvmAlignOf(info.payload_ty) });
+                if (typeNameEql(info.payload_ty, "bool")) {
+                    const bool_result = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ bool_result, result });
+                    return bool_result;
+                }
+                return result;
+            }
+            if (std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) {
+                if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
+                const ordering = atomicOrderingArg(call.args, 1) orelse return error.UnsupportedLlvmEmission;
+                const llvm_order = atomicLlvmOrdering(ordering, .rmw) orelse return error.UnsupportedLlvmEmission;
+                if (self.integerBitsOf(info.payload_ty) == null) return error.UnsupportedLlvmEmission;
+                const ptr = try self.atomicBaseAddress(info.base);
+                const delta = try self.emitExpr(call.args[0], info.payload_ty);
+                const result = try self.nextTemp();
+                const op: []const u8 = if (std.mem.eql(u8, info.op, "fetch_sub")) "sub" else "add";
+                try self.out.print(self.allocator, "  {s} = atomicrmw {s} ptr {s}, {s} {s} {s}\n", .{ result, op, ptr, try self.llvmType(info.payload_ty), delta, llvm_order });
+                return result;
+            }
         }
         if (self.rawManyOffsetCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
@@ -1581,6 +1634,10 @@ const LlvmEmitter = struct {
             .pointer, .raw_many_pointer, .nullable => "ptr",
             .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
             .slice => "{ ptr, i64 }",
+            .generic => |node| if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1)
+                try self.atomicStorageLlvmType(node.args[0])
+            else
+                error.UnsupportedLlvmEmission,
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -1647,6 +1704,32 @@ const LlvmEmitter = struct {
             .nullable => |child| child.*,
             else => null,
         };
+    }
+
+    fn atomicPayloadType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .generic => |node| {
+                if (!std.mem.eql(u8, node.base.text, "atomic") or node.args.len != 1) return null;
+                return node.args[0];
+            },
+            .qualified => |node| self.atomicPayloadType(node.child.*),
+            else => null,
+        };
+    }
+
+    fn atomicStorageLlvmType(self: *LlvmEmitter, payload_ty: ast.TypeExpr) ![]const u8 {
+        if (typeNameEql(self.resolveAliasType(payload_ty), "bool")) return "i8";
+        return self.llvmType(payload_ty);
+    }
+
+    fn emitAtomicValueForStorage(self: *LlvmEmitter, expr: ast.Expr, payload_ty: ast.TypeExpr) ![]const u8 {
+        const value = try self.emitExpr(expr, payload_ty);
+        if (!typeNameEql(self.resolveAliasType(payload_ty), "bool")) return value;
+        if (std.mem.eql(u8, value, "0") or std.mem.eql(u8, value, "1")) return value;
+        const widened = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = zext i1 {s} to i8\n", .{ widened, value });
+        return widened;
     }
 
     fn indexElementType(self: *LlvmEmitter, base: ast.Expr) ?ast.TypeExpr {
@@ -1756,6 +1839,10 @@ const LlvmEmitter = struct {
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
         if (builtinCallReturnType(call)) |ty| return ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
+        if (self.atomicCallInfo(call)) |info| {
+            if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
+            if (std.mem.eql(u8, info.op, "store")) return simpleType(call.callee.*.span, "void");
+        }
         if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
         const callee = switch (call.callee.kind) {
             .ident => |ident| ident.text,
@@ -1778,6 +1865,64 @@ const LlvmEmitter = struct {
         const enum_decl = self.enumDeclForType(enum_ty) orelse return null;
         if (!enum_decl.is_open) return null;
         return .{ .base = member.base.*, .enum_ty = enum_ty, .repr_ty = enumReprType(enum_decl) };
+    }
+
+    fn atomicCallInfo(self: *LlvmEmitter, call: anytype) ?AtomicCallInfo {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "load") and
+            !std.mem.eql(u8, member.name.text, "store") and
+            !std.mem.eql(u8, member.name.text, "fetch_add") and
+            !std.mem.eql(u8, member.name.text, "fetch_sub"))
+        {
+            return null;
+        }
+        const base_ty = self.exprType(member.base.*) orelse return null;
+        const payload_ty = self.atomicPayloadType(base_ty) orelse return null;
+        return .{ .base = member.base.*, .op = member.name.text, .payload_ty = payload_ty };
+    }
+
+    fn atomicBaseAddress(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| if (self.local_slots.get(ident.text)) |slot|
+                slot.ptr
+            else if (self.global_types.contains(ident.text))
+                try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
+            else
+                error.UnsupportedLlvmEmission,
+            .member => |node| try self.emitMemberAddress(node),
+            .grouped => |inner| try self.atomicBaseAddress(inner.*),
+            else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn llvmAlignOf(self: *LlvmEmitter, ty: ast.TypeExpr) u8 {
+        if (self.enumDeclForType(ty)) |enum_decl| return self.llvmAlignOf(enumReprType(enum_decl));
+        const resolved_ty = self.resolveAliasType(ty);
+        if (self.atomicPayloadType(resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
+        return switch (resolved_ty.kind) {
+            .name => |name| if (std.mem.eql(u8, name.text, "bool") or
+                std.mem.eql(u8, name.text, "i8") or
+                std.mem.eql(u8, name.text, "u8"))
+                1
+            else if (std.mem.eql(u8, name.text, "i16") or
+                std.mem.eql(u8, name.text, "u16"))
+                2
+            else if (std.mem.eql(u8, name.text, "i32") or
+                std.mem.eql(u8, name.text, "u32") or
+                std.mem.eql(u8, name.text, "f32"))
+                4
+            else
+                8,
+            .pointer, .raw_many_pointer, .nullable, .slice => 8,
+            else => 8,
+        };
     }
 
     fn integerBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
@@ -1857,6 +2002,18 @@ const EnumRawCallInfo = struct {
     base: ast.Expr,
     enum_ty: ast.TypeExpr,
     repr_ty: ast.TypeExpr,
+};
+
+const AtomicCallInfo = struct {
+    base: ast.Expr,
+    op: []const u8,
+    payload_ty: ast.TypeExpr,
+};
+
+const AtomicOrderContext = enum {
+    load,
+    store,
+    rmw,
 };
 
 fn restoreLocal(map: anytype, key: []const u8, old: anytype) !void {
@@ -1961,6 +2118,30 @@ fn isPhysCall(callee: ast.Expr) bool {
     };
 }
 
+fn isAtomicInitCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "init") and isIdentNamed(member.base.*, "atomic"),
+        .grouped => |inner| isAtomicInitCall(inner.*),
+        else => false,
+    };
+}
+
+fn isAtomicInitExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .call => |call| isAtomicInitCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1,
+        .grouped => |inner| isAtomicInitExpr(inner.*),
+        else => false,
+    };
+}
+
+fn atomicInitValue(expr: ast.Expr) ?ast.Expr {
+    return switch (expr.kind) {
+        .call => |call| if (isAtomicInitCall(call.callee.*) and call.args.len == 1) call.args[0] else null,
+        .grouped => |inner| atomicInitValue(inner.*),
+        else => null,
+    };
+}
+
 fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, name),
@@ -1984,6 +2165,42 @@ fn rawScalarTypeName(ty: ast.TypeExpr) ?[]const u8 {
     if (std.mem.eql(u8, name, "f32")) return name;
     if (std.mem.eql(u8, name, "f64")) return name;
     return null;
+}
+
+fn atomicOrderingArg(args: []const ast.Expr, index: usize) ?[]const u8 {
+    if (index >= args.len) return null;
+    return atomicOrderingExpr(args[index]);
+}
+
+fn atomicOrderingExpr(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .enum_literal => |literal| literal.text,
+        .grouped => |inner| atomicOrderingExpr(inner.*),
+        else => null,
+    };
+}
+
+fn atomicLlvmOrdering(ordering: []const u8, context: AtomicOrderContext) ?[]const u8 {
+    if (std.mem.eql(u8, ordering, "relaxed")) return "monotonic";
+    return switch (context) {
+        .load => {
+            if (std.mem.eql(u8, ordering, "acquire")) return "acquire";
+            if (std.mem.eql(u8, ordering, "seq_cst")) return "seq_cst";
+            return null;
+        },
+        .store => {
+            if (std.mem.eql(u8, ordering, "release")) return "release";
+            if (std.mem.eql(u8, ordering, "seq_cst")) return "seq_cst";
+            return null;
+        },
+        .rmw => {
+            if (std.mem.eql(u8, ordering, "acquire")) return "acquire";
+            if (std.mem.eql(u8, ordering, "release")) return "release";
+            if (std.mem.eql(u8, ordering, "acq_rel")) return "acq_rel";
+            if (std.mem.eql(u8, ordering, "seq_cst")) return "seq_cst";
+            return null;
+        },
+    };
 }
 
 fn typeName(ty: ast.TypeExpr) ?[]const u8 {
