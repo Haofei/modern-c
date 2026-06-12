@@ -430,10 +430,18 @@ const LlvmEmitter = struct {
                 "0"
             else if (self.structDeclForType(resolved_ty) != null)
                 "zeroinitializer"
+            else if (libraryScalarLlvmType(name.text) != null)
+                "0"
             else
                 error.UnsupportedLlvmEmission,
             .pointer, .raw_many_pointer, .nullable => "null",
             .array => "zeroinitializer",
+            .generic => |node| if (self.resultInfo(resolved_ty)) |_|
+                "zeroinitializer"
+            else if (isPayloadDomainGenericName(node.base.text) and node.args.len == 1)
+                try self.zeroInitializer(node.args[0])
+            else
+                error.UnsupportedLlvmEmission,
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -596,9 +604,11 @@ const LlvmEmitter = struct {
                 },
                 .@"switch" => |node| {
                     if (try self.emitNullableSwitch(node, ret_ty)) return true;
+                    if (try self.emitResultSwitch(node, ret_ty)) return true;
                     if (try self.emitScalarSwitch(node, ret_ty)) return true;
                 },
                 .if_let => |node| {
+                    if (try self.emitResultIfLet(node, ret_ty)) return true;
                     if (try self.emitNullableIfLet(node, ret_ty)) return true;
                 },
                 .@"break" => {
@@ -684,12 +694,28 @@ const LlvmEmitter = struct {
 
     fn emitTryExpr(self: *LlvmEmitter, operand: ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
         const operand_ty = self.exprType(operand) orelse return error.UnsupportedLlvmEmission;
-        const inner_ty = self.nullableInnerType(operand_ty) orelse return error.UnsupportedLlvmEmission;
         _ = try self.llvmType(expected_ty);
+        if (self.resultInfo(operand_ty)) |info| {
+            _ = try self.resultPayloadLlvmType(info.ok_ty);
+            const value = try self.emitExpr(operand, operand_ty);
+            try self.emitResultUnwrapCheck(value, operand_ty);
+            const payload = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, try self.llvmType(operand_ty), value });
+            return payload;
+        }
+        const inner_ty = self.nullableInnerType(operand_ty) orelse return error.UnsupportedLlvmEmission;
         const value = try self.emitExpr(operand, operand_ty);
         try self.emitNullUnwrapCheck(value);
         _ = inner_ty;
         return value;
+    }
+
+    fn emitResultUnwrapCheck(self: *LlvmEmitter, value: []const u8, result_ty: ast.TypeExpr) !void {
+        const is_ok = try self.nextTemp();
+        const trap = try self.nextLabel("trap_result");
+        const cont = try self.nextLabel("result_ok");
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_ok, try self.llvmType(result_ty), value });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_InvalidRepresentation(){s}\n  unreachable\n{s}:\n", .{ is_ok, cont, trap, trap, try self.debugCallSuffix(), cont });
     }
 
     fn emitNullUnwrapCheck(self: *LlvmEmitter, value: []const u8) !void {
@@ -731,6 +757,62 @@ const LlvmEmitter = struct {
 
         _ = self.local_types.remove(binding.text);
         _ = self.local_slots.remove(binding.text);
+
+        try self.out.print(self.allocator, "{s}:\n", .{else_label});
+        const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
+        if (!else_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        if (then_terminated and else_terminated) return true;
+        try self.out.print(self.allocator, "{s}:\n", .{end_label});
+        return false;
+    }
+
+    fn emitResultIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr) !bool {
+        const tag_bind = switch (node.pattern.kind) {
+            .tag_bind => |tag_bind| tag_bind,
+            else => return false,
+        };
+        const is_ok_pattern = if (std.mem.eql(u8, tag_bind.tag.text, "ok"))
+            true
+        else if (std.mem.eql(u8, tag_bind.tag.text, "err"))
+            false
+        else
+            return false;
+        const subject_ty = self.exprType(node.value) orelse return false;
+        const info = self.resultInfo(subject_ty) orelse return false;
+        const binding_ty = if (is_ok_pattern) info.ok_ty else info.err_ty;
+        const payload_index: u8 = if (is_ok_pattern) 1 else 2;
+        const subject = try self.emitExpr(node.value, subject_ty);
+        const then_label = try self.nextLabel(if (is_ok_pattern) "result_ok" else "result_err");
+        const else_label = try self.nextLabel(if (is_ok_pattern) "result_err" else "result_ok");
+        const end_label = try self.nextLabel("result_end");
+        const is_ok = try self.nextTemp();
+        const matches = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_ok, try self.llvmType(subject_ty), subject });
+        if (is_ok_pattern) {
+            try self.out.print(self.allocator, "  {s} = icmp eq i1 {s}, true\n", .{ matches, is_ok });
+        } else {
+            try self.out.print(self.allocator, "  {s} = icmp eq i1 {s}, false\n", .{ matches, is_ok });
+        }
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ matches, then_label, else_label, then_label });
+
+        const old_type = self.local_types.fetchRemove(tag_bind.binding.text);
+        const old_slot = self.local_slots.fetchRemove(tag_bind.binding.text);
+        defer restoreLocal(&self.local_types, tag_bind.binding.text, old_type) catch {};
+        defer restoreLocal(&self.local_slots, tag_bind.binding.text, old_slot) catch {};
+
+        const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{tag_bind.binding.text});
+        const payload = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, try self.llvmType(subject_ty), subject, payload_index });
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.resultPayloadLlvmType(binding_ty) });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.resultPayloadLlvmType(binding_ty), payload, binding_ptr });
+        try self.local_types.put(tag_bind.binding.text, binding_ty);
+        try self.local_slots.put(tag_bind.binding.text, .{ .ty = binding_ty, .ptr = binding_ptr });
+
+        const then_terminated = try self.emitBlock(node.then_block, ret_ty);
+        if (!then_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+
+        _ = self.local_types.remove(tag_bind.binding.text);
+        _ = self.local_slots.remove(tag_bind.binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
         const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
@@ -1088,6 +1170,87 @@ const LlvmEmitter = struct {
         if (all_terminated) return true;
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
         return false;
+    }
+
+    fn emitResultSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
+        const subject_ty = self.exprType(node.subject) orelse return false;
+        const info = self.resultInfo(subject_ty) orelse return false;
+        if (node.arms.len != 2) return error.UnsupportedLlvmEmission;
+
+        var ok_index: ?usize = null;
+        var ok_binding: ?ast.Ident = null;
+        var err_index: ?usize = null;
+        var err_binding: ?ast.Ident = null;
+        var wildcard_index: ?usize = null;
+        for (node.arms, 0..) |arm, i| {
+            if (arm.patterns.len != 1) return false;
+            const pattern = arm.patterns[0];
+            if (pattern.kind == .wildcard) {
+                if (wildcard_index != null) return error.UnsupportedLlvmEmission;
+                wildcard_index = i;
+                continue;
+            }
+            const tag_info = resultSwitchPattern(pattern) orelse return false;
+            if (std.mem.eql(u8, tag_info.tag, "ok")) {
+                if (ok_index != null) return error.UnsupportedLlvmEmission;
+                ok_index = i;
+                ok_binding = tag_info.binding;
+            } else if (std.mem.eql(u8, tag_info.tag, "err")) {
+                if (err_index != null) return error.UnsupportedLlvmEmission;
+                err_index = i;
+                err_binding = tag_info.binding;
+            } else {
+                return false;
+            }
+        }
+        const ok_i = ok_index orelse wildcard_index orelse return false;
+        const err_i = err_index orelse wildcard_index orelse return false;
+        if (ok_index == null and err_index == null) return false;
+
+        const subject = try self.emitExpr(node.subject, subject_ty);
+        const ok_label = try self.nextLabel("result_ok");
+        const err_label = try self.nextLabel("result_err");
+        const end_label = try self.nextLabel("result_end");
+        const is_ok = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_ok, try self.llvmType(subject_ty), subject });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ is_ok, ok_label, err_label });
+
+        var all_terminated = true;
+        try self.out.print(self.allocator, "{s}:\n", .{ok_label});
+        const ok_terminated = try self.emitResultSwitchArm(node.arms[ok_i], ret_ty, subject, subject_ty, info.ok_ty, 1, if (ok_index != null) ok_binding else null);
+        if (!ok_terminated) {
+            all_terminated = false;
+            try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        }
+
+        try self.out.print(self.allocator, "{s}:\n", .{err_label});
+        const err_terminated = try self.emitResultSwitchArm(node.arms[err_i], ret_ty, subject, subject_ty, info.err_ty, 2, if (err_index != null) err_binding else null);
+        if (!err_terminated) {
+            all_terminated = false;
+            try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        }
+        if (all_terminated) return true;
+        try self.out.print(self.allocator, "{s}:\n", .{end_label});
+        return false;
+    }
+
+    fn emitResultSwitchArm(self: *LlvmEmitter, arm: ast.SwitchArm, ret_ty: ast.TypeExpr, subject: []const u8, subject_ty: ast.TypeExpr, payload_ty: ast.TypeExpr, payload_index: u8, binding: ?ast.Ident) !bool {
+        if (binding) |bind| {
+            const old_type = self.local_types.fetchRemove(bind.text);
+            const old_slot = self.local_slots.fetchRemove(bind.text);
+            defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
+            defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
+
+            const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{bind.text});
+            const payload = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, try self.llvmType(subject_ty), subject, payload_index });
+            try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.resultPayloadLlvmType(payload_ty) });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.resultPayloadLlvmType(payload_ty), payload, binding_ptr });
+            try self.local_types.put(bind.text, payload_ty);
+            try self.local_slots.put(bind.text, .{ .ty = payload_ty, .ptr = binding_ptr });
+            return try self.emitSwitchBody(arm.body, ret_ty);
+        }
+        return try self.emitSwitchBody(arm.body, ret_ty);
     }
 
     fn emitScalarSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
@@ -1576,6 +1739,7 @@ const LlvmEmitter = struct {
             const value = try self.emitExpr(info.base, info.enum_ty);
             return try self.castValue(value, info.enum_ty, info.repr_ty);
         }
+        if (isResultConstructorCall(call)) |tag| return try self.emitResultConstructorValue(call, expected_ty, tag);
         if (self.domainResidueCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(info.base, info.domain_ty);
@@ -2078,6 +2242,44 @@ const LlvmEmitter = struct {
         return result;
     }
 
+    fn emitResultConstructorValue(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr, tag: []const u8) ![]const u8 {
+        if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+        const info = self.resultInfo(expected_ty) orelse return error.UnsupportedLlvmEmission;
+        const result_ty = try self.llvmType(expected_ty);
+        const ok_ty = try self.resultPayloadLlvmType(info.ok_ty);
+        const err_ty = try self.resultPayloadLlvmType(info.err_ty);
+        const is_ok = std.mem.eql(u8, tag, "ok");
+        const tag_value = if (is_ok) "true" else "false";
+
+        const tagged = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} undef, i1 {s}, 0\n", .{ tagged, result_ty, tag_value });
+
+        const ok_value = if (is_ok)
+            try self.emitResultPayloadExpr(call.args[0], info.ok_ty)
+        else
+            try self.resultPayloadZero(info.ok_ty);
+        const with_ok = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ with_ok, result_ty, tagged, ok_ty, ok_value });
+
+        const err_value = if (is_ok)
+            try self.resultPayloadZero(info.err_ty)
+        else
+            try self.emitResultPayloadExpr(call.args[0], info.err_ty);
+        const with_err = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 2\n", .{ with_err, result_ty, with_ok, err_ty, err_value });
+        return with_err;
+    }
+
+    fn emitResultPayloadExpr(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
+        if (typeNameEql(self.resolveAliasType(ty), "void")) return "0";
+        return try self.emitExpr(expr, ty);
+    }
+
+    fn resultPayloadZero(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
+        if (typeNameEql(self.resolveAliasType(ty), "void")) return "0";
+        return try self.zeroInitializer(ty);
+    }
+
     fn emitDomainOpCall(self: *LlvmEmitter, call: anytype, info: DomainOpCallInfo) ![]const u8 {
         if (call.type_args.len != 0) return error.UnsupportedLlvmEmission;
         const expected_args: usize = if (std.mem.eql(u8, info.op, "elapsed_assume_within")) 3 else 2;
@@ -2226,13 +2428,17 @@ const LlvmEmitter = struct {
                 try self.llvmType(info.repr)
             else if (self.struct_types.get(name.text)) |struct_decl|
                 try self.structLlvmType(struct_decl)
+            else if (libraryScalarLlvmType(name.text)) |library_ty|
+                library_ty
             else
                 error.UnsupportedLlvmEmission,
             .pointer, .raw_many_pointer, .nullable => "ptr",
             .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ self.arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
             .slice => "{ ptr, i64 }",
             .fn_pointer => "ptr",
-            .generic => |node| if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1)
+            .generic => |node| if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2)
+                try self.resultLlvmType(node.args[0], node.args[1])
+            else if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1)
                 try self.atomicStorageLlvmType(node.args[0])
             else if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1)
                 try self.llvmType(node.args[0])
@@ -2244,6 +2450,15 @@ const LlvmEmitter = struct {
                 error.UnsupportedLlvmEmission,
             else => error.UnsupportedLlvmEmission,
         };
+    }
+
+    fn resultLlvmType(self: *LlvmEmitter, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) ![]const u8 {
+        return std.fmt.allocPrint(self.scratch.allocator(), "{{ i1, {s}, {s} }}", .{ try self.resultPayloadLlvmType(ok_ty), try self.resultPayloadLlvmType(err_ty) });
+    }
+
+    fn resultPayloadLlvmType(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
+        if (typeNameEql(self.resolveAliasType(ty), "void")) return "i8";
+        return try self.llvmType(ty);
     }
 
     fn nextTemp(self: *LlvmEmitter) ![]const u8 {
@@ -2282,7 +2497,10 @@ const LlvmEmitter = struct {
                 break :blk null;
             } else null,
             .binary => |node| if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*),
-            .try_expr => |node| if (self.exprType(node.operand.*)) |ty| self.nullableInnerType(ty) else null,
+            .try_expr => |node| if (self.exprType(node.operand.*)) |ty|
+                if (self.resultInfo(ty)) |info| info.ok_ty else self.nullableInnerType(ty)
+            else
+                null,
             else => null,
         };
     }
@@ -2333,6 +2551,18 @@ const LlvmEmitter = struct {
                 return node.args[0];
             },
             .qualified => |node| self.maybeUninitPayloadType(node.child.*),
+            else => null,
+        };
+    }
+
+    fn resultInfo(self: *LlvmEmitter, ty: ast.TypeExpr) ?ResultTypeInfo {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .generic => |node| {
+                if (!std.mem.eql(u8, node.base.text, "Result") or node.args.len != 2) return null;
+                return .{ .ok_ty = node.args[0], .err_ty = node.args[1] };
+            },
+            .qualified => |node| self.resultInfo(node.child.*),
             else => null,
         };
     }
@@ -2801,7 +3031,8 @@ const LlvmEmitter = struct {
         return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "bool") or
                 std.mem.eql(u8, name.text, "i8") or
-                std.mem.eql(u8, name.text, "u8"))
+                std.mem.eql(u8, name.text, "u8") or
+                libraryScalarLlvmType(name.text) != null)
                 1
             else if (std.mem.eql(u8, name.text, "i16") or
                 std.mem.eql(u8, name.text, "u16"))
@@ -2857,12 +3088,26 @@ const LlvmEmitter = struct {
                 if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructSize(struct_decl, depth + 1);
                 if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeSizeOf(enumReprType(enum_decl), depth + 1);
                 if (self.packed_bits.get(name.text)) |info| return self.comptimeSizeOf(info.repr, depth + 1);
+                if (libraryScalarLlvmType(name.text) != null) return 1;
                 return null;
             },
             .pointer, .raw_many_pointer => 8,
             .nullable => |child| if (isPointerLikeType(child.*)) 8 else null,
             .slice => 16,
             .generic => |g| {
+                if (std.mem.eql(u8, g.base.text, "Result") and g.args.len == 2) {
+                    const ok_size = self.comptimeResultPayloadSizeOf(g.args[0], depth + 1) orelse return null;
+                    const err_size = self.comptimeResultPayloadSizeOf(g.args[1], depth + 1) orelse return null;
+                    const ok_align = self.comptimeResultPayloadAlignOf(g.args[0], depth + 1) orelse return null;
+                    const err_align = self.comptimeResultPayloadAlignOf(g.args[1], depth + 1) orelse return null;
+                    const max_align = @max(@max(ok_align, err_align), 1);
+                    var offset: i128 = 1;
+                    offset = alignForward(offset, ok_align) orelse return null;
+                    offset += ok_size;
+                    offset = alignForward(offset, err_align) orelse return null;
+                    offset += err_size;
+                    return alignForward(offset, max_align);
+                }
                 if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
@@ -2888,11 +3133,17 @@ const LlvmEmitter = struct {
                 if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructAlign(struct_decl, depth + 1);
                 if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeAlignOf(enumReprType(enum_decl), depth + 1);
                 if (self.packed_bits.get(name.text)) |info| return self.comptimeAlignOf(info.repr, depth + 1);
+                if (libraryScalarLlvmType(name.text) != null) return 1;
                 return null;
             },
             .pointer, .raw_many_pointer, .slice => 8,
             .nullable => |child| if (isPointerLikeType(child.*)) 8 else null,
             .generic => |g| {
+                if (std.mem.eql(u8, g.base.text, "Result") and g.args.len == 2) {
+                    const ok_align = self.comptimeResultPayloadAlignOf(g.args[0], depth + 1) orelse return null;
+                    const err_align = self.comptimeResultPayloadAlignOf(g.args[1], depth + 1) orelse return null;
+                    return @max(@max(ok_align, err_align), 1);
+                }
                 if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
@@ -2903,6 +3154,16 @@ const LlvmEmitter = struct {
             .qualified => |node| self.comptimeAlignOf(node.child.*, depth + 1),
             else => null,
         };
+    }
+
+    fn comptimeResultPayloadSizeOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (typeNameEql(self.resolveAliasType(ty), "void")) return 1;
+        return self.comptimeSizeOf(ty, depth + 1);
+    }
+
+    fn comptimeResultPayloadAlignOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (typeNameEql(self.resolveAliasType(ty), "void")) return 1;
+        return self.comptimeAlignOf(ty, depth + 1);
     }
 
     fn comptimeStructSize(self: *LlvmEmitter, struct_decl: ast.StructDecl, depth: usize) ?i128 {
@@ -3022,6 +3283,7 @@ const LlvmEmitter = struct {
             .array => true,
             .slice => true,
             .name => self.structDeclForType(resolved_ty) != null,
+            .generic => |node| std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2,
             else => false,
         };
     }
@@ -3131,6 +3393,16 @@ const MaybeUninitCallInfo = struct {
     base: ast.Expr,
     op: []const u8,
     payload_ty: ast.TypeExpr,
+};
+
+const ResultTypeInfo = struct {
+    ok_ty: ast.TypeExpr,
+    err_ty: ast.TypeExpr,
+};
+
+const ResultSwitchPattern = struct {
+    tag: []const u8,
+    binding: ?ast.Ident = null,
 };
 
 const AtomicOrderContext = enum {
@@ -3561,6 +3833,30 @@ fn isPayloadDomainGenericName(name: []const u8) bool {
         std.mem.eql(u8, name, "Duration");
 }
 
+fn libraryScalarLlvmType(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "Order")) return "i8";
+    if (std.mem.eql(u8, name, "Error")) return "i8";
+    if (std.mem.eql(u8, name, "AmbiguousSerialOrder")) return "i8";
+    if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return "i8";
+    if (std.mem.eql(u8, name, "ConversionError")) return "i8";
+    if (std.mem.eql(u8, name, "Overflow")) return "i8";
+    return null;
+}
+
+fn isResultConstructorCall(call: anytype) ?[]const u8 {
+    if (call.type_args.len != 0 or call.args.len != 1) return null;
+    const name = switch (call.callee.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| switch (inner.kind) {
+            .ident => |ident| ident.text,
+            else => return null,
+        },
+        else => return null,
+    };
+    if (std.mem.eql(u8, name, "ok") or std.mem.eql(u8, name, "err")) return name;
+    return null;
+}
+
 fn trapHelperForCall(call: anytype) ?[]const u8 {
     const callee = switch (call.callee.kind) {
         .ident => |ident| ident.text,
@@ -3614,6 +3910,14 @@ fn findWildcardSwitchArm(arms: []const ast.SwitchArm) ?ast.SwitchArm {
         }
     }
     return null;
+}
+
+fn resultSwitchPattern(pattern: ast.Pattern) ?ResultSwitchPattern {
+    return switch (pattern.kind) {
+        .tag => |tag| .{ .tag = tag.text },
+        .tag_bind => |tag_bind| .{ .tag = tag_bind.tag.text, .binding = tag_bind.binding },
+        else => null,
+    };
 }
 
 fn binaryIsComparison(op: ast.BinaryOp) bool {

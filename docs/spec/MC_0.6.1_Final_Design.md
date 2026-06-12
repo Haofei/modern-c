@@ -4028,6 +4028,9 @@ enums, enum switches over direct calls, and void switch expression arms.
 Nullable pointer lowering covers nullable pointer ABI,
 `null`, non-null-to-nullable widening, postfix `?` null-unwrapping traps,
 nullable `if let`, and simple nullable switches.
+Result lowering covers aggregate ABI, `ok(...)`/`err(...)` constructors,
+`Result<void, E>` marker payloads, postfix `?` trap unwrap, `if let ok/err`
+narrowing, and two-arm Result switches including wildcard fallback arms.
 Atomic lowering covers `atomic<T>` scalar storage, `atomic.init`, `load`,
 `store`, `fetch_add`, and `fetch_sub` with LLVM atomic memory orderings for
 local and global atomics.
