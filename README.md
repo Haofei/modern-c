@@ -287,9 +287,9 @@ markers. Passing fixtures do not imply full implementation of
 `docs/spec/MC_0.6.1_Final_Design.md`.
 
 `zig build m0` is the current milestone gate. It runs unit tests, the spec
-sweep, generated-C checks, toolchain/library host tests, and many QEMU-backed
-kernel/demo tests; external-tool-dependent tests self-skip when their required
-tools are absent.
+sweep, generated-C checks, LLVM IR/object/link-run gates, toolchain/library
+host tests, and many QEMU-backed kernel/demo tests; external-tool-dependent
+tests self-skip when their required tools are absent.
 
 Generated C is checked by the `tests/c_emit` fixture suite and the spec emission
 sweep. Unsupported C emission paths fail rather than silently changing source

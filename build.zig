@@ -1283,6 +1283,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_c_obj_sweep_cmd.step);
     m0_step.dependOn(&llvm_cc_test_cmd.step);
     m0_step.dependOn(&llvm_move_test_cmd.step);
+    m0_step.dependOn(&llvm_runtime_test_cmd.step);
+    m0_step.dependOn(&llvm_std_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

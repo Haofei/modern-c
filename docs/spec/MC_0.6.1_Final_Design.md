@@ -4126,6 +4126,8 @@ imported generic `std/stack`, `std/sync` guard, and fn-pointer runtime checks.
 The `zig build llvm-std-test` gate additionally links LLVM-built
 `std/{core,bits,math,ascii,fmt,addr}` objects into one host executable and runs
 exported function checks.
+These LLVM IR, object, and link/run gates are included in the `zig build m0`
+milestone gate.
 It intentionally emits no hidden optimizer-assumption tokens outside proven
 verifier conditions, and the broad LLVM sweep gates enforce that policy for
 `nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef`. Additional
