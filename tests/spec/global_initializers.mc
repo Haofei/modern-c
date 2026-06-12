@@ -13,6 +13,7 @@ struct Table {
 
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
+global letter: u8 = 'A';
 global cast_seed: u32 = 1 as u32;
 global cast_copied_seed: u32 = seed as u32;
 global first_index: usize = 0;

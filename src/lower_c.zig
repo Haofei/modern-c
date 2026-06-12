@@ -10260,7 +10260,7 @@ fn ptrCType(child: ast.TypeExpr, mutability: ast.Mutability) []const u8 {
 
 fn isStaticCInitializer(expr: ast.Expr) bool {
     return switch (expr.kind) {
-        .int_literal, .bool_literal, .null_literal, .void_literal, .enum_literal, .string_literal => true,
+        .int_literal, .bool_literal, .null_literal, .void_literal, .enum_literal, .string_literal, .char_literal => true,
         .address_of => true,
         .cast => |node| isStaticCInitializer(node.value.*),
         .unary => |node| node.op == .neg and switch (node.expr.kind) {

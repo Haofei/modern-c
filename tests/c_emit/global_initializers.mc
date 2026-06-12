@@ -5,6 +5,7 @@ struct Table {
 global shared_cell: u32 = 0;
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
+global letter: u8 = 'A';
 global cast_seed: u32 = 1 as u32;
 global cast_copied_seed: u32 = seed as u32;
 global signed_seed: i32 = -1;
@@ -25,6 +26,10 @@ fn read_shared_cell() -> u32 {
 
 fn read_copied_seed() -> u32 {
     return copied_seed;
+}
+
+fn read_letter() -> u8 {
+    return letter;
 }
 
 fn read_cast_seed() -> u32 {
