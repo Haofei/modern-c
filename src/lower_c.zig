@@ -946,6 +946,7 @@ const CEmitter = struct {
     fn emitEnumCaseValue(self: *CEmitter, value: ast.Expr) !void {
         switch (value.kind) {
             .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
+            .char_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .grouped => |inner| try self.emitEnumCaseValue(inner.*),
             // Negative discriminants for signed-repr enums (`negative = -1`).
             .unary => |node| {

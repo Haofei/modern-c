@@ -158,6 +158,11 @@ enum SignedIrq: i8 {
     zero = 0,
 }
 
+enum AsciiCode: u8 {
+    letter_a = 'A',
+    newline = '\n',
+}
+
 open enum DeviceState: u8 {
     idle = 0,
     busy = 1,
@@ -269,6 +274,12 @@ enum RejectDuplicateEnumValue: u8 {
     first = 1,
     // EXPECT_ERROR: E_DUPLICATE_ENUM_VALUE
     second = 1,
+}
+
+enum RejectDuplicateCharEnumValue: u8 {
+    letter_a = 'A',
+    // EXPECT_ERROR: E_DUPLICATE_ENUM_VALUE
+    numeric_a = 65,
 }
 
 // EXPECT_ERROR: E_ENUM_REPR_NOT_INTEGER

@@ -9,6 +9,11 @@ enum Irq: u8 {
     keyboard = 33,
 }
 
+enum AsciiCode: u8 {
+    letter_a = 'A',
+    newline = '\n',
+}
+
 open enum DeviceState: u8 {
     idle = 0,
     busy = 1,
@@ -58,4 +63,8 @@ fn closed_enum_switch_wildcard(irq: Irq) -> void {
         .timer => {},
         _ => {},
     }
+}
+
+fn ascii_code() -> AsciiCode {
+    return .letter_a;
 }
