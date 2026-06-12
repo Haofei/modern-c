@@ -353,13 +353,23 @@ pub fn build(b: *std.Build) void {
     llvm_virtio_test_step.dependOn(&llvm_virtio_test_cmd.step);
 
     const blk_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/fs/blk-test.sh",
         "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_blk_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/fs/blk-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
     });
     blk_test_cmd.step.dependOn(b.getInstallStep());
     const blk_test_step = b.step("blk-test", "Build and run the virtio-blk driver reading a sector under QEMU");
     blk_test_step.dependOn(&blk_test_cmd.step);
+    llvm_blk_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_blk_test_step = b.step("llvm-blk-test", "Build and run the LLVM-lowered virtio-blk driver under QEMU");
+    llvm_blk_test_step.dependOn(&llvm_blk_test_cmd.step);
 
     const udp_net_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -1951,6 +1961,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_tcp_server_test_cmd.step);
     m0_step.dependOn(&llvm_virtio_test_cmd.step);
     m0_step.dependOn(&llvm_udp_net_test_cmd.step);
+    m0_step.dependOn(&llvm_blk_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

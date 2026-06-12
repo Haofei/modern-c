@@ -1,49 +1,45 @@
 #!/usr/bin/env bash
-# Real virtio-net driver execution test (§28, virtio 1.x over virtio-mmio).
+# Real virtio-blk driver execution test (virtio 1.x over virtio-mmio).
 #
-# Lowers the MC virtio-net driver to C, links it into a bare-metal riscv64 image
-# with the platform runtime, runs it under qemu-system-riscv64 -machine virt with
-# an attached `virtio-net-device`, and checks that the driver completed the
-# device handshake and the device reaped a transmitted descriptor (the used ring
-# advanced) — i.e. the device accepted the MC driver's virtqueue setup + frame.
+# Lowers the MC virtio-blk driver through the selected backend, links it into a
+# bare-metal riscv64 image with the platform runtime, runs it under
+# qemu-system-riscv64 -machine virt with an attached `virtio-blk-device`, and
+# checks that the driver reads sector 0 through a 3-descriptor request chain.
 #
-# Usage: tools/fs/blk-test.sh <path-to-mcc>
+# Usage: tools/fs/blk-test.sh <path-to-mcc> [c|llvm]
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
-HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
+BACKEND="${2:-c}"
+CLANG="${CLANG:-clang}"
+LLD="${LLD:-ld.lld}"
+LLC="${LLC:-llc}"
+QEMU="${QEMU:-qemu-system-riscv64}"
+
+source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
+HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/fs/blk_demo.mc"
 RUNTIME="$HERE/kernel/arch/riscv64/blk_runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="BLK-READ DISK"
+TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-blk-test" || echo "blk-test")
 
-CLANG="${CLANG:-clang}"
-LLD="${LLD:-ld.lld}"
-QEMU="${QEMU:-qemu-system-riscv64}"
-
-skip() { echo "SKIP: blk-test ($1)"; exit 0; }
-command -v "$CLANG" >/dev/null 2>&1 || skip "clang not found"
-command -v "$LLD" >/dev/null 2>&1 || skip "ld.lld not found"
-command -v "$QEMU" >/dev/null 2>&1 || skip "$QEMU not found"
-"$CLANG" --print-targets 2>/dev/null | grep -q riscv64 || skip "clang has no riscv64 target"
+kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
-        -Wno-unused-function)
+        -Wno-unused-function -fno-builtin)
 
-# 1. MC -> C (the typed virtio-net driver).
-"$MCC" emit-c "$SRC" >"$WORK/virtio.c"
+kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/virtio.o" "$WORK"
+kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
+"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/virtio.o" $SUPPORT_OBJ -o "$WORK/virtio.elf"
 
-# 2. Compile + link the bare-metal image.
-"$CLANG" "${CFLAGS[@]}" -c "$WORK/virtio.c" -o "$WORK/virtio.o"
-"$CLANG" "${CFLAGS[@]}" -c "$RUNTIME" -o "$WORK/runtime.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/virtio.o" -o "$WORK/virtio.elf"
-
-# 3. Run under QEMU with an attached virtio-net device (user net + pcap capture).
+# 3. Run under QEMU with an attached virtio-blk device.
 printf 'DISK' >"$WORK/disk.img"; dd if=/dev/zero bs=1 count=508 >>"$WORK/disk.img" 2>/dev/null
 OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
         -global virtio-mmio.force-legacy=false \
@@ -56,8 +52,8 @@ printf '%s\n' "$OUT"
 echo "--------------------------"
 
 if printf '%s' "$OUT" | grep -q "$EXPECT" && printf '%s' "$OUT" | grep -q "BLK-OK"; then
-    echo "PASS: blk-test — MC virtio-blk driver read sector 0 via a 3-descriptor request chain (got 'DISK') under QEMU"
+    echo "PASS: $TEST_NAME — $BACKEND backend MC virtio-blk driver read sector 0 via a 3-descriptor request chain (got 'DISK') under QEMU"
     exit 0
 fi
-echo "FAIL: blk-test — expected '$EXPECT' and BLK-OK in driver output"
+echo "FAIL: $TEST_NAME — expected '$EXPECT' and BLK-OK in driver output"
 exit 1
