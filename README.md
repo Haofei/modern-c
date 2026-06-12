@@ -71,9 +71,10 @@ and `for` over arrays/slices, including array-valued call results, with
 loop-local bindings plus `break`/`continue`.
 Scalar expression lowering covers integer casts, unsigned bitwise operations,
 bitwise not, short-circuit boolean `&&`/`||`, and checked unsigned shifts with
-invalid-count and shifted-out-bit traps. Statement workflow covers expression
-statements, void calls, `assert`, nested blocks, unsafe blocks, and transparent
-unsafe-contract blocks. The LLVM
+invalid-count and shifted-out-bit traps. Floating-point scalar lowering covers
+`f32`/`f64` literals, globals, calls, locals, arithmetic, comparison, and unary
+negation. Statement workflow covers expression statements, void calls, `assert`,
+nested blocks, unsafe blocks, and transparent unsafe-contract blocks. The LLVM
 toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the
 covered textual IR subset to linkable object files through `llc`, and
 `zig build llvm-obj-test` validates representative scalar, statement-workflow,

@@ -177,6 +177,18 @@ const LlvmEmitter = struct {
         }
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
+            .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal),
+            .unary => |node| if (node.op == .neg and isFloatType(ty)) blk: {
+                const literal = switch ((node.expr.*).kind) {
+                    .float_literal => |literal| literal,
+                    .grouped => |inner| switch (inner.kind) {
+                        .float_literal => |literal| literal,
+                        else => break :blk error.UnsupportedLlvmEmission,
+                    },
+                    else => break :blk error.UnsupportedLlvmEmission,
+                };
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedFloatLiteral(self.scratch.allocator(), literal)});
+            } else error.UnsupportedLlvmEmission,
             .bool_literal => |value| if (value) "1" else "0",
             .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
             .address_of => |inner| switch (inner.kind) {
@@ -194,6 +206,8 @@ const LlvmEmitter = struct {
         return switch (ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "bool"))
                 "0"
+            else if (isFloatType(ty))
+                "0.0"
             else if (integerBits(ty) != null)
                 "0"
             else if (self.structDeclForType(ty) != null)
@@ -253,6 +267,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .ident => |ident| try self.emitIdent(ident),
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
+            .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal),
             .bool_literal => |value| if (value) "1" else "0",
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
             .call => |call| try self.emitCall(call, expected_ty),
@@ -994,6 +1009,15 @@ const LlvmEmitter = struct {
         if (binaryIsComparison(node.op)) return self.emitComparison(node, ty);
         if (node.op == .logical_and or node.op == .logical_or) return self.emitLogicalBinary(node, ty);
         const llvm_ty = try self.llvmType(ty);
+        if (isFloatType(ty)) {
+            return switch (node.op) {
+                .add => try self.emitPlainBinary("fadd", node, ty, llvm_ty),
+                .sub => try self.emitPlainBinary("fsub", node, ty, llvm_ty),
+                .mul => try self.emitPlainBinary("fmul", node, ty, llvm_ty),
+                .div => try self.emitPlainBinary("fdiv", node, ty, llvm_ty),
+                else => error.UnsupportedLlvmEmission,
+            };
+        }
         return switch (node.op) {
             .add, .sub, .mul => try self.emitCheckedArithmetic(node, ty, llvm_ty),
             .div, .mod => try self.emitCheckedDivRem(node, ty, llvm_ty),
@@ -1051,7 +1075,13 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  {s} = xor {s} {s}, -1\n", .{ result, try self.llvmType(ty), value });
                 break :blk result;
             },
-            else => error.UnsupportedLlvmEmission,
+            .neg => blk: {
+                if (!isFloatType(ty)) return error.UnsupportedLlvmEmission;
+                const value = try self.emitExpr(node.expr.*, ty);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = fneg {s} {s}\n", .{ result, try self.llvmType(ty), value });
+                break :blk result;
+            },
         };
     }
 
@@ -1091,11 +1121,15 @@ const LlvmEmitter = struct {
         if (!typeNameEql(expected_ty, "bool")) return error.UnsupportedLlvmEmission;
         const operand_ty = self.exprType(node.left.*) orelse self.exprType(node.right.*) orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(operand_ty);
-        const pred = comparisonPredicate(node.op, isSignedInteger(operand_ty)) orelse return error.UnsupportedLlvmEmission;
+        const pred = if (isFloatType(operand_ty))
+            floatComparisonPredicate(node.op) orelse return error.UnsupportedLlvmEmission
+        else
+            comparisonPredicate(node.op, isSignedInteger(operand_ty)) orelse return error.UnsupportedLlvmEmission;
         const left = try self.emitExpr(node.left.*, operand_ty);
         const right = try self.emitExpr(node.right.*, operand_ty);
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {s}\n", .{ result, pred, llvm_ty, left, right });
+        const cmp_op: []const u8 = if (isFloatType(operand_ty)) "fcmp" else "icmp";
+        try self.out.print(self.allocator, "  {s} = {s} {s} {s} {s}, {s}\n", .{ result, cmp_op, pred, llvm_ty, left, right });
         return result;
     }
 
@@ -1252,6 +1286,10 @@ const LlvmEmitter = struct {
                 "void"
             else if (std.mem.eql(u8, name.text, "bool"))
                 "i1"
+            else if (std.mem.eql(u8, name.text, "f32"))
+                "float"
+            else if (std.mem.eql(u8, name.text, "f64"))
+                "double"
             else if (integerBits(ty)) |bits|
                 try std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{bits})
             else if (self.struct_types.get(name.text)) |struct_decl|
@@ -1283,6 +1321,7 @@ const LlvmEmitter = struct {
             .bool_literal => simpleType(expr.span, "bool"),
             .unary => |node| if (node.op == .logical_not) simpleType(expr.span, "bool") else self.exprType(node.expr.*),
             .int_literal => null,
+            .float_literal => null,
             .grouped => |inner| self.exprType(inner.*),
             .call => |call| self.callReturnType(call),
             .cast => |node| node.ty.*,
@@ -1499,6 +1538,18 @@ fn comparisonPredicate(op: ast.BinaryOp, signed: bool) ?[]const u8 {
     };
 }
 
+fn floatComparisonPredicate(op: ast.BinaryOp) ?[]const u8 {
+    return switch (op) {
+        .eq => "oeq",
+        .ne => "une",
+        .lt => "olt",
+        .le => "ole",
+        .gt => "ogt",
+        .ge => "oge",
+        else => null,
+    };
+}
+
 fn normalizedIntLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
     var cleaned: std.ArrayList(u8) = .empty;
     for (literal) |ch| {
@@ -1507,6 +1558,14 @@ fn normalizedIntLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]co
     const text = try cleaned.toOwnedSlice(allocator);
     const value = std.fmt.parseInt(i128, text, 0) catch return text;
     return std.fmt.allocPrint(allocator, "{d}", .{value});
+}
+
+fn normalizedFloatLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
+    var cleaned: std.ArrayList(u8) = .empty;
+    for (literal) |ch| {
+        if (ch != '_') try cleaned.append(allocator, ch);
+    }
+    return cleaned.toOwnedSlice(allocator);
 }
 
 fn arrayLenValue(expr: ast.Expr) ?u64 {
@@ -1547,6 +1606,14 @@ fn isSignedInteger(ty: ast.TypeExpr) bool {
         else => return false,
     };
     return std.mem.startsWith(u8, name, "i") or std.mem.eql(u8, name, "isize");
+}
+
+fn isFloatType(ty: ast.TypeExpr) bool {
+    const name = switch (ty.kind) {
+        .name => |name| name.text,
+        else => return false,
+    };
+    return std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64");
 }
 
 fn signedMinLiteral(ty: ast.TypeExpr) ?[]const u8 {
