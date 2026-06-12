@@ -12,4 +12,26 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
-      - run: zig build m0
+      - name: Install integration-test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm qemu-system-arm qemu-system-misc qemu-system-x86
+      - name: Print tool versions
+        run: |
+          zig version
+          clang --version
+          llvm-as --version
+          llc --version
+          opt --version
+          qemu-system-riscv64 --version
+          qemu-system-aarch64 --version
+          qemu-system-x86_64 --version
+      - name: Run full milestone gate without skips
+        shell: bash
+        run: |
+          set -o pipefail
+          zig build m0 2>&1 | tee m0.log
+          if grep -n '^SKIP:' m0.log; then
+            echo "m0 skipped at least one gate in CI" >&2
+            exit 1
+          fi

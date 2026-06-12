@@ -599,6 +599,15 @@ pub const Checker = struct {
             .@"return" => |maybe| if (maybe) |v| self.moveConsume(v, state, aliases),
             .expr => |e| self.moveConsume(e, state, aliases),
             .assignment => |a| {
+                if (a.target.kind == .ident) {
+                    if (state.getPtr(a.target.kind.ident.text)) |slot| {
+                        if (slot.live and !slot.deferred) {
+                            self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot overwrite a live linear `move` value; consume it first");
+                        } else if (slot.deferred) {
+                            self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be reassigned");
+                        }
+                    }
+                }
                 self.moveConsume(a.value, state, aliases);
                 if (a.target.kind == .ident) {
                     if (state.getPtr(a.target.kind.ident.text)) |slot| slot.live = true;
@@ -619,19 +628,28 @@ pub const Checker = struct {
                 // The condition/scrutinee is evaluated, so by-value `move` operands in
                 // it are consumed (borrow operands `&x` stay borrows inside moveConsume).
                 self.moveConsume(n.value, state, aliases);
-                self.moveBlock(n.then_block, state, aliases);
-                if (n.else_block) |eb| self.moveBlock(eb, state, aliases);
+                var then_state = self.cloneMoveState(state);
+                defer then_state.deinit();
+                var else_state = self.cloneMoveState(state);
+                defer else_state.deinit();
+                self.moveBlock(n.then_block, &then_state, aliases);
+                if (n.else_block) |eb| self.moveBlock(eb, &else_state, aliases);
+                self.mergeMoveBranches(state, &then_state, &else_state);
             },
             .@"switch" => |sw| {
                 // The subject is evaluated, so by-value `move` operands in it are
                 // consumed (a plain `if cond` desugars to a switch on `cond`; borrow
                 // operands `&x` and non-move subjects stay no-ops in moveConsume).
                 self.moveConsume(sw.subject, state, aliases);
+                var merged: ?std.StringHashMap(MoveSlot) = null;
+                defer if (merged) |*m| m.deinit();
                 // Infer the subject's type so a pattern binding (`ok(p)`) that names a `move`
                 // value is tracked inside the arm — otherwise use-after-move / a leak through a
                 // switch arm goes undetected.
                 const subject_ty: ?ast.TypeExpr = if (self.move_ctx) |ctx| exprResultType(sw.subject, ctx.*) else null;
                 for (sw.arms) |arm| {
+                    var arm_state = self.cloneMoveState(state);
+                    defer arm_state.deinit();
                     var bound_name: ?[]const u8 = null;
                     for (arm.patterns) |pat| {
                         const payload_ty: ?ast.TypeExpr = switch (pat.kind) {
@@ -647,7 +665,7 @@ pub const Checker = struct {
                         if (name) |id| {
                             if (payload_ty) |pty| {
                                 if (self.isMoveTypeName(pty, aliases)) {
-                                    state.put(id.text, .{ .live = true, .span = id.span }) catch {
+                                    arm_state.put(id.text, .{ .live = true, .span = id.span }) catch {
                                         self.oom = true;
                                     };
                                     bound_name = id.text;
@@ -656,23 +674,76 @@ pub const Checker = struct {
                         }
                     }
                     switch (arm.body) {
-                        .block => |b| self.moveBlock(b, state, aliases),
-                        .expr => |e| self.moveConsume(e, state, aliases),
+                        .block => |b| self.moveBlock(b, &arm_state, aliases),
+                        .expr => |e| self.moveConsume(e, &arm_state, aliases),
                     }
                     // A `move` value bound by this arm must be consumed within it; then it leaves
                     // scope (remove it so a later arm's same-named binding starts fresh).
                     if (bound_name) |bn| {
-                        if (state.getPtr(bn)) |slot| {
+                        if (arm_state.getPtr(bn)) |slot| {
                             if (slot.live and !slot.deferred) {
                                 self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in a switch arm is never consumed (must be moved, returned, or freed)");
                             }
                         }
-                        _ = state.remove(bn);
+                        _ = arm_state.remove(bn);
+                    }
+                    if (merged) |*m| {
+                        self.mergeMoveBranches(m, m, &arm_state);
+                    } else {
+                        merged = self.cloneMoveState(&arm_state);
                     }
                 }
+                if (merged) |*m| self.replaceMoveState(state, m);
             },
             .@"break", .@"continue", .asm_stmt => {},
         }
+    }
+
+    fn cloneMoveState(self: *Checker, state: *const std.StringHashMap(MoveSlot)) std.StringHashMap(MoveSlot) {
+        var clone = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
+        var it = state.iterator();
+        while (it.next()) |entry| {
+            clone.put(entry.key_ptr.*, entry.value_ptr.*) catch {
+                self.oom = true;
+            };
+        }
+        return clone;
+    }
+
+    fn replaceMoveState(self: *Checker, dest: *std.StringHashMap(MoveSlot), src: *const std.StringHashMap(MoveSlot)) void {
+        dest.clearRetainingCapacity();
+        var it = src.iterator();
+        while (it.next()) |entry| {
+            dest.put(entry.key_ptr.*, entry.value_ptr.*) catch {
+                self.oom = true;
+            };
+        }
+    }
+
+    fn mergeMoveBranches(
+        self: *Checker,
+        dest: *std.StringHashMap(MoveSlot),
+        left: *const std.StringHashMap(MoveSlot),
+        right: *const std.StringHashMap(MoveSlot),
+    ) void {
+        var merged = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
+        defer merged.deinit();
+
+        var it = left.iterator();
+        while (it.next()) |entry| {
+            const other = right.get(entry.key_ptr.*) orelse continue;
+            var slot = entry.value_ptr.*;
+            if (slot.live != other.live or slot.deferred != other.deferred) {
+                self.errorCode(slot.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` value has inconsistent ownership across control-flow branches");
+                slot.live = false;
+                slot.deferred = false;
+            }
+            merged.put(entry.key_ptr.*, slot) catch {
+                self.oom = true;
+            };
+        }
+
+        self.replaceMoveState(dest, &merged);
     }
 
     // Consume the move bindings used by-value in `expr` (checking liveness).

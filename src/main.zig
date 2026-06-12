@@ -37,8 +37,11 @@ const usage =
 // stdout so they can be redirected with `>`; diagnostics and logs stay on stderr.
 var stdout_io: std.Io = undefined;
 
-fn writeStdout(bytes: []const u8) void {
-    std.Io.File.stdout().writeStreamingAll(stdout_io, bytes) catch {};
+fn writeStdout(bytes: []const u8) !void {
+    std.Io.File.stdout().writeStreamingAll(stdout_io, bytes) catch |err| switch (err) {
+        error.BrokenPipe => return,
+        else => return err,
+    };
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -133,7 +136,7 @@ fn runLowerHir(allocator: std.mem.Allocator, path: []const u8, source: []const u
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try hir.appendDump(allocator, module, &output);
-    writeStdout(output.items);
+    try writeStdout(output.items);
 }
 
 fn runVerifyHir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -155,7 +158,7 @@ fn runVerifyHir(allocator: std.mem.Allocator, path: []const u8, source: []const 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try hir.appendVerificationFacts(allocator, module, &output);
-    writeStdout(output.items);
+    try writeStdout(output.items);
 }
 
 fn runLowerMir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -177,7 +180,7 @@ fn runLowerMir(allocator: std.mem.Allocator, path: []const u8, source: []const u
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try mir.appendDump(allocator, module, &output);
-    writeStdout(output.items);
+    try writeStdout(output.items);
 }
 
 fn runVerify(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -286,7 +289,7 @@ fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(allocator);
     try ir.appendFacts(allocator, module, &facts);
-    writeStdout(facts.items);
+    try writeStdout(facts.items);
 }
 
 fn runLowerIr(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -308,7 +311,7 @@ fn runLowerIr(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try ir.appendLowerIr(allocator, module, &output);
-    writeStdout(output.items);
+    try writeStdout(output.items);
 }
 
 fn runTrap(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -369,7 +372,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_c.appendInspection(allocator, module, &output);
-    writeStdout(output.items);
+    try writeStdout(output.items);
 }
 
 fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile) !void {
@@ -404,7 +407,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_c.appendCProfileWithSourcePath(allocator, module, &output, profile, path);
-    writeStdout(output.items);
+    try writeStdout(output.items);
 }
 
 fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile) !void {
@@ -439,7 +442,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_c.appendCSourceMap(allocator, module, &output, profile, path, null);
-    writeStdout(output.items);
+    try writeStdout(output.items);
 }
 
 fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -474,7 +477,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_llvm.appendLlvmWithSourcePath(allocator, module, &output, path);
-    writeStdout(output.items);
+    try writeStdout(output.items);
 }
 
 fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {

@@ -2,7 +2,7 @@
 // SPEC: milestone=linear-move
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_USE_AFTER_MOVE,E_RESOURCE_LEAK
+// SPEC: check=E_USE_AFTER_MOVE,E_RESOURCE_LEAK,E_RESOURCE_OVERWRITE,E_MOVE_BRANCH_MISMATCH
 
 // Linear `move` resource types (section 18.1): a `move` value is used linearly —
 // consumed (moved) exactly once. A by-value use moves it; `&x` borrows.
@@ -57,6 +57,23 @@ fn reject_copy() -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Token = t;
     return consume(x) + consume(y);
+}
+
+fn reject_overwrite_live() -> u32 {
+    var t: Token = make();
+    // EXPECT_ERROR: E_RESOURCE_OVERWRITE
+    t = make();
+    return consume(t);
+}
+
+fn reject_branch_mismatch(flag: bool) -> u32 {
+    // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    let t: Token = make();
+    switch flag {
+        true => { let a: u32 = consume(t); }
+        false => { }
+    }
+    return 0;
 }
 
 // --- move values bound in a switch arm are tracked too (regression: ok(t) must be linear) ---

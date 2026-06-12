@@ -4,8 +4,8 @@ MC is a spec-first compiler prototype for a kernel-profile, Zig-like systems
 language. The project explores how a C replacement for low-level systems code
 could make machine contracts explicit without promising memory safety.
 
-The compiler currently has two production-grade backend paths for the implemented
-spec surface:
+The compiler currently has two verified backend paths for the implemented spec
+surface:
 
 - C emission through `emit-c`
 - LLVM IR emission through `emit-llvm`, then object generation through `llc`
@@ -285,7 +285,8 @@ links against libc and libm.
 ## What Is Still Prototype Work
 
 The current backend milestone is complete for the implemented spec surface, but
-several areas are intentionally not production-grade:
+the project as a whole is still not production-grade. Several areas remain
+prototype work:
 
 - full arbitrary comptime execution
 - production MIR optimization passes

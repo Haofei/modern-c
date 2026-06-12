@@ -4,7 +4,7 @@
 
 **Status:** implementation-aligned design draft
 **Version:** 0.6.1  
-**Scope:** kernels, drivers, allocators, runtimes, freestanding systems code, boot code, and low-level libraries. The current implementation target is the verified C backend; LLVM is a deferred backend appendix, not part of the non-LLVM conformance target.
+**Scope:** kernels, drivers, allocators, runtimes, freestanding systems code, boot code, and low-level libraries. The current implementation target is the verified C backend plus the LLVM backend for the implemented spec surface. C remains the historical conformance baseline; LLVM follows the same semantic and MIR verification contract.
 
 ---
 
@@ -53,7 +53,7 @@
   - [J. C Backend Verifier](#j-c-backend-verifier)
   - [K. Feature Admission Rule](#k-feature-admission-rule)
   - [L. MC-C Conformance Levels](#l-mc-c-conformance-levels)
-  - [M. LLVM Backend Future](#m-llvm-backend-future)
+  - [M. LLVM Backend](#m-llvm-backend)
   - [N. Debug Mapping](#n-debug-mapping)
   - [O. Final Implementation Contract](#o-final-implementation-contract)
 
@@ -3970,7 +3970,7 @@ beyond `.mcmap`.
 
 ---
 
-# M. LLVM Backend Future
+# M. LLVM Backend
 
 The LLVM backend must use the same MIR as the C backend.
 
