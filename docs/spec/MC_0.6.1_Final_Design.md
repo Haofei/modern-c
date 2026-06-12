@@ -4175,15 +4175,19 @@ llvm-vmctx-test`, `zig build llvm-sched-vm-test`, `zig build llvm-ipc-test`,
 `zig build llvm-ipc2-test`, `zig build llvm-registry-test`, `zig build
 llvm-timeout-test`, `zig build llvm-signal-test`, `zig build llvm-cap-test`,
 `zig build llvm-restart-test`, `zig build llvm-heartbeat-test`, `zig build
-llvm-privilege-test`, and `zig build llvm-usched-test` gates boot LLVM-lowered
-bare-metal RISC-V QEMU images for typed MMIO, timer traps, cooperative context
-switching, round-robin scheduling, syscall dispatch, U-mode entry, process
-lifecycle, ELF load/run, VFS syscalls, socket syscalls, exec, `satp`
-address-space switching, per-process page tables, context switches that swap
-address spaces, scheduler VM switching, IPC request/reply, multi-slot IPC,
-registry lookup, IPC timeout, signal delivery, capability-scoped server access,
-restart supervision, heartbeat liveness, least-privilege gates, and
-userspace-set scheduling policy.
+llvm-privilege-test`, `zig build llvm-usched-test`, `zig build
+llvm-paging-activate-test`, `zig build llvm-demand-test`, `zig build
+llvm-mmap-test`, `zig build llvm-contain-test`, `zig build llvm-cow-test`, and
+`zig build llvm-isolation-test` gates boot LLVM-lowered bare-metal RISC-V QEMU
+images for typed MMIO, timer traps, cooperative context switching, round-robin
+scheduling, syscall dispatch, U-mode entry, process lifecycle, ELF load/run, VFS
+syscalls, socket syscalls, exec, `satp` address-space switching, per-process
+page tables, context switches that swap address spaces, scheduler VM switching,
+IPC request/reply, multi-slot IPC, registry lookup, IPC timeout, signal delivery,
+capability-scoped server access, restart supervision, heartbeat liveness,
+least-privilege gates, userspace-set scheduling policy, Sv39 activation, demand
+paging, anonymous mmap, crash containment, copy-on-write, and per-server MMU
+isolation.
 The `zig build llvm-kmain-test` and `zig build llvm-kmain-net-test` gates boot
 LLVM-lowered integrated RISC-V kernel images under QEMU; the network variant also
 checks that QEMU captures the expected transmitted UDP payload.

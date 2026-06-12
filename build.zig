@@ -685,7 +685,10 @@ pub fn build(b: *std.Build) void {
         "sh", "tools/arch/rtc-test.sh", "zig-out/bin/mcc",
     });
     const contain_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/mem/contain-test.sh", "zig-out/bin/mcc",
+        "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_contain_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "llvm",
     });
     const tcp_server_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/net/tcp-server-test.sh", "zig-out/bin/mcc",
@@ -753,6 +756,9 @@ pub fn build(b: *std.Build) void {
     contain_test_cmd.step.dependOn(b.getInstallStep());
     const contain_test_step = b.step("contain-test", "MMU crash containment");
     contain_test_step.dependOn(&contain_test_cmd.step);
+    llvm_contain_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_contain_test_step = b.step("llvm-contain-test", "Run LLVM-lowered MMU crash containment under QEMU");
+    llvm_contain_test_step.dependOn(&llvm_contain_test_cmd.step);
 
 
     rtc_test_cmd.step.dependOn(b.getInstallStep());
@@ -864,13 +870,24 @@ pub fn build(b: *std.Build) void {
     bcache_test_step.dependOn(&bcache_test_cmd.step);
 
     const cow_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/mem/cow-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     cow_test_cmd.step.dependOn(b.getInstallStep());
     const cow_test_step = b.step("cow-test", "Copy-on-write: shared RO page diverges on write");
     cow_test_step.dependOn(&cow_test_cmd.step);
+
+    const llvm_cow_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/cow-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_cow_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_cow_test_step = b.step("llvm-cow-test", "Run LLVM-lowered copy-on-write fault handling under QEMU");
+    llvm_cow_test_step.dependOn(&llvm_cow_test_cmd.step);
 
     const usched_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -902,31 +919,64 @@ pub fn build(b: *std.Build) void {
     userserver_test_step.dependOn(&userserver_test_cmd.step);
 
     const isolation_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/isolation-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     isolation_test_cmd.step.dependOn(b.getInstallStep());
     const isolation_test_step = b.step("isolation-test", "Per-server MMU isolation + cross-AS IPC");
     isolation_test_step.dependOn(&isolation_test_cmd.step);
 
+    const llvm_isolation_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/isolation-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_isolation_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_isolation_test_step = b.step("llvm-isolation-test", "Run LLVM-lowered per-server MMU isolation under QEMU");
+    llvm_isolation_test_step.dependOn(&llvm_isolation_test_cmd.step);
+
     const demand_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/mem/demand-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     demand_test_cmd.step.dependOn(b.getInstallStep());
     const demand_test_step = b.step("demand-test", "Demand paging: fault -> map -> retry");
     demand_test_step.dependOn(&demand_test_cmd.step);
 
+    const llvm_demand_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/demand-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_demand_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_demand_test_step = b.step("llvm-demand-test", "Run LLVM-lowered demand paging under QEMU");
+    llvm_demand_test_step.dependOn(&llvm_demand_test_cmd.step);
+
     const mmap_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/mem/mmap-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     mmap_test_cmd.step.dependOn(b.getInstallStep());
     const mmap_test_step = b.step("mmap-test", "mmap anonymous pages into a page table (active satp)");
     mmap_test_step.dependOn(&mmap_test_cmd.step);
+
+    const llvm_mmap_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/mmap-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_mmap_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_mmap_test_step = b.step("llvm-mmap-test", "Run LLVM-lowered anonymous mmap under QEMU");
+    llvm_mmap_test_step.dependOn(&llvm_mmap_test_cmd.step);
 
     const diskfs_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1507,13 +1557,24 @@ pub fn build(b: *std.Build) void {
     llvm_exec_test_step.dependOn(&llvm_exec_test_cmd.step);
 
     const paging_activate_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/mem/paging-activate-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     paging_activate_test_cmd.step.dependOn(b.getInstallStep());
     const paging_activate_test_step = b.step("paging-activate-test", "Activate Sv39 satp in S-mode and read a translation-only VA under QEMU");
     paging_activate_test_step.dependOn(&paging_activate_test_cmd.step);
+
+    const llvm_paging_activate_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/paging-activate-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_paging_activate_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_paging_activate_test_step = b.step("llvm-paging-activate-test", "Run LLVM-lowered Sv39 activation under QEMU");
+    llvm_paging_activate_test_step.dependOn(&llvm_paging_activate_test_cmd.step);
 
     const kmain_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -1692,6 +1753,12 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_privilege_test_cmd.step);
     m0_step.dependOn(&llvm_cap_test_cmd.step);
     m0_step.dependOn(&llvm_restart_test_cmd.step);
+    m0_step.dependOn(&llvm_contain_test_cmd.step);
+    m0_step.dependOn(&llvm_cow_test_cmd.step);
+    m0_step.dependOn(&llvm_isolation_test_cmd.step);
+    m0_step.dependOn(&llvm_demand_test_cmd.step);
+    m0_step.dependOn(&llvm_mmap_test_cmd.step);
+    m0_step.dependOn(&llvm_paging_activate_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

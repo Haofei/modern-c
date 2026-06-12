@@ -220,9 +220,10 @@ LLVM backend status:
   tables, context switches that swap address spaces, scheduler VM switching,
   IPC request/reply, multi-slot IPC, registry lookup, IPC timeout, signal
   delivery, capability-scoped server access, restart supervision, heartbeat
-  liveness, least-privilege gates, userspace-set scheduling policy, the
-  integrated RISC-V kernel image, and the integrated kernel+network image, LLVM
-  link/run coverage for the hosted elementwise
+  liveness, least-privilege gates, userspace-set scheduling policy, Sv39
+  activation, demand paging, anonymous mmap, crash containment, copy-on-write,
+  per-server MMU isolation, the integrated RISC-V kernel image, and the
+  integrated kernel+network image, LLVM link/run coverage for the hosted elementwise
   stdin/stdout round trip, and LLVM link/run coverage for every current
   data-driven host-driver manifest row. LLVM object debug info is verified for
   DWARF file/function/source line mappings across calls, control flow,
@@ -350,18 +351,22 @@ llvm-fs-syscall-test`, `zig build llvm-socket-syscall-test`, `zig build
 llvm-exec-test`, `zig build llvm-vm-switch-test`, `zig build
 llvm-vmspace-test`, `zig build llvm-vmctx-test`, `zig build
 llvm-sched-vm-test`, `zig build llvm-ipc-test`, `zig build llvm-ipc2-test`,
-`zig build llvm-registry-test`, `zig build llvm-timeout-test`, and `zig build
+`zig build llvm-registry-test`, `zig build llvm-timeout-test`, `zig build
 llvm-signal-test`, `zig build llvm-cap-test`, `zig build llvm-restart-test`,
 `zig build llvm-heartbeat-test`, `zig build llvm-privilege-test`, and `zig build
-llvm-usched-test` for typed MMIO, timer traps, cooperative context switching,
-round-robin scheduling, syscall dispatch, U-mode entry, process lifecycle, ELF
-load/run, VFS syscalls, socket syscalls, exec, `satp` address-space switching,
-per-process page tables, context switches that swap address spaces, scheduler VM
-switching, IPC request/reply, multi-slot IPC, registry lookup, IPC timeout,
-signal delivery, capability-scoped server access, restart supervision, heartbeat
-liveness, least-privilege gates, and userspace-set scheduling policy. `zig build
-llvm-kmain-test` boots the integrated kernel image from an LLVM-lowered MC object
-under QEMU, and `zig build llvm-kmain-net-test`
+llvm-usched-test`, `zig build llvm-paging-activate-test`, `zig build
+llvm-demand-test`, `zig build llvm-mmap-test`, `zig build llvm-contain-test`,
+`zig build llvm-cow-test`, and `zig build llvm-isolation-test` for typed MMIO,
+timer traps, cooperative context switching, round-robin scheduling, syscall
+dispatch, U-mode entry, process lifecycle, ELF load/run, VFS syscalls, socket
+syscalls, exec, `satp` address-space switching, per-process page tables, context
+switches that swap address spaces, scheduler VM switching, IPC request/reply,
+multi-slot IPC, registry lookup, IPC timeout, signal delivery,
+capability-scoped server access, restart supervision, heartbeat liveness,
+least-privilege gates, userspace-set scheduling policy, Sv39 activation, demand
+paging, anonymous mmap, crash containment, copy-on-write, and per-server MMU
+isolation. `zig build llvm-kmain-test` boots the integrated kernel image from an
+LLVM-lowered MC object under QEMU, and `zig build llvm-kmain-net-test`
 boots the integrated kernel+network image and verifies the transmitted UDP packet
 in the QEMU pcap. `zig build llvm-hosted-demo-test`
 links and runs the hosted elementwise demo through LLVM, libc, and libm, then
