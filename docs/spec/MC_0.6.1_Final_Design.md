@@ -1568,53 +1568,55 @@ device.wait_irq();
 let packet = buf.as_slice();   // may be stale if invalidate was required
 ```
 
-A stricter kernel profile may use typestate:
+A stricter kernel profile uses ordinary `move` resource typestates around the
+core DMA primitive:
 
 ```mc
-DmaBuf<T, .noncoherent, .cpu_owned>
-DmaBuf<T, .noncoherent, .device_owned>
+move struct CpuBuffer { /* CPU-owned DMA allocation */ }
+move struct DeviceBuffer { /* device-owned DMA allocation */ }
 ```
 
 Example:
 
 ```mc
-let buf = dma.alloc<u8>(4096, .noncoherent)?;  // cpu_owned
+let cpu0 = dma.alloc(4096);                     // CpuBuffer
 
-let buf = cache.clean_for_device(buf);         // device_owned
-device.start_dma(buf.dma_addr());
+let dev = dma.clean_for_device(cpu0);          // DeviceBuffer
+device.start_dma(dma.device_addr(&dev));
 
 device.wait_irq();
 
-let buf = cache.invalidate_for_cpu(buf);       // cpu_owned
-let packet = buf.as_slice();
+let cpu1 = dma.invalidate_for_cpu(dev);        // CpuBuffer
+let cpu_addr = dma.cpu_addr(&cpu1);
 ```
 
 DMA-buffer ownership transfer of this kind requires **linear resource handles**.
-MC provides these through the `move` type qualifier (section 18.1): `DmaBuf` is a
-`move` type, so the example above is checked — the old `buf` binding is consumed
-at each transition, `as_slice` is defined only on `.cpu_owned`, and forgetting to
-free the buffer is a leak error. Ownership/lifecycle is therefore a **library
-profile expressed with core `move` types**, not a separate ad-hoc convention.
+MC provides these through the `move` type qualifier (section 18.1): the ownership
+library exposes distinct `move` handles for CPU-owned and device-owned buffers,
+so the example above is checked — `cpu0` is consumed by the handoff, CPU accessors
+are defined only for `CpuBuffer`, and forgetting to free the reclaimed buffer is
+a leak error. Ownership/lifecycle is therefore a **library profile expressed with
+core `move` types**, not a separate ad-hoc convention.
 
 **Summary — the DMA primitive vs the DMA library:**
 
 ```txt
 DMA primitive (core, always enforced):
     DmaAddr address class       — DmaAddr != PAddr != VAddr; not CPU-dereferenceable
-    DmaBuf<T, coherence, owner> — coherence (.coherent/.noncoherent) and owner
-                                  (.cpu_owned/.device_owned) carried in the type
+    DmaBuf<T, mode>             — coherence mode (.coherent/.noncoherent)
+                                  carried in the type
     cache.clean / cache.invalidate — typed cache operations, not volatile pokes
     dma_addr() / as_slice()     — the device-address vs CPU-view bridge
 
 DMA library (profile, built on the primitive + core `move` types):
-    ownership / lifecycle       — .cpu_owned vs .device_owned typestate over a
-                                  `move` (linear) DmaBuf handle, enforcing the
+    ownership / lifecycle       — CpuBuffer vs DeviceBuffer typestate over
+                                  `move` (linear) handles, enforcing the
                                   temporal rule "clean before handoff, invalidate
                                   before CPU read, do not touch while device-owned,
                                   free exactly once"
 ```
 
-The split follows the kind of fact. The primitive checks **spatial / representational** facts (which address space, which coherence mode) structurally and always. Ownership is a **temporal / linear** fact, enforced by the core `move` qualifier (section 18.1) plus the `owner` typestate parameter.
+The split follows the kind of fact. The primitive checks **spatial / representational** facts (which address space, which coherence mode) structurally and always. Ownership is a **temporal / linear** fact, enforced by the core `move` qualifier (section 18.1) and ordinary ownership-state types in the library.
 
 ---
 
@@ -1633,7 +1635,8 @@ A type is made linear with the `move` qualifier on its declaration:
 
 ```mc
 move struct Lock { /* … */ }
-move struct DmaBuf<T, coherence, owner> { /* … */ }
+move struct CpuBuffer { /* … */ }
+move struct DeviceBuffer { /* … */ }
 ```
 
 Semantics of a `move` value:
@@ -1672,25 +1675,35 @@ borrow/lifetime system.
 ## 18.2 DMA Ownership Library
 
 The DMA ownership profile is a library built on the core `move` qualifier and the
-DMA primitive. `DmaBuf<T, coherence, owner>` is a `move` (linear) handle whose
-`owner` typestate is `.cpu_owned` or `.device_owned`:
+DMA primitive. It models ownership with distinct `move` handles: `CpuBuffer` for
+memory currently owned by the CPU and `DeviceBuffer` for memory handed to the
+device.
 
 ```mc
-// Allocation yields a cpu-owned, linear handle (the `?` propagates allocation
-// failure). The handle must eventually be freed exactly once.
-fn alloc<T>(count: usize, coherence: Coherence)
-    -> Result<DmaBuf<T, coherence, .cpu_owned>, DmaError>;
-fn free<T, c, o>(buf: DmaBuf<T, c, o>) -> void;          // consumes the handle
+move struct CpuBuffer {
+    dev_addr: DmaAddr,
+    cpu_addr: PAddr,
+    len: usize,
+}
+
+move struct DeviceBuffer {
+    dev_addr: DmaAddr,
+    len: usize,
+}
+
+// Allocation yields a cpu-owned, linear handle. The handle must eventually be
+// freed exactly once.
+fn alloc(len: usize) -> CpuBuffer;
+fn free(buf: CpuBuffer) -> void;                         // consumes the handle
 
 // Cache transitions consume the handle and return it in the new owner state.
-fn clean_for_device<T, c>(buf: DmaBuf<T, c, .cpu_owned>)
-    -> DmaBuf<T, c, .device_owned>;
-fn invalidate_for_cpu<T, c>(buf: DmaBuf<T, c, .device_owned>)
-    -> DmaBuf<T, c, .cpu_owned>;
+fn clean_for_device(buf: CpuBuffer) -> DeviceBuffer;
+fn invalidate_for_cpu(buf: DeviceBuffer) -> CpuBuffer;
 
-// The device address is readable in any state; the CPU view only when cpu-owned.
-fn dma_addr<T, c, o>(buf: DmaBuf<T, c, o>) -> DmaAddr;    // borrow-by-value of the address
-fn as_slice<T, c>(buf: DmaBuf<T, c, .cpu_owned>) -> []mut T;
+// Address accessors borrow; the CPU address exists only while cpu-owned.
+fn device_addr(buf: *DeviceBuffer) -> DmaAddr;
+fn cpu_addr(buf: *CpuBuffer) -> PAddr;
+fn cpu_len(buf: *CpuBuffer) -> usize;
 ```
 
 Because the handle is linear, the §18 example is now fully enforced. Each
@@ -1698,17 +1711,17 @@ type-changing transition consumes the old handle and binds a **new** name (MC ha
 no name shadowing); a borrow uses `&handle`:
 
 ```mc
-let cpu0 = dma.alloc<u8>(4096, .noncoherent)?;  // cpu_owned, linear
-let dev = cache.clean_for_device(cpu0);         // cpu0 consumed; dev is device_owned
-device.start_dma(dma.addr(&dev));               // &dev borrows, does not consume
+let cpu0 = dma.alloc(4096);                      // cpu-owned, linear
+let dev = dma.clean_for_device(cpu0);            // cpu0 consumed; dev is device-owned
+device.start_dma(dma.device_addr(&dev));         // &dev borrows, does not consume
 device.wait_irq();
-let cpu1 = cache.invalidate_for_cpu(dev);       // dev consumed; back to cpu_owned
-let packet = dma.as_slice(&cpu1);               // OK only because cpu_owned
-dma.free(cpu1);                                 // consumes cpu1; omitting this is E_RESOURCE_LEAK
+let cpu1 = dma.invalidate_for_cpu(dev);          // dev consumed; back to cpu-owned
+let ptr = dma.cpu_addr(&cpu1);                   // OK only because cpu-owned
+dma.free(cpu1);                                  // consumes cpu1; omitting this is E_RESOURCE_LEAK
 ```
 
-The compiler rejects: reading a device-owned buffer (`as_slice` is not defined on
-`.device_owned`), using a buffer after it was moved into a transition
+The compiler rejects: reading a device-owned buffer (`cpu_addr` is not defined on
+`DeviceBuffer`), using a buffer after it was moved into a transition
 (`E_USE_AFTER_MOVE`), and dropping a buffer without freeing it
 (`E_RESOURCE_LEAK`). A by-value argument moves; `&handle` borrows. The same
 `move` mechanism gives `IrqOff`, locks, and device handles their single-owner /
@@ -2490,10 +2503,10 @@ The transmit path composes the modules: take the lock, push a DMA-backed
 descriptor onto the TX ring, order the writes, ring the doorbell.
 
 ```mc
-fn transmit(dev: *Nic, frame: DmaBuf<u8, .noncoherent, .cpu_owned>) -> void {
-    let owned = cache.clean_for_device(frame);      // §18.2: frame consumed, owned is device_owned
+fn transmit(dev: *Nic, frame: CpuBuffer) -> void {
+    let owned = dma.clean_for_device(frame);        // §18.2: frame consumed, owned is DeviceBuffer
     let g = sync.lock_irqsave(&dev.lock);           // §28.1: linear IrqGuard
-    let pushed = ring_push(Desc, TX_CAP, &dev.tx, make_desc(dma.addr(&owned))); // §28.2 + §18
+    let pushed = ring_push(Desc, TX_CAP, &dev.tx, make_desc(dma.device_addr(&owned))); // §28.2 + §18
     if !pushed { unreachable; }
     barrier.wmb();                                  // §28.5: descriptor before doorbell
     dev.doorbell.write(TX_KICK, .release);          // §17 typed MMIO
@@ -3931,7 +3944,7 @@ package manifests with recursive dependency/version checks
 Adds:
 
 ```txt
-DMA ownership typestate via the linear `move` qualifier (section 18.1)
+library-scale DMA ownership protocols beyond the current `std/dma` move handles
 precise asm per compiler/arch
 full comptime reflection
 advanced packed ABI validation
