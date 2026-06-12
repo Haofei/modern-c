@@ -139,9 +139,9 @@ indexing. Static aggregate global coverage includes nested array/struct
 literals plus const-folded `sizeof`/`alignof`/`field_offset` array lengths.
 LLVM debug metadata now includes `source_filename`, a compile unit/file record,
 function `DISubprogram` records, and line/column locations on local
-initialization stores, direct assignment stores, volatile raw/MMIO stores,
-atomic stores, precise asm output stores, returns, call instructions,
-loop/break/continue branch terminators,
+initialization stores, direct assignment stores, aggregate literal/member field
+stores, volatile raw/MMIO stores, atomic stores, precise asm output stores,
+returns, call instructions, loop/break/continue branch terminators,
 switch/if-let dispatches, and trap-path plus `?` propagation, short-circuit
 boolean, and if-let join branch terminators for the covered backend subset, plus
 branch terminators in compiler-expanded `mem.bytes_equal` and `reduce.*` helper
@@ -176,9 +176,9 @@ Prototype or incomplete:
   `emit-map` emits an initial `.mcmap`-style source/generated-C map, including
   global initializer, statement/expression, and deferred cleanup spans.
   `emit-llvm` now emits initial LLVM debug metadata for source files,
-  functions, calls, returns, stores including volatile raw/MMIO and atomic
-  stores, loop/break/continue branch terminators, precise asm output stores,
-  switch/if-let dispatches, and trap-path plus `?`
+  functions, calls, returns, stores including aggregate literal/member field,
+  volatile raw/MMIO, and atomic stores, loop/break/continue branch terminators,
+  precise asm output stores, switch/if-let dispatches, and trap-path plus `?`
   propagation and short-circuit boolean and if-let join branch terminators, plus
   compiler-expanded `mem.bytes_equal` and `reduce.*` helper loop branch
   terminators. DWARF-quality native debug mapping with richer
@@ -351,8 +351,8 @@ address-width values, `cache.clean`/`cache.invalidate` fences,
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function
-subprograms, precise-asm output stores, volatile raw/MMIO stores, atomic
-stores, and
+subprograms, precise-asm output stores, aggregate literal/member field stores,
+volatile raw/MMIO stores, atomic stores, and
 call/return/loop-branch/switch/if-let/trap-path/`?`
 propagation/short-circuit/if-let-join/helper-loop branch line locations for the
 covered subset.

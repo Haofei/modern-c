@@ -1291,20 +1291,20 @@ const LlvmEmitter = struct {
                     try self.out.print(self.allocator, "  {s} = or {s} {s}, {d}\n", .{ set_value, llvm_ty, current, packedBitsMask(bit_index) });
                     try self.out.print(self.allocator, "  {s} = and {s} {s}, {d}\n", .{ clear_value, llvm_ty, current, packedBitsClearMask(info, bit_index) orelse return error.UnsupportedLlvmEmission });
                     try self.out.print(self.allocator, "  {s} = select i1 {s}, {s} {s}, {s} {s}\n", .{ result, flag, llvm_ty, set_value, llvm_ty, clear_value });
-                    try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, result, ptr });
+                    try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, result, ptr, try self.debugCallSuffix() });
                     break :blk true;
                 }
                 if (self.overlayField(node.base.*, node.name.text)) |field| {
                     if (overlayByteArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
                     const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
                     const value = try self.emitExpr(value_expr, field.ty);
-                    try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(field.ty), value, ptr });
+                    try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, ptr, try self.debugCallSuffix() });
                     break :blk true;
                 }
                 const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitMemberAddress(node);
                 const value = try self.emitExpr(value_expr, field.ty);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(field.ty), value, ptr });
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, ptr, try self.debugCallSuffix() });
                 break :blk true;
             },
             .grouped => |inner| try self.emitMemberAssignment(inner.*, value_expr),
@@ -2071,7 +2071,7 @@ const LlvmEmitter = struct {
             const ptr = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(array_ty), array_ptr, i });
             const value = try self.emitExpr(item, element_ty);
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ element_llvm, value, ptr });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ element_llvm, value, ptr, try self.debugCallSuffix() });
         }
     }
 
@@ -2082,7 +2082,7 @@ const LlvmEmitter = struct {
             const ptr = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ ptr, try self.llvmType(struct_ty), struct_ptr, i });
             const value = try self.emitExpr(value_expr, field.ty);
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(field.ty), value, ptr });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, ptr, try self.debugCallSuffix() });
         }
     }
 
