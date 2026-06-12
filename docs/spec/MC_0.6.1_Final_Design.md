@@ -3999,6 +3999,8 @@ Character literal lowering covers target-typed `u8` returns, locals, call
 arguments, comparisons, escapes, and checked `u8` arithmetic.
 String literal lowering covers target-typed `u8` pointers via private LLVM byte
 constants with MC escape decoding for returns, locals, and call arguments.
+Byte-view lowering covers `mem.as_bytes(&value)` as a const `u8` slice and
+`mem.bytes_equal` as a length check plus byte loop.
 Packed-bits lowering uses the declared integer representation for LLVM ABI,
 global/static values, aliases, literals, and boolean field mask tests.
 Accepted pure `comptime { ... }` blocks are omitted from runtime LLVM IR after

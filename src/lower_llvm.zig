@@ -1754,6 +1754,7 @@ const LlvmEmitter = struct {
             const value = try self.emitExpr(info.base, info.enum_ty);
             return try self.castValue(value, info.enum_ty, info.repr_ty);
         }
+        if (byteViewCallKind(call.callee.*)) |kind| return try self.emitByteViewCall(call, kind);
         if (isResultConstructorCall(call)) |tag| return try self.emitResultConstructorValue(call, expected_ty, tag);
         if (self.domainResidueCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
@@ -2062,6 +2063,90 @@ const LlvmEmitter = struct {
             current = selected;
         }
         return try self.castValue(current, source_ty, target_ty);
+    }
+
+    fn emitByteViewCall(self: *LlvmEmitter, call: anytype, kind: ByteViewCallKind) ![]const u8 {
+        if (call.type_args.len != 0) return error.UnsupportedLlvmEmission;
+        return switch (kind) {
+            .as_bytes => try self.emitAsBytesCall(call),
+            .bytes_equal => try self.emitBytesEqualCall(call),
+        };
+    }
+
+    fn emitAsBytesCall(self: *LlvmEmitter, call: anytype) ![]const u8 {
+        if (call.args.len != 1) return error.UnsupportedLlvmEmission;
+        const target = byteViewAddressTarget(call.args[0]) orelse return error.UnsupportedLlvmEmission;
+        const source_ty = self.exprType(target) orelse return error.UnsupportedLlvmEmission;
+        const size = self.comptimeSizeOf(source_ty, 0) orelse return error.UnsupportedLlvmEmission;
+        const ptr = try self.emitExpr(call.args[0], try self.pointerTypeFor(source_ty));
+        const slice_ty = try self.constU8SliceType(call.callee.*.span);
+        const slice_llvm = try self.llvmType(slice_ty);
+        const with_ptr = try self.nextTemp();
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} undef, ptr {s}, 0\n", .{ with_ptr, slice_llvm, ptr });
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i64 {d}, 1\n", .{ result, slice_llvm, with_ptr, size });
+        return result;
+    }
+
+    fn emitBytesEqualCall(self: *LlvmEmitter, call: anytype) ![]const u8 {
+        if (call.args.len != 2) return error.UnsupportedLlvmEmission;
+        const slice_ty = try self.constU8SliceType(call.callee.*.span);
+        const slice_llvm = try self.llvmType(slice_ty);
+        const left = try self.emitExpr(call.args[0], self.exprType(call.args[0]) orelse slice_ty);
+        const right = try self.emitExpr(call.args[1], self.exprType(call.args[1]) orelse slice_ty);
+        const left_ptr = try self.nextTemp();
+        const left_len = try self.nextTemp();
+        const right_ptr = try self.nextTemp();
+        const right_len = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ left_ptr, slice_llvm, left });
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ left_len, slice_llvm, left });
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ right_ptr, slice_llvm, right });
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ right_len, slice_llvm, right });
+
+        const index_ptr = try self.nextTemp();
+        const result_ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = alloca i64\n", .{index_ptr});
+        try self.out.print(self.allocator, "  {s} = alloca i1\n", .{result_ptr});
+        try self.out.print(self.allocator, "  store i64 0, ptr {s}\n", .{index_ptr});
+        try self.out.print(self.allocator, "  store i1 0, ptr {s}\n", .{result_ptr});
+
+        const len_match = try self.nextTemp();
+        const cond_label = try self.nextLabel("bytes_equal_cond");
+        const body_label = try self.nextLabel("bytes_equal_body");
+        const step_label = try self.nextLabel("bytes_equal_step");
+        const equal_label = try self.nextLabel("bytes_equal_true");
+        const done_label = try self.nextLabel("bytes_equal_done");
+        try self.out.print(self.allocator, "  {s} = icmp eq i64 {s}, {s}\n", .{ len_match, left_len, right_len });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ len_match, cond_label, done_label, cond_label });
+
+        const index = try self.nextTemp();
+        const in_range = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ index, index_ptr });
+        try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n", .{ in_range, index, left_len });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ in_range, body_label, equal_label, body_label });
+
+        const left_elem_ptr = try self.nextTemp();
+        const right_elem_ptr = try self.nextTemp();
+        const left_byte = try self.nextTemp();
+        const right_byte = try self.nextTemp();
+        const same = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds i8, ptr {s}, i64 {s}\n", .{ left_elem_ptr, left_ptr, index });
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds i8, ptr {s}, i64 {s}\n", .{ right_elem_ptr, right_ptr, index });
+        try self.out.print(self.allocator, "  {s} = load i8, ptr {s}\n", .{ left_byte, left_elem_ptr });
+        try self.out.print(self.allocator, "  {s} = load i8, ptr {s}\n", .{ right_byte, right_elem_ptr });
+        try self.out.print(self.allocator, "  {s} = icmp eq i8 {s}, {s}\n", .{ same, left_byte, right_byte });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ same, step_label, done_label, step_label });
+
+        const next_index = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = add i64 {s}, 1\n", .{ next_index, index });
+        try self.out.print(self.allocator, "  store i64 {s}, ptr {s}\n", .{ next_index, index_ptr });
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, equal_label });
+        try self.out.print(self.allocator, "  store i1 1, ptr {s}\n", .{result_ptr});
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ done_label, done_label });
+
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load i1, ptr {s}\n", .{ result, result_ptr });
+        return result;
     }
 
     fn emitTryConversion(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
@@ -2851,6 +2936,12 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn constU8SliceType(self: *LlvmEmitter, span: ast.Span) !ast.TypeExpr {
+        const child = try self.scratch.allocator().create(ast.TypeExpr);
+        child.* = simpleType(span, "u8");
+        return .{ .span = span, .kind = .{ .slice = .{ .mutability = .@"const", .child = child } } };
+    }
+
     fn structDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.StructDecl {
         const resolved_ty = self.resolveAliasType(ty);
         return switch (resolved_ty.kind) {
@@ -3037,6 +3128,10 @@ const LlvmEmitter = struct {
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
         if (self.domainOpCallInfo(call)) |info| return info.return_ty;
         if (self.reduceCallInfo(call)) |info| return info.return_ty;
+        if (byteViewCallKind(call.callee.*)) |kind| return switch (kind) {
+            .as_bytes => self.constU8SliceType(call.callee.*.span) catch null,
+            .bytes_equal => simpleType(call.callee.*.span, "bool"),
+        };
         if (self.conversionCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "try_from")) {
                 return self.resultType(info.target_ty, simpleType(call.callee.*.span, "ConversionError"), call.callee.*.span) catch null;
@@ -3854,6 +3949,31 @@ fn isRawPtrCall(callee: ast.Expr) bool {
         .member => |member| std.mem.eql(u8, member.name.text, "ptr") and isIdentNamed(member.base.*, "raw"),
         .grouped => |inner| isRawPtrCall(inner.*),
         else => false,
+    };
+}
+
+const ByteViewCallKind = enum {
+    as_bytes,
+    bytes_equal,
+};
+
+fn byteViewCallKind(callee: ast.Expr) ?ByteViewCallKind {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return byteViewCallKind(inner.*),
+        else => return null,
+    };
+    if (!isIdentNamed(member.base.*, "mem")) return null;
+    if (std.mem.eql(u8, member.name.text, "as_bytes")) return .as_bytes;
+    if (std.mem.eql(u8, member.name.text, "bytes_equal")) return .bytes_equal;
+    return null;
+}
+
+fn byteViewAddressTarget(expr: ast.Expr) ?ast.Expr {
+    return switch (expr.kind) {
+        .address_of => |target| target.*,
+        .grouped => |inner| byteViewAddressTarget(inner.*),
+        else => null,
     };
 }
 

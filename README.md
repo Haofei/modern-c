@@ -78,6 +78,8 @@ target-typed `u8` returns, locals, call arguments, comparisons, escapes, and
 checked `u8` arithmetic. String literal lowering covers target-typed `u8`
 pointers via private LLVM byte constants with MC escape decoding. Floating-point scalar lowering covers `f32`/`f64`
 literals, globals, calls, locals, arithmetic, comparison, and unary negation.
+Byte-view lowering covers `mem.as_bytes(&value)` as a const `u8` slice and
+`mem.bytes_equal` as a length check plus byte loop.
 Domain scalar lowering covers `wrap<T>`/`sat<T>`/`serial<T>`/`counter<T>`/
 `Duration<T>` payload representation, `wrap` modular add/sub/mul/bitwise/shift
 and unary negation, unsigned `sat` add/sub/mul, serial
@@ -256,6 +258,8 @@ LLVM string literal coverage includes `*const u8`/raw-many `u8` pointer targets
 for returns, locals, and call arguments, including MC escape sequences.
 LLVM packed-bits coverage uses the declared integer representation for ABI,
 globals, aliases, literals, and boolean field mask tests.
+LLVM byte-view coverage includes `mem.as_bytes(&value)` and `mem.bytes_equal`
+over direct byte views and local byte-view slice values.
 LLVM comptime block coverage omits accepted pure `comptime { ... }` blocks from
 runtime IR after semantic checking.
 LLVM initialization coverage materializes observable `uninit` storage with
