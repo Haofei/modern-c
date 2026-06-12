@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run selected data-driven host tests with the fixture compiled through the
-# LLVM backend, then linked against the existing C host driver.
+# Run data-driven host tests with each fixture compiled through the LLVM backend,
+# then linked against the existing C host driver.
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
@@ -10,14 +10,24 @@ HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "
 MANIFEST="$HERE/tools/lib/host-tests.tsv"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
+LINK_FLAGS=()
 
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: llvm-host-suite-test (clang not found)"; exit 0; }
 command -v "$LLC" >/dev/null 2>&1 || { echo "SKIP: llvm-host-suite-test (llc not found)"; exit 0; }
+if [ "$(uname -s)" = "Linux" ]; then
+    LINK_FLAGS=(-no-pie)
+fi
 
 if [ "$#" -gt 0 ]; then
     TESTS=("$@")
 else
-    TESTS=(byteview-test constgen-test arena-test ring-test ramfs-test udp-test)
+    TESTS=()
+    while IFS=$'\t' read -r name _; do
+        case "$name" in
+            ""|\#*) continue ;;
+        esac
+        TESTS+=("$name")
+    done <"$MANIFEST"
 fi
 
 trap_stubs() {
@@ -65,7 +75,7 @@ for name in "${TESTS[@]}"; do
     esac
 
     trap_stubs "$WORK/trap_stubs.c"
-    "$CLANG" -std=c11 -Wall -Wextra "$WORK/driver.c" "$WORK/trap_stubs.c" "$WORK/mod.o" -o "$WORK/app"
+    "$CLANG" -std=c11 -Wall -Wextra "${LINK_FLAGS[@]}" "$WORK/driver.c" "$WORK/trap_stubs.c" "$WORK/mod.o" -o "$WORK/app"
     if OUT="$("$WORK/app")"; then
         [ -n "$OUT" ] && printf '%s\n' "$OUT"
         echo "PASS: llvm-host-suite-test - $name - $desc"

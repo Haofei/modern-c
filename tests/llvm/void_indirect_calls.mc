@@ -13,6 +13,10 @@ fn call_fn_pointer() -> void {
     entry();
 }
 
+fn call_entry_param(entry: fn() -> void) -> void {
+    entry();
+}
+
 fn store_value(env: *mut Env, value: u32) -> void {
     env.value = value;
 }

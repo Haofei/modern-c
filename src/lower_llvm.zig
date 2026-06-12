@@ -584,6 +584,8 @@ const LlvmEmitter = struct {
                 "0"
             else if (self.isFloatTypeOf(resolved_ty))
                 "0.0"
+            else if (isOpaqueAddressTypeName(name.text))
+                "0"
             else if (self.integerBitsOf(resolved_ty) != null or self.enumDeclForType(resolved_ty) != null)
                 "0"
             else if (self.overlayInfoForType(resolved_ty) != null)
@@ -599,6 +601,7 @@ const LlvmEmitter = struct {
             .pointer, .raw_many_pointer, .nullable => "null",
             .slice => "zeroinitializer",
             .array => "zeroinitializer",
+            .qualified => |node| try self.zeroInitializer(node.child.*),
             .generic => |node| if (self.resultInfo(resolved_ty)) |_|
                 "zeroinitializer"
             else if (isPayloadDomainGenericName(node.base.text) and node.args.len == 1)
@@ -629,9 +632,9 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "{s} %{s}", .{ try self.llvmType(param.ty), param.name.text });
         }
         if (self.current_debug_scope) |scope| {
-            try self.out.print(self.allocator, ") !dbg !{d} {{\nentry:\n", .{scope});
+            try self.out.print(self.allocator, ") !dbg !{d} {{\nbb_entry:\n", .{scope});
         } else {
-            try self.out.appendSlice(self.allocator, ") {\nentry:\n");
+            try self.out.appendSlice(self.allocator, ") {\nbb_entry:\n");
         }
         self.temp_index = 0;
         self.trap_index = 0;
@@ -1271,6 +1274,11 @@ const LlvmEmitter = struct {
             } else {
                 return error.UnsupportedLlvmEmission;
             }
+            return true;
+        }
+        if (fenceOrderingForCall(call.callee.*)) |ordering| {
+            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
+            try self.out.print(self.allocator, "  fence {s}{s}\n", .{ ordering, try self.debugCallSuffix() });
             return true;
         }
         if (isCpuPauseCall(call.callee.*)) {
@@ -3473,7 +3481,7 @@ const LlvmEmitter = struct {
     fn nextLabel(self: *LlvmEmitter, prefix: []const u8) ![]const u8 {
         const index = self.trap_index;
         self.trap_index += 1;
-        return std.fmt.allocPrint(self.scratch.allocator(), "{s}{d}", .{ prefix, index });
+        return std.fmt.allocPrint(self.scratch.allocator(), "bb_{s}{d}", .{ prefix, index });
     }
 
     fn exprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
@@ -5299,6 +5307,20 @@ fn isCpuPauseCall(callee: ast.Expr) bool {
         .member => |member| std.mem.eql(u8, member.name.text, "pause") and isIdentNamed(member.base.*, "cpu"),
         .grouped => |inner| isCpuPauseCall(inner.*),
         else => false,
+    };
+}
+
+fn fenceOrderingForCall(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .member => |member| blk: {
+            if (!isIdentNamed(member.base.*, "fence")) break :blk null;
+            if (std.mem.eql(u8, member.name.text, "full")) break :blk "seq_cst";
+            if (std.mem.eql(u8, member.name.text, "release")) break :blk "release";
+            if (std.mem.eql(u8, member.name.text, "acquire")) break :blk "acquire";
+            break :blk null;
+        },
+        .grouped => |inner| fenceOrderingForCall(inner.*),
+        else => null,
     };
 }
 

@@ -212,12 +212,12 @@ Deferred:
   lowering, manifest package builds, and multi-object
   `std/{core,bits,math,ascii,fmt,addr}` runtime checks, plus LLVM object
   coverage for the framebuffer/gpio/irq/spi/timer/uart hardware demos and the
-  hosted elementwise demo, and LLVM link/run coverage for the hosted
-  elementwise stdin/stdout round trip. LLVM object debug info is smoke-tested
+  hosted elementwise demo, LLVM link/run coverage for the hosted elementwise
+  stdin/stdout round trip, and LLVM link/run coverage for every current
+  data-driven host-driver manifest row. LLVM object debug info is smoke-tested
   for DWARF file/function/source line mappings, and the broad emitted-IR corpus
-  is accepted by LLVM verifier and `default<O2>` pipelines.
-  Remaining work is additional runtime/toolchain coverage, production optimizer
-  proof work, and fuller native debug mapping.
+  is accepted by LLVM verifier and `default<O2>` pipelines. Remaining work is
+  production optimizer proof work and fuller native debug mapping.
 
 ## Requirements
 
@@ -329,10 +329,9 @@ drivers and the hosted elementwise demo through LLVM to non-empty objects under
 the same hidden-assumption token check. `zig build llvm-hosted-demo-test`
 links and runs the hosted elementwise demo through LLVM, libc, and libm, then
 verifies the binary stdin/stdout `f32` round trip. `zig build
-llvm-host-suite-test` reuses selected data-driven host tests
-(`byteview-test`, `constgen-test`, `arena-test`, `ring-test`, `ramfs-test`,
-and `udp-test`) with each MC fixture compiled through LLVM, linked to the
-existing C host driver, and run.
+llvm-host-suite-test` reuses every current data-driven host test manifest row
+with each MC fixture compiled through LLVM, linked to the existing C host
+driver, and run.
 
 ## Conformance Snapshot
 

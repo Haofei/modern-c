@@ -42,3 +42,9 @@ fn read_ticks() -> u32 {
 fn reset_ticks() -> void {
     ticks.store(0, .release);
 }
+
+fn explicit_fences() -> void {
+    fence.release();
+    fence.acquire();
+    fence.full();
+}

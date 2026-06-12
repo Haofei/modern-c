@@ -265,7 +265,7 @@ pub fn build(b: *std.Build) void {
         "zig-out/bin/mcc",
     });
     llvm_host_suite_test_cmd.step.dependOn(b.getInstallStep());
-    const llvm_host_suite_test_step = b.step("llvm-host-suite-test", "Compile selected host-driver fixtures through LLVM, link them, and run them");
+    const llvm_host_suite_test_step = b.step("llvm-host-suite-test", "Compile host-driver manifest fixtures through LLVM, link them, and run them");
     llvm_host_suite_test_step.dependOn(&llvm_host_suite_test_cmd.step);
 
     const move_test_cmd = b.addSystemCommand(&.{
