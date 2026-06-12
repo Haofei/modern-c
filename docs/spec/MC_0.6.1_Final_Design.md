@@ -4119,7 +4119,9 @@ in-scope valid spec fixture to a non-empty LLVM object file with `llc`, and the
 to non-empty LLVM object files with `llc`.
 The `zig build llvm-cc-test` and `zig build llvm-move-test` gates link and run
 LLVM-produced objects against C drivers, including a linear `move` handle
-roundtrip through the LLVM ABI.
+roundtrip through the LLVM ABI. The `zig build llvm-std-test` gate additionally
+links LLVM-built `std/{core,bits,math,ascii,fmt,addr}` objects into one host
+executable and runs exported function checks.
 It intentionally emits no hidden optimizer-assumption tokens outside proven
 verifier conditions, and the broad LLVM sweep gates enforce that policy for
 `nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`. Broader runtime/toolchain

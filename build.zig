@@ -149,6 +149,15 @@ pub fn build(b: *std.Build) void {
     const std_test_step = b.step("std-test", "Compile std/core, link it against a C driver, and run the checks");
     std_test_step.dependOn(&std_test_cmd.step);
 
+    const llvm_std_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/llvm-std-test.sh",
+        "zig-out/bin/mcc",
+    });
+    llvm_std_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_std_test_step = b.step("llvm-std-test", "Compile std modules through LLVM, link them against a C driver, and run the checks");
+    llvm_std_test_step.dependOn(&llvm_std_test_cmd.step);
+
     const import_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/import-test.sh",
