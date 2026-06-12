@@ -52,8 +52,8 @@ line is the C backend plus verifier/tooling contract in
 `docs/spec/MC_0.6.1_Final_Design.md`. LLVM now has a MIR-backed textual IR path
 that runs after the same semantic and MIR verification gates as C emission. The
 valid declarations in the current spec fixture suite emit assemblable LLVM IR
-through `zig build llvm-sweep`, and the valid `tests/c_emit` fixture audit emits
-LLVM for all 109 currently checked fixtures. Scalar/pointer globals are covered for
+through `zig build llvm-sweep`, and `zig build llvm-c-sweep` verifies all 109
+current `tests/c_emit` fixtures emit assemblable LLVM IR. Scalar/pointer globals are covered for
 literal and address-of-global initializers. Local fixed arrays of scalar
 elements support literals, checked indexing, element assignment, and
 element-address taking. Plain local structs with scalar fields support literals,
@@ -169,9 +169,10 @@ Deferred:
 
 - LLVM backend production hardening (see Appendix M of
   `docs/spec/MC_0.6.1_Final_Design.md`). The current spec sweep is clear for
-  valid declarations and representative object output works through `llc`.
-  Remaining work is broader runtime/toolchain coverage, optimizer proof work,
-  and fuller native debug mapping.
+  valid declarations, all current C-emission fixtures emit assemblable LLVM IR,
+  and representative object output works through `llc`. Remaining work is
+  broader runtime/toolchain coverage, optimizer proof work, and fuller native
+  debug mapping.
 
 ## Requirements
 
@@ -192,6 +193,10 @@ zig build m0
 zig build test
 zig build c-test
 zig build sweep
+zig build llvm-test
+zig build llvm-obj-test
+zig build llvm-sweep
+zig build llvm-c-sweep
 ```
 
 Run the compiler prototype:
@@ -236,10 +241,11 @@ stdin-to-stdout float round-trip; run it with `zig build hosted-test`.
 `.mcmap` artifact to stdout, including statement, deferred cleanup, and selected
 expression spans, plus global initializer spans, with typed-AST and MIR labels.
 `emit-llvm` uses the same semantic/MIR verification gate and emits textual LLVM
-IR for the initial scalar/control-flow backend slice; `zig build llvm-test`
-checks that output with `llvm-as`. `tools/toolchain/mcc-llvm-cc.sh` compiles an
-MC module through `emit-llvm` and `llc -filetype=obj`; `zig build llvm-obj-test`
-checks representative LLVM object output.
+IR for the covered backend surface. `zig build llvm-test`, `zig build
+llvm-sweep`, and `zig build llvm-c-sweep` check LLVM IR with `llvm-as`.
+`tools/toolchain/mcc-llvm-cc.sh` compiles an MC module through `emit-llvm` and
+`llc -filetype=obj`; `zig build llvm-obj-test` checks representative LLVM object
+output.
 
 ## Conformance Snapshot
 

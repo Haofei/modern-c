@@ -4106,7 +4106,10 @@ textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.
 The `zig build llvm-sweep` gate strips expected-reject declarations from the
 spec corpus and verifies every in-scope valid spec fixture emits assemblable
-LLVM IR. The current sweep has no allowlisted LLVM backend gaps.
+LLVM IR. The current sweep has no allowlisted LLVM backend gaps. The
+`zig build llvm-c-sweep` gate additionally verifies every current
+`tests/c_emit` fixture emits assemblable LLVM IR, keeping the broad C-backend
+regression corpus covered by LLVM emission.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
 Broader runtime/toolchain coverage, optimizer proof work, and fuller native
