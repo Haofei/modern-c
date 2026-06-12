@@ -27,7 +27,6 @@ OUT_OF_SCOPE = {
     "irq_context.mc": "irq-context verifier inspection fixture",
     "move_linear.mc": "linear move value lowering",
     "no_lang_trap.mc": "no_lang_trap verifier edge fixture",
-    "unsafe_context.mc": "strict unsafe mmio.map try fixture",
 }
 
 

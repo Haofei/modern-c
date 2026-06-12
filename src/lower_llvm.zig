@@ -2217,6 +2217,13 @@ const LlvmEmitter = struct {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
         }
+        if (mmioMapCallPayloadType(call)) |_| {
+            if (call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ result, addr });
+            return result;
+        }
         if (self.dmaBufCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             const base = try self.emitExpr(info.base, info.dma_ty);
@@ -4039,6 +4046,11 @@ const LlvmEmitter = struct {
             .as_bytes => self.constU8SliceType(call.callee.*.span) catch null,
             .bytes_equal => simpleType(call.callee.*.span, "bool"),
         };
+        if (mmioMapCallPayloadType(call)) |ty| {
+            const child = self.scratch.allocator().create(ast.TypeExpr) catch return null;
+            child.* = ty;
+            return .{ .span = call.callee.*.span, .kind = .{ .nullable = child } };
+        }
         if (self.conversionCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "try_from")) {
                 return self.resultType(info.target_ty, simpleType(call.callee.*.span, "ConversionError"), call.callee.*.span) catch null;
@@ -5206,6 +5218,25 @@ fn isPhysCall(callee: ast.Expr) bool {
         .ident => |ident| std.mem.eql(u8, ident.text, "phys"),
         .grouped => |inner| isPhysCall(inner.*),
         else => false,
+    };
+}
+
+fn isMmioMapCallName(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "map") and isIdentNamed(member.base.*, "mmio"),
+        .grouped => |inner| isMmioMapCallName(inner.*),
+        else => false,
+    };
+}
+
+fn mmioMapCallPayloadType(call: anytype) ?ast.TypeExpr {
+    if (!isMmioMapCallName(call.callee.*) or call.type_args.len != 1) return null;
+    return .{
+        .span = call.type_args[0].span,
+        .kind = .{ .generic = .{
+            .base = .{ .text = "MmioPtr", .span = call.type_args[0].span },
+            .args = call.type_args[0..1],
+        } },
     };
 }
 

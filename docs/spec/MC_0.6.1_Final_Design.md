@@ -4038,6 +4038,8 @@ typed register reads/writes, `.acquire`/`.release` fences, and irq-context MMIO
 fixtures. DMA/IRQ marker lowering covers `DmaAddr`/`DmaBuf<T, mode>` as opaque
 address-width values, `cache.clean`/`cache.invalidate` fences,
 `dma_addr()`/`as_slice()` bridges, and `IrqOff` as a witness ABI value.
+Strict unsafe-context lowering includes `mmio.map<T>(pa)?` as a nullable
+`MmioPtr<T>` address conversion with a null-unwrapping trap on the `?`.
 Packed-bits lowering covers representation ABI, static/dynamic
 literals, mask tests, and read-modify-write field updates. Overlay-union
 lowering uses byte storage with typed scalar field writes, byte-array reads, and
