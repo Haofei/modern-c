@@ -20,6 +20,10 @@ open enum DeviceState: u8 {
     error = 2,
 }
 
+struct ErrorBox {
+    error: OpenError,
+}
+
 global default_error: OpenError = .denied;
 global default_errors: [2]OpenError = .{ .not_found, .denied };
 
@@ -68,6 +72,42 @@ fn closed_enum_switch_wildcard(irq: Irq) -> void {
     switch irq {
         .timer => {},
         _ => {},
+    }
+}
+
+fn global_enum_switch() -> u32 {
+    switch default_error {
+        .not_found => {
+            return 0;
+        },
+        .denied => {
+            return 1;
+        },
+        .bad_path => {
+            return 2;
+        },
+    }
+}
+
+fn global_enum_array_switch() -> u32 {
+    switch default_errors[0] {
+        .not_found => {
+            return 0;
+        },
+        _ => {
+            return 1;
+        },
+    }
+}
+
+fn enum_field_switch(box: ErrorBox) -> u32 {
+    switch box.error {
+        .denied => {
+            return 1;
+        },
+        _ => {
+            return 0;
+        },
     }
 }
 

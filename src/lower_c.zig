@@ -4955,7 +4955,7 @@ const CEmitter = struct {
     }
 
     fn enumNameForType(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
-        const name = typeName(ty) orelse return null;
+        const name = typeName(self.resolveAliasType(ty)) orelse return null;
         return if (self.enums.contains(name)) name else null;
     }
 
@@ -5362,6 +5362,9 @@ const CEmitter = struct {
     }
 
     fn enumNameForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+        if (self.operandEmitType(expr, locals)) |ty| {
+            if (self.enumNameForType(ty)) |name| return name;
+        }
         return switch (expr.kind) {
             .ident => |ident| {
                 if (locals) |local_set| {
@@ -5369,8 +5372,12 @@ const CEmitter = struct {
                         if (info.source_type_name) |name| if (self.enums.contains(name)) return name;
                     }
                 }
+                if (self.globals.get(ident.text)) |global| {
+                    if (self.enums.contains(global.type_name)) return global.type_name;
+                }
                 return null;
             },
+            .call, .cast => self.enumNameForValueExpr(expr, locals),
             .grouped => |inner| self.enumNameForExpr(inner.*, locals),
             else => null,
         };
@@ -5412,6 +5419,9 @@ const CEmitter = struct {
     }
 
     fn enumNameForValueExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+        if (self.operandEmitType(expr, locals)) |ty| {
+            if (self.enumNameForType(ty)) |name| return name;
+        }
         return switch (expr.kind) {
             .ident => |ident| {
                 if (locals) |local_set| {
