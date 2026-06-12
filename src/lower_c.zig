@@ -2963,6 +2963,10 @@ const CEmitter = struct {
     }
 
     fn nullableSwitchSubjectForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?NullableSwitchSubject {
+        return try self.nullableSubjectForExpr(expr, locals);
+    }
+
+    fn nullableSubjectForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?NullableSwitchSubject {
         const source_name = switch (expr.kind) {
             .ident => |ident| ident.text,
             .grouped => |inner| switch (inner.kind) {
@@ -2970,20 +2974,30 @@ const CEmitter = struct {
                 else => null,
             },
             else => null,
-        } orelse blk: {
-            const nullable_ty = self.nullableReturnTypeForExpr(expr) orelse return null;
-            const inner_c_type = try self.nullableInnerCTypeForExpr(expr, locals) orelse return null;
-            const temp = try self.emitSequencedCallArgTemp(expr, locals, nullable_ty);
-            try locals.put(temp.name, .{
-                .source_ty = nullable_ty,
-                .c_type = inner_c_type,
-                .nullable_inner_c_type = inner_c_type,
-            });
-            break :blk temp.name;
         };
-        const source_info = locals.get(source_name) orelse return null;
-        const inner_c_type = source_info.nullable_inner_c_type orelse return null;
-        return .{ .name = source_name, .inner_c_type = inner_c_type };
+        if (source_name) |name| {
+            if (locals.get(name)) |info| {
+                if (info.nullable_inner_c_type) |inner_c_type| {
+                    return .{ .name = name, .inner_c_type = inner_c_type };
+                }
+                return null;
+            }
+        }
+
+        const nullable_ty = self.nullableTypeForExpr(expr, locals) orelse return null;
+        const inner_c_type = try self.nullableInnerCTypeForType(nullable_ty) orelse return null;
+        const temp = try self.emitSequencedCallArgTemp(expr, locals, nullable_ty);
+        try locals.put(temp.name, try self.localInfoFromType(nullable_ty));
+        return .{ .name = temp.name, .inner_c_type = inner_c_type };
+    }
+
+    fn nullableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .call => self.nullableReturnTypeForExpr(expr),
+            .cast => |node| node.ty.*,
+            .grouped => |inner| self.nullableTypeForExpr(inner.*, locals),
+            else => self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals),
+        };
     }
 
     fn taggedUnionReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
@@ -3192,42 +3206,20 @@ const CEmitter = struct {
                 return error.UnsupportedCEmission;
             },
         };
-        const source_name = switch (node.value.kind) {
-            .ident => |ident| ident.text,
-            .grouped => |inner| switch (inner.kind) {
-                .ident => |ident| ident.text,
-                else => null,
-            },
-            else => null,
-        } orelse blk: {
-            const nullable_ty = self.nullableReturnTypeForExpr(node.value) orelse {
-                try self.writeIndent();
-                try self.out.print(self.allocator, "/* unsupported if-let value: {s} */\n", .{@tagName(node.value.kind)});
-                return error.UnsupportedCEmission;
-            };
-            const temp = try self.emitSequencedCallArgTemp(node.value, locals, nullable_ty);
-            try locals.put(temp.name, try self.localInfoFromType(nullable_ty));
-            break :blk temp.name;
-        };
-        const source_info = locals.get(source_name) orelse {
+        const subject = (try self.nullableSubjectForExpr(node.value, locals)) orelse {
             try self.writeIndent();
-            try self.out.print(self.allocator, "/* unsupported if-let source: {s} */\n", .{source_name});
-            return error.UnsupportedCEmission;
-        };
-        const bind_ty = source_info.nullable_inner_c_type orelse {
-            try self.writeIndent();
-            try self.out.print(self.allocator, "/* unsupported if-let source type: {s} */\n", .{source_name});
+            try self.out.print(self.allocator, "/* unsupported if-let value: {s} */\n", .{@tagName(node.value.kind)});
             return error.UnsupportedCEmission;
         };
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "if ({s} != NULL) {{\n", .{source_name});
+        try self.out.print(self.allocator, "if ({s} != NULL) {{\n", .{subject.name});
         var then_locals = try cloneLocals(self.allocator, locals.*);
         defer then_locals.deinit();
-        try then_locals.put(binding.text, .{ .c_type = bind_ty });
+        try then_locals.put(binding.text, .{ .c_type = subject.inner_c_type });
         self.indent += 1;
         try self.writeIndent();
-        try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ bind_ty, try self.cIdent(binding.text), source_name });
+        try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ subject.inner_c_type, try self.cIdent(binding.text), subject.name });
         try self.emitBlockItems(node.then_block, &then_locals, return_ty);
         self.indent -= 1;
         try self.writeIndent();

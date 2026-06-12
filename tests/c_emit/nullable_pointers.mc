@@ -5,6 +5,12 @@ extern fn ptr_value(p: *mut u8) -> u32;
 extern fn consume_nullable_mut(p: ?*mut u8) -> void;
 extern fn consume_nullable_c_void(p: ?*mut c_void) -> void;
 
+global saved_nullable: ?*mut u8 = null;
+
+struct NullableBox {
+    maybe: ?*mut u8,
+}
+
 fn nullable_null() -> ?*mut u8 {
     return null;
 }
@@ -55,6 +61,20 @@ fn unwrap_call_seed_or_zero() -> u32 {
     return 0;
 }
 
+fn unwrap_global_or_zero() -> u32 {
+    if let p = saved_nullable {
+        return ptr_value(p);
+    }
+    return 0;
+}
+
+fn unwrap_field_or_zero(box: NullableBox) -> u32 {
+    if let p = box.maybe {
+        return ptr_value(p);
+    }
+    return 0;
+}
+
 fn nullable_switch(maybe: ?*mut u8) -> u32 {
     switch maybe {
         p => {
@@ -68,6 +88,28 @@ fn nullable_switch(maybe: ?*mut u8) -> u32 {
 
 fn nullable_switch_call_seed() -> u32 {
     switch maybe_ptr_from(next_seed()) {
+        p => {
+            return ptr_value(p);
+        },
+        _ => {
+            return 0;
+        },
+    }
+}
+
+fn nullable_switch_global() -> u32 {
+    switch saved_nullable {
+        p => {
+            return ptr_value(p);
+        },
+        _ => {
+            return 0;
+        },
+    }
+}
+
+fn nullable_switch_field(box: NullableBox) -> u32 {
+    switch box.maybe {
         p => {
             return ptr_value(p);
         },
