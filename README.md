@@ -208,7 +208,8 @@ Deferred:
   lowering, manifest package builds, and multi-object
   `std/{core,bits,math,ascii,fmt,addr}` runtime checks, plus LLVM object
   coverage for the framebuffer/gpio/irq/spi/timer/uart hardware demos and the
-  hosted elementwise demo.
+  hosted elementwise demo, and LLVM link/run coverage for the hosted
+  elementwise stdin/stdout round trip.
   Remaining work is additional runtime/toolchain coverage, deeper optimizer
   proof work, and fuller native debug mapping.
 
@@ -245,6 +246,7 @@ zig build llvm-toolchain-test
 zig build llvm-std-test
 zig build llvm-pkg-test
 zig build llvm-demo-test
+zig build llvm-hosted-demo-test
 ```
 
 Run the compiler prototype:
@@ -311,7 +313,9 @@ against a C driver. `zig build llvm-pkg-test` builds the package-manifest demo
 through LLVM, links the resulting object, and runs it. `zig build
 llvm-demo-test` compiles the framebuffer/gpio/irq/spi/timer/uart hardware demo
 drivers and the hosted elementwise demo through LLVM to non-empty objects under
-the same hidden-assumption token check.
+the same hidden-assumption token check. `zig build llvm-hosted-demo-test`
+links and runs the hosted elementwise demo through LLVM, libc, and libm, then
+verifies the binary stdin/stdout `f32` round trip.
 
 ## Conformance Snapshot
 

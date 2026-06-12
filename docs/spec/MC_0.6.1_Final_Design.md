@@ -4145,6 +4145,9 @@ the LLVM object driver, links the resulting object, and runs it.
 The `zig build llvm-demo-test` gate compiles the framebuffer/gpio/irq/spi/timer/uart
 hardware demo drivers and the hosted elementwise demo through LLVM to non-empty
 object files under the same hidden-assumption token check.
+The `zig build llvm-hosted-demo-test` gate links and runs the hosted
+elementwise demo through LLVM, libc, and libm, then verifies its binary
+stdin/stdout `f32` round trip.
 These LLVM IR, object, and link/run gates are included in the `zig build m0`
 milestone gate.
 It intentionally emits no hidden optimizer-assumption tokens outside proven
