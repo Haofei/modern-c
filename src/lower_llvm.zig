@@ -698,13 +698,13 @@ const LlvmEmitter = struct {
     fn emitIdent(self: *LlvmEmitter, ident: ast.Ident) ![]const u8 {
         if (self.local_slots.get(ident.text)) |slot| {
             const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(slot.ty), slot.ptr });
+            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(slot.ty), slot.ptr, try self.debugCallSuffix() });
             return result;
         }
         if (self.local_types.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text});
         if (self.global_types.get(ident.text)) |ty| {
             const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = load {s}, ptr @{s}\n", .{ result, try self.llvmType(ty), ident.text });
+            try self.out.print(self.allocator, "  {s} = load {s}, ptr @{s}{s}\n", .{ result, try self.llvmType(ty), ident.text, try self.debugCallSuffix() });
             return result;
         }
         if (self.fn_sigs.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
@@ -1194,14 +1194,14 @@ const LlvmEmitter = struct {
                         const element_ty = overlayByteArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
                         const ptr = try self.emitIndexAddress(node);
                         const value = try self.emitExpr(value_expr, element_ty);
-                        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(element_ty), value, ptr });
+                        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(element_ty), value, ptr, try self.debugCallSuffix() });
                         break :blk true;
                     }
                 }
                 const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitIndexAddress(node);
                 const value = try self.emitExpr(value_expr, element_ty);
-                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(element_ty), value, ptr });
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(element_ty), value, ptr, try self.debugCallSuffix() });
                 break :blk true;
             },
             .grouped => |inner| try self.emitIndexAssignment(inner.*, value_expr),
@@ -1215,7 +1215,7 @@ const LlvmEmitter = struct {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const ptr = try self.storageBaseAddress(info.base);
             const value = try self.emitExpr(call.args[0], info.payload_ty);
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(info.payload_ty), value, ptr });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.payload_ty), value, ptr, try self.debugCallSuffix() });
             return true;
         }
         if (isRawStoreCall(call.callee.*)) {
@@ -1831,7 +1831,7 @@ const LlvmEmitter = struct {
     fn emitDeref(self: *LlvmEmitter, ptr_expr: ast.Expr, pointee_ty: ast.TypeExpr) ![]const u8 {
         const ptr = try self.emitExpr(ptr_expr, try self.pointerTypeFor(pointee_ty));
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(pointee_ty), ptr });
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(pointee_ty), ptr, try self.debugCallSuffix() });
         return result;
     }
 
@@ -1856,13 +1856,13 @@ const LlvmEmitter = struct {
             if (overlayByteArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
             const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
             const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(field.ty), ptr });
+            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(field.ty), ptr, try self.debugCallSuffix() });
             return result;
         }
         const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
         const ptr = try self.emitMemberAddress(node);
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(field.ty), ptr });
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(field.ty), ptr, try self.debugCallSuffix() });
         return result;
     }
 
@@ -1894,14 +1894,14 @@ const LlvmEmitter = struct {
                 const element_ty = overlayByteArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitIndexAddress(node);
                 const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(element_ty), ptr });
+                try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(element_ty), ptr, try self.debugCallSuffix() });
                 return result;
             }
         }
         const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const ptr = try self.emitIndexAddress(node);
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(element_ty), ptr });
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(element_ty), ptr, try self.debugCallSuffix() });
         return result;
     }
 
