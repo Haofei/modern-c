@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# QEMU MMIO execution test (TODO: "Hardware MMIO execution tests").
+# QEMU MMIO execution test.
 #
 # Lowers a typed-MMIO MC program to C, links it into a bare-metal riscv64 image,
 # runs it under qemu-system-riscv64 -machine virt, and checks that the emulated

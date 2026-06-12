@@ -33,7 +33,10 @@ Implemented today:
 - Floating-point scalar types `f32`/`f64` end-to-end: literals, non-trapping
   IEEE arithmetic, ordering, no implicit conversion, and C lowering to
   `float`/`double` (sections 3, 8.3).
-- Integer `reduce.sum_checked<T>` lowers to C with checked accumulation.
+- Integer `reduce.sum_checked<T>` lowers to C with checked accumulation, while
+  floating `reduce.sum_left<T>` keeps source-order folding and
+  `reduce.sum_fast<T>` emits an explicit reassociation/vectorization opt-in for
+  Clang with a strict fallback loop.
 - A growing standard library used by the QEMU/kernel demos, including
   `std/sync`, `std/ring`, `std/dma`, `std/endian`, `std/time`, `std/barrier`,
   `std/virtio`, `std/virtqueue`, hosted I/O, float math intrinsics, and fixed
@@ -48,9 +51,6 @@ Prototype or incomplete:
 
 - Production-grade typed MIR/CFG and verifier.
 - Package manager, releases, and production toolchain support.
-- Floating-point reductions `reduce.sum_left` / `reduce.sum_fast` from section
-  8.3 lower to explicit typed C loops; `sum_fast` is currently conservative
-  and does not yet enable reassociation/vectorization.
 - Full comptime execution (§22): the evaluator handles scalar folding, const
   globals, const-fn calls with loops/for/switch/asserts, aggregate literals and
   mutable aggregate updates, and comptime/type feedback; broader arbitrary
@@ -61,7 +61,6 @@ Prototype or incomplete:
 - Full DMA/cache-coherence model (§18): typed `DmaBuf`, cache clean/invalidate,
   and the address-class rules are implemented; a complete coherence simulation
   is not.
-- Hardware MMIO execution tests.
 - Debug mapping: `emit-c` writes `#line` source hints for generated C, and
   `emit-map` emits an initial `.mcmap`-style source/generated-C map. DWARF-quality
   native debug mapping is still pending.

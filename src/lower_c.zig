@@ -4295,7 +4295,7 @@ const CEmitter = struct {
         if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
 
         if (std.mem.eql(u8, member.name.text, "sum_left") or std.mem.eql(u8, member.name.text, "sum_fast")) {
-            return try self.emitFloatReduceCall(call, locals);
+            return try self.emitFloatReduceCall(call, locals, std.mem.eql(u8, member.name.text, "sum_fast"));
         }
         if (!std.mem.eql(u8, member.name.text, "sum_checked")) return error.UnsupportedCEmission;
 
@@ -4315,7 +4315,7 @@ const CEmitter = struct {
         return true;
     }
 
-    fn emitFloatReduceCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    fn emitFloatReduceCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo), fast: bool) !bool {
         const t_ty = call.type_args[0];
         const t_cty = floatCTypeName(t_ty) orelse return error.UnsupportedCEmission;
         const n = self.temp_index;
@@ -4323,7 +4323,24 @@ const CEmitter = struct {
 
         try self.out.print(self.allocator, "({{ __auto_type mc_xs{d} = (", .{n});
         try self.emitExpr(call.args[0], locals);
-        try self.out.print(self.allocator, "); {s} mc_acc{d} = ({s})0; for (uintptr_t mc_i{d} = 0; mc_i{d} < mc_xs{d}.len; mc_i{d}++) mc_acc{d} = ({s})(mc_acc{d} + mc_xs{d}.ptr[mc_i{d}]); mc_acc{d}; }})", .{ t_cty, n, t_cty, n, n, n, n, n, t_cty, n, n, n, n });
+        try self.out.print(self.allocator, "); {s} mc_acc{d} = ({s})0; ", .{ t_cty, n, t_cty });
+        if (fast) {
+            try self.out.print(self.allocator,
+                \\/* MC_SUM_FAST: reassociation/vectorization opt-in */
+                \\#if defined(__clang__)
+                \\{{
+                \\#pragma clang fp reassociate(on)
+                \\#pragma clang loop vectorize(enable) interleave(enable)
+                \\for (uintptr_t mc_i{0d} = 0; mc_i{0d} < mc_xs{0d}.len; mc_i{0d}++) mc_acc{0d} = ({1s})(mc_acc{0d} + mc_xs{0d}.ptr[mc_i{0d}]);
+                \\}}
+                \\#else
+                \\for (uintptr_t mc_i{0d} = 0; mc_i{0d} < mc_xs{0d}.len; mc_i{0d}++) mc_acc{0d} = ({1s})(mc_acc{0d} + mc_xs{0d}.ptr[mc_i{0d}]);
+                \\#endif
+                \\ mc_acc{0d}; }})
+            , .{ n, t_cty });
+        } else {
+            try self.out.print(self.allocator, "for (uintptr_t mc_i{d} = 0; mc_i{d} < mc_xs{d}.len; mc_i{d}++) mc_acc{d} = ({s})(mc_acc{d} + mc_xs{d}.ptr[mc_i{d}]); mc_acc{d}; }})", .{ n, n, n, n, n, t_cty, n, n, n, n });
+        }
         return true;
     }
 
@@ -9256,6 +9273,7 @@ const Inspector = struct {
                 try self.writeAtomicCallMetadata(node.callee.*, node.args, ctx);
                 try self.writeDmaCallMetadata(node.callee.*, node.args, ctx);
                 try self.writeBitcastMetadata(node, ctx);
+                try self.writeFloatReduceMetadata(node, ctx);
                 if (try self.mmioAccess(node.callee.*, node.args, ctx)) |access| {
                     const bits = widthBits(access.width);
                     try self.out.print(
@@ -9358,6 +9376,30 @@ const Inspector = struct {
                 .{ fn_name, access.struct_name, access.field, helper_base, access.width, access.value_type, bits, helper_base, access.width, access.struct_name, access.field },
             );
         }
+    }
+
+    fn writeFloatReduceMetadata(self: *Inspector, call: anytype, ctx: *FnContext) !void {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return,
+            },
+            else => return,
+        };
+        if (!isIdentNamed(member.base.*, "reduce")) return;
+        const is_left = std.mem.eql(u8, member.name.text, "sum_left");
+        const is_fast = std.mem.eql(u8, member.name.text, "sum_fast");
+        if (!is_left and !is_fast) return;
+        if (call.type_args.len != 1) return;
+
+        const mc_type = typeName(call.type_args[0]) orelse return;
+        const c_type = floatCTypeName(call.type_args[0]) orelse return;
+        try self.out.print(
+            self.allocator,
+            "lower float_reduce fn={s} op={s} type={s} c_type={s} strict_left_fold={} reassociate={} vectorize={} target_dependent={}\n",
+            .{ ctx.name, member.name.text, mc_type, c_type, is_left, is_fast, is_fast, is_fast },
+        );
     }
 
     fn writeMmioBackendBarrier(self: *Inspector, fn_name: []const u8, access: MmioAccess, placement: []const u8, helper: []const u8) !void {
@@ -13733,6 +13775,39 @@ test "emits C for reduce.sum_checked" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__int128 mc_acc") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "> (__int128)(UINT32_MAX)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "(mc_result_u32_Overflow){ .is_ok = true, .payload.ok = (uint32_t)mc_acc") != null);
+}
+
+test "emits C for distinct floating reduction modes" {
+    const source =
+        \\fn sum_left(xs: []const f64) -> f64 {
+        \\    return reduce.sum_left<f64>(xs);
+        \\}
+        \\
+        \\fn sum_fast(xs: []const f32) -> f32 {
+        \\    return reduce.sum_fast<f32>(xs);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_float_reduce.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output.items, "MC_SUM_FAST"));
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "#pragma clang fp reassociate(on)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "#pragma clang loop vectorize(enable) interleave(enable)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "double mc_acc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "float mc_acc") != null);
 }
 
 test "emits C unsafe contract blocks as scoped blocks" {

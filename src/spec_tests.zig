@@ -173,6 +173,7 @@ test "classify SPEC check entries" {
     try std.testing.expectEqual(CheckKind.lower_c, classifyCheck("mmio-width-preserved"));
     try std.testing.expectEqual(CheckKind.lower_c, classifyCheck("packed-bits-no-c-bitfields"));
     try std.testing.expectEqual(CheckKind.lower_c, classifyCheck("overlay-union-byte-storage"));
+    try std.testing.expectEqual(CheckKind.lower_c, classifyCheck("floating-reduction-modes"));
     try std.testing.expectEqual(CheckKind.unsupported, classifyCheck("needs-new-harness-mode"));
 }
 
@@ -779,6 +780,7 @@ fn isLowerCCheck(check: []const u8) bool {
         "irq-off-capability",
         "opaque-asm-lowering",
         "bitcast-lowering",
+        "floating-reduction-modes",
     };
     return matchesAny(check, &names);
 }
@@ -1428,6 +1430,12 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
         return containsAll(output, &.{
             "lower bitcast fn=bitcast_u32_from_i32 source=i32 target=u32 strategy=memcpy helper=mc_bitcast_memcpy strict_aliasing_cast=false",
             "lower bitcast fn=bitcast_i32_from_u32 source=u32 target=i32 strategy=memcpy helper=mc_bitcast_memcpy strict_aliasing_cast=false",
+        });
+    }
+    if (std.mem.eql(u8, check, "floating-reduction-modes")) {
+        return containsAll(output, &.{
+            "lower float_reduce fn=sum_left_f64 op=sum_left type=f64 c_type=double strict_left_fold=true reassociate=false vectorize=false target_dependent=false",
+            "lower float_reduce fn=sum_fast_f32 op=sum_fast type=f32 c_type=float strict_left_fold=false reassociate=true vectorize=true target_dependent=true",
         });
     }
     return false;

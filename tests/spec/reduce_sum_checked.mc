@@ -2,7 +2,7 @@
 // SPEC: milestone=checked-and-floating-reductions
 // SPEC: phase=sema,lower-c
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_REDUCE_REQUIRES_INTEGER,E_REDUCE_REQUIRES_FLOAT,E_REDUCE_ARG_NOT_SLICE,E_CALL_ARG_COUNT
+// SPEC: check=E_REDUCE_REQUIRES_INTEGER,E_REDUCE_REQUIRES_FLOAT,E_REDUCE_ARG_NOT_SLICE,E_CALL_ARG_COUNT,floating-reduction-modes
 
 // reduce.sum_checked<T>(xs: []const T) -> Result<T, Overflow> (§8.2): sum in an
 // abstract/wide integer domain, returning Overflow only if the final result
