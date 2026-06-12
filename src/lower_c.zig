@@ -461,18 +461,71 @@ const SourceMapEmitter = struct {
 
     fn emitStmtExpressions(self: *SourceMapEmitter, stmt: ast.Stmt) !void {
         switch (stmt.kind) {
-            .let_decl, .var_decl => |local| if (local.init) |init| try self.emitExprEntry("initializer_expr", init.span),
+            .let_decl, .var_decl => |local| if (local.init) |init| try self.emitExprTree("initializer_expr", init),
             .assignment => |node| {
-                try self.emitExprEntry("assignment_target_expr", node.target.span);
-                try self.emitExprEntry("assignment_value_expr", node.value.span);
+                try self.emitExprTree("assignment_target_expr", node.target);
+                try self.emitExprTree("assignment_value_expr", node.value);
             },
-            .@"return" => |maybe_expr| if (maybe_expr) |expr| try self.emitExprEntry("return_expr", expr.span),
-            .assert => |expr| try self.emitExprEntry("assert_expr", expr.span),
-            .loop => |loop| if (loop.iterable) |expr| try self.emitExprEntry(if (loop.kind == .@"while") "while_condition_expr" else "for_iterable_expr", expr.span),
-            .if_let => |node| try self.emitExprEntry("if_let_value_expr", node.value.span),
-            .@"switch" => |node| try self.emitExprEntry("switch_subject_expr", node.subject.span),
-            .@"defer" => |expr| try self.emitExprEntry("defer_expr", expr.span),
-            .expr => |expr| try self.emitExprEntry("expr", expr.span),
+            .@"return" => |maybe_expr| if (maybe_expr) |expr| try self.emitExprTree("return_expr", expr),
+            .assert => |expr| try self.emitExprTree("assert_expr", expr),
+            .loop => |loop| if (loop.iterable) |expr| try self.emitExprTree(if (loop.kind == .@"while") "while_condition_expr" else "for_iterable_expr", expr),
+            .if_let => |node| try self.emitExprTree("if_let_value_expr", node.value),
+            .@"switch" => |node| try self.emitExprTree("switch_subject_expr", node.subject),
+            .@"defer" => |expr| try self.emitExprTree("defer_expr", expr),
+            .asm_stmt => |asm_stmt| {
+                for (asm_stmt.inputs) |input| try self.emitExprTree("asm_input_expr", input.value);
+            },
+            .expr => |expr| try self.emitExprTree("expr", expr),
+            else => {},
+        }
+    }
+
+    fn emitExprTree(self: *SourceMapEmitter, root_kind: []const u8, expr: ast.Expr) anyerror!void {
+        try self.emitExprEntry(root_kind, expr.span);
+        try self.emitExprChildren(expr);
+    }
+
+    fn emitNestedExpr(self: *SourceMapEmitter, expr: ast.Expr) anyerror!void {
+        const kind = try std.fmt.allocPrint(self.allocator, "expr_{s}", .{@tagName(expr.kind)});
+        defer self.allocator.free(kind);
+        try self.emitExprEntry(kind, expr.span);
+        try self.emitExprChildren(expr);
+    }
+
+    fn emitExprChildren(self: *SourceMapEmitter, expr: ast.Expr) anyerror!void {
+        switch (expr.kind) {
+            .array_literal => |items| {
+                for (items) |item| try self.emitNestedExpr(item);
+            },
+            .struct_literal => |fields| {
+                for (fields) |field| try self.emitNestedExpr(field.value);
+            },
+            .grouped, .address_of, .deref => |inner| try self.emitNestedExpr(inner.*),
+            .block => |block| try self.emitBlock(block),
+            .unary => |node| try self.emitNestedExpr(node.expr.*),
+            .binary => |node| {
+                try self.emitNestedExpr(node.left.*);
+                try self.emitNestedExpr(node.right.*);
+            },
+            .cast => |node| try self.emitNestedExpr(node.value.*),
+            .call => |node| {
+                try self.emitNestedExpr(node.callee.*);
+                for (node.args) |arg| try self.emitNestedExpr(arg);
+            },
+            .index => |node| {
+                try self.emitNestedExpr(node.base.*);
+                try self.emitNestedExpr(node.index.*);
+            },
+            .slice => |node| {
+                try self.emitNestedExpr(node.base.*);
+                try self.emitNestedExpr(node.start.*);
+                try self.emitNestedExpr(node.end.*);
+            },
+            .member => |node| try self.emitNestedExpr(node.base.*),
+            .try_expr => |node| {
+                try self.emitNestedExpr(node.operand.*);
+                if (node.mapped) |mapped| try self.emitNestedExpr(mapped.*);
+            },
             else => {},
         }
     }
@@ -12247,6 +12300,8 @@ test "C source map records source spans and generated C lines" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"function\" symbol=\"add_one\" source_line=3") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"let_decl\" symbol=\"add_one\" source_line=4") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"initializer_expr\" symbol=\"add_one\" source_line=4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"expr_ident\" symbol=\"add_one\" source_line=4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"expr_int_literal\" symbol=\"add_one\" source_line=4") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"return\" symbol=\"add_one\" source_line=5") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"return_expr\" symbol=\"add_one\" source_line=5") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "generated_c_line=0") == null);
