@@ -1446,40 +1446,84 @@ pub fn build(b: *std.Build) void {
     llvm_kmain_net_test_step.dependOn(&llvm_kmain_net_test_cmd.step);
 
     const vm_switch_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/mem/vm-switch-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     vm_switch_test_cmd.step.dependOn(b.getInstallStep());
     const vm_switch_test_step = b.step("vm-switch-test", "Switch satp between two address spaces under QEMU (per-process VM)");
     vm_switch_test_step.dependOn(&vm_switch_test_cmd.step);
 
+    const llvm_vm_switch_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/vm-switch-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_vm_switch_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_vm_switch_test_step = b.step("llvm-vm-switch-test", "Run LLVM-lowered satp switching between two address spaces under QEMU");
+    llvm_vm_switch_test_step.dependOn(&llvm_vm_switch_test_cmd.step);
+
     const vmspace_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/mem/vmspace-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     vmspace_test_cmd.step.dependOn(b.getInstallStep());
     const vmspace_test_step = b.step("vmspace-test", "Per-process page tables: switch satp by process slot under QEMU");
     vmspace_test_step.dependOn(&vmspace_test_cmd.step);
 
+    const llvm_vmspace_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/vmspace-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_vmspace_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_vmspace_test_step = b.step("llvm-vmspace-test", "Run LLVM-lowered per-process page tables under QEMU");
+    llvm_vmspace_test_step.dependOn(&llvm_vmspace_test_cmd.step);
+
     const vmctx_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/mem/vmctx-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     vmctx_test_cmd.step.dependOn(b.getInstallStep());
     const vmctx_test_step = b.step("vmctx-test", "Context switch that swaps satp per thread under QEMU");
     vmctx_test_step.dependOn(&vmctx_test_cmd.step);
 
+    const llvm_vmctx_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/vmctx-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_vmctx_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_vmctx_test_step = b.step("llvm-vmctx-test", "Run LLVM-lowered context switching with satp swaps under QEMU");
+    llvm_vmctx_test_step.dependOn(&llvm_vmctx_test_cmd.step);
+
     const sched_vm_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/sched-vm-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     sched_vm_test_cmd.step.dependOn(b.getInstallStep());
     const sched_vm_test_step = b.step("sched-vm-test", "Scheduler switching per-process address spaces (proc_yield_vm) under QEMU");
     sched_vm_test_step.dependOn(&sched_vm_test_cmd.step);
+
+    const llvm_sched_vm_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/sched-vm-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_sched_vm_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_sched_vm_test_step = b.step("llvm-sched-vm-test", "Run LLVM-lowered scheduler switching per-process address spaces under QEMU");
+    llvm_sched_vm_test_step.dependOn(&llvm_sched_vm_test_cmd.step);
 
     const run_ushell_cmd = b.addSystemCommand(&.{ "sh", "tools/lang/run-ushell.sh" });
     run_ushell_cmd.step.dependOn(b.getInstallStep());
@@ -1524,6 +1568,10 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_exec_test_cmd.step);
     m0_step.dependOn(&llvm_kmain_test_cmd.step);
     m0_step.dependOn(&llvm_kmain_net_test_cmd.step);
+    m0_step.dependOn(&llvm_vm_switch_test_cmd.step);
+    m0_step.dependOn(&llvm_vmspace_test_cmd.step);
+    m0_step.dependOn(&llvm_vmctx_test_cmd.step);
+    m0_step.dependOn(&llvm_sched_vm_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
