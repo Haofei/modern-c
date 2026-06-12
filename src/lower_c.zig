@@ -571,6 +571,7 @@ const CEmitter = struct {
     // comptime↔type feedback).
     const_fns: std.StringHashMap(ast.FnDecl),
     const_globals: std.StringHashMap(eval.ComptimeValue),
+    const_global_widths: std.StringHashMap(u16),
     structs: std.StringHashMap(ast.StructDecl),
     mmio_structs: std.StringHashMap(MmioStruct),
     packed_bits: std.StringHashMap(PackedBitsInfo),
@@ -607,6 +608,7 @@ const CEmitter = struct {
             .functions = std.StringHashMap(FnInfo).init(allocator),
             .const_fns = std.StringHashMap(ast.FnDecl).init(allocator),
             .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
+            .const_global_widths = std.StringHashMap(u16).init(allocator),
             .structs = std.StringHashMap(ast.StructDecl).init(allocator),
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
             .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
@@ -643,6 +645,7 @@ const CEmitter = struct {
         while (mmio_structs.next()) |mmio_struct| mmio_struct.fields.deinit();
         self.mmio_structs.deinit();
         self.structs.deinit();
+        self.const_global_widths.deinit();
         self.const_fns.deinit();
         eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.functions.deinit();
@@ -651,6 +654,19 @@ const CEmitter = struct {
         self.globals.deinit();
         self.loop_ids.deinit(self.allocator);
         self.scratch.deinit();
+    }
+
+    fn collectConstGlobalWidths(self: *CEmitter, module: ast.Module) !void {
+        for (module.decls) |decl| {
+            const global = switch (decl.kind) {
+                .global_decl => |g| g,
+                else => continue,
+            };
+            if (!global.is_const) continue;
+            const ty = global.ty orelse continue;
+            const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
+            try self.const_global_widths.put(global.name.text, bits);
+        }
     }
 
     fn emitModule(self: *CEmitter, module: ast.Module) anyerror!void {
@@ -665,6 +681,7 @@ const CEmitter = struct {
             }
         }
         try eval.collectConstGlobals(self.allocator, module, &self.const_fns, &self.const_globals);
+        try self.collectConstGlobalWidths(module);
         // Pre-register every (non-MMIO) struct and type alias name so type-name
         // mangling (`typeSuffix`'s `struct_` prefix) is consistent regardless of
         // declaration/import order — e.g. an array-of-struct field (`[N]S`) whose
@@ -824,6 +841,8 @@ const CEmitter = struct {
         var scope = eval.ComptimeScope.init(fba.allocator());
         scope.funcs = &self.const_fns;
         scope.globals = &self.const_globals;
+        var widths = self.const_global_widths.iterator();
+        while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
         return switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => |v| switch (v) {
                 // Values above the signed-64 range need an unsigned suffix, or C

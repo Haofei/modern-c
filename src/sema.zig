@@ -16,6 +16,9 @@ pub const Checker = struct {
     // Folded values of `const NAME: T = …` globals (section 22), so comptime
     // folding can resolve named compile-time constants.
     const_globals: ?*const std.StringHashMap(eval.ComptimeValue) = null,
+    // Declared integer widths of named const globals, used by width-sensitive
+    // comptime folds such as `~CONST_U32`.
+    const_global_widths: ?*const std.StringHashMap(u16) = null,
     // Functions that declare at least one `comptime` parameter (section 22),
     // keyed by name, so call sites can re-check their comptime assertions with
     // the parameters bound to the call's constant arguments.
@@ -89,6 +92,12 @@ pub const Checker = struct {
         };
         self.const_globals = &const_globals;
         defer self.const_globals = null;
+
+        var const_global_widths = std.StringHashMap(u16).init(self.reporter.allocator);
+        defer const_global_widths.deinit();
+        self.collectConstGlobalWidths(module, &const_global_widths);
+        self.const_global_widths = &const_global_widths;
+        defer self.const_global_widths = null;
 
         var comptime_fns = std.StringHashMap(ast.FnDecl).init(self.reporter.allocator);
         defer comptime_fns.deinit();
@@ -377,6 +386,21 @@ pub const Checker = struct {
                 },
                 .fn_decl, .extern_fn, .struct_decl, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
             }
+        }
+    }
+
+    fn collectConstGlobalWidths(self: *Checker, module: ast.Module, widths: *std.StringHashMap(u16)) void {
+        for (module.decls) |decl| {
+            const global = switch (decl.kind) {
+                .global_decl => |g| g,
+                else => continue,
+            };
+            if (!global.is_const) continue;
+            const ty = global.ty orelse continue;
+            const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
+            widths.put(global.name.text, bits) catch {
+                self.oom = true;
+            };
         }
     }
 
@@ -819,12 +843,20 @@ pub const Checker = struct {
         var buf: [64 * 1024]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buf);
         var scope = eval.ComptimeScope.init(fba.allocator());
-        scope.funcs = self.const_fns;
-        scope.globals = self.const_globals;
+        self.seedComptimeScope(&scope);
         return switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => true,
             else => false,
         };
+    }
+
+    fn seedComptimeScope(self: *Checker, scope: *eval.ComptimeScope) void {
+        scope.funcs = self.const_fns;
+        scope.globals = self.const_globals;
+        if (self.const_global_widths) |widths| {
+            var it = widths.iterator();
+            while (it.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
+        }
     }
 
     fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
@@ -1149,8 +1181,7 @@ pub const Checker = struct {
         var buf: [64 * 1024]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buf);
         var scope = eval.ComptimeScope.init(fba.allocator());
-        scope.funcs = self.const_fns;
-        scope.globals = self.const_globals;
+        self.seedComptimeScope(&scope);
         return switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => |v| v,
             else => null,
@@ -1166,8 +1197,7 @@ pub const Checker = struct {
         var arena = std.heap.ArenaAllocator.init(self.reporter.allocator);
         defer arena.deinit();
         var scope = eval.ComptimeScope.init(arena.allocator());
-        scope.funcs = self.const_fns;
-        scope.globals = self.const_globals;
+        self.seedComptimeScope(&scope);
         for (fn_decl.params, args) |param, arg| {
             if (!param.is_comptime) continue;
             const value = self.comptimeFoldValue(arg) orelse return; // non-const arg already diagnosed
@@ -1292,8 +1322,7 @@ pub const Checker = struct {
                 var arena = std.heap.ArenaAllocator.init(self.reporter.allocator);
                 defer arena.deinit();
                 var scope = eval.ComptimeScope.init(arena.allocator());
-                scope.funcs = self.const_fns;
-                scope.globals = self.const_globals;
+                self.seedComptimeScope(&scope);
                 scope.reflect = comptimeReflectThunk;
                 scope.reflect_ctx = self;
                 self.foldComptimeBlock(block, &scope);

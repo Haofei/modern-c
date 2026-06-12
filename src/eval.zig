@@ -461,6 +461,7 @@ pub fn collectConstGlobals(
                 const cloned = try cloneComptimeValue(allocator, v);
                 errdefer freeComptimeValue(allocator, cloned);
                 try out.put(global.name.text, cloned);
+                if (global.ty) |ty| if (comptimeTypeBitWidth(ty)) |bits| scope.bindWidth(global.name.text, bits);
             },
             else => {},
         }

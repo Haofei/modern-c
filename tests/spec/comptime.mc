@@ -20,6 +20,8 @@ enum BootState : u8 {
 const DEFAULT_BOOT_STATE: BootState = .ready;
 
 const DEFAULT_NUMBERS: [4]u32 = .{ 1, 2, 3, 4 };
+const DEFAULT_ZERO: u32 = 0;
+const DEFAULT_INVERTED_ZERO: u32 = ~DEFAULT_ZERO;
 
 const fn is_power_of_two(x: u32) -> bool {
     return x != 0 && (x & (x - 1)) == 0;
@@ -351,6 +353,20 @@ fn reject_comptime_const_array_global() -> void {
     comptime {
         // EXPECT_ERROR: E_COMPTIME_TRAP
         assert(DEFAULT_NUMBERS[1] == 3);
+    }
+}
+
+fn accept_comptime_const_global_bit_not_width() -> void {
+    comptime {
+        assert(~DEFAULT_ZERO == 0xFFFFFFFF);
+        assert(DEFAULT_INVERTED_ZERO == 0xFFFFFFFF);
+    }
+}
+
+fn reject_comptime_const_global_bit_not_width() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(~DEFAULT_ZERO == 0xFFFF);
     }
 }
 
