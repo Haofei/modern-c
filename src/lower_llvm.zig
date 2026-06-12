@@ -30,6 +30,9 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         .need_sadd = std.StringHashMap(void).init(allocator),
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
+        .const_fns = std.StringHashMap(ast.FnDecl).init(allocator),
+        .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
+        .const_global_widths = std.StringHashMap(u16).init(allocator),
         .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
         .enum_types = std.StringHashMap(ast.EnumDecl).init(allocator),
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
@@ -44,6 +47,12 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
     };
     defer ctx.deinit();
     for (module.decls) |decl| {
+        if (decl.kind == .fn_decl) {
+            const fn_decl = decl.kind.fn_decl;
+            if (fn_decl.is_const and !ctx.const_fns.contains(fn_decl.name.text)) try ctx.const_fns.put(fn_decl.name.text, fn_decl);
+        }
+    }
+    for (module.decls) |decl| {
         switch (decl.kind) {
             .type_alias => |alias| try ctx.collectTypeAlias(alias),
             .enum_decl => |enum_decl| try ctx.collectEnum(enum_decl),
@@ -56,6 +65,11 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
             else => {},
         }
     }
+    try eval.collectConstGlobalsWithOptions(allocator, module, &ctx.const_fns, &ctx.const_globals, .{
+        .reflect = llvmComptimeReflectThunk,
+        .reflect_ctx = &ctx,
+    });
+    try ctx.collectConstGlobalWidths(module);
     for (module.decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| try ctx.collectFunction(fn_decl),
@@ -110,6 +124,9 @@ const LlvmEmitter = struct {
     need_sadd: std.StringHashMap(void) = undefined,
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
+    const_fns: std.StringHashMap(ast.FnDecl) = undefined,
+    const_globals: std.StringHashMap(eval.ComptimeValue) = undefined,
+    const_global_widths: std.StringHashMap(u16) = undefined,
     type_aliases: std.StringHashMap(ast.TypeExpr) = undefined,
     enum_types: std.StringHashMap(ast.EnumDecl) = undefined,
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
@@ -132,6 +149,9 @@ const LlvmEmitter = struct {
         self.need_sadd.deinit();
         self.need_ssub.deinit();
         self.need_smul.deinit();
+        self.const_fns.deinit();
+        self.const_global_widths.deinit();
+        eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.type_aliases.deinit();
         self.enum_types.deinit();
         self.struct_types.deinit();
@@ -143,6 +163,19 @@ const LlvmEmitter = struct {
         self.debug_functions.deinit(self.allocator);
         self.debug_locations.deinit(self.allocator);
         self.scratch.deinit();
+    }
+
+    fn collectConstGlobalWidths(self: *LlvmEmitter, module: ast.Module) !void {
+        for (module.decls) |decl| {
+            const global = switch (decl.kind) {
+                .global_decl => |g| g,
+                else => continue,
+            };
+            if (!global.is_const) continue;
+            const ty = global.ty orelse continue;
+            const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
+            try self.const_global_widths.put(global.name.text, bits);
+        }
     }
 
     fn collectStruct(self: *LlvmEmitter, struct_decl: ast.StructDecl) !void {
@@ -197,6 +230,9 @@ const LlvmEmitter = struct {
 
     fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
         const resolved_ty = self.resolveAliasType(ty);
+        if (self.foldConstGlobalValue(expr)) |value| {
+            return try self.comptimeValueInitializer(value, ty);
+        }
         if (self.atomicPayloadType(resolved_ty)) |payload_ty| {
             if (isAtomicInitExpr(expr)) return try self.emitGlobalInitializer(atomicInitValue(expr).?, payload_ty);
             return try self.emitGlobalInitializer(expr, payload_ty);
@@ -215,7 +251,7 @@ const LlvmEmitter = struct {
                     .grouped => |inner| return self.emitGlobalInitializer(inner.*, ty),
                     else => return error.UnsupportedLlvmEmission,
                 };
-                const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+                const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 if (items.len != len) return error.UnsupportedLlvmEmission;
                 var text: std.ArrayList(u8) = .empty;
                 try text.append(self.scratch.allocator(), '[');
@@ -248,17 +284,32 @@ const LlvmEmitter = struct {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(ty)),
-            .unary => |node| if (node.op == .neg and self.isFloatTypeOf(ty)) blk: {
-                const literal = switch ((node.expr.*).kind) {
-                    .float_literal => |literal| literal,
-                    .grouped => |inner| switch (inner.kind) {
+            .unary => |node| blk: {
+                if (node.op != .neg) break :blk error.UnsupportedLlvmEmission;
+                if (self.isFloatTypeOf(ty)) {
+                    const literal = switch ((node.expr.*).kind) {
                         .float_literal => |literal| literal,
+                        .grouped => |inner| switch (inner.kind) {
+                            .float_literal => |literal| literal,
+                            else => break :blk error.UnsupportedLlvmEmission,
+                        },
                         else => break :blk error.UnsupportedLlvmEmission,
-                    },
-                    else => break :blk error.UnsupportedLlvmEmission,
-                };
-                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(ty))});
-            } else error.UnsupportedLlvmEmission,
+                    };
+                    break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(ty))});
+                }
+                if (self.integerBitsOf(ty) != null) {
+                    const literal = switch ((node.expr.*).kind) {
+                        .int_literal => |literal| literal,
+                        .grouped => |inner| switch (inner.kind) {
+                            .int_literal => |literal| literal,
+                            else => break :blk error.UnsupportedLlvmEmission,
+                        },
+                        else => break :blk error.UnsupportedLlvmEmission,
+                    };
+                    break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedIntLiteral(self.scratch.allocator(), literal)});
+                }
+                break :blk error.UnsupportedLlvmEmission;
+            },
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
             .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
@@ -274,6 +325,66 @@ const LlvmEmitter = struct {
                 else => error.UnsupportedLlvmEmission,
             },
             else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn foldConstGlobalValue(self: *LlvmEmitter, expr: ast.Expr) ?eval.ComptimeValue {
+        var buf: [64 * 1024]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        var scope = eval.ComptimeScope.init(fba.allocator());
+        defer scope.deinit();
+        self.seedConstFoldScope(&scope);
+        return switch (eval.foldComptimeExpr(&scope, expr)) {
+            .value => |v| eval.cloneComptimeValue(self.scratch.allocator(), v) catch null,
+            else => null,
+        };
+    }
+
+    fn seedConstFoldScope(self: *LlvmEmitter, scope: *eval.ComptimeScope) void {
+        scope.funcs = &self.const_fns;
+        scope.globals = &self.const_globals;
+        scope.reflect = llvmComptimeReflectThunk;
+        scope.reflect_ctx = self;
+        var widths = self.const_global_widths.iterator();
+        while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    fn comptimeValueInitializer(self: *LlvmEmitter, value: eval.ComptimeValue, target_ty: ast.TypeExpr) anyerror![]const u8 {
+        const resolved = self.resolveAliasType(target_ty);
+        return switch (value) {
+            .int => |n| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
+            .boolean => |b| if (b) "1" else "0",
+            .tag => |tag| blk: {
+                const enum_decl = self.enumDeclForType(resolved) orelse return error.UnsupportedLlvmEmission;
+                break :blk try self.enumCaseValueByName(enum_decl, tag);
+            },
+            .array => |items| blk: {
+                const array = switch (resolved.kind) {
+                    .array => |node| node,
+                    else => return error.UnsupportedLlvmEmission,
+                };
+                var text: std.ArrayList(u8) = .empty;
+                try text.append(self.scratch.allocator(), '[');
+                for (items, 0..) |item, i| {
+                    if (i != 0) try text.appendSlice(self.scratch.allocator(), ", ");
+                    try text.print(self.scratch.allocator(), "{s} {s}", .{ try self.llvmType(array.child.*), try self.comptimeValueInitializer(item, array.child.*) });
+                }
+                try text.append(self.scratch.allocator(), ']');
+                break :blk try text.toOwnedSlice(self.scratch.allocator());
+            },
+            .@"struct" => |fields| blk: {
+                const struct_decl = self.structDeclForType(resolved) orelse return error.UnsupportedLlvmEmission;
+                var text: std.ArrayList(u8) = .empty;
+                try text.appendSlice(self.scratch.allocator(), "{ ");
+                for (struct_decl.fields, 0..) |field, i| {
+                    if (i != 0) try text.appendSlice(self.scratch.allocator(), ", ");
+                    const field_value = comptimeStructFieldValue(fields, field.name.text) orelse return error.UnsupportedLlvmEmission;
+                    try text.print(self.scratch.allocator(), "{s} {s}", .{ try self.llvmType(field.ty), try self.comptimeValueInitializer(field_value, field.ty) });
+                }
+                try text.appendSlice(self.scratch.allocator(), " }");
+                break :blk try text.toOwnedSlice(self.scratch.allocator());
+            },
+            .void => error.UnsupportedLlvmEmission,
         };
     }
 
@@ -831,7 +942,7 @@ const LlvmEmitter = struct {
 
     fn emitIterableLen(self: *LlvmEmitter, iterable: ast.Expr, iterable_ty: ast.TypeExpr, iterable_slot: ?LocalSlot) ![]const u8 {
         return switch (iterable_ty.kind) {
-            .array => |array| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission}),
+            .array => |array| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission}),
             .slice => blk: {
                 const slot = iterable_slot orelse return error.UnsupportedLlvmEmission;
                 _ = iterable;
@@ -1123,7 +1234,7 @@ const LlvmEmitter = struct {
         const index = try self.emitExpr(node.index.*, simpleType((node.index.*).span, "usize"));
         return switch (resolved_base_ty.kind) {
             .array => |array| blk: {
-                const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+                const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 const base_ptr = try self.arrayBasePointer(node.base.*);
                 try self.emitBoundsCheck(index, len);
                 const result = try self.nextTemp();
@@ -1226,7 +1337,7 @@ const LlvmEmitter = struct {
         const base_ptr = switch (base_ty.kind) {
             .array => |array| blk: {
                 const array_ptr = try self.arrayBasePointer(node.base.*);
-                const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+                const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 const elem_ptr = try self.nextTemp();
                 try self.emitSliceBoundsCheck(start, end, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{len}));
                 try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ elem_ptr, try self.llvmType(base_ty), array_ptr, start });
@@ -1260,7 +1371,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return error.UnsupportedLlvmEmission,
         };
-        const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+        const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
         if (items.len != len) return error.UnsupportedLlvmEmission;
         const element_ty = array.child.*;
         const element_llvm = try self.llvmType(element_ty);
@@ -1967,7 +2078,7 @@ const LlvmEmitter = struct {
             else
                 error.UnsupportedLlvmEmission,
             .pointer, .raw_many_pointer, .nullable => "ptr",
-            .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
+            .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ self.arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
             .slice => "{ ptr, i64 }",
             .fn_pointer => "ptr",
             .generic => |node| if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1)
@@ -2387,6 +2498,132 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn arrayLenValue(self: *LlvmEmitter, expr: ast.Expr) ?u64 {
+        if (literalArrayLenValue(expr)) |len| return len;
+        var buf: [64 * 1024]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        var scope = eval.ComptimeScope.init(fba.allocator());
+        defer scope.deinit();
+        self.seedConstFoldScope(&scope);
+        return switch (eval.foldComptimeExpr(&scope, expr)) {
+            .value => |value| switch (value) {
+                .int => |n| if (n >= 0 and n <= std.math.maxInt(u64)) @intCast(n) else null,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn comptimeReflect(self: *LlvmEmitter, call: ast.Expr) ?i128 {
+        const node = switch (call.kind) {
+            .call => |n| n,
+            else => return null,
+        };
+        const kind = reflectionCallKind(node.callee.*) orelse return null;
+        if (node.type_args.len != 1) return null;
+        const ty = node.type_args[0];
+        return switch (kind) {
+            .size => if (node.args.len == 0) self.comptimeSizeOf(ty, 0) else null,
+            .alignment => if (node.args.len == 0) self.comptimeAlignOf(ty, 0) else null,
+            .field_offset => if (node.args.len == 1) self.comptimeFieldOffset(ty, reflectionFieldName(node.args[0]) orelse return null, 0) else null,
+        };
+    }
+
+    fn comptimeSizeOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        return switch (ty.kind) {
+            .name => |name| {
+                if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
+                if (self.type_aliases.get(name.text)) |aliased| return self.comptimeSizeOf(aliased, depth + 1);
+                if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructSize(struct_decl, depth + 1);
+                if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeSizeOf(enumReprType(enum_decl), depth + 1);
+                return null;
+            },
+            .pointer, .raw_many_pointer => 8,
+            .nullable => |child| if (isPointerLikeType(child.*)) 8 else null,
+            .slice => 16,
+            .generic => |g| {
+                if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat")) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                return null;
+            },
+            .array => |node| {
+                const len = self.arrayLenValue(node.len) orelse return null;
+                const elem = self.comptimeSizeOf(node.child.*, depth + 1) orelse return null;
+                return @as(i128, @intCast(len)) * elem;
+            },
+            .qualified => |node| self.comptimeSizeOf(node.child.*, depth + 1),
+            else => null,
+        };
+    }
+
+    fn comptimeAlignOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        return switch (ty.kind) {
+            .name => |name| {
+                if (scalarLayout(name.text)) |layout| return @intCast(layout.alignment);
+                if (self.type_aliases.get(name.text)) |aliased| return self.comptimeAlignOf(aliased, depth + 1);
+                if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructAlign(struct_decl, depth + 1);
+                if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeAlignOf(enumReprType(enum_decl), depth + 1);
+                return null;
+            },
+            .pointer, .raw_many_pointer, .slice => 8,
+            .nullable => |child| if (isPointerLikeType(child.*)) 8 else null,
+            .generic => |g| {
+                if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat")) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                return null;
+            },
+            .array => |node| self.comptimeAlignOf(node.child.*, depth + 1),
+            .qualified => |node| self.comptimeAlignOf(node.child.*, depth + 1),
+            else => null,
+        };
+    }
+
+    fn comptimeStructSize(self: *LlvmEmitter, struct_decl: ast.StructDecl, depth: usize) ?i128 {
+        const layout = self.comptimeStructLayout(struct_decl, null, depth + 1) orelse return null;
+        return layout.size;
+    }
+
+    fn comptimeStructAlign(self: *LlvmEmitter, struct_decl: ast.StructDecl, depth: usize) ?i128 {
+        const layout = self.comptimeStructLayout(struct_decl, null, depth + 1) orelse return null;
+        return layout.alignment;
+    }
+
+    fn comptimeFieldOffset(self: *LlvmEmitter, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        const name = typeName(ty) orelse return null;
+        if (self.type_aliases.get(name)) |aliased| return self.comptimeFieldOffset(aliased, field, depth + 1);
+        if (self.struct_types.get(name)) |struct_decl| {
+            const layout = self.comptimeStructLayout(struct_decl, field, depth + 1) orelse return null;
+            return layout.field_offset;
+        }
+        return null;
+    }
+
+    fn comptimeStructLayout(self: *LlvmEmitter, struct_decl: ast.StructDecl, wanted_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
+        if (depth > 32) return null;
+        var offset: i128 = 0;
+        var max_align: i128 = 1;
+        var found: ?i128 = null;
+        for (struct_decl.fields) |field| {
+            const size = self.comptimeSizeOf(field.ty, depth + 1) orelse return null;
+            const alignment = self.comptimeAlignOf(field.ty, depth + 1) orelse return null;
+            if (alignment <= 0) return null;
+            if (alignment > max_align) max_align = alignment;
+            offset = alignForward(offset, alignment) orelse return null;
+            if (wanted_field) |wanted| {
+                if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
+            }
+            offset += size;
+        }
+        return .{
+            .size = alignForward(offset, max_align) orelse return null,
+            .alignment = max_align,
+            .field_offset = found,
+        };
+    }
+
     fn integerBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
         if (self.enumDeclForType(ty)) |enum_decl| return self.integerBitsOf(enumReprType(enum_decl));
         if (self.domainPayloadType(ty)) |payload_ty| return self.integerBitsOf(payload_ty);
@@ -2505,6 +2742,12 @@ const ConversionCallInfo = struct {
 const IntRange = struct {
     min: i128,
     max: i128,
+};
+
+const ComptimeStructLayout = struct {
+    size: i128,
+    alignment: i128,
+    field_offset: ?i128,
 };
 
 const AtomicCallInfo = struct {
@@ -2686,6 +2929,13 @@ fn atomicInitValue(expr: ast.Expr) ?ast.Expr {
     };
 }
 
+fn comptimeStructFieldValue(fields: []const eval.ComptimeStructField, name: []const u8) ?eval.ComptimeValue {
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name, name)) return field.value;
+    }
+    return null;
+}
+
 fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, name),
@@ -2750,8 +3000,73 @@ fn atomicLlvmOrdering(ordering: []const u8, context: AtomicOrderContext) ?[]cons
 fn typeName(ty: ast.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .name => |name| name.text,
+        .qualified => |node| typeName(node.child.*),
         else => null,
     };
+}
+
+fn llvmComptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
+    const self: *LlvmEmitter = @ptrCast(@alignCast(ctx orelse return null));
+    return self.comptimeReflect(call);
+}
+
+const ReflectionCallKind = enum {
+    size,
+    alignment,
+    field_offset,
+};
+
+fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
+    return switch (callee.kind) {
+        .ident => |ident| {
+            if (std.mem.eql(u8, ident.text, "size_of") or std.mem.eql(u8, ident.text, "sizeof")) return .size;
+            if (std.mem.eql(u8, ident.text, "alignof")) return .alignment;
+            if (std.mem.eql(u8, ident.text, "field_offset")) return .field_offset;
+            return null;
+        },
+        .grouped => |inner| reflectionCallKind(inner.*),
+        else => null,
+    };
+}
+
+fn reflectionFieldName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .enum_literal => |literal| literal.text,
+        .grouped => |inner| reflectionFieldName(inner.*),
+        else => null,
+    };
+}
+
+const ScalarLayout = struct { size: u32, alignment: u32 };
+
+fn scalarLayout(name: []const u8) ?ScalarLayout {
+    const table = [_]struct { n: []const u8, s: u32 }{
+        .{ .n = "u8", .s = 1 },      .{ .n = "i8", .s = 1 },    .{ .n = "bool", .s = 1 },
+        .{ .n = "u16", .s = 2 },     .{ .n = "i16", .s = 2 },   .{ .n = "u32", .s = 4 },
+        .{ .n = "i32", .s = 4 },     .{ .n = "f32", .s = 4 },   .{ .n = "u64", .s = 8 },
+        .{ .n = "i64", .s = 8 },     .{ .n = "f64", .s = 8 },   .{ .n = "usize", .s = 8 },
+        .{ .n = "isize", .s = 8 },   .{ .n = "PAddr", .s = 8 }, .{ .n = "VAddr", .s = 8 },
+        .{ .n = "DmaAddr", .s = 8 },
+    };
+    for (table) |entry| {
+        if (std.mem.eql(u8, name, entry.n)) return .{ .size = entry.s, .alignment = entry.s };
+    }
+    return null;
+}
+
+fn isPointerLikeType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .pointer, .raw_many_pointer => true,
+        .qualified => |node| isPointerLikeType(node.child.*),
+        else => false,
+    };
+}
+
+fn alignForward(value: i128, alignment: i128) ?i128 {
+    if (alignment <= 0) return null;
+    const rem = @rem(value, alignment);
+    if (rem == 0) return value;
+    return std.math.add(i128, value, alignment - rem) catch null;
 }
 
 fn isOpaqueAddressTypeName(name: []const u8) bool {
@@ -2874,10 +3189,10 @@ fn charLiteralValue(allocator: std.mem.Allocator, literal: []const u8) ![]const 
     return std.fmt.allocPrint(allocator, "{d}", .{value});
 }
 
-fn arrayLenValue(expr: ast.Expr) ?u64 {
+fn literalArrayLenValue(expr: ast.Expr) ?u64 {
     return switch (expr.kind) {
         .int_literal => |literal| parseU64Literal(literal),
-        .grouped => |inner| arrayLenValue(inner.*),
+        .grouped => |inner| literalArrayLenValue(inner.*),
         else => null,
     };
 }

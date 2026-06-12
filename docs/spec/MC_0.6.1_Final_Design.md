@@ -4027,7 +4027,8 @@ and nested aggregate stores through globals, arrays, and struct fields. Inferred
 local lowering covers initializer-derived scalar, slice, array, and struct
 storage for the covered backend subset. Aggregate layout coverage includes
 structs containing arrays/slices, slices of structs/arrays, and nested array
-indexing.
+indexing. Static aggregate global coverage includes nested array/struct
+literals plus const-folded `sizeof`/`alignof`/`field_offset` array lengths.
 LLVM debug metadata includes `source_filename`, compile-unit/file records,
 function `DISubprogram` records, and line/column locations on returns and call
 instructions for the covered backend subset.
