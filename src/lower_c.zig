@@ -800,6 +800,12 @@ const CEmitter = struct {
                     try self.out.print(self.allocator, " = {s};\n\n", .{text});
                     return;
                 }
+                if (global.ty) |global_ty| {
+                    if (try self.emitConstGlobalInitializer(global_ty, initializer)) {
+                        try self.out.appendSlice(self.allocator, ";\n\n");
+                        return;
+                    }
+                }
             }
             if (self.staticCInitializer(initializer)) |static_initializer| {
                 try self.out.appendSlice(self.allocator, " = ");
@@ -857,6 +863,68 @@ const CEmitter = struct {
             },
             else => null,
         };
+    }
+
+    fn emitConstGlobalInitializer(self: *CEmitter, ty: ast.TypeExpr, expr: ast.Expr) !bool {
+        const value = self.foldConstGlobalValue(expr) orelse return false;
+        try self.out.appendSlice(self.allocator, " = ");
+        try self.emitComptimeValueInitializer(value, ty);
+        return true;
+    }
+
+    fn foldConstGlobalValue(self: *CEmitter, expr: ast.Expr) ?eval.ComptimeValue {
+        var buf: [64 * 1024]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        var scope = eval.ComptimeScope.init(fba.allocator());
+        scope.funcs = &self.const_fns;
+        scope.globals = &self.const_globals;
+        var widths = self.const_global_widths.iterator();
+        while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
+        return switch (eval.foldComptimeExpr(&scope, expr)) {
+            .value => |v| v,
+            else => null,
+        };
+    }
+
+    fn emitComptimeValueInitializer(self: *CEmitter, value: eval.ComptimeValue, target_ty: ast.TypeExpr) anyerror!void {
+        const resolved = self.resolveAliasType(target_ty);
+        switch (value) {
+            .int => |n| try self.emitComptimeIntInitializer(n),
+            .boolean => |b| try self.out.appendSlice(self.allocator, if (b) "1" else "0"),
+            .tag => |tag| {
+                const enum_name = self.enumNameForType(resolved) orelse return error.UnsupportedCEmission;
+                try self.out.print(self.allocator, "{s}_{s}", .{ enum_name, tag });
+            },
+            .array => |items| {
+                const child_ty = self.arrayChildTypeForResolvedTarget(resolved) orelse return error.UnsupportedCEmission;
+                try self.out.appendSlice(self.allocator, "{ .elems = { ");
+                for (items, 0..) |item, i| {
+                    if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                    try self.emitComptimeValueInitializer(item, child_ty);
+                }
+                try self.out.appendSlice(self.allocator, " } }");
+            },
+            .@"struct" => |fields| {
+                const struct_decl = self.structDeclForResolvedTarget(resolved) orelse return error.UnsupportedCEmission;
+                try self.out.appendSlice(self.allocator, "{ ");
+                for (fields, 0..) |field, i| {
+                    if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                    const field_ty = structFieldType(struct_decl, field.name) orelse return error.UnsupportedCEmission;
+                    try self.out.print(self.allocator, ".{s} = ", .{try self.cIdent(field.name)});
+                    try self.emitComptimeValueInitializer(field.value, field_ty);
+                }
+                try self.out.appendSlice(self.allocator, " }");
+            },
+            .void => return error.UnsupportedCEmission,
+        }
+    }
+
+    fn emitComptimeIntInitializer(self: *CEmitter, n: i128) !void {
+        if (n > std.math.maxInt(i64)) {
+            try self.out.print(self.allocator, "{d}ULL", .{n});
+        } else {
+            try self.out.print(self.allocator, "{d}", .{n});
+        }
     }
 
     fn zeroInitializerRequiresBraces(self: *CEmitter, ty: ast.TypeExpr) bool {

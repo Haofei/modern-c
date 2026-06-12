@@ -11,11 +11,26 @@
 const MAX: usize = 4;
 const DOUBLE: usize = MAX * 2;
 
+struct ConstPair {
+    left: u32,
+    right: u32,
+}
+
 const fn align_up(x: usize, a: usize) -> usize {
     return (x + a - 1) & ~(a - 1);
 }
 
+const fn make_const_numbers() -> [4]u32 {
+    return .{ 4, 5, 6, 7 };
+}
+
+const fn make_const_pair() -> ConstPair {
+    return .{ .left = 8, .right = 9 };
+}
+
 const ALIGNED: usize = align_up(3, 4);
+const CONST_NUMBERS: [4]u32 = make_const_numbers();
+const CONST_PAIR: ConstPair = make_const_pair();
 
 fn accept_const_global_array() -> [MAX]u8 {
     return .{1, 2, 3, 4};
@@ -33,12 +48,18 @@ fn accept_const_global_runtime_use() -> usize {
     return DOUBLE;
 }
 
+fn accept_const_fn_aggregate_global_runtime_use() -> u32 {
+    return CONST_NUMBERS[2] + CONST_PAIR.right;
+}
+
 fn accept_comptime_const_global_assert() -> void {
     comptime {
         assert(MAX == 4);
         assert(DOUBLE == 8);
         assert(ALIGNED == 4);
         assert(DOUBLE == MAX * 2);
+        assert(CONST_NUMBERS[1] == 5);
+        assert(CONST_PAIR.left == 8);
     }
 }
 
