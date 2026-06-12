@@ -3968,6 +3968,13 @@ work, and debug mapping beyond `.mcmap`.
 
 The LLVM backend must use the same MIR as the C backend.
 
+Current repository status: `emit-llvm` is an initial textual LLVM IR backend
+slice. It runs after the same semantic and MIR verification gates as C emission,
+and currently covers scalar functions, direct calls, and checked integer
+arithmetic. It intentionally emits no `nuw`/`nsw`/`nonnull`/`noalias` metadata
+outside proven verifier conditions. Broader control-flow, aggregate, memory, ABI,
+object emission, and debug-info lowering remain future work.
+
 LLVM lowering examples:
 
 Checked add:

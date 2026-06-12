@@ -41,6 +41,16 @@ pub fn build(b: *std.Build) void {
     const c_test_step = b.step("c-test", "Emit C for smoke fixture and compile-check it with clang");
     c_test_step.dependOn(&c_test_cmd.step);
 
+    const llvm_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/llvm-test.sh",
+        "zig-out/bin/mcc",
+        "zig-out/llvm-test",
+    });
+    llvm_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_test_step = b.step("llvm-test", "Emit LLVM IR for the initial backend slice and validate it with llvm-as");
+    llvm_test_step.dependOn(&llvm_test_cmd.step);
+
     const sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-emit-sweep.py",

@@ -8,6 +8,7 @@ const ir = @import("ir.zig");
 const lexer = @import("lexer.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
+const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const monomorphize = @import("monomorphize.zig");
 const parser = @import("parser.zig");
@@ -28,6 +29,7 @@ const usage =
     \\  mcc lower-c <file.mc>
     \\  mcc emit-c <file.mc> [--profile=kernel|hosted]
     \\  mcc emit-map <file.mc> [--profile=kernel|hosted]
+    \\  mcc emit-llvm <file.mc>
     \\
 ;
 
@@ -105,6 +107,8 @@ pub fn main(init: std.process.Init) !void {
         try runEmitC(allocator, path, source, profile);
     } else if (std.mem.eql(u8, command, "emit-map")) {
         try runEmitMap(allocator, path, source, profile);
+    } else if (std.mem.eql(u8, command, "emit-llvm")) {
+        try runEmitLlvm(allocator, path, source);
     } else {
         return failUsage();
     }
@@ -438,6 +442,41 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     writeStdout(output.items);
 }
 
+fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitLlvmFailed;
+    }
+
+    var checker = sema.Checker.init(&diag);
+    checker.checkModule(module);
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitLlvmFailed;
+    }
+
+    try mir.verify(allocator, module, &diag);
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitLlvmFailed;
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    try lower_llvm.appendLlvm(allocator, module, &output);
+    writeStdout(output.items);
+}
+
 fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {
     var p = parser.Parser.init(source, diag);
     const module = p.parseModule(allocator) catch |err| {
@@ -462,6 +501,7 @@ test {
     _ = lexer;
     _ = loader;
     _ = lower_c;
+    _ = lower_llvm;
     _ = mir;
     _ = monomorphize;
     _ = parser;

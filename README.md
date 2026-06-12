@@ -49,8 +49,9 @@ The type-checking surface covered by the core language fixtures is implemented,
 and the valid declarations in the current spec fixture suite lower to
 clang-checked C without `unsupported` emission placeholders. The non-LLVM finish
 line is the C backend plus verifier/tooling contract in
-`docs/spec/MC_0.6.1_Final_Design.md`; LLVM remains a deferred backend, not a
-requirement for the current implementation profile.
+`docs/spec/MC_0.6.1_Final_Design.md`. LLVM now has an initial MIR-backed
+textual IR path for scalar functions, calls, and checked integer arithmetic,
+but it is not yet a complete lowering target.
 
 Prototype or incomplete:
 
@@ -79,8 +80,10 @@ Prototype or incomplete:
 
 Deferred:
 
-- LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Not started; the
-  C backend is the only lowering target for now.
+- LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
+  `emit-llvm` support exists for a scalar subset and validates through
+  `llvm-as`; full control flow, aggregates, memory, ABI, and object emission are
+  still pending.
 
 ## Requirements
 
@@ -129,6 +132,7 @@ Available commands:
 - `lower-c <file.mc>`
 - `emit-c <file.mc> [--profile=kernel|hosted]`
 - `emit-map <file.mc> [--profile=kernel|hosted]`
+- `emit-llvm <file.mc>`
 
 `emit-c` defaults to the **kernel / freestanding** profile (no ambient I/O).
 `--profile=hosted` selects an opt-in **hosted** profile that links a host C
@@ -141,6 +145,9 @@ stdin-to-stdout float round-trip; run it with `zig build hosted-test`.
 `emit-map` uses the same verified C-emission path and writes a line-oriented
 `.mcmap` artifact to stdout, including statement, deferred cleanup, and selected
 expression spans, plus global initializer spans, with typed-AST and MIR labels.
+`emit-llvm` uses the same semantic/MIR verification gate and emits textual LLVM
+IR for the initial scalar backend slice; `zig build llvm-test` checks that output
+with `llvm-as`.
 
 ## Conformance Snapshot
 
