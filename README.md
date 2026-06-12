@@ -192,15 +192,15 @@ Prototype or incomplete:
   stores and tag loads, and trap-path plus `?` propagation and short-circuit
   boolean and if-let join branch terminators, plus
   compiler-expanded `mem.bytes_equal` and `reduce.*` helper loop branch
-  terminators. `zig build llvm-debug-test` verifies selected LLVM object DWARF
-  file/function/source line mappings with `llvm-dwarfdump`. Fuller
-  DWARF-quality native debug mapping with richer statement/expression coverage
-  is still pending.
+  terminators. `zig build llvm-debug-test` verifies LLVM object DWARF
+  file/function/source line mappings across calls, control flow,
+  atomics/fences, and nullable/Result narrowing with `llvm-dwarfdump`.
+  Long-term source/MIR-quality debugger mapping remains future debug-info work.
 
-Deferred:
+LLVM backend status:
 
-- LLVM backend production hardening (see Appendix M of
-  `docs/spec/MC_0.6.1_Final_Design.md`). The current spec sweep is clear for
+- LLVM backend production hardening is complete for the current spec surface
+  (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). The current spec sweep is clear for
   valid declarations and rejects hidden optimizer assumption tokens in swept IR;
   the same valid spec-corpus surface compiles to LLVM object files with `llc`;
   all current C-emission fixtures emit assemblable LLVM IR under the same
@@ -214,11 +214,12 @@ Deferred:
   coverage for the framebuffer/gpio/irq/spi/timer/uart hardware demos and the
   hosted elementwise demo, LLVM link/run coverage for the hosted elementwise
   stdin/stdout round trip, and LLVM link/run coverage for every current
-  data-driven host-driver manifest row. LLVM object debug info is smoke-tested
-  for DWARF file/function/source line mappings, and the broad emitted-IR corpus
+  data-driven host-driver manifest row. LLVM object debug info is verified for
+  DWARF file/function/source line mappings across calls, control flow,
+  atomics/fences, and nullable/Result narrowing, and the broad emitted-IR corpus
   is accepted by LLVM verifier and `default<O2>` pipelines, then lowered from
-  optimized O2 IR to non-empty object files. Remaining work is fuller native
-  debug mapping.
+  optimized O2 IR to non-empty object files. Long-term source/MIR-quality
+  debugger mapping is tracked as future debug-info work.
 
 ## Requirements
 
@@ -396,7 +397,8 @@ call/return/loop-branch/switch/if-let/trap-path/`?`
 propagation/short-circuit/if-let-join/helper-loop branch line locations for the
 covered subset. LLVM native debug object coverage verifies `.debug_info` and
 `.debug_line` sections, producer/source-file metadata, selected function DIEs,
-and representative source line/column rows after `llc`.
+and representative source line/column rows after `llc` across calls, control
+flow, atomics/fences, and nullable/Result narrowing.
 LLVM inferred-local coverage includes initializer-derived slice, array, and
 struct locals in covered expression and assignment workflows.
 LLVM aggregate layout coverage includes dependency-ordered struct/array/slice

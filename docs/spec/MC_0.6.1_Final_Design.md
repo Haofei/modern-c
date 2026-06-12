@@ -3953,14 +3953,13 @@ library-scale DMA ownership protocols beyond the current `std/dma` move handles
 precise asm per compiler/arch
 full comptime reflection
 advanced packed ABI validation
-more complete backend optimization verification
-native debug-info quality mapping
+source/MIR-quality native debug tooling
 ```
 
 MC-C0 and the implemented MC-C1 slice are the non-LLVM target for this
 repository. MC-C2 work is intentionally larger than the current backend finish
-line: it requires broader interpreter coverage, production optimizer proof
-work, and debug mapping beyond `.mcmap`.
+line: it requires broader interpreter coverage and debugger-quality mapping
+beyond `.mcmap`.
 
 ---
 
@@ -4109,9 +4108,10 @@ tagged-union constructor materialization stores, tagged-union switch subject
 stores and tag loads, and trap-path plus `?` propagation, short-circuit boolean,
 and if-let join branch terminators for the covered backend subset, plus branch
 terminators in compiler-expanded `mem.bytes_equal` and `reduce.*` helper loops.
-The `zig build llvm-debug-test` gate compiles a debug-rich LLVM fixture to an
-object and verifies `.debug_info`/`.debug_line`, producer/source-file metadata,
-selected function DIEs, and representative source line/column rows with
+The `zig build llvm-debug-test` gate compiles debug-rich LLVM fixtures to
+objects and verifies `.debug_info`/`.debug_line`, producer/source-file metadata,
+selected function DIEs, and representative source line/column rows across
+calls, control flow, atomics/fences, and nullable/Result narrowing with
 `llvm-dwarfdump`.
 Valid `#[no_lang_trap]` functions lower when the shared verifier proves they
 contain no language-trap edge; naked/boot-style opaque asm functions returning
@@ -4119,8 +4119,8 @@ contain no language-trap edge; naked/boot-style opaque asm functions returning
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles textual IR
 to linkable object files through `llc`, with representative object-output
 coverage in `zig build llvm-obj-test`.
-The `zig build llvm-debug-test` gate verifies selected DWARF source mappings in
-LLVM objects after `llc` lowering.
+The `zig build llvm-debug-test` gate verifies DWARF source mappings in LLVM
+objects after `llc` lowering.
 The `zig build llvm-sweep` gate strips expected-reject declarations from the
 spec corpus and verifies every in-scope valid spec fixture emits assemblable
 LLVM IR. It also rejects hidden optimizer-assumption tokens
@@ -4168,7 +4168,8 @@ verifier conditions, and the broad LLVM sweep gates plus optimizer sweep
 enforce that policy for
 `nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef` and hidden
 fast-math flags, except the explicit `reduce.sum_fast` floating-reduction
-reassociation opt-in. Fuller native debug mapping remains future work.
+reassociation opt-in. Source/MIR-quality native debugger mapping remains future
+debug-info work.
 
 LLVM lowering examples:
 
