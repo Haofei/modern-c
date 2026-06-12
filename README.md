@@ -81,9 +81,9 @@ Prototype or incomplete:
 Deferred:
 
 - LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
-  `emit-llvm` support exists for a scalar subset and validates through
-  `llvm-as`; full control flow, aggregates, memory, ABI, and object emission are
-  still pending.
+  `emit-llvm` support exists for a scalar/control-flow subset and validates
+  through `llvm-as`; loops, mutable locals, aggregates, memory, ABI, and object
+  emission are still pending.
 
 ## Requirements
 
@@ -146,8 +146,8 @@ stdin-to-stdout float round-trip; run it with `zig build hosted-test`.
 `.mcmap` artifact to stdout, including statement, deferred cleanup, and selected
 expression spans, plus global initializer spans, with typed-AST and MIR labels.
 `emit-llvm` uses the same semantic/MIR verification gate and emits textual LLVM
-IR for the initial scalar backend slice; `zig build llvm-test` checks that output
-with `llvm-as`.
+IR for the initial scalar/control-flow backend slice; `zig build llvm-test`
+checks that output with `llvm-as`.
 
 ## Conformance Snapshot
 

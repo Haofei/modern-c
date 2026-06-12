@@ -22,6 +22,7 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
         .need_sadd = std.StringHashMap(void).init(allocator),
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
+        .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
     };
     defer ctx.deinit();
     for (module.decls) |decl| {
@@ -53,6 +54,7 @@ const LlvmEmitter = struct {
     need_sadd: std.StringHashMap(void) = undefined,
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
+    local_types: std.StringHashMap(ast.TypeExpr) = undefined,
 
     fn deinit(self: *LlvmEmitter) void {
         self.need_uadd.deinit();
@@ -61,6 +63,7 @@ const LlvmEmitter = struct {
         self.need_sadd.deinit();
         self.need_ssub.deinit();
         self.need_smul.deinit();
+        self.local_types.deinit();
         self.scratch.deinit();
     }
 
@@ -75,14 +78,11 @@ const LlvmEmitter = struct {
         try self.out.appendSlice(self.allocator, ") {\nentry:\n");
         self.temp_index = 0;
         self.trap_index = 0;
+        self.local_types.clearRetainingCapacity();
+        for (fn_decl.params) |param| try self.local_types.put(param.name.text, param.ty);
 
-        const return_expr = singleReturnExpr(body) orelse return error.UnsupportedLlvmEmission;
-        if (ret_ty.kind == .name and std.mem.eql(u8, ret_ty.kind.name.text, "void")) {
-            try self.out.appendSlice(self.allocator, "  ret void\n}\n\n");
-            return;
-        }
-        const value = try self.emitExpr(return_expr, ret_ty);
-        try self.out.print(self.allocator, "  ret {s} {s}\n}}\n\n", .{ ret_llvm, value });
+        if (!try self.emitTerminatingBlock(body, ret_ty)) return error.UnsupportedLlvmEmission;
+        try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
     fn emitExternFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl) !void {
@@ -103,7 +103,58 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
             .call => |call| try self.emitCall(call, expected_ty),
             .binary => |node| try self.emitBinary(node, expected_ty),
+            .unary => |node| try self.emitUnary(node, expected_ty),
             else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn emitTerminatingBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) anyerror!bool {
+        for (block.items) |stmt| {
+            switch (stmt.kind) {
+                .@"return" => |maybe_expr| {
+                    if (ret_ty.kind == .name and std.mem.eql(u8, ret_ty.kind.name.text, "void")) {
+                        try self.out.appendSlice(self.allocator, "  ret void\n");
+                    } else {
+                        const expr = maybe_expr orelse return error.UnsupportedLlvmEmission;
+                        const value = try self.emitExpr(expr, ret_ty);
+                        try self.out.print(self.allocator, "  ret {s} {s}\n", .{ try self.llvmType(ret_ty), value });
+                    }
+                    return true;
+                },
+                .@"switch" => |node| return try self.emitBoolSwitch(node, ret_ty),
+                else => return error.UnsupportedLlvmEmission,
+            }
+        }
+        return false;
+    }
+
+    fn emitBoolSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
+        const subject_ty = self.exprType(node.subject) orelse return error.UnsupportedLlvmEmission;
+        if (!typeNameEql(subject_ty, "bool")) return error.UnsupportedLlvmEmission;
+
+        const true_arm = findBoolSwitchArm(node.arms, true);
+        const false_arm = findBoolSwitchArm(node.arms, false) orelse findWildcardSwitchArm(node.arms);
+        if (true_arm == null or false_arm == null) return error.UnsupportedLlvmEmission;
+
+        const subject = try self.emitExpr(node.subject, subject_ty);
+        const true_label = try self.nextLabel("switch_true");
+        const false_label = try self.nextLabel("switch_false");
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ subject, true_label, false_label });
+        try self.out.print(self.allocator, "{s}:\n", .{true_label});
+        if (!try self.emitSwitchBody(true_arm.?.body, ret_ty)) return error.UnsupportedLlvmEmission;
+        try self.out.print(self.allocator, "{s}:\n", .{false_label});
+        if (!try self.emitSwitchBody(false_arm.?.body, ret_ty)) return error.UnsupportedLlvmEmission;
+        return true;
+    }
+
+    fn emitSwitchBody(self: *LlvmEmitter, body: ast.SwitchBody, ret_ty: ast.TypeExpr) !bool {
+        return switch (body) {
+            .block => |block| try self.emitTerminatingBlock(block, ret_ty),
+            .expr => |expr| blk: {
+                const value = try self.emitExpr(expr, ret_ty);
+                try self.out.print(self.allocator, "  ret {s} {s}\n", .{ try self.llvmType(ret_ty), value });
+                break :blk true;
+            },
         };
     }
 
@@ -125,6 +176,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitBinary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {
+        if (binaryIsComparison(node.op)) return self.emitComparison(node, ty);
         const llvm_ty = try self.llvmType(ty);
         return switch (node.op) {
             .add, .sub, .mul => try self.emitCheckedArithmetic(node, ty, llvm_ty),
@@ -132,6 +184,30 @@ const LlvmEmitter = struct {
             .mod => try self.emitPlainBinary("urem", node, ty, llvm_ty),
             else => error.UnsupportedLlvmEmission,
         };
+    }
+
+    fn emitUnary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {
+        return switch (node.op) {
+            .logical_not => blk: {
+                const value = try self.emitExpr(node.expr.*, ty);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ result, value });
+                break :blk result;
+            },
+            else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn emitComparison(self: *LlvmEmitter, node: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+        if (!typeNameEql(expected_ty, "bool")) return error.UnsupportedLlvmEmission;
+        const operand_ty = self.exprType(node.left.*) orelse self.exprType(node.right.*) orelse return error.UnsupportedLlvmEmission;
+        const llvm_ty = try self.llvmType(operand_ty);
+        const pred = comparisonPredicate(node.op, isSignedInteger(operand_ty)) orelse return error.UnsupportedLlvmEmission;
+        const left = try self.emitExpr(node.left.*, operand_ty);
+        const right = try self.emitExpr(node.right.*, operand_ty);
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {s}\n", .{ result, pred, llvm_ty, left, right });
+        return result;
     }
 
     fn emitCheckedArithmetic(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
@@ -221,15 +297,18 @@ const LlvmEmitter = struct {
         self.trap_index += 1;
         return std.fmt.allocPrint(self.scratch.allocator(), "{s}{d}", .{ prefix, index });
     }
-};
 
-fn singleReturnExpr(block: ast.Block) ?ast.Expr {
-    if (block.items.len != 1) return null;
-    return switch (block.items[0].kind) {
-        .@"return" => |maybe| maybe,
-        else => null,
-    };
-}
+    fn exprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .ident => |ident| self.local_types.get(ident.text),
+            .bool_literal, .unary => simpleType(expr.span, "bool"),
+            .int_literal => null,
+            .grouped => |inner| self.exprType(inner.*),
+            .binary => |node| if (binaryIsComparison(node.op)) simpleType(expr.span, "bool") else self.exprType(node.left.*),
+            else => null,
+        };
+    }
+};
 
 fn expected_tyForCallArg(module_mir: mir.Module, callee: []const u8, index: usize) ?ast.TypeExpr {
     _ = module_mir;
@@ -240,6 +319,56 @@ fn expected_tyForCallArg(module_mir: mir.Module, callee: []const u8, index: usiz
 
 fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .span = span, .text = name } } };
+}
+
+fn typeNameEql(ty: ast.TypeExpr, expected: []const u8) bool {
+    return switch (ty.kind) {
+        .name => |name| std.mem.eql(u8, name.text, expected),
+        else => false,
+    };
+}
+
+fn findBoolSwitchArm(arms: []const ast.SwitchArm, value: bool) ?ast.SwitchArm {
+    for (arms) |arm| {
+        for (arm.patterns) |pattern| {
+            switch (pattern.kind) {
+                .literal => |expr| switch (expr.kind) {
+                    .bool_literal => |literal| if (literal == value) return arm,
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    }
+    return null;
+}
+
+fn findWildcardSwitchArm(arms: []const ast.SwitchArm) ?ast.SwitchArm {
+    for (arms) |arm| {
+        for (arm.patterns) |pattern| {
+            if (pattern.kind == .wildcard) return arm;
+        }
+    }
+    return null;
+}
+
+fn binaryIsComparison(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .eq, .ne, .lt, .le, .gt, .ge => true,
+        else => false,
+    };
+}
+
+fn comparisonPredicate(op: ast.BinaryOp, signed: bool) ?[]const u8 {
+    return switch (op) {
+        .eq => "eq",
+        .ne => "ne",
+        .lt => if (signed) "slt" else "ult",
+        .le => if (signed) "sle" else "ule",
+        .gt => if (signed) "sgt" else "ugt",
+        .ge => if (signed) "sge" else "uge",
+        else => null,
+    };
 }
 
 fn normalizedIntLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
