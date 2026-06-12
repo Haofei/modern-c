@@ -572,6 +572,16 @@ const BodyFlow = union(enum) {
     unknown, // a construct outside the supported subset — bail without diagnosing
 };
 
+pub const ComptimeBlockFold = enum { ok, trap, unknown };
+
+pub fn foldComptimeBlock(scope: *ComptimeScope, block: ast.Block) ComptimeBlockFold {
+    return switch (foldComptimeStmtSeq(scope, block.items)) {
+        .fallthrough => .ok,
+        .trap => .trap,
+        else => .unknown,
+    };
+}
+
 // Evaluate a const-fn body: a `return` produces the call's value; falling off
 // the end (no return) or any unsupported construct yields `.unknown`.
 fn foldComptimeFnBody(scope: *ComptimeScope, block: ast.Block) ComptimeFold {

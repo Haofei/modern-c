@@ -937,6 +937,13 @@ pub const Checker = struct {
                         .unknown => {},
                     }
                 },
+                .assignment, .loop, .@"switch" => {
+                    var single = [_]ast.Stmt{stmt};
+                    switch (eval.foldComptimeBlock(scope, .{ .span = stmt.span, .items = &single })) {
+                        .ok, .unknown => {},
+                        .trap => self.errorCode(span, "E_COMPTIME_TRAP", "trap during const eval is a compile error"),
+                    }
+                },
                 // A comptime block may nest plain/unsafe blocks; recurse so their
                 // constants and assertions fold in the same scope.
                 .block, .unsafe_block, .comptime_block => |inner| self.foldComptimeBlockAt(inner, scope, report_span),

@@ -187,6 +187,56 @@ fn reject_comptime_false_const_binding() -> void {
     }
 }
 
+fn accept_comptime_block_loop_assignment() -> void {
+    comptime {
+        var total: u32 = 0;
+        var i: u32 = 0;
+        while i < 4 {
+            total = total + i;
+            i = i + 1;
+        }
+        assert(total == 6);
+    }
+}
+
+fn reject_comptime_block_loop_assignment() -> void {
+    comptime {
+        var total: u32 = 0;
+        var i: u32 = 0;
+        while i < 4 {
+            total = total + i;
+            i = i + 1;
+        }
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(total == 7);
+    }
+}
+
+fn accept_comptime_block_switch_assignment() -> void {
+    comptime {
+        var selected: u32 = 0;
+        switch 2 {
+            1 => { selected = 10; },
+            2 => { selected = 20; },
+            _ => { selected = 30; },
+        }
+        assert(selected == 20);
+    }
+}
+
+fn reject_comptime_block_switch_assignment() -> void {
+    comptime {
+        var selected: u32 = 0;
+        switch 2 {
+            1 => { selected = 10; },
+            2 => { selected = 20; },
+            _ => { selected = 30; },
+        }
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(selected == 30);
+    }
+}
+
 fn reject_comptime_divide_by_zero() -> void {
     comptime {
         // EXPECT_ERROR: E_COMPTIME_TRAP
