@@ -787,14 +787,14 @@ const LlvmEmitter = struct {
                     const labels = self.loop_stack.getLastOrNull() orelse return error.UnsupportedLlvmEmission;
                     try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
                     self.defer_stack.items.len = labels.cleanup_start;
-                    try self.out.print(self.allocator, "  br label %{s}\n", .{labels.break_label});
+                    try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.break_label, try self.debugCallSuffix() });
                     return true;
                 },
                 .@"continue" => {
                     const labels = self.loop_stack.getLastOrNull() orelse return error.UnsupportedLlvmEmission;
                     try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
                     self.defer_stack.items.len = labels.cleanup_start;
-                    try self.out.print(self.allocator, "  br label %{s}\n", .{labels.continue_label});
+                    try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.continue_label, try self.debugCallSuffix() });
                     return true;
                 },
                 .expr => |expr| try self.emitExprStatement(expr),
@@ -1329,13 +1329,13 @@ const LlvmEmitter = struct {
         const body_label = try self.nextLabel("while_body");
         const end_label = try self.nextLabel("while_end");
 
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ cond_label, try self.debugCallSuffix(), cond_label });
         const condition = try self.emitExpr(condition_expr, condition_ty);
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ condition, body_label, end_label, body_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, body_label, end_label, try self.debugCallSuffix(), body_label });
         try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = cond_label, .cleanup_start = self.defer_stack.items.len });
         defer _ = self.loop_stack.pop();
         const body_terminated = try self.emitBlock(loop.body, ret_ty);
-        if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{cond_label});
+        if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ cond_label, try self.debugCallSuffix() });
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
         return false;
     }
@@ -1382,13 +1382,13 @@ const LlvmEmitter = struct {
         const step_label = try self.nextLabel("for_step");
         const end_label = try self.nextLabel("for_end");
 
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ cond_label, try self.debugCallSuffix(), cond_label });
         const index = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ index, index_ptr });
         const len = try self.emitIterableLen(iterable, iterable_ty, iterable_slot);
         const ok = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n", .{ ok, index, len });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ ok, body_label, end_label, body_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ ok, body_label, end_label, try self.debugCallSuffix(), body_label });
 
         const element_ptr = try self.emitForElementPtr(iterable, iterable_ty, iterable_ptr, index);
         const element_value = try self.nextTemp();
@@ -1398,14 +1398,14 @@ const LlvmEmitter = struct {
         try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label, .cleanup_start = self.defer_stack.items.len });
         defer _ = self.loop_stack.pop();
         const body_terminated = try self.emitBlock(loop.body, ret_ty);
-        if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{step_label});
+        if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ step_label, try self.debugCallSuffix() });
         try self.out.print(self.allocator, "{s}:\n", .{step_label});
         const step_index = try self.nextTemp();
         const next_index = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ step_index, index_ptr });
         try self.out.print(self.allocator, "  {s} = add i64 {s}, 1\n", .{ next_index, step_index });
         try self.out.print(self.allocator, "  store i64 {s}, ptr {s}\n", .{ next_index, index_ptr });
-        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, end_label });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ cond_label, try self.debugCallSuffix(), end_label });
         return false;
     }
 
