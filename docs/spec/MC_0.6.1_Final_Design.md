@@ -3974,9 +3974,11 @@ and currently covers scalar functions, direct calls, checked integer arithmetic,
 checked division/remainder, bool switch/if control flow with simple joins,
 simple scalar locals, direct scalar assignment, simple `while` loops, and basic
 pointer load/store operations. Scalar/pointer globals are supported for literal
-and address-of-global initializers. It intentionally emits no
+and address-of-global initializers. Local fixed arrays of scalar elements support
+array literals, checked indexing, element assignment, and element-address taking.
+It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
-Broader CFG/phi lowering, aggregates, aggregate globals, slices/arrays, ABI,
+Broader CFG/phi lowering, aggregates, aggregate globals, slices, aggregate ABI,
 object emission, and debug-info lowering remain future work.
 
 LLVM lowering examples:

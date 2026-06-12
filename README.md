@@ -54,7 +54,9 @@ textual IR path for scalar functions, calls, checked integer arithmetic,
 checked division/remainder, boolean control flow with simple joins, simple
 scalar locals/while loops, and basic pointer load/store operations, but it is
 not yet a complete lowering target. Scalar/pointer globals are covered for
-literal and address-of-global initializers.
+literal and address-of-global initializers. Local fixed arrays of scalar
+elements support literals, checked indexing, element assignment, and
+element-address taking.
 
 Prototype or incomplete:
 
@@ -85,7 +87,7 @@ Deferred:
 
 - LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
   `emit-llvm` support exists for a scalar/control-flow subset and validates
-  through `llvm-as`; aggregate globals, slices/arrays, ABI, object emission, broader
+  through `llvm-as`; aggregate globals, slices, aggregate ABI, object emission, broader
   CFG/phi lowering, and debug-info lowering are still pending.
 
 ## Requirements

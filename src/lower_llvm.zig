@@ -53,6 +53,7 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(allocator, "declare void @mc_trap_IntegerOverflow() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_DivideByZero() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_InvalidShift() noreturn\n\n");
+    try out.appendSlice(allocator, "declare void @mc_trap_Bounds() noreturn\n\n");
 }
 
 const LlvmEmitter = struct {
@@ -164,6 +165,7 @@ const LlvmEmitter = struct {
             .unary => |node| try self.emitUnary(node, expected_ty),
             .address_of => |inner| try self.emitAddressOf(inner.*),
             .deref => |inner| try self.emitDeref(inner.*, expected_ty),
+            .index => |node| try self.emitIndexLoad(node),
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -217,14 +219,23 @@ const LlvmEmitter = struct {
         const llvm_ty = try self.llvmType(ty);
         const name = local.names[0].text;
         const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{name});
-        const value = try self.emitExpr(init, ty);
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, llvm_ty });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
+        if (ty.kind == .array) {
+            const items = switch (init.kind) {
+                .array_literal => |items| items,
+                else => return error.UnsupportedLlvmEmission,
+            };
+            try self.emitArrayLiteralStores(ptr, ty, items);
+            return;
+        }
+        const value = try self.emitExpr(init, ty);
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
     }
 
     fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !void {
+        if (try self.emitIndexAssignment(target, value_expr)) return;
         if (assignmentIdent(target)) |ident| {
             if (self.local_slots.get(ident.text)) |slot| {
                 const llvm_ty = try self.llvmType(slot.ty);
@@ -249,6 +260,20 @@ const LlvmEmitter = struct {
             return;
         }
         return error.UnsupportedLlvmEmission;
+    }
+
+    fn emitIndexAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {
+        return switch (target.kind) {
+            .index => |node| blk: {
+                const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+                const ptr = try self.emitIndexAddress(node);
+                const value = try self.emitExpr(value_expr, element_ty);
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(element_ty), value, ptr });
+                break :blk true;
+            },
+            .grouped => |inner| try self.emitIndexAssignment(inner.*, value_expr),
+            else => false,
+        };
     }
 
     fn emitWhile(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
@@ -314,6 +339,7 @@ const LlvmEmitter = struct {
             },
             .grouped => |inner| return self.emitAddressOf(inner.*),
             .deref => |inner| return self.emitExpr(inner.*, self.exprType(inner.*) orelse return error.UnsupportedLlvmEmission),
+            .index => |node| return self.emitIndexAddress(node),
             else => return error.UnsupportedLlvmEmission,
         }
     }
@@ -323,6 +349,66 @@ const LlvmEmitter = struct {
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(pointee_ty), ptr });
         return result;
+    }
+
+    fn emitIndexLoad(self: *LlvmEmitter, node: anytype) ![]const u8 {
+        const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        const ptr = try self.emitIndexAddress(node);
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(element_ty), ptr });
+        return result;
+    }
+
+    fn emitIndexAddress(self: *LlvmEmitter, node: anytype) ![]const u8 {
+        const array_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        const array = switch (array_ty.kind) {
+            .array => |array| array,
+            else => return error.UnsupportedLlvmEmission,
+        };
+        const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+        const base_ptr = try self.arrayBasePointer(node.base.*);
+        const index = try self.emitExpr(node.index.*, simpleType((node.index.*).span, "usize"));
+        try self.emitBoundsCheck(index, len);
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(array_ty), base_ptr, index });
+        return result;
+    }
+
+    fn arrayBasePointer(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| blk: {
+                if (self.local_slots.get(ident.text)) |slot| break :blk slot.ptr;
+                if (self.global_types.contains(ident.text)) break :blk try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
+                break :blk error.UnsupportedLlvmEmission;
+            },
+            .grouped => |inner| self.arrayBasePointer(inner.*),
+            else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn emitBoundsCheck(self: *LlvmEmitter, index: []const u8, len: u64) !void {
+        const ok = try self.nextTemp();
+        const trap = try self.nextLabel("trap_bounds");
+        const cont = try self.nextLabel("bounds_ok");
+        try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {d}\n", .{ ok, index, len });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Bounds()\n  unreachable\n{s}:\n", .{ ok, cont, trap, trap, cont });
+    }
+
+    fn emitArrayLiteralStores(self: *LlvmEmitter, array_ptr: []const u8, array_ty: ast.TypeExpr, items: []const ast.Expr) !void {
+        const array = switch (array_ty.kind) {
+            .array => |array| array,
+            else => return error.UnsupportedLlvmEmission,
+        };
+        const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+        if (items.len != len) return error.UnsupportedLlvmEmission;
+        const element_ty = array.child.*;
+        const element_llvm = try self.llvmType(element_ty);
+        for (items, 0..) |item, i| {
+            const ptr = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(array_ty), array_ptr, i });
+            const value = try self.emitExpr(item, element_ty);
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ element_llvm, value, ptr });
+        }
     }
 
     fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
@@ -484,6 +570,7 @@ const LlvmEmitter = struct {
             else
                 error.UnsupportedLlvmEmission,
             .pointer, .raw_many_pointer => "ptr",
+            .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -508,6 +595,7 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.exprType(inner.*),
             .address_of => |inner| if (self.exprType(inner.*)) |ty| self.pointerTypeFor(ty) catch null else null,
             .deref => |inner| self.derefPointeeType(inner.*),
+            .index => |node| self.indexElementType(node.base.*),
             .binary => |node| if (binaryIsComparison(node.op)) simpleType(expr.span, "bool") else self.exprType(node.left.*),
             else => null,
         };
@@ -528,6 +616,14 @@ const LlvmEmitter = struct {
         return .{
             .span = child.span,
             .kind = .{ .pointer = .{ .mutability = .mut, .child = child_ptr } },
+        };
+    }
+
+    fn indexElementType(self: *LlvmEmitter, base: ast.Expr) ?ast.TypeExpr {
+        const ty = self.exprType(base) orelse return null;
+        return switch (ty.kind) {
+            .array => |array| array.child.*,
+            else => null,
         };
     }
 };
@@ -620,6 +716,25 @@ fn normalizedIntLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]co
         if (ch != '_') try out.append(allocator, ch);
     }
     return out.toOwnedSlice(allocator);
+}
+
+fn arrayLenValue(expr: ast.Expr) ?u64 {
+    return switch (expr.kind) {
+        .int_literal => |literal| parseU64Literal(literal),
+        .grouped => |inner| arrayLenValue(inner.*),
+        else => null,
+    };
+}
+
+fn parseU64Literal(literal: []const u8) ?u64 {
+    var value: u64 = 0;
+    for (literal) |ch| {
+        if (ch == '_') continue;
+        if (ch < '0' or ch > '9') return null;
+        value = std.math.mul(u64, value, 10) catch return null;
+        value = std.math.add(u64, value, ch - '0') catch return null;
+    }
+    return value;
 }
 
 fn integerBits(ty: ast.TypeExpr) ?u16 {
