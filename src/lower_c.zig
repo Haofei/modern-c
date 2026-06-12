@@ -5891,7 +5891,7 @@ const CEmitter = struct {
     }
 
     fn emitLocalCopyInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const inferred_ty = localCopyTypeForInitializer(initializer, locals) orelse return false;
+        const inferred_ty = self.operandEmitType(initializer, locals) orelse return false;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
 
         try self.writeIndent();
@@ -8864,17 +8864,6 @@ fn numericExprType(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.
             if (!sameCStorageType(left_ty, right_ty)) return null;
             return left_ty;
         },
-        else => null,
-    };
-}
-
-fn localCopyTypeForInitializer(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    return switch (expr.kind) {
-        .ident => |ident| {
-            const info = locals.get(ident.text) orelse return null;
-            return info.source_ty;
-        },
-        .grouped => |inner| localCopyTypeForInitializer(inner.*, locals),
         else => null,
     };
 }

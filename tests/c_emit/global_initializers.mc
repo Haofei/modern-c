@@ -122,6 +122,24 @@ fn read_copied_pair() -> u32 {
     return copied_pair.right;
 }
 
+fn inferred_pair_right() -> u32 {
+    let p = pair;
+    return p.right;
+}
+
+fn inferred_values_second() -> u32 {
+    let xs = values;
+    return xs[1];
+}
+
+fn inferred_values_first_loop() -> u32 {
+    let xs = values;
+    for x in xs {
+        return x;
+    }
+    return 0;
+}
+
 fn read_message() -> *const u8 {
     return message;
 }
@@ -162,6 +180,11 @@ fn default_slice_len() -> usize {
     return consume_default_slice(default_slice);
 }
 
+fn inferred_default_slice_len() -> usize {
+    let xs = default_slice;
+    return consume_default_slice(xs);
+}
+
 fn default_result_value() -> u32 {
     switch default_result {
         ok(v) => { return v; },
@@ -169,8 +192,24 @@ fn default_result_value() -> u32 {
     }
 }
 
+fn inferred_default_result_value() -> u32 {
+    let result = default_result;
+    switch result {
+        ok(v) => { return v; },
+        err(e) => { return 0; },
+    }
+}
+
 fn default_token_value() -> u32 {
     switch default_token {
+        number(v) => { return v; },
+        .eof => { return 0; },
+    }
+}
+
+fn inferred_default_token_value() -> u32 {
+    let token = default_token;
+    switch token {
         number(v) => { return v; },
         .eof => { return 0; },
     }
