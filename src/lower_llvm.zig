@@ -1975,7 +1975,7 @@ const LlvmEmitter = struct {
         const ptr = try self.nextTemp();
         const llvm_ty = try self.llvmType(ty);
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, llvm_ty });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
         return ptr;
     }
 
@@ -2971,19 +2971,19 @@ const LlvmEmitter = struct {
         const ptr = try self.nextTemp();
         const tag_ptr = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, union_llvm });
-        try self.out.print(self.allocator, "  store {s} zeroinitializer, ptr {s}\n", .{ union_llvm, ptr });
+        try self.out.print(self.allocator, "  store {s} zeroinitializer, ptr {s}{s}\n", .{ union_llvm, ptr, try self.debugCallSuffix() });
         try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, ptr });
-        try self.out.print(self.allocator, "  store i32 {d}, ptr {s}\n", .{ case_index, tag_ptr });
+        try self.out.print(self.allocator, "  store i32 {d}, ptr {s}{s}\n", .{ case_index, tag_ptr, try self.debugCallSuffix() });
         if (case.ty) |payload_ty| {
             if (call.args.len != 1) return error.UnsupportedLlvmEmission;
             const payload = try self.emitExpr(call.args[0], payload_ty);
             const payload_ptr = try self.taggedUnionPayloadPtr(ptr, expected_ty, payload_ty);
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(payload_ty), payload, payload_ptr });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(payload_ty), payload, payload_ptr, try self.debugCallSuffix() });
         } else if (call.args.len != 0) {
             return error.UnsupportedLlvmEmission;
         }
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, union_llvm, ptr });
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, union_llvm, ptr, try self.debugCallSuffix() });
         return result;
     }
 
