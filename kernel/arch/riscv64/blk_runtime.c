@@ -13,15 +13,14 @@ uint64_t blk_demo_run(volatile VirtioMmio *regs, Virtq *vq, uint64_t sector);
 // status — outstanding at once, unlike the net path's one).
 static uint8_t g_dma_pool[4096] __attribute__((aligned(16)));
 static uintptr_t g_dma_off = 0;
-CpuBuffer mc_dma_alloc(uintptr_t len) {
+uintptr_t mc_dma_alloc_base(uintptr_t len) {
     uintptr_t a = (g_dma_off + 15) & ~(uintptr_t)15;
     if (a + len > sizeof(g_dma_pool)) for (;;) {}
     g_dma_off = a + len;
     for (uintptr_t i = 0; i < len; ++i) g_dma_pool[a + i] = 0;
-    CpuBuffer b = { (uintptr_t)(g_dma_pool + a), (uintptr_t)(g_dma_pool + a), len };
-    return b;
+    return (uintptr_t)(g_dma_pool + a);
 }
-void mc_dma_free(CpuBuffer b) { (void)b; }
+void mc_dma_free_base(uintptr_t dev_addr, uintptr_t cpu_addr, uintptr_t len) { (void)dev_addr; (void)cpu_addr; (void)len; }
 
 #define VIRTIO_MMIO_BASE 0x10001000UL
 #define VIRTIO_MMIO_STRIDE 0x1000UL

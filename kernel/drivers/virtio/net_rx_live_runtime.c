@@ -56,7 +56,7 @@ static uint8_t framebuf[256];
 // smoke test). Exhaustion halts rather than overruns.
 static uint8_t g_dma_pool[65536] __attribute__((aligned(16)));
 static uintptr_t g_dma_off = 0;
-CpuBuffer mc_dma_alloc(uintptr_t len) {
+uintptr_t mc_dma_alloc_base(uintptr_t len) {
     uintptr_t a = (len + 15u) & ~(uintptr_t)15u; // 16-byte aligned
     if (g_dma_off + a > sizeof(g_dma_pool)) {
         for (;;) {
@@ -65,12 +65,11 @@ CpuBuffer mc_dma_alloc(uintptr_t len) {
     uint8_t *p = g_dma_pool + g_dma_off;
     g_dma_off += a;
     for (uintptr_t i = 0; i < len; ++i) p[i] = 0;
-    CpuBuffer b = { (uintptr_t)p, (uintptr_t)p, len };
-    return b;
+    return (uintptr_t)p;
 }
-void mc_dma_free(CpuBuffer b) { (void)b; }
-DeviceBuffer mc_dma_clean_for_device(CpuBuffer b) { DeviceBuffer d = { b.dev_addr, b.len }; return d; }
-CpuBuffer mc_dma_invalidate_for_cpu(DeviceBuffer b) { CpuBuffer c = { b.dev_addr, b.dev_addr, b.len }; return c; }
+void mc_dma_free_base(uintptr_t dev_addr, uintptr_t cpu_addr, uintptr_t len) { (void)dev_addr; (void)cpu_addr; (void)len; }
+void mc_dma_clean_for_device_base(uintptr_t dev_addr, uintptr_t cpu_addr, uintptr_t len) { (void)dev_addr; (void)cpu_addr; (void)len; }
+uintptr_t mc_dma_invalidate_for_cpu_base(uintptr_t dev_addr, uintptr_t len) { (void)len; return dev_addr; }
 
 // ----- UART (QEMU virt 16550 at 0x1000_0000) -----
 #define UART ((volatile uint8_t *)0x10000000UL)

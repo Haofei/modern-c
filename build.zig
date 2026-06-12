@@ -1285,22 +1285,44 @@ pub fn build(b: *std.Build) void {
     paging_activate_test_step.dependOn(&paging_activate_test_cmd.step);
 
     const kmain_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/kmain-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     kmain_test_cmd.step.dependOn(b.getInstallStep());
     const kmain_test_step = b.step("kmain-test", "Boot one integrated kernel image (heap+console+log+VFS+scheduler) under QEMU");
     kmain_test_step.dependOn(&kmain_test_cmd.step);
 
+    const llvm_kmain_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/kmain-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_kmain_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_kmain_test_step = b.step("llvm-kmain-test", "Boot one LLVM-lowered integrated kernel image under QEMU");
+    llvm_kmain_test_step.dependOn(&llvm_kmain_test_cmd.step);
+
     const kmain_net_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/net/kmain-net-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     kmain_net_test_cmd.step.dependOn(b.getInstallStep());
     const kmain_net_test_step = b.step("kmain-net-test", "Boot the integrated kernel + network in one image under QEMU");
     kmain_net_test_step.dependOn(&kmain_net_test_cmd.step);
+
+    const llvm_kmain_net_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/net/kmain-net-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_kmain_net_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_kmain_net_test_step = b.step("llvm-kmain-net-test", "Boot the LLVM-lowered integrated kernel + network image under QEMU");
+    llvm_kmain_net_test_step.dependOn(&llvm_kmain_net_test_cmd.step);
 
     const vm_switch_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1368,6 +1390,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_kernel_test_cmd.step);
     m0_step.dependOn(&llvm_hosted_demo_test_cmd.step);
     m0_step.dependOn(&llvm_host_suite_test_cmd.step);
+    m0_step.dependOn(&llvm_kmain_test_cmd.step);
+    m0_step.dependOn(&llvm_kmain_net_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

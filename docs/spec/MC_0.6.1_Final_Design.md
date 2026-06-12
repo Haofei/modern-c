@@ -1706,6 +1706,13 @@ fn cpu_addr(buf: *CpuBuffer) -> PAddr;
 fn cpu_len(buf: *CpuBuffer) -> usize;
 ```
 
+The current `std/dma.mc` implementation keeps these ownership handles in MC and
+uses scalar platform hooks (`mc_dma_alloc_base`, `mc_dma_free_base`,
+`mc_dma_clean_for_device_base`, and `mc_dma_invalidate_for_cpu_base`) at the C/LLVM
+runtime boundary. This avoids making platform runtimes depend on by-value
+aggregate ABI lowering while preserving the typed `CpuBuffer`/`DeviceBuffer`
+protocol inside MC code.
+
 Because the handle is linear, the §18 example is now fully enforced. Each
 type-changing transition consumes the old handle and binds a **new** name (MC has
 no name shadowing); a borrow uses `&handle`:
@@ -4158,6 +4165,9 @@ object files under the same hidden-assumption token check.
 The `zig build llvm-kernel-test` gate compiles every non-bad `kernel/` module
 through LLVM to assemblable IR and non-empty target objects, using a RISC-V
 target for the main kernel modules and an x86-64 target for x86 arch modules.
+The `zig build llvm-kmain-test` and `zig build llvm-kmain-net-test` gates boot
+LLVM-lowered integrated RISC-V kernel images under QEMU; the network variant also
+checks that QEMU captures the expected transmitted UDP payload.
 The `zig build llvm-hosted-demo-test` gate links and runs the hosted
 elementwise demo through LLVM, libc, and libm, then verifies its binary
 stdin/stdout `f32` round trip.

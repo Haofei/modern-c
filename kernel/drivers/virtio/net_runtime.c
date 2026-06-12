@@ -16,7 +16,7 @@ uint32_t kernel_main(volatile VirtioMmio *regs, Virtq *rxq, Virtq *txq);
 // smoke test). Exhaustion halts rather than overruns.
 static uint8_t g_dma_pool[65536] __attribute__((aligned(16)));
 static uintptr_t g_dma_off = 0;
-CpuBuffer mc_dma_alloc(uintptr_t len) {
+uintptr_t mc_dma_alloc_base(uintptr_t len) {
     uintptr_t a = (len + 15u) & ~(uintptr_t)15u; // 16-byte aligned
     if (g_dma_off + a > sizeof(g_dma_pool)) {
         for (;;) {
@@ -25,11 +25,10 @@ CpuBuffer mc_dma_alloc(uintptr_t len) {
     uint8_t *p = g_dma_pool + g_dma_off;
     g_dma_off += a;
     for (uintptr_t i = 0; i < len; ++i) p[i] = 0;
-    CpuBuffer b = { (uintptr_t)p, (uintptr_t)p, len };
-    return b;
+    return (uintptr_t)p;
 }
-void mc_dma_free(CpuBuffer b) { (void)b; }
-// (mc_dma_clean_for_device / mc_dma_invalidate_for_cpu come from platform_virtio.h)
+void mc_dma_free_base(uintptr_t dev_addr, uintptr_t cpu_addr, uintptr_t len) { (void)dev_addr; (void)cpu_addr; (void)len; }
+// (mc_dma_clean_for_device_base / mc_dma_invalidate_for_cpu_base come from platform_virtio.h)
 
 #define VIRTIO_MMIO_BASE 0x10001000UL
 #define VIRTIO_MMIO_STRIDE 0x1000UL

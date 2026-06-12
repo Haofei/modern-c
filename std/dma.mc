@@ -23,31 +23,45 @@ move struct DeviceBuffer {
     len: usize,
 }
 
-extern fn mc_dma_alloc(len: usize) -> CpuBuffer;
-extern fn mc_dma_free(b: CpuBuffer) -> void;
-extern fn mc_dma_clean_for_device(b: CpuBuffer) -> DeviceBuffer;   // clean caches, hand to device
-extern fn mc_dma_invalidate_for_cpu(b: DeviceBuffer) -> CpuBuffer; // invalidate caches, take back
+extern fn mc_dma_alloc_base(len: usize) -> usize;
+extern fn mc_dma_free_base(dev_addr: DmaAddr, cpu_addr: PAddr, len: usize) -> void;
+extern fn mc_dma_clean_for_device_base(dev_addr: DmaAddr, cpu_addr: PAddr, len: usize) -> void;
+extern fn mc_dma_invalidate_for_cpu_base(dev_addr: DmaAddr, len: usize) -> usize;
 
 // Allocate a coherent/cpu-owned DMA buffer of `len` bytes (linear handle).
 export fn alloc(len: usize) -> CpuBuffer {
-    return mc_dma_alloc(len);
+    let base: usize = mc_dma_alloc_base(len);
+    return .{ .dev_addr = (base as usize) as DmaAddr, .cpu_addr = pa(base), .len = len };
 }
 
 // Free a cpu-owned buffer, consuming it.
 export fn free(b: CpuBuffer) -> void {
-    mc_dma_free(b);
+    let dev: DmaAddr = b.dev_addr;
+    let cpu: PAddr = b.cpu_addr;
+    let n: usize = b.len;
+    mc_dma_free_base(dev, cpu, n);
+    drop(b);
 }
 
 // Hand the buffer to the device: clean (flush) caches, consume the CpuBuffer,
 // produce a DeviceBuffer. After this the CPU may not touch the buffer.
 export fn clean_for_device(b: CpuBuffer) -> DeviceBuffer {
-    return mc_dma_clean_for_device(b);
+    let dev: DmaAddr = b.dev_addr;
+    let cpu: PAddr = b.cpu_addr;
+    let n: usize = b.len;
+    mc_dma_clean_for_device_base(dev, cpu, n);
+    drop(b);
+    return .{ .dev_addr = dev, .len = n };
 }
 
 // Take the buffer back: invalidate caches, consume the DeviceBuffer, produce a
 // CpuBuffer the CPU may read.
 export fn invalidate_for_cpu(b: DeviceBuffer) -> CpuBuffer {
-    return mc_dma_invalidate_for_cpu(b);
+    let dev: DmaAddr = b.dev_addr;
+    let n: usize = b.len;
+    let cpu: usize = mc_dma_invalidate_for_cpu_base(dev, n);
+    drop(b);
+    return .{ .dev_addr = dev, .cpu_addr = pa(cpu), .len = n };
 }
 
 // Device address — readable in either state (borrows, does not consume). Typed
