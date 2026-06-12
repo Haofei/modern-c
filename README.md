@@ -185,10 +185,11 @@ Deferred:
   assumption-token gate, and all current C-emission fixtures compile to LLVM
   object files with `llc`. The LLVM toolchain has link-and-run smoke coverage,
   including a linear `move` handle ABI roundtrip, imported generic `std/stack`,
-  `std/sync` guard, fn-pointer runtime checks, and multi-object
-  `std/{core,bits,math,ascii,fmt,addr}` runtime checks. Remaining work is
-  additional runtime/toolchain coverage, deeper optimizer proof work, and fuller
-  native debug mapping.
+  `std/sync` guard, fn-pointer runtime checks, import/std merge,
+  monomorphization and generic-struct runtime checks, reflection object
+  lowering, and multi-object `std/{core,bits,math,ascii,fmt,addr}` runtime
+  checks. Remaining work is additional runtime/toolchain coverage, deeper
+  optimizer proof work, and fuller native debug mapping.
 
 ## Requirements
 
@@ -219,6 +220,7 @@ zig build llvm-c-obj-sweep
 zig build llvm-cc-test
 zig build llvm-move-test
 zig build llvm-runtime-test
+zig build llvm-toolchain-test
 zig build llvm-std-test
 ```
 
@@ -276,8 +278,11 @@ current `tests/c_emit` fixture to an object file. `zig build llvm-cc-test` links
 and runs a simple exported function through the LLVM driver, and `zig build
 llvm-move-test` links and runs a linear `move` handle ABI roundtrip. `zig build
 llvm-runtime-test` links and runs imported generic `std/stack`, `std/sync`
-guard, and fn-pointer modules through LLVM. `zig build llvm-std-test` links and
-runs LLVM-built std module objects against a C driver.
+guard, and fn-pointer modules through LLVM. `zig build llvm-toolchain-test`
+links and runs import/std-merge, monomorphization, and generic-struct modules
+through LLVM, and verifies reflection modules with `check` plus LLVM object
+lowering. `zig build llvm-std-test` links and runs LLVM-built std module objects
+against a C driver.
 
 ## Conformance Snapshot
 

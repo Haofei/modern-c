@@ -158,6 +158,15 @@ pub fn build(b: *std.Build) void {
     const llvm_std_test_step = b.step("llvm-std-test", "Compile std modules through LLVM, link them against a C driver, and run the checks");
     llvm_std_test_step.dependOn(&llvm_std_test_cmd.step);
 
+    const llvm_toolchain_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/llvm-toolchain-test.sh",
+        "zig-out/bin/mcc",
+    });
+    llvm_toolchain_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_toolchain_test_step = b.step("llvm-toolchain-test", "Build, link, and run import, monomorphization, and reflection modules through LLVM");
+    llvm_toolchain_test_step.dependOn(&llvm_toolchain_test_cmd.step);
+
     const import_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/import-test.sh",
@@ -1279,12 +1288,14 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_test_cmd.step);
     m0_step.dependOn(&llvm_obj_test_cmd.step);
     m0_step.dependOn(&llvm_sweep_cmd.step);
+    m0_step.dependOn(&llvm_spec_obj_sweep_cmd.step);
     m0_step.dependOn(&llvm_c_sweep_cmd.step);
     m0_step.dependOn(&llvm_c_obj_sweep_cmd.step);
     m0_step.dependOn(&llvm_cc_test_cmd.step);
     m0_step.dependOn(&llvm_move_test_cmd.step);
     m0_step.dependOn(&llvm_runtime_test_cmd.step);
     m0_step.dependOn(&llvm_std_test_cmd.step);
+    m0_step.dependOn(&llvm_toolchain_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

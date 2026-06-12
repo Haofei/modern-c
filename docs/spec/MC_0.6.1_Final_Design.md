@@ -4123,6 +4123,9 @@ The `zig build llvm-cc-test`, `zig build llvm-move-test`, and
 `zig build llvm-runtime-test` gates link and run LLVM-produced objects against C
 drivers, including a linear `move` handle roundtrip through the LLVM ABI,
 imported generic `std/stack`, `std/sync` guard, and fn-pointer runtime checks.
+The `zig build llvm-toolchain-test` gate links and runs LLVM-built import/std
+merge, monomorphization, and generic-struct modules, and verifies reflection
+with `check` plus LLVM object lowering.
 The `zig build llvm-std-test` gate additionally links LLVM-built
 `std/{core,bits,math,ascii,fmt,addr}` objects into one host executable and runs
 exported function checks.
