@@ -14,6 +14,7 @@ global values: [2]u32 = .{ 7, 8 };
 global first_value_ptr: *const u32 = &values[first_index];
 global table: Table = .{ .items = .{ 11, 12 } };
 global table_item_ptr: *const u32 = &table.items[first_index];
+global message: *const u8 = "ready";
 global global_const_ptr: *const u32 = &shared_cell;
 global global_mut_ptr: *mut u32 = &shared_cell;
 global nullable_handle: ?*mut u8 = null;
@@ -48,6 +49,10 @@ fn read_first_value_ptr() -> u32 {
 
 fn read_table_item_ptr() -> u32 {
     return table_item_ptr.*;
+}
+
+fn read_message() -> *const u8 {
+    return message;
 }
 
 fn read_global_const_ptr() -> u32 {

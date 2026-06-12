@@ -4703,7 +4703,7 @@ fn isUninitLiteral(expr: ast.Expr) bool {
 
 fn isStaticGlobalInitializer(expr: ast.Expr, ctx: Context) bool {
     return switch (expr.kind) {
-        .int_literal, .bool_literal, .null_literal, .void_literal, .enum_literal => true,
+        .int_literal, .bool_literal, .null_literal, .void_literal, .enum_literal, .string_literal => true,
         .ident => |ident| if (ctx.globals) |globals| globals.contains(ident.text) else false,
         .unary => |node| node.op == .neg and integerLiteralValue(node.expr.*) != null,
         // An explicit conversion of a static operand (`0 as u32`) is itself static;

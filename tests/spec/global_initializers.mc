@@ -20,6 +20,7 @@ global values: [2]u32 = .{ 7, 8 };
 global first_value_ptr: *const u32 = &values[first_index];
 global table: Table = .{ .items = .{ 11, 12 } };
 global table_item_ptr: *const u32 = &table.items[first_index];
+global message: *const u8 = "ready";
 global nullable_handle: ?*mut u8 = null;
 
 // EXPECT_ERROR: E_VOID_STORAGE
