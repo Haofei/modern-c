@@ -108,6 +108,8 @@ const LlvmEmitter = struct {
             .call => |call| try self.emitCall(call, expected_ty),
             .binary => |node| try self.emitBinary(node, expected_ty),
             .unary => |node| try self.emitUnary(node, expected_ty),
+            .address_of => |inner| try self.emitAddressOf(inner.*),
+            .deref => |inner| try self.emitDeref(inner.*, expected_ty),
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -164,11 +166,22 @@ const LlvmEmitter = struct {
     }
 
     fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !void {
-        const ident = assignmentIdent(target) orelse return error.UnsupportedLlvmEmission;
-        const slot = self.local_slots.get(ident.text) orelse return error.UnsupportedLlvmEmission;
-        const llvm_ty = try self.llvmType(slot.ty);
-        const value = try self.emitExpr(value_expr, slot.ty);
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, slot.ptr });
+        if (assignmentIdent(target)) |ident| {
+            const slot = self.local_slots.get(ident.text) orelse return error.UnsupportedLlvmEmission;
+            const llvm_ty = try self.llvmType(slot.ty);
+            const value = try self.emitExpr(value_expr, slot.ty);
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, slot.ptr });
+            return;
+        }
+        if (derefTarget(target)) |ptr_expr| {
+            const pointee_ty = self.derefPointeeType(ptr_expr) orelse return error.UnsupportedLlvmEmission;
+            const llvm_ty = try self.llvmType(pointee_ty);
+            const ptr = try self.emitExpr(ptr_expr, try self.pointerTypeFor(pointee_ty));
+            const value = try self.emitExpr(value_expr, pointee_ty);
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+            return;
+        }
+        return error.UnsupportedLlvmEmission;
     }
 
     fn emitWhile(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
@@ -223,6 +236,25 @@ const LlvmEmitter = struct {
                 break :blk true;
             },
         };
+    }
+
+    fn emitAddressOf(self: *LlvmEmitter, target: ast.Expr) ![]const u8 {
+        switch (target.kind) {
+            .ident => |ident| {
+                const slot = self.local_slots.get(ident.text) orelse return error.UnsupportedLlvmEmission;
+                return slot.ptr;
+            },
+            .grouped => |inner| return self.emitAddressOf(inner.*),
+            .deref => |inner| return self.emitExpr(inner.*, self.exprType(inner.*) orelse return error.UnsupportedLlvmEmission),
+            else => return error.UnsupportedLlvmEmission,
+        }
+    }
+
+    fn emitDeref(self: *LlvmEmitter, ptr_expr: ast.Expr, pointee_ty: ast.TypeExpr) ![]const u8 {
+        const ptr = try self.emitExpr(ptr_expr, try self.pointerTypeFor(pointee_ty));
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(pointee_ty), ptr });
+        return result;
     }
 
     fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
@@ -383,6 +415,7 @@ const LlvmEmitter = struct {
                 try std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{bits})
             else
                 error.UnsupportedLlvmEmission,
+            .pointer, .raw_many_pointer => "ptr",
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -405,8 +438,28 @@ const LlvmEmitter = struct {
             .bool_literal, .unary => simpleType(expr.span, "bool"),
             .int_literal => null,
             .grouped => |inner| self.exprType(inner.*),
+            .address_of => |inner| if (self.exprType(inner.*)) |ty| self.pointerTypeFor(ty) catch null else null,
+            .deref => |inner| self.derefPointeeType(inner.*),
             .binary => |node| if (binaryIsComparison(node.op)) simpleType(expr.span, "bool") else self.exprType(node.left.*),
             else => null,
+        };
+    }
+
+    fn derefPointeeType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        const ty = self.exprType(expr) orelse return null;
+        return switch (ty.kind) {
+            .pointer => |node| node.child.*,
+            .raw_many_pointer => |node| node.child.*,
+            else => null,
+        };
+    }
+
+    fn pointerTypeFor(self: *LlvmEmitter, child: ast.TypeExpr) !ast.TypeExpr {
+        const child_ptr = try self.scratch.allocator().create(ast.TypeExpr);
+        child_ptr.* = child;
+        return .{
+            .span = child.span,
+            .kind = .{ .pointer = .{ .mutability = .mut, .child = child_ptr } },
         };
     }
 };
@@ -420,6 +473,14 @@ fn assignmentIdent(target: ast.Expr) ?ast.Ident {
     return switch (target.kind) {
         .ident => |ident| ident,
         .grouped => |inner| assignmentIdent(inner.*),
+        else => null,
+    };
+}
+
+fn derefTarget(target: ast.Expr) ?ast.Expr {
+    return switch (target.kind) {
+        .deref => |inner| inner.*,
+        .grouped => |inner| derefTarget(inner.*),
         else => null,
     };
 }
