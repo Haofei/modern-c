@@ -110,6 +110,9 @@ payloads, postfix `?` trap unwrap, `if let ok/err` narrowing, and two-arm
 Result switches including wildcard fallback arms. Atomic lowering covers
 `atomic<T>` scalar storage, `atomic.init`, `load`, `store`, `fetch_add`, and
 `fetch_sub` with LLVM atomic memory orderings for local and global atomics.
+Tagged-union lowering covers aligned tag-plus-payload ABI, constructors,
+direct calls, returns, locals, struct fields, and pattern switches including
+payload bindings and wildcard fallback arms.
 Function-pointer lowering covers `fn(...) -> T` values as opaque pointers,
 static function-name initializers, copied function-pointer aggregate globals,
 indirect calls through parameters, locals, globals, arrays, and struct fields,
@@ -262,6 +265,9 @@ globals, aliases, static/dynamic literals, boolean field mask tests, and
 read-modify-write field updates.
 LLVM overlay-union coverage uses byte storage rather than C/LLVM union punning,
 including scalar field writes, byte-array reads, and overlay field reflection.
+LLVM tagged-union coverage uses an aligned tag-plus-payload aggregate ABI and
+supports constructors, direct calls/returns, locals, struct fields, and
+pattern switches with payload bindings and wildcard fallback arms.
 LLVM byte-view coverage includes `mem.as_bytes(&value)` and `mem.bytes_equal`
 over direct byte views and local byte-view slice values.
 LLVM comptime block coverage omits accepted pure `comptime { ... }` blocks from

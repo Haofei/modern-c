@@ -37,6 +37,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         .enum_types = std.StringHashMap(ast.EnumDecl).init(allocator),
         .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
         .overlay_unions = std.StringHashMap(OverlayUnionInfo).init(allocator),
+        .tagged_unions = std.StringHashMap(ast.UnionDecl).init(allocator),
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
@@ -60,6 +61,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         switch (decl.kind) {
             .packed_bits_decl => |packed_bits| try ctx.collectPackedBits(packed_bits),
             .overlay_union_decl => |overlay_union| try ctx.collectOverlayUnion(overlay_union),
+            .union_decl => |union_decl| try ctx.collectTaggedUnion(union_decl),
             else => {},
         }
     }
@@ -143,6 +145,7 @@ const LlvmEmitter = struct {
     enum_types: std.StringHashMap(ast.EnumDecl) = undefined,
     packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
     overlay_unions: std.StringHashMap(OverlayUnionInfo) = undefined,
+    tagged_unions: std.StringHashMap(ast.UnionDecl) = undefined,
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
@@ -172,6 +175,7 @@ const LlvmEmitter = struct {
         self.enum_types.deinit();
         self.packed_bits.deinit();
         self.overlay_unions.deinit();
+        self.tagged_unions.deinit();
         self.struct_types.deinit();
         self.fn_sigs.deinit();
         self.global_types.deinit();
@@ -246,6 +250,13 @@ const LlvmEmitter = struct {
             .size = size,
             .alignment = alignment,
         });
+    }
+
+    fn collectTaggedUnion(self: *LlvmEmitter, union_decl: ast.UnionDecl) !void {
+        for (union_decl.cases) |case| {
+            if (case.ty) |ty| _ = try self.llvmType(ty);
+        }
+        try self.tagged_unions.put(union_decl.name.text, union_decl);
     }
 
     fn collectFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl) !void {
@@ -473,6 +484,8 @@ const LlvmEmitter = struct {
                 "0"
             else if (self.overlayInfoForType(resolved_ty) != null)
                 "zeroinitializer"
+            else if (self.taggedUnionForType(resolved_ty) != null)
+                "zeroinitializer"
             else if (self.structDeclForType(resolved_ty) != null)
                 "zeroinitializer"
             else if (libraryScalarLlvmType(name.text) != null)
@@ -650,6 +663,7 @@ const LlvmEmitter = struct {
                 .@"switch" => |node| {
                     if (try self.emitNullableSwitch(node, ret_ty)) return true;
                     if (try self.emitResultSwitch(node, ret_ty)) return true;
+                    if (try self.emitTaggedUnionSwitch(node, ret_ty)) return true;
                     if (try self.emitScalarSwitch(node, ret_ty)) return true;
                 },
                 .if_let => |node| {
@@ -1354,6 +1368,100 @@ const LlvmEmitter = struct {
         return try self.emitSwitchBody(arm.body, ret_ty);
     }
 
+    fn emitTaggedUnionSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
+        const subject_ty = self.taggedUnionSwitchSubjectType(node) orelse return false;
+        const union_decl = self.taggedUnionForType(subject_ty) orelse return false;
+        const subject = try self.emitExpr(node.subject, subject_ty);
+        const subject_ptr = try self.nextTemp();
+        const tag_ptr = try self.nextTemp();
+        const tag = try self.nextTemp();
+        const union_llvm = try self.llvmType(subject_ty);
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ subject_ptr, union_llvm });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ union_llvm, subject, subject_ptr });
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, subject_ptr });
+        try self.out.print(self.allocator, "  {s} = load i32, ptr {s}\n", .{ tag, tag_ptr });
+
+        const end_label = try self.nextLabel("union_switch_end");
+        const trap_label = try self.nextLabel("union_switch_trap");
+        var arm_labels = try self.scratch.allocator().alloc([]const u8, node.arms.len);
+        var wildcard_index: ?usize = null;
+        for (node.arms, 0..) |arm, i| {
+            arm_labels[i] = try self.nextLabel("union_switch_arm");
+            for (arm.patterns) |pattern| {
+                if (pattern.kind == .wildcard and wildcard_index == null) wildcard_index = i;
+            }
+        }
+        const default_label = if (wildcard_index) |index| arm_labels[index] else trap_label;
+        try self.out.print(self.allocator, "  switch i32 {s}, label %{s} [\n", .{ tag, default_label });
+        for (node.arms, 0..) |arm, i| {
+            for (arm.patterns) |pattern| {
+                const case_name = taggedUnionPatternName(pattern) orelse continue;
+                const case_index = self.taggedUnionCaseIndex(union_decl, case_name) orelse return error.UnsupportedLlvmEmission;
+                try self.out.print(self.allocator, "    i32 {d}, label %{s}\n", .{ case_index, arm_labels[i] });
+            }
+        }
+        try self.out.appendSlice(self.allocator, "  ]\n");
+
+        var all_terminated = true;
+        for (node.arms, 0..) |arm, i| {
+            try self.out.print(self.allocator, "{s}:\n", .{arm_labels[i]});
+            const terminated = try self.emitTaggedUnionSwitchArm(arm, ret_ty, subject_ptr, subject_ty, union_decl);
+            if (!terminated) {
+                all_terminated = false;
+                try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+            }
+        }
+        if (wildcard_index == null) {
+            try self.out.print(self.allocator, "{s}:\n  call void @mc_trap_InvalidRepresentation(){s}\n  unreachable\n", .{ trap_label, try self.debugCallSuffix() });
+        }
+        if (all_terminated) return true;
+        try self.out.print(self.allocator, "{s}:\n", .{end_label});
+        return false;
+    }
+
+    fn taggedUnionSwitchSubjectType(self: *LlvmEmitter, node: ast.Switch) ?ast.TypeExpr {
+        if (self.exprType(node.subject)) |subject_ty| {
+            if (self.taggedUnionForType(subject_ty) != null) return subject_ty;
+        }
+
+        var candidate: ?ast.TypeExpr = null;
+        var unions = self.tagged_unions.iterator();
+        union_candidate: while (unions.next()) |entry| {
+            var matched_named_pattern = false;
+            for (node.arms) |arm| {
+                for (arm.patterns) |pattern| {
+                    const case_name = taggedUnionPatternName(pattern) orelse continue;
+                    if (taggedUnionCase(entry.value_ptr.*, case_name) == null) continue :union_candidate;
+                    matched_named_pattern = true;
+                }
+            }
+            if (!matched_named_pattern) continue;
+            if (candidate != null) return null;
+            candidate = simpleType(node.subject.span, entry.key_ptr.*);
+        }
+        return candidate;
+    }
+
+    fn emitTaggedUnionSwitchArm(self: *LlvmEmitter, arm: ast.SwitchArm, ret_ty: ast.TypeExpr, subject_ptr: []const u8, subject_ty: ast.TypeExpr, union_decl: ast.UnionDecl) !bool {
+        if (taggedUnionBindingPattern(arm)) |binding| {
+            const case = taggedUnionCase(union_decl, binding.tag) orelse return error.UnsupportedLlvmEmission;
+            const payload_ty = case.ty orelse return error.UnsupportedLlvmEmission;
+            const old_type = self.local_types.fetchRemove(binding.binding.text);
+            const old_slot = self.local_slots.fetchRemove(binding.binding.text);
+            defer restoreLocal(&self.local_types, binding.binding.text, old_type) catch {};
+            defer restoreLocal(&self.local_slots, binding.binding.text, old_slot) catch {};
+
+            const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{binding.binding.text});
+            const payload = try self.taggedUnionLoadPayload(subject_ptr, subject_ty, payload_ty);
+            try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(payload_ty) });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(payload_ty), payload, binding_ptr });
+            try self.local_types.put(binding.binding.text, payload_ty);
+            try self.local_slots.put(binding.binding.text, .{ .ty = payload_ty, .ptr = binding_ptr });
+            return try self.emitSwitchBody(arm.body, ret_ty);
+        }
+        return try self.emitSwitchBody(arm.body, ret_ty);
+    }
+
     fn emitScalarSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
         const subject_ty = self.exprType(node.subject) orelse return error.UnsupportedLlvmEmission;
         if (!typeNameEql(self.resolveAliasType(subject_ty), "bool") and self.integerBitsOf(subject_ty) == null and self.enumDeclForType(subject_ty) == null) return error.UnsupportedLlvmEmission;
@@ -1773,6 +1881,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+        if (try self.emitTaggedUnionConstructor(call, expected_ty)) |value| return value;
         if (try self.emitBuiltinValueCall(call, expected_ty)) |value| return value;
         if (self.directCallName(call.callee.*)) |callee| {
             return try self.emitDirectCall(callee, call, expected_ty);
@@ -2553,6 +2662,48 @@ const LlvmEmitter = struct {
         return with_err;
     }
 
+    fn emitTaggedUnionConstructor(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) !?[]const u8 {
+        const tag = taggedUnionConstructorName(call.callee.*) orelse return null;
+        const union_decl = self.taggedUnionForType(expected_ty) orelse return null;
+        const case_index = self.taggedUnionCaseIndex(union_decl, tag) orelse return null;
+        const case = union_decl.cases[case_index];
+        const union_llvm = try self.llvmType(expected_ty);
+        const ptr = try self.nextTemp();
+        const tag_ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, union_llvm });
+        try self.out.print(self.allocator, "  store {s} zeroinitializer, ptr {s}\n", .{ union_llvm, ptr });
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, ptr });
+        try self.out.print(self.allocator, "  store i32 {d}, ptr {s}\n", .{ case_index, tag_ptr });
+        if (case.ty) |payload_ty| {
+            if (call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const payload = try self.emitExpr(call.args[0], payload_ty);
+            const payload_ptr = try self.taggedUnionPayloadPtr(ptr, expected_ty, payload_ty);
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(payload_ty), payload, payload_ptr });
+        } else if (call.args.len != 0) {
+            return error.UnsupportedLlvmEmission;
+        }
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, union_llvm, ptr });
+        return result;
+    }
+
+    fn taggedUnionPayloadPtr(self: *LlvmEmitter, union_ptr: []const u8, union_ty: ast.TypeExpr, payload_ty: ast.TypeExpr) ![]const u8 {
+        const union_decl = self.taggedUnionForType(union_ty) orelse return error.UnsupportedLlvmEmission;
+        const layout = self.taggedUnionLayout(union_decl, 0) orelse return error.UnsupportedLlvmEmission;
+        const union_llvm = try self.llvmType(union_ty);
+        const payload_ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 {d}\n", .{ payload_ptr, union_llvm, union_ptr, layout.payload_field_index });
+        _ = try self.llvmType(payload_ty);
+        return payload_ptr;
+    }
+
+    fn taggedUnionLoadPayload(self: *LlvmEmitter, union_ptr: []const u8, union_ty: ast.TypeExpr, payload_ty: ast.TypeExpr) ![]const u8 {
+        const payload_ptr = try self.taggedUnionPayloadPtr(union_ptr, union_ty, payload_ty);
+        const payload = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ payload, try self.llvmType(payload_ty), payload_ptr });
+        return payload;
+    }
+
     fn emitResultPayloadExpr(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
         if (typeNameEql(self.resolveAliasType(ty), "void")) return "0";
         return try self.emitExpr(expr, ty);
@@ -2882,6 +3033,8 @@ const LlvmEmitter = struct {
                 try self.llvmType(info.repr)
             else if (self.overlay_unions.get(name.text)) |info|
                 try self.overlayLlvmType(info)
+            else if (self.tagged_unions.get(name.text)) |union_decl|
+                try self.taggedUnionLlvmType(union_decl)
             else if (self.struct_types.get(name.text)) |struct_decl|
                 try self.structLlvmType(struct_decl)
             else if (libraryScalarLlvmType(name.text)) |library_ty|
@@ -3190,6 +3343,79 @@ const LlvmEmitter = struct {
             .name => |name| self.overlay_unions.get(name.text),
             else => null,
         };
+    }
+
+    fn taggedUnionForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.UnionDecl {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .name => |name| self.tagged_unions.get(name.text),
+            else => null,
+        };
+    }
+
+    fn taggedUnionCaseIndex(self: *LlvmEmitter, union_decl: ast.UnionDecl, case_name: []const u8) ?usize {
+        _ = self;
+        for (union_decl.cases, 0..) |case, i| {
+            if (std.mem.eql(u8, case.name.text, case_name)) return i;
+        }
+        return null;
+    }
+
+    fn taggedUnionLlvmType(self: *LlvmEmitter, union_decl: ast.UnionDecl) ![]const u8 {
+        const layout = self.taggedUnionLayout(union_decl, 0) orelse return error.UnsupportedLlvmEmission;
+        const storage_ty = try self.taggedUnionPayloadStorageType(layout);
+        if (layout.padding_size == 0) {
+            return std.fmt.allocPrint(self.scratch.allocator(), "{{ i32, {s} }}", .{storage_ty});
+        }
+        return std.fmt.allocPrint(self.scratch.allocator(), "{{ i32, [{d} x i8], {s} }}", .{ layout.padding_size, storage_ty });
+    }
+
+    fn taggedUnionLayout(self: *LlvmEmitter, union_decl: ast.UnionDecl, depth: usize) ?TaggedUnionLayout {
+        const payload_size = self.taggedUnionPayloadSize(union_decl, depth + 1) orelse return null;
+        const payload_align = self.taggedUnionPayloadAlignment(union_decl, depth + 1) orelse return null;
+        if (payload_align != 1 and payload_align != 2 and payload_align != 4 and payload_align != 8) return null;
+        var payload_offset: i128 = 4;
+        payload_offset = alignForward(payload_offset, @intCast(payload_align)) orelse return null;
+        const payload_offset_u64: u64 = @intCast(payload_offset);
+        const aligned_payload_size = alignForward(@intCast(payload_size), @intCast(payload_align)) orelse return null;
+        const size = alignForward(payload_offset + aligned_payload_size, @intCast(@max(@as(u64, 4), payload_align))) orelse return null;
+        const storage_count = @as(u64, @intCast(aligned_payload_size)) / payload_align;
+        return .{
+            .size = @intCast(size),
+            .alignment = @max(@as(u64, 4), payload_align),
+            .payload_size = payload_size,
+            .payload_alignment = payload_align,
+            .padding_size = payload_offset_u64 - 4,
+            .storage_count = @max(@as(u64, 1), storage_count),
+            .payload_field_index = if (payload_offset_u64 == 4) 1 else 2,
+        };
+    }
+
+    fn taggedUnionPayloadStorageType(self: *LlvmEmitter, layout: TaggedUnionLayout) ![]const u8 {
+        const bits = layout.payload_alignment * 8;
+        return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i{d}]", .{ layout.storage_count, bits });
+    }
+
+    fn taggedUnionPayloadSize(self: *LlvmEmitter, union_decl: ast.UnionDecl, depth: usize) ?u64 {
+        if (depth > 32) return null;
+        var size: u64 = 1;
+        for (union_decl.cases) |case| {
+            const ty = case.ty orelse continue;
+            const payload_size = self.comptimeSizeOf(ty, depth + 1) orelse return null;
+            size = @max(size, @as(u64, @intCast(payload_size)));
+        }
+        return size;
+    }
+
+    fn taggedUnionPayloadAlignment(self: *LlvmEmitter, union_decl: ast.UnionDecl, depth: usize) ?u64 {
+        if (depth > 32) return null;
+        var alignment: u64 = 1;
+        for (union_decl.cases) |case| {
+            const ty = case.ty orelse continue;
+            const payload_alignment = self.comptimeAlignOf(ty, depth + 1) orelse return null;
+            alignment = @max(alignment, @as(u64, @intCast(payload_alignment)));
+        }
+        return alignment;
     }
 
     fn packedBitsFieldIndex(self: *LlvmEmitter, info: PackedBitsInfo, field_name: []const u8) ?usize {
@@ -3820,6 +4046,10 @@ const LlvmEmitter = struct {
                 if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
                 if (self.type_aliases.get(name.text)) |aliased| return self.comptimeSizeOf(aliased, depth + 1);
                 if (self.overlay_unions.get(name.text)) |info| return @intCast(info.size);
+                if (self.tagged_unions.get(name.text)) |union_decl| {
+                    const layout = self.taggedUnionLayout(union_decl, depth + 1) orelse return null;
+                    return @intCast(layout.size);
+                }
                 if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructSize(struct_decl, depth + 1);
                 if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeSizeOf(enumReprType(enum_decl), depth + 1);
                 if (self.packed_bits.get(name.text)) |info| return self.comptimeSizeOf(info.repr, depth + 1);
@@ -3868,6 +4098,10 @@ const LlvmEmitter = struct {
                 if (scalarLayout(name.text)) |layout| return @intCast(layout.alignment);
                 if (self.type_aliases.get(name.text)) |aliased| return self.comptimeAlignOf(aliased, depth + 1);
                 if (self.overlay_unions.get(name.text)) |info| return @intCast(info.alignment);
+                if (self.tagged_unions.get(name.text)) |union_decl| {
+                    const layout = self.taggedUnionLayout(union_decl, depth + 1) orelse return null;
+                    return @intCast(layout.alignment);
+                }
                 if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructAlign(struct_decl, depth + 1);
                 if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeAlignOf(enumReprType(enum_decl), depth + 1);
                 if (self.packed_bits.get(name.text)) |info| return self.comptimeAlignOf(info.repr, depth + 1);
@@ -4037,7 +4271,7 @@ const LlvmEmitter = struct {
         return switch (resolved_ty.kind) {
             .array => true,
             .slice => true,
-            .name => self.structDeclForType(resolved_ty) != null or self.overlayInfoForType(resolved_ty) != null,
+            .name => self.structDeclForType(resolved_ty) != null or self.overlayInfoForType(resolved_ty) != null or self.taggedUnionForType(resolved_ty) != null,
             .generic => |node| std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2,
             else => false,
         };
@@ -4069,6 +4303,16 @@ const OverlayUnionInfo = struct {
 const OverlayLayout = struct {
     size: u64,
     alignment: u64,
+};
+
+const TaggedUnionLayout = struct {
+    size: u64,
+    alignment: u64,
+    payload_size: u64,
+    payload_alignment: u64,
+    padding_size: u64,
+    storage_count: u64,
+    payload_field_index: u8,
 };
 
 const MmioFieldInfo = struct {
@@ -4194,6 +4438,11 @@ const ResultTypeInfo = struct {
 const ResultSwitchPattern = struct {
     tag: []const u8,
     binding: ?ast.Ident = null,
+};
+
+const TaggedUnionBinding = struct {
+    tag: []const u8,
+    binding: ast.Ident,
 };
 
 const AtomicOrderContext = enum {
@@ -4828,6 +5077,37 @@ fn resultSwitchPattern(pattern: ast.Pattern) ?ResultSwitchPattern {
         .tag_bind => |tag_bind| .{ .tag = tag_bind.tag.text, .binding = tag_bind.binding },
         else => null,
     };
+}
+
+fn taggedUnionConstructorName(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| taggedUnionConstructorName(inner.*),
+        else => null,
+    };
+}
+
+fn taggedUnionPatternName(pattern: ast.Pattern) ?[]const u8 {
+    return switch (pattern.kind) {
+        .tag => |tag| tag.text,
+        .tag_bind => |tag_bind| tag_bind.tag.text,
+        else => null,
+    };
+}
+
+fn taggedUnionBindingPattern(arm: ast.SwitchArm) ?TaggedUnionBinding {
+    if (arm.patterns.len != 1) return null;
+    return switch (arm.patterns[0].kind) {
+        .tag_bind => |tag_bind| .{ .tag = tag_bind.tag.text, .binding = tag_bind.binding },
+        else => null,
+    };
+}
+
+fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCase {
+    for (union_decl.cases) |case| {
+        if (std.mem.eql(u8, case.name.text, name)) return case;
+    }
+    return null;
 }
 
 fn binaryIsComparison(op: ast.BinaryOp) bool {

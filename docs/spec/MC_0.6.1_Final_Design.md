@@ -4036,7 +4036,9 @@ typed register reads/writes, `.acquire`/`.release` fences, and irq-context MMIO
 fixtures. Packed-bits lowering covers representation ABI, static/dynamic
 literals, mask tests, and read-modify-write field updates. Overlay-union
 lowering uses byte storage with typed scalar field writes, byte-array reads, and
-field reflection. Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
+field reflection. Tagged-union lowering covers aligned tag-plus-payload ABI,
+constructors, direct calls/returns, locals, struct fields, and pattern switches
+with payload bindings and wildcard fallback arms. Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
 globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
 enums, enum switches over direct calls, and void switch expression arms.
