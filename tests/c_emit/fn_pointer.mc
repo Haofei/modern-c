@@ -19,6 +19,10 @@ struct BinOp {
     combine: fn(u32, u32) -> u32,
 }
 
+global default_box: BinOp = .{ .combine = add };
+global copied_box: BinOp = default_box;
+global default_boxes: [2]BinOp = .{ .{ .combine = add }, .{ .combine = mul } };
+
 fn dispatch(o: *BinOp, x: u32, y: u32) -> u32 {
     return o.combine(x, y);
 }
@@ -40,6 +44,26 @@ fn global_op_array_call(x: u32, y: u32) -> u32 {
 
 fn global_op_array_get() -> fn(u32, u32) -> u32 {
     return default_ops[0];
+}
+
+fn global_box_call(x: u32, y: u32) -> u32 {
+    return default_box.combine(x, y);
+}
+
+fn copied_global_box_call(x: u32, y: u32) -> u32 {
+    return copied_box.combine(x, y);
+}
+
+fn global_box_array_call(x: u32, y: u32) -> u32 {
+    return default_boxes[1].combine(x, y);
+}
+
+fn replace_global_box() -> void {
+    default_boxes[0] = .{ .combine = mul };
+}
+
+fn replace_global_box_op() -> void {
+    default_boxes[1].combine = add;
 }
 
 // 3+4 (callback) + 3*4 (vtable) = 19

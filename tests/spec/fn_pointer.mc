@@ -32,11 +32,28 @@ fn use_global_callback_array() -> u32 {
 struct BinOp {
     combine: fn(u32, u32) -> u32,
 }
+
+global default_box: BinOp = .{ .combine = add };
+global copied_box: BinOp = default_box;
+global default_boxes: [2]BinOp = .{ .{ .combine = add }, .{ .combine = add } };
+
 fn dispatch(o: *BinOp, x: u32, y: u32) -> u32 {
     return o.combine(x, y);
 }
 fn build_vtable() -> BinOp {
     return .{ .combine = add };
+}
+
+fn use_global_vtable() -> u32 {
+    return default_box.combine(3, 4);
+}
+
+fn use_copied_global_vtable() -> u32 {
+    return copied_box.combine(3, 4);
+}
+
+fn use_global_vtable_array() -> u32 {
+    return default_boxes[0].combine(3, 4);
 }
 
 fn reject_wrong_arity(op: fn(u32, u32) -> u32) -> u32 {
@@ -56,5 +73,12 @@ fn reject_wrong_signature_array() -> void {
     let ops: [1]fn(u32, u32) -> u32 = .{
         // EXPECT_ERROR: E_FN_POINTER_SIGNATURE_MISMATCH
         negate,
+    };
+}
+
+fn reject_wrong_signature_struct_literal() -> BinOp {
+    return .{
+        // EXPECT_ERROR: E_FN_POINTER_SIGNATURE_MISMATCH
+        .combine = negate,
     };
 }
