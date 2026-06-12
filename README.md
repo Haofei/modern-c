@@ -94,6 +94,7 @@ the output with another toolchain is unsupported.
 zig build m0
 zig build test
 zig build c-test
+zig build sweep
 ```
 
 Run the compiler prototype:
