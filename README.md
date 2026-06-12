@@ -96,8 +96,9 @@ nested blocks, unsafe blocks, transparent unsafe-contract blocks, `trap(...)`,
 the covered trap kinds. Unsafe-contract arithmetic lowering covers
 `unchecked.add`/`sub`/`mul` as plain arithmetic after semantic contract
 verification. Unsafe machine-operation lowering covers opaque address
-classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`, and
-raw-many pointer `.offset(...)`. Alias and enum lowering covers scalar, array,
+classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`,
+opaque inline asm, unsafe-block raw stores, and raw-many pointer `.offset(...)`.
+Alias and enum lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
 globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
 enums, enum switches over direct calls, and void switch expression arms.
@@ -268,6 +269,9 @@ payload storage representation.
 LLVM opaque-address coverage lowers `PAddr`/`VAddr` representation-preserving
 casts as `i64`, including `UserPtr<T>`/`PhysPtr<T>` wrapper ABI and the std/addr
 helpers used by raw float buffers and fixed-lane helper arrays.
+LLVM unsafe machine coverage includes volatile raw loads/stores, raw pointers,
+raw-many offsets, `cpu.pause()`, and opaque inline asm with explicit LLVM
+clobbers. Precise asm operands remain pending.
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function

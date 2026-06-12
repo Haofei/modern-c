@@ -4028,8 +4028,9 @@ transparent unsafe-contract blocks. Unsafe-contract arithmetic lowering covers
 verification. The LLVM backend also lowers `trap(...)`,
 `unreachable`, `never` functions, and `never` coercion in return position for
 the covered trap kinds. Unsafe machine-operation lowering covers opaque address
-classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`, and
-raw-many pointer `.offset(...)`. Alias and enum lowering covers scalar, array,
+classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`,
+opaque inline asm, unsafe-block raw stores, and raw-many pointer `.offset(...)`.
+Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
 globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
 enums, enum switches over direct calls, and void switch expression arms.

@@ -637,6 +637,7 @@ const LlvmEmitter = struct {
                     return true;
                 },
                 .expr => |expr| try self.emitExprStatement(expr),
+                .asm_stmt => |asm_stmt| try self.emitAsmStmt(asm_stmt),
                 else => return error.UnsupportedLlvmEmission,
             }
         }
@@ -664,6 +665,14 @@ const LlvmEmitter = struct {
         }
 
         return try self.emitBlock(block, ret_ty);
+    }
+
+    fn emitAsmStmt(self: *LlvmEmitter, asm_stmt: ast.AsmStmt) !void {
+        if (asm_stmt.form != .@"opaque" or asm_stmt.inputs.len != 0 or asm_stmt.outputs.len != 0) return error.UnsupportedLlvmEmission;
+        const template = try llvmAsmTemplate(self.scratch.allocator(), asm_stmt.templates);
+        const constraints = try llvmAsmClobbers(self.scratch.allocator(), asm_stmt.clobbers);
+        const sideeffect: []const u8 = if (asm_stmt.is_volatile) " sideeffect" else "";
+        try self.out.print(self.allocator, "  call void asm{s} \"{s}\", \"{s}\"(){s}\n", .{ sideeffect, template, constraints, try self.debugCallSuffix() });
     }
 
     fn emitExprStatement(self: *LlvmEmitter, expr: ast.Expr) !void {
@@ -3846,11 +3855,46 @@ const LlvmStringBytes = struct {
     len: usize,
 };
 
-fn llvmStringLiteralBytes(allocator: std.mem.Allocator, literal: []const u8) !LlvmStringBytes {
-    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return error.UnsupportedLlvmEmission;
+fn llvmAsmTemplate(allocator: std.mem.Allocator, templates: []const []const u8) ![]const u8 {
+    var escaped: std.ArrayList(u8) = .empty;
+    for (templates, 0..) |template, i| {
+        if (i != 0) try escaped.appendSlice(allocator, "\\0A\\09");
+        try appendLlvmStringLiteralBody(allocator, &escaped, template, null);
+    }
+    return escaped.toOwnedSlice(allocator);
+}
 
+fn llvmAsmClobbers(allocator: std.mem.Allocator, clobbers: []const []const u8) ![]const u8 {
+    var constraints: std.ArrayList(u8) = .empty;
+    if (clobbers.len == 0) {
+        try constraints.appendSlice(allocator, "~{memory}");
+        return constraints.toOwnedSlice(allocator);
+    }
+    for (clobbers, 0..) |clobber, i| {
+        const name = try stringLiteralText(allocator, clobber);
+        if (i != 0) try constraints.append(allocator, ',');
+        try constraints.print(allocator, "~{{{s}}}", .{name});
+    }
+    return constraints.toOwnedSlice(allocator);
+}
+
+fn llvmStringLiteralBytes(allocator: std.mem.Allocator, literal: []const u8) !LlvmStringBytes {
     var escaped: std.ArrayList(u8) = .empty;
     var len: usize = 0;
+    try appendLlvmStringLiteralBody(allocator, &escaped, literal, &len);
+    try appendLlvmStringByte(allocator, &escaped, 0);
+    len += 1;
+    return .{ .escaped = try escaped.toOwnedSlice(allocator), .len = len };
+}
+
+fn stringLiteralText(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
+    var escaped: std.ArrayList(u8) = .empty;
+    try appendLlvmStringLiteralBody(allocator, &escaped, literal, null);
+    return escaped.toOwnedSlice(allocator);
+}
+
+fn appendLlvmStringLiteralBody(allocator: std.mem.Allocator, escaped: *std.ArrayList(u8), literal: []const u8, maybe_len: ?*usize) !void {
+    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return error.UnsupportedLlvmEmission;
     var i: usize = 1;
     while (i + 1 < literal.len) {
         const byte = if (literal[i] == '\\') blk: {
@@ -3867,13 +3911,10 @@ fn llvmStringLiteralBytes(allocator: std.mem.Allocator, literal: []const u8) !Ll
                 else => return error.UnsupportedLlvmEmission,
             };
         } else literal[i];
-        try appendLlvmStringByte(allocator, &escaped, byte);
-        len += 1;
+        try appendLlvmStringByte(allocator, escaped, byte);
+        if (maybe_len) |len| len.* += 1;
         i += 1;
     }
-    try appendLlvmStringByte(allocator, &escaped, 0);
-    len += 1;
-    return .{ .escaped = try escaped.toOwnedSlice(allocator), .len = len };
 }
 
 fn appendLlvmStringByte(allocator: std.mem.Allocator, escaped: *std.ArrayList(u8), byte: u8) !void {
