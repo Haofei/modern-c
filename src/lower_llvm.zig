@@ -2597,8 +2597,16 @@ const LlvmEmitter = struct {
         const source_ty = self.exprType(value_expr) orelse {
             return self.emitExpr(value_expr, target_ty);
         };
-        const value = try self.emitExpr(value_expr, source_ty);
+        const value = try self.emitExprNatural(value_expr, source_ty);
         return try self.castValue(value, source_ty, target_ty);
+    }
+
+    fn emitExprNatural(self: *LlvmEmitter, expr: ast.Expr, source_ty: ast.TypeExpr) anyerror![]const u8 {
+        return switch (expr.kind) {
+            .binary => |node| try self.emitBinary(node, source_ty),
+            .grouped => |inner| try self.emitExprNatural(inner.*, source_ty),
+            else => try self.emitExpr(expr, source_ty),
+        };
     }
 
     fn castValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
@@ -2859,8 +2867,8 @@ const LlvmEmitter = struct {
         const signed = self.isSignedIntegerType(ty);
         const intrinsic = try self.overflowIntrinsic(node.op, signed, bits);
         const pair_ty = try std.fmt.allocPrint(self.scratch.allocator(), "{{ {s}, i1 }}", .{llvm_ty});
-        const left = try self.emitExpr(node.left.*, ty);
-        const right = try self.emitExpr(node.right.*, ty);
+        const left = try self.emitBinaryOperand(node.left.*, ty);
+        const right = try self.emitBinaryOperand(node.right.*, ty);
         const pair = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}, {s} {s}){s}\n", .{ pair, pair_ty, intrinsic, llvm_ty, left, llvm_ty, right, try self.debugCallSuffix() });
         const value = try self.nextTemp();
@@ -2895,8 +2903,8 @@ const LlvmEmitter = struct {
 
     fn emitCheckedDivRem(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
         if (self.integerBitsOf(ty) == null) return error.UnsupportedLlvmEmission;
-        const left = try self.emitExpr(node.left.*, ty);
-        const right = try self.emitExpr(node.right.*, ty);
+        const left = try self.emitBinaryOperand(node.left.*, ty);
+        const right = try self.emitBinaryOperand(node.right.*, ty);
         const zero_cmp = try self.nextTemp();
         const zero_trap = try self.nextLabel("trap_div_zero");
         const nonzero = try self.nextLabel("div_nonzero");
@@ -2993,9 +3001,15 @@ const LlvmEmitter = struct {
     }
 
     fn emitPlainBinary(self: *LlvmEmitter, op: []const u8, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
-        const left = try self.emitExpr(node.left.*, ty);
-        const right = try self.emitExpr(node.right.*, ty);
+        const left = try self.emitBinaryOperand(node.left.*, ty);
+        const right = try self.emitBinaryOperand(node.right.*, ty);
         return try self.emitPlainBinaryValues(op, llvm_ty, left, right);
+    }
+
+    fn emitBinaryOperand(self: *LlvmEmitter, expr: ast.Expr, target_ty: ast.TypeExpr) anyerror![]const u8 {
+        const source_ty = self.exprType(expr) orelse return self.emitExpr(expr, target_ty);
+        const value = try self.emitExprNatural(expr, source_ty);
+        return try self.castValue(value, source_ty, target_ty);
     }
 
     fn emitPlainBinaryValues(self: *LlvmEmitter, op: []const u8, llvm_ty: []const u8, left: []const u8, right: []const u8) ![]const u8 {

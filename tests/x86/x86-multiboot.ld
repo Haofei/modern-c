@@ -11,6 +11,7 @@ SECTIONS {
     }
     .text : { *(.text .text.*) }
     .rodata : { *(.rodata .rodata.*) }
+    .eh_frame : { *(.eh_frame .eh_frame.*) }
     .data : { *(.data .data.*) }
     . = ALIGN(8);
     _load_end = .;

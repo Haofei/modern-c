@@ -227,7 +227,8 @@ LLVM backend status:
   handshake, virtio-net device bring-up, pcap-verified UDP transmit,
   virtio-blk sector read, ARP/ICMP gateway round trip over virtio-net,
   driver-library synthetic NIC transmit, e1000 PCI probe, live virtio-net RX
-  routing through the production demux,
+  routing through the production demux, OpenSBI firmware boot, aarch64 QEMU
+  boot, and x86-64 native/QEMU scheduler boot,
   backtrace symbolization, char-device driver dispatch, timer preemption, SMP
   boot/sync, SMP ticket-lock mutual exclusion, inter-processor interrupts, the
   integrated RISC-V kernel image, and the integrated kernel+network image, LLVM
@@ -373,8 +374,10 @@ llvm-driver-test`, `zig build llvm-preempt-test`, `zig build llvm-smp-test`,
 `zig build llvm-smp-lock-test`, `zig build llvm-ipi-test`, and `zig build
 llvm-tcp-server-test`, `zig build llvm-virtio-test`, and `zig build
 llvm-udp-net-test`, `zig build llvm-blk-test`, `zig build llvm-net-test`,
-`zig build llvm-nic-test`, `zig build llvm-e1000-test`, and
-`zig build llvm-net-rx-live-test`
+`zig build llvm-nic-test`, `zig build llvm-e1000-test`,
+`zig build llvm-net-rx-live-test`, `zig build llvm-sbi-boot-test`,
+`zig build llvm-aarch64-test`, `zig build llvm-x86-sched-test`, and
+`zig build llvm-x86-qemu-test`
 for typed MMIO, timer traps, cooperative context switching, round-robin
 scheduling, syscall dispatch, U-mode entry, process lifecycle, ELF load/run,
 VFS syscalls, socket syscalls, exec, `satp` address-space switching,
@@ -389,8 +392,9 @@ char-device driver dispatch, timer preemption, SMP boot/sync, SMP ticket-lock
 mutual exclusion, inter-processor interrupts, a user-mode TCP passive-open
 server handshake, virtio-net device bring-up, pcap-verified UDP transmit,
 virtio-blk sector reads, ARP/ICMP gateway round trips over virtio-net,
-driver-library synthetic NIC transmit, e1000 PCI probing, and live virtio-net
-RX routing through the production demux. `zig build llvm-kmain-test` boots the integrated
+driver-library synthetic NIC transmit, e1000 PCI probing, live virtio-net RX
+routing through the production demux, OpenSBI firmware boot, aarch64 QEMU boot,
+and x86-64 native/QEMU scheduler boot. `zig build llvm-kmain-test` boots the integrated
 kernel image from an LLVM-lowered MC object under QEMU, and `zig build llvm-kmain-net-test`
 boots the integrated kernel+network image and verifies the transmitted UDP packet
 in the QEMU pcap. `zig build llvm-page-test`, `zig build llvm-heap-test`, and

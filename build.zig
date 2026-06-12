@@ -851,13 +851,19 @@ pub fn build(b: *std.Build) void {
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "dynlink-test",
     });
     const aarch64_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc",
+        "bash", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_aarch64_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc", "llvm",
     });
     const liveupdate_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "liveupdate-test",
     });
     const sbi_boot_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc",
+        "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_sbi_boot_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "llvm",
     });
     const e1000_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "c",
@@ -876,6 +882,9 @@ pub fn build(b: *std.Build) void {
     sbi_boot_test_cmd.step.dependOn(b.getInstallStep());
     const sbi_boot_test_step = b.step("sbi-boot-test", "Boot under OpenSBI (real firmware)");
     sbi_boot_test_step.dependOn(&sbi_boot_test_cmd.step);
+    llvm_sbi_boot_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_sbi_boot_test_step = b.step("llvm-sbi-boot-test", "LLVM-lowered boot under OpenSBI (real firmware)");
+    llvm_sbi_boot_test_step.dependOn(&llvm_sbi_boot_test_cmd.step);
 
 
     liveupdate_test_cmd.step.dependOn(b.getInstallStep());
@@ -886,6 +895,9 @@ pub fn build(b: *std.Build) void {
     aarch64_test_cmd.step.dependOn(b.getInstallStep());
     const aarch64_test_step = b.step("aarch64-test", "Second architecture (aarch64) bring-up");
     aarch64_test_step.dependOn(&aarch64_test_cmd.step);
+    llvm_aarch64_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_aarch64_test_step = b.step("llvm-aarch64-test", "LLVM-lowered second architecture (aarch64) bring-up");
+    llvm_aarch64_test_step.dependOn(&llvm_aarch64_test_cmd.step);
 
 
     dynlink_test_cmd.step.dependOn(b.getInstallStep());
@@ -995,15 +1007,23 @@ pub fn build(b: *std.Build) void {
     const granttab_test_step = b.step("granttab-test", "owner-tracked grants: bounded IPC sharing + revoke-on-death");
     granttab_test_step.dependOn(&granttab_test_cmd.step);
 
-    const x86_sched_test_cmd = b.addSystemCommand(&.{ "sh", "tools/arch/x86-sched-test.sh", "zig-out/bin/mcc" });
+    const x86_sched_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-sched-test.sh", "zig-out/bin/mcc", "c" });
+    const llvm_x86_sched_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-sched-test.sh", "zig-out/bin/mcc", "llvm" });
     x86_sched_test_cmd.step.dependOn(b.getInstallStep());
     const x86_sched_test_step = b.step("x86-sched-test", "x86-64 arch port: cooperative context switch (native)");
     x86_sched_test_step.dependOn(&x86_sched_test_cmd.step);
+    llvm_x86_sched_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_x86_sched_test_step = b.step("llvm-x86-sched-test", "LLVM-lowered x86-64 arch port: cooperative context switch (native)");
+    llvm_x86_sched_test_step.dependOn(&llvm_x86_sched_test_cmd.step);
 
-    const x86_qemu_test_cmd = b.addSystemCommand(&.{ "sh", "tools/arch/x86-qemu-test.sh", "zig-out/bin/mcc" });
+    const x86_qemu_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-qemu-test.sh", "zig-out/bin/mcc", "c" });
+    const llvm_x86_qemu_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-qemu-test.sh", "zig-out/bin/mcc", "llvm" });
     x86_qemu_test_cmd.step.dependOn(b.getInstallStep());
     const x86_qemu_test_step = b.step("x86-qemu-test", "x86-64 kernel boots under QEMU (multiboot -> long mode)");
     x86_qemu_test_step.dependOn(&x86_qemu_test_cmd.step);
+    llvm_x86_qemu_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_x86_qemu_test_step = b.step("llvm-x86-qemu-test", "LLVM-lowered x86-64 kernel boots under QEMU (multiboot -> long mode)");
+    llvm_x86_qemu_test_step.dependOn(&llvm_x86_qemu_test_cmd.step);
 
 
     shell_test_cmd.step.dependOn(b.getInstallStep());
@@ -2103,6 +2123,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&granttab_test_cmd.step);
     m0_step.dependOn(&x86_sched_test_cmd.step);
     m0_step.dependOn(&x86_qemu_test_cmd.step);
+    m0_step.dependOn(&llvm_x86_sched_test_cmd.step);
+    m0_step.dependOn(&llvm_x86_qemu_test_cmd.step);
     m0_step.dependOn(&slotmap_test_cmd.step);
     m0_step.dependOn(&mask_test_cmd.step);
     m0_step.dependOn(&mailbox_test_cmd.step);
@@ -2119,8 +2141,10 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&fb_test_cmd.step);
     m0_step.dependOn(&dynlink_test_cmd.step);
     m0_step.dependOn(&aarch64_test_cmd.step);
+    m0_step.dependOn(&llvm_aarch64_test_cmd.step);
     m0_step.dependOn(&liveupdate_test_cmd.step);
     m0_step.dependOn(&sbi_boot_test_cmd.step);
+    m0_step.dependOn(&llvm_sbi_boot_test_cmd.step);
     m0_step.dependOn(&e1000_test_cmd.step);
     m0_step.dependOn(&grant_test_cmd.step);
     m0_step.dependOn(&ipc_test_cmd.step);

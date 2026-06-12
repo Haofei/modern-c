@@ -3,6 +3,7 @@ SECTIONS {
     . = 0x80200000;            /* OpenSBI's default payload address on virt */
     .text : { KEEP(*(.text.boot)) *(.text*) }
     .rodata : { *(.rodata*) }
+    .eh_frame : { *(.eh_frame .eh_frame.*) }
     .data : { *(.data*) }
     .bss : { *(.bss*) *(COMMON) }
     . = ALIGN(16);

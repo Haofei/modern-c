@@ -2,23 +2,24 @@
 # Real boot path: boot our kernel under OpenSBI (QEMU default firmware, the bootloader
 # used on real RISC-V hardware) in S-mode, talking to console/power via SBI ecalls.
 set -euo pipefail
-MCC="${1:-zig-out/bin/mcc}"; HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
-CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; QEMU="${QEMU:-qemu-system-riscv64}"
-skip(){ echo "SKIP: sbi-boot-test ($1)"; exit 0; }
-command -v "$CLANG" >/dev/null 2>&1 || skip "no clang"
-command -v "$LLD" >/dev/null 2>&1 || skip "no ld.lld"
-command -v "$QEMU" >/dev/null 2>&1 || skip "no qemu"
+MCC="${1:-zig-out/bin/mcc}"
+BACKEND="${2:-c}"
+CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; QEMU="${QEMU:-qemu-system-riscv64}"
+source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
+HERE="$(kernel_boot_repo_root)"
+TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-sbi-boot-test" || echo "sbi-boot-test")
+kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra)
-"$MCC" emit-c "$HERE/tests/qemu/arch/arch_demo.mc" >"$WORK/c.c"
-"$CLANG" "${CFLAGS[@]}" -c "$WORK/c.c" -o "$WORK/c.o"
-"$CLANG" "${CFLAGS[@]}" -c "$HERE/kernel/arch/riscv64/sbi_boot_runtime.c" -o "$WORK/boot.o"
-"$LLD" -T "$HERE/tests/qemu/sbi.ld" "$WORK/boot.o" "$WORK/c.o" -o "$WORK/k.elf"
+kernel_boot_compile_mc_object "$BACKEND" "$HERE/tests/qemu/arch/arch_demo.mc" "$WORK/mc.o" "$WORK"
+kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/sbi_boot_runtime.c" "$WORK/boot.o"
+SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
+"$LLD" -T "$HERE/tests/qemu/sbi.ld" "$WORK/boot.o" "$WORK/mc.o" $SUPPORT_OBJ -o "$WORK/k.elf"
 # NOTE: no '-bios none' -> QEMU loads OpenSBI (the real firmware) which boots our kernel.
 OUT="$(timeout 30 "$QEMU" -machine virt -nographic -kernel "$WORK/k.elf" 2>/dev/null || true)"
 echo "--- OpenSBI + kernel output ---"; printf '%s\n' "$OUT" | tail -8; echo "-------------------------------"
 if printf '%s' "$OUT" | grep -q "SBI-BOOT-OK" && printf '%s' "$OUT" | grep -qi "OpenSBI"; then
-    echo "PASS: sbi-boot-test — booted under OpenSBI (real RISC-V firmware) in S-mode; kernel ran + used SBI console/shutdown (SBI-BOOT-OK)"
+    echo "PASS: $TEST_NAME — $BACKEND backend booted under OpenSBI (real RISC-V firmware) in S-mode; kernel ran + used SBI console/shutdown (SBI-BOOT-OK)"
     exit 0
 fi
-echo "FAIL: sbi-boot-test — expected OpenSBI banner + SBI-BOOT-OK"; exit 1
+echo "FAIL: $TEST_NAME — expected OpenSBI banner + SBI-BOOT-OK"; exit 1
