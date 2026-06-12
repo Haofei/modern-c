@@ -420,6 +420,7 @@ const LlvmEmitter = struct {
     fn zeroInitializer(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
         const resolved_ty = self.resolveAliasType(ty);
         if (self.atomicPayloadType(resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
+        if (self.maybeUninitPayloadType(resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
         return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "bool"))
                 "0"
@@ -766,7 +767,10 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, llvm_ty });
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
-        if (init.kind == .uninit_literal) return;
+        if (isUninitExpr(init)) {
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, try self.zeroInitializer(ty), ptr });
+            return;
+        }
         if (resolved_ty.kind == .array) {
             if (init.kind == .array_literal) {
                 try self.emitArrayLiteralStores(ptr, resolved_ty, init.kind.array_literal);
@@ -833,6 +837,14 @@ const LlvmEmitter = struct {
     }
 
     fn emitBuiltinVoidCall(self: *LlvmEmitter, call: anytype) !bool {
+        if (self.maybeUninitCallInfo(call)) |info| {
+            if (!std.mem.eql(u8, info.op, "write")) return false;
+            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const ptr = try self.storageBaseAddress(info.base);
+            const value = try self.emitExpr(call.args[0], info.payload_ty);
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(info.payload_ty), value, ptr });
+            return true;
+        }
         if (isRawStoreCall(call.callee.*)) {
             if (call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedLlvmEmission;
             const value_ty = call.type_args[0];
@@ -1532,6 +1544,14 @@ const LlvmEmitter = struct {
             const payload_ty = self.atomicPayloadType(expected_ty) orelse return error.UnsupportedLlvmEmission;
             return try self.emitAtomicValueForStorage(call.args[0], payload_ty);
         }
+        if (self.maybeUninitCallInfo(call)) |info| {
+            if (!std.mem.eql(u8, info.op, "assume_init")) return null;
+            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
+            const ptr = try self.storageBaseAddress(info.base);
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(info.payload_ty), ptr });
+            return result;
+        }
         if (isRawLoadCall(call.callee.*)) {
             if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const value_ty = call.type_args[0];
@@ -2188,6 +2208,8 @@ const LlvmEmitter = struct {
             .fn_pointer => "ptr",
             .generic => |node| if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1)
                 try self.atomicStorageLlvmType(node.args[0])
+            else if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1)
+                try self.llvmType(node.args[0])
             else if ((std.mem.eql(u8, node.base.text, "wrap") or std.mem.eql(u8, node.base.text, "sat")) and node.args.len == 1)
                 try self.llvmType(node.args[0])
             else
@@ -2271,6 +2293,18 @@ const LlvmEmitter = struct {
                 return node.args[0];
             },
             .qualified => |node| self.atomicPayloadType(node.child.*),
+            else => null,
+        };
+    }
+
+    fn maybeUninitPayloadType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .generic => |node| {
+                if (!std.mem.eql(u8, node.base.text, "MaybeUninit") or node.args.len != 1) return null;
+                return node.args[0];
+            },
+            .qualified => |node| self.maybeUninitPayloadType(node.child.*),
             else => null,
         };
     }
@@ -2526,6 +2560,10 @@ const LlvmEmitter = struct {
             if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
             if (std.mem.eql(u8, info.op, "store")) return simpleType(call.callee.*.span, "void");
         }
+        if (self.maybeUninitCallInfo(call)) |info| {
+            if (std.mem.eql(u8, info.op, "assume_init")) return info.payload_ty;
+            if (std.mem.eql(u8, info.op, "write")) return simpleType(call.callee.*.span, "void");
+        }
         if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
         if (self.fnPointerCalleeType(call.callee.*)) |fn_ty| return fn_ty.kind.fn_pointer.ret.*;
         const callee = self.directCallName(call.callee.*) orelse return null;
@@ -2648,7 +2686,30 @@ const LlvmEmitter = struct {
         return .{ .base = member.base.*, .op = member.name.text, .payload_ty = payload_ty };
     }
 
+    fn maybeUninitCallInfo(self: *LlvmEmitter, call: anytype) ?MaybeUninitCallInfo {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "write") and
+            !std.mem.eql(u8, member.name.text, "assume_init"))
+        {
+            return null;
+        }
+        const base_ty = self.exprType(member.base.*) orelse return null;
+        const payload_ty = self.maybeUninitPayloadType(base_ty) orelse return null;
+        return .{ .base = member.base.*, .op = member.name.text, .payload_ty = payload_ty };
+    }
+
     fn atomicBaseAddress(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+        return self.storageBaseAddress(expr);
+    }
+
+    fn storageBaseAddress(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
         return switch (expr.kind) {
             .ident => |ident| if (self.local_slots.get(ident.text)) |slot|
                 slot.ptr
@@ -2657,7 +2718,7 @@ const LlvmEmitter = struct {
             else
                 error.UnsupportedLlvmEmission,
             .member => |node| try self.emitMemberAddress(node),
-            .grouped => |inner| try self.atomicBaseAddress(inner.*),
+            .grouped => |inner| try self.storageBaseAddress(inner.*),
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -2666,6 +2727,7 @@ const LlvmEmitter = struct {
         if (self.enumDeclForType(ty)) |enum_decl| return self.llvmAlignOf(enumReprType(enum_decl));
         const resolved_ty = self.resolveAliasType(ty);
         if (self.atomicPayloadType(resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
+        if (self.maybeUninitPayloadType(resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
         if (self.domainPayloadType(resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
         return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "bool") or
@@ -2733,6 +2795,7 @@ const LlvmEmitter = struct {
             .slice => 16,
             .generic => |g| {
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat")) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 return null;
             },
@@ -2761,6 +2824,7 @@ const LlvmEmitter = struct {
             .nullable => |child| if (isPointerLikeType(child.*)) 8 else null,
             .generic => |g| {
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 if ((std.mem.eql(u8, g.base.text, "wrap") or std.mem.eql(u8, g.base.text, "sat")) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 return null;
             },
@@ -2881,6 +2945,7 @@ const LlvmEmitter = struct {
 
     fn isAggregateType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         const resolved_ty = self.resolveAliasType(ty);
+        if (self.maybeUninitPayloadType(resolved_ty)) |payload_ty| return self.isAggregateType(payload_ty);
         return switch (resolved_ty.kind) {
             .array => true,
             .slice => true,
@@ -2978,6 +3043,12 @@ const ComptimeStructLayout = struct {
 };
 
 const AtomicCallInfo = struct {
+    base: ast.Expr,
+    op: []const u8,
+    payload_ty: ast.TypeExpr,
+};
+
+const MaybeUninitCallInfo = struct {
     base: ast.Expr,
     op: []const u8,
     payload_ty: ast.TypeExpr,
@@ -3220,6 +3291,14 @@ fn atomicInitValue(expr: ast.Expr) ?ast.Expr {
         .call => |call| if (isAtomicInitCall(call.callee.*) and call.args.len == 1) call.args[0] else null,
         .grouped => |inner| atomicInitValue(inner.*),
         else => null,
+    };
+}
+
+fn isUninitExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .uninit_literal => true,
+        .grouped => |inner| isUninitExpr(inner.*),
+        else => false,
     };
 }
 

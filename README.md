@@ -245,6 +245,9 @@ LLVM packed-bits coverage uses the declared integer representation for ABI,
 globals, aliases, literals, and boolean field mask tests.
 LLVM comptime block coverage omits accepted pure `comptime { ... }` blocks from
 runtime IR after semantic checking.
+LLVM initialization coverage materializes observable `uninit` storage with
+concrete zero values and lowers `MaybeUninit<T>.write/assume_init` through the
+payload storage representation.
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function
