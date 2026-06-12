@@ -8196,9 +8196,15 @@ const CEmitter = struct {
     fn structTypeNameForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
         return switch (expr.kind) {
             .ident => |id| blk: {
-                const set = locals orelse break :blk null;
-                const info = set.get(id.text) orelse break :blk null;
-                const ty = info.source_ty orelse break :blk null;
+                const local_ty = if (locals) |set| local: {
+                    if (set.get(id.text)) |info| break :local info.source_ty orelse break :blk null;
+                    if (set.contains(id.text)) break :blk null;
+                    break :local null;
+                } else null;
+                const ty = local_ty orelse if (self.globals.get(id.text)) |global|
+                    global.source_ty orelse break :blk null
+                else
+                    break :blk null;
                 const resolved = self.resolveAliasType(ty);
                 break :blk switch (resolved.kind) {
                     .name => |n| n.text,

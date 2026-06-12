@@ -1,3 +1,7 @@
+struct Table {
+    items: [2]u32,
+}
+
 global shared_cell: u32 = 0;
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
@@ -8,6 +12,8 @@ global grouped_signed_seed: i16 = (-12);
 global first_index: usize = 0;
 global values: [2]u32 = .{ 7, 8 };
 global first_value_ptr: *const u32 = &values[first_index];
+global table: Table = .{ .items = .{ 11, 12 } };
+global table_item_ptr: *const u32 = &table.items[first_index];
 global global_const_ptr: *const u32 = &shared_cell;
 global global_mut_ptr: *mut u32 = &shared_cell;
 global nullable_handle: ?*mut u8 = null;
@@ -38,6 +44,10 @@ fn read_grouped_signed_seed() -> i16 {
 
 fn read_first_value_ptr() -> u32 {
     return first_value_ptr.*;
+}
+
+fn read_table_item_ptr() -> u32 {
+    return table_item_ptr.*;
 }
 
 fn read_global_const_ptr() -> u32 {

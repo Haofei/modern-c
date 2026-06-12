@@ -7,6 +7,10 @@
 extern fn make_mut_u8_pointer() -> *mut u8;
 extern fn make_seed() -> u32;
 
+struct Table {
+    items: [2]u32,
+}
+
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
 global cast_seed: u32 = 1 as u32;
@@ -14,6 +18,8 @@ global cast_copied_seed: u32 = seed as u32;
 global first_index: usize = 0;
 global values: [2]u32 = .{ 7, 8 };
 global first_value_ptr: *const u32 = &values[first_index];
+global table: Table = .{ .items = .{ 11, 12 } };
+global table_item_ptr: *const u32 = &table.items[first_index];
 global nullable_handle: ?*mut u8 = null;
 
 // EXPECT_ERROR: E_VOID_STORAGE
