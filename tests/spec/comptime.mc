@@ -82,6 +82,16 @@ const fn require_power_of_two(x: u32) -> u32 {
     return x;
 }
 
+const fn observe_void(flag: bool) -> void {
+    assert(flag);
+    return;
+}
+
+const fn bool_after_void_call() -> bool {
+    observe_void(true);
+    return true;
+}
+
 const fn make_squares() -> [4]usize {
     var a: [4]usize = .{0, 0, 0, 0};
     var i: usize = 0;
@@ -310,6 +320,20 @@ fn reject_comptime_const_fn_expr_statement() -> void {
     comptime {
         // EXPECT_ERROR: E_COMPTIME_TRAP
         require_power_of_two(18);
+    }
+}
+
+fn accept_comptime_void_const_fn_expr_statement() -> void {
+    comptime {
+        observe_void(true);
+        assert(bool_after_void_call());
+    }
+}
+
+fn reject_comptime_void_const_fn_sequence() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(bool_after_void_call() == false);
     }
 }
 

@@ -4762,7 +4762,7 @@ fn comptimeUsizeValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDec
     return switch (eval.foldComptimeExpr(&scope, expr)) {
         .value => |v| switch (v) {
             .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
-            .boolean, .tag, .array, .@"struct" => null,
+            .void, .boolean, .tag, .array, .@"struct" => null,
         },
         else => null,
     };

@@ -257,6 +257,7 @@ pub const ComptimeStructField = struct {
 };
 
 pub const ComptimeValue = union(enum) {
+    void,
     int: i128,
     boolean: bool,
     tag: []const u8,
@@ -269,7 +270,7 @@ pub const ComptimeValue = union(enum) {
 
 pub fn cloneComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) !ComptimeValue {
     return switch (value) {
-        .int, .boolean, .tag => value,
+        .void, .int, .boolean, .tag => value,
         .array => |items| blk: {
             const copy = try allocator.alloc(ComptimeValue, items.len);
             var initialized: usize = 0;
@@ -304,7 +305,7 @@ pub fn cloneComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) !C
 
 pub fn freeComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) void {
     switch (value) {
-        .int, .boolean, .tag => {},
+        .void, .int, .boolean, .tag => {},
         .array => |items| {
             for (items) |item| freeComptimeValue(allocator, item);
             allocator.free(items);
@@ -476,6 +477,7 @@ fn comptimeIdentValue(scope: *const ComptimeScope, name: []const u8) ?ComptimeVa
 
 pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFold {
     return switch (expr.kind) {
+        .void_literal => .{ .value = .void },
         .int_literal => |literal| .{ .value = .{ .int = parseInt(literal) catch return .unknown } },
         .bool_literal => |value| .{ .value = .{ .boolean = value } },
         .enum_literal => |literal| .{ .value = .{ .tag = literal.text } },
@@ -670,14 +672,14 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                 }
             },
             .@"return" => |maybe_expr| {
-                const expr = maybe_expr orelse return .unknown;
+                const expr = maybe_expr orelse return .{ .returned = .{ .value = .void } };
                 return .{ .returned = foldComptimeExpr(scope, expr) };
             },
             .assert => |expr| {
                 switch (foldComptimeExpr(scope, expr)) {
                     .value => |value| switch (value) {
                         .boolean => |ok| if (!ok) return .trap,
-                        .int, .tag, .array, .@"struct" => return .unknown,
+                        .void, .int, .tag, .array, .@"struct" => return .unknown,
                     },
                     .trap => return .trap,
                     .unknown => return .unknown,
@@ -768,6 +770,10 @@ fn foldComptimeSwitch(scope: *ComptimeScope, sw: ast.Switch) BodyFlow {
 
 fn comptimeValueEql(a: ComptimeValue, b: ComptimeValue) bool {
     return switch (a) {
+        .void => switch (b) {
+            .void => true,
+            else => false,
+        },
         .int => |av| switch (b) {
             .int => |bv| av == bv,
             else => false,
@@ -898,7 +904,7 @@ fn foldComptimeWhile(scope: *ComptimeScope, loop: ast.Loop) BodyFlow {
         const keep_going = switch (foldComptimeExpr(scope, cond)) {
             .value => |v| switch (v) {
                 .boolean => |b| b,
-                .int, .tag, .array, .@"struct" => return .unknown,
+                .void, .int, .tag, .array, .@"struct" => return .unknown,
             },
             .trap => return .trap,
             .unknown => return .unknown,
@@ -950,7 +956,7 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
     return switch (op) {
         .neg => switch (operand) {
             .int => |v| .{ .value = .{ .int = std.math.negate(v) catch return .unknown } },
-            .boolean, .tag, .array, .@"struct" => .unknown,
+            .void, .boolean, .tag, .array, .@"struct" => .unknown,
         },
         .bit_not => switch (operand) {
             // Mask the complement to the operand's declared width. Without a known
@@ -962,11 +968,11 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
                 const masked: u128 = (~@as(u128, @bitCast(v))) & mask;
                 break :blk .{ .value = .{ .int = @intCast(masked) } };
             } else .unknown,
-            .boolean, .tag, .array, .@"struct" => .unknown,
+            .void, .boolean, .tag, .array, .@"struct" => .unknown,
         },
         .logical_not => switch (operand) {
             .boolean => |v| .{ .value = .{ .boolean = !v } },
-            .int, .tag, .array, .@"struct" => .unknown,
+            .void, .int, .tag, .array, .@"struct" => .unknown,
         },
     };
 }
@@ -983,14 +989,14 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
                     if (op == .logical_and and !b) return .{ .value = .{ .boolean = false } };
                     if (op == .logical_or and b) return .{ .value = .{ .boolean = true } };
                 },
-                .int, .tag, .array, .@"struct" => return .unknown,
+                .void, .int, .tag, .array, .@"struct" => return .unknown,
             },
             .unknown => return .unknown,
         }
         return switch (foldComptimeExpr(scope, right_expr)) {
             .value => |v| switch (v) {
                 .boolean => |b| .{ .value = .{ .boolean = b } },
-                .int, .tag, .array, .@"struct" => .unknown,
+                .void, .int, .tag, .array, .@"struct" => .unknown,
             },
             .trap => .trap,
             .unknown => .unknown,
@@ -1014,23 +1020,27 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         const equal = switch (left) {
             .int => |l| switch (right) {
                 .int => |r| l == r,
-                .boolean, .tag, .array, .@"struct" => return .unknown,
+                .void, .boolean, .tag, .array, .@"struct" => return .unknown,
             },
             .boolean => |l| switch (right) {
                 .boolean => |r| l == r,
-                .int, .tag, .array, .@"struct" => return .unknown,
+                .void, .int, .tag, .array, .@"struct" => return .unknown,
+            },
+            .void => switch (right) {
+                .void => true,
+                .int, .boolean, .tag, .array, .@"struct" => return .unknown,
             },
             .tag => |l| switch (right) {
                 .tag => |r| std.mem.eql(u8, l, r),
-                .int, .boolean, .array, .@"struct" => return .unknown,
+                .void, .int, .boolean, .array, .@"struct" => return .unknown,
             },
             .array => switch (right) {
                 .array => comptimeValueEql(left, right),
-                .int, .boolean, .tag, .@"struct" => return .unknown,
+                .void, .int, .boolean, .tag, .@"struct" => return .unknown,
             },
             .@"struct" => switch (right) {
                 .@"struct" => comptimeValueEql(left, right),
-                .int, .boolean, .tag, .array => return .unknown,
+                .void, .int, .boolean, .tag, .array => return .unknown,
             },
         };
         return .{ .value = .{ .boolean = if (op == .eq) equal else !equal } };
@@ -1038,11 +1048,11 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
 
     const l = switch (left) {
         .int => |v| v,
-        .boolean, .tag, .array, .@"struct" => return .unknown,
+        .void, .boolean, .tag, .array, .@"struct" => return .unknown,
     };
     const r = switch (right) {
         .int => |v| v,
-        .boolean, .tag, .array, .@"struct" => return .unknown,
+        .void, .boolean, .tag, .array, .@"struct" => return .unknown,
     };
 
     return switch (op) {

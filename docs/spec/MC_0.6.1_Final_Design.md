@@ -2032,7 +2032,7 @@ const fn align_up(x: usize, a: usize) -> usize {
 Allowed:
 
 ```txt
-integer/bool/enum compile-time values
+integer/bool/unit/enum compile-time values
 array/struct compile-time values
 loops with compiler fuel limit
 type parameters
