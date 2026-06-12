@@ -53,6 +53,14 @@ cp "$PKG/demo.o" "$WORK/demo.o"
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>
 extern uint32_t demo_main(uint32_t);
+void mc_trap_Assert(void) { __builtin_trap(); }
+void mc_trap_Bounds(void) { __builtin_trap(); }
+void mc_trap_DivideByZero(void) { __builtin_trap(); }
+void mc_trap_IntegerOverflow(void) { __builtin_trap(); }
+void mc_trap_InvalidRepresentation(void) { __builtin_trap(); }
+void mc_trap_InvalidShift(void) { __builtin_trap(); }
+void mc_trap_NullUnwrap(void) { __builtin_trap(); }
+void mc_trap_Unreachable(void) { __builtin_trap(); }
 // demo_main(x) = clamp_u32(scale(x) + cube(x), 0, 1000) = clamp(10*x + x*x*x, 0, 1000).
 int main(void) {
     if (demo_main(5) != 175) return 1;    // 50 + 125

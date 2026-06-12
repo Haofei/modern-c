@@ -3,7 +3,7 @@
 #
 # Reads a declarative `mcpkg.txt` manifest and builds the package by lowering its
 # entry module — whose `import`s pull in package-local modules and dependencies
-# — to a linkable object via the mcc-cc driver. This is the foundational
+# — to a linkable object via the selected compile-to-object driver. This is the foundational
 # build/packaging layer; a dependency registry and release publishing build on
 # top of it.
 #
@@ -21,6 +21,7 @@
 set -euo pipefail
 
 MCC="${MCC:-zig-out/bin/mcc}"
+MCC_PKG_CC="${MCC_PKG_CC:-}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 
 cmd="${1:-}"
@@ -118,7 +119,8 @@ case "$cmd" in
         resolve_deps >/dev/null
         ENTRY="$MANIFEST_DIR/$PKG_ENTRY"
         OUT="$MANIFEST_DIR/$PKG_OUTPUT"
-        MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$ENTRY" -o "$OUT" >/dev/null
+        DRIVER="${MCC_PKG_CC:-$HERE/tools/toolchain/mcc-cc.sh}"
+        MCC="$MCC" "$DRIVER" "$ENTRY" -o "$OUT" >/dev/null
         echo "mcc-pkg: built ${PKG_NAME:-package} -> $OUT"
         ;;
     *)

@@ -212,6 +212,15 @@ pub fn build(b: *std.Build) void {
     const pkg_test_step = b.step("pkg-test", "Build a package from its manifest with mcc-pkg, link, and run it");
     pkg_test_step.dependOn(&pkg_test_cmd.step);
 
+    const llvm_pkg_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/llvm-pkg-test.sh",
+        "zig-out/bin/mcc",
+    });
+    llvm_pkg_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_pkg_test_step = b.step("llvm-pkg-test", "Build a package from its manifest through LLVM, link, and run it");
+    llvm_pkg_test_step.dependOn(&llvm_pkg_test_cmd.step);
+
     const move_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/move-test.sh",
@@ -1296,6 +1305,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_runtime_test_cmd.step);
     m0_step.dependOn(&llvm_std_test_cmd.step);
     m0_step.dependOn(&llvm_toolchain_test_cmd.step);
+    m0_step.dependOn(&llvm_pkg_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

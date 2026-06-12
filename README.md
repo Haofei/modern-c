@@ -149,7 +149,8 @@ loops.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles textual IR
 to linkable object files through `llc`, and
 `zig build llvm-obj-test` validates representative scalar, statement-workflow,
-and aggregate objects.
+and aggregate objects. `zig build llvm-pkg-test` builds the manifest-driven demo
+package through the LLVM driver, links it, and runs it.
 
 Prototype or incomplete:
 
@@ -195,8 +196,9 @@ Deferred:
   including a linear `move` handle ABI roundtrip, imported generic `std/stack`,
   `std/sync` guard, fn-pointer runtime checks, import/std merge,
   monomorphization and generic-struct runtime checks, reflection object
-  lowering, and multi-object `std/{core,bits,math,ascii,fmt,addr}` runtime
-  checks. Remaining work is additional runtime/toolchain coverage, deeper
+  lowering, manifest package builds, and multi-object
+  `std/{core,bits,math,ascii,fmt,addr}` runtime checks. Remaining work is
+  additional runtime/toolchain coverage, deeper
   optimizer proof work, and fuller native debug mapping.
 
 ## Requirements
@@ -292,7 +294,8 @@ guard, and fn-pointer modules through LLVM. `zig build llvm-toolchain-test`
 links and runs import/std-merge, monomorphization, and generic-struct modules
 through LLVM, and verifies reflection modules with `check` plus LLVM object
 lowering. `zig build llvm-std-test` links and runs LLVM-built std module objects
-against a C driver.
+against a C driver. `zig build llvm-pkg-test` builds the package-manifest demo
+through LLVM, links the resulting object, and runs it.
 
 ## Conformance Snapshot
 
