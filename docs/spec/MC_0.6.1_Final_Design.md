@@ -4137,8 +4137,9 @@ in-scope valid spec fixture to a non-empty LLVM object file with `llc`, and the
 `zig build llvm-c-obj-sweep` gate compiles the current C-emission fixture set
 to non-empty LLVM object files with `llc`.
 The `zig build llvm-opt-sweep` gate applies the hidden-assumption policy to
-emitted IR, then runs LLVM `verify` and `default<O2>` pipeline checks over the
-valid spec corpus and all current `tests/c_emit` fixtures.
+emitted IR, runs LLVM `verify` and `default<O2>` pipeline checks over the valid
+spec corpus and all current `tests/c_emit` fixtures, then lowers each optimized
+O2 result to a non-empty object file with `llc`.
 The `zig build llvm-cc-test`, `zig build llvm-move-test`, and
 `zig build llvm-runtime-test` gates link and run LLVM-produced objects against C
 drivers, including a linear `move` handle roundtrip through the LLVM ABI,
@@ -4167,8 +4168,7 @@ verifier conditions, and the broad LLVM sweep gates plus optimizer sweep
 enforce that policy for
 `nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef` and hidden
 fast-math flags, except the explicit `reduce.sum_fast` floating-reduction
-reassociation opt-in. Production optimizer proof work and fuller native debug
-mapping remain future work.
+reassociation opt-in. Fuller native debug mapping remains future work.
 
 LLVM lowering examples:
 

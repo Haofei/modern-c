@@ -216,15 +216,16 @@ Deferred:
   stdin/stdout round trip, and LLVM link/run coverage for every current
   data-driven host-driver manifest row. LLVM object debug info is smoke-tested
   for DWARF file/function/source line mappings, and the broad emitted-IR corpus
-  is accepted by LLVM verifier and `default<O2>` pipelines. Remaining work is
-  production optimizer proof work and fuller native debug mapping.
+  is accepted by LLVM verifier and `default<O2>` pipelines, then lowered from
+  optimized O2 IR to non-empty object files. Remaining work is fuller native
+  debug mapping.
 
 ## Requirements
 
 - Zig `0.16.0`
 - `clang` for `zig build c-test`
 - `llvm-as` for `zig build llvm-test`
-- `opt` for `zig build llvm-opt-sweep`
+- `opt` and `llc` for `zig build llvm-opt-sweep`
 - `llc` for LLVM object-output gates such as `zig build llvm-obj-test`,
   `zig build llvm-spec-obj-sweep`, and `zig build llvm-c-obj-sweep`
 
@@ -307,8 +308,9 @@ sweep gates also reject hidden optimizer assumption tokens
 (`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef` and
 hidden fast-math flags, with `reassoc` allowed only for explicit
 `reduce.sum_fast` floating reductions). `zig build llvm-opt-sweep` applies that
-policy to emitted IR, then runs LLVM `verify` and `default<O2>` pipeline checks
-over the valid spec corpus and all current `tests/c_emit` fixtures.
+policy to emitted IR, runs LLVM `verify` and `default<O2>` pipeline checks over
+the valid spec corpus and all current `tests/c_emit` fixtures, then lowers each
+optimized O2 result to a non-empty object file with `llc`.
 `tools/toolchain/mcc-llvm-cc.sh` compiles an MC module through `emit-llvm` and
 `llc -filetype=obj`; `zig build llvm-obj-test` checks representative LLVM object
 output, `zig build llvm-debug-test` verifies selected DWARF source mappings in

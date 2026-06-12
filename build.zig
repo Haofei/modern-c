@@ -119,7 +119,7 @@ pub fn build(b: *std.Build) void {
         "tests/c_emit/*.mc",
     });
     llvm_opt_sweep_cmd.step.dependOn(b.getInstallStep());
-    const llvm_opt_sweep_step = b.step("llvm-opt-sweep", "Run LLVM verifier and O2 optimizer checks over broad emitted IR");
+    const llvm_opt_sweep_step = b.step("llvm-opt-sweep", "Run LLVM verifier, O2 optimizer, and optimized object checks over broad emitted IR");
     llvm_opt_sweep_step.dependOn(&llvm_opt_sweep_cmd.step);
 
     const llvm_c_obj_sweep_cmd = b.addSystemCommand(&.{

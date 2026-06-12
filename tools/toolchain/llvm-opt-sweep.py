@@ -2,7 +2,8 @@
 """LLVM optimizer/verifier sweep over the broad backend corpus.
 
 This gate keeps the backend policy check on emitted IR, then asks LLVM's
-verifier and default O2 pipeline to accept every module. Optimized IR may contain
+verifier and default O2 pipeline to accept every module, and finally proves the
+optimized O2 result still lowers to an object file. Optimized IR may contain
 facts inferred by LLVM itself, so hidden-assumption token scanning is applied to
 the backend's emitted IR, not the optimizer's rewritten IR.
 
@@ -84,13 +85,41 @@ def forbidden_assumption(ir, source):
     return None
 
 
-def run_opt(ir, passes):
+def run_opt(ir, passes, *, emit=False):
+    args = ["opt", f"-passes={passes}"]
+    if emit:
+        args.extend(["-S", "-o", "-"])
+    else:
+        args.append("-disable-output")
     return subprocess.run(
-        ["opt", "-disable-output", f"-passes={passes}"],
+        args,
         input=ir,
         capture_output=True,
         text=True,
     )
+
+
+def run_llc_object(ir):
+    with tempfile.NamedTemporaryFile("w", suffix=".ll", delete=False) as tmp:
+        tmp.write(ir)
+        ll_path = tmp.name
+    obj_path = f"{ll_path}.o"
+    try:
+        lowered = subprocess.run(
+            ["llc", "-filetype=obj", ll_path, "-o", obj_path],
+            capture_output=True,
+            text=True,
+        )
+        if lowered.returncode != 0:
+            return lowered
+        if not os.path.exists(obj_path) or os.path.getsize(obj_path) == 0:
+            lowered.returncode = 1
+            lowered.stderr = "llc produced an empty object"
+        return lowered
+    finally:
+        os.unlink(ll_path)
+        if os.path.exists(obj_path):
+            os.unlink(obj_path)
 
 
 def check_module(mcc, label, source_path, source, extra_check=False):
@@ -119,9 +148,13 @@ def check_module(mcc, label, source_path, source, extra_check=False):
     if verify.returncode != 0:
         return ("OPT-VERIFY", first_error(verify.stderr))
 
-    o2 = run_opt(emit.stdout, "default<O2>")
+    o2 = run_opt(emit.stdout, "default<O2>", emit=True)
     if o2.returncode != 0:
         return ("OPT-O2", first_error(o2.stderr))
+
+    lowered = run_llc_object(o2.stdout)
+    if lowered.returncode != 0:
+        return ("LLC-O2", first_error(lowered.stderr))
 
     return None
 
@@ -133,6 +166,9 @@ def main():
 
     if subprocess.run(["sh", "-c", "command -v opt >/dev/null 2>&1"]).returncode != 0:
         print("SKIP: llvm-opt-sweep (opt not found)")
+        return 0
+    if subprocess.run(["sh", "-c", "command -v llc >/dev/null 2>&1"]).returncode != 0:
+        print("SKIP: llvm-opt-sweep (llc not found)")
         return 0
 
     failures = []
@@ -164,7 +200,7 @@ def main():
             print(f"  [{kind}] {name}: {message}")
         return 1
 
-    print("PASS: emitted LLVM modules pass hidden-assumption, verifier, and O2 pipeline checks")
+    print("PASS: emitted LLVM modules pass hidden-assumption, verifier, O2 pipeline, and optimized object checks")
     return 0
 
 
