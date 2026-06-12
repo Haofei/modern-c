@@ -4033,7 +4033,10 @@ opaque inline asm, unsafe-block raw stores, and raw-many pointer `.offset(...)`.
 LLVM MMIO lowering covers `MmioPtr<T>` as a pointer ABI, `Reg`/`RegBits`
 storage-width access, explicit `@offset(...)` register addressing, volatile
 typed register reads/writes, `.acquire`/`.release` fences, and irq-context MMIO
-fixtures. Packed-bits lowering covers representation ABI, static/dynamic
+fixtures. DMA/IRQ marker lowering covers `DmaAddr`/`DmaBuf<T, mode>` as opaque
+address-width values, `cache.clean`/`cache.invalidate` fences,
+`dma_addr()`/`as_slice()` bridges, and `IrqOff` as a witness ABI value.
+Packed-bits lowering covers representation ABI, static/dynamic
 literals, mask tests, and read-modify-write field updates. Overlay-union
 lowering uses byte storage with typed scalar field writes, byte-array reads, and
 field reflection. Tagged-union lowering covers aligned tag-plus-payload ABI,
@@ -4085,7 +4088,7 @@ object-output coverage in `zig build llvm-obj-test`.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
 Full aggregate ABI breadth, richer iterable forms, broader slice/pattern
-workflows, full `?` propagation, and fuller debug mapping remain future work.
+workflows, and fuller debug mapping remain future work.
 
 LLVM lowering examples:
 

@@ -287,6 +287,9 @@ LLVM MMIO coverage includes `MmioPtr<T>` ABI lowering, `Reg`/`RegBits`
 storage-width lowering, explicit `@offset(...)` register addressing, volatile
 typed register reads/writes, `.acquire`/`.release` fences, and irq-context MMIO
 fixtures.
+LLVM DMA/IRQ marker coverage includes `DmaAddr`/`DmaBuf<T, mode>` as opaque
+address-width values, `cache.clean`/`cache.invalidate` fences,
+`dma_addr()`/`as_slice()` bridges, and the `IrqOff` witness ABI.
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function

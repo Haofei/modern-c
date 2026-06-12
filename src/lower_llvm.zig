@@ -1232,6 +1232,18 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}\n", .{ try self.llvmType(info.storage_ty), value, ptr });
             return true;
         }
+        if (self.dmaCacheCallInfo(call)) |info| {
+            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            _ = try self.emitExpr(call.args[0], info.dma_ty);
+            if (std.mem.eql(u8, info.op, "clean")) {
+                try self.out.appendSlice(self.allocator, "  fence release\n");
+            } else if (std.mem.eql(u8, info.op, "invalidate")) {
+                try self.out.appendSlice(self.allocator, "  fence acquire\n");
+            } else {
+                return error.UnsupportedLlvmEmission;
+            }
+            return true;
+        }
         if (isCpuPauseCall(call.callee.*)) {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             try self.out.print(self.allocator, "  call void asm sideeffect \"pause\", \"~{{memory}}\"(){s}\n", .{try self.debugCallSuffix()});
@@ -2200,6 +2212,22 @@ const LlvmEmitter = struct {
         if (isPhysCall(call.callee.*)) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
+        }
+        if (self.dmaBufCallInfo(call)) |info| {
+            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
+            const base = try self.emitExpr(info.base, info.dma_ty);
+            if (std.mem.eql(u8, info.op, "dma_addr")) return base;
+            if (std.mem.eql(u8, info.op, "as_slice")) {
+                const ptr = try self.nextTemp();
+                const with_ptr = try self.nextTemp();
+                const result = try self.nextTemp();
+                const slice_ty = try self.sliceTypeFor(info.payload_ty, .mut, call.callee.*.span);
+                try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, base });
+                try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr {s}, 0\n", .{ with_ptr, try self.llvmType(slice_ty), ptr });
+                try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i64 1, 1\n", .{ result, try self.llvmType(slice_ty), with_ptr });
+                return result;
+            }
+            return error.UnsupportedLlvmEmission;
         }
         if (isAtomicInitCall(call.callee.*)) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
@@ -3276,6 +3304,8 @@ const LlvmEmitter = struct {
                 "i64"
             else if (std.mem.eql(u8, name.text, "c_void"))
                 "i8"
+            else if (std.mem.eql(u8, name.text, "IrqOff"))
+                "i8"
             else if (std.mem.eql(u8, name.text, "bool"))
                 "i1"
             else if (std.mem.eql(u8, name.text, "f32"))
@@ -3313,6 +3343,8 @@ const LlvmEmitter = struct {
                 try self.llvmType(node.args[0])
             else if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1)
                 "ptr"
+            else if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2)
+                "i64"
             else if (isPayloadDomainGenericName(node.base.text) and node.args.len == 1)
                 try self.llvmType(node.args[0])
             else if (isOpaqueAddressGenericName(node.base.text) and node.args.len == 1)
@@ -3574,6 +3606,12 @@ const LlvmEmitter = struct {
             .array => |node| .{ .span = span, .kind = .{ .slice = .{ .mutability = .mut, .child = node.child } } },
             else => null,
         };
+    }
+
+    fn sliceTypeFor(self: *LlvmEmitter, child_ty: ast.TypeExpr, mutability: ast.Mutability, span: ast.Span) !ast.TypeExpr {
+        const child = try self.scratch.allocator().create(ast.TypeExpr);
+        child.* = child_ty;
+        return .{ .span = span, .kind = .{ .slice = .{ .mutability = mutability, .child = child } } };
     }
 
     fn constU8SliceType(self: *LlvmEmitter, span: ast.Span) !ast.TypeExpr {
@@ -4016,6 +4054,11 @@ const LlvmEmitter = struct {
             if (std.mem.eql(u8, info.op, "assume_init")) return info.payload_ty;
             if (std.mem.eql(u8, info.op, "write")) return simpleType(call.callee.*.span, "void");
         }
+        if (self.dmaCacheCallInfo(call) != null) return simpleType(call.callee.*.span, "void");
+        if (self.dmaBufCallInfo(call)) |info| {
+            if (std.mem.eql(u8, info.op, "dma_addr")) return simpleType(call.callee.*.span, "DmaAddr");
+            if (std.mem.eql(u8, info.op, "as_slice")) return self.sliceTypeFor(info.payload_ty, .mut, call.callee.*.span) catch null;
+        }
         if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
         if (isBindCallByNode(call)) return self.bindClosureType(call);
         if (self.closureCalleeType(call.callee.*)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
@@ -4226,6 +4269,50 @@ const LlvmEmitter = struct {
         const base_ty = self.exprType(member.base.*) orelse return null;
         const payload_ty = self.maybeUninitPayloadType(base_ty) orelse return null;
         return .{ .base = member.base.*, .op = member.name.text, .payload_ty = payload_ty };
+    }
+
+    fn dmaCacheCallInfo(self: *LlvmEmitter, call: anytype) ?DmaCacheCallInfo {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!isIdentNamed(member.base.*, "cache")) return null;
+        if (!std.mem.eql(u8, member.name.text, "clean") and !std.mem.eql(u8, member.name.text, "invalidate")) return null;
+        if (call.args.len != 1) return null;
+        const dma_ty = self.exprType(call.args[0]) orelse return null;
+        _ = self.dmaBufInfo(dma_ty) orelse return null;
+        return .{ .op = member.name.text, .dma_ty = dma_ty };
+    }
+
+    fn dmaBufCallInfo(self: *LlvmEmitter, call: anytype) ?DmaBufCallInfo {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "dma_addr") and !std.mem.eql(u8, member.name.text, "as_slice")) return null;
+        const dma_ty = self.exprType(member.base.*) orelse return null;
+        const info = self.dmaBufInfo(dma_ty) orelse return null;
+        return .{ .base = member.base.*, .op = member.name.text, .dma_ty = dma_ty, .payload_ty = info.payload_ty };
+    }
+
+    fn dmaBufInfo(self: *LlvmEmitter, ty: ast.TypeExpr) ?DmaBufInfo {
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .generic => |node| {
+                if (!std.mem.eql(u8, node.base.text, "DmaBuf") or node.args.len != 2) return null;
+                return .{ .payload_ty = node.args[0] };
+            },
+            .qualified => |node| self.dmaBufInfo(node.child.*),
+            else => null,
+        };
     }
 
     fn atomicBaseAddress(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
@@ -4653,6 +4740,22 @@ const MmioAccessInfo = struct {
 const MmioFencePlacement = enum {
     before_store,
     after_load,
+};
+
+const DmaBufInfo = struct {
+    payload_ty: ast.TypeExpr,
+};
+
+const DmaBufCallInfo = struct {
+    base: ast.Expr,
+    op: []const u8,
+    dma_ty: ast.TypeExpr,
+    payload_ty: ast.TypeExpr,
+};
+
+const DmaCacheCallInfo = struct {
+    op: []const u8,
+    dma_ty: ast.TypeExpr,
 };
 
 const ArgValue = struct {
