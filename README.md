@@ -53,7 +53,7 @@ line is the C backend plus verifier/tooling contract in
 that runs after the same semantic and MIR verification gates as C emission. The
 valid declarations in the current spec fixture suite emit assemblable LLVM IR
 through `zig build llvm-sweep`, and that gate also rejects hidden optimizer
-assumption tokens (`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`) across
+assumption tokens (`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef`) across
 the swept IR. `zig build llvm-c-sweep` applies the same IR checks to all 109
 current `tests/c_emit` fixtures; `zig build llvm-spec-obj-sweep` compiles the
 same valid spec-corpus surface to LLVM object files with `llc`, and `zig build
@@ -266,7 +266,7 @@ expression spans, plus global initializer spans, with typed-AST and MIR labels.
 IR for the covered backend surface. `zig build llvm-test`, `zig build
 llvm-sweep`, and `zig build llvm-c-sweep` check LLVM IR with `llvm-as`; the two
 sweep gates also reject hidden optimizer assumption tokens
-(`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`).
+(`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef`).
 `tools/toolchain/mcc-llvm-cc.sh` compiles an MC module through `emit-llvm` and
 `llc -filetype=obj`; `zig build llvm-obj-test` checks representative LLVM object
 output, `zig build llvm-spec-obj-sweep` compiles every in-scope valid spec

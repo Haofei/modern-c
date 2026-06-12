@@ -4109,7 +4109,7 @@ coverage in `zig build llvm-obj-test`.
 The `zig build llvm-sweep` gate strips expected-reject declarations from the
 spec corpus and verifies every in-scope valid spec fixture emits assemblable
 LLVM IR. It also rejects hidden optimizer-assumption tokens
-(`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`) in the swept IR. The
+(`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef`) in the swept IR. The
 current sweep has no allowlisted LLVM backend gaps. The
 `zig build llvm-c-sweep` gate additionally verifies every current
 `tests/c_emit` fixture emits assemblable LLVM IR under the same
@@ -4127,7 +4127,7 @@ The `zig build llvm-std-test` gate additionally links LLVM-built
 exported function checks.
 It intentionally emits no hidden optimizer-assumption tokens outside proven
 verifier conditions, and the broad LLVM sweep gates enforce that policy for
-`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`. Additional
+`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef`. Additional
 runtime/toolchain coverage, deeper optimizer proof work, and fuller native
 debug mapping remain
 future work.

@@ -2052,7 +2052,7 @@ const LlvmEmitter = struct {
         const result0 = try self.nextTemp();
         const slice_len = try self.nextTemp();
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = insertvalue {s} undef, ptr {s}, 0\n", .{ result0, try self.llvmType(slice_ty), base_ptr });
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr {s}, 0\n", .{ result0, try self.llvmType(slice_ty), base_ptr });
         try self.out.print(self.allocator, "  {s} = sub i64 {s}, {s}\n", .{ slice_len, end, start });
         try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i64 {s}, 1\n", .{ result, try self.llvmType(slice_ty), result0, slice_len });
         return result;
@@ -2639,7 +2639,7 @@ const LlvmEmitter = struct {
         const slice_llvm = try self.llvmType(slice_ty);
         const with_ptr = try self.nextTemp();
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = insertvalue {s} undef, ptr {s}, 0\n", .{ with_ptr, slice_llvm, ptr });
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr {s}, 0\n", .{ with_ptr, slice_llvm, ptr });
         try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i64 {d}, 1\n", .{ result, slice_llvm, with_ptr, size });
         return result;
     }
@@ -2932,7 +2932,7 @@ const LlvmEmitter = struct {
         const tag_value = if (is_ok) "true" else "false";
 
         const tagged = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = insertvalue {s} undef, i1 {s}, 0\n", .{ tagged, result_ty, tag_value });
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_ty, tag_value });
 
         const ok_value = if (is_ok)
             try self.emitResultPayloadExpr(call.args[0], info.ok_ty)
@@ -2954,7 +2954,7 @@ const LlvmEmitter = struct {
         const info = self.resultInfo(result_ty) orelse return error.UnsupportedLlvmEmission;
         const result_llvm = try self.llvmType(result_ty);
         const tagged = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = insertvalue {s} undef, i1 {s}, 0\n", .{ tagged, result_llvm, is_ok });
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_llvm, is_ok });
         const with_ok = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ with_ok, result_llvm, tagged, try self.resultPayloadLlvmType(info.ok_ty), ok_value });
         const with_err = try self.nextTemp();
