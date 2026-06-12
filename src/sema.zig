@@ -4752,6 +4752,10 @@ fn parseCharLiteral(literal: []const u8) ?u128 {
 fn parseArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
     return switch (expr.kind) {
         .int_literal => |literal| parseUsizeLiteral(literal),
+        .char_literal => |literal| if (parseCharLiteral(literal)) |value|
+            if (value <= std.math.maxInt(usize)) @intCast(value) else null
+        else
+            null,
         .grouped => |inner| parseArrayLen(inner.*, funcs, globals),
         .binary => |node| {
             const left = parseArrayLen(node.left.*, funcs, globals) orelse return null;

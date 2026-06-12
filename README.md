@@ -57,7 +57,7 @@ Prototype or incomplete:
 - Production-grade typed MIR/CFG and verifier hardening beyond the current
   checked C-emission path.
 - Package registry, releases/publishing, and production toolchain support.
-- Full comptime execution (§22): the evaluator handles scalar/unit/enum-tag
+- Full comptime execution (§22): the evaluator handles scalar/char/unit/enum-tag
   folding, scalar and aggregate const globals and typed static global
   initializers, reflected named const globals, const-fn calls with
   loops/for/switch/asserts, top-level comptime block assignments/loops/switches,

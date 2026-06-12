@@ -11,6 +11,7 @@
 const MAX: usize = 4;
 const DOUBLE: usize = MAX * 2;
 const WORD_SIZE: usize = sizeof(u32);
+const TAB_WIDTH: usize = '\t';
 
 struct ConstPair {
     left: u32,
@@ -29,6 +30,10 @@ union ConstToken {
 
 const fn align_up(x: usize, a: usize) -> usize {
     return (x + a - 1) & ~(a - 1);
+}
+
+const fn newline_width() -> usize {
+    return '\n';
 }
 
 const fn make_const_numbers() -> [4]u32 {
@@ -59,6 +64,18 @@ fn accept_const_fn_const_global_array() -> [ALIGNED]u8 {
     return .{1, 2, 3, 4};
 }
 
+fn accept_char_const_global_array() -> [TAB_WIDTH]u8 {
+    return .{1, 2, 3, 4, 5, 6, 7, 8, 9};
+}
+
+fn accept_char_const_fn_array() -> [newline_width()]u8 {
+    return .{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+}
+
+fn accept_direct_char_array() -> ['\t']u8 {
+    return .{1, 2, 3, 4, 5, 6, 7, 8, 9};
+}
+
 fn accept_reflected_const_global_array() -> [WORD_SIZE]u8 {
     return .{1, 2, 3, 4};
 }
@@ -87,6 +104,9 @@ fn accept_comptime_const_global_assert() -> void {
     comptime {
         assert(MAX == 4);
         assert(DOUBLE == 8);
+        assert(TAB_WIDTH == 9);
+        assert(newline_width() == 10);
+        assert('A' == 65);
         assert(ALIGNED == 4);
         assert(WORD_SIZE == 4);
         assert(PACKET_SIZE == 4);

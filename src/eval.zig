@@ -405,6 +405,23 @@ pub fn comptimeTypeBitWidth(ty: ast.TypeExpr) ?u16 {
     };
 }
 
+pub fn parseCharLiteral(literal: []const u8) ?u128 {
+    if (literal.len < 3 or literal[0] != '\'' or literal[literal.len - 1] != '\'') return null;
+    const body = literal[1 .. literal.len - 1];
+    if (body.len == 1) return body[0];
+    if (body.len != 2 or body[0] != '\\') return null;
+    return switch (body[1]) {
+        '\\' => '\\',
+        '\'' => '\'',
+        '"' => '"',
+        '0' => 0,
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
+        else => null,
+    };
+}
+
 // Apply an `as T` integer conversion to a comptime value, mirroring C cast
 // semantics: mask to T's width, sign-extending for signed targets. Returns null
 // for non-integer values or non-integer (width-unknown) targets, so those casts
@@ -612,6 +629,7 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
     return switch (expr.kind) {
         .void_literal => .{ .value = .void },
         .int_literal => |literal| .{ .value = .{ .int = parseInt(literal) catch return .unknown } },
+        .char_literal => |literal| .{ .value = .{ .int = @intCast(parseCharLiteral(literal) orelse return .unknown) } },
         .bool_literal => |value| .{ .value = .{ .boolean = value } },
         .enum_literal => |literal| .{ .value = .{ .tag = literal.text } },
         .ident => |ident| if (comptimeIdentValue(scope, ident.text)) |value| .{ .value = value } else .unknown,

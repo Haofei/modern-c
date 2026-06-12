@@ -10911,6 +10911,10 @@ fn parseUsizeLiteral(raw: []const u8) ?usize {
 fn constArrayLenValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
     return switch (expr.kind) {
         .int_literal => |literal| parseUsizeLiteral(literal),
+        .char_literal => |literal| if (eval.parseCharLiteral(literal)) |value|
+            if (value <= std.math.maxInt(usize)) @intCast(value) else null
+        else
+            null,
         .grouped => |inner| constArrayLenValue(inner.*, funcs, globals, reflect, reflect_ctx),
         // Section 22 comptime↔type: a `const fn` result or named `const` global
         // can drive a fixed-array length, so emit the same folded constant.

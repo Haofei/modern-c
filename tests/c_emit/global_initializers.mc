@@ -40,6 +40,12 @@ const fn static_type_alignment(comptime T: type) -> usize {
     return alignof(T);
 }
 
+const CHAR_TAB_WIDTH: usize = '\t';
+
+const fn static_newline_width() -> usize {
+    return '\n';
+}
+
 extern fn consume_default_slice(xs: []const u8) -> usize;
 
 global shared_cell: u32 = 0;
@@ -102,6 +108,18 @@ fn read_folded_type_size() -> usize {
 
 fn read_folded_type_alignment() -> usize {
     return folded_type_alignment;
+}
+
+fn char_const_global_array() -> [CHAR_TAB_WIDTH]u8 {
+    return .{1, 2, 3, 4, 5, 6, 7, 8, 9};
+}
+
+fn char_const_fn_array() -> [static_newline_width()]u8 {
+    return .{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+}
+
+fn direct_char_array() -> ['\t']u8 {
+    return .{1, 2, 3, 4, 5, 6, 7, 8, 9};
 }
 
 fn read_letter() -> u8 {

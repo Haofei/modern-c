@@ -3926,6 +3926,10 @@ fn mirStaticArrayLen(expr: ast.Expr) ?usize {
 fn parseArrayLen(expr: ast.Expr, const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue)) ?usize {
     return switch (expr.kind) {
         .int_literal => |literal| parseUsizeLiteral(literal),
+        .char_literal => |literal| if (eval.parseCharLiteral(literal)) |value|
+            if (value <= std.math.maxInt(usize)) @intCast(value) else null
+        else
+            null,
         .grouped => |inner| parseArrayLen(inner.*, const_fns, const_globals),
         // Section 22 comptime↔type: a `const fn` result or named `const` global
         // can drive a fixed-array length; fold it the way the front-end did.
