@@ -314,10 +314,11 @@ the valid spec corpus and all current `tests/c_emit` fixtures, then lowers each
 optimized O2 result to a non-empty object file with `llc`.
 `tools/toolchain/mcc-llvm-cc.sh` compiles an MC module through `emit-llvm` and
 `llc -filetype=obj`; `zig build llvm-obj-test` checks representative LLVM object
-output, `zig build llvm-debug-test` verifies selected DWARF source mappings in
-LLVM objects, `zig build llvm-spec-obj-sweep` compiles every in-scope valid
-spec fixture to an object file, and `zig build llvm-c-obj-sweep` compiles every
-current `tests/c_emit` fixture to an object file. `zig build llvm-cc-test` links
+output, `zig build llvm-debug-test` verifies DWARF source mappings across calls,
+control flow, atomics/fences, and nullable/Result narrowing in LLVM objects,
+`zig build llvm-spec-obj-sweep` compiles every in-scope valid spec fixture to an
+object file, and `zig build llvm-c-obj-sweep` compiles every current
+`tests/c_emit` fixture to an object file. `zig build llvm-cc-test` links
 and runs a simple exported function through the LLVM driver, and `zig build
 llvm-move-test` links and runs a linear `move` handle ABI roundtrip. `zig build
 llvm-runtime-test` links and runs imported generic `std/stack`, `std/sync`
