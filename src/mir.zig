@@ -3599,7 +3599,7 @@ fn comptimeUsizeArrayLen(expr: ast.Expr, const_fns: *const std.StringHashMap(ast
     return switch (eval.foldComptimeExpr(&scope, expr)) {
         .value => |v| switch (v) {
             .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
-            .boolean, .array, .@"struct" => null,
+            .boolean, .tag, .array, .@"struct" => null,
         },
         else => null,
     };

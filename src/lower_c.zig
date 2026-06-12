@@ -830,7 +830,7 @@ const CEmitter = struct {
                     try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
                 .boolean => |b| if (b) "1" else "0",
                 // Aggregate const globals are not lowered to a C scalar here.
-                .array, .@"struct" => null,
+                .tag, .array, .@"struct" => null,
             },
             else => null,
         };
@@ -10465,7 +10465,7 @@ fn comptimeUsizeArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.Fn
     return switch (eval.foldComptimeExpr(&scope, expr)) {
         .value => |v| switch (v) {
             .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
-            .boolean, .array, .@"struct" => null,
+            .boolean, .tag, .array, .@"struct" => null,
         },
         else => null,
     };

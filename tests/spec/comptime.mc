@@ -11,6 +11,14 @@ extern mmio struct Uart16550 {
 
 extern fn runtime_value() -> u32;
 
+enum BootState : u8 {
+    cold = 0,
+    warm = 1,
+    ready = 2,
+}
+
+const DEFAULT_BOOT_STATE: BootState = .ready;
+
 const fn is_power_of_two(x: u32) -> bool {
     return x != 0 && (x & (x - 1)) == 0;
 }
@@ -52,6 +60,14 @@ const fn classify(x: u32) -> u32 {
         0 => { return 100; },
         1 => { return 200; },
         _ => { return 999; },
+    }
+}
+
+const fn boot_rank(state: BootState) -> u32 {
+    switch state {
+        .cold => { return 10; },
+        .warm => { return 20; },
+        .ready => { return 30; },
     }
 }
 
@@ -333,6 +349,24 @@ fn reject_comptime_switch_fold() -> void {
     comptime {
         // EXPECT_ERROR: E_COMPTIME_TRAP
         assert(classify(1) == 100);
+    }
+}
+
+// Comptime enum tags: literals, const globals, equality, and switch dispatch.
+fn accept_comptime_enum_tag_fold() -> void {
+    comptime {
+        let state: BootState = .ready;
+        assert(state == .ready);
+        assert(boot_rank(.cold) == 10);
+        assert(boot_rank(state) == 30);
+        assert(boot_rank(DEFAULT_BOOT_STATE) == 30);
+    }
+}
+
+fn reject_comptime_enum_tag_fold() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(boot_rank(.warm) == 30);
     }
 }
 
