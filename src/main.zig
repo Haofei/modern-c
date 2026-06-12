@@ -27,6 +27,7 @@ const usage =
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
     \\  mcc emit-c <file.mc> [--profile=kernel|hosted]
+    \\  mcc emit-map <file.mc> [--profile=kernel|hosted]
     \\
 ;
 
@@ -48,7 +49,7 @@ pub fn main(init: std.process.Init) !void {
     _ = args.next();
     const command = args.next() orelse return failUsage();
     const path = args.next() orelse return failUsage();
-    // Optional flags follow the path. Only `emit-c` accepts one today:
+    // Optional flags follow the path. `emit-c` and `emit-map` accept:
     // `--profile=kernel` (default) or `--profile=hosted`.
     var profile: lower_c.Profile = .kernel;
     var saw_flag = false;
@@ -67,8 +68,9 @@ pub fn main(init: std.process.Init) !void {
             return failUsage();
         }
     }
-    // Only `emit-c` consumes flags; any flag with another command is an error.
-    if (saw_flag and !std.mem.eql(u8, command, "emit-c")) return failUsage();
+    // Only C artifact commands consume flags; any flag with another command is an error.
+    const is_c_artifact_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map");
+    if (saw_flag and !is_c_artifact_command) return failUsage();
 
     const root_source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(root_source);
@@ -101,6 +103,8 @@ pub fn main(init: std.process.Init) !void {
         try runLowerC(allocator, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
         try runEmitC(allocator, path, source, profile);
+    } else if (std.mem.eql(u8, command, "emit-map")) {
+        try runEmitMap(allocator, path, source, profile);
     } else {
         return failUsage();
     }
@@ -396,6 +400,41 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try lower_c.appendCProfileWithSourcePath(allocator, module, &output, profile, path);
+    writeStdout(output.items);
+}
+
+fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitCFailed;
+    }
+
+    var checker = sema.Checker.init(&diag);
+    checker.checkModule(module);
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitCFailed;
+    }
+
+    try mir.verify(allocator, module, &diag);
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitCFailed;
+    }
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    try lower_c.appendCSourceMap(allocator, module, &output, profile, path, null);
     writeStdout(output.items);
 }
 

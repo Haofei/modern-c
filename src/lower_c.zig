@@ -334,6 +334,160 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
     try emitter.emitModule(module);
 }
 
+pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: []const u8, generated_c_path: ?[]const u8) anyerror!void {
+    var generated_c: std.ArrayList(u8) = .empty;
+    defer generated_c.deinit(allocator);
+    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path);
+
+    var line_index = try buildGeneratedLineIndex(allocator, generated_c.items);
+    defer line_index.deinit(allocator);
+
+    try out.appendSlice(allocator, "# mcmap v0\n");
+    try out.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol\n");
+    var mapper = SourceMapEmitter{
+        .allocator = allocator,
+        .out = out,
+        .source_path = source_path,
+        .generated_c_path = generated_c_path orelse "-",
+        .line_index = line_index.items,
+    };
+    try mapper.emitModule(module);
+}
+
+const GeneratedLine = struct {
+    source_line: usize,
+    generated_line: usize,
+};
+
+fn buildGeneratedLineIndex(allocator: std.mem.Allocator, generated_c: []const u8) !std.ArrayList(GeneratedLine) {
+    var lines: std.ArrayList(GeneratedLine) = .empty;
+    errdefer lines.deinit(allocator);
+
+    var it = std.mem.splitScalar(u8, generated_c, '\n');
+    var generated_line: usize = 1;
+    while (it.next()) |raw_line| : (generated_line += 1) {
+        const line = std.mem.trim(u8, raw_line, "\r");
+        const source_line = cLineDirectiveSourceLine(line) orelse continue;
+        try lines.append(allocator, .{
+            .source_line = source_line,
+            .generated_line = generated_line + 1,
+        });
+    }
+    return lines;
+}
+
+fn cLineDirectiveSourceLine(line: []const u8) ?usize {
+    if (!std.mem.startsWith(u8, line, "#line ")) return null;
+    var index: usize = "#line ".len;
+    var value: usize = 0;
+    var saw_digit = false;
+    while (index < line.len) : (index += 1) {
+        const ch = line[index];
+        if (ch < '0' or ch > '9') break;
+        saw_digit = true;
+        value = value * 10 + (ch - '0');
+    }
+    return if (saw_digit) value else null;
+}
+
+const SourceMapEmitter = struct {
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    source_path: []const u8,
+    generated_c_path: []const u8,
+    line_index: []const GeneratedLine,
+    line_cursor: usize = 0,
+    current_function: ?[]const u8 = null,
+
+    fn emitModule(self: *SourceMapEmitter, module: ast.Module) !void {
+        for (module.decls) |decl| {
+            switch (decl.kind) {
+                .global_decl => |global| try self.emitEntry("global", global.name.text, global.name.span, global.name.text, "mir:global:init"),
+                .fn_decl => |fn_decl| if (fn_decl.body) |body| {
+                    try self.emitEntry("function", fn_decl.name.text, fn_decl.name.span, fn_decl.name.text, "mir:function:entry");
+                    const previous_function = self.current_function;
+                    self.current_function = fn_decl.name.text;
+                    try self.emitBlock(body);
+                    self.current_function = previous_function;
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn emitBlock(self: *SourceMapEmitter, block: ast.Block) !void {
+        for (block.items) |stmt| {
+            if (std.meta.activeTag(stmt.kind) == .@"defer") continue;
+            try self.emitStmt(stmt);
+            switch (stmt.kind) {
+                .block, .unsafe_block => |nested| try self.emitBlock(nested),
+                .comptime_block => {},
+                .contract_block => |contract| try self.emitBlock(contract.block),
+                .loop => |loop| try self.emitBlock(loop.body),
+                .if_let => |node| {
+                    try self.emitBlock(node.then_block);
+                    if (node.else_block) |else_block| try self.emitBlock(else_block);
+                },
+                .@"switch" => |node| {
+                    for (node.arms) |arm| switch (arm.body) {
+                        .block => |arm_block| try self.emitBlock(arm_block),
+                        .expr => |expr| try self.emitEntry("switch_expr", self.current_function orelse "-", expr.span, self.current_function orelse "-", "mir:switch:expr"),
+                    };
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn emitStmt(self: *SourceMapEmitter, stmt: ast.Stmt) !void {
+        const symbol = self.current_function orelse "-";
+        const mir_block = try std.fmt.allocPrint(self.allocator, "mir:{s}:span:{d}:{d}", .{ symbol, stmt.span.line, stmt.span.column });
+        defer self.allocator.free(mir_block);
+        try self.emitEntry(@tagName(stmt.kind), symbol, stmt.span, symbol, mir_block);
+    }
+
+    fn emitEntry(self: *SourceMapEmitter, kind: []const u8, symbol: []const u8, span: ast.Span, object_symbol: []const u8, mir_block: []const u8) !void {
+        try self.out.appendSlice(self.allocator, "entry kind=");
+        try appendMapString(self.out, self.allocator, kind);
+        try self.out.appendSlice(self.allocator, " symbol=");
+        try appendMapString(self.out, self.allocator, symbol);
+        try self.out.print(self.allocator, " source_line={d} source_column={d} source_len={d} generated_c_line={d} source_path=", .{
+            span.line,
+            span.column,
+            span.len,
+            self.generatedLineForSource(span.line),
+        });
+        try appendMapString(self.out, self.allocator, self.source_path);
+        try self.out.appendSlice(self.allocator, " generated_c_path=");
+        try appendMapString(self.out, self.allocator, self.generated_c_path);
+        try self.out.appendSlice(self.allocator, " typed_ast_node=");
+        try self.out.appendSlice(self.allocator, "\"ast:");
+        try appendMapStringContents(self.out, self.allocator, kind);
+        try self.out.appendSlice(self.allocator, ":");
+        try appendMapStringContents(self.out, self.allocator, symbol);
+        try self.out.print(self.allocator, "@{d}:{d}\" mir_block=", .{ span.line, span.column });
+        try appendMapString(self.out, self.allocator, mir_block);
+        try self.out.appendSlice(self.allocator, " object_symbol=");
+        try appendMapString(self.out, self.allocator, object_symbol);
+        try self.out.appendSlice(self.allocator, "\n");
+    }
+
+    fn generatedLineForSource(self: *SourceMapEmitter, source_line: usize) usize {
+        var index = self.line_cursor;
+        while (index < self.line_index.len) : (index += 1) {
+            const entry = self.line_index[index];
+            if (entry.source_line == source_line) {
+                self.line_cursor = index + 1;
+                return entry.generated_line;
+            }
+        }
+        for (self.line_index) |entry| {
+            if (entry.source_line == source_line) return entry.generated_line;
+        }
+        return 0;
+    }
+};
+
 fn hasTestDiagnosticCode(reporter: diagnostics.Reporter, code: []const u8) bool {
     for (reporter.diagnostics.items) |diag| {
         if (std.mem.startsWith(u8, diag.message, code) and diag.message.len > code.len and diag.message[code.len] == ':') return true;
@@ -11103,6 +11257,27 @@ fn appendCPreprocessorString(out: *std.ArrayList(u8), allocator: std.mem.Allocat
     };
 }
 
+fn appendMapString(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
+    try out.append(allocator, '"');
+    try appendMapStringContents(out, allocator, text);
+    try out.append(allocator, '"');
+}
+
+fn appendMapStringContents(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
+    for (text) |ch| switch (ch) {
+        '\\' => try out.appendSlice(allocator, "\\\\"),
+        '"' => try out.appendSlice(allocator, "\\\""),
+        '\n' => try out.appendSlice(allocator, "\\n"),
+        '\r' => try out.appendSlice(allocator, "\\r"),
+        '\t' => try out.appendSlice(allocator, "\\t"),
+        else => if (ch < 0x20 or ch == 0x7f) {
+            try out.print(allocator, "\\x{X:0>2}", .{ch});
+        } else {
+            try out.append(allocator, ch);
+        },
+    };
+}
+
 test "emits inspection markers for lowering-sensitive spec behavior" {
     const source =
         \\global shared_counter: u32 = 0;
@@ -11238,6 +11413,43 @@ test "path-aware C emission writes source line hints" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 3 \"debug\\\"map\\\\case.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 4 \"debug\\\"map\\\\case.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 5 \"debug\\\"map\\\\case.mc\"") != null);
+}
+
+test "C source map records source spans and generated C lines" {
+    const source =
+        \\global count: u32 = 1;
+        \\
+        \\fn add_one(x: u32) -> u32 {
+        \\    let y: u32 = x + 1;
+        \\    return y;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "debug_map.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCSourceMap(std.testing.allocator, module, &output, .kernel, "debug_map.mc", "debug_map.c");
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "# mcmap v0\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"global\" symbol=\"count\" source_line=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"function\" symbol=\"add_one\" source_line=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"let_decl\" symbol=\"add_one\" source_line=4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"return\" symbol=\"add_one\" source_line=5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "generated_c_line=0") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "source_path=\"debug_map.mc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "generated_c_path=\"debug_map.c\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:function:add_one@3:4\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mir_block=\"mir:add_one:span:4:") != null);
 }
 
 test "C emission materializes closure callees once" {

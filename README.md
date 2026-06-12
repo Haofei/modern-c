@@ -61,8 +61,9 @@ Prototype or incomplete:
   and the address-class rules are implemented; a complete coherence simulation
   is not.
 - Hardware MMIO execution tests.
-- Debug mapping: `emit-c` writes `#line` source hints for generated C; richer
-  `.mcmap`/DWARF-quality mapping is still pending.
+- Debug mapping: `emit-c` writes `#line` source hints for generated C, and
+  `emit-map` emits an initial `.mcmap`-style source/generated-C map. DWARF-quality
+  native debug mapping is still pending.
 
 Deferred:
 
@@ -98,6 +99,7 @@ zig build run -- verify-hir tests/spec/no_lang_trap.mc
 zig build run -- facts tests/spec/no_lang_trap.mc
 zig build run -- lower-c tests/spec/mmio_ordering.mc
 zig build run -- emit-c tests/c_emit/smoke.mc
+zig build run -- emit-map tests/c_emit/smoke.mc
 ```
 
 Available commands:
@@ -113,6 +115,7 @@ Available commands:
 - `lower-ir <file.mc>`
 - `lower-c <file.mc>`
 - `emit-c <file.mc> [--profile=kernel|hosted]`
+- `emit-map <file.mc> [--profile=kernel|hosted]`
 
 `emit-c` defaults to the **kernel / freestanding** profile (no ambient I/O).
 `--profile=hosted` selects an opt-in **hosted** profile that links a host C
@@ -122,6 +125,8 @@ target for programs that use `std/hosted_io` (explicit, fallible byte I/O —
 `Result`) and `std/mathf` (the libm float intrinsics `sqrt`/`sin`/`cos`/
 `exp2`/`log2`/`exp`/`log`/`tanh` for `f32`/`f64`). See `demo/hosted/` for the
 stdin-to-stdout float round-trip; run it with `zig build hosted-test`.
+`emit-map` uses the same verified C-emission path and writes a line-oriented
+`.mcmap` artifact to stdout.
 
 ## Conformance Snapshot
 
