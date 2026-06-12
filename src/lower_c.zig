@@ -1124,7 +1124,12 @@ const CEmitter = struct {
             .array => true,
             .slice => true,
             .closure_type => true,
-            .generic => |node| std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2,
+            .generic => |node| {
+                if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1) {
+                    return self.zeroInitializerRequiresBraces(node.args[0]);
+                }
+                return std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2;
+            },
             .name => |name| self.structs.contains(name.text) or
                 self.overlay_unions.contains(name.text) or
                 self.tagged_unions.contains(name.text),
@@ -1576,6 +1581,9 @@ const CEmitter = struct {
                     return self.appendType(out, node.args[0], style);
                 }
                 if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1) {
+                    return self.appendType(out, node.args[0], style);
+                }
+                if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1) {
                     return self.appendType(out, node.args[0], style);
                 }
                 if ((std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits")) and node.args.len >= 1) {
@@ -2315,6 +2323,7 @@ const CEmitter = struct {
             },
             .expr => |expr| {
                 if (try self.emitNeverExprStmt(expr, locals)) return;
+                if (try self.emitMaybeUninitWriteStmt(expr, locals)) return;
                 if (try self.emitMmioWriteStmt(expr, locals)) return;
                 if (try self.emitRawStoreStmt(expr, locals)) return;
                 if (try self.emitCpuPauseStmt(expr)) return;
@@ -3681,6 +3690,31 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitMaybeUninitWriteStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            .grouped => |inner| return try self.emitMaybeUninitWriteStmt(inner.*, locals),
+            else => return false,
+        };
+        if (call.type_args.len != 0 or call.args.len != 1) return false;
+        const member = switch (call.callee.*.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!std.mem.eql(u8, member.name.text, "write")) return false;
+        const payload_ty = self.maybeUninitPayloadType(member.base.*, locals) orelse return false;
+        try self.writeIndent();
+        try self.emitExpr(member.base.*, locals);
+        try self.out.appendSlice(self.allocator, " = ");
+        try self.emitExprWithTarget(call.args[0], locals, payload_ty);
+        try self.out.appendSlice(self.allocator, ";\n");
+        return true;
+    }
+
     fn emitCpuPauseStmt(self: *CEmitter, expr: ast.Expr) !bool {
         const call = switch (expr.kind) {
             .call => |node| node,
@@ -4111,6 +4145,7 @@ const CEmitter = struct {
                 if (try self.emitBitcastCall(node, locals)) return;
                 if (try self.emitDmaCall(node, locals)) return;
                 if (try self.emitMmioMapCall(node, locals)) return;
+                if (try self.emitMaybeUninitAssumeInitCall(node, locals)) return;
                 if (try self.emitResidueCall(node, locals)) return;
                 if (try self.emitDomainOpCall(node, locals)) return;
                 if (try self.emitReflectionCall(node)) return;
@@ -4765,6 +4800,22 @@ const CEmitter = struct {
         return true;
     }
 
+    fn emitMaybeUninitAssumeInitCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        if (call.type_args.len != 0 or call.args.len != 0) return false;
+        const member = switch (call.callee.*.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (!std.mem.eql(u8, member.name.text, "assume_init")) return false;
+        _ = self.maybeUninitPayloadType(member.base.*, locals) orelse return false;
+        try self.emitExpr(member.base.*, locals);
+        return true;
+    }
+
     fn emitAssumeNoaliasCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         if (!isAssumeNoaliasCall(call)) return false;
         if (call.args.len != 2) return error.UnsupportedCEmission;
@@ -4808,6 +4859,11 @@ const CEmitter = struct {
             }
         }
         return null;
+    }
+
+    fn maybeUninitPayloadType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return null;
+        return genericChildType(self.resolveAliasType(ty), "MaybeUninit");
     }
 
     // Emit the address-of operand for an atomic op: the raw storage, so a global

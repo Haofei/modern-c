@@ -1847,6 +1847,7 @@ pub const Checker = struct {
                 }
                 self.checkMmioRegisterAccessCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkAtomicCall(expr.span, node.callee.*, node.args, ctx);
+                self.checkMaybeUninitCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkDmaCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkMmioMapCall(expr.span, node, ctx);
                 self.checkTypeStaticCall(expr.span, node.callee.*, node.args, ctx);
@@ -2289,6 +2290,48 @@ pub const Checker = struct {
             return;
         }
         self.errorCode(member.name.span, "E_ATOMIC_OPERATION", "unknown atomic operation");
+    }
+
+    fn checkMaybeUninitCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
+        const member = switch (callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| {
+                self.checkMaybeUninitCall(span, inner.*, args, ctx);
+                return;
+            },
+            else => return,
+        };
+        if (!std.mem.eql(u8, member.name.text, "write") and !std.mem.eql(u8, member.name.text, "assume_init")) return;
+        const payload_ty = maybeUninitPayloadTypeForValue(member.base.*, ctx) orelse return;
+        if (std.mem.eql(u8, member.name.text, "write")) {
+            if (args.len != 1) {
+                self.errorCode(span, "E_CALL_ARG_COUNT", "MaybeUninit.write expects exactly one payload argument");
+                return;
+            }
+            const source = self.checkExpr(args[0], ctx);
+            self.checkCallArgument(payload_ty, args[0], source, ctx);
+            self.checkMaybeUninitWritePayload(payload_ty, args[0], ctx);
+            return;
+        }
+        if (args.len != 0) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "MaybeUninit.assume_init does not take arguments");
+        }
+    }
+
+    fn checkMaybeUninitWritePayload(self: *Checker, payload_ty: ast.TypeExpr, arg: ast.Expr, ctx: Context) void {
+        const payload_name = structNameOfType(payload_ty, ctx) orelse return;
+        if (arg.kind == .struct_literal) return;
+        const arg_ty = exprDeclaredType(arg, ctx) orelse {
+            self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "MaybeUninit.write payload must match the storage type");
+            return;
+        };
+        const arg_name = structNameOfType(arg_ty, ctx) orelse {
+            self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "MaybeUninit.write payload must match the storage type");
+            return;
+        };
+        if (!std.mem.eql(u8, payload_name, arg_name)) {
+            self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "MaybeUninit.write payload must match the storage type");
+        }
     }
 
     fn checkAtomicLoadOrdering(self: *Checker, expr: ast.Expr) void {
@@ -4255,6 +4298,22 @@ fn atomicPayloadTypeForValue(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return atomicPayloadType(resolveAliasType(ty, ctx));
 }
 
+fn maybeUninitPayloadType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .generic => |node| {
+            if (!std.mem.eql(u8, node.base.text, "MaybeUninit") or node.args.len != 1) return null;
+            return node.args[0];
+        },
+        .qualified => |node| maybeUninitPayloadType(node.child.*),
+        else => null,
+    };
+}
+
+fn maybeUninitPayloadTypeForValue(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
+    return maybeUninitPayloadType(resolveAliasType(ty, ctx));
+}
+
 const DmaBufInfo = struct {
     payload: ast.TypeExpr,
     mode: []const u8,
@@ -4430,6 +4489,16 @@ fn atomicCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
         return atomicPayloadTypeForValue(member.base.*, ctx);
     }
     return null;
+}
+
+fn maybeUninitCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return maybeUninitCallReturnType(inner.*, ctx),
+        else => return null,
+    };
+    if (!std.mem.eql(u8, member.name.text, "assume_init")) return null;
+    return maybeUninitPayloadTypeForValue(member.base.*, ctx);
 }
 
 fn atomicCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
@@ -5329,7 +5398,7 @@ fn globalClass(name: []const u8, ctx: Context) ?TypeClass {
 
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse atomicCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .try_expr => |inner| tryPayloadType(inner.operand.*, ctx),
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),

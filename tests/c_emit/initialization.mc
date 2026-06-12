@@ -3,6 +3,10 @@ fn initialized_local() -> u32 {
     return x;
 }
 
+extern struct Node {
+    value: u32,
+}
+
 fn explicit_uninit_scalar(value: u32) -> u32 {
     var x: u32 = uninit;
     x = value;
@@ -29,4 +33,11 @@ fn read_materialized_uninit_scalar() -> u32 {
 fn read_materialized_uninit_byte() -> u8 {
     var buf: [4]u8 = uninit;
     return buf[0];
+}
+
+fn maybe_uninit_write_assume_init() -> u32 {
+    var x: MaybeUninit<Node> = uninit;
+    x.write(.{ .value = 7 });
+    let node: Node = x.assume_init();
+    return node.value;
 }
