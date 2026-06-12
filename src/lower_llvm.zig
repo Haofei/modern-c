@@ -116,6 +116,42 @@ const LlvmEmitter = struct {
     }
 
     fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
+        switch (ty.kind) {
+            .array => |array| {
+                const items = switch (expr.kind) {
+                    .array_literal => |items| items,
+                    .grouped => |inner| return self.emitGlobalInitializer(inner.*, ty),
+                    else => return error.UnsupportedLlvmEmission,
+                };
+                const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+                if (items.len != len) return error.UnsupportedLlvmEmission;
+                var text: std.ArrayList(u8) = .empty;
+                try text.append(self.scratch.allocator(), '[');
+                for (items, 0..) |item, i| {
+                    if (i != 0) try text.appendSlice(self.scratch.allocator(), ", ");
+                    try text.print(self.scratch.allocator(), "{s} {s}", .{ try self.llvmType(array.child.*), try self.emitGlobalInitializer(item, array.child.*) });
+                }
+                try text.append(self.scratch.allocator(), ']');
+                return text.toOwnedSlice(self.scratch.allocator());
+            },
+            .name => if (self.structDeclForType(ty)) |struct_decl| {
+                const fields = switch (expr.kind) {
+                    .struct_literal => |fields| fields,
+                    .grouped => |inner| return self.emitGlobalInitializer(inner.*, ty),
+                    else => return error.UnsupportedLlvmEmission,
+                };
+                var text: std.ArrayList(u8) = .empty;
+                try text.appendSlice(self.scratch.allocator(), "{ ");
+                for (struct_decl.fields, 0..) |field, i| {
+                    if (i != 0) try text.appendSlice(self.scratch.allocator(), ", ");
+                    const value_expr = structLiteralField(fields, field.name.text) orelse return error.UnsupportedLlvmEmission;
+                    try text.print(self.scratch.allocator(), "{s} {s}", .{ try self.llvmType(field.ty), try self.emitGlobalInitializer(value_expr, field.ty) });
+                }
+                try text.appendSlice(self.scratch.allocator(), " }");
+                return text.toOwnedSlice(self.scratch.allocator());
+            },
+            else => {},
+        }
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .bool_literal => |value| if (value) "1" else "0",
@@ -132,10 +168,17 @@ const LlvmEmitter = struct {
     }
 
     fn zeroInitializer(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
-        _ = self;
         return switch (ty.kind) {
-            .name => |name| if (std.mem.eql(u8, name.text, "bool")) "0" else if (integerBits(ty) != null) "0" else error.UnsupportedLlvmEmission,
+            .name => |name| if (std.mem.eql(u8, name.text, "bool"))
+                "0"
+            else if (integerBits(ty) != null)
+                "0"
+            else if (self.structDeclForType(ty) != null)
+                "zeroinitializer"
+            else
+                error.UnsupportedLlvmEmission,
             .pointer, .raw_many_pointer => "null",
+            .array => "zeroinitializer",
             else => error.UnsupportedLlvmEmission,
         };
     }

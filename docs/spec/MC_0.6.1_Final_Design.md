@@ -3977,10 +3977,11 @@ pointer load/store operations. Scalar/pointer globals are supported for literal
 and address-of-global initializers. Local fixed arrays of scalar elements support
 array literals, checked indexing, element assignment, and element-address taking.
 Plain local structs with scalar fields support literals, field load/store, and
-field-address taking. It intentionally emits no
+field-address taking. Scalar fixed-array and scalar-struct globals support static
+literals plus element/field access. It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
-Broader CFG/phi lowering, aggregates, aggregate globals, slices, aggregate ABI,
-object emission, and debug-info lowering remain future work.
+Broader CFG/phi lowering, slices, aggregate ABI, object emission, and debug-info
+lowering remain future work.
 
 LLVM lowering examples:
 
