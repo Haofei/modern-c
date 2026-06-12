@@ -10,9 +10,14 @@ struct Cell {
     value: u32,
 }
 
+struct MatrixBox {
+    rows: [2][2]u32,
+}
+
 global default_values: [2]u32 = .{1, 2};
 global default_cells: [2]Cell = .{ .{ .value = 1 }, .{ .value = 2 } };
 global default_matrix: [2][2]u32 = .{ .{ 1, 2 }, .{ 3, 4 } };
+global default_box: MatrixBox = .{ .rows = .{ .{ 1, 2 }, .{ 3, 4 } } };
 
 fn accept_local_array_literal() -> u32 {
     let xs: [2]u32 = .{1, 2};
@@ -50,6 +55,27 @@ fn accept_nested_array_literal() -> u32 {
 
 fn accept_global_nested_array_element() -> u32 {
     return default_matrix[1][0];
+}
+
+fn accept_global_nested_array_row() -> [2]u32 {
+    return default_matrix[1];
+}
+
+fn accept_global_nested_array_row_local() -> u32 {
+    let row: [2]u32 = default_matrix[0];
+    return row[1];
+}
+
+fn accept_assign_global_nested_array_row() -> void {
+    default_matrix[1] = .{9, 10};
+}
+
+fn accept_struct_field_nested_array_element() -> u32 {
+    return default_box.rows[1][0];
+}
+
+fn accept_struct_field_nested_array_row() -> [2]u32 {
+    return default_box.rows[1];
 }
 
 fn reject_bool_array_length() -> void {
