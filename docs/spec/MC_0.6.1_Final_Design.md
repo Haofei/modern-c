@@ -4118,15 +4118,18 @@ by LLVM emission. The `zig build llvm-spec-obj-sweep` gate compiles every
 in-scope valid spec fixture to a non-empty LLVM object file with `llc`, and the
 `zig build llvm-c-obj-sweep` gate compiles the current C-emission fixture set
 to non-empty LLVM object files with `llc`.
-The `zig build llvm-cc-test` and `zig build llvm-move-test` gates link and run
-LLVM-produced objects against C drivers, including a linear `move` handle
-roundtrip through the LLVM ABI. The `zig build llvm-std-test` gate additionally
-links LLVM-built `std/{core,bits,math,ascii,fmt,addr}` objects into one host
-executable and runs exported function checks.
+The `zig build llvm-cc-test`, `zig build llvm-move-test`, and
+`zig build llvm-runtime-test` gates link and run LLVM-produced objects against C
+drivers, including a linear `move` handle roundtrip through the LLVM ABI,
+imported generic `std/stack`, `std/sync` guard, and fn-pointer runtime checks.
+The `zig build llvm-std-test` gate additionally links LLVM-built
+`std/{core,bits,math,ascii,fmt,addr}` objects into one host executable and runs
+exported function checks.
 It intentionally emits no hidden optimizer-assumption tokens outside proven
 verifier conditions, and the broad LLVM sweep gates enforce that policy for
-`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`. Broader runtime/toolchain
-coverage, deeper optimizer proof work, and fuller native debug mapping remain
+`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`. Additional
+runtime/toolchain coverage, deeper optimizer proof work, and fuller native
+debug mapping remain
 future work.
 
 LLVM lowering examples:

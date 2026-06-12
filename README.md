@@ -183,9 +183,10 @@ Deferred:
   all current C-emission fixtures emit assemblable LLVM IR under the same
   assumption-token gate, and all current C-emission fixtures compile to LLVM
   object files with `llc`. The LLVM toolchain has link-and-run smoke coverage,
-  including a linear `move` handle ABI roundtrip and multi-object
+  including a linear `move` handle ABI roundtrip, imported generic `std/stack`,
+  `std/sync` guard, fn-pointer runtime checks, and multi-object
   `std/{core,bits,math,ascii,fmt,addr}` runtime checks. Remaining work is
-  broader runtime/toolchain coverage, deeper optimizer proof work, and fuller
+  additional runtime/toolchain coverage, deeper optimizer proof work, and fuller
   native debug mapping.
 
 ## Requirements
@@ -216,6 +217,7 @@ zig build llvm-c-sweep
 zig build llvm-c-obj-sweep
 zig build llvm-cc-test
 zig build llvm-move-test
+zig build llvm-runtime-test
 zig build llvm-std-test
 ```
 
@@ -272,7 +274,9 @@ fixture to an object file, and `zig build llvm-c-obj-sweep` compiles every
 current `tests/c_emit` fixture to an object file. `zig build llvm-cc-test` links
 and runs a simple exported function through the LLVM driver, and `zig build
 llvm-move-test` links and runs a linear `move` handle ABI roundtrip. `zig build
-llvm-std-test` links and runs LLVM-built std module objects against a C driver.
+llvm-runtime-test` links and runs imported generic `std/stack`, `std/sync`
+guard, and fn-pointer modules through LLVM. `zig build llvm-std-test` links and
+runs LLVM-built std module objects against a C driver.
 
 ## Conformance Snapshot
 

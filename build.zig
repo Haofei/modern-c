@@ -221,6 +221,15 @@ pub fn build(b: *std.Build) void {
     const llvm_move_test_step = b.step("llvm-move-test", "Build, link, and run a linear `move` handle through the LLVM toolchain");
     llvm_move_test_step.dependOn(&llvm_move_test_cmd.step);
 
+    const llvm_runtime_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/llvm-runtime-test.sh",
+        "zig-out/bin/mcc",
+    });
+    llvm_runtime_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_runtime_test_step = b.step("llvm-runtime-test", "Build, link, and run imported generic, sync, and fn-pointer modules through the LLVM toolchain");
+    llvm_runtime_test_step.dependOn(&llvm_runtime_test_cmd.step);
+
     const sync_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/sync-test.sh",
