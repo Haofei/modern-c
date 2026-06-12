@@ -10,6 +10,8 @@ extern struct Packet {
     value: u32,
 }
 
+extern fn make_array() -> [4]u32;
+
 fn accept_return_parameter_pointer(p: *mut u32) -> *mut u32 {
     return p;
 }
@@ -113,6 +115,11 @@ fn reject_return_local_array_element_address(i: usize) -> *mut u32 {
 fn reject_return_array_param_element_address(xs: [4]u32, i: usize) -> *mut u32 {
     // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
     return &xs[i];
+}
+
+fn reject_return_call_array_element_address(i: usize) -> *mut u32 {
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return &make_array()[i];
 }
 
 fn reject_return_local_pointer_to_var() -> *mut u32 {

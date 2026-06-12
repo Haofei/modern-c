@@ -1,6 +1,8 @@
 global shared_counter: u32 = 0;
 
 extern fn next_index() -> usize;
+extern fn make_mut_slice() -> []mut u32;
+extern fn make_array() -> [4]u32;
 extern fn consume_mut_pointer(p: *mut u32) -> void;
 
 fn return_parameter_pointer(p: *mut u32) -> *mut u32 {
@@ -41,6 +43,18 @@ fn assign_slice_element_address_next(xs: []mut u32, fallback: *mut u32) -> *mut 
 
 fn pass_slice_element_address_next(xs: []mut u32) -> void {
     consume_mut_pointer(&xs[next_index()]);
+}
+
+fn return_call_slice_element_address() -> *mut u32 {
+    return &make_mut_slice()[next_index()];
+}
+
+fn pass_call_slice_element_address() -> void {
+    consume_mut_pointer(&make_mut_slice()[next_index()]);
+}
+
+fn pass_call_array_element_address() -> void {
+    consume_mut_pointer(&make_array()[next_index()]);
 }
 
 fn pass_local_array_element_address_next() -> void {

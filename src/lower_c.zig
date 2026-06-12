@@ -5788,6 +5788,7 @@ const CEmitter = struct {
             },
             else => return null,
         };
+        if (try self.emitDirectCallIndexAddressValueTemp(index, locals, target_ty)) |temp| return temp;
         if (!exprContainsCall(index.index.*)) return null;
         if (localIndexElementType(index.base.*, locals) == null) return null;
 
@@ -5812,6 +5813,47 @@ const CEmitter = struct {
                 try self.out.print(self.allocator, ".{s}", .{elems_field});
             }
             try self.out.print(self.allocator, "[mc_check_index_usize({s}, {s})];\n", .{ index_temp.name, len });
+            return .{ .name = value_temp, .ty = target_ty };
+        }
+
+        return null;
+    }
+
+    fn emitDirectCallIndexAddressValueTemp(self: *CEmitter, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+        const usize_ty = simpleNameType("usize", index.index.span);
+
+        if (self.sliceReturnTypeForIndexBase(index.base.*)) |slice_ty| {
+            const slice_temp = try self.emitSequencedCallArgTemp(index.base.*, locals, slice_ty);
+            const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+            const value_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = &{s}.ptr[mc_check_index_usize({s}, {s}.len)];\n", .{
+                try self.cTypeFor(target_ty, .typedef_name),
+                value_temp,
+                slice_temp.name,
+                index_temp.name,
+                slice_temp.name,
+            });
+            return .{ .name = value_temp, .ty = target_ty };
+        }
+
+        if (self.arrayReturnTypeForExpr(index.base.*)) |array_ty| {
+            const len = (try self.arrayLenText(array_ty)) orelse return error.UnsupportedCEmission;
+            const array_temp = try self.emitSequencedCallArgTemp(index.base.*, locals, array_ty);
+            const index_temp = try self.emitSequencedCallArgTemp(index.index.*, locals, usize_ty);
+            const value_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s} = &{s}.elems[mc_check_index_usize({s}, {s})];\n", .{
+                try self.cTypeFor(target_ty, .typedef_name),
+                value_temp,
+                array_temp.name,
+                index_temp.name,
+                len,
+            });
             return .{ .name = value_temp, .ty = target_ty };
         }
 
@@ -8098,6 +8140,14 @@ const CEmitter = struct {
         const info = self.functions.get(fn_name) orelse return null;
         const return_ty = info.return_type orelse return null;
         return if (return_ty.kind == .slice) return_ty else null;
+    }
+
+    fn sliceReturnTypeForIndexBase(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .call => |call| self.sliceReturnTypeForCall(call),
+            .grouped => |inner| self.sliceReturnTypeForIndexBase(inner.*),
+            else => null,
+        };
     }
 
     fn sliceElementType(ty: ast.TypeExpr) ?ast.TypeExpr {

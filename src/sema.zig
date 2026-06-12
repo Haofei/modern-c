@@ -5526,6 +5526,7 @@ fn indexedLocalArrayStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span 
             }
             return null;
         },
+        .call => expr.span,
         .grouped => |inner| indexedLocalArrayStorageRoot(inner.*, ctx),
         else => localStorageRoot(expr, ctx),
     };
