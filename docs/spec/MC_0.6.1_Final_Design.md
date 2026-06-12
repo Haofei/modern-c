@@ -4038,7 +4038,11 @@ literals, mask tests, and read-modify-write field updates. Overlay-union
 lowering uses byte storage with typed scalar field writes, byte-array reads, and
 field reflection. Tagged-union lowering covers aligned tag-plus-payload ABI,
 constructors, direct calls/returns, locals, struct fields, and pattern switches
-with payload bindings and wildcard fallback arms. Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
+with payload bindings and wildcard fallback arms. Static global initializer
+lowering covers string pointer arrays, constant address-of globals, and default
+slice/Result/tagged-union zero initializers. Reflection lowering covers
+`sizeof`/`alignof`, `repr_of`, field/bit offsets, MMIO wrapper layouts, and
+`field_type(...)` in monomorphized type-argument position. Precise asm operands remain future work. Alias and enum lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
 globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
 enums, enum switches over direct calls, and void switch expression arms.

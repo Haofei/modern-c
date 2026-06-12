@@ -365,6 +365,15 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
+            .string_literal => |literal| blk: {
+                if (!isStringLiteralTarget(resolved_ty)) break :blk error.UnsupportedLlvmEmission;
+                const global = try self.internStringLiteral(literal);
+                break :blk try std.fmt.allocPrint(
+                    self.scratch.allocator(),
+                    "getelementptr inbounds ([{d} x i8], ptr @{s}, i64 0, i64 0)",
+                    .{ global.len, global.name },
+                );
+            },
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(ty)),
             .unary => |node| blk: {
                 if (node.op != .neg) break :blk error.UnsupportedLlvmEmission;
@@ -399,14 +408,66 @@ const LlvmEmitter = struct {
                 try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
             else
                 error.UnsupportedLlvmEmission,
-            .address_of => |inner| switch (inner.kind) {
-                .ident => |ident| if (self.global_types.contains(ident.text))
-                    try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
-                else
-                    error.UnsupportedLlvmEmission,
-                else => error.UnsupportedLlvmEmission,
-            },
+            .address_of => |inner| try self.globalAddressInitializer(inner.*),
             else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn globalAddressInitializer(self: *LlvmEmitter, expr: ast.Expr) anyerror![]const u8 {
+        return switch (expr.kind) {
+            .ident => |ident| if (self.global_types.contains(ident.text))
+                try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
+            else
+                error.UnsupportedLlvmEmission,
+            .index => |node| try self.globalIndexAddressInitializer(node),
+            .member => |node| try self.globalMemberAddressInitializer(node),
+            .grouped => |inner| try self.globalAddressInitializer(inner.*),
+            else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn globalIndexAddressInitializer(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
+        const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        const resolved_base_ty = self.resolveAliasType(base_ty);
+        const index = self.globalConstIndexValue(node.index.*) orelse return error.UnsupportedLlvmEmission;
+        const base_ptr = try self.globalAddressInitializer(node.base.*);
+        return switch (resolved_base_ty.kind) {
+            .array => try std.fmt.allocPrint(
+                self.scratch.allocator(),
+                "getelementptr inbounds ({s}, ptr {s}, i64 0, i64 {d})",
+                .{ try self.llvmType(resolved_base_ty), base_ptr, index },
+            ),
+            else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn globalMemberAddressInitializer(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
+        const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        const struct_ty = self.memberBaseStructType(base_ty) orelse return error.UnsupportedLlvmEmission;
+        const struct_decl = self.structDeclForType(struct_ty) orelse return error.UnsupportedLlvmEmission;
+        const index = structFieldIndex(struct_decl, node.name.text) orelse return error.UnsupportedLlvmEmission;
+        const base_ptr = try self.globalAddressInitializer(node.base.*);
+        return std.fmt.allocPrint(
+            self.scratch.allocator(),
+            "getelementptr inbounds ({s}, ptr {s}, i64 0, i32 {d})",
+            .{ try self.llvmType(struct_ty), base_ptr, index },
+        );
+    }
+
+    fn globalConstIndexValue(self: *LlvmEmitter, expr: ast.Expr) ?u64 {
+        if (self.foldConstGlobalValue(expr)) |value| {
+            return switch (value) {
+                .int => |n| if (n >= 0 and n <= std.math.maxInt(u64)) @intCast(n) else null,
+                else => null,
+            };
+        }
+        return switch (expr.kind) {
+            .ident => |ident| if (self.global_initializers.get(ident.text)) |initializer|
+                self.globalConstIndexValue(initializer)
+            else
+                null,
+            .grouped => |inner| self.globalConstIndexValue(inner.*),
+            else => null,
         };
     }
 
@@ -493,6 +554,7 @@ const LlvmEmitter = struct {
             else
                 error.UnsupportedLlvmEmission,
             .pointer, .raw_many_pointer, .nullable => "null",
+            .slice => "zeroinitializer",
             .array => "zeroinitializer",
             .generic => |node| if (self.resultInfo(resolved_ty)) |_|
                 "zeroinitializer"
@@ -2940,17 +3002,22 @@ const LlvmEmitter = struct {
     fn emitStringLiteral(self: *LlvmEmitter, literal: []const u8, expected_ty: ast.TypeExpr) ![]const u8 {
         if (!isStringLiteralTarget(self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
 
+        const global = try self.internStringLiteral(literal);
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds [{d} x i8], ptr @{s}, i64 0, i64 0\n", .{ result, global.len, global.name });
+        return result;
+    }
+
+    fn internStringLiteral(self: *LlvmEmitter, literal: []const u8) !StringLiteralGlobal {
         const bytes = try llvmStringLiteralBytes(self.scratch.allocator(), literal);
         const name = try std.fmt.allocPrint(self.scratch.allocator(), ".str.{d}", .{self.string_literals.items.len});
-        try self.string_literals.append(self.allocator, .{
+        const global: StringLiteralGlobal = .{
             .name = name,
             .escaped_bytes = bytes.escaped,
             .len = bytes.len,
-        });
-
-        const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds [{d} x i8], ptr @{s}, i64 0, i64 0\n", .{ result, bytes.len, name });
-        return result;
+        };
+        try self.string_literals.append(self.allocator, global);
+        return global;
     }
 
     fn emitStringLiteralGlobals(self: *LlvmEmitter) !void {
@@ -4011,6 +4078,7 @@ const LlvmEmitter = struct {
         const field_arg_index: usize = if (node.type_args.len == 1) 0 else 1;
         return switch (kind) {
             .size => self.comptimeSizeOf(ty, 0),
+            .repr => self.comptimeReprOf(ty, 0),
             .alignment => self.comptimeAlignOf(ty, 0),
             .field_offset => if (field_arg_index < node.args.len) self.comptimeFieldOffset(ty, reflectionFieldName(node.args[field_arg_index]) orelse return null, 0) else null,
             .bit_offset => if (field_arg_index < node.args.len) self.comptimeBitOffset(ty, reflectionFieldName(node.args[field_arg_index]) orelse return null) else null,
@@ -4037,6 +4105,20 @@ const LlvmEmitter = struct {
         }
         const byte_offset = self.comptimeFieldOffset(ty, field, 0) orelse return null;
         return byte_offset * 8;
+    }
+
+    fn comptimeReprOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .name => |name| {
+                if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeSizeOf(enumReprType(enum_decl), depth + 1);
+                if (self.tagged_unions.get(name.text) != null) return 4;
+                return self.comptimeSizeOf(resolved_ty, depth + 1);
+            },
+            .qualified => |node| self.comptimeReprOf(node.child.*, depth + 1),
+            else => self.comptimeSizeOf(resolved_ty, depth + 1),
+        };
     }
 
     fn comptimeSizeOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
@@ -4074,6 +4156,7 @@ const LlvmEmitter = struct {
                     return alignForward(offset, max_align);
                 }
                 if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
+                if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
                 if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeSizeOf(g.args[0], depth + 1);
@@ -4117,6 +4200,7 @@ const LlvmEmitter = struct {
                     return @max(@max(ok_align, err_align), 1);
                 }
                 if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
+                if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
                 if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
                 if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeAlignOf(g.args[0], depth + 1);
@@ -4906,6 +4990,7 @@ fn llvmComptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
 
 const ReflectionCallKind = enum {
     size,
+    repr,
     alignment,
     field_offset,
     bit_offset,
@@ -4915,6 +5000,7 @@ fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
     return switch (callee.kind) {
         .ident => |ident| {
             if (std.mem.eql(u8, ident.text, "size_of") or std.mem.eql(u8, ident.text, "sizeof")) return .size;
+            if (std.mem.eql(u8, ident.text, "repr_of")) return .repr;
             if (std.mem.eql(u8, ident.text, "alignof")) return .alignment;
             if (std.mem.eql(u8, ident.text, "field_offset")) return .field_offset;
             if (std.mem.eql(u8, ident.text, "bit_offset")) return .bit_offset;

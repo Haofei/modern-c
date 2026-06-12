@@ -295,7 +295,12 @@ LLVM aggregate layout coverage includes dependency-ordered struct/array/slice
 combinations and target-typed integer coercions such as `usize` slice lengths
 returned as narrower integer types after MIR verification.
 LLVM static global initializer coverage includes scalar copies, casted scalar
-copies, function-pointer globals, and copied function-pointer aggregate globals.
+copies, string pointer/raw-many pointer arrays, constant address-of globals,
+default slice/Result/tagged-union zero initializers, function-pointer globals,
+and copied function-pointer aggregate globals.
+LLVM reflection coverage includes `sizeof`/`alignof`, `repr_of`, field and bit
+offsets, `DmaBuf`/MMIO register wrapper layouts, and `field_type(...)` in
+monomorphized type-argument position.
 LLVM domain coverage includes payload ABI lowering for `wrap<T>`/`sat<T>`,
 `serial<T>`/`counter<T>`/`Duration<T>` scalar storage, modular `wrap` arithmetic
 and shifts, unsigned saturating arithmetic, serial
