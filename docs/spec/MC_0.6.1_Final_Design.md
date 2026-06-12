@@ -3971,8 +3971,9 @@ The LLVM backend must use the same MIR as the C backend.
 Current repository status: `emit-llvm` is an initial textual LLVM IR backend
 slice. It runs after the same semantic and MIR verification gates as C emission,
 and currently covers scalar functions, direct calls, checked integer arithmetic,
-terminating bool switch/if control flow, simple scalar locals, direct scalar
-assignment, and simple `while` loops. It intentionally emits no
+checked division/remainder, terminating bool switch/if control flow, simple
+scalar locals, direct scalar assignment, and simple `while` loops. It
+intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
 Broader control-flow joins, aggregates, memory, ABI, object emission, and
 debug-info lowering remain future work.

@@ -240,8 +240,7 @@ const LlvmEmitter = struct {
         const llvm_ty = try self.llvmType(ty);
         return switch (node.op) {
             .add, .sub, .mul => try self.emitCheckedArithmetic(node, ty, llvm_ty),
-            .div => try self.emitPlainBinary("udiv", node, ty, llvm_ty),
-            .mod => try self.emitPlainBinary("urem", node, ty, llvm_ty),
+            .div, .mod => try self.emitCheckedDivRem(node, ty, llvm_ty),
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -289,9 +288,44 @@ const LlvmEmitter = struct {
         return value;
     }
 
+    fn emitCheckedDivRem(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
+        if (integerBits(ty) == null) return error.UnsupportedLlvmEmission;
+        const left = try self.emitExpr(node.left.*, ty);
+        const right = try self.emitExpr(node.right.*, ty);
+        const zero_cmp = try self.nextTemp();
+        const zero_trap = try self.nextLabel("trap_div_zero");
+        const nonzero = try self.nextLabel("div_nonzero");
+        try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, 0\n", .{ zero_cmp, llvm_ty, right });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_DivideByZero()\n  unreachable\n{s}:\n", .{ zero_cmp, zero_trap, nonzero, zero_trap, nonzero });
+
+        if (isSignedInteger(ty)) {
+            const min_literal = signedMinLiteral(ty) orelse return error.UnsupportedLlvmEmission;
+            const min_cmp = try self.nextTemp();
+            const neg_one_cmp = try self.nextTemp();
+            const overflow_cmp = try self.nextTemp();
+            const overflow_trap = try self.nextLabel("trap_div_overflow");
+            const safe = try self.nextLabel("div_safe");
+            try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, {s}\n", .{ min_cmp, llvm_ty, left, min_literal });
+            try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, -1\n", .{ neg_one_cmp, llvm_ty, right });
+            try self.out.print(self.allocator, "  {s} = and i1 {s}, {s}\n", .{ overflow_cmp, min_cmp, neg_one_cmp });
+            try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_IntegerOverflow()\n  unreachable\n{s}:\n", .{ overflow_cmp, overflow_trap, safe, overflow_trap, safe });
+        }
+
+        const op: []const u8 = switch (node.op) {
+            .div => if (isSignedInteger(ty)) "sdiv" else "udiv",
+            .mod => if (isSignedInteger(ty)) "srem" else "urem",
+            else => unreachable,
+        };
+        return try self.emitPlainBinaryValues(op, llvm_ty, left, right);
+    }
+
     fn emitPlainBinary(self: *LlvmEmitter, op: []const u8, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
         const left = try self.emitExpr(node.left.*, ty);
         const right = try self.emitExpr(node.right.*, ty);
+        return try self.emitPlainBinaryValues(op, llvm_ty, left, right);
+    }
+
+    fn emitPlainBinaryValues(self: *LlvmEmitter, op: []const u8, llvm_ty: []const u8, left: []const u8, right: []const u8) ![]const u8 {
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = {s} {s} {s}, {s}\n", .{ result, op, llvm_ty, left, right });
         return result;
@@ -471,6 +505,18 @@ fn isSignedInteger(ty: ast.TypeExpr) bool {
         else => return false,
     };
     return std.mem.startsWith(u8, name, "i") or std.mem.eql(u8, name, "isize");
+}
+
+fn signedMinLiteral(ty: ast.TypeExpr) ?[]const u8 {
+    const name = switch (ty.kind) {
+        .name => |name| name.text,
+        else => return null,
+    };
+    if (std.mem.eql(u8, name, "i8")) return "-128";
+    if (std.mem.eql(u8, name, "i16")) return "-32768";
+    if (std.mem.eql(u8, name, "i32")) return "-2147483648";
+    if (std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "isize")) return "-9223372036854775808";
+    return null;
 }
 
 fn intrinsicBits(name: []const u8) ?u16 {
