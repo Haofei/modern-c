@@ -72,6 +72,7 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(allocator, "declare void @mc_trap_InvalidShift() noreturn\n\n");
     try out.appendSlice(allocator, "declare void @mc_trap_InvalidRepresentation() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_Bounds() noreturn\n\n");
+    try out.appendSlice(allocator, "declare void @mc_trap_Assert() noreturn\n\n");
 }
 
 const LlvmEmitter = struct {
@@ -301,6 +302,7 @@ const LlvmEmitter = struct {
                 .contract_block => |node| {
                     if (try self.emitScopedBlock(node.block, ret_ty)) return true;
                 },
+                .assert => |expr| try self.emitAssert(expr),
                 .@"return" => |maybe_expr| {
                     if (ret_ty.kind == .name and std.mem.eql(u8, ret_ty.kind.name.text, "void")) {
                         try self.out.appendSlice(self.allocator, "  ret void\n");
@@ -377,6 +379,15 @@ const LlvmEmitter = struct {
                 _ = try self.emitExpr(expr, ty);
             },
         }
+    }
+
+    fn emitAssert(self: *LlvmEmitter, expr: ast.Expr) !void {
+        const ty = self.exprType(expr) orelse return error.UnsupportedLlvmEmission;
+        if (!typeNameEql(ty, "bool")) return error.UnsupportedLlvmEmission;
+        const condition = try self.emitExpr(expr, ty);
+        const cont = try self.nextLabel("assert_ok");
+        const trap = try self.nextLabel("trap_assert");
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Assert()\n  unreachable\n{s}:\n", .{ condition, cont, trap, trap, cont });
     }
 
     fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl) !void {
@@ -981,6 +992,7 @@ const LlvmEmitter = struct {
 
     fn emitBinary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {
         if (binaryIsComparison(node.op)) return self.emitComparison(node, ty);
+        if (node.op == .logical_and or node.op == .logical_or) return self.emitLogicalBinary(node, ty);
         const llvm_ty = try self.llvmType(ty);
         return switch (node.op) {
             .add, .sub, .mul => try self.emitCheckedArithmetic(node, ty, llvm_ty),
@@ -991,6 +1003,37 @@ const LlvmEmitter = struct {
             .shl, .shr => try self.emitCheckedShift(node, ty, llvm_ty),
             else => error.UnsupportedLlvmEmission,
         };
+    }
+
+    fn emitLogicalBinary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {
+        if (!typeNameEql(ty, "bool")) return error.UnsupportedLlvmEmission;
+        const left_ty = self.exprType(node.left.*) orelse return error.UnsupportedLlvmEmission;
+        const right_ty = self.exprType(node.right.*) orelse return error.UnsupportedLlvmEmission;
+        if (!typeNameEql(left_ty, "bool") or !typeNameEql(right_ty, "bool")) return error.UnsupportedLlvmEmission;
+
+        const result_ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = alloca i1\n", .{result_ptr});
+
+        const left = try self.emitExpr(node.left.*, left_ty);
+        const rhs_label = try self.nextLabel(if (node.op == .logical_and) "logic_and_rhs" else "logic_or_rhs");
+        const short_label = try self.nextLabel(if (node.op == .logical_and) "logic_and_false" else "logic_or_true");
+        const end_label = try self.nextLabel("logic_end");
+        switch (node.op) {
+            .logical_and => try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ left, rhs_label, short_label }),
+            .logical_or => try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ left, short_label, rhs_label }),
+            else => unreachable,
+        }
+
+        try self.out.print(self.allocator, "{s}:\n", .{rhs_label});
+        const right = try self.emitExpr(node.right.*, right_ty);
+        try self.out.print(self.allocator, "  store i1 {s}, ptr {s}\n", .{ right, result_ptr });
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ end_label, short_label });
+        const short_value = if (node.op == .logical_and) "0" else "1";
+        try self.out.print(self.allocator, "  store i1 {s}, ptr {s}\n", .{ short_value, result_ptr });
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ end_label, end_label });
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load i1, ptr {s}\n", .{ result, result_ptr });
+        return result;
     }
 
     fn emitUnary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {
@@ -1252,7 +1295,7 @@ const LlvmEmitter = struct {
                 if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
                 break :blk null;
             } else null,
-            .binary => |node| if (binaryIsComparison(node.op)) simpleType(expr.span, "bool") else self.exprType(node.left.*),
+            .binary => |node| if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*),
             else => null,
         };
     }
