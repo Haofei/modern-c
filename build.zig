@@ -334,13 +334,23 @@ pub fn build(b: *std.Build) void {
     nic_test_step.dependOn(&nic_test_cmd.step);
 
     const virtio_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/net/virtio-test.sh",
         "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_virtio_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/net/virtio-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
     });
     virtio_test_cmd.step.dependOn(b.getInstallStep());
     const virtio_test_step = b.step("virtio-test", "Build and run the real virtio-net driver against virtio-net-device under QEMU");
     virtio_test_step.dependOn(&virtio_test_cmd.step);
+    llvm_virtio_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_virtio_test_step = b.step("llvm-virtio-test", "Build and run the LLVM-lowered virtio-net driver under QEMU");
+    llvm_virtio_test_step.dependOn(&llvm_virtio_test_cmd.step);
 
     const blk_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -352,13 +362,23 @@ pub fn build(b: *std.Build) void {
     blk_test_step.dependOn(&blk_test_cmd.step);
 
     const udp_net_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/net/udp-net-test.sh",
         "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_udp_net_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/net/udp-net-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
     });
     udp_net_test_cmd.step.dependOn(b.getInstallStep());
     const udp_net_test_step = b.step("udp-net-test", "Transmit a real UDP datagram over virtio-net under QEMU (pcap-verified)");
     udp_net_test_step.dependOn(&udp_net_test_cmd.step);
+    llvm_udp_net_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_udp_net_test_step = b.step("llvm-udp-net-test", "Transmit a real LLVM-lowered UDP datagram over virtio-net under QEMU");
+    llvm_udp_net_test_step.dependOn(&llvm_udp_net_test_cmd.step);
 
     const smp_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -1929,6 +1949,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_smp_lock_test_cmd.step);
     m0_step.dependOn(&llvm_ipi_test_cmd.step);
     m0_step.dependOn(&llvm_tcp_server_test_cmd.step);
+    m0_step.dependOn(&llvm_virtio_test_cmd.step);
+    m0_step.dependOn(&llvm_udp_net_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

@@ -4184,7 +4184,8 @@ llvm-rtc-test`, `zig build llvm-userserver-test`, `zig build
 llvm-backtrace-test`, `zig build llvm-driver-test`, and `zig build
 llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
 llvm-smp-lock-test`, `zig build llvm-ipi-test`, and `zig build
-llvm-tcp-server-test` gates boot LLVM-lowered bare-metal RISC-V QEMU images for
+llvm-tcp-server-test`, `zig build llvm-virtio-test`, and `zig build
+llvm-udp-net-test` gates boot LLVM-lowered bare-metal RISC-V QEMU images for
 typed MMIO, timer traps, cooperative context switching, round-robin scheduling,
 syscall dispatch, U-mode entry, process lifecycle, ELF load/run, VFS syscalls,
 socket syscalls, exec, `satp` address-space switching, per-process page tables,
@@ -4196,7 +4197,8 @@ demand paging, anonymous mmap, crash containment, copy-on-write, per-server MMU
 isolation, user-mode block/filesystem/network servers, RTC MMIO, user-mode
 server syscalls, backtrace symbolization, char-device driver dispatch, timer
 preemption, SMP boot/sync, SMP ticket-lock mutual exclusion, inter-processor
-interrupts, and a user-mode TCP passive-open server handshake.
+interrupts, a user-mode TCP passive-open server handshake, virtio-net device
+bring-up, and pcap-verified UDP transmit.
 The `zig build llvm-kmain-test` and `zig build llvm-kmain-net-test` gates boot
 LLVM-lowered integrated RISC-V kernel images under QEMU; the network variant also
 checks that QEMU captures the expected transmitted UDP payload.
