@@ -700,6 +700,7 @@ const CEmitter = struct {
                     if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
                 },
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
+                .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
                 else => {},
             }
         }
@@ -948,7 +949,7 @@ const CEmitter = struct {
                 return null;
             },
             .array => |node| {
-                const len = constArrayLenValue(node.len, &self.const_fns, &self.const_globals) orelse return null;
+                const len = constArrayLenValue(node.len, &self.const_fns, &self.const_globals, cComptimeReflectThunk, self) orelse return null;
                 const elem = self.comptimeSizeOf(node.child.*, depth + 1) orelse return null;
                 return @as(i128, @intCast(len)) * elem;
             },
@@ -1061,6 +1062,7 @@ const CEmitter = struct {
         if (self.packed_bits.get(name)) |info| {
             return self.comptimeSizeOf(simpleNameType(info.repr_name, ty.span), depth + 1);
         }
+        if (self.tagged_unions.contains(name)) return cTaggedUnionTagSize();
         return null;
     }
 
@@ -1685,7 +1687,7 @@ const CEmitter = struct {
         switch (ty.kind) {
             .array => |node| {
                 const child = self.overlayFieldLayout(node.child.*) orelse return null;
-                const len = constArrayLenValue(node.len, &self.const_fns, &self.const_globals) orelse return null;
+                const len = constArrayLenValue(node.len, &self.const_fns, &self.const_globals, cComptimeReflectThunk, self) orelse return null;
                 return .{ .size = child.size * len, .alignment = child.alignment };
             },
             .qualified => |node| return self.overlayFieldLayout(node.child.*),
@@ -4567,6 +4569,10 @@ const CEmitter = struct {
                 }
                 if (self.packed_bits.get(type_name)) |info| {
                     try self.out.print(self.allocator, "((uintptr_t)sizeof({s}))", .{info.repr_c_type});
+                    return true;
+                }
+                if (self.tagged_unions.contains(type_name)) {
+                    try self.out.print(self.allocator, "((uintptr_t)sizeof({s}Tag))", .{type_name});
                     return true;
                 }
                 return error.UnsupportedCEmission;
@@ -8440,7 +8446,7 @@ const CEmitter = struct {
     }
 
     fn arrayLenTextForExpr(self: *CEmitter, expr: ast.Expr) ![]const u8 {
-        const value = constArrayLenValue(expr, &self.const_fns, &self.const_globals) orelse return error.UnsupportedCEmission;
+        const value = constArrayLenValue(expr, &self.const_fns, &self.const_globals, cComptimeReflectThunk, self) orelse return error.UnsupportedCEmission;
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 
@@ -10419,6 +10425,10 @@ const ComptimeStructLayout = struct {
     field_offset: ?i128,
 };
 
+fn cTaggedUnionTagSize() i128 {
+    return 4;
+}
+
 fn scalarLayout(name: []const u8) ?ScalarLayout {
     const table = [_]struct { n: []const u8, s: u32 }{
         .{ .n = "u8", .s = 1 },      .{ .n = "i8", .s = 1 },    .{ .n = "bool", .s = 1 },
@@ -10898,16 +10908,16 @@ fn parseUsizeLiteral(raw: []const u8) ?usize {
     return std.fmt.parseInt(usize, cleaned[0..len], 0) catch null;
 }
 
-fn constArrayLenValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
+fn constArrayLenValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
     return switch (expr.kind) {
         .int_literal => |literal| parseUsizeLiteral(literal),
-        .grouped => |inner| constArrayLenValue(inner.*, funcs, globals),
+        .grouped => |inner| constArrayLenValue(inner.*, funcs, globals, reflect, reflect_ctx),
         // Section 22 comptime↔type: a `const fn` result or named `const` global
         // can drive a fixed-array length, so emit the same folded constant.
-        .call, .ident => comptimeUsizeArrayLen(expr, funcs, globals),
+        .call, .ident => comptimeUsizeArrayLen(expr, funcs, globals, reflect, reflect_ctx),
         .binary => |node| {
-            const left = constArrayLenValue(node.left.*, funcs, globals) orelse return null;
-            const right = constArrayLenValue(node.right.*, funcs, globals) orelse return null;
+            const left = constArrayLenValue(node.left.*, funcs, globals, reflect, reflect_ctx) orelse return null;
+            const right = constArrayLenValue(node.right.*, funcs, globals, reflect, reflect_ctx) orelse return null;
             return switch (node.op) {
                 .add => std.math.add(usize, left, right) catch null,
                 .sub => std.math.sub(usize, left, right) catch null,
@@ -10926,13 +10936,15 @@ fn constArrayLenValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDec
 // Fold a comptime const-fn call to a usize array length, mirroring the
 // front-end's `comptimeUsizeValue`. A stack buffer backs the scope so this
 // stays a free function.
-fn comptimeUsizeArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
+fn comptimeUsizeArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
     if (funcs == null and globals == null) return null;
     var buf: [64 * 1024]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     var scope = eval.ComptimeScope.init(fba.allocator());
     scope.funcs = funcs;
     scope.globals = globals;
+    scope.reflect = reflect;
+    scope.reflect_ctx = reflect_ctx;
     return switch (eval.foldComptimeExpr(&scope, expr)) {
         .value => |v| switch (v) {
             .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,

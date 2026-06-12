@@ -1205,6 +1205,7 @@ pub const Checker = struct {
             const repr = info.repr orelse return null;
             return self.comptimeSizeOf(repr, depth + 1);
         }
+        if (env.tagged_unions.contains(name)) return c_tagged_union_tag_size;
         return null;
     }
 

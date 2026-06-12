@@ -8,6 +8,11 @@ enum Mode: u8 {
     fast = 1,
 }
 
+union ReflectToken {
+    number: u32,
+    eof,
+}
+
 extern mmio struct Uart16550 {
     thr: Reg<u8, .write>,
     lsr: Reg<u8, .read>,
@@ -55,6 +60,10 @@ fn accept_spec_sizeof_slice() -> usize {
 
 fn accept_spec_repr_of_enum() -> usize {
     return repr_of(Mode);
+}
+
+fn accept_spec_repr_of_tagged_union() -> usize {
+    return repr_of(ReflectToken);
 }
 
 fn accept_field_offset() -> usize {

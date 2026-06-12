@@ -269,6 +269,7 @@ const PackedBitsSummary = struct {
 const MirReflectEnv = struct {
     enums: *const std.StringHashMap(EnumSummary),
     structs: *const std.StringHashMap(StructSummary),
+    unions: *const std.StringHashMap(UnionSummary),
     packed_bits: *const std.StringHashMap(PackedBitsSummary),
     aliases: *const std.StringHashMap(ast.TypeExpr),
 };
@@ -333,6 +334,7 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
     var reflect_env = MirReflectEnv{
         .enums = &enums,
         .structs = &structs,
+        .unions = &unions,
         .packed_bits = &packed_bits,
         .aliases = &aliases,
     };
@@ -3783,6 +3785,7 @@ fn mirComptimeReprOf(env: *const MirReflectEnv, ty: ast.TypeExpr, depth: usize) 
         return mirComptimeSizeOf(env, repr, depth + 1);
     }
     if (env.packed_bits.get(name)) |info| return mirComptimeSizeOf(env, info.repr, depth + 1);
+    if (env.unions.contains(name)) return mirTaggedUnionTagSize();
     return null;
 }
 
@@ -3861,6 +3864,10 @@ fn mirScalarLayout(name: []const u8) ?MirScalarLayout {
         if (std.mem.eql(u8, name, entry.n)) return .{ .size = entry.s, .alignment = entry.s };
     }
     return null;
+}
+
+fn mirTaggedUnionTagSize() i128 {
+    return 4;
 }
 
 fn mirTypeName(ty: ast.TypeExpr) ?[]const u8 {

@@ -22,6 +22,11 @@ extern struct ConstPacket {
     tag: u8,
 }
 
+union ConstToken {
+    number: u32,
+    eof,
+}
+
 const fn align_up(x: usize, a: usize) -> usize {
     return (x + a - 1) & ~(a - 1);
 }
@@ -38,6 +43,7 @@ const ALIGNED: usize = align_up(3, 4);
 const PACKET_SIZE: usize = sizeof(ConstPacket);
 const PACKET_TAG_OFFSET: usize = field_offset(ConstPacket, .tag);
 const PACKET_TAG_BIT_OFFSET: usize = bit_offset(ConstPacket, .tag);
+const TOKEN_REPR: usize = repr_of(ConstToken);
 const CONST_NUMBERS: [4]u32 = make_const_numbers();
 const CONST_PAIR: ConstPair = make_const_pair();
 
@@ -65,6 +71,10 @@ fn accept_reflected_field_offset_const_global_array() -> [PACKET_TAG_OFFSET]u8 {
     return .{1, 2};
 }
 
+fn accept_reflected_tagged_union_repr_const_global_array() -> [TOKEN_REPR]u8 {
+    return .{1, 2, 3, 4};
+}
+
 fn accept_const_global_runtime_use() -> usize {
     return DOUBLE;
 }
@@ -82,6 +92,7 @@ fn accept_comptime_const_global_assert() -> void {
         assert(PACKET_SIZE == 4);
         assert(PACKET_TAG_OFFSET == 2);
         assert(PACKET_TAG_BIT_OFFSET == 16);
+        assert(TOKEN_REPR == 4);
         assert(DOUBLE == MAX * 2);
         assert(CONST_NUMBERS[1] == 5);
         assert(CONST_PAIR.left == 8);

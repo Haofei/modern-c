@@ -19,6 +19,11 @@ enum DefaultMode {
     fast,
 }
 
+union ReflectToken {
+    number: u32,
+    eof,
+}
+
 extern mmio struct Uart16550 {
     thr: Reg<u8, .write>,
     lsr: Reg<u8, .read>,
@@ -68,6 +73,10 @@ fn accept_spec_repr_of_enum() -> usize {
     return repr_of(Mode);
 }
 
+fn accept_spec_repr_of_tagged_union() -> usize {
+    return repr_of(ReflectToken);
+}
+
 fn accept_spec_sizeof_default_enum() -> usize {
     return sizeof(DefaultMode);
 }
@@ -113,6 +122,7 @@ fn accept_comptime_reflection_offsets() -> void {
         assert(sizeof(Packet) == 4);
         assert(alignof(Packet) == 2);
         assert(repr_of(Mode) == 1);
+        assert(repr_of(ReflectToken) == 4);
         assert(sizeof(DefaultMode) == 8);
         assert(alignof(DefaultMode) == 8);
         assert(repr_of(DefaultMode) == 8);
