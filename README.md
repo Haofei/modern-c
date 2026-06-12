@@ -309,7 +309,8 @@ lowering. `zig build llvm-std-test` links and runs LLVM-built std module objects
 against a C driver. `zig build llvm-pkg-test` builds the package-manifest demo
 through LLVM, links the resulting object, and runs it. `zig build
 llvm-demo-test` compiles the framebuffer/gpio/irq/spi/timer/uart hardware demo
-drivers through LLVM to non-empty objects.
+drivers through LLVM to non-empty objects under the same hidden-assumption token
+check.
 
 ## Conformance Snapshot
 

@@ -4141,7 +4141,8 @@ exported function checks.
 The `zig build llvm-pkg-test` gate builds the package-manifest demo through
 the LLVM object driver, links the resulting object, and runs it.
 The `zig build llvm-demo-test` gate compiles the framebuffer/gpio/irq/spi/timer/uart
-hardware demo drivers through LLVM to non-empty object files.
+hardware demo drivers through LLVM to non-empty object files under the same
+hidden-assumption token check.
 These LLVM IR, object, and link/run gates are included in the `zig build m0`
 milestone gate.
 It intentionally emits no hidden optimizer-assumption tokens outside proven
