@@ -841,10 +841,19 @@ const CEmitter = struct {
     }
 
     fn zeroInitializerRequiresBraces(self: *CEmitter, ty: ast.TypeExpr) bool {
-        return switch (ty.kind) {
+        return self.isAggregateGlobalType(ty);
+    }
+
+    fn isAggregateGlobalType(self: *CEmitter, ty: ast.TypeExpr) bool {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
             .array => true,
-            .name => |name| self.structs.contains(name.text),
-            .qualified => |node| self.zeroInitializerRequiresBraces(node.child.*),
+            .slice => true,
+            .closure_type => true,
+            .generic => |node| std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2,
+            .name => |name| self.structs.contains(name.text) or
+                self.overlay_unions.contains(name.text) or
+                self.tagged_unions.contains(name.text),
             else => false,
         };
     }
@@ -8653,9 +8662,7 @@ const CEmitter = struct {
                 .source_ty = resolved_ty,
             };
         }
-        const is_aggregate = self.structs.contains(name) or
-            self.overlay_unions.contains(name) or
-            self.tagged_unions.contains(name);
+        const is_aggregate = self.isAggregateGlobalType(resolved_ty);
         // Address newtypes (PAddr/VAddr/DmaAddr) are scalar uintptr_t values, so they use
         // the usize scalar race helper rather than a (nonexistent) per-name helper.
         if (isOpaqueAddressTypeName(name)) {
@@ -8675,7 +8682,7 @@ const CEmitter = struct {
             .race_type_name = name,
             .race_c_type = c_type,
             .width_bits = widthBits(name),
-            .pointer_like = isPointerLikeGlobalType(resolved_ty),
+            .pointer_like = !is_aggregate and isPointerLikeGlobalType(resolved_ty),
             .aggregate = is_aggregate,
             .source_ty = resolved_ty,
         };
@@ -8708,20 +8715,17 @@ const CEmitter = struct {
                 .race_c_type = packed_bits.repr_c_type,
             };
         }
-        // Array/struct/union/closure elements have no scalar race helper: access them as plain
-        // aggregates. Function-pointer elements are scalar pointers (relaxed-atomic).
-        const is_aggregate = resolved_ty.kind == .array or
-            self.structs.contains(name) or
-            self.overlay_unions.contains(name) or
-            self.tagged_unions.contains(name) or
-            resolved_ty.kind == .closure_type;
+        // Array/slice/struct/result/union/closure elements have no scalar race
+        // helper: access them as plain aggregates. Function-pointer elements are
+        // scalar pointers (relaxed-atomic).
+        const is_aggregate = self.isAggregateGlobalType(resolved_ty);
         return .{
             .source_ty = resolved_ty,
             .c_type = c_type,
             .race_type_name = name,
             .race_c_type = c_type,
             .aggregate = is_aggregate,
-            .pointer_like = isPointerLikeGlobalType(resolved_ty) or resolved_ty.kind == .fn_pointer,
+            .pointer_like = !is_aggregate and (isPointerLikeGlobalType(resolved_ty) or resolved_ty.kind == .fn_pointer),
         };
     }
 

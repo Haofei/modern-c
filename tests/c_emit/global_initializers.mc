@@ -11,6 +11,17 @@ struct MaybeBox {
     ptr: ?*mut u32,
 }
 
+enum InitError {
+    failed,
+}
+
+union GlobalToken {
+    number: u32,
+    eof,
+}
+
+extern fn consume_default_slice(xs: []const u8) -> usize;
+
 global shared_cell: u32 = 0;
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
@@ -39,6 +50,9 @@ global maybe_box: MaybeBox = .{ .ptr = &seed };
 global global_const_ptr: *const u32 = &shared_cell;
 global global_mut_ptr: *mut u32 = &shared_cell;
 global nullable_handle: ?*mut u8 = null;
+global default_slice: []const u8;
+global default_result: Result<u32, InitError>;
+global default_token: GlobalToken;
 
 fn read_shared_cell() -> u32 {
     return shared_cell;
@@ -142,4 +156,22 @@ fn read_nullable_handle() -> ?*mut u8 {
 
 fn set_nullable_handle(next: ?*mut u8) -> void {
     nullable_handle = next;
+}
+
+fn default_slice_len() -> usize {
+    return consume_default_slice(default_slice);
+}
+
+fn default_result_value() -> u32 {
+    switch default_result {
+        ok(v) => { return v; },
+        err(e) => { return 0; },
+    }
+}
+
+fn default_token_value() -> u32 {
+    switch default_token {
+        number(v) => { return v; },
+        .eof => { return 0; },
+    }
 }
