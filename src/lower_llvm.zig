@@ -23,6 +23,7 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
+        .fn_sigs = std.StringHashMap(FnSig).init(allocator),
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
@@ -31,6 +32,13 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
     for (module.decls) |decl| {
         switch (decl.kind) {
             .struct_decl => |struct_decl| try ctx.collectStruct(struct_decl),
+            else => {},
+        }
+    }
+    for (module.decls) |decl| {
+        switch (decl.kind) {
+            .fn_decl => |fn_decl| try ctx.collectFunction(fn_decl),
+            .extern_fn => |fn_decl| try ctx.collectFunction(fn_decl),
             else => {},
         }
     }
@@ -77,6 +85,7 @@ const LlvmEmitter = struct {
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
+    fn_sigs: std.StringHashMap(FnSig) = undefined,
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
@@ -89,6 +98,7 @@ const LlvmEmitter = struct {
         self.need_ssub.deinit();
         self.need_smul.deinit();
         self.struct_types.deinit();
+        self.fn_sigs.deinit();
         self.global_types.deinit();
         self.local_types.deinit();
         self.local_slots.deinit();
@@ -99,6 +109,13 @@ const LlvmEmitter = struct {
         if (struct_decl.type_params.len != 0 or struct_decl.is_move or struct_decl.abi != null) return error.UnsupportedLlvmEmission;
         for (struct_decl.fields) |field| _ = try self.llvmType(field.ty);
         try self.struct_types.put(struct_decl.name.text, struct_decl);
+    }
+
+    fn collectFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl) !void {
+        const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
+        _ = try self.llvmType(ret_ty);
+        for (fn_decl.params) |param| _ = try self.llvmType(param.ty);
+        try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params });
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
@@ -196,7 +213,15 @@ const LlvmEmitter = struct {
         self.trap_index = 0;
         self.local_types.clearRetainingCapacity();
         self.local_slots.clearRetainingCapacity();
-        for (fn_decl.params) |param| try self.local_types.put(param.name.text, param.ty);
+        for (fn_decl.params) |param| {
+            try self.local_types.put(param.name.text, param.ty);
+            if (self.isAggregateType(param.ty)) {
+                const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{param.name.text});
+                try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(param.ty) });
+                try self.out.print(self.allocator, "  store {s} %{s}, ptr {s}\n", .{ try self.llvmType(param.ty), param.name.text, ptr });
+                try self.local_slots.put(param.name.text, .{ .ty = param.ty, .ptr = ptr });
+            }
+        }
 
         if (!try self.emitBlock(body, ret_ty)) return error.UnsupportedLlvmEmission;
         try self.out.appendSlice(self.allocator, "}\n\n");
@@ -219,6 +244,8 @@ const LlvmEmitter = struct {
             .bool_literal => |value| if (value) "1" else "0",
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
             .call => |call| try self.emitCall(call, expected_ty),
+            .array_literal => |items| try self.emitArrayLiteralValue(expected_ty, items),
+            .struct_literal => |fields| try self.emitStructLiteralValue(expected_ty, fields),
             .binary => |node| try self.emitBinary(node, expected_ty),
             .unary => |node| try self.emitUnary(node, expected_ty),
             .address_of => |inner| try self.emitAddressOf(inner.*),
@@ -527,18 +554,45 @@ const LlvmEmitter = struct {
         }
     }
 
+    fn emitArrayLiteralValue(self: *LlvmEmitter, array_ty: ast.TypeExpr, items: []const ast.Expr) ![]const u8 {
+        if (array_ty.kind != .array) return error.UnsupportedLlvmEmission;
+        const ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(array_ty) });
+        try self.emitArrayLiteralStores(ptr, array_ty, items);
+        const value = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ value, try self.llvmType(array_ty), ptr });
+        return value;
+    }
+
+    fn emitStructLiteralValue(self: *LlvmEmitter, struct_ty: ast.TypeExpr, fields: []const ast.StructLiteralField) ![]const u8 {
+        if (self.structDeclForType(struct_ty) == null) return error.UnsupportedLlvmEmission;
+        const ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(struct_ty) });
+        try self.emitStructLiteralStores(ptr, struct_ty, fields);
+        const value = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ value, try self.llvmType(struct_ty), ptr });
+        return value;
+    }
+
     fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
         const callee = switch (call.callee.kind) {
             .ident => |ident| ident.text,
             else => return error.UnsupportedLlvmEmission,
         };
-        const ret_ty = try self.llvmType(expected_ty);
+        const ret_ast_ty = if (self.fn_sigs.get(callee)) |sig| sig.ret else expected_ty;
+        const ret_ty = try self.llvmType(ret_ast_ty);
+        if (typeNameEql(ret_ast_ty, "void")) return error.UnsupportedLlvmEmission;
+        var args: std.ArrayList(ArgValue) = .empty;
+        defer args.deinit(self.allocator);
+        for (call.args, 0..) |arg, i| {
+            const arg_ty = self.expectedTyForCallArg(callee, i) orelse expected_ty;
+            try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExpr(arg, arg_ty) });
+        }
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = call {s} @{s}(", .{ result, ret_ty, callee });
-        for (call.args, 0..) |arg, i| {
+        for (args.items, 0..) |arg, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            const arg_ty = expected_tyForCallArg(self.mir_module, callee, i) orelse expected_ty;
-            try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg_ty), try self.emitExpr(arg, arg_ty) });
+            try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
         }
         try self.out.appendSlice(self.allocator, ")\n");
         return result;
@@ -772,11 +826,35 @@ const LlvmEmitter = struct {
         }
         return null;
     }
+
+    fn expectedTyForCallArg(self: *LlvmEmitter, callee: []const u8, index: usize) ?ast.TypeExpr {
+        const sig = self.fn_sigs.get(callee) orelse return null;
+        if (index >= sig.params.len) return null;
+        return sig.params[index].ty;
+    }
+
+    fn isAggregateType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        return switch (ty.kind) {
+            .array => true,
+            .name => self.structDeclForType(ty) != null,
+            else => false,
+        };
+    }
 };
 
 const LocalSlot = struct {
     ty: ast.TypeExpr,
     ptr: []const u8,
+};
+
+const FnSig = struct {
+    ret: ast.TypeExpr,
+    params: []const ast.Param,
+};
+
+const ArgValue = struct {
+    ty: ast.TypeExpr,
+    value: []const u8,
 };
 
 fn assignmentIdent(target: ast.Expr) ?ast.Ident {
@@ -806,13 +884,6 @@ fn structLiteralField(fields: []const ast.StructLiteralField, field_name: []cons
     for (fields) |field| {
         if (std.mem.eql(u8, field.name.text, field_name)) return field.value;
     }
-    return null;
-}
-
-fn expected_tyForCallArg(module_mir: mir.Module, callee: []const u8, index: usize) ?ast.TypeExpr {
-    _ = module_mir;
-    _ = callee;
-    _ = index;
     return null;
 }
 
