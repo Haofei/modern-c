@@ -4094,6 +4094,9 @@ helper calls for the covered backend subset.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
 textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.
+The `zig build llvm-sweep` gate strips expected-reject declarations from the
+spec corpus and verifies every in-scope valid spec fixture emits assemblable
+LLVM IR.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
 Full aggregate ABI breadth and fuller debug mapping remain future work.

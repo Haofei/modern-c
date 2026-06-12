@@ -71,6 +71,16 @@ pub fn build(b: *std.Build) void {
     const sweep_step = b.step("sweep", "Emit C for every valid spec-corpus function and compile-check it with clang");
     sweep_step.dependOn(&sweep_cmd.step);
 
+    const llvm_sweep_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/toolchain/spec-llvm-sweep.py",
+        "zig-out/bin/mcc",
+        "tests/spec",
+    });
+    llvm_sweep_cmd.step.dependOn(b.getInstallStep());
+    const llvm_sweep_step = b.step("llvm-sweep", "Emit LLVM IR for every in-scope valid spec-corpus fixture and validate it with llvm-as");
+    llvm_sweep_step.dependOn(&llvm_sweep_cmd.step);
+
     const qemu_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/arch/qemu-mmio-test.sh",
