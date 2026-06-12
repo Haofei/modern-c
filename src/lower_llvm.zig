@@ -1030,7 +1030,7 @@ const LlvmEmitter = struct {
 
         const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{binding.text});
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(inner_ty) });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(inner_ty), subject, binding_ptr });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(inner_ty), subject, binding_ptr, try self.debugCallSuffix() });
         try self.local_types.put(binding.text, inner_ty);
         try self.local_slots.put(binding.text, .{ .ty = inner_ty, .ptr = binding_ptr });
 
@@ -1086,7 +1086,7 @@ const LlvmEmitter = struct {
         const payload = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, try self.llvmType(subject_ty), subject, payload_index });
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.resultPayloadLlvmType(binding_ty) });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.resultPayloadLlvmType(binding_ty), payload, binding_ptr });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.resultPayloadLlvmType(binding_ty), payload, binding_ptr, try self.debugCallSuffix() });
         try self.local_types.put(tag_bind.binding.text, binding_ty);
         try self.local_slots.put(tag_bind.binding.text, .{ .ty = binding_ty, .ptr = binding_ptr });
 
@@ -1393,7 +1393,7 @@ const LlvmEmitter = struct {
         const element_ptr = try self.emitForElementPtr(iterable, iterable_ty, iterable_ptr, index);
         const element_value = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ element_value, element_llvm, element_ptr });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ element_llvm, element_value, binding_ptr });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ element_llvm, element_value, binding_ptr, try self.debugCallSuffix() });
 
         try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label, .cleanup_start = self.defer_stack.items.len });
         defer _ = self.loop_stack.pop();
@@ -1491,7 +1491,7 @@ const LlvmEmitter = struct {
 
         const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{bind.text});
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(inner_ty) });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(inner_ty), subject, binding_ptr });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(inner_ty), subject, binding_ptr, try self.debugCallSuffix() });
         try self.local_types.put(bind.text, inner_ty);
         try self.local_slots.put(bind.text, .{ .ty = inner_ty, .ptr = binding_ptr });
         const some_terminated = try self.emitSwitchBody(node.arms[some_i].body, ret_ty);
@@ -1586,7 +1586,7 @@ const LlvmEmitter = struct {
             const payload = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, try self.llvmType(subject_ty), subject, payload_index });
             try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.resultPayloadLlvmType(payload_ty) });
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.resultPayloadLlvmType(payload_ty), payload, binding_ptr });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.resultPayloadLlvmType(payload_ty), payload, binding_ptr, try self.debugCallSuffix() });
             try self.local_types.put(bind.text, payload_ty);
             try self.local_slots.put(bind.text, .{ .ty = payload_ty, .ptr = binding_ptr });
             return try self.emitSwitchBody(arm.body, ret_ty);
@@ -1680,7 +1680,7 @@ const LlvmEmitter = struct {
             const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{binding.binding.text});
             const payload = try self.taggedUnionLoadPayload(subject_ptr, subject_ty, payload_ty);
             try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(payload_ty) });
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(payload_ty), payload, binding_ptr });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(payload_ty), payload, binding_ptr, try self.debugCallSuffix() });
             try self.local_types.put(binding.binding.text, payload_ty);
             try self.local_slots.put(binding.binding.text, .{ .ty = payload_ty, .ptr = binding_ptr });
             return try self.emitSwitchBody(arm.body, ret_ty);
