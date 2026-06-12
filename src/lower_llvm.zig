@@ -23,6 +23,8 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
         .need_sadd = std.StringHashMap(void).init(allocator),
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
+        .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
+        .enum_types = std.StringHashMap(ast.EnumDecl).init(allocator),
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
@@ -31,6 +33,13 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
         .loop_stack = std.ArrayList(LoopLabels).empty,
     };
     defer ctx.deinit();
+    for (module.decls) |decl| {
+        switch (decl.kind) {
+            .type_alias => |alias| try ctx.collectTypeAlias(alias),
+            .enum_decl => |enum_decl| try ctx.collectEnum(enum_decl),
+            else => {},
+        }
+    }
     for (module.decls) |decl| {
         switch (decl.kind) {
             .struct_decl => |struct_decl| try ctx.collectStruct(struct_decl),
@@ -89,6 +98,8 @@ const LlvmEmitter = struct {
     need_sadd: std.StringHashMap(void) = undefined,
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
+    type_aliases: std.StringHashMap(ast.TypeExpr) = undefined,
+    enum_types: std.StringHashMap(ast.EnumDecl) = undefined,
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
@@ -103,6 +114,8 @@ const LlvmEmitter = struct {
         self.need_sadd.deinit();
         self.need_ssub.deinit();
         self.need_smul.deinit();
+        self.type_aliases.deinit();
+        self.enum_types.deinit();
         self.struct_types.deinit();
         self.fn_sigs.deinit();
         self.global_types.deinit();
@@ -116,6 +129,18 @@ const LlvmEmitter = struct {
         if (struct_decl.type_params.len != 0 or struct_decl.is_move or struct_decl.abi != null) return error.UnsupportedLlvmEmission;
         for (struct_decl.fields) |field| _ = try self.llvmType(field.ty);
         try self.struct_types.put(struct_decl.name.text, struct_decl);
+    }
+
+    fn collectTypeAlias(self: *LlvmEmitter, alias: ast.TypeAlias) !void {
+        _ = try self.llvmType(alias.ty);
+        try self.type_aliases.put(alias.name.text, alias.ty);
+    }
+
+    fn collectEnum(self: *LlvmEmitter, enum_decl: ast.EnumDecl) !void {
+        const repr = enumReprType(enum_decl);
+        if (self.integerBitsOf(repr) == null) return error.UnsupportedLlvmEmission;
+        for (enum_decl.cases) |case| _ = try self.enumCaseValue(enum_decl, case);
+        try self.enum_types.put(enum_decl.name.text, enum_decl);
     }
 
     fn collectFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl) !void {
@@ -140,7 +165,15 @@ const LlvmEmitter = struct {
     }
 
     fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
-        switch (ty.kind) {
+        const resolved_ty = self.resolveAliasType(ty);
+        if (self.enumDeclForType(ty)) |enum_decl| {
+            return switch (expr.kind) {
+                .enum_literal => |literal| try self.enumCaseValueByName(enum_decl, literal.text),
+                .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
+                else => try self.emitGlobalInitializer(expr, enumReprType(enum_decl)),
+            };
+        }
+        switch (resolved_ty.kind) {
             .array => |array| {
                 const items = switch (expr.kind) {
                     .array_literal => |items| items,
@@ -158,10 +191,10 @@ const LlvmEmitter = struct {
                 try text.append(self.scratch.allocator(), ']');
                 return text.toOwnedSlice(self.scratch.allocator());
             },
-            .name => if (self.structDeclForType(ty)) |struct_decl| {
+            .name => if (self.structDeclForType(resolved_ty)) |struct_decl| {
                 const fields = switch (expr.kind) {
                     .struct_literal => |fields| fields,
-                    .grouped => |inner| return self.emitGlobalInitializer(inner.*, ty),
+                    .grouped => |inner| return self.emitGlobalInitializer(inner.*, resolved_ty),
                     else => return error.UnsupportedLlvmEmission,
                 };
                 var text: std.ArrayList(u8) = .empty;
@@ -179,7 +212,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal),
-            .unary => |node| if (node.op == .neg and isFloatType(ty)) blk: {
+            .unary => |node| if (node.op == .neg and self.isFloatTypeOf(ty)) blk: {
                 const literal = switch ((node.expr.*).kind) {
                     .float_literal => |literal| literal,
                     .grouped => |inner| switch (inner.kind) {
@@ -204,14 +237,15 @@ const LlvmEmitter = struct {
     }
 
     fn zeroInitializer(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
-        return switch (ty.kind) {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "bool"))
                 "0"
-            else if (isFloatType(ty))
+            else if (self.isFloatTypeOf(resolved_ty))
                 "0.0"
-            else if (integerBits(ty) != null)
+            else if (self.integerBitsOf(resolved_ty) != null or self.enumDeclForType(resolved_ty) != null)
                 "0"
-            else if (self.structDeclForType(ty) != null)
+            else if (self.structDeclForType(resolved_ty) != null)
                 "zeroinitializer"
             else
                 error.UnsupportedLlvmEmission,
@@ -270,6 +304,10 @@ const LlvmEmitter = struct {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal),
             .bool_literal => |value| if (value) "1" else "0",
+            .enum_literal => |literal| if (self.enumDeclForType(expected_ty)) |enum_decl|
+                try self.enumCaseValueByName(enum_decl, literal.text)
+            else
+                error.UnsupportedLlvmEmission,
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
             .call => |call| try self.emitCall(call, expected_ty),
             .array_literal => |items| try self.emitArrayLiteralValue(expected_ty, items),
@@ -438,25 +476,26 @@ const LlvmEmitter = struct {
         const ty = local.ty orelse return error.UnsupportedLlvmEmission;
         const init = local.init orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(ty);
+        const resolved_ty = self.resolveAliasType(ty);
         const name = local.names[0].text;
         const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{name});
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, llvm_ty });
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
-        if (ty.kind == .array) {
+        if (resolved_ty.kind == .array) {
             const items = switch (init.kind) {
                 .array_literal => |items| items,
                 else => return error.UnsupportedLlvmEmission,
             };
-            try self.emitArrayLiteralStores(ptr, ty, items);
+            try self.emitArrayLiteralStores(ptr, resolved_ty, items);
             return;
         }
-        if (self.structDeclForType(ty)) |_| {
+        if (self.structDeclForType(resolved_ty)) |_| {
             const fields = switch (init.kind) {
                 .struct_literal => |fields| fields,
                 else => return error.UnsupportedLlvmEmission,
             };
-            try self.emitStructLiteralStores(ptr, ty, fields);
+            try self.emitStructLiteralStores(ptr, resolved_ty, fields);
             return;
         }
         const value = try self.emitExpr(init, ty);
@@ -678,7 +717,7 @@ const LlvmEmitter = struct {
 
     fn emitScalarSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
         const subject_ty = self.exprType(node.subject) orelse return error.UnsupportedLlvmEmission;
-        if (!typeNameEql(subject_ty, "bool") and integerBits(subject_ty) == null) return error.UnsupportedLlvmEmission;
+        if (!typeNameEql(self.resolveAliasType(subject_ty), "bool") and self.integerBitsOf(subject_ty) == null and self.enumDeclForType(subject_ty) == null) return error.UnsupportedLlvmEmission;
 
         const subject = try self.emitExpr(node.subject, subject_ty);
         const subject_llvm = try self.llvmType(subject_ty);
@@ -712,7 +751,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
             }
         }
-        if (wildcard_index == null and !typeNameEql(subject_ty, "bool")) all_terminated = false;
+        if (wildcard_index == null and !typeNameEql(self.resolveAliasType(subject_ty), "bool") and self.enumDeclForType(subject_ty) == null) all_terminated = false;
         if (all_terminated) {
             if (wildcard_index == null) {
                 try self.out.print(self.allocator, "{s}:\n  call void @mc_trap_InvalidRepresentation()\n  unreachable\n", .{end_label});
@@ -726,9 +765,13 @@ const LlvmEmitter = struct {
     fn switchPatternValue(self: *LlvmEmitter, pattern: ast.Pattern, subject_ty: ast.TypeExpr) ![]const u8 {
         const expr = switch (pattern.kind) {
             .literal => |expr| expr,
+            .tag => |tag| {
+                const enum_decl = self.enumDeclForType(subject_ty) orelse return error.UnsupportedLlvmEmission;
+                return try self.enumCaseValueByName(enum_decl, tag.text);
+            },
             else => return error.UnsupportedLlvmEmission,
         };
-        if (typeNameEql(subject_ty, "bool")) {
+        if (typeNameEql(self.resolveAliasType(subject_ty), "bool")) {
             return switch (expr.kind) {
                 .bool_literal => |value| if (value) "1" else "0",
                 .grouped => |inner| self.switchLiteralValue(inner.*, subject_ty),
@@ -743,6 +786,10 @@ const LlvmEmitter = struct {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| if (eval.parseCharLiteral(literal)) |value|
                 try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value})
+            else
+                error.UnsupportedLlvmEmission,
+            .enum_literal => |literal| if (self.enumDeclForType(subject_ty)) |enum_decl|
+                try self.enumCaseValueByName(enum_decl, literal.text)
             else
                 error.UnsupportedLlvmEmission,
             .grouped => |inner| self.switchLiteralValue(inner.*, subject_ty),
@@ -830,19 +877,20 @@ const LlvmEmitter = struct {
 
     fn emitIndexAddress(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        const resolved_base_ty = self.resolveAliasType(base_ty);
         const index = try self.emitExpr(node.index.*, simpleType((node.index.*).span, "usize"));
-        return switch (base_ty.kind) {
+        return switch (resolved_base_ty.kind) {
             .array => |array| blk: {
                 const len = arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 const base_ptr = try self.arrayBasePointer(node.base.*);
                 try self.emitBoundsCheck(index, len);
                 const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(base_ty), base_ptr, index });
+                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(resolved_base_ty), base_ptr, index });
                 break :blk result;
             },
             .slice => |slice| blk: {
-                const base = try self.emitExpr(node.base.*, base_ty);
-                const base_llvm = try self.llvmType(base_ty);
+                const base = try self.emitExpr(node.base.*, resolved_base_ty);
+                const base_llvm = try self.llvmType(resolved_base_ty);
                 const ptr = try self.nextTemp();
                 const len = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ ptr, base_llvm, base });
@@ -1063,6 +1111,11 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ result, addr });
             return result;
         }
+        if (self.enumRawCallInfo(call)) |info| {
+            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
+            const value = try self.emitExpr(info.base, info.enum_ty);
+            return try self.castValue(value, info.enum_ty, info.repr_ty);
+        }
         if (self.rawManyOffsetCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const base = try self.emitExpr(info.base, info.base_ty);
@@ -1095,7 +1148,7 @@ const LlvmEmitter = struct {
         if (binaryIsComparison(node.op)) return self.emitComparison(node, ty);
         if (node.op == .logical_and or node.op == .logical_or) return self.emitLogicalBinary(node, ty);
         const llvm_ty = try self.llvmType(ty);
-        if (isFloatType(ty)) {
+        if (self.isFloatTypeOf(ty)) {
             return switch (node.op) {
                 .add => try self.emitPlainBinary("fadd", node, ty, llvm_ty),
                 .sub => try self.emitPlainBinary("fsub", node, ty, llvm_ty),
@@ -1155,14 +1208,14 @@ const LlvmEmitter = struct {
                 break :blk result;
             },
             .bit_not => blk: {
-                if (integerBits(ty) == null) return error.UnsupportedLlvmEmission;
+                if (self.integerBitsOf(ty) == null) return error.UnsupportedLlvmEmission;
                 const value = try self.emitExpr(node.expr.*, ty);
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = xor {s} {s}, -1\n", .{ result, try self.llvmType(ty), value });
                 break :blk result;
             },
             .neg => blk: {
-                if (!isFloatType(ty)) return error.UnsupportedLlvmEmission;
+                if (!self.isFloatTypeOf(ty)) return error.UnsupportedLlvmEmission;
                 const value = try self.emitExpr(node.expr.*, ty);
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = fneg {s} {s}\n", .{ result, try self.llvmType(ty), value });
@@ -1180,22 +1233,24 @@ const LlvmEmitter = struct {
     }
 
     fn castValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
-        if (integerBits(source_ty) != null and integerBits(target_ty) != null) {
+        if ((self.integerBitsOf(source_ty) != null or self.enumDeclForType(source_ty) != null) and
+            (self.integerBitsOf(target_ty) != null or self.enumDeclForType(target_ty) != null))
+        {
             return try self.castIntegerValue(value, source_ty, target_ty);
         }
         return error.UnsupportedLlvmEmission;
     }
 
     fn castIntegerValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
-        const source_bits = integerBits(source_ty) orelse return error.UnsupportedLlvmEmission;
-        const target_bits = integerBits(target_ty) orelse return error.UnsupportedLlvmEmission;
+        const source_bits = self.integerBitsOf(source_ty) orelse return error.UnsupportedLlvmEmission;
+        const target_bits = self.integerBitsOf(target_ty) orelse return error.UnsupportedLlvmEmission;
         if (source_bits == target_bits) return value;
 
         const result = try self.nextTemp();
         const source_llvm = try self.llvmType(source_ty);
         const target_llvm = try self.llvmType(target_ty);
         if (source_bits < target_bits) {
-            const op: []const u8 = if (isSignedInteger(source_ty)) "sext" else "zext";
+            const op: []const u8 = if (self.isSignedIntegerType(source_ty)) "sext" else "zext";
             try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
         } else {
             try self.out.print(self.allocator, "  {s} = trunc {s} {s} to {s}\n", .{ result, source_llvm, value, target_llvm });
@@ -1207,21 +1262,21 @@ const LlvmEmitter = struct {
         if (!typeNameEql(expected_ty, "bool")) return error.UnsupportedLlvmEmission;
         const operand_ty = self.exprType(node.left.*) orelse self.exprType(node.right.*) orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(operand_ty);
-        const pred = if (isFloatType(operand_ty))
+        const pred = if (self.isFloatTypeOf(operand_ty))
             floatComparisonPredicate(node.op) orelse return error.UnsupportedLlvmEmission
         else
-            comparisonPredicate(node.op, isSignedInteger(operand_ty)) orelse return error.UnsupportedLlvmEmission;
+            comparisonPredicate(node.op, self.isSignedIntegerType(operand_ty)) orelse return error.UnsupportedLlvmEmission;
         const left = try self.emitExpr(node.left.*, operand_ty);
         const right = try self.emitExpr(node.right.*, operand_ty);
         const result = try self.nextTemp();
-        const cmp_op: []const u8 = if (isFloatType(operand_ty)) "fcmp" else "icmp";
+        const cmp_op: []const u8 = if (self.isFloatTypeOf(operand_ty)) "fcmp" else "icmp";
         try self.out.print(self.allocator, "  {s} = {s} {s} {s} {s}, {s}\n", .{ result, cmp_op, pred, llvm_ty, left, right });
         return result;
     }
 
     fn emitCheckedArithmetic(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
-        const bits = integerBits(ty) orelse return error.UnsupportedLlvmEmission;
-        const signed = isSignedInteger(ty);
+        const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const signed = self.isSignedIntegerType(ty);
         const intrinsic = try self.overflowIntrinsic(node.op, signed, bits);
         const pair_ty = try std.fmt.allocPrint(self.scratch.allocator(), "{{ {s}, i1 }}", .{llvm_ty});
         const left = try self.emitExpr(node.left.*, ty);
@@ -1239,7 +1294,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitCheckedDivRem(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
-        if (integerBits(ty) == null) return error.UnsupportedLlvmEmission;
+        if (self.integerBitsOf(ty) == null) return error.UnsupportedLlvmEmission;
         const left = try self.emitExpr(node.left.*, ty);
         const right = try self.emitExpr(node.right.*, ty);
         const zero_cmp = try self.nextTemp();
@@ -1248,8 +1303,8 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, 0\n", .{ zero_cmp, llvm_ty, right });
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_DivideByZero()\n  unreachable\n{s}:\n", .{ zero_cmp, zero_trap, nonzero, zero_trap, nonzero });
 
-        if (isSignedInteger(ty)) {
-            const min_literal = signedMinLiteral(ty) orelse return error.UnsupportedLlvmEmission;
+        if (self.isSignedIntegerType(ty)) {
+            const min_literal = self.signedMinLiteralOf(ty) orelse return error.UnsupportedLlvmEmission;
             const min_cmp = try self.nextTemp();
             const neg_one_cmp = try self.nextTemp();
             const overflow_cmp = try self.nextTemp();
@@ -1262,15 +1317,15 @@ const LlvmEmitter = struct {
         }
 
         const op: []const u8 = switch (node.op) {
-            .div => if (isSignedInteger(ty)) "sdiv" else "udiv",
-            .mod => if (isSignedInteger(ty)) "srem" else "urem",
+            .div => if (self.isSignedIntegerType(ty)) "sdiv" else "udiv",
+            .mod => if (self.isSignedIntegerType(ty)) "srem" else "urem",
             else => unreachable,
         };
         return try self.emitPlainBinaryValues(op, llvm_ty, left, right);
     }
 
     fn emitCheckedShift(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
-        const shifted_bits = integerBits(ty) orelse return error.UnsupportedLlvmEmission;
+        const shifted_bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const amount_ty = self.exprType(node.right.*) orelse ty;
         const amount_llvm = try self.llvmType(amount_ty);
         const left = try self.emitExpr(node.left.*, ty);
@@ -1281,7 +1336,7 @@ const LlvmEmitter = struct {
 
         const op: []const u8 = switch (node.op) {
             .shl => "shl",
-            .shr => if (isSignedInteger(ty)) "ashr" else "lshr",
+            .shr => if (self.isSignedIntegerType(ty)) "ashr" else "lshr",
             else => unreachable,
         };
         const result = try self.emitPlainBinaryValues(op, llvm_ty, left, amount);
@@ -1292,8 +1347,8 @@ const LlvmEmitter = struct {
     }
 
     fn emitShiftCountCheck(self: *LlvmEmitter, amount: []const u8, amount_ty: ast.TypeExpr, amount_llvm: []const u8, shifted_bits: u16) !void {
-        if (integerBits(amount_ty) == null) return error.UnsupportedLlvmEmission;
-        if (isSignedInteger(amount_ty)) {
+        if (self.integerBitsOf(amount_ty) == null) return error.UnsupportedLlvmEmission;
+        if (self.isSignedIntegerType(amount_ty)) {
             const negative = try self.nextTemp();
             const neg_trap = try self.nextLabel("trap_shift_neg");
             const nonnegative = try self.nextLabel("shift_nonnegative");
@@ -1304,13 +1359,13 @@ const LlvmEmitter = struct {
         const too_large = try self.nextTemp();
         const invalid = try self.nextLabel("trap_shift_count");
         const valid = try self.nextLabel("shift_count_ok");
-        const pred: []const u8 = if (isSignedInteger(amount_ty)) "sge" else "uge";
+        const pred: []const u8 = if (self.isSignedIntegerType(amount_ty)) "sge" else "uge";
         try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{ too_large, pred, amount_llvm, amount, shifted_bits });
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_InvalidShift()\n  unreachable\n{s}:\n", .{ too_large, invalid, valid, invalid, valid });
     }
 
     fn emitLeftShiftOverflowCheck(self: *LlvmEmitter, result: []const u8, left: []const u8, amount: []const u8, ty: ast.TypeExpr, llvm_ty: []const u8) !void {
-        const reverse_op: []const u8 = if (isSignedInteger(ty)) "ashr" else "lshr";
+        const reverse_op: []const u8 = if (self.isSignedIntegerType(ty)) "ashr" else "lshr";
         const reversed = try self.emitPlainBinaryValues(reverse_op, llvm_ty, result, amount);
         const overflow = try self.nextTemp();
         const overflow_trap = try self.nextLabel("trap_shift_overflow");
@@ -1367,7 +1422,8 @@ const LlvmEmitter = struct {
     }
 
     fn llvmType(self: *LlvmEmitter, ty: ast.TypeExpr) anyerror![]const u8 {
-        return switch (ty.kind) {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "void"))
                 "void"
             else if (std.mem.eql(u8, name.text, "never"))
@@ -1382,8 +1438,10 @@ const LlvmEmitter = struct {
                 "float"
             else if (std.mem.eql(u8, name.text, "f64"))
                 "double"
-            else if (integerBits(ty)) |bits|
+            else if (self.integerBitsOf(resolved_ty)) |bits|
                 try std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{bits})
+            else if (self.enum_types.get(name.text)) |enum_decl|
+                try self.llvmType(enumReprType(enum_decl))
             else if (self.struct_types.get(name.text)) |struct_decl|
                 try self.structLlvmType(struct_decl)
             else
@@ -1422,7 +1480,8 @@ const LlvmEmitter = struct {
             .index => |node| self.indexElementType(node.base.*),
             .slice => |node| if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
             .member => |node| if (self.exprType(node.base.*)) |base_ty| blk: {
-                if (base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
+                const resolved_base_ty = self.resolveAliasType(base_ty);
+                if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
                 if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
                 break :blk null;
             } else null,
@@ -1432,7 +1491,7 @@ const LlvmEmitter = struct {
     }
 
     fn derefPointeeType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
-        const ty = self.exprType(expr) orelse return null;
+        const ty = self.resolveAliasType(self.exprType(expr) orelse return null);
         return switch (ty.kind) {
             .pointer => |node| node.child.*,
             .raw_many_pointer => |node| node.child.*,
@@ -1450,7 +1509,7 @@ const LlvmEmitter = struct {
     }
 
     fn indexElementType(self: *LlvmEmitter, base: ast.Expr) ?ast.TypeExpr {
-        const ty = self.exprType(base) orelse return null;
+        const ty = self.resolveAliasType(self.exprType(base) orelse return null);
         return switch (ty.kind) {
             .array => |array| array.child.*,
             .slice => |slice| slice.child.*,
@@ -1459,8 +1518,8 @@ const LlvmEmitter = struct {
     }
 
     fn sliceTypeForBase(self: *LlvmEmitter, ty: ast.TypeExpr, span: ast.Span) ?ast.TypeExpr {
-        _ = self;
-        return switch (ty.kind) {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
             .slice => ty,
             .array => |node| .{ .span = span, .kind = .{ .slice = .{ .mutability = .mut, .child = node.child } } },
             else => null,
@@ -1468,9 +1527,62 @@ const LlvmEmitter = struct {
     }
 
     fn structDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.StructDecl {
-        return switch (ty.kind) {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
             .name => |name| self.struct_types.get(name.text),
             else => null,
+        };
+    }
+
+    fn enumDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.EnumDecl {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .name => |name| self.enum_types.get(name.text),
+            else => null,
+        };
+    }
+
+    fn enumReprType(enum_decl: ast.EnumDecl) ast.TypeExpr {
+        return enum_decl.repr orelse simpleType(enum_decl.name.span, "isize");
+    }
+
+    fn enumCaseValueByName(self: *LlvmEmitter, enum_decl: ast.EnumDecl, case_name: []const u8) ![]const u8 {
+        for (enum_decl.cases) |case| {
+            if (std.mem.eql(u8, case.name.text, case_name)) return try self.enumCaseValue(enum_decl, case);
+        }
+        return error.UnsupportedLlvmEmission;
+    }
+
+    fn enumCaseValue(self: *LlvmEmitter, enum_decl: ast.EnumDecl, case: ast.EnumCase) ![]const u8 {
+        if (case.value) |value| return try self.enumLiteralValue(value);
+        for (enum_decl.cases, 0..) |candidate, i| {
+            if (std.mem.eql(u8, candidate.name.text, case.name.text)) {
+                return try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{i});
+            }
+        }
+        return error.UnsupportedLlvmEmission;
+    }
+
+    fn enumLiteralValue(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+        return switch (expr.kind) {
+            .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
+            .char_literal => |literal| if (eval.parseCharLiteral(literal)) |value|
+                try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value})
+            else
+                error.UnsupportedLlvmEmission,
+            .grouped => |inner| try self.enumLiteralValue(inner.*),
+            .unary => |node| blk: {
+                if (node.op != .neg) break :blk error.UnsupportedLlvmEmission;
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try self.enumLiteralValue(node.expr.*)});
+            },
+            else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn resolveAliasType(self: *LlvmEmitter, ty: ast.TypeExpr) ast.TypeExpr {
+        return switch (ty.kind) {
+            .name => |name| if (self.type_aliases.get(name.text)) |aliased| self.resolveAliasType(aliased) else ty,
+            else => ty,
         };
     }
 
@@ -1502,12 +1614,48 @@ const LlvmEmitter = struct {
 
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
         if (builtinCallReturnType(call)) |ty| return ty;
+        if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
         if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
         const callee = switch (call.callee.kind) {
             .ident => |ident| ident.text,
             else => return null,
         };
         return if (self.fn_sigs.get(callee)) |sig| sig.ret else null;
+    }
+
+    fn enumRawCallInfo(self: *LlvmEmitter, call: anytype) ?EnumRawCallInfo {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "raw")) return null;
+        const enum_ty = self.exprType(member.base.*) orelse return null;
+        const enum_decl = self.enumDeclForType(enum_ty) orelse return null;
+        if (!enum_decl.is_open) return null;
+        return .{ .base = member.base.*, .enum_ty = enum_ty, .repr_ty = enumReprType(enum_decl) };
+    }
+
+    fn integerBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
+        if (self.enumDeclForType(ty)) |enum_decl| return self.integerBitsOf(enumReprType(enum_decl));
+        return integerBits(self.resolveAliasType(ty));
+    }
+
+    fn isSignedIntegerType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        if (self.enumDeclForType(ty)) |enum_decl| return self.isSignedIntegerType(enumReprType(enum_decl));
+        return isSignedInteger(self.resolveAliasType(ty));
+    }
+
+    fn isFloatTypeOf(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        return isFloatType(self.resolveAliasType(ty));
+    }
+
+    fn signedMinLiteralOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?[]const u8 {
+        if (self.enumDeclForType(ty)) |enum_decl| return self.signedMinLiteralOf(enumReprType(enum_decl));
+        return signedMinLiteral(self.resolveAliasType(ty));
     }
 
     fn rawManyOffsetCallInfo(self: *LlvmEmitter, call: anytype) ?RawManyOffsetInfo {
@@ -1521,7 +1669,7 @@ const LlvmEmitter = struct {
         };
         if (!std.mem.eql(u8, member.name.text, "offset")) return null;
         const base_ty = self.exprType(member.base.*) orelse return null;
-        const element_ty = switch (base_ty.kind) {
+        const element_ty = switch (self.resolveAliasType(base_ty).kind) {
             .raw_many_pointer => |node| node.child.*,
             else => return null,
         };
@@ -1562,6 +1710,12 @@ const RawManyOffsetInfo = struct {
     base: ast.Expr,
     base_ty: ast.TypeExpr,
     element_ty: ast.TypeExpr,
+};
+
+const EnumRawCallInfo = struct {
+    base: ast.Expr,
+    enum_ty: ast.TypeExpr,
+    repr_ty: ast.TypeExpr,
 };
 
 fn restoreLocal(map: anytype, key: []const u8, old: anytype) !void {

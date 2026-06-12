@@ -3999,7 +3999,10 @@ transparent unsafe-contract blocks. The LLVM backend also lowers `trap(...)`,
 `unreachable`, `never` functions, and `never` coercion in return position for
 the covered trap kinds. Unsafe machine-operation lowering covers opaque address
 classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`, and
-raw-many pointer `.offset(...)`.
+raw-many pointer `.offset(...)`. Alias and enum lowering covers scalar, array,
+raw-pointer, closed-enum, and open-enum representation cases, including enum
+globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
+enums, and enum switches.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
 textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.
