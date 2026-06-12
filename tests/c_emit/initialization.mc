@@ -41,3 +41,10 @@ fn maybe_uninit_write_assume_init() -> u32 {
     let node: Node = x.assume_init();
     return node.value;
 }
+
+fn grouped_maybe_uninit_write_assume_init() -> u32 {
+    var x: MaybeUninit<Node> = uninit;
+    x.write((.{ .value = 9 }));
+    let node: Node = x.assume_init();
+    return node.value;
+}

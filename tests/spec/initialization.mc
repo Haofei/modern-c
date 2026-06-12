@@ -34,6 +34,13 @@ fn accept_maybe_uninit_write_assume_init() -> u32 {
     return node.value;
 }
 
+fn accept_grouped_maybe_uninit_write_payload() -> u32 {
+    var x: MaybeUninit<Node> = uninit;
+    x.write((.{ .value = 9 }));
+    let node: Node = x.assume_init();
+    return node.value;
+}
+
 fn accept_read_materialized_uninit_scalar() -> u32 {
     var x: u32 = uninit;
     return x;

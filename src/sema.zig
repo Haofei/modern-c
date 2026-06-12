@@ -2320,7 +2320,7 @@ pub const Checker = struct {
 
     fn checkMaybeUninitWritePayload(self: *Checker, payload_ty: ast.TypeExpr, arg: ast.Expr, ctx: Context) void {
         const payload_name = structNameOfType(payload_ty, ctx) orelse return;
-        if (arg.kind == .struct_literal) return;
+        if (isStructLiteral(arg)) return;
         const arg_ty = exprDeclaredType(arg, ctx) orelse {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "MaybeUninit.write payload must match the storage type");
             return;
