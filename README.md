@@ -71,9 +71,10 @@ and `for` over arrays/slices, including array-valued call results, with
 loop-local bindings plus `break`/`continue`.
 Scalar expression lowering covers integer casts, unsigned bitwise operations,
 bitwise not, short-circuit boolean `&&`/`||`, and checked unsigned shifts with
-invalid-count and shifted-out-bit traps. Floating-point scalar lowering covers
-`f32`/`f64` literals, globals, calls, locals, arithmetic, comparison, and unary
-negation. Statement workflow covers expression statements, void calls, `assert`,
+invalid-count and shifted-out-bit traps, plus verified integer/enum coercions at
+target-typed expression sites. Floating-point scalar lowering covers `f32`/`f64`
+literals, globals, calls, locals, arithmetic, comparison, and unary negation.
+Statement workflow covers expression statements, void calls, `assert`,
 nested blocks, unsafe blocks, transparent unsafe-contract blocks, `trap(...)`,
 `unreachable`, `never` functions, and `never` coercion in return position for
 the covered trap kinds. Unsafe machine-operation lowering covers opaque address
@@ -93,7 +94,9 @@ Aggregate assignment lowering covers `uninit` aggregate storage, whole
 array/struct literal assignment, aggregate copies from nested elements/fields,
 and nested aggregate stores through globals, arrays, and struct fields. Inferred
 local lowering covers initializer-derived scalar, slice, array, and struct
-storage for the covered backend subset.
+storage for the covered backend subset. Aggregate layout coverage includes
+structs containing arrays/slices, slices of structs/arrays, and nested array
+indexing.
 LLVM debug metadata now includes `source_filename`, a compile unit/file record,
 function `DISubprogram` records, and line/column locations on returns and call
 instructions for the covered backend subset.
@@ -232,3 +235,6 @@ LLVM debug metadata coverage includes compile-unit/file records, function
 subprograms, and call/return line locations for the covered subset.
 LLVM inferred-local coverage includes initializer-derived slice, array, and
 struct locals in covered expression and assignment workflows.
+LLVM aggregate layout coverage includes dependency-ordered struct/array/slice
+combinations and target-typed integer coercions such as `usize` slice lengths
+returned as narrower integer types after MIR verification.

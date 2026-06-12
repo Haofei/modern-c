@@ -3991,7 +3991,8 @@ and `for` over arrays/slices, including array-valued call results, with
 loop-local bindings plus `break`/`continue`.
 Scalar expression lowering covers integer casts, unsigned bitwise operations,
 bitwise not, short-circuit boolean `&&`/`||`, and checked unsigned shifts with
-invalid-count and shifted-out-bit traps.
+invalid-count and shifted-out-bit traps, plus verified integer/enum coercions at
+target-typed expression sites.
 Floating-point scalar lowering covers `f32`/`f64` literals, globals, calls,
 locals, arithmetic, comparison, and unary negation. Statement workflow covers
 expression statements, void calls, `assert`, nested blocks, unsafe blocks, and
@@ -4015,7 +4016,9 @@ Aggregate assignment lowering covers `uninit` aggregate storage, whole
 array/struct literal assignment, aggregate copies from nested elements/fields,
 and nested aggregate stores through globals, arrays, and struct fields. Inferred
 local lowering covers initializer-derived scalar, slice, array, and struct
-storage for the covered backend subset.
+storage for the covered backend subset. Aggregate layout coverage includes
+structs containing arrays/slices, slices of structs/arrays, and nested array
+indexing.
 LLVM debug metadata includes `source_filename`, compile-unit/file records,
 function `DISubprogram` records, and line/column locations on returns and call
 instructions for the covered backend subset.

@@ -352,7 +352,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitExpr(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
-        return switch (expr.kind) {
+        const value = try switch (expr.kind) {
             .ident => |ident| try self.emitIdent(ident),
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(expected_ty)),
@@ -377,6 +377,18 @@ const LlvmEmitter = struct {
             .try_expr => |node| try self.emitTryExpr(node.operand.*, expected_ty),
             else => error.UnsupportedLlvmEmission,
         };
+        return try self.coerceExprValue(value, expr, expected_ty);
+    }
+
+    fn coerceExprValue(self: *LlvmEmitter, value: []const u8, expr: ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
+        const source_ty = self.exprType(expr) orelse return value;
+        if (std.mem.eql(u8, try self.llvmType(source_ty), try self.llvmType(expected_ty))) return value;
+        if ((self.integerBitsOf(source_ty) != null or self.enumDeclForType(source_ty) != null) and
+            (self.integerBitsOf(expected_ty) != null or self.enumDeclForType(expected_ty) != null))
+        {
+            return try self.castValue(value, source_ty, expected_ty);
+        }
+        return value;
     }
 
     fn emitIdent(self: *LlvmEmitter, ident: ast.Ident) ![]const u8 {
