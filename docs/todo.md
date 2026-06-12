@@ -147,7 +147,7 @@
 |---|---|---|---|
 | `[x]` | Move through switch / if-let | 已修复；`tests/spec/move_linear.mc` 覆盖 | 继续扩展 move diagnostics |
 | `[~]` | closure/global lowering | global closure / fn pointer regression 已有 | 扩更多 aggregate/global assignment case |
-| `[ ]` | `mmio.map(...)` emit try on `MmioPtr` | 仍在 spec sweep allowlist / verifier 边界 | 明确 MIR verifier 语义并接 C emission |
+| `[x]` | `mmio.map(...)` emit try on `MmioPtr` | 已接入 sema / MIR / C emission；移出 spec sweep allowlist | 继续扩展 MMIO map 组合用例 |
 | `[ ]` | `Result<GenericStruct, E>` 名字混淆 | 仍是泛型 Result lowering 风险 | 稳定 type suffix / monomorph name order |
 | `[ ]` | LLVM backend | 未开始 | C backend 稳定后再做 |
 | `[ ]` | debug info | 只有 `#line` hint | DWARF 或至少 source map |

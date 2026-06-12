@@ -3541,6 +3541,7 @@ const CEmitter = struct {
                 if (try self.emitConversionCall(node, locals)) return;
                 if (try self.emitBitcastCall(node, locals)) return;
                 if (try self.emitDmaCall(node, locals)) return;
+                if (try self.emitMmioMapCall(node, locals)) return;
                 if (try self.emitResidueCall(node, locals)) return;
                 if (try self.emitDomainOpCall(node, locals)) return;
                 if (try self.emitReflectionCall(node)) return;
@@ -4140,6 +4141,15 @@ const CEmitter = struct {
             return true;
         }
         return false;
+    }
+
+    fn emitMmioMapCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const payload_ty = mmioMapCallPayloadType(call) orelse return false;
+        if (call.args.len != 1) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(payload_ty, .typedef_name)});
+        try self.emitExpr(call.args[0], locals);
+        try self.out.appendSlice(self.allocator, ")");
+        return true;
     }
 
     fn emitAssumeNoaliasCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
@@ -7427,6 +7437,14 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .call => |node| {
+                if (isMmioMapCallName(node.callee.*)) {
+                    const payload_ty = mmioMapCallPayloadType(node) orelse return error.UnsupportedCEmission;
+                    if (node.args.len != 1) return error.UnsupportedCEmission;
+                    try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(payload_ty, .typedef_name)});
+                    try self.emitResultTryExprWithReplacements(node.args[0], locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ")");
+                    return;
+                }
                 const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
                 try self.emitExpr(node.callee.*, locals);
                 try self.out.appendSlice(self.allocator, "(");
@@ -7557,6 +7575,14 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .call => |node| {
+                if (isMmioMapCallName(node.callee.*)) {
+                    const payload_ty = mmioMapCallPayloadType(node) orelse return error.UnsupportedCEmission;
+                    if (node.args.len != 1) return error.UnsupportedCEmission;
+                    try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(payload_ty, .typedef_name)});
+                    try self.emitNullableTryExprWithReplacements(node.args[0], locals, null, replacements);
+                    try self.out.appendSlice(self.allocator, ")");
+                    return;
+                }
                 const fn_info = if (calleeIdentName(node.callee.*)) |name| self.functions.get(name) else null;
                 try self.emitExpr(node.callee.*, locals);
                 try self.out.appendSlice(self.allocator, "(");
@@ -7947,6 +7973,7 @@ const CEmitter = struct {
                 break :blk info.nullable_inner_c_type;
             },
             .call => |node| blk: {
+                if (mmioMapCallPayloadType(node)) |ty| break :blk try self.cTypeFor(ty, .typedef_name);
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
                 const ret_ty = info.return_type orelse break :blk null;
@@ -10789,6 +10816,25 @@ fn isRawPtrCall(callee: ast.Expr) bool {
         .member => |member| std.mem.eql(u8, member.name.text, "ptr") and isIdentNamed(member.base.*, "raw"),
         .grouped => |inner| isRawPtrCall(inner.*),
         else => false,
+    };
+}
+
+fn isMmioMapCallName(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "map") and isIdentNamed(member.base.*, "mmio"),
+        .grouped => |inner| isMmioMapCallName(inner.*),
+        else => false,
+    };
+}
+
+fn mmioMapCallPayloadType(call: anytype) ?ast.TypeExpr {
+    if (!isMmioMapCallName(call.callee.*) or call.type_args.len != 1) return null;
+    return .{
+        .span = call.type_args[0].span,
+        .kind = .{ .generic = .{
+            .base = .{ .text = "MmioPtr", .span = call.type_args[0].span },
+            .args = call.type_args[0..1],
+        } },
     };
 }
 

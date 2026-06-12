@@ -1651,6 +1651,7 @@ pub const Checker = struct {
                 self.checkMmioRegisterAccessCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkAtomicCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkDmaCall(expr.span, node.callee.*, node.args, ctx);
+                self.checkMmioMapCall(expr.span, node, ctx);
                 self.checkTypeStaticCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkResidueCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkReduceCall(expr.span, node, ctx);
@@ -1744,6 +1745,7 @@ pub const Checker = struct {
                 if (self.checkEnumRawCall(expr.span, node.callee.*, node.args, ctx)) |class| return class;
                 if (atomicCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (self.dmaCallReturnClass(node.callee.*, ctx)) |class| return class;
+                if (mmioMapCallPayloadType(node)) |_| return .nullable_pointer;
                 if (typeStaticCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (residueCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (reduceCallReturnClass(node.callee.*)) |class| return class;
@@ -2300,6 +2302,20 @@ pub const Checker = struct {
         if (std.mem.eql(u8, member.name.text, "dma_addr")) return .dma_addr;
         if (std.mem.eql(u8, member.name.text, "as_slice")) return .slice;
         return null;
+    }
+
+    fn checkMmioMapCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) void {
+        if (!isMmioMapCallName(call.callee.*)) return;
+        if (call.type_args.len != 1 or call.args.len != 1) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "mmio.map requires exactly one target type and one physical address argument");
+            return;
+        }
+        self.checkMmioPtrTarget(call.type_args[0], ctx);
+        const source_ty = exprResultType(call.args[0], ctx) orelse exprStorageType(call.args[0], ctx) orelse return;
+        const source = classifyTypeCtx(source_ty, ctx);
+        if (source != .paddr and source != .unknown and source != .never) {
+            self.errorCode(call.args[0].span, "E_ADDRESS_CLASS_MISMATCH", "mmio.map requires a PAddr argument");
+        }
     }
 
     fn checkBitcastCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) ?TypeClass {
@@ -4163,6 +4179,25 @@ fn rawLoadCallReturnType(call: anytype) ?ast.TypeExpr {
     return call.type_args[0];
 }
 
+fn isMmioMapCallName(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |m| isIdentNamed(m.base.*, "mmio") and std.mem.eql(u8, m.name.text, "map"),
+        .grouped => |inner| isMmioMapCallName(inner.*),
+        else => false,
+    };
+}
+
+fn mmioMapCallPayloadType(call: anytype) ?ast.TypeExpr {
+    if (!isMmioMapCallName(call.callee.*) or call.type_args.len != 1) return null;
+    return .{
+        .span = call.type_args[0].span,
+        .kind = .{ .generic = .{
+            .base = .{ .text = "MmioPtr", .span = call.type_args[0].span },
+            .args = call.type_args[0..1],
+        } },
+    };
+}
+
 // `raw.ptr<T>(addr)` mints a `*mut T` from a raw address — the typed-pointer companion
 // of raw.load/store (used to view an allocation as a typed object: Arc blocks, etc.).
 fn isRawPtrCall(callee: ast.Expr) bool {
@@ -4174,6 +4209,11 @@ fn isRawPtrCall(callee: ast.Expr) bool {
 }
 
 fn tryPayloadType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
+    switch (expr.kind) {
+        .call => |node| if (mmioMapCallPayloadType(node)) |ty| return ty,
+        .grouped => |inner| return tryPayloadType(inner.*, ctx),
+        else => {},
+    }
     const ty = exprResultType(expr, ctx) orelse return null;
     return nullableInnerType(ty) orelse resultPayloadType(ty, "ok");
 }

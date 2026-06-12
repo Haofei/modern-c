@@ -10,15 +10,13 @@ compilable C".
 Usage:
     tools/toolchain/spec-emit-sweep.py [<mcc-binary> [<spec-dir>]]
 
-Defaults: zig-out/bin/mcc, tests/spec. Exit status is non-zero if any fixture
-outside the documented out-of-scope allowlist fails to emit or compile.
+Defaults: zig-out/bin/mcc, tests/spec. Exit status is non-zero if any valid
+fixture fails to emit or compile.
 """
 import sys, os, re, glob, subprocess, tempfile
 
-# Fixtures whose valid functions are NOT a declared lower-c target:
-#  - unsafe_context: phase=sema fixture; `mmio.map<T>(pa)?` C emission is not a
-#    declared target there.
-OUT_OF_SCOPE = {"unsafe_context.mc"}
+# No valid spec fixtures are currently excluded from the lower-C sweep.
+OUT_OF_SCOPE = set()
 
 CLANG = ["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
          # The harness keeps unused valid functions, so silence those two only.

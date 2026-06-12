@@ -2914,6 +2914,7 @@ const FunctionBuilder = struct {
                 break :blk self.structFieldTypeExpr(struct_name, node.name.text);
             },
             .call => |node| self.mmioReceiverReadTypeExpr(node.callee.*) orelse
+                mmioMapCallPayloadType(node) orelse
                 self.constGetCallTypeExpr(node) orelse
                 self.ptrOffsetReceiverTypeExpr(node.callee.*) orelse
                 if (self.summaries.get(self.calleeName(node.callee.*))) |summary| summary.return_type_expr else null,
@@ -2921,7 +2922,7 @@ const FunctionBuilder = struct {
             .index => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
             .grouped => |inner| self.typeExprForExpr(inner.*),
             .cast => |node| node.ty.*,
-            .try_expr => |inner| if (self.typeExprForExpr(inner.operand.*)) |ty| tryPayloadTypeExprAlias(ty, self.aliases) else null,
+            .try_expr => |inner| if (mmioMapPayloadTypeForExpr(inner.operand.*)) |ty| ty else if (self.typeExprForExpr(inner.operand.*)) |ty| tryPayloadTypeExprAlias(ty, self.aliases) else null,
             else => null,
         };
     }
@@ -2937,11 +2938,15 @@ const FunctionBuilder = struct {
                 ty
             else if (self.ptrOffsetReceiverType(node.callee.*)) |ty|
                 ty
+            else if (mmioMapCallPayloadType(node)) |ty|
+                .{ .nullable_pointer = .{ .kind = .single, .mutability = .none, .child = typeText(ty) } }
             else if (directCalleeName(node.callee.*)) |callee|
                 if (self.summaries.get(callee)) |summary| summary.return_ty else .unknown
             else
                 .unknown,
-            .try_expr => |inner| switch (self.exprType(inner.operand.*)) {
+            .try_expr => |inner| if (mmioMapPayloadTypeForExpr(inner.operand.*)) |ty|
+                valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
+            else switch (self.exprType(inner.operand.*)) {
                 .nullable_pointer => |name| .{ .pointer = name },
                 .result => |shape| valueTypeFromTypeName(shape.ok, self.enums, self.structs),
                 else => .unknown,
@@ -4145,6 +4150,41 @@ fn tryPayloadTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHash
         .generic => |node| if (std.mem.eql(u8, node.base.text, "Result") and node.args.len >= 1) aggregateTargetTypeAlias(node.args[0], aliases) else null,
         .qualified => |node| tryPayloadTypeExprAliasDepth(node.child.*, aliases, depth + 1),
         else => null,
+    };
+}
+
+fn mmioMapPayloadTypeForExpr(expr: ast.Expr) ?ast.TypeExpr {
+    return switch (expr.kind) {
+        .call => |call| mmioMapCallPayloadType(call),
+        .grouped => |inner| mmioMapPayloadTypeForExpr(inner.*),
+        else => null,
+    };
+}
+
+fn mmioMapCallPayloadType(call: anytype) ?ast.TypeExpr {
+    if (!isMmioMapCallName(call.callee.*) or call.type_args.len != 1) return null;
+    return .{
+        .span = call.type_args[0].span,
+        .kind = .{ .generic = .{
+            .base = .{ .text = "MmioPtr", .span = call.type_args[0].span },
+            .args = call.type_args[0..1],
+        } },
+    };
+}
+
+fn isMmioMapCallName(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "map") and isIdentNamed(member.base.*, "mmio"),
+        .grouped => |inner| isMmioMapCallName(inner.*),
+        else => false,
+    };
+}
+
+fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, name),
+        .grouped => |inner| isIdentNamed(inner.*, name),
+        else => false,
     };
 }
 
