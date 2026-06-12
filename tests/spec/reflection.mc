@@ -19,6 +19,11 @@ enum DefaultMode {
     fast,
 }
 
+packed bits ModeBits: u8 {
+    normal: bool,
+    fast: bool,
+}
+
 union ReflectToken {
     number: u32,
     eof,
@@ -69,6 +74,22 @@ fn accept_spec_sizeof_slice() -> usize {
     return sizeof([]u8);
 }
 
+fn accept_spec_sizeof_reg() -> usize {
+    return sizeof(Reg<u8, .read>);
+}
+
+fn accept_spec_alignof_reg() -> usize {
+    return alignof(Reg<u8, .read>);
+}
+
+fn accept_spec_sizeof_reg_bits() -> usize {
+    return sizeof(RegBits<u8, ModeBits, .read>);
+}
+
+fn accept_spec_alignof_reg_bits() -> usize {
+    return alignof(RegBits<u8, ModeBits, .read>);
+}
+
 fn accept_spec_repr_of_enum() -> usize {
     return repr_of(Mode);
 }
@@ -95,6 +116,14 @@ fn accept_spec_repr_of_mmio_ptr() -> usize {
 
 fn accept_spec_repr_of_dma_buf() -> usize {
     return repr_of(DmaBuf<Packet, .coherent>);
+}
+
+fn accept_spec_repr_of_reg() -> usize {
+    return repr_of(Reg<u8, .read>);
+}
+
+fn accept_spec_repr_of_reg_bits() -> usize {
+    return repr_of(RegBits<u8, ModeBits, .read>);
 }
 
 fn accept_spec_sizeof_default_enum() -> usize {
@@ -158,6 +187,12 @@ fn accept_comptime_reflection_offsets() -> void {
         assert(sizeof(DefaultMode) == 8);
         assert(alignof(DefaultMode) == 8);
         assert(repr_of(DefaultMode) == 8);
+        assert(sizeof(Reg<u8, .read>) == 1);
+        assert(alignof(Reg<u8, .read>) == 1);
+        assert(repr_of(Reg<u8, .read>) == 1);
+        assert(sizeof(RegBits<u8, ModeBits, .read>) == 1);
+        assert(alignof(RegBits<u8, ModeBits, .read>) == 1);
+        assert(repr_of(RegBits<u8, ModeBits, .read>) == 1);
         assert(sizeof([]u8) == 16);
         assert(alignof([]u8) == 8);
         assert(field_offset(Packet, .len) == 0);

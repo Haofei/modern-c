@@ -1578,6 +1578,9 @@ const CEmitter = struct {
                 if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1) {
                     return self.appendType(out, node.args[0], style);
                 }
+                if ((std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits")) and node.args.len >= 1) {
+                    return self.appendType(out, node.args[0], style);
+                }
                 if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2) {
                     return self.appendPointerType(out, node.args[0], .mut, style);
                 }

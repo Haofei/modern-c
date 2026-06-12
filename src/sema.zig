@@ -2693,7 +2693,9 @@ pub const Checker = struct {
     }
 
     fn checkReflectedType(self: *Checker, ty: ast.TypeExpr, ctx: Context) void {
-        self.checkReflectedGenericTypeArgs(ty, ctx);
+        var reflection_ctx = ctx;
+        reflection_ctx.allow_mmio_register_type = true;
+        self.checkReflectedGenericTypeArgs(ty, reflection_ctx);
         if (reflectionGenericHasWrongArity(ty)) {
             self.errorCode(ty.span, "E_REFLECTION_GENERIC_ARG_COUNT", "reflection generic type has the wrong number of type arguments");
             return;
