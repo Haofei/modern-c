@@ -6,7 +6,12 @@
 
 extern fn consume_array(xs: [2]u32) -> void;
 
+struct Cell {
+    value: u32,
+}
+
 global default_values: [2]u32 = .{1, 2};
+global default_cells: [2]Cell = .{ .{ .value = 1 }, .{ .value = 2 } };
 
 fn accept_local_array_literal() -> u32 {
     let xs: [2]u32 = .{1, 2};
@@ -30,6 +35,11 @@ fn accept_assignment_array_literal() -> [2]u32 {
 
 fn accept_call_array_literal() -> void {
     consume_array(.{7, 8});
+}
+
+fn accept_nested_struct_array_literal() -> u32 {
+    let cells: [2]Cell = .{ .{ .value = 9 }, .{ .value = 10 } };
+    return cells[1].value;
 }
 
 fn reject_bool_array_length() -> void {

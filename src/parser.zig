@@ -811,7 +811,7 @@ pub const Parser = struct {
         if (self.match(.dot)) {
             const dot = self.lxTokenBeforeCurrent();
             if (self.match(.l_brace)) {
-                if (self.current.kind == .dot) {
+                if (self.startsStructLiteralField()) {
                     var fields: std.ArrayList(ast.StructLiteralField) = .empty;
                     errdefer fields.deinit(self.allocator);
                     while (true) {
@@ -1089,6 +1089,14 @@ pub const Parser = struct {
     fn advance(self: *Parser) void {
         self.previous = self.current;
         self.current = self.lx.next();
+    }
+
+    fn startsStructLiteralField(self: *Parser) bool {
+        if (self.current.kind != .dot) return false;
+        var lx = self.lx;
+        const name = lx.next();
+        if (!self.isSymbol(name.kind)) return false;
+        return lx.next().kind == .equal;
     }
 
     fn isSymbol(_: *Parser, kind: token.Kind) bool {
