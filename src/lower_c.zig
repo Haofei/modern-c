@@ -2683,14 +2683,7 @@ const CEmitter = struct {
     }
 
     fn emitResultSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
-        const subject = if (self.resultSubjectForExpr(node.subject, locals)) |subject|
-            subject
-        else blk: {
-            const result_ty = self.resultTypeForExpr(node.subject, locals) orelse return false;
-            const temp = try self.emitSequencedCallArgTemp(node.subject, locals, result_ty);
-            try locals.put(temp.name, try self.localInfoFromType(result_ty));
-            break :blk self.resultSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = node.subject.span } }, .span = node.subject.span }, locals).?;
-        };
+        const subject = (try self.resultSubjectForValueExpr(node.subject, locals)) orelse return false;
         var emitted_any = false;
         var seen_ok = false;
         var seen_err = false;
@@ -2890,6 +2883,14 @@ const CEmitter = struct {
         const ok_ty = info.result_ok_c_type orelse return null;
         const err_ty = info.result_err_c_type orelse return null;
         return .{ .name = name, .ok_c_type = ok_ty, .err_c_type = err_ty };
+    }
+
+    fn resultSubjectForValueExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?ResultSwitchSubject {
+        if (self.resultSubjectForExpr(expr, locals)) |subject| return subject;
+        const result_ty = self.resultTypeForExpr(expr, locals) orelse return null;
+        const temp = try self.emitSequencedCallArgTemp(expr, locals, result_ty);
+        try locals.put(temp.name, try self.localInfoFromType(result_ty));
+        return self.resultSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = expr.span } }, .span = expr.span }, locals);
     }
 
     fn resultSwitchBranch(self: *CEmitter, patterns: []const ast.Pattern, subject: ResultSwitchSubject) !?ResultSwitchBranch {
@@ -3251,43 +3252,22 @@ const CEmitter = struct {
             try self.out.print(self.allocator, "/* unsupported result if-let tag: {s} */\n", .{tag_bind.tag.text});
             return error.UnsupportedCEmission;
         };
-        const source_name = switch (node.value.kind) {
-            .ident => |ident| ident.text,
-            .grouped => |inner| switch (inner.kind) {
-                .ident => |ident| ident.text,
-                else => null,
-            },
-            else => null,
-        } orelse blk: {
-            const result_ty = self.resultTypeForExpr(node.value, locals) orelse {
-                try self.writeIndent();
-                try self.out.print(self.allocator, "/* unsupported result if-let value: {s} */\n", .{@tagName(node.value.kind)});
-                return error.UnsupportedCEmission;
-            };
-            const temp = try self.emitSequencedCallArgTemp(node.value, locals, result_ty);
-            try locals.put(temp.name, try self.localInfoFromType(result_ty));
-            break :blk temp.name;
-        };
-        const source_info = locals.get(source_name) orelse {
+        const subject = (try self.resultSubjectForValueExpr(node.value, locals)) orelse {
             try self.writeIndent();
-            try self.out.print(self.allocator, "/* unsupported result if-let source: {s} */\n", .{source_name});
+            try self.out.print(self.allocator, "/* unsupported result if-let value: {s} */\n", .{@tagName(node.value.kind)});
             return error.UnsupportedCEmission;
         };
-        const bind_ty = (if (is_ok) source_info.result_ok_c_type else source_info.result_err_c_type) orelse {
-            try self.writeIndent();
-            try self.out.print(self.allocator, "/* unsupported result if-let source type: {s} */\n", .{source_name});
-            return error.UnsupportedCEmission;
-        };
+        const bind_ty = if (is_ok) subject.ok_c_type else subject.err_c_type;
         const payload_field = if (is_ok) "ok" else "err";
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "if ({s}{s}.is_ok) {{\n", .{ if (is_ok) "" else "!", source_name });
+        try self.out.print(self.allocator, "if ({s}{s}.is_ok) {{\n", .{ if (is_ok) "" else "!", subject.name });
         var then_locals = try cloneLocals(self.allocator, locals.*);
         defer then_locals.deinit();
         try then_locals.put(tag_bind.binding.text, .{ .c_type = bind_ty });
         self.indent += 1;
         try self.writeIndent();
-        try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s}.payload.{s};\n", .{ bind_ty, tag_bind.binding.text, source_name, payload_field });
+        try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s}.payload.{s};\n", .{ bind_ty, tag_bind.binding.text, subject.name, payload_field });
         try self.emitBlockItems(node.then_block, &then_locals, return_ty);
         self.indent -= 1;
         try self.writeIndent();
@@ -8303,6 +8283,7 @@ const CEmitter = struct {
     }
 
     fn resultTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (self.resultTypeFromSourceExpr(expr, locals)) |ty| return ty;
         return switch (expr.kind) {
             .ident => |ident| blk: {
                 const info = locals.get(ident.text) orelse break :blk null;
@@ -8317,6 +8298,11 @@ const CEmitter = struct {
             .grouped => |inner| self.resultTypeForExpr(inner.*, locals),
             else => null,
         };
+    }
+
+    fn resultTypeFromSourceExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return null;
+        return if (resultPayloadTypeForTag(ty, "ok") != null and resultPayloadTypeForTag(ty, "err") != null) ty else null;
     }
 
     fn enumReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {

@@ -6,6 +6,10 @@ extern fn make_result() -> Result<u32, Error>;
 extern fn make_result_from(seed: u32) -> Result<u32, Error>;
 extern fn next_seed() -> u32;
 
+struct ResultBox {
+    result: Result<u32, Error>,
+}
+
 fn unwrap_ok(result: Result<u32, Error>) -> u32 {
     return result?;
 }
@@ -30,6 +34,22 @@ fn unwrap_call_seed_or_zero() -> u32 {
     }
 }
 
+fn unwrap_field_or_zero(box: ResultBox) -> u32 {
+    if let ok(value) = box.result {
+        return value;
+    } else {
+        return 0;
+    }
+}
+
+fn field_is_error(box: ResultBox) -> bool {
+    if let err(e) = box.result {
+        return true;
+    } else {
+        return false;
+    }
+}
+
 fn is_error(result: Result<u32, Error>) -> bool {
     if let err(e) = result {
         return true;
@@ -40,6 +60,17 @@ fn is_error(result: Result<u32, Error>) -> bool {
 
 fn result_switch_value(result: Result<u32, Error>) -> u32 {
     switch result {
+        ok(value) => {
+            return value;
+        },
+        err(e) => {
+            return 0;
+        },
+    }
+}
+
+fn result_switch_field(box: ResultBox) -> u32 {
+    switch box.result {
         ok(value) => {
             return value;
         },
