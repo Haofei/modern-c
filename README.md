@@ -213,8 +213,9 @@ LLVM backend status:
   `std/{core,bits,math,ascii,fmt,addr}` runtime checks, plus LLVM object
   coverage for the framebuffer/gpio/irq/spi/timer/uart hardware demos and the
   hosted elementwise demo, LLVM target-object coverage for every non-bad
-  `kernel/` module, LLVM QEMU boot coverage for the integrated RISC-V kernel
-  image and integrated kernel+network image, LLVM link/run coverage for the hosted elementwise
+  `kernel/` module, LLVM QEMU boot coverage for typed MMIO, trap/timer,
+  cooperative thread switching, round-robin scheduling, the integrated RISC-V
+  kernel image, and the integrated kernel+network image, LLVM link/run coverage for the hosted elementwise
   stdin/stdout round trip, and LLVM link/run coverage for every current
   data-driven host-driver manifest row. LLVM object debug info is verified for
   DWARF file/function/source line mappings across calls, control flow,
@@ -334,10 +335,13 @@ llvm-demo-test` compiles the framebuffer/gpio/irq/spi/timer/uart hardware demo
 drivers and the hosted elementwise demo through LLVM to non-empty objects under
 the same hidden-assumption token check. `zig build llvm-kernel-test` compiles
 every non-bad `kernel/` module through LLVM to assemblable IR and non-empty
-target objects. `zig build llvm-kmain-test` boots the integrated kernel image
-from an LLVM-lowered MC object under QEMU, and `zig build llvm-kmain-net-test`
-boots the integrated kernel+network image and verifies the transmitted UDP
-packet in the QEMU pcap. `zig build llvm-hosted-demo-test`
+target objects. `zig build llvm-qemu-test`, `zig build llvm-trap-test`, `zig
+build llvm-thread-test`, and `zig build llvm-sched-test` boot LLVM-lowered
+bare-metal RISC-V QEMU images for typed MMIO, timer traps, cooperative context
+switching, and round-robin scheduling. `zig build llvm-kmain-test` boots the
+integrated kernel image from an LLVM-lowered MC object under QEMU, and `zig build
+llvm-kmain-net-test` boots the integrated kernel+network image and verifies the
+transmitted UDP packet in the QEMU pcap. `zig build llvm-hosted-demo-test`
 links and runs the hosted elementwise demo through LLVM, libc, and libm, then
 verifies the binary stdin/stdout `f32` round trip. `zig build
 llvm-host-suite-test` reuses every current data-driven host test manifest row

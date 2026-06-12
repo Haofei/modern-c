@@ -4165,9 +4165,13 @@ object files under the same hidden-assumption token check.
 The `zig build llvm-kernel-test` gate compiles every non-bad `kernel/` module
 through LLVM to assemblable IR and non-empty target objects, using a RISC-V
 target for the main kernel modules and an x86-64 target for x86 arch modules.
-The `zig build llvm-kmain-test` and `zig build llvm-kmain-net-test` gates boot
-LLVM-lowered integrated RISC-V kernel images under QEMU; the network variant also
-checks that QEMU captures the expected transmitted UDP payload.
+The `zig build llvm-qemu-test`, `zig build llvm-trap-test`, `zig build
+llvm-thread-test`, and `zig build llvm-sched-test` gates boot LLVM-lowered
+bare-metal RISC-V QEMU images for typed MMIO, timer traps, cooperative context
+switching, and round-robin scheduling. The `zig build llvm-kmain-test` and `zig
+build llvm-kmain-net-test` gates boot LLVM-lowered integrated RISC-V kernel
+images under QEMU; the network variant also checks that QEMU captures the
+expected transmitted UDP payload.
 The `zig build llvm-hosted-demo-test` gate links and runs the hosted
 elementwise demo through LLVM, libc, and libm, then verifies its binary
 stdin/stdout `f32` round trip.

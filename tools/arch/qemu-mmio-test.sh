@@ -1,53 +1,50 @@
 #!/usr/bin/env bash
 # QEMU MMIO execution test.
 #
-# Lowers a typed-MMIO MC program to C, links it into a bare-metal riscv64 image,
-# runs it under qemu-system-riscv64 -machine virt, and checks that the emulated
-# 16550 UART actually received the bytes written through the MMIO lowering.
+# Lowers a typed-MMIO MC program through the selected backend, links it into a
+# bare-metal riscv64 image, runs it under qemu-system-riscv64 -machine virt, and
+# checks that the emulated 16550 UART actually received the bytes written through
+# the MMIO lowering.
 #
-# Usage: tools/arch/qemu-mmio-test.sh <path-to-mcc>
+# Usage: tools/arch/qemu-mmio-test.sh <path-to-mcc> [c|llvm]
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
-HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
+BACKEND="${2:-c}"
+CLANG="${CLANG:-clang}"
+LLD="${LLD:-ld.lld}"
+LLC="${LLC:-llc}"
+QEMU="${QEMU:-qemu-system-riscv64}"
+
+source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
+HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/arch/uart_mmio.mc"
 RUNTIME="$HERE/tests/qemu/runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="MMIO-OK"
+TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-qemu-mmio-test" || echo "qemu-mmio-test")
 
-CLANG="${CLANG:-clang}"
-LLD="${LLD:-ld.lld}"
-QEMU="${QEMU:-qemu-system-riscv64}"
-
-skip() { echo "SKIP: qemu-mmio-test ($1)"; exit 0; }
-command -v "$CLANG" >/dev/null 2>&1 || skip "clang not found"
-command -v "$LLD" >/dev/null 2>&1 || skip "ld.lld not found"
-command -v "$QEMU" >/dev/null 2>&1 || skip "$QEMU not found"
-"$CLANG" --print-targets 2>/dev/null | grep -q riscv64 || skip "clang has no riscv64 target"
+kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
-        -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra)
+        -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
+        -fno-builtin)
 
-# 1. MC -> C (the typed-MMIO lowering under test).
-"$MCC" emit-c "$SRC" >"$WORK/uart.c"
+kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/uart.o" "$WORK"
+kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
+"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/uart.o" $SUPPORT_OBJ -o "$WORK/test.elf"
 
-# 2. Compile the lowered MMIO code + the bare-metal runtime, and link at the
-#    `virt` RAM base.
-"$CLANG" "${CFLAGS[@]}" -c "$WORK/uart.c" -o "$WORK/uart.o"
-"$CLANG" "${CFLAGS[@]}" -c "$RUNTIME" -o "$WORK/runtime.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/uart.o" -o "$WORK/test.elf"
-
-# 3. Run on emulated hardware and capture the UART output.
 OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic -kernel "$WORK/test.elf" 2>/dev/null || true)"
 
 if printf '%s' "$OUT" | grep -q "$EXPECT"; then
-    echo "PASS: qemu-mmio-test — UART received '$EXPECT' via typed MMIO"
+    echo "PASS: $TEST_NAME — $BACKEND backend UART received '$EXPECT' via typed MMIO"
     exit 0
 fi
-echo "FAIL: qemu-mmio-test — expected '$EXPECT' in UART output, got:"
+echo "FAIL: $TEST_NAME — expected '$EXPECT' in UART output, got:"
 printf '%s\n' "$OUT"
 exit 1

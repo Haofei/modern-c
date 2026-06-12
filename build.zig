@@ -134,13 +134,24 @@ pub fn build(b: *std.Build) void {
     llvm_c_obj_sweep_step.dependOn(&llvm_c_obj_sweep_cmd.step);
 
     const qemu_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/arch/qemu-mmio-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     qemu_test_cmd.step.dependOn(b.getInstallStep());
     const qemu_test_step = b.step("qemu-test", "Run the typed-MMIO program on emulated hardware under QEMU");
     qemu_test_step.dependOn(&qemu_test_cmd.step);
+
+    const llvm_qemu_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/qemu-mmio-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_qemu_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qemu_test_step = b.step("llvm-qemu-test", "Run the LLVM-lowered typed-MMIO program under QEMU");
+    llvm_qemu_test_step.dependOn(&llvm_qemu_test_cmd.step);
 
     const cc_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1168,31 +1179,64 @@ pub fn build(b: *std.Build) void {
     fnptr_test_step.dependOn(&fnptr_test_cmd.step);
 
     const trap_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/arch/trap-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     trap_test_cmd.step.dependOn(b.getInstallStep());
     const trap_test_step = b.step("trap-test", "Run the typed-CPU trap/timer interrupt path under QEMU");
     trap_test_step.dependOn(&trap_test_cmd.step);
 
+    const llvm_trap_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/trap-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_trap_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_trap_test_step = b.step("llvm-trap-test", "Run the LLVM-lowered typed-CPU trap/timer path under QEMU");
+    llvm_trap_test_step.dependOn(&llvm_trap_test_cmd.step);
+
     const thread_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/thread-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     thread_test_cmd.step.dependOn(b.getInstallStep());
     const thread_test_step = b.step("thread-test", "Run cooperative context switching (main/worker ping-pong) under QEMU");
     thread_test_step.dependOn(&thread_test_cmd.step);
 
+    const llvm_thread_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/thread-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_thread_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_thread_test_step = b.step("llvm-thread-test", "Run LLVM-lowered cooperative context switching under QEMU");
+    llvm_thread_test_step.dependOn(&llvm_thread_test_cmd.step);
+
     const sched_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/proc/sched-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     sched_test_cmd.step.dependOn(b.getInstallStep());
     const sched_test_step = b.step("sched-test", "Run the round-robin scheduler (3 heap-stacked threads) under QEMU");
     sched_test_step.dependOn(&sched_test_cmd.step);
+
+    const llvm_sched_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/sched-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_sched_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_sched_test_step = b.step("llvm-sched-test", "Run the LLVM-lowered round-robin scheduler under QEMU");
+    llvm_sched_test_step.dependOn(&llvm_sched_test_cmd.step);
 
     const preempt_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1390,6 +1434,10 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_kernel_test_cmd.step);
     m0_step.dependOn(&llvm_hosted_demo_test_cmd.step);
     m0_step.dependOn(&llvm_host_suite_test_cmd.step);
+    m0_step.dependOn(&llvm_qemu_test_cmd.step);
+    m0_step.dependOn(&llvm_trap_test_cmd.step);
+    m0_step.dependOn(&llvm_thread_test_cmd.step);
+    m0_step.dependOn(&llvm_sched_test_cmd.step);
     m0_step.dependOn(&llvm_kmain_test_cmd.step);
     m0_step.dependOn(&llvm_kmain_net_test_cmd.step);
 
