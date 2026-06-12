@@ -4178,16 +4178,18 @@ llvm-timeout-test`, `zig build llvm-signal-test`, `zig build llvm-cap-test`,
 llvm-privilege-test`, `zig build llvm-usched-test`, `zig build
 llvm-paging-activate-test`, `zig build llvm-demand-test`, `zig build
 llvm-mmap-test`, `zig build llvm-contain-test`, `zig build llvm-cow-test`, and
-`zig build llvm-isolation-test` gates boot LLVM-lowered bare-metal RISC-V QEMU
-images for typed MMIO, timer traps, cooperative context switching, round-robin
-scheduling, syscall dispatch, U-mode entry, process lifecycle, ELF load/run, VFS
-syscalls, socket syscalls, exec, `satp` address-space switching, per-process
-page tables, context switches that swap address spaces, scheduler VM switching,
-IPC request/reply, multi-slot IPC, registry lookup, IPC timeout, signal delivery,
-capability-scoped server access, restart supervision, heartbeat liveness,
-least-privilege gates, userspace-set scheduling policy, Sv39 activation, demand
-paging, anonymous mmap, crash containment, copy-on-write, and per-server MMU
-isolation.
+`zig build llvm-isolation-test`, `zig build llvm-block-server-test`, `zig build
+llvm-fs-server-test`, and `zig build llvm-net-server-test` gates boot
+LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer traps,
+cooperative context switching, round-robin scheduling, syscall dispatch, U-mode
+entry, process lifecycle, ELF load/run, VFS syscalls, socket syscalls, exec,
+`satp` address-space switching, per-process page tables, context switches that
+swap address spaces, scheduler VM switching, IPC request/reply, multi-slot IPC,
+registry lookup, IPC timeout, signal delivery, capability-scoped server access,
+restart supervision, heartbeat liveness, least-privilege gates,
+userspace-set scheduling policy, Sv39 activation, demand paging, anonymous mmap,
+crash containment, copy-on-write, per-server MMU isolation, and user-mode
+block/filesystem/network servers.
 The `zig build llvm-kmain-test` and `zig build llvm-kmain-net-test` gates boot
 LLVM-lowered integrated RISC-V kernel images under QEMU; the network variant also
 checks that QEMU captures the expected transmitted UDP payload.

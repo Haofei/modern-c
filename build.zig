@@ -513,31 +513,64 @@ pub fn build(b: *std.Build) void {
     pool_test_step.dependOn(&pool_test_cmd.step);
 
     const block_server_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/fs/block-server-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     block_server_test_cmd.step.dependOn(b.getInstallStep());
     const block_server_test_step = b.step("block-server-test", "storage driver as a user-mode server (block read/write via IPC)");
     block_server_test_step.dependOn(&block_server_test_cmd.step);
 
+    const llvm_block_server_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/fs/block-server-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_block_server_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_block_server_test_step = b.step("llvm-block-server-test", "Run LLVM-lowered block server under QEMU");
+    llvm_block_server_test_step.dependOn(&llvm_block_server_test_cmd.step);
+
     const fs_server_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/fs/fs-server-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     fs_server_test_cmd.step.dependOn(b.getInstallStep());
     const fs_server_test_step = b.step("fs-server-test", "filesystem as a user-mode server (open/write/read via IPC)");
     fs_server_test_step.dependOn(&fs_server_test_cmd.step);
 
+    const llvm_fs_server_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/fs/fs-server-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_fs_server_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_fs_server_test_step = b.step("llvm-fs-server-test", "Run LLVM-lowered filesystem server under QEMU");
+    llvm_fs_server_test_step.dependOn(&llvm_fs_server_test_cmd.step);
+
     const net_server_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/net/net-server-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     net_server_test_cmd.step.dependOn(b.getInstallStep());
     const net_server_test_step = b.step("net-server-test", "UDP socket layer as a user-mode server (bind/recv via IPC)");
     net_server_test_step.dependOn(&net_server_test_cmd.step);
+
+    const llvm_net_server_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/net/net-server-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_net_server_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_net_server_test_step = b.step("llvm-net-server-test", "Run LLVM-lowered network server under QEMU");
+    llvm_net_server_test_step.dependOn(&llvm_net_server_test_cmd.step);
 
     const constgen_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1759,6 +1792,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_demand_test_cmd.step);
     m0_step.dependOn(&llvm_mmap_test_cmd.step);
     m0_step.dependOn(&llvm_paging_activate_test_cmd.step);
+    m0_step.dependOn(&llvm_block_server_test_cmd.step);
+    m0_step.dependOn(&llvm_fs_server_test_cmd.step);
+    m0_step.dependOn(&llvm_net_server_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
