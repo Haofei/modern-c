@@ -55,6 +55,11 @@ const fn classify(x: u32) -> u32 {
     }
 }
 
+const fn require_power_of_two(x: u32) -> u32 {
+    assert(is_power_of_two(x));
+    return x;
+}
+
 const fn make_squares() -> [4]usize {
     var a: [4]usize = .{0, 0, 0, 0};
     var i: usize = 0;
@@ -207,6 +212,19 @@ fn reject_comptime_const_fn_arithmetic() -> void {
     comptime {
         // EXPECT_ERROR: E_COMPTIME_TRAP
         assert(align_up(5, 8) == 16);
+    }
+}
+
+fn accept_comptime_const_fn_assert() -> void {
+    comptime {
+        assert(require_power_of_two(16) == 16);
+    }
+}
+
+fn reject_comptime_const_fn_assert() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(require_power_of_two(18) == 18);
     }
 }
 

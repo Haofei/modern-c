@@ -608,6 +608,16 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                 const expr = maybe_expr orelse return .unknown;
                 return .{ .returned = foldComptimeExpr(scope, expr) };
             },
+            .assert => |expr| {
+                switch (foldComptimeExpr(scope, expr)) {
+                    .value => |value| switch (value) {
+                        .boolean => |ok| if (!ok) return .trap,
+                        .int, .array, .@"struct" => return .unknown,
+                    },
+                    .trap => return .trap,
+                    .unknown => return .unknown,
+                }
+            },
             .@"break" => return .broke,
             .@"continue" => return .continued,
             .loop => |loop| {
@@ -1124,6 +1134,49 @@ test "foldComptimeExpr evaluates const fn calls" {
         .args = &.{},
     } } });
     try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, call_unknown.*)) == .unknown);
+}
+
+test "foldComptimeExpr evaluates assert statements in const fn calls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // const fn require_four(x: u32) -> u32 { assert(x == 4); return x; }
+    const x_param = ast.Param{ .name = .{ .text = "x", .span = zero_span }, .ty = .{ .span = zero_span, .kind = .{ .name = .{ .text = "u32", .span = zero_span } } } };
+    const assert_expr = try testBinary(a, .eq, try testIdent(a, "x"), try testInt(a, "4"));
+    const assert_stmt = ast.Stmt{ .span = zero_span, .kind = .{ .assert = assert_expr.* } };
+    const ret_stmt = ast.Stmt{ .span = zero_span, .kind = .{ .@"return" = (try testIdent(a, "x")).* } };
+    const fn_decl = ast.FnDecl{
+        .name = .{ .text = "require_four", .span = zero_span },
+        .params = try a.dupe(ast.Param, &.{x_param}),
+        .return_type = null,
+        .body = .{ .span = zero_span, .items = try a.dupe(ast.Stmt, &.{ assert_stmt, ret_stmt }) },
+        .is_const = true,
+        .abi = null,
+        .exported = false,
+    };
+
+    var funcs = std.StringHashMap(ast.FnDecl).init(std.testing.allocator);
+    defer funcs.deinit();
+    try funcs.put("require_four", fn_decl);
+
+    var scope = ComptimeScope.init(std.testing.allocator);
+    defer scope.deinit();
+    scope.funcs = &funcs;
+
+    const call_ok = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .call = .{
+        .callee = try testIdent(a, "require_four"),
+        .type_args = &.{},
+        .args = try a.dupe(ast.Expr, &.{(try testInt(a, "4")).*}),
+    } } });
+    try std.testing.expectEqual(@as(i128, 4), foldComptimeExpr(&scope, call_ok.*).value.int);
+
+    const call_trap = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .call = .{
+        .callee = try testIdent(a, "require_four"),
+        .type_args = &.{},
+        .args = try a.dupe(ast.Expr, &.{(try testInt(a, "5")).*}),
+    } } });
+    try std.testing.expect(std.meta.activeTag(foldComptimeExpr(&scope, call_trap.*)) == .trap);
 }
 
 fn testU32(name: []const u8) ast.Param {

@@ -51,12 +51,13 @@ Prototype or incomplete:
 - Floating-point reductions `reduce.sum_left` / `reduce.sum_fast` from section
   8.3 lower to explicit typed C loops; `sum_fast` is currently conservative
   and does not yet enable reassociation/vectorization.
-- Full comptime execution (§22): the comptime evaluator currently const-folds
-  arithmetic and enforces the comptime effect rules, but does not yet interpret
-  arbitrary comptime code.
-- Production MIR optimizer use: MIR records scoped no-overflow range facts for
-  covered unchecked arithmetic, but optimizer consumption and broader range
-  algebra are not implemented yet.
+- Full comptime execution (§22): the evaluator handles scalar folding, const
+  globals, const-fn calls with loops/for/switch/asserts, aggregate literals and
+  mutable aggregate updates, and comptime/type feedback; broader arbitrary
+  interpreter coverage is still incomplete.
+- Production MIR optimizer use: MIR records and consumes scoped no-overflow
+  range facts for covered unchecked arithmetic; broader range algebra and
+  optimization passes are still incomplete.
 - Full DMA/cache-coherence model (§18): typed `DmaBuf`, cache clean/invalidate,
   and the address-class rules are implemented; a complete coherence simulation
   is not.
