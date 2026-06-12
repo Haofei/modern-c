@@ -206,9 +206,10 @@ Deferred:
   `std/sync` guard, fn-pointer runtime checks, import/std merge,
   monomorphization and generic-struct runtime checks, reflection object
   lowering, manifest package builds, and multi-object
-  `std/{core,bits,math,ascii,fmt,addr}` runtime checks. Remaining work is
-  additional runtime/toolchain coverage, deeper
-  optimizer proof work, and fuller native debug mapping.
+  `std/{core,bits,math,ascii,fmt,addr}` runtime checks, plus LLVM object
+  coverage for the framebuffer/gpio/irq/spi/timer/uart hardware demos.
+  Remaining work is additional runtime/toolchain coverage, deeper optimizer
+  proof work, and fuller native debug mapping.
 
 ## Requirements
 
@@ -241,6 +242,8 @@ zig build llvm-move-test
 zig build llvm-runtime-test
 zig build llvm-toolchain-test
 zig build llvm-std-test
+zig build llvm-pkg-test
+zig build llvm-demo-test
 ```
 
 Run the compiler prototype:
@@ -304,7 +307,9 @@ links and runs import/std-merge, monomorphization, and generic-struct modules
 through LLVM, and verifies reflection modules with `check` plus LLVM object
 lowering. `zig build llvm-std-test` links and runs LLVM-built std module objects
 against a C driver. `zig build llvm-pkg-test` builds the package-manifest demo
-through LLVM, links the resulting object, and runs it.
+through LLVM, links the resulting object, and runs it. `zig build
+llvm-demo-test` compiles the framebuffer/gpio/irq/spi/timer/uart hardware demo
+drivers through LLVM to non-empty objects.
 
 ## Conformance Snapshot
 
