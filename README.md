@@ -66,6 +66,9 @@ checked indexing, `.len`, direct returns/params, and range slicing from arrays o
 slices. Scalar `switch` lowering covers bool and integer subjects, including
 multi-pattern literal arms and wildcard defaults. Core loop CFG covers `while`
 and `for` over arrays/slices with loop-local bindings plus `break`/`continue`.
+Scalar expression lowering covers integer casts, unsigned bitwise operations,
+bitwise not, and checked unsigned shifts with invalid-count and shifted-out-bit
+traps.
 
 Prototype or incomplete:
 
@@ -96,8 +99,9 @@ Deferred:
 
 - LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
   `emit-llvm` support exists for a scalar/control-flow subset and validates
-  through `llvm-as`; full aggregate ABI, object emission, debug-info lowering,
-  richer iterable forms, and broader slice/pattern workflows are still pending.
+  through `llvm-as`; object emission, debug-info lowering, richer iterable
+  forms, broader aggregate ABI/layout cases, and broader slice/pattern workflows
+  are still pending.
 
 ## Requirements
 

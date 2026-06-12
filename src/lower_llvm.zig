@@ -259,6 +259,7 @@ const LlvmEmitter = struct {
             .struct_literal => |fields| try self.emitStructLiteralValue(expected_ty, fields),
             .binary => |node| try self.emitBinary(node, expected_ty),
             .unary => |node| try self.emitUnary(node, expected_ty),
+            .cast => |node| try self.emitCast(node.value.*, node.ty.*),
             .address_of => |inner| try self.emitAddressOf(inner.*),
             .deref => |inner| try self.emitDeref(inner.*, expected_ty),
             .index => |node| try self.emitIndexLoad(node),
@@ -881,6 +882,10 @@ const LlvmEmitter = struct {
         return switch (node.op) {
             .add, .sub, .mul => try self.emitCheckedArithmetic(node, ty, llvm_ty),
             .div, .mod => try self.emitCheckedDivRem(node, ty, llvm_ty),
+            .bit_and => try self.emitPlainBinary("and", node, ty, llvm_ty),
+            .bit_or => try self.emitPlainBinary("or", node, ty, llvm_ty),
+            .bit_xor => try self.emitPlainBinary("xor", node, ty, llvm_ty),
+            .shl, .shr => try self.emitCheckedShift(node, ty, llvm_ty),
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -893,8 +898,47 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ result, value });
                 break :blk result;
             },
+            .bit_not => blk: {
+                if (integerBits(ty) == null) return error.UnsupportedLlvmEmission;
+                const value = try self.emitExpr(node.expr.*, ty);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = xor {s} {s}, -1\n", .{ result, try self.llvmType(ty), value });
+                break :blk result;
+            },
             else => error.UnsupportedLlvmEmission,
         };
+    }
+
+    fn emitCast(self: *LlvmEmitter, value_expr: ast.Expr, target_ty: ast.TypeExpr) ![]const u8 {
+        const source_ty = self.exprType(value_expr) orelse {
+            return self.emitExpr(value_expr, target_ty);
+        };
+        const value = try self.emitExpr(value_expr, source_ty);
+        return try self.castValue(value, source_ty, target_ty);
+    }
+
+    fn castValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+        if (integerBits(source_ty) != null and integerBits(target_ty) != null) {
+            return try self.castIntegerValue(value, source_ty, target_ty);
+        }
+        return error.UnsupportedLlvmEmission;
+    }
+
+    fn castIntegerValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+        const source_bits = integerBits(source_ty) orelse return error.UnsupportedLlvmEmission;
+        const target_bits = integerBits(target_ty) orelse return error.UnsupportedLlvmEmission;
+        if (source_bits == target_bits) return value;
+
+        const result = try self.nextTemp();
+        const source_llvm = try self.llvmType(source_ty);
+        const target_llvm = try self.llvmType(target_ty);
+        if (source_bits < target_bits) {
+            const op: []const u8 = if (isSignedInteger(source_ty)) "sext" else "zext";
+            try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
+        } else {
+            try self.out.print(self.allocator, "  {s} = trunc {s} {s} to {s}\n", .{ result, source_llvm, value, target_llvm });
+        }
+        return result;
     }
 
     fn emitComparison(self: *LlvmEmitter, node: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
@@ -957,6 +1001,56 @@ const LlvmEmitter = struct {
             else => unreachable,
         };
         return try self.emitPlainBinaryValues(op, llvm_ty, left, right);
+    }
+
+    fn emitCheckedShift(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
+        const shifted_bits = integerBits(ty) orelse return error.UnsupportedLlvmEmission;
+        const amount_ty = self.exprType(node.right.*) orelse ty;
+        const amount_llvm = try self.llvmType(amount_ty);
+        const left = try self.emitExpr(node.left.*, ty);
+        const raw_amount = try self.emitExpr(node.right.*, amount_ty);
+
+        try self.emitShiftCountCheck(raw_amount, amount_ty, amount_llvm, shifted_bits);
+        const amount = try self.castIntegerValue(raw_amount, amount_ty, ty);
+
+        const op: []const u8 = switch (node.op) {
+            .shl => "shl",
+            .shr => if (isSignedInteger(ty)) "ashr" else "lshr",
+            else => unreachable,
+        };
+        const result = try self.emitPlainBinaryValues(op, llvm_ty, left, amount);
+        if (node.op == .shl) {
+            try self.emitLeftShiftOverflowCheck(result, left, amount, ty, llvm_ty);
+        }
+        return result;
+    }
+
+    fn emitShiftCountCheck(self: *LlvmEmitter, amount: []const u8, amount_ty: ast.TypeExpr, amount_llvm: []const u8, shifted_bits: u16) !void {
+        if (integerBits(amount_ty) == null) return error.UnsupportedLlvmEmission;
+        if (isSignedInteger(amount_ty)) {
+            const negative = try self.nextTemp();
+            const neg_trap = try self.nextLabel("trap_shift_neg");
+            const nonnegative = try self.nextLabel("shift_nonnegative");
+            try self.out.print(self.allocator, "  {s} = icmp slt {s} {s}, 0\n", .{ negative, amount_llvm, amount });
+            try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_InvalidShift()\n  unreachable\n{s}:\n", .{ negative, neg_trap, nonnegative, neg_trap, nonnegative });
+        }
+
+        const too_large = try self.nextTemp();
+        const invalid = try self.nextLabel("trap_shift_count");
+        const valid = try self.nextLabel("shift_count_ok");
+        const pred: []const u8 = if (isSignedInteger(amount_ty)) "sge" else "uge";
+        try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{ too_large, pred, amount_llvm, amount, shifted_bits });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_InvalidShift()\n  unreachable\n{s}:\n", .{ too_large, invalid, valid, invalid, valid });
+    }
+
+    fn emitLeftShiftOverflowCheck(self: *LlvmEmitter, result: []const u8, left: []const u8, amount: []const u8, ty: ast.TypeExpr, llvm_ty: []const u8) !void {
+        const reverse_op: []const u8 = if (isSignedInteger(ty)) "ashr" else "lshr";
+        const reversed = try self.emitPlainBinaryValues(reverse_op, llvm_ty, result, amount);
+        const overflow = try self.nextTemp();
+        const overflow_trap = try self.nextLabel("trap_shift_overflow");
+        const ok = try self.nextLabel("shift_overflow_ok");
+        try self.out.print(self.allocator, "  {s} = icmp ne {s} {s}, {s}\n", .{ overflow, llvm_ty, reversed, left });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_IntegerOverflow()\n  unreachable\n{s}:\n", .{ overflow, overflow_trap, ok, overflow_trap, ok });
     }
 
     fn emitPlainBinary(self: *LlvmEmitter, op: []const u8, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
@@ -1040,10 +1134,12 @@ const LlvmEmitter = struct {
     fn exprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
             .ident => |ident| self.local_types.get(ident.text) orelse self.global_types.get(ident.text),
-            .bool_literal, .unary => simpleType(expr.span, "bool"),
+            .bool_literal => simpleType(expr.span, "bool"),
+            .unary => |node| if (node.op == .logical_not) simpleType(expr.span, "bool") else self.exprType(node.expr.*),
             .int_literal => null,
             .grouped => |inner| self.exprType(inner.*),
             .call => |call| self.callReturnType(call),
+            .cast => |node| node.ty.*,
             .address_of => |inner| if (self.exprType(inner.*)) |ty| self.pointerTypeFor(ty) catch null else null,
             .deref => |inner| self.derefPointeeType(inner.*),
             .index => |node| self.indexElementType(node.base.*),
@@ -1258,11 +1354,13 @@ fn comparisonPredicate(op: ast.BinaryOp, signed: bool) ?[]const u8 {
 }
 
 fn normalizedIntLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
+    var cleaned: std.ArrayList(u8) = .empty;
     for (literal) |ch| {
-        if (ch != '_') try out.append(allocator, ch);
+        if (ch != '_') try cleaned.append(allocator, ch);
     }
-    return out.toOwnedSlice(allocator);
+    const text = try cleaned.toOwnedSlice(allocator);
+    const value = std.fmt.parseInt(i128, text, 0) catch return text;
+    return std.fmt.allocPrint(allocator, "{d}", .{value});
 }
 
 fn arrayLenValue(expr: ast.Expr) ?u64 {

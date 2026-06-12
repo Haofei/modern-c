@@ -3986,6 +3986,9 @@ indexing, `.len`, direct returns/params, and range slicing from arrays or slices
 Scalar `switch` lowering covers bool and integer subjects, including
 multi-pattern literal arms and wildcard defaults. Core loop CFG covers `while`
 and `for` over arrays/slices with loop-local bindings plus `break`/`continue`.
+Scalar expression lowering covers integer casts, unsigned bitwise operations,
+bitwise not, and checked unsigned shifts with invalid-count and shifted-out-bit
+traps.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
 Full aggregate ABI, object emission, debug-info lowering, richer iterable forms,
