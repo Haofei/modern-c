@@ -76,7 +76,9 @@ invalid-count and shifted-out-bit traps. Floating-point scalar lowering covers
 negation. Statement workflow covers expression statements, void calls, `assert`,
 nested blocks, unsafe blocks, transparent unsafe-contract blocks, `trap(...)`,
 `unreachable`, `never` functions, and `never` coercion in return position for
-the covered trap kinds. The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the
+the covered trap kinds. Unsafe machine-operation lowering covers opaque address
+classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`, and
+raw-many pointer `.offset(...)`. The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the
 covered textual IR subset to linkable object files through `llc`, and
 `zig build llvm-obj-test` validates representative scalar, statement-workflow,
 and aggregate objects.

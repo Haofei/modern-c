@@ -385,6 +385,7 @@ const LlvmEmitter = struct {
     fn emitExprStatement(self: *LlvmEmitter, expr: ast.Expr) !void {
         switch (expr.kind) {
             .call => |call| {
+                if (try self.emitBuiltinVoidCall(call)) return;
                 const callee = switch (call.callee.kind) {
                     .ident => |ident| ident.text,
                     else => return error.UnsupportedLlvmEmission,
@@ -503,6 +504,27 @@ const LlvmEmitter = struct {
             .grouped => |inner| try self.emitIndexAssignment(inner.*, value_expr),
             else => false,
         };
+    }
+
+    fn emitBuiltinVoidCall(self: *LlvmEmitter, call: anytype) !bool {
+        if (isRawStoreCall(call.callee.*)) {
+            if (call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedLlvmEmission;
+            const value_ty = call.type_args[0];
+            _ = rawScalarTypeName(value_ty) orelse return error.UnsupportedLlvmEmission;
+            const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
+            const value = try self.emitExpr(call.args[1], value_ty);
+            const ptr = try self.nextTemp();
+            const llvm_ty = try self.llvmType(value_ty);
+            try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
+            try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+            return true;
+        }
+        if (isCpuPauseCall(call.callee.*)) {
+            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
+            try self.out.appendSlice(self.allocator, "  call void asm sideeffect \"pause\", \"~{memory}\"()\n");
+            return true;
+        }
+        return false;
     }
 
     fn emitMemberAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {
@@ -992,6 +1014,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+        if (try self.emitBuiltinValueCall(call, expected_ty)) |value| return value;
         const callee = switch (call.callee.kind) {
             .ident => |ident| ident.text,
             else => return error.UnsupportedLlvmEmission,
@@ -1013,6 +1036,42 @@ const LlvmEmitter = struct {
         }
         try self.out.appendSlice(self.allocator, ")\n");
         return result;
+    }
+
+    fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) !?[]const u8 {
+        _ = expected_ty;
+        if (isPhysCall(call.callee.*)) {
+            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            return try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
+        }
+        if (isRawLoadCall(call.callee.*)) {
+            if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const value_ty = call.type_args[0];
+            _ = rawScalarTypeName(value_ty) orelse return error.UnsupportedLlvmEmission;
+            const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
+            const ptr = try self.nextTemp();
+            const result = try self.nextTemp();
+            const llvm_ty = try self.llvmType(value_ty);
+            try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
+            try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}\n", .{ result, llvm_ty, ptr });
+            return result;
+        }
+        if (isRawPtrCall(call.callee.*)) {
+            if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ result, addr });
+            return result;
+        }
+        if (self.rawManyOffsetCallInfo(call)) |info| {
+            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const base = try self.emitExpr(info.base, info.base_ty);
+            const index = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(info.element_ty), base, index });
+            return result;
+        }
+        return null;
     }
 
     fn emitVoidCall(self: *LlvmEmitter, callee: []const u8, call: anytype) !void {
@@ -1313,6 +1372,10 @@ const LlvmEmitter = struct {
                 "void"
             else if (std.mem.eql(u8, name.text, "never"))
                 "void"
+            else if (isOpaqueAddressTypeName(name.text))
+                "i64"
+            else if (std.mem.eql(u8, name.text, "c_void"))
+                "i8"
             else if (std.mem.eql(u8, name.text, "bool"))
                 "i1"
             else if (std.mem.eql(u8, name.text, "f32"))
@@ -1438,11 +1501,31 @@ const LlvmEmitter = struct {
     }
 
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+        if (builtinCallReturnType(call)) |ty| return ty;
+        if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
         const callee = switch (call.callee.kind) {
             .ident => |ident| ident.text,
             else => return null,
         };
         return if (self.fn_sigs.get(callee)) |sig| sig.ret else null;
+    }
+
+    fn rawManyOffsetCallInfo(self: *LlvmEmitter, call: anytype) ?RawManyOffsetInfo {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "offset")) return null;
+        const base_ty = self.exprType(member.base.*) orelse return null;
+        const element_ty = switch (base_ty.kind) {
+            .raw_many_pointer => |node| node.child.*,
+            else => return null,
+        };
+        return .{ .base = member.base.*, .base_ty = base_ty, .element_ty = element_ty };
     }
 
     fn isAggregateType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
@@ -1473,6 +1556,12 @@ const ArgValue = struct {
 const LoopLabels = struct {
     break_label: []const u8,
     continue_label: []const u8,
+};
+
+const RawManyOffsetInfo = struct {
+    base: ast.Expr,
+    base_ty: ast.TypeExpr,
+    element_ty: ast.TypeExpr,
 };
 
 fn restoreLocal(map: anytype, key: []const u8, old: anytype) !void {
@@ -1517,11 +1606,102 @@ fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .span = span, .text = name } } };
 }
 
+fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
+    if (isPhysCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1) return simpleType(call.callee.*.span, "PAddr");
+    if (isRawLoadCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1) return call.type_args[0];
+    if (isRawPtrCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1) {
+        const child = @constCast(&call.type_args[0]);
+        return .{
+            .span = call.callee.*.span,
+            .kind = .{ .pointer = .{ .mutability = .mut, .child = child } },
+        };
+    }
+    return null;
+}
+
 fn typeNameEql(ty: ast.TypeExpr, expected: []const u8) bool {
     return switch (ty.kind) {
         .name => |name| std.mem.eql(u8, name.text, expected),
         else => false,
     };
+}
+
+fn isRawStoreCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "store") and isIdentNamed(member.base.*, "raw"),
+        .grouped => |inner| isRawStoreCall(inner.*),
+        else => false,
+    };
+}
+
+fn isRawLoadCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "load") and isIdentNamed(member.base.*, "raw"),
+        .grouped => |inner| isRawLoadCall(inner.*),
+        else => false,
+    };
+}
+
+fn isRawPtrCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "ptr") and isIdentNamed(member.base.*, "raw"),
+        .grouped => |inner| isRawPtrCall(inner.*),
+        else => false,
+    };
+}
+
+fn isCpuPauseCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "pause") and isIdentNamed(member.base.*, "cpu"),
+        .grouped => |inner| isCpuPauseCall(inner.*),
+        else => false,
+    };
+}
+
+fn isPhysCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, "phys"),
+        .grouped => |inner| isPhysCall(inner.*),
+        else => false,
+    };
+}
+
+fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, name),
+        .grouped => |inner| isIdentNamed(inner.*, name),
+        else => false,
+    };
+}
+
+fn rawScalarTypeName(ty: ast.TypeExpr) ?[]const u8 {
+    const name = typeName(ty) orelse return null;
+    if (std.mem.eql(u8, name, "u8")) return name;
+    if (std.mem.eql(u8, name, "u16")) return name;
+    if (std.mem.eql(u8, name, "u32")) return name;
+    if (std.mem.eql(u8, name, "u64")) return name;
+    if (std.mem.eql(u8, name, "usize")) return name;
+    if (std.mem.eql(u8, name, "i8")) return name;
+    if (std.mem.eql(u8, name, "i16")) return name;
+    if (std.mem.eql(u8, name, "i32")) return name;
+    if (std.mem.eql(u8, name, "i64")) return name;
+    if (std.mem.eql(u8, name, "isize")) return name;
+    if (std.mem.eql(u8, name, "f32")) return name;
+    if (std.mem.eql(u8, name, "f64")) return name;
+    return null;
+}
+
+fn typeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |name| name.text,
+        else => null,
+    };
+}
+
+fn isOpaqueAddressTypeName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "PAddr") or
+        std.mem.eql(u8, name, "VAddr") or
+        std.mem.eql(u8, name, "DmaAddr");
 }
 
 fn trapHelperForCall(call: anytype) ?[]const u8 {
