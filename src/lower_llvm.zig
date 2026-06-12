@@ -1035,14 +1035,14 @@ const LlvmEmitter = struct {
         try self.local_slots.put(binding.text, .{ .ty = inner_ty, .ptr = binding_ptr });
 
         const then_terminated = try self.emitBlock(node.then_block, ret_ty);
-        if (!then_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        if (!then_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
 
         _ = self.local_types.remove(binding.text);
         _ = self.local_slots.remove(binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
         const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
-        if (!else_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        if (!else_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
         if (then_terminated and else_terminated) return true;
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
         return false;
@@ -1091,14 +1091,14 @@ const LlvmEmitter = struct {
         try self.local_slots.put(tag_bind.binding.text, .{ .ty = binding_ty, .ptr = binding_ptr });
 
         const then_terminated = try self.emitBlock(node.then_block, ret_ty);
-        if (!then_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        if (!then_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
 
         _ = self.local_types.remove(tag_bind.binding.text);
         _ = self.local_slots.remove(tag_bind.binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
         const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
-        if (!else_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        if (!else_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
         if (then_terminated and else_terminated) return true;
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
         return false;

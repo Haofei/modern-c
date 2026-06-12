@@ -139,8 +139,8 @@ LLVM debug metadata now includes `source_filename`, a compile unit/file record,
 function `DISubprogram` records, and line/column locations on local
 initialization stores, direct assignment stores, returns, call instructions,
 loop/break/continue branch terminators, switch/if-let dispatches, and trap-path
-plus `?` propagation and short-circuit boolean branch terminators for the
-covered backend subset, plus branch terminators in compiler-expanded
+plus `?` propagation, short-circuit boolean, and if-let join branch terminators
+for the covered backend subset, plus branch terminators in compiler-expanded
 `mem.bytes_equal` and `reduce.*` helper loops.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles textual IR
 to linkable object files through `llc`, and
@@ -173,10 +173,10 @@ Prototype or incomplete:
   `emit-llvm` now emits initial LLVM debug metadata for source files,
   functions, calls, returns, stores, loop/break/continue branch terminators,
   switch/if-let dispatches, and trap-path plus `?` propagation and
-  short-circuit boolean branch terminators, plus compiler-expanded
-  `mem.bytes_equal` and `reduce.*` helper loop branch terminators. DWARF-quality
-  native debug mapping with richer statement/expression coverage is still
-  pending.
+  short-circuit boolean and if-let join branch terminators, plus
+  compiler-expanded `mem.bytes_equal` and `reduce.*` helper loop branch
+  terminators. DWARF-quality native debug mapping with richer
+  statement/expression coverage is still pending.
 
 Deferred:
 
@@ -342,8 +342,8 @@ LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function
 subprograms, and call/return/loop-branch/switch/if-let/trap-path/`?`
-propagation/short-circuit/helper-loop branch line locations for the covered
-subset.
+propagation/short-circuit/if-let-join/helper-loop branch line locations for the
+covered subset.
 LLVM inferred-local coverage includes initializer-derived slice, array, and
 struct locals in covered expression and assignment workflows.
 LLVM aggregate layout coverage includes dependency-ordered struct/array/slice
