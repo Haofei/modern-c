@@ -10,6 +10,14 @@ fn slice_of_struct(xs: []const Inner) -> u32 {
     return xs.len;
 }
 
+extern fn make_inner_slice() -> []const Inner;
+extern fn consume_inner(inner: Inner) -> u32;
+
+fn inferred_call_slice_element() -> u32 {
+    let inner = make_inner_slice()[0];
+    return consume_inner(inner);
+}
+
 // array-of-struct: the array typedef embeds `Inner` by value, so `Inner` must
 // be fully defined first.
 fn array_of_struct(xs: [4]Inner) -> u32 {

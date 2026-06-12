@@ -3,12 +3,20 @@ struct Pair {
     right: u32,
 }
 
+struct PairBox {
+    pair: Pair,
+}
+
 global default_pair: Pair = .{ .left = 1, .right = 2 };
 
 extern fn consume_pair(pair: Pair) -> void;
 
 fn make_pair() -> Pair {
     return .{ .left = 1, .right = 2 };
+}
+
+fn make_pair_box() -> PairBox {
+    return .{ .pair = .{ .left = 9, .right = 10 } };
 }
 
 fn local_pair() -> u32 {
@@ -24,4 +32,9 @@ fn assign_pair() -> Pair {
 
 fn call_pair() -> void {
     consume_pair(.{ .left = 7, .right = 8 });
+}
+
+fn inferred_call_field_pair() -> u32 {
+    let pair = make_pair_box().pair;
+    return pair.right;
 }

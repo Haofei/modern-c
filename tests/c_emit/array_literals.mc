@@ -18,6 +18,8 @@ global default_box: MatrixBox = .{ .rows = .{ .{ 1, 2 }, .{ 3, 4 } } };
 global default_row_boxes: [2]RowBox = .{ .{ .row = .{ 1, 2 } }, .{ .row = .{ 3, 4 } } };
 
 extern fn consume_array(xs: [2]u32) -> void;
+extern fn make_matrix() -> [2][2]u32;
+extern fn consume_row(row: [2]u32) -> u32;
 
 fn make_literal() -> [2]u32 {
     return .{1, 2};
@@ -64,6 +66,11 @@ fn global_nested_array_row() -> [2]u32 {
 fn global_nested_array_row_local() -> u32 {
     let row: [2]u32 = default_matrix[0];
     return row[1];
+}
+
+fn inferred_call_nested_array_row() -> u32 {
+    let row = make_matrix()[0];
+    return consume_row(row);
 }
 
 fn assign_global_nested_array_row() -> void {

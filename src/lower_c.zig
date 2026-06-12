@@ -5893,6 +5893,8 @@ const CEmitter = struct {
     fn emitLocalCopyInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const inferred_ty = self.operandEmitType(initializer, locals) orelse return false;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
+        if (try self.emitDirectCallSliceIndexLocalInit(name, inferred_ty, initializer, locals)) return true;
+        if (try self.emitDirectCallArrayIndexLocalInit(name, inferred_ty, initializer, locals)) return true;
 
         try self.writeIndent();
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(inferred_ty, .typedef_name), try self.cIdent(name) });
@@ -8105,8 +8107,9 @@ const CEmitter = struct {
     // The array type of `expr`, if it is an array — including the element of an
     // outer array access (`m[i]` over `[N][M]T` yields `[M]T`), which enables
     // nested indexing `m[i][j]`. Returns null for non-array expressions.
-    // The declared type of a value expression (a local, global, struct field, or
-    // array element) — enough to give an enum-literal comparison operand its type.
+    // The declared type of a value expression (a local, global, call result,
+    // struct field, or array/slice element) — enough to keep inferred locals and
+    // enum-literal comparison operands typed.
     fn operandEmitType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         switch (expr.kind) {
             .ident => |ident| {
@@ -8118,7 +8121,7 @@ const CEmitter = struct {
             },
             .grouped => |inner| return self.operandEmitType(inner.*, locals),
             .member => |node| {
-                const base_ty = self.operandEmitType(node.base.*, locals) orelse return null;
+                const base_ty = self.operandEmitType(node.base.*, locals) orelse self.exprSourceTypeForEmission(node.base.*, locals) orelse return null;
                 var resolved = self.resolveAliasType(base_ty);
                 if (resolved.kind == .pointer) resolved = self.resolveAliasType(resolved.kind.pointer.child.*);
                 const struct_name = switch (resolved.kind) {
@@ -8132,9 +8135,13 @@ const CEmitter = struct {
                 return null;
             },
             .index => |node| {
-                const base_ty = self.operandEmitType(node.base.*, locals) orelse return null;
+                const base_ty = self.operandEmitType(node.base.*, locals) orelse self.exprSourceTypeForEmission(node.base.*, locals) orelse return null;
                 const resolved = self.resolveAliasType(base_ty);
-                return if (resolved.kind == .array) resolved.kind.array.child.* else null;
+                return switch (resolved.kind) {
+                    .array => resolved.kind.array.child.*,
+                    .slice => resolved.kind.slice.child.*,
+                    else => null,
+                };
             },
             else => return null,
         }
