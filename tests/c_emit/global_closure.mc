@@ -59,6 +59,18 @@ fn set_probe_at(i: usize) -> void {
     g_table[i].probe = probe_impl;
 }
 
+fn active_at(i: usize) -> bool {
+    return g_table[i].active;
+}
+fn invoke_field_at(i: usize, x: u32) -> u32 {
+    let f: closure(u32) -> u32 = g_table[i].run;
+    return f(x);
+}
+fn check_field_at(i: usize, x: u32) -> bool {
+    let p: fn(u32) -> bool = g_table[i].probe;
+    return p(x);
+}
+
 fn invoke_at(i: usize, x: u32) -> u32 {
     let s: *Slot = &g_table[i];
     let f: closure(u32) -> u32 = s.run;

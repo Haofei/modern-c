@@ -146,7 +146,7 @@
 | 状态 | 缺什么 | 现状 | 下一步 |
 |---|---|---|---|
 | `[x]` | Move through switch / if-let | 已修复；`tests/spec/move_linear.mc` 覆盖 | 继续扩展 move diagnostics |
-| `[~]` | closure/global lowering | global closure / fn pointer、global array element field assignment regression 已有 | 扩更多 nested aggregate/global assignment case |
+| `[~]` | closure/global lowering | global closure / fn pointer、global array element field read/write regression 已有 | 扩更多 nested aggregate/global assignment case |
 | `[x]` | `mmio.map(...)` emit try on `MmioPtr` | 已接入 sema / MIR / C emission；移出 spec sweep allowlist | 继续扩展 MMIO map 组合用例 |
 | `[x]` | `Result<GenericStruct, E>` 名字混淆 | 已有 `tests/c_emit/generic_structs.mc` 覆盖 lower-C monomorphized ABI | 继续扩展嵌套泛型 ABI regression |
 | `[ ]` | LLVM backend | 未开始 | C backend 稳定后再做 |

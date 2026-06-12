@@ -3616,6 +3616,7 @@ const CEmitter = struct {
             },
             .member => |node| {
                 if (try self.emitPackedBitsMember(node, locals)) return;
+                if (try self.emitGlobalArrayElementMemberLoadExpr(node, locals)) return;
                 if (self.globalMemberAccess(node, locals)) |access| {
                     try self.emitGlobalLoadExpr(access.name, access.info);
                     return;
@@ -4858,6 +4859,46 @@ const CEmitter = struct {
         try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&{s}.elems[mc_check_index_usize(", .{ access.element_info.c_type, access.element_info.race_type_name, access.base_name });
         try self.emitExpr(access.index, locals);
         try self.out.print(self.allocator, ", {s})]))", .{access.len});
+    }
+
+    fn emitGlobalArrayElementMemberLoadExpr(self: *CEmitter, member: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const index = switch (member.base.kind) {
+            .index => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .index => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const access = self.globalArrayElementAccess(index, locals) orelse return false;
+        const element_ty = self.resolveAliasType(access.element_info.source_ty);
+        const element_name = typeName(element_ty) orelse return false;
+        const struct_decl = self.structs.get(element_name) orelse return false;
+
+        const field = blk: {
+            for (struct_decl.fields) |field| {
+                if (std.mem.eql(u8, field.name.text, member.name.text)) break :blk field;
+            }
+            return false;
+        };
+        const field_info = try self.globalElementInfoFromType(field.ty);
+        const field_name = try self.cIdent(member.name.text);
+        if (field_info.aggregate) {
+            try self.out.print(self.allocator, "({s}.elems[mc_check_index_usize(", .{access.base_name});
+            try self.emitExpr(access.index, locals);
+            try self.out.print(self.allocator, ", {s})].{s})", .{ access.len, field_name });
+            return true;
+        }
+        if (field_info.pointer_like) {
+            try self.out.print(self.allocator, "(({s})__atomic_load_n(&{s}.elems[mc_check_index_usize(", .{ field_info.c_type, access.base_name });
+            try self.emitExpr(access.index, locals);
+            try self.out.print(self.allocator, ", {s})].{s}, __ATOMIC_RELAXED))", .{ access.len, field_name });
+            return true;
+        }
+        try self.out.print(self.allocator, "(({s})mc_race_load_{s}(&{s}.elems[mc_check_index_usize(", .{ field_info.c_type, field_info.race_type_name, access.base_name });
+        try self.emitExpr(access.index, locals);
+        try self.out.print(self.allocator, ", {s})].{s}))", .{ access.len, field_name });
+        return true;
     }
 
     fn emitGlobalArrayIndexAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
