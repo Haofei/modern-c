@@ -33,16 +33,23 @@ Implemented today:
 - Floating-point scalar types `f32`/`f64` end-to-end: literals, non-trapping
   IEEE arithmetic, ordering, no implicit conversion, and C lowering to
   `float`/`double` (sections 3, 8.3).
+- Integer `reduce.sum_checked<T>` lowers to C with checked accumulation.
+- A growing standard library used by the QEMU/kernel demos, including
+  `std/sync`, `std/ring`, `std/dma`, `std/endian`, `std/time`, `std/barrier`,
+  `std/virtio`, `std/virtqueue`, hosted I/O, float math intrinsics, and fixed
+  `f32x4` lane helpers in `std/vec`.
 
 The full type-checking surface of the core language spec is implemented, and
-every operation that has a defined value lowers to clang-checked C. The
-remaining items are the larger runtime/toolchain subsystems that
-`docs/implementation-plan.md` scopes out of the initial MC-C0 suite.
+most operations covered by the current spec fixtures lower to clang-checked C.
+The remaining items are the larger runtime/toolchain subsystems outside the
+initial MC-C0 snapshot.
 
 Prototype or incomplete:
 
 - Production-grade typed MIR/CFG and verifier.
-- Standard library, package manager, releases, and production toolchain support.
+- Package manager, releases, and production toolchain support.
+- Floating-point reductions `reduce.sum_left` / `reduce.sum_fast` from section
+  8.3 are still design-level; only integer `reduce.sum_checked` is implemented.
 - Full comptime execution (§22): the comptime evaluator currently const-folds
   arithmetic and enforces the comptime effect rules, but does not yet interpret
   arbitrary comptime code.
@@ -109,19 +116,22 @@ Available commands:
 runtime (libc + `-lm`); it stamps a `/* mc-profile: hosted */` marker and is the
 target for programs that use `std/hosted_io` (explicit, fallible byte I/O —
 `io_open`/`io_read`/`io_write`/`io_close`/`io_printf_f64`, each returning a
-`Result`) and `std/mathf` (the libm float intrinsics `sqrt`/`sin`/`cos`/`exp2`/
-`log2` for `f32`/`f64`). See `demo/hosted/` for the stdin→stdout float
-round-trip; run it with `zig build hosted-test`.
+`Result`) and `std/mathf` (the libm float intrinsics `sqrt`/`sin`/`cos`/
+`exp2`/`log2`/`exp`/`log`/`tanh` for `f32`/`f64`). See `demo/hosted/` for the
+stdin-to-stdout float round-trip; run it with `zig build hosted-test`.
 
 ## Conformance Snapshot
 
-The current fixture suite contains 51 spec milestones and is mostly focused on
+The current fixture suite contains 65 spec milestones and is mostly focused on
 parsing, semantic diagnostics, IR/fact inspection, and lower-C inspection
 markers. Passing fixtures do not imply full implementation of
 `docs/spec/MC_0.6.1_Final_Design.md`.
 
-`zig build m0` is the current milestone gate. It runs the spec fixture/unit
-tests and generated-C smoke fixtures together.
+`zig build m0` is the current milestone gate. It runs unit tests, the spec
+sweep, generated-C checks, toolchain/library host tests, and many QEMU-backed
+kernel/demo tests; external-tool-dependent tests self-skip when their required
+tools are absent.
 
-Generated C is currently checked by a small smoke fixture set. Unsupported C
-emission paths fail rather than silently changing source semantics.
+Generated C is checked by the `tests/c_emit` fixture suite and the spec emission
+sweep. Unsupported C emission paths fail rather than silently changing source
+semantics.

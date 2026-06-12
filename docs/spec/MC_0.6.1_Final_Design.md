@@ -2358,7 +2358,7 @@ NIC driver  ──uses──▶  std/sync     locking + linear guards          (
             ──uses──▶  std/endian   network/device byte order         (pure const fn)
             ──uses──▶  std/time     reset/link-up waits, timeouts      (on counter/serial domains)
             ──uses──▶  std/barrier  descriptor-vs-doorbell ordering    (on §17/§19 ordering)
-            ──uses──▶  std/mmio     register-field RMW, iomem copy      (on §17 MMIO)
+            ──uses──▶  std/mmio     planned register-field RMW helpers  (on §17 MMIO)
             ──uses──▶  (core)       typed MMIO §17, IrqOff §19.1, irq_context
 ```
 
@@ -2395,9 +2395,10 @@ fn lock_irqsave(l: *SpinLock) -> IrqGuard;
 fn unlock_irqrestore(g: IrqGuard) -> void;
 ```
 
-Module also provides `Mutex` (sleeping), `RwLock`, and `seqlock`. A NIC driver
-holds a `SpinLock` (via `lock_irqsave`) around TX/RX ring updates shared between
-the transmit path and the completion ISR.
+The current prototype provides the `SpinLock` API above. Sleeping `Mutex`,
+`RwLock`, and `seqlock` are planned library extensions. A NIC driver holds a
+`SpinLock` (via `lock_irqsave`) around TX/RX ring updates shared between the
+transmit path and the completion ISR.
 
 ## 28.2 `std/ring` — Generic Descriptor Ring
 
@@ -2405,16 +2406,21 @@ A NIC's TX and RX paths are bounded single-producer/single-consumer rings of
 descriptors. `Ring<T, N>` is a generic (section 22) fixed-capacity ring:
 
 ```mc
-struct Ring<T, N> { slots: [N]T, head: usize, tail: usize }
+struct Ring<T, N> { slots: [N]T, head: usize, tail: usize, count: usize }
 
-fn is_empty<T, N>(r: Ring<T, N>) -> bool;
-fn is_full<T, N>(r: Ring<T, N>)  -> bool;
-fn push<T, N>(r: Ring<T, N>, x: T) -> Ring<T, N>;   // producer; full is a trap
-fn pop<T, N>(r: Ring<T, N>)        -> (Ring<T, N>, T); // consumer
+fn ring_init(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> void;
+fn ring_len(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> usize;
+fn ring_is_empty(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> bool;
+fn ring_is_full(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> bool;
+fn ring_push(comptime T: type, comptime N: usize, r: *mut Ring<T, N>, x: T) -> bool;
+fn ring_front(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> T;
+fn ring_pop(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> T;
 ```
 
-A `comptime N: usize` capacity makes the ring size a type parameter. Descriptors
-carry `DmaAddr` (section 18) for the buffer each slot points at.
+A `comptime N: usize` capacity makes the ring size a type parameter. The
+current API mutates the ring in place; `ring_push` returns `false` when full,
+while `ring_front` and `ring_pop` trap if the ring is empty. Descriptors carry
+`DmaAddr` (section 18) for the buffer each slot points at.
 
 ## 28.3 `std/endian` — Byte Order
 
@@ -2438,11 +2444,14 @@ Reset sequences, link-up polling, and DMA timeouts need bounded waits. Built on
 the `counter`/`serial` arithmetic domains (which model tick wraparound):
 
 ```mc
-fn read_ticks() -> Ticks;                       // monotonic counter
-fn elapsed(a: Ticks, b: Ticks) -> Ticks;        // wrap-correct difference
-fn udelay(us: u32) -> void;                      // busy-wait microseconds
+type Ticks = wrap<u64>;
+
+fn read_ticks() -> Ticks;                           // monotonic counter
+fn elapsed(start: Ticks, now: Ticks) -> u64;         // wrap-correct difference
+fn timed_out(start: Ticks, now: Ticks, limit: u64) -> bool;
+fn poll_until(probe: fn() -> bool, timeout: u64) -> bool;
+fn udelay(us: u32) -> void;                          // busy-wait microseconds
 fn mdelay(ms: u32) -> void;
-fn timed_out(start: Ticks, limit: Ticks) -> bool;
 ```
 
 ## 28.5 `std/barrier` — Memory Barriers
@@ -2458,7 +2467,10 @@ fn wmb() -> void;       // store barrier (descriptor writes before doorbell)
 fn dma_wmb() -> void;   // DMA-visible store barrier
 ```
 
-## 28.6 `std/mmio` — Register-Field Helpers and IO-Memory Copy
+## 28.6 Planned `std/mmio` — Register-Field Helpers and IO-Memory Copy
+
+The current prototype uses typed MMIO directly. A separate `std/mmio.mc` module
+is not present yet. The planned helper layer is:
 
 Thin helpers over typed MMIO (section 17): atomic read-modify-write of register
 fields, and width-correct volatile copies to/from device memory (which a plain
@@ -2481,9 +2493,10 @@ descriptor onto the TX ring, order the writes, ring the doorbell.
 fn transmit(dev: *Nic, frame: DmaBuf<u8, .noncoherent, .cpu_owned>) -> void {
     let owned = cache.clean_for_device(frame);      // §18.2: frame consumed, owned is device_owned
     let g = sync.lock_irqsave(&dev.lock);           // §28.1: linear IrqGuard
-    dev.tx = ring.push(dev.tx, make_desc(dma.addr(&owned))); // §28.2 + §18 (borrow)
+    let pushed = ring_push(Desc, TX_CAP, &dev.tx, make_desc(dma.addr(&owned))); // §28.2 + §18
+    if !pushed { unreachable; }
     barrier.wmb();                                  // §28.5: descriptor before doorbell
-    mmio.set_bits(dev.doorbell, TX_KICK);           // §28.6 / §17
+    dev.doorbell.write(TX_KICK, .release);          // §17 typed MMIO
     enqueue_owned(dev, owned);                       // owned moved into the ring's pending list
     sync.unlock_irqrestore(g);                      // §28.1: consumes the guard
 }
