@@ -4040,7 +4040,10 @@ field reflection. Tagged-union lowering covers aligned tag-plus-payload ABI,
 constructors, direct calls/returns, locals, struct fields, and pattern switches
 with payload bindings and wildcard fallback arms. Static global initializer
 lowering covers string pointer arrays, constant address-of globals, and default
-slice/Result/tagged-union zero initializers. Reflection lowering covers
+slice/Result/tagged-union zero initializers, plus closure/function-pointer
+fields inside mutable globals. Defer lowering runs lexical cleanups in reverse
+order before returns, block fallthrough, and loop `break`/`continue` exits.
+Reflection lowering covers
 `sizeof`/`alignof`, `repr_of`, field/bit offsets, MMIO wrapper layouts, and
 `field_type(...)` in monomorphized type-argument position. Result `?`
 propagation lowers to early `err(...)` returns in `Result`-returning functions,

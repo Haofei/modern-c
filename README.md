@@ -168,8 +168,8 @@ Deferred:
   `emit-llvm` support exists for a scalar/control-flow/domain subset and
   validates through `llvm-as`; the `mcc-llvm-cc.sh` driver compiles covered
   LLVM IR to object files with `llc`. Richer iterable forms, broader aggregate
-  ABI/layout cases, broader slice/pattern workflows, defer cleanup, closure
-  values, and fuller debug mapping are still pending.
+  ABI/layout cases, broader slice/pattern workflows, and fuller debug mapping
+  are still pending.
 
 ## Requirements
 
@@ -299,7 +299,10 @@ returned as narrower integer types after MIR verification.
 LLVM static global initializer coverage includes scalar copies, casted scalar
 copies, string pointer/raw-many pointer arrays, constant address-of globals,
 default slice/Result/tagged-union zero initializers, function-pointer globals,
-and copied function-pointer aggregate globals.
+copied function-pointer aggregate globals, and closure/function-pointer fields
+inside mutable globals.
+LLVM defer coverage runs lexical cleanups in reverse order before function
+returns, block fallthrough, and loop `break`/`continue` exits.
 LLVM reflection coverage includes `sizeof`/`alignof`, `repr_of`, field and bit
 offsets, `DmaBuf`/MMIO register wrapper layouts, and `field_type(...)` in
 monomorphized type-argument position.

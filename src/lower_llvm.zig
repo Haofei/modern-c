@@ -45,6 +45,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
+        .defer_stack = std.ArrayList(ast.Expr).empty,
         .string_literals = std.ArrayList(StringLiteralGlobal).empty,
         .debug_functions = std.ArrayList(DebugFunction).empty,
         .debug_locations = std.ArrayList(DebugLocation).empty,
@@ -153,6 +154,7 @@ const LlvmEmitter = struct {
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
     loop_stack: std.ArrayList(LoopLabels) = undefined,
+    defer_stack: std.ArrayList(ast.Expr) = undefined,
     string_literals: std.ArrayList(StringLiteralGlobal) = undefined,
     debug_functions: std.ArrayList(DebugFunction) = undefined,
     debug_locations: std.ArrayList(DebugLocation) = undefined,
@@ -184,6 +186,7 @@ const LlvmEmitter = struct {
         self.local_types.deinit();
         self.local_slots.deinit();
         self.loop_stack.deinit(self.allocator);
+        self.defer_stack.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.debug_functions.deinit(self.allocator);
         self.debug_locations.deinit(self.allocator);
@@ -328,6 +331,9 @@ const LlvmEmitter = struct {
             else => {},
         }
         switch (resolved_ty.kind) {
+            .closure_type => if (isBindCall(expr)) {
+                return try self.emitGlobalBindInitializer(expr, resolved_ty);
+            },
             .array => |array| {
                 const items = switch (expr.kind) {
                     .array_literal => |items| items,
@@ -425,6 +431,19 @@ const LlvmEmitter = struct {
             .grouped => |inner| try self.globalAddressInitializer(inner.*),
             else => error.UnsupportedLlvmEmission,
         };
+    }
+
+    fn emitGlobalBindInitializer(self: *LlvmEmitter, expr: ast.Expr, closure_ty: ast.TypeExpr) ![]const u8 {
+        const call = switch (expr.kind) {
+            .call => |call| call,
+            .grouped => |inner| return self.emitGlobalBindInitializer(inner.*, closure_ty),
+            else => return error.UnsupportedLlvmEmission,
+        };
+        if (self.resolveAliasType(closure_ty).kind != .closure_type) return error.UnsupportedLlvmEmission;
+        const fname = calleeIdentName(call.args[1]) orelse return error.UnsupportedLlvmEmission;
+        if (!self.fn_sigs.contains(fname)) return error.UnsupportedLlvmEmission;
+        const env = try self.globalAddressInitializer(call.args[0]);
+        return try std.fmt.allocPrint(self.scratch.allocator(), "{{ ptr @{s}, ptr {s} }}", .{ fname, env });
     }
 
     fn globalIndexAddressInitializer(self: *LlvmEmitter, node: anytype) anyerror![]const u8 {
@@ -595,6 +614,7 @@ const LlvmEmitter = struct {
         self.trap_index = 0;
         self.local_types.clearRetainingCapacity();
         self.local_slots.clearRetainingCapacity();
+        self.defer_stack.clearRetainingCapacity();
         for (fn_decl.params) |param| {
             try self.local_types.put(param.name.text, param.ty);
             if (self.isAggregateType(param.ty)) {
@@ -690,11 +710,14 @@ const LlvmEmitter = struct {
     }
 
     fn emitBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) anyerror!bool {
+        const defer_start = self.defer_stack.items.len;
+        errdefer self.defer_stack.items.len = defer_start;
         for (block.items) |stmt| {
             switch (stmt.kind) {
                 .let_decl => |local| try self.emitLocalDecl(local),
                 .var_decl => |local| try self.emitLocalDecl(local),
                 .assignment => |node| try self.emitAssignment(node.target, node.value),
+                .@"defer" => |expr| try self.defer_stack.append(self.allocator, expr),
                 .loop => |node| {
                     if (try self.emitLoop(node, ret_ty)) return true;
                 },
@@ -719,12 +742,14 @@ const LlvmEmitter = struct {
                             .grouped => |inner| if ((inner.*).kind != .void_literal) return error.UnsupportedLlvmEmission,
                             else => return error.UnsupportedLlvmEmission,
                         };
+                        try self.emitDeferredCleanupsFrom(0, ret_ty);
                         try self.emitReturnVoid(stmt.span);
                     } else if (typeNameEql(ret_ty, "never")) {
                         return error.UnsupportedLlvmEmission;
                     } else {
                         const expr = maybe_expr orelse return error.UnsupportedLlvmEmission;
                         const value = try self.emitExpr(expr, ret_ty);
+                        try self.emitDeferredCleanupsFrom(0, ret_ty);
                         try self.emitReturnValue(ret_ty, value, stmt.span);
                     }
                     return true;
@@ -754,20 +779,42 @@ const LlvmEmitter = struct {
                 },
                 .@"break" => {
                     const labels = self.loop_stack.getLastOrNull() orelse return error.UnsupportedLlvmEmission;
+                    try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
+                    self.defer_stack.items.len = labels.cleanup_start;
                     try self.out.print(self.allocator, "  br label %{s}\n", .{labels.break_label});
                     return true;
                 },
                 .@"continue" => {
                     const labels = self.loop_stack.getLastOrNull() orelse return error.UnsupportedLlvmEmission;
+                    try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
+                    self.defer_stack.items.len = labels.cleanup_start;
                     try self.out.print(self.allocator, "  br label %{s}\n", .{labels.continue_label});
                     return true;
                 },
                 .expr => |expr| try self.emitExprStatement(expr),
                 .asm_stmt => |asm_stmt| try self.emitAsmStmt(asm_stmt),
-                else => return error.UnsupportedLlvmEmission,
             }
         }
+        try self.emitDeferredCleanupsFrom(defer_start, ret_ty);
+        self.defer_stack.items.len = defer_start;
         return false;
+    }
+
+    fn emitDeferredCleanupsFrom(self: *LlvmEmitter, start: usize, ret_ty: ast.TypeExpr) !void {
+        var index = self.defer_stack.items.len;
+        while (index > start) {
+            index -= 1;
+            try self.emitDeferredCleanup(self.defer_stack.items[index], ret_ty);
+        }
+    }
+
+    fn emitDeferredCleanup(self: *LlvmEmitter, expr: ast.Expr, ret_ty: ast.TypeExpr) !void {
+        switch (expr.kind) {
+            .block => |block| {
+                if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
+            },
+            else => try self.emitExprStatement(expr),
+        }
     }
 
     fn emitScopedBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) !bool {
@@ -1261,7 +1308,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
         const condition = try self.emitExpr(condition_expr, condition_ty);
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ condition, body_label, end_label, body_label });
-        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = cond_label });
+        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = cond_label, .cleanup_start = self.defer_stack.items.len });
         defer _ = self.loop_stack.pop();
         const body_terminated = try self.emitBlock(loop.body, ret_ty);
         if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{cond_label});
@@ -1324,7 +1371,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ element_value, element_llvm, element_ptr });
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ element_llvm, element_value, binding_ptr });
 
-        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label });
+        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label, .cleanup_start = self.defer_stack.items.len });
         defer _ = self.loop_stack.pop();
         const body_terminated = try self.emitBlock(loop.body, ret_ty);
         if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{step_label});
@@ -2036,13 +2083,29 @@ const LlvmEmitter = struct {
     }
 
     fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+        if (isBindCallByNode(call)) return try self.emitBindValue(call, expected_ty);
         if (try self.emitTaggedUnionConstructor(call, expected_ty)) |value| return value;
         if (try self.emitBuiltinValueCall(call, expected_ty)) |value| return value;
         if (self.directCallName(call.callee.*)) |callee| {
             return try self.emitDirectCall(callee, call, expected_ty);
         }
+        if (self.closureCalleeType(call.callee.*)) |closure_ty| return try self.emitClosureCall(call.callee.*, call.args, closure_ty);
         const fn_ty = self.fnPointerCalleeType(call.callee.*) orelse return error.UnsupportedLlvmEmission;
         return try self.emitFnPointerCall(call.callee.*, call.args, fn_ty);
+    }
+
+    fn emitBindValue(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+        if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
+        const closure_ty = self.resolveAliasType(expected_ty);
+        if (closure_ty.kind != .closure_type) return error.UnsupportedLlvmEmission;
+        const fname = calleeIdentName(call.args[1]) orelse return error.UnsupportedLlvmEmission;
+        if (!self.fn_sigs.contains(fname)) return error.UnsupportedLlvmEmission;
+        const env = try self.emitExpr(call.args[0], self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission);
+        const with_code = try self.nextTemp();
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr @{s}, 0\n", .{ with_code, try self.llvmType(closure_ty), fname });
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, ptr {s}, 1\n", .{ result, try self.llvmType(closure_ty), with_code, env });
+        return result;
     }
 
     fn emitDirectCall(self: *LlvmEmitter, callee: []const u8, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
@@ -2081,6 +2144,30 @@ const LlvmEmitter = struct {
         for (args.items, 0..) |arg, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
+        }
+        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
+        return result;
+    }
+
+    fn emitClosureCall(self: *LlvmEmitter, callee_expr: ast.Expr, args_expr: []const ast.Expr, closure_ty: ast.TypeExpr) ![]const u8 {
+        const sig = closure_ty.kind.closure_type;
+        if (typeNameEql(sig.ret.*, "void")) return error.UnsupportedLlvmEmission;
+        if (args_expr.len != sig.params.len) return error.UnsupportedLlvmEmission;
+        const callee = try self.emitExpr(callee_expr, closure_ty);
+        const code = try self.nextTemp();
+        const env = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ code, try self.llvmType(closure_ty), callee });
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ env, try self.llvmType(closure_ty), callee });
+        var args: std.ArrayList(ArgValue) = .empty;
+        defer args.deinit(self.allocator);
+        for (args_expr, 0..) |arg, i| {
+            const arg_ty = sig.params[i];
+            try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExpr(arg, arg_ty) });
+        }
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = call {s} {s}(ptr {s}", .{ result, try self.llvmType(sig.ret.*), code, env });
+        for (args.items) |arg| {
+            try self.out.print(self.allocator, ", {s} {s}", .{ try self.llvmType(arg.ty), arg.value });
         }
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
         return result;
@@ -3215,6 +3302,7 @@ const LlvmEmitter = struct {
             .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ self.arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
             .slice => "{ ptr, i64 }",
             .fn_pointer => "ptr",
+            .closure_type => "{ ptr, ptr }",
             .generic => |node| if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2)
                 try self.resultLlvmType(node.args[0], node.args[1])
             else if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1)
@@ -3856,6 +3944,15 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn closureCalleeType(self: *LlvmEmitter, callee: ast.Expr) ?ast.TypeExpr {
+        const ty = self.exprType(callee) orelse return null;
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .closure_type => resolved_ty,
+            else => null,
+        };
+    }
+
     fn fnPointerTypeForName(self: *LlvmEmitter, name: []const u8) ?ast.TypeExpr {
         const sig = self.fn_sigs.get(name) orelse return null;
         const params = self.scratch.allocator().alloc(ast.TypeExpr, sig.params.len) catch return null;
@@ -3865,6 +3962,21 @@ const LlvmEmitter = struct {
         return .{
             .span = sig.ret.span,
             .kind = .{ .fn_pointer = .{ .params = params, .ret = ret } },
+        };
+    }
+
+    fn bindClosureType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+        if (!isBindCallByNode(call) or call.args.len != 2) return null;
+        const fname = calleeIdentName(call.args[1]) orelse return null;
+        const sig = self.fn_sigs.get(fname) orelse return null;
+        if (sig.params.len == 0) return null;
+        const params = self.scratch.allocator().alloc(ast.TypeExpr, sig.params.len - 1) catch return null;
+        for (sig.params[1..], 0..) |param, i| params[i] = param.ty;
+        const ret = self.scratch.allocator().create(ast.TypeExpr) catch return null;
+        ret.* = sig.ret;
+        return .{
+            .span = call.callee.*.span,
+            .kind = .{ .closure_type = .{ .params = params, .ret = ret } },
         };
     }
 
@@ -3905,6 +4017,8 @@ const LlvmEmitter = struct {
             if (std.mem.eql(u8, info.op, "write")) return simpleType(call.callee.*.span, "void");
         }
         if (self.rawManyOffsetCallInfo(call)) |info| return info.base_ty;
+        if (isBindCallByNode(call)) return self.bindClosureType(call);
+        if (self.closureCalleeType(call.callee.*)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         if (self.fnPointerCalleeType(call.callee.*)) |fn_ty| return fn_ty.kind.fn_pointer.ret.*;
         const callee = self.directCallName(call.callee.*) orelse return null;
         return if (self.fn_sigs.get(callee)) |sig| sig.ret else null;
@@ -4477,6 +4591,7 @@ const LlvmEmitter = struct {
         return switch (resolved_ty.kind) {
             .array => true,
             .slice => true,
+            .closure_type => true,
             .name => self.structDeclForType(resolved_ty) != null or self.overlayInfoForType(resolved_ty) != null or self.taggedUnionForType(resolved_ty) != null,
             .generic => |node| std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2,
             else => false,
@@ -4568,6 +4683,7 @@ const DebugLocation = struct {
 const LoopLabels = struct {
     break_label: []const u8,
     continue_label: []const u8,
+    cleanup_start: usize,
 };
 
 const RawManyOffsetInfo = struct {
@@ -5461,6 +5577,26 @@ fn integerBits(ty: ast.TypeExpr) ?u16 {
     if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return 64;
     if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return 64;
     return null;
+}
+
+fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| calleeIdentName(inner.*),
+        else => null,
+    };
+}
+
+fn isBindCall(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .call => |call| isBindCallByNode(call),
+        .grouped => |inner| isBindCall(inner.*),
+        else => false,
+    };
+}
+
+fn isBindCallByNode(call: anytype) bool {
+    return call.type_args.len == 0 and call.args.len == 2 and isIdentNamed(call.callee.*, "bind");
 }
 
 fn isSignedInteger(ty: ast.TypeExpr) bool {
