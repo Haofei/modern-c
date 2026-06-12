@@ -740,11 +740,17 @@ pub fn build(b: *std.Build) void {
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "shell2-test",
     });
     const ushell_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/lang/ushell-test.sh", "zig-out/bin/mcc",
+        "bash", "tools/lang/ushell-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_ushell_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/lang/ushell-test.sh", "zig-out/bin/mcc", "llvm",
     });
     ushell_test_cmd.step.dependOn(b.getInstallStep());
     const ushell_test_step = b.step("ushell-test", "Shell running in user mode via syscalls");
     ushell_test_step.dependOn(&ushell_test_cmd.step);
+    llvm_ushell_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_ushell_test_step = b.step("llvm-ushell-test", "LLVM-lowered shell running in user mode via syscalls");
+    llvm_ushell_test_step.dependOn(&llvm_ushell_test_cmd.step);
 
 
     shell2_test_cmd.step.dependOn(b.getInstallStep());
@@ -1937,11 +1943,17 @@ pub fn build(b: *std.Build) void {
     const llvm_sched_vm_test_step = b.step("llvm-sched-vm-test", "Run LLVM-lowered scheduler switching per-process address spaces under QEMU");
     llvm_sched_vm_test_step.dependOn(&llvm_sched_vm_test_cmd.step);
 
-    const run_ushell_cmd = b.addSystemCommand(&.{ "sh", "tools/lang/run-ushell.sh" });
+    const run_ushell_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/run-ushell.sh", "c" });
     run_ushell_cmd.step.dependOn(b.getInstallStep());
     run_ushell_cmd.stdio = .inherit; // connect the terminal so QEMU is interactive
     const run_ushell_step = b.step("run-ushell", "Build + boot the user-mode MC shell in QEMU (interactive)");
     run_ushell_step.dependOn(&run_ushell_cmd.step);
+
+    const run_llvm_ushell_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/run-ushell.sh", "llvm" });
+    run_llvm_ushell_cmd.step.dependOn(b.getInstallStep());
+    run_llvm_ushell_cmd.stdio = .inherit; // connect the terminal so QEMU is interactive
+    const run_llvm_ushell_step = b.step("run-llvm-ushell", "Build + boot the LLVM-lowered user-mode MC shell in QEMU (interactive)");
+    run_llvm_ushell_step.dependOn(&run_llvm_ushell_cmd.step);
 
     const m0_step = b.step("m0", "Run M0 conformance gates");
     m0_step.dependOn(&test_cmd.step);
@@ -2108,6 +2120,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&shell_test_cmd.step);
     m0_step.dependOn(&shell2_test_cmd.step);
     m0_step.dependOn(&ushell_test_cmd.step);
+    m0_step.dependOn(&llvm_ushell_test_cmd.step);
     m0_step.dependOn(&vfsmount_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
