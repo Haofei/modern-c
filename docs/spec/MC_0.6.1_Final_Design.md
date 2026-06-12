@@ -3992,7 +3992,7 @@ loop-local bindings plus `break`/`continue`.
 Scalar expression lowering covers integer casts, unsigned bitwise operations,
 bitwise not, short-circuit boolean `&&`/`||`, and checked unsigned shifts with
 invalid-count and shifted-out-bit traps, plus verified integer/enum coercions at
-target-typed expression sites.
+target-typed expression sites and fixed-layout scalar bitcasts.
 Checked integer arithmetic includes signed unary negation with an `INT_MIN`
 overflow trap.
 Character literal lowering covers target-typed `u8` returns, locals, call

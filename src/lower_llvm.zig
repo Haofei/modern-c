@@ -1465,6 +1465,12 @@ const LlvmEmitter = struct {
     }
 
     fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) !?[]const u8 {
+        if (bitcastTargetType(call)) |target_ty| {
+            if (call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const source_ty = self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission;
+            const value = try self.emitExpr(call.args[0], source_ty);
+            return try self.emitBitcastValue(value, source_ty, target_ty);
+        }
         if (isPhysCall(call.callee.*)) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
@@ -1715,6 +1721,27 @@ const LlvmEmitter = struct {
             return try self.castIntegerValue(value, source_ty, target_ty);
         }
         return error.UnsupportedLlvmEmission;
+    }
+
+    fn emitBitcastValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+        const source_bits = self.fixedLayoutBitsOf(source_ty) orelse return error.UnsupportedLlvmEmission;
+        const target_bits = self.fixedLayoutBitsOf(target_ty) orelse return error.UnsupportedLlvmEmission;
+        if (source_bits != target_bits) return error.UnsupportedLlvmEmission;
+
+        const source_llvm = try self.llvmType(source_ty);
+        const target_llvm = try self.llvmType(target_ty);
+        if (std.mem.eql(u8, source_llvm, target_llvm)) return value;
+
+        const op: []const u8 = if (std.mem.eql(u8, source_llvm, "ptr"))
+            "ptrtoint"
+        else if (std.mem.eql(u8, target_llvm, "ptr"))
+            "inttoptr"
+        else
+            "bitcast";
+
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
+        return result;
     }
 
     fn castIntegerValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
@@ -2362,6 +2389,7 @@ const LlvmEmitter = struct {
     }
 
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+        if (bitcastTargetType(call)) |ty| return ty;
         if (builtinCallReturnType(call)) |ty| return ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
@@ -2645,6 +2673,22 @@ const LlvmEmitter = struct {
         return switch (resolved.kind) {
             .name => |name| std.mem.eql(u8, name.text, "f32"),
             else => false,
+        };
+    }
+
+    fn fixedLayoutBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
+        if (self.integerBitsOf(ty)) |bits| return bits;
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .name => |name| if (std.mem.eql(u8, name.text, "f32"))
+                32
+            else if (std.mem.eql(u8, name.text, "f64") or isOpaqueAddressTypeName(name.text))
+                64
+            else
+                null,
+            .pointer, .raw_many_pointer, .nullable, .slice, .fn_pointer => 64,
+            .qualified => |node| self.fixedLayoutBitsOf(node.child.*),
+            else => null,
         };
     }
 
@@ -2934,6 +2978,19 @@ fn comptimeStructFieldValue(fields: []const eval.ComptimeStructField, name: []co
         if (std.mem.eql(u8, field.name, name)) return field.value;
     }
     return null;
+}
+
+fn bitcastTargetType(call: anytype) ?ast.TypeExpr {
+    const callee = switch (call.callee.kind) {
+        .ident => |ident| ident,
+        .grouped => |inner| switch (inner.kind) {
+            .ident => |ident| ident,
+            else => return null,
+        },
+        else => return null,
+    };
+    if (!std.mem.eql(u8, callee.text, "bitcast") or call.type_args.len != 1) return null;
+    return call.type_args[0];
 }
 
 fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
