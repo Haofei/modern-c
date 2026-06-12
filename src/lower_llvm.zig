@@ -82,6 +82,7 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(allocator, "declare void @mc_trap_InvalidRepresentation() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_Bounds() noreturn\n\n");
     try out.appendSlice(allocator, "declare void @mc_trap_Assert() noreturn\n\n");
+    try out.appendSlice(allocator, "declare void @mc_trap_NullUnwrap() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_Unreachable() noreturn\n\n");
 }
 
@@ -224,6 +225,7 @@ const LlvmEmitter = struct {
                 break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedFloatLiteral(self.scratch.allocator(), literal)});
             } else error.UnsupportedLlvmEmission,
             .bool_literal => |value| if (value) "1" else "0",
+            .null_literal => "null",
             .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
             .address_of => |inner| switch (inner.kind) {
                 .ident => |ident| if (self.global_types.contains(ident.text))
@@ -249,7 +251,7 @@ const LlvmEmitter = struct {
                 "zeroinitializer"
             else
                 error.UnsupportedLlvmEmission,
-            .pointer, .raw_many_pointer => "null",
+            .pointer, .raw_many_pointer, .nullable => "null",
             .array => "zeroinitializer",
             else => error.UnsupportedLlvmEmission,
         };
@@ -304,6 +306,7 @@ const LlvmEmitter = struct {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal),
             .bool_literal => |value| if (value) "1" else "0",
+            .null_literal => "null",
             .enum_literal => |literal| if (self.enumDeclForType(expected_ty)) |enum_decl|
                 try self.enumCaseValueByName(enum_decl, literal.text)
             else
@@ -320,6 +323,7 @@ const LlvmEmitter = struct {
             .index => |node| try self.emitIndexLoad(node),
             .slice => |node| try self.emitSlice(node),
             .member => |node| try self.emitMemberLoad(node),
+            .try_expr => |node| try self.emitTryExpr(node.operand.*, expected_ty),
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -378,7 +382,11 @@ const LlvmEmitter = struct {
                     return true;
                 },
                 .@"switch" => |node| {
+                    if (try self.emitNullableSwitch(node, ret_ty)) return true;
                     if (try self.emitScalarSwitch(node, ret_ty)) return true;
+                },
+                .if_let => |node| {
+                    if (try self.emitNullableIfLet(node, ret_ty)) return true;
                 },
                 .@"break" => {
                     const labels = self.loop_stack.getLastOrNull() orelse return error.UnsupportedLlvmEmission;
@@ -453,6 +461,64 @@ const LlvmEmitter = struct {
         const cont = try self.nextLabel("assert_ok");
         const trap = try self.nextLabel("trap_assert");
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_Assert()\n  unreachable\n{s}:\n", .{ condition, cont, trap, trap, cont });
+    }
+
+    fn emitTryExpr(self: *LlvmEmitter, operand: ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
+        const operand_ty = self.exprType(operand) orelse return error.UnsupportedLlvmEmission;
+        const inner_ty = self.nullableInnerType(operand_ty) orelse return error.UnsupportedLlvmEmission;
+        _ = try self.llvmType(expected_ty);
+        const value = try self.emitExpr(operand, operand_ty);
+        try self.emitNullUnwrapCheck(value);
+        _ = inner_ty;
+        return value;
+    }
+
+    fn emitNullUnwrapCheck(self: *LlvmEmitter, value: []const u8) !void {
+        const is_null = try self.nextTemp();
+        const trap = try self.nextLabel("trap_null");
+        const cont = try self.nextLabel("nonnull");
+        try self.out.print(self.allocator, "  {s} = icmp eq ptr {s}, null\n", .{ is_null, value });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_NullUnwrap()\n  unreachable\n{s}:\n", .{ is_null, trap, cont, trap, cont });
+    }
+
+    fn emitNullableIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr) !bool {
+        const binding = switch (node.pattern.kind) {
+            .bind => |ident| ident,
+            else => return false,
+        };
+        const subject_ty = self.exprType(node.value) orelse return false;
+        const inner_ty = self.nullableInnerType(subject_ty) orelse return false;
+        const subject = try self.emitExpr(node.value, subject_ty);
+        const then_label = try self.nextLabel("nullable_some");
+        const else_label = try self.nextLabel("nullable_none");
+        const end_label = try self.nextLabel("nullable_end");
+        const is_some = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = icmp ne ptr {s}, null\n", .{ is_some, subject });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ is_some, then_label, else_label, then_label });
+
+        const old_type = self.local_types.fetchRemove(binding.text);
+        const old_slot = self.local_slots.fetchRemove(binding.text);
+        defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
+        defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
+
+        const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{binding.text});
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(inner_ty) });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(inner_ty), subject, binding_ptr });
+        try self.local_types.put(binding.text, inner_ty);
+        try self.local_slots.put(binding.text, .{ .ty = inner_ty, .ptr = binding_ptr });
+
+        const then_terminated = try self.emitBlock(node.then_block, ret_ty);
+        if (!then_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+
+        _ = self.local_types.remove(binding.text);
+        _ = self.local_slots.remove(binding.text);
+
+        try self.out.print(self.allocator, "{s}:\n", .{else_label});
+        const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
+        if (!else_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        if (then_terminated and else_terminated) return true;
+        try self.out.print(self.allocator, "{s}:\n", .{end_label});
+        return false;
     }
 
     fn emitNeverExpr(self: *LlvmEmitter, expr: ast.Expr) !bool {
@@ -713,6 +779,72 @@ const LlvmEmitter = struct {
             },
             else => error.UnsupportedLlvmEmission,
         };
+    }
+
+    fn emitNullableSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
+        const subject_ty = self.exprType(node.subject) orelse return false;
+        const inner_ty = self.nullableInnerType(subject_ty) orelse return false;
+        if (node.arms.len == 0) return error.UnsupportedLlvmEmission;
+
+        var bind_index: ?usize = null;
+        var binding: ?ast.Ident = null;
+        var wildcard_index: ?usize = null;
+        for (node.arms, 0..) |arm, i| {
+            if (arm.patterns.len != 1) return false;
+            switch (arm.patterns[0].kind) {
+                .bind => |ident| {
+                    if (bind_index != null) return false;
+                    bind_index = i;
+                    binding = ident;
+                },
+                .wildcard => {
+                    if (wildcard_index != null) return false;
+                    wildcard_index = i;
+                },
+                else => return false,
+            }
+        }
+        const some_i = bind_index orelse return false;
+        const none_i = wildcard_index orelse return false;
+        const bind = binding orelse return false;
+
+        const subject = try self.emitExpr(node.subject, subject_ty);
+        const some_label = try self.nextLabel("nullable_some");
+        const none_label = try self.nextLabel("nullable_none");
+        const end_label = try self.nextLabel("nullable_end");
+        const is_some = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = icmp ne ptr {s}, null\n", .{ is_some, subject });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ is_some, some_label, none_label });
+
+        var all_terminated = true;
+        try self.out.print(self.allocator, "{s}:\n", .{some_label});
+        const old_type = self.local_types.fetchRemove(bind.text);
+        const old_slot = self.local_slots.fetchRemove(bind.text);
+        defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
+        defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
+
+        const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{bind.text});
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(inner_ty) });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(inner_ty), subject, binding_ptr });
+        try self.local_types.put(bind.text, inner_ty);
+        try self.local_slots.put(bind.text, .{ .ty = inner_ty, .ptr = binding_ptr });
+        const some_terminated = try self.emitSwitchBody(node.arms[some_i].body, ret_ty);
+        if (!some_terminated) {
+            all_terminated = false;
+            try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        }
+        _ = self.local_types.remove(bind.text);
+        _ = self.local_slots.remove(bind.text);
+
+        try self.out.print(self.allocator, "{s}:\n", .{none_label});
+        const none_terminated = try self.emitSwitchBody(node.arms[none_i].body, ret_ty);
+        if (!none_terminated) {
+            all_terminated = false;
+            try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        }
+        if (all_terminated) return true;
+        try self.out.print(self.allocator, "{s}:\n", .{end_label});
+        return false;
     }
 
     fn emitScalarSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
@@ -1446,7 +1578,7 @@ const LlvmEmitter = struct {
                 try self.structLlvmType(struct_decl)
             else
                 error.UnsupportedLlvmEmission,
-            .pointer, .raw_many_pointer => "ptr",
+            .pointer, .raw_many_pointer, .nullable => "ptr",
             .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
             .slice => "{ ptr, i64 }",
             else => error.UnsupportedLlvmEmission,
@@ -1486,6 +1618,7 @@ const LlvmEmitter = struct {
                 break :blk null;
             } else null,
             .binary => |node| if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*),
+            .try_expr => |node| if (self.exprType(node.operand.*)) |ty| self.nullableInnerType(ty) else null,
             else => null,
         };
     }
@@ -1505,6 +1638,14 @@ const LlvmEmitter = struct {
         return .{
             .span = child.span,
             .kind = .{ .pointer = .{ .mutability = .mut, .child = child_ptr } },
+        };
+    }
+
+    fn nullableInnerType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .nullable => |child| child.*,
+            else => null,
         };
     }
 

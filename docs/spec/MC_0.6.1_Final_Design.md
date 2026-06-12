@@ -4002,7 +4002,9 @@ classes, `phys(...)`, volatile `raw.load`/`raw.store`, `raw.ptr`, `cpu.pause()`,
 raw-many pointer `.offset(...)`. Alias and enum lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
 globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
-enums, and enum switches.
+enums, and enum switches. Nullable pointer lowering covers nullable pointer ABI,
+`null`, non-null-to-nullable widening, postfix `?` null-unwrapping traps,
+nullable `if let`, and simple nullable switches.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
 textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.
