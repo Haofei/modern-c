@@ -190,8 +190,10 @@ Prototype or incomplete:
   stores and tag loads, and trap-path plus `?` propagation and short-circuit
   boolean and if-let join branch terminators, plus
   compiler-expanded `mem.bytes_equal` and `reduce.*` helper loop branch
-  terminators. DWARF-quality native debug mapping with richer
-  statement/expression coverage is still pending.
+  terminators. `zig build llvm-debug-test` verifies selected LLVM object DWARF
+  file/function/source line mappings with `llvm-dwarfdump`. Fuller
+  DWARF-quality native debug mapping with richer statement/expression coverage
+  is still pending.
 
 Deferred:
 
@@ -209,7 +211,8 @@ Deferred:
   `std/{core,bits,math,ascii,fmt,addr}` runtime checks, plus LLVM object
   coverage for the framebuffer/gpio/irq/spi/timer/uart hardware demos and the
   hosted elementwise demo, and LLVM link/run coverage for the hosted
-  elementwise stdin/stdout round trip.
+  elementwise stdin/stdout round trip. LLVM object debug info is smoke-tested
+  for DWARF file/function/source line mappings.
   Remaining work is additional runtime/toolchain coverage, deeper optimizer
   proof work, and fuller native debug mapping.
 
@@ -235,6 +238,7 @@ zig build c-test
 zig build sweep
 zig build llvm-test
 zig build llvm-obj-test
+zig build llvm-debug-test
 zig build llvm-sweep
 zig build llvm-spec-obj-sweep
 zig build llvm-c-sweep
@@ -299,8 +303,9 @@ hidden fast-math flags, with `reassoc` allowed only for explicit
 `reduce.sum_fast` floating reductions).
 `tools/toolchain/mcc-llvm-cc.sh` compiles an MC module through `emit-llvm` and
 `llc -filetype=obj`; `zig build llvm-obj-test` checks representative LLVM object
-output, `zig build llvm-spec-obj-sweep` compiles every in-scope valid spec
-fixture to an object file, and `zig build llvm-c-obj-sweep` compiles every
+output, `zig build llvm-debug-test` verifies selected DWARF source mappings in
+LLVM objects, `zig build llvm-spec-obj-sweep` compiles every in-scope valid
+spec fixture to an object file, and `zig build llvm-c-obj-sweep` compiles every
 current `tests/c_emit` fixture to an object file. `zig build llvm-cc-test` links
 and runs a simple exported function through the LLVM driver, and `zig build
 llvm-move-test` links and runs a linear `move` handle ABI roundtrip. `zig build
@@ -376,7 +381,9 @@ stores, aggregate literal/member field stores, `MaybeUninit` writes, volatile
 raw/MMIO stores and loads, atomic stores/loads/RMWs, fences, and
 call/return/loop-branch/switch/if-let/trap-path/`?`
 propagation/short-circuit/if-let-join/helper-loop branch line locations for the
-covered subset.
+covered subset. LLVM native debug object coverage verifies `.debug_info` and
+`.debug_line` sections, producer/source-file metadata, selected function DIEs,
+and representative source line/column rows after `llc`.
 LLVM inferred-local coverage includes initializer-derived slice, array, and
 struct locals in covered expression and assignment workflows.
 LLVM aggregate layout coverage includes dependency-ordered struct/array/slice

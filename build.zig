@@ -61,6 +61,15 @@ pub fn build(b: *std.Build) void {
     const llvm_obj_test_step = b.step("llvm-obj-test", "Compile LLVM backend fixtures to object files with llc");
     llvm_obj_test_step.dependOn(&llvm_obj_test_cmd.step);
 
+    const llvm_debug_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/llvm-debug-test.sh",
+        "zig-out/bin/mcc",
+    });
+    llvm_debug_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_debug_test_step = b.step("llvm-debug-test", "Verify LLVM object DWARF source and line mappings");
+    llvm_debug_test_step.dependOn(&llvm_debug_test_cmd.step);
+
     const sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-emit-sweep.py",
@@ -1314,6 +1323,7 @@ pub fn build(b: *std.Build) void {
     // c_emit fixture sweeps, and host link/run smoke tests.
     m0_step.dependOn(&llvm_test_cmd.step);
     m0_step.dependOn(&llvm_obj_test_cmd.step);
+    m0_step.dependOn(&llvm_debug_test_cmd.step);
     m0_step.dependOn(&llvm_sweep_cmd.step);
     m0_step.dependOn(&llvm_spec_obj_sweep_cmd.step);
     m0_step.dependOn(&llvm_c_sweep_cmd.step);

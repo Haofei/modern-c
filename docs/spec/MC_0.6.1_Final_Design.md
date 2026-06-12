@@ -4109,12 +4109,18 @@ tagged-union constructor materialization stores, tagged-union switch subject
 stores and tag loads, and trap-path plus `?` propagation, short-circuit boolean,
 and if-let join branch terminators for the covered backend subset, plus branch
 terminators in compiler-expanded `mem.bytes_equal` and `reduce.*` helper loops.
+The `zig build llvm-debug-test` gate compiles a debug-rich LLVM fixture to an
+object and verifies `.debug_info`/`.debug_line`, producer/source-file metadata,
+selected function DIEs, and representative source line/column rows with
+`llvm-dwarfdump`.
 Valid `#[no_lang_trap]` functions lower when the shared verifier proves they
 contain no language-trap edge; naked/boot-style opaque asm functions returning
 `never` lower fallthrough as LLVM `unreachable`.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles textual IR
 to linkable object files through `llc`, with representative object-output
 coverage in `zig build llvm-obj-test`.
+The `zig build llvm-debug-test` gate verifies selected DWARF source mappings in
+LLVM objects after `llc` lowering.
 The `zig build llvm-sweep` gate strips expected-reject declarations from the
 spec corpus and verifies every in-scope valid spec fixture emits assemblable
 LLVM IR. It also rejects hidden optimizer-assumption tokens
