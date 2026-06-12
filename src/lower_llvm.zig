@@ -1745,6 +1745,7 @@ const LlvmEmitter = struct {
             return try self.emitExpr(info.base, info.domain_ty);
         }
         if (self.domainOpCallInfo(call)) |info| return try self.emitDomainOpCall(call, info);
+        if (self.reduceCallInfo(call)) |info| return try self.emitReduceCall(call, info);
         if (self.conversionCallInfo(call)) |info| {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const source_ty = self.exprType(call.args[0]) orelse info.target_ty;
@@ -2371,6 +2372,138 @@ const LlvmEmitter = struct {
         return .{ .span = span, .kind = .{ .generic = .{ .base = .{ .text = "Duration", .span = span }, .args = args } } };
     }
 
+    fn emitReduceCall(self: *LlvmEmitter, call: anytype, info: ReduceCallInfo) ![]const u8 {
+        if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+        const slice_ty = self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission;
+        const slice = switch (self.resolveAliasType(slice_ty).kind) {
+            .slice => |node| node,
+            else => return error.UnsupportedLlvmEmission,
+        };
+        if (!std.mem.eql(u8, try self.llvmType(slice.child.*), try self.llvmType(info.element_ty))) return error.UnsupportedLlvmEmission;
+
+        if (std.mem.eql(u8, info.op, "sum_checked")) return try self.emitReduceSumChecked(call.args[0], slice_ty, info.element_ty, info.return_ty);
+        if (std.mem.eql(u8, info.op, "sum_left")) return try self.emitReduceFloat(call.args[0], slice_ty, info.element_ty, false);
+        if (std.mem.eql(u8, info.op, "sum_fast")) return try self.emitReduceFloat(call.args[0], slice_ty, info.element_ty, true);
+        return error.UnsupportedLlvmEmission;
+    }
+
+    fn emitReduceSumChecked(self: *LlvmEmitter, arg: ast.Expr, slice_ty: ast.TypeExpr, element_ty: ast.TypeExpr, return_ty: ast.TypeExpr) ![]const u8 {
+        const range = self.intRangeOf(element_ty) orelse return error.UnsupportedLlvmEmission;
+        const element_llvm = try self.llvmType(element_ty);
+        const element_bits = self.integerBitsOf(element_ty) orelse return error.UnsupportedLlvmEmission;
+        const result_llvm = try self.resultPayloadLlvmType(element_ty);
+
+        const slice_value = try self.emitExpr(arg, slice_ty);
+        const data = try self.nextTemp();
+        const len = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ data, try self.llvmType(slice_ty), slice_value });
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ len, try self.llvmType(slice_ty), slice_value });
+
+        const index_ptr = try self.nextTemp();
+        const acc_ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = alloca i64\n", .{index_ptr});
+        try self.out.print(self.allocator, "  {s} = alloca i128\n", .{acc_ptr});
+        try self.out.print(self.allocator, "  store i64 0, ptr {s}\n", .{index_ptr});
+        try self.out.print(self.allocator, "  store i128 0, ptr {s}\n", .{acc_ptr});
+
+        const cond_label = try self.nextLabel("reduce_cond");
+        const body_label = try self.nextLabel("reduce_body");
+        const done_label = try self.nextLabel("reduce_done");
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
+        const index = try self.nextTemp();
+        const in_range = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ index, index_ptr });
+        try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n", .{ in_range, index, len });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ in_range, body_label, done_label, body_label });
+
+        const element_ptr = try self.nextTemp();
+        const element = try self.nextTemp();
+        const widened = try self.nextTemp();
+        const acc = try self.nextTemp();
+        const next_acc = try self.nextTemp();
+        const next_index = try self.nextTemp();
+        const extend_op: []const u8 = if (self.isSignedIntegerType(element_ty)) "sext" else "zext";
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ element_ptr, element_llvm, data, index });
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ element, element_llvm, element_ptr });
+        if (element_bits == 128) {
+            try self.out.print(self.allocator, "  {s} = add i128 {s}, 0\n", .{ widened, element });
+        } else {
+            try self.out.print(self.allocator, "  {s} = {s} {s} {s} to i128\n", .{ widened, extend_op, element_llvm, element });
+        }
+        try self.out.print(self.allocator, "  {s} = load i128, ptr {s}\n", .{ acc, acc_ptr });
+        try self.out.print(self.allocator, "  {s} = add i128 {s}, {s}\n", .{ next_acc, acc, widened });
+        try self.out.print(self.allocator, "  store i128 {s}, ptr {s}\n", .{ next_acc, acc_ptr });
+        try self.out.print(self.allocator, "  {s} = add i64 {s}, 1\n", .{ next_index, index });
+        try self.out.print(self.allocator, "  store i64 {s}, ptr {s}\n", .{ next_index, index_ptr });
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, done_label });
+
+        const final_acc = try self.nextTemp();
+        const below = try self.nextTemp();
+        const above = try self.nextTemp();
+        const overflow = try self.nextTemp();
+        const ok = try self.nextTemp();
+        const narrowed = try self.nextTemp();
+        const selected_payload = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load i128, ptr {s}\n", .{ final_acc, acc_ptr });
+        try self.out.print(self.allocator, "  {s} = icmp slt i128 {s}, {d}\n", .{ below, final_acc, range.min });
+        try self.out.print(self.allocator, "  {s} = icmp sgt i128 {s}, {d}\n", .{ above, final_acc, range.max });
+        try self.out.print(self.allocator, "  {s} = or i1 {s}, {s}\n", .{ overflow, below, above });
+        try self.out.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ ok, overflow });
+        if (element_bits == 128) {
+            try self.out.print(self.allocator, "  {s} = add i128 {s}, 0\n", .{ narrowed, final_acc });
+        } else {
+            try self.out.print(self.allocator, "  {s} = trunc i128 {s} to {s}\n", .{ narrowed, final_acc, result_llvm });
+        }
+        try self.out.print(self.allocator, "  {s} = select i1 {s}, {s} 0, {s} {s}\n", .{ selected_payload, overflow, result_llvm, result_llvm, narrowed });
+        return try self.emitResultValue(return_ty, ok, selected_payload, "0");
+    }
+
+    fn emitReduceFloat(self: *LlvmEmitter, arg: ast.Expr, slice_ty: ast.TypeExpr, element_ty: ast.TypeExpr, fast: bool) ![]const u8 {
+        if (!self.isFloatTypeOf(element_ty)) return error.UnsupportedLlvmEmission;
+        const element_llvm = try self.llvmType(element_ty);
+        const slice_value = try self.emitExpr(arg, slice_ty);
+        const data = try self.nextTemp();
+        const len = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ data, try self.llvmType(slice_ty), slice_value });
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ len, try self.llvmType(slice_ty), slice_value });
+
+        const index_ptr = try self.nextTemp();
+        const acc_ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = alloca i64\n", .{index_ptr});
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ acc_ptr, element_llvm });
+        try self.out.print(self.allocator, "  store i64 0, ptr {s}\n", .{index_ptr});
+        try self.out.print(self.allocator, "  store {s} 0.000000e+00, ptr {s}\n", .{ element_llvm, acc_ptr });
+
+        const cond_label = try self.nextLabel("reduce_cond");
+        const body_label = try self.nextLabel("reduce_body");
+        const done_label = try self.nextLabel("reduce_done");
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
+        const index = try self.nextTemp();
+        const in_range = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ index, index_ptr });
+        try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n", .{ in_range, index, len });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ in_range, body_label, done_label, body_label });
+
+        const element_ptr = try self.nextTemp();
+        const element = try self.nextTemp();
+        const acc = try self.nextTemp();
+        const next_acc = try self.nextTemp();
+        const next_index = try self.nextTemp();
+        const add_op: []const u8 = if (fast) "fadd reassoc" else "fadd";
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ element_ptr, element_llvm, data, index });
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ element, element_llvm, element_ptr });
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ acc, element_llvm, acc_ptr });
+        try self.out.print(self.allocator, "  {s} = {s} {s} {s}, {s}\n", .{ next_acc, add_op, element_llvm, acc, element });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ element_llvm, next_acc, acc_ptr });
+        try self.out.print(self.allocator, "  {s} = add i64 {s}, 1\n", .{ next_index, index });
+        try self.out.print(self.allocator, "  store i64 {s}, ptr {s}\n", .{ next_index, index_ptr });
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, done_label });
+
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, element_llvm, acc_ptr });
+        return result;
+    }
+
     fn overflowIntrinsic(self: *LlvmEmitter, op: ast.BinaryOp, signed: bool, bits: u16) ![]const u8 {
         const prefix = if (signed) "s" else "u";
         const name = switch (op) {
@@ -2888,6 +3021,7 @@ const LlvmEmitter = struct {
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
         if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
         if (self.domainOpCallInfo(call)) |info| return info.return_ty;
+        if (self.reduceCallInfo(call)) |info| return info.return_ty;
         if (self.conversionCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "try_from")) {
                 return self.resultType(info.target_ty, simpleType(call.callee.*.span, "ConversionError"), call.callee.*.span) catch null;
@@ -3018,6 +3152,27 @@ const LlvmEmitter = struct {
         else
             .{ .span = member.name.span, .kind = .{ .generic = .{ .base = .{ .text = "wrap", .span = member.name.span }, .args = generic.args } } };
         return .{ .domain_ty = domain_ty, .payload_ty = generic.args[0], .return_ty = return_ty, .op = op };
+    }
+
+    fn reduceCallInfo(self: *LlvmEmitter, call: anytype) ?ReduceCallInfo {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!isIdentNamed(member.base.*, "reduce")) return null;
+        const op = member.name.text;
+        if (!std.mem.eql(u8, op, "sum_checked") and !std.mem.eql(u8, op, "sum_left") and !std.mem.eql(u8, op, "sum_fast")) return null;
+        if (call.type_args.len != 1) return null;
+        const element_ty = call.type_args[0];
+        const return_ty = if (std.mem.eql(u8, op, "sum_checked"))
+            self.resultType(element_ty, simpleType(member.name.span, "Overflow"), member.name.span) catch return null
+        else
+            element_ty;
+        return .{ .element_ty = element_ty, .return_ty = return_ty, .op = op };
     }
 
     fn constGetCallInfo(self: *LlvmEmitter, call: anytype) ?ConstGetCallInfo {
@@ -3456,6 +3611,12 @@ const DomainOpCallInfo = struct {
 
 const ConversionCallInfo = struct {
     target_ty: ast.TypeExpr,
+    op: []const u8,
+};
+
+const ReduceCallInfo = struct {
+    element_ty: ast.TypeExpr,
+    return_ty: ast.TypeExpr,
     op: []const u8,
 };
 

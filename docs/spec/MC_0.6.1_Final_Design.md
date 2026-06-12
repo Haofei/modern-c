@@ -4016,7 +4016,10 @@ scalar storage, `wrap` modular add/sub/mul/bitwise/shift and unary negation,
 unsigned `sat` add/sub/mul, serial `before`/`after`/`distance`/`compare`,
 counter `delta_mod`/`elapsed_assume_within`/`elapsed_bounded`, scalar conversion
 calls `from`/`try_from`/`trap_from`/`sat_from`/`wrap_from`/`from_mod`,
-`wrap.residue()`, and `wrapping.add`/`sub`/`mul`. Statement workflow covers
+`wrap.residue()`, and `wrapping.add`/`sub`/`mul`. Reduction lowering covers
+integer `reduce.sum_checked<T>` with an `i128` accumulator and
+`Result<T, Overflow>` result, plus floating `reduce.sum_left<T>` and
+`reduce.sum_fast<T>`. Statement workflow covers
 expression statements, void calls, `assert`, nested blocks, unsafe blocks, and
 transparent unsafe-contract blocks. Unsafe-contract arithmetic lowering covers
 `unchecked.add`/`sub`/`mul` as plain arithmetic after semantic contract
