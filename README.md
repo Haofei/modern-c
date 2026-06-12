@@ -72,10 +72,11 @@ loop-local bindings plus `break`/`continue`.
 Scalar expression lowering covers integer casts, unsigned bitwise operations,
 bitwise not, short-circuit boolean `&&`/`||`, and checked unsigned shifts with
 invalid-count and shifted-out-bit traps, plus verified integer/enum coercions at
-target-typed expression sites. Character literal lowering covers target-typed
-`u8` returns, locals, call arguments, comparisons, escapes, and checked `u8`
-arithmetic. Floating-point scalar lowering covers `f32`/`f64` literals, globals,
-calls, locals, arithmetic, comparison, and unary negation.
+target-typed expression sites. Checked integer arithmetic includes signed unary
+negation with an `INT_MIN` overflow trap. Character literal lowering covers
+target-typed `u8` returns, locals, call arguments, comparisons, escapes, and
+checked `u8` arithmetic. Floating-point scalar lowering covers `f32`/`f64`
+literals, globals, calls, locals, arithmetic, comparison, and unary negation.
 Statement workflow covers expression statements, void calls, `assert`,
 nested blocks, unsafe blocks, transparent unsafe-contract blocks, `trap(...)`,
 `unreachable`, `never` functions, and `never` coercion in return position for

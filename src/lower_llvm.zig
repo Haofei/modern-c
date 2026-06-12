@@ -1510,12 +1510,35 @@ const LlvmEmitter = struct {
                 break :blk result;
             },
             .neg => blk: {
-                if (!self.isFloatTypeOf(ty)) return error.UnsupportedLlvmEmission;
+                if (try self.negativeIntegerLiteralValue(node.expr.*)) |literal| break :blk literal;
                 const value = try self.emitExpr(node.expr.*, ty);
-                const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = fneg {s} {s}\n", .{ result, try self.llvmType(ty), value });
-                break :blk result;
+                if (self.isFloatTypeOf(ty)) {
+                    const result = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = fneg {s} {s}\n", .{ result, try self.llvmType(ty), value });
+                    break :blk result;
+                }
+                if (self.integerBitsOf(ty) != null and self.isSignedIntegerType(ty)) {
+                    const min_literal = self.signedMinLiteralOf(ty) orelse return error.UnsupportedLlvmEmission;
+                    const overflow = try self.nextTemp();
+                    const trap = try self.nextLabel("trap_neg_overflow");
+                    const cont = try self.nextLabel("neg_ok");
+                    const result = try self.nextTemp();
+                    const llvm_ty = try self.llvmType(ty);
+                    try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, {s}\n", .{ overflow, llvm_ty, value, min_literal });
+                    try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_IntegerOverflow(){s}\n  unreachable\n{s}:\n", .{ overflow, trap, cont, trap, try self.debugCallSuffix(), cont });
+                    try self.out.print(self.allocator, "  {s} = sub {s} 0, {s}\n", .{ result, llvm_ty, value });
+                    break :blk result;
+                }
+                return error.UnsupportedLlvmEmission;
             },
+        };
+    }
+
+    fn negativeIntegerLiteralValue(self: *LlvmEmitter, expr: ast.Expr) !?[]const u8 {
+        return switch (expr.kind) {
+            .int_literal => |literal| try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedIntLiteral(self.scratch.allocator(), literal)}),
+            .grouped => |inner| try self.negativeIntegerLiteralValue(inner.*),
+            else => null,
         };
     }
 
