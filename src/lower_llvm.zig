@@ -377,7 +377,7 @@ const LlvmEmitter = struct {
                 const global = try self.internStringLiteral(literal);
                 break :blk try std.fmt.allocPrint(
                     self.scratch.allocator(),
-                    "getelementptr inbounds ([{d} x i8], ptr @{s}, i64 0, i64 0)",
+                    "getelementptr ([{d} x i8], ptr @{s}, i64 0, i64 0)",
                     .{ global.len, global.name },
                 );
             },
@@ -454,7 +454,7 @@ const LlvmEmitter = struct {
         return switch (resolved_base_ty.kind) {
             .array => try std.fmt.allocPrint(
                 self.scratch.allocator(),
-                "getelementptr inbounds ({s}, ptr {s}, i64 0, i64 {d})",
+                "getelementptr ({s}, ptr {s}, i64 0, i64 {d})",
                 .{ try self.llvmType(resolved_base_ty), base_ptr, index },
             ),
             else => error.UnsupportedLlvmEmission,
@@ -469,7 +469,7 @@ const LlvmEmitter = struct {
         const base_ptr = try self.globalAddressInitializer(node.base.*);
         return std.fmt.allocPrint(
             self.scratch.allocator(),
-            "getelementptr inbounds ({s}, ptr {s}, i64 0, i32 {d})",
+            "getelementptr ({s}, ptr {s}, i64 0, i32 {d})",
             .{ try self.llvmType(struct_ty), base_ptr, index },
         );
     }
@@ -1430,7 +1430,7 @@ const LlvmEmitter = struct {
             .array => blk: {
                 const base_ptr = iterable_ptr orelse try self.arrayBasePointer(iterable);
                 const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(iterable_ty), base_ptr, index });
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(iterable_ty), base_ptr, index });
                 break :blk result;
             },
             .slice => |slice| blk: {
@@ -1440,7 +1440,7 @@ const LlvmEmitter = struct {
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ value, try self.llvmType(iterable_ty), ptr });
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ data, try self.llvmType(iterable_ty), value });
-                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(slice.child.*), data, index });
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(slice.child.*), data, index });
                 break :blk result;
             },
             else => error.UnsupportedLlvmEmission,
@@ -1604,7 +1604,7 @@ const LlvmEmitter = struct {
         const union_llvm = try self.llvmType(subject_ty);
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ subject_ptr, union_llvm });
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ union_llvm, subject, subject_ptr });
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, subject_ptr });
+        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, subject_ptr });
         try self.out.print(self.allocator, "  {s} = load i32, ptr {s}\n", .{ tag, tag_ptr });
 
         const end_label = try self.nextLabel("union_switch_end");
@@ -1875,7 +1875,7 @@ const LlvmEmitter = struct {
             const base_ptr = try self.emitExpr(node.base.*, base_ty);
             if (offset == 0) return base_ptr;
             const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = getelementptr inbounds i8, ptr {s}, i64 {d}\n", .{ result, base_ptr, offset });
+            try self.out.print(self.allocator, "  {s} = getelementptr i8, ptr {s}, i64 {d}\n", .{ result, base_ptr, offset });
             return result;
         }
         const index = structFieldIndex(struct_decl, node.name.text) orelse return error.UnsupportedLlvmEmission;
@@ -1884,7 +1884,7 @@ const LlvmEmitter = struct {
         else
             try self.aggregateBasePointer(node.base.*);
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 {d}\n", .{ result, try self.llvmType(struct_ty), base_ptr, index });
+        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ result, try self.llvmType(struct_ty), base_ptr, index });
         return result;
     }
 
@@ -1920,7 +1920,7 @@ const LlvmEmitter = struct {
                 const base_ptr = try self.aggregateBasePointer(member.base.*);
                 try self.emitBoundsCheck(index, len);
                 const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(element_ty), base_ptr, index });
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(element_ty), base_ptr, index });
                 return result;
             }
         }
@@ -1930,7 +1930,7 @@ const LlvmEmitter = struct {
                 const base_ptr = try self.arrayBasePointer(node.base.*);
                 try self.emitBoundsCheck(index, len);
                 const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(resolved_base_ty), base_ptr, index });
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(resolved_base_ty), base_ptr, index });
                 break :blk result;
             },
             .slice => |slice| blk: {
@@ -1942,7 +1942,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ len, base_llvm, base });
                 try self.emitDynamicBoundsCheck(index, len);
                 const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(slice.child.*), ptr, index });
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(slice.child.*), ptr, index });
                 break :blk result;
             },
             else => return error.UnsupportedLlvmEmission,
@@ -2032,7 +2032,7 @@ const LlvmEmitter = struct {
                 const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 const elem_ptr = try self.nextTemp();
                 try self.emitSliceBoundsCheck(start, end, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{len}));
-                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ elem_ptr, try self.llvmType(base_ty), array_ptr, start });
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {s}\n", .{ elem_ptr, try self.llvmType(base_ty), array_ptr, start });
                 break :blk elem_ptr;
             },
             .slice => blk: {
@@ -2044,7 +2044,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ ptr, base_llvm, base });
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ len, base_llvm, base });
                 try self.emitSliceBoundsCheck(start, end, len);
-                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ elem_ptr, try self.llvmType(slice.child.*), ptr, start });
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ elem_ptr, try self.llvmType(slice.child.*), ptr, start });
                 break :blk elem_ptr;
             },
             else => return error.UnsupportedLlvmEmission,
@@ -2069,7 +2069,7 @@ const LlvmEmitter = struct {
         const element_llvm = try self.llvmType(element_ty);
         for (items, 0..) |item, i| {
             const ptr = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(array_ty), array_ptr, i });
+            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(array_ty), array_ptr, i });
             const value = try self.emitExpr(item, element_ty);
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ element_llvm, value, ptr });
         }
@@ -2080,7 +2080,7 @@ const LlvmEmitter = struct {
         for (struct_decl.fields, 0..) |field, i| {
             const value_expr = structLiteralField(fields, field.name.text) orelse return error.UnsupportedLlvmEmission;
             const ptr = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 {d}\n", .{ ptr, try self.llvmType(struct_ty), struct_ptr, i });
+            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ ptr, try self.llvmType(struct_ty), struct_ptr, i });
             const value = try self.emitExpr(value_expr, field.ty);
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(field.ty), value, ptr });
         }
@@ -2211,7 +2211,7 @@ const LlvmEmitter = struct {
             if (call.args.len != 0) return error.UnsupportedLlvmEmission;
             const base_ptr = try self.arrayBasePointer(info.base);
             const ptr = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(info.array_ty), base_ptr, info.index });
+            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(info.array_ty), base_ptr, info.index });
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(info.element_ty), ptr });
             return result;
@@ -2362,7 +2362,7 @@ const LlvmEmitter = struct {
             const base = try self.emitExpr(info.base, info.base_ty);
             const index = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
             const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(info.element_ty), base, index });
+            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(info.element_ty), base, index });
             return result;
         }
         return null;
@@ -2686,8 +2686,8 @@ const LlvmEmitter = struct {
         const left_byte = try self.nextTemp();
         const right_byte = try self.nextTemp();
         const same = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds i8, ptr {s}, i64 {s}\n", .{ left_elem_ptr, left_ptr, index });
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds i8, ptr {s}, i64 {s}\n", .{ right_elem_ptr, right_ptr, index });
+        try self.out.print(self.allocator, "  {s} = getelementptr i8, ptr {s}, i64 {s}\n", .{ left_elem_ptr, left_ptr, index });
+        try self.out.print(self.allocator, "  {s} = getelementptr i8, ptr {s}, i64 {s}\n", .{ right_elem_ptr, right_ptr, index });
         try self.out.print(self.allocator, "  {s} = load i8, ptr {s}\n", .{ left_byte, left_elem_ptr });
         try self.out.print(self.allocator, "  {s} = load i8, ptr {s}\n", .{ right_byte, right_elem_ptr });
         try self.out.print(self.allocator, "  {s} = icmp eq i8 {s}, {s}\n", .{ same, left_byte, right_byte });
@@ -2972,7 +2972,7 @@ const LlvmEmitter = struct {
         const tag_ptr = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, union_llvm });
         try self.out.print(self.allocator, "  store {s} zeroinitializer, ptr {s}\n", .{ union_llvm, ptr });
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, ptr });
+        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, ptr });
         try self.out.print(self.allocator, "  store i32 {d}, ptr {s}\n", .{ case_index, tag_ptr });
         if (case.ty) |payload_ty| {
             if (call.args.len != 1) return error.UnsupportedLlvmEmission;
@@ -2992,7 +2992,7 @@ const LlvmEmitter = struct {
         const layout = self.taggedUnionLayout(union_decl, 0) orelse return error.UnsupportedLlvmEmission;
         const union_llvm = try self.llvmType(union_ty);
         const payload_ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 {d}\n", .{ payload_ptr, union_llvm, union_ptr, layout.payload_field_index });
+        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 {d}\n", .{ payload_ptr, union_llvm, union_ptr, layout.payload_field_index });
         _ = try self.llvmType(payload_ty);
         return payload_ptr;
     }
@@ -3121,7 +3121,7 @@ const LlvmEmitter = struct {
         const next_acc = try self.nextTemp();
         const next_index = try self.nextTemp();
         const extend_op: []const u8 = if (self.isSignedIntegerType(element_ty)) "sext" else "zext";
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ element_ptr, element_llvm, data, index });
+        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ element_ptr, element_llvm, data, index });
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ element, element_llvm, element_ptr });
         if (element_bits == 128) {
             try self.out.print(self.allocator, "  {s} = add i128 {s}, 0\n", .{ widened, element });
@@ -3188,7 +3188,7 @@ const LlvmEmitter = struct {
         const next_acc = try self.nextTemp();
         const next_index = try self.nextTemp();
         const add_op: []const u8 = if (fast) "fadd reassoc" else "fadd";
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ element_ptr, element_llvm, data, index });
+        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ element_ptr, element_llvm, data, index });
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ element, element_llvm, element_ptr });
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ acc, element_llvm, acc_ptr });
         try self.out.print(self.allocator, "  {s} = {s} {s} {s}, {s}\n", .{ next_acc, add_op, element_llvm, acc, element });
@@ -3242,7 +3242,7 @@ const LlvmEmitter = struct {
 
         const global = try self.internStringLiteral(literal);
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds [{d} x i8], ptr @{s}, i64 0, i64 0\n", .{ result, global.len, global.name });
+        try self.out.print(self.allocator, "  {s} = getelementptr [{d} x i8], ptr @{s}, i64 0, i64 0\n", .{ result, global.len, global.name });
         return result;
     }
 
@@ -3522,7 +3522,7 @@ const LlvmEmitter = struct {
         const base = try self.emitExpr(info.base, try self.mmioPointerType(info.struct_ty, info.base.span));
         if (info.offset == 0) return base;
         const ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = getelementptr inbounds i8, ptr {s}, i64 {d}\n", .{ ptr, base, info.offset });
+        try self.out.print(self.allocator, "  {s} = getelementptr i8, ptr {s}, i64 {d}\n", .{ ptr, base, info.offset });
         return ptr;
     }
 
