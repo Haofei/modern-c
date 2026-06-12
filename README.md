@@ -77,6 +77,10 @@ negation with an `INT_MIN` overflow trap. Character literal lowering covers
 target-typed `u8` returns, locals, call arguments, comparisons, escapes, and
 checked `u8` arithmetic. Floating-point scalar lowering covers `f32`/`f64`
 literals, globals, calls, locals, arithmetic, comparison, and unary negation.
+Domain scalar lowering covers `wrap<T>`/`sat<T>` payload representation,
+`wrap` modular add/sub/mul/bitwise/shift and unary negation, unsigned
+`sat` add/sub/mul, scalar conversion calls `from`/`trap_from`/`sat_from`/
+`wrap_from`/`from_mod`, `wrap.residue()`, and `wrapping.add`/`sub`/`mul`.
 Statement workflow covers expression statements, void calls, `assert`,
 nested blocks, unsafe blocks, transparent unsafe-contract blocks, `trap(...)`,
 `unreachable`, `never` functions, and `never` coercion in return position for
@@ -138,11 +142,11 @@ Prototype or incomplete:
 Deferred:
 
 - LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
-  `emit-llvm` support exists for a scalar/control-flow subset and validates
-  through `llvm-as`; the `mcc-llvm-cc.sh` driver compiles covered LLVM IR to
-  object files with `llc`. Richer iterable forms, broader aggregate ABI/layout
-  cases, broader slice/pattern workflows, and fuller debug mapping are still
-  pending.
+  `emit-llvm` support exists for a scalar/control-flow/domain subset and
+  validates through `llvm-as`; the `mcc-llvm-cc.sh` driver compiles covered
+  LLVM IR to object files with `llc`. Richer iterable forms, broader aggregate
+  ABI/layout cases, broader slice/pattern workflows, and fuller debug mapping
+  are still pending.
 
 ## Requirements
 
@@ -241,3 +245,6 @@ struct locals in covered expression and assignment workflows.
 LLVM aggregate layout coverage includes dependency-ordered struct/array/slice
 combinations and target-typed integer coercions such as `usize` slice lengths
 returned as narrower integer types after MIR verification.
+LLVM domain coverage includes payload ABI lowering for `wrap<T>`/`sat<T>`,
+modular `wrap` arithmetic and shifts, unsigned saturating arithmetic,
+checked/clamping scalar conversions, residue extraction, and wrapping builtins.

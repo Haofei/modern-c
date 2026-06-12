@@ -1383,6 +1383,26 @@ const LlvmEmitter = struct {
             const value = try self.emitExpr(info.base, info.enum_ty);
             return try self.castValue(value, info.enum_ty, info.repr_ty);
         }
+        if (self.domainResidueCallInfo(call)) |info| {
+            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
+            return try self.emitExpr(info.base, info.domain_ty);
+        }
+        if (self.conversionCallInfo(call)) |info| {
+            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const source_ty = self.exprType(call.args[0]) orelse info.target_ty;
+            const value = try self.emitExpr(call.args[0], source_ty);
+            if (std.mem.eql(u8, info.op, "trap_from")) return try self.emitTrapConversion(value, source_ty, info.target_ty);
+            if (std.mem.eql(u8, info.op, "sat_from")) return try self.emitSaturatingConversion(value, source_ty, info.target_ty);
+            if (!std.mem.eql(u8, info.op, "from") and !std.mem.eql(u8, info.op, "wrap_from") and !std.mem.eql(u8, info.op, "from_mod")) return error.UnsupportedLlvmEmission;
+            return try self.castValue(value, source_ty, info.target_ty);
+        }
+        if (wrappingBuiltinOp(call.callee.*)) |op| {
+            if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
+            if (self.integerBitsOf(expected_ty) == null) return error.UnsupportedLlvmEmission;
+            const left = try self.emitExpr(call.args[0], expected_ty);
+            const right = try self.emitExpr(call.args[1], expected_ty);
+            return try self.emitPlainBinaryValues(op, try self.llvmType(expected_ty), left, right);
+        }
         if (self.atomicCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "load")) {
                 if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
@@ -1449,6 +1469,24 @@ const LlvmEmitter = struct {
                 .sub => try self.emitPlainBinary("fsub", node, ty, llvm_ty),
                 .mul => try self.emitPlainBinary("fmul", node, ty, llvm_ty),
                 .div => try self.emitPlainBinary("fdiv", node, ty, llvm_ty),
+                else => error.UnsupportedLlvmEmission,
+            };
+        }
+        if (self.isWrapDomainType(ty)) {
+            return switch (node.op) {
+                .add => try self.emitPlainBinary("add", node, ty, llvm_ty),
+                .sub => try self.emitPlainBinary("sub", node, ty, llvm_ty),
+                .mul => try self.emitPlainBinary("mul", node, ty, llvm_ty),
+                .bit_and => try self.emitPlainBinary("and", node, ty, llvm_ty),
+                .bit_or => try self.emitPlainBinary("or", node, ty, llvm_ty),
+                .bit_xor => try self.emitPlainBinary("xor", node, ty, llvm_ty),
+                .shl, .shr => try self.emitWrapShift(node, ty, llvm_ty),
+                else => error.UnsupportedLlvmEmission,
+            };
+        }
+        if (self.isSatDomainType(ty)) {
+            return switch (node.op) {
+                .add, .sub, .mul => try self.emitSaturatingArithmetic(node, ty, llvm_ty),
                 else => error.UnsupportedLlvmEmission,
             };
         }
@@ -1529,6 +1567,11 @@ const LlvmEmitter = struct {
                     try self.out.print(self.allocator, "  {s} = sub {s} 0, {s}\n", .{ result, llvm_ty, value });
                     break :blk result;
                 }
+                if (self.isWrapDomainType(ty)) {
+                    const result = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = sub {s} 0, {s}\n", .{ result, try self.llvmType(ty), value });
+                    break :blk result;
+                }
                 return error.UnsupportedLlvmEmission;
             },
         };
@@ -1576,6 +1619,76 @@ const LlvmEmitter = struct {
         return result;
     }
 
+    fn emitTrapConversion(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+        const check = try self.emitConversionOutOfRange(value, source_ty, target_ty);
+        if (check) |out_of_range| {
+            const trap = try self.nextLabel("trap_conversion");
+            const cont = try self.nextLabel("conversion_ok");
+            try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n  call void @mc_trap_IntegerOverflow(){s}\n  unreachable\n{s}:\n", .{ out_of_range, trap, cont, trap, try self.debugCallSuffix(), cont });
+        }
+        return try self.castValue(value, source_ty, target_ty);
+    }
+
+    fn emitSaturatingConversion(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+        const src_range = self.intRangeOf(source_ty) orelse return error.UnsupportedLlvmEmission;
+        const dst_range = self.intRangeOf(target_ty) orelse return error.UnsupportedLlvmEmission;
+        const source_llvm = try self.llvmType(source_ty);
+        var current = value;
+        if (src_range.min < dst_range.min) {
+            const below = try self.nextTemp();
+            const selected = try self.nextTemp();
+            const pred: []const u8 = if (self.isSignedIntegerType(source_ty)) "slt" else "ult";
+            try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{ below, pred, source_llvm, current, dst_range.min });
+            try self.out.print(self.allocator, "  {s} = select i1 {s}, {s} {d}, {s} {s}\n", .{ selected, below, source_llvm, dst_range.min, source_llvm, current });
+            current = selected;
+        }
+        if (src_range.max > dst_range.max) {
+            const above = try self.nextTemp();
+            const selected = try self.nextTemp();
+            const pred: []const u8 = if (self.isSignedIntegerType(source_ty)) "sgt" else "ugt";
+            try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{ above, pred, source_llvm, current, dst_range.max });
+            try self.out.print(self.allocator, "  {s} = select i1 {s}, {s} {d}, {s} {s}\n", .{ selected, above, source_llvm, dst_range.max, source_llvm, current });
+            current = selected;
+        }
+        return try self.castValue(current, source_ty, target_ty);
+    }
+
+    fn emitConversionOutOfRange(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) !?[]const u8 {
+        const src_range = self.intRangeOf(source_ty) orelse return error.UnsupportedLlvmEmission;
+        const dst_range = self.intRangeOf(target_ty) orelse return error.UnsupportedLlvmEmission;
+        const source_llvm = try self.llvmType(source_ty);
+        var result: ?[]const u8 = null;
+        if (src_range.min < dst_range.min) {
+            const below = try self.nextTemp();
+            const pred: []const u8 = if (self.isSignedIntegerType(source_ty)) "slt" else "ult";
+            try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{ below, pred, source_llvm, value, dst_range.min });
+            result = below;
+        }
+        if (src_range.max > dst_range.max) {
+            const above = try self.nextTemp();
+            const pred: []const u8 = if (self.isSignedIntegerType(source_ty)) "sgt" else "ugt";
+            try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}\n", .{ above, pred, source_llvm, value, dst_range.max });
+            if (result) |previous| {
+                const combined = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = or i1 {s}, {s}\n", .{ combined, previous, above });
+                result = combined;
+            } else {
+                result = above;
+            }
+        }
+        return result;
+    }
+
+    fn intRangeOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?IntRange {
+        const bits = self.integerBitsOf(ty) orelse return null;
+        if (self.isSignedIntegerType(ty)) {
+            const max = (@as(i128, 1) << @intCast(bits - 1)) - 1;
+            return .{ .min = -max - 1, .max = max };
+        }
+        const max = (@as(i128, 1) << @intCast(bits)) - 1;
+        return .{ .min = 0, .max = max };
+    }
+
     fn emitComparison(self: *LlvmEmitter, node: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
         if (!typeNameEql(expected_ty, "bool")) return error.UnsupportedLlvmEmission;
         const operand_ty = self.exprType(node.left.*) orelse self.exprType(node.right.*) orelse return error.UnsupportedLlvmEmission;
@@ -1611,6 +1724,26 @@ const LlvmEmitter = struct {
         return value;
     }
 
+    fn emitSaturatingArithmetic(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
+        if (self.isSignedIntegerType(ty)) return error.UnsupportedLlvmEmission;
+        const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const intrinsic = try self.overflowIntrinsic(node.op, false, bits);
+        const pair_ty = try std.fmt.allocPrint(self.scratch.allocator(), "{{ {s}, i1 }}", .{llvm_ty});
+        const left = try self.emitExpr(node.left.*, ty);
+        const right = try self.emitExpr(node.right.*, ty);
+        const pair = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}, {s} {s}){s}\n", .{ pair, pair_ty, intrinsic, llvm_ty, left, llvm_ty, right, try self.debugCallSuffix() });
+        const value = try self.nextTemp();
+        const overflow = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ value, pair_ty, pair });
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ overflow, pair_ty, pair });
+        const range = self.intRangeOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const saturated = if (node.op == .sub) range.min else range.max;
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = select i1 {s}, {s} {d}, {s} {s}\n", .{ result, overflow, llvm_ty, saturated, llvm_ty, value });
+        return result;
+    }
+
     fn emitCheckedDivRem(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
         if (self.integerBitsOf(ty) == null) return error.UnsupportedLlvmEmission;
         const left = try self.emitExpr(node.left.*, ty);
@@ -1640,6 +1773,24 @@ const LlvmEmitter = struct {
             else => unreachable,
         };
         return try self.emitPlainBinaryValues(op, llvm_ty, left, right);
+    }
+
+    fn emitWrapShift(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
+        const shifted_bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const amount_ty = self.exprType(node.right.*) orelse ty;
+        const amount_llvm = try self.llvmType(amount_ty);
+        const left = try self.emitExpr(node.left.*, ty);
+        const raw_amount = try self.emitExpr(node.right.*, amount_ty);
+
+        try self.emitShiftCountCheck(raw_amount, amount_ty, amount_llvm, shifted_bits);
+        const amount = try self.castIntegerValue(raw_amount, amount_ty, ty);
+
+        const op: []const u8 = switch (node.op) {
+            .shl => "shl",
+            .shr => if (self.isSignedIntegerType(ty)) "ashr" else "lshr",
+            else => unreachable,
+        };
+        return try self.emitPlainBinaryValues(op, llvm_ty, left, amount);
     }
 
     fn emitCheckedShift(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
@@ -1817,6 +1968,8 @@ const LlvmEmitter = struct {
             .fn_pointer => "ptr",
             .generic => |node| if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1)
                 try self.atomicStorageLlvmType(node.args[0])
+            else if ((std.mem.eql(u8, node.base.text, "wrap") or std.mem.eql(u8, node.base.text, "sat")) and node.args.len == 1)
+                try self.llvmType(node.args[0])
             else
                 error.UnsupportedLlvmEmission,
             else => error.UnsupportedLlvmEmission,
@@ -1896,6 +2049,36 @@ const LlvmEmitter = struct {
             },
             .qualified => |node| self.atomicPayloadType(node.child.*),
             else => null,
+        };
+    }
+
+    fn domainPayloadType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .generic => |node| {
+                if ((!std.mem.eql(u8, node.base.text, "wrap") and !std.mem.eql(u8, node.base.text, "sat")) or node.args.len != 1) return null;
+                return node.args[0];
+            },
+            .qualified => |node| self.domainPayloadType(node.child.*),
+            else => null,
+        };
+    }
+
+    fn isWrapDomainType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .generic => |node| std.mem.eql(u8, node.base.text, "wrap") and node.args.len == 1,
+            .qualified => |node| self.isWrapDomainType(node.child.*),
+            else => false,
+        };
+    }
+
+    fn isSatDomainType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .generic => |node| std.mem.eql(u8, node.base.text, "sat") and node.args.len == 1,
+            .qualified => |node| self.isSatDomainType(node.child.*),
+            else => false,
         };
     }
 
@@ -2066,6 +2249,8 @@ const LlvmEmitter = struct {
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
         if (builtinCallReturnType(call)) |ty| return ty;
         if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
+        if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
+        if (self.conversionCallInfo(call)) |info| return info.target_ty;
         if (self.atomicCallInfo(call)) |info| {
             if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
             if (std.mem.eql(u8, info.op, "store")) return simpleType(call.callee.*.span, "void");
@@ -2090,6 +2275,53 @@ const LlvmEmitter = struct {
         const enum_decl = self.enumDeclForType(enum_ty) orelse return null;
         if (!enum_decl.is_open) return null;
         return .{ .base = member.base.*, .enum_ty = enum_ty, .repr_ty = enumReprType(enum_decl) };
+    }
+
+    fn domainResidueCallInfo(self: *LlvmEmitter, call: anytype) ?DomainResidueCallInfo {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "residue")) return null;
+        const domain_ty = self.exprType(member.base.*) orelse return null;
+        const payload_ty = self.domainPayloadType(domain_ty) orelse return null;
+        const resolved = self.resolveAliasType(domain_ty);
+        const generic = switch (resolved.kind) {
+            .generic => |node| node,
+            else => return null,
+        };
+        if (!std.mem.eql(u8, generic.base.text, "wrap")) return null;
+        return .{ .base = member.base.*, .domain_ty = domain_ty, .payload_ty = payload_ty };
+    }
+
+    fn conversionCallInfo(self: *LlvmEmitter, call: anytype) ?ConversionCallInfo {
+        const member = switch (call.callee.kind) {
+            .member => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .member => |node| node,
+                else => return null,
+            },
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "from") and
+            !std.mem.eql(u8, member.name.text, "wrap_from") and
+            !std.mem.eql(u8, member.name.text, "from_mod") and
+            !std.mem.eql(u8, member.name.text, "trap_from") and
+            !std.mem.eql(u8, member.name.text, "sat_from"))
+        {
+            return null;
+        }
+        const ident = switch (member.base.kind) {
+            .ident => |id| id,
+            else => return null,
+        };
+        const target_ty = self.resolveAliasType(simpleType(ident.span, ident.text));
+        if (self.integerBitsOf(target_ty) == null) return null;
+        return .{ .target_ty = target_ty, .op = member.name.text };
     }
 
     fn atomicCallInfo(self: *LlvmEmitter, call: anytype) ?AtomicCallInfo {
@@ -2131,6 +2363,7 @@ const LlvmEmitter = struct {
         if (self.enumDeclForType(ty)) |enum_decl| return self.llvmAlignOf(enumReprType(enum_decl));
         const resolved_ty = self.resolveAliasType(ty);
         if (self.atomicPayloadType(resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
+        if (self.domainPayloadType(resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
         return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "bool") or
                 std.mem.eql(u8, name.text, "i8") or
@@ -2152,11 +2385,13 @@ const LlvmEmitter = struct {
 
     fn integerBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
         if (self.enumDeclForType(ty)) |enum_decl| return self.integerBitsOf(enumReprType(enum_decl));
+        if (self.domainPayloadType(ty)) |payload_ty| return self.integerBitsOf(payload_ty);
         return integerBits(self.resolveAliasType(ty));
     }
 
     fn isSignedIntegerType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         if (self.enumDeclForType(ty)) |enum_decl| return self.isSignedIntegerType(enumReprType(enum_decl));
+        if (self.domainPayloadType(ty)) |payload_ty| return self.isSignedIntegerType(payload_ty);
         return isSignedInteger(self.resolveAliasType(ty));
     }
 
@@ -2250,6 +2485,22 @@ const EnumRawCallInfo = struct {
     base: ast.Expr,
     enum_ty: ast.TypeExpr,
     repr_ty: ast.TypeExpr,
+};
+
+const DomainResidueCallInfo = struct {
+    base: ast.Expr,
+    domain_ty: ast.TypeExpr,
+    payload_ty: ast.TypeExpr,
+};
+
+const ConversionCallInfo = struct {
+    target_ty: ast.TypeExpr,
+    op: []const u8,
+};
+
+const IntRange = struct {
+    min: i128,
+    max: i128,
 };
 
 const AtomicCallInfo = struct {
@@ -2402,6 +2653,24 @@ fn isAtomicInitExpr(expr: ast.Expr) bool {
         .call => |call| isAtomicInitCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1,
         .grouped => |inner| isAtomicInitExpr(inner.*),
         else => false,
+    };
+}
+
+fn wrappingBuiltinOp(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .member => |member| if (isIdentNamed(member.base.*, "wrapping"))
+            if (std.mem.eql(u8, member.name.text, "add"))
+                "add"
+            else if (std.mem.eql(u8, member.name.text, "sub"))
+                "sub"
+            else if (std.mem.eql(u8, member.name.text, "mul"))
+                "mul"
+            else
+                null
+        else
+            null,
+        .grouped => |inner| wrappingBuiltinOp(inner.*),
+        else => null,
     };
 }
 
