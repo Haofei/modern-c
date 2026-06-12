@@ -565,6 +565,7 @@ const LlvmEmitter = struct {
                 .block => |node| {
                     if (try self.emitScopedBlock(node, ret_ty)) return true;
                 },
+                .comptime_block => {},
                 .unsafe_block => |node| {
                     if (try self.emitScopedBlock(node, ret_ty)) return true;
                 },
