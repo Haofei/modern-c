@@ -831,11 +831,12 @@ pub const Checker = struct {
         if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, source)) {
             self.errorCode(initializer.span, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         }
-        // A `const` global's initializer is a compile-time constant by
-        // definition (section 22): accept any expression that folds, including
-        // named references to earlier const globals (e.g. `MAX * 2`).
-        const folds_const = global.is_const and self.comptimeConstantFolds(initializer);
-        if (type_valid and self.reporter.diagnostics.items.len == errors_before and !isStaticGlobalInitializer(initializer, ctx) and !folds_const) {
+        // A typed global initializer is static when it is either a C static
+        // initializer or folds through the section-22 comptime evaluator. The
+        // latter admits expressions like `1 + 2` and const-fn aggregate builders
+        // while still rejecting runtime calls.
+        const folds_static = self.comptimeConstantFolds(initializer);
+        if (type_valid and self.reporter.diagnostics.items.len == errors_before and !isStaticGlobalInitializer(initializer, ctx) and !folds_static) {
             self.errorCode(initializer.span, "E_GLOBAL_INITIALIZER_NOT_STATIC", "global initializer must be a compile-time static value for M0 C emission");
         }
     }

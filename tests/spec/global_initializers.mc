@@ -20,7 +20,21 @@ struct MaybeBox {
     ptr: ?*mut u32,
 }
 
+const fn static_add(a: u32, b: u32) -> u32 {
+    return a + b;
+}
+
+const fn static_values() -> [2]u32 {
+    return .{ 13, 14 };
+}
+
+const fn static_pair() -> Pair {
+    return .{ .left = 15, .right = 16 };
+}
+
 global seed: u32 = 1;
+global folded_sum: u32 = 1 + 2;
+global folded_call: u32 = static_add(5, 6);
 global copied_seed: u32 = seed;
 global letter: u8 = 'A';
 global gain: f32 = 1.5;
@@ -29,6 +43,7 @@ global cast_seed: u32 = 1 as u32;
 global cast_copied_seed: u32 = seed as u32;
 global first_index: usize = 0;
 global values: [2]u32 = .{ 7, 8 };
+global folded_values: [2]u32 = static_values();
 global copied_values: [2]u32 = values;
 global names: [2]*const u8 = .{ "alpha", "beta" };
 global copied_names: [2]*const u8 = names;
@@ -42,6 +57,7 @@ global table_item_ptr: *const u32 = &table.items[first_index];
 global message: *const u8 = "ready";
 global maybe_ptrs: [2]?*mut u32 = .{ null, &seed };
 global maybe_box: MaybeBox = .{ .ptr = &seed };
+global folded_pair: Pair = static_pair();
 global nullable_handle: ?*mut u8 = null;
 
 // EXPECT_ERROR: E_VOID_STORAGE

@@ -804,12 +804,6 @@ const CEmitter = struct {
                     try self.out.print(self.allocator, " = {s};\n\n", .{text});
                     return;
                 }
-                if (global.ty) |global_ty| {
-                    if (try self.emitConstGlobalInitializer(global_ty, initializer)) {
-                        try self.out.appendSlice(self.allocator, ";\n\n");
-                        return;
-                    }
-                }
             }
             if (self.staticCInitializer(initializer)) |static_initializer| {
                 try self.out.appendSlice(self.allocator, " = ");
@@ -829,8 +823,16 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, " = ");
                 try self.emitExprWithTarget(initializer, null, global.ty.?);
                 try self.static_initializers.put(global.name.text, initializer);
-            } else if (global.ty != null and global.ty.?.kind == .array) {
-                try self.out.appendSlice(self.allocator, "/* unsupported non-static global array initializer */");
+            } else if (global.ty) |global_ty| {
+                if (try self.emitConstGlobalInitializer(global_ty, initializer)) {
+                    try self.out.appendSlice(self.allocator, ";\n\n");
+                    return;
+                }
+                if (global_ty.kind == .array) {
+                    try self.out.appendSlice(self.allocator, "/* unsupported non-static global array initializer */");
+                    return error.UnsupportedCEmission;
+                }
+                try self.out.appendSlice(self.allocator, "/* unsupported non-static global initializer */");
                 return error.UnsupportedCEmission;
             } else {
                 try self.out.appendSlice(self.allocator, "/* unsupported non-static global initializer */");

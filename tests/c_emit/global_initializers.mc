@@ -20,10 +20,24 @@ union GlobalToken {
     eof,
 }
 
+const fn static_add(a: u32, b: u32) -> u32 {
+    return a + b;
+}
+
+const fn static_values() -> [2]u32 {
+    return .{ 13, 14 };
+}
+
+const fn static_pair() -> Pair {
+    return .{ .left = 15, .right = 16 };
+}
+
 extern fn consume_default_slice(xs: []const u8) -> usize;
 
 global shared_cell: u32 = 0;
 global seed: u32 = 1;
+global folded_sum: u32 = 1 + 2;
+global folded_call: u32 = static_add(5, 6);
 global copied_seed: u32 = seed;
 global letter: u8 = 'A';
 global gain: f32 = 1.5;
@@ -34,6 +48,7 @@ global signed_seed: i32 = -1;
 global grouped_signed_seed: i16 = (-12);
 global first_index: usize = 0;
 global values: [2]u32 = .{ 7, 8 };
+global folded_values: [2]u32 = static_values();
 global copied_values: [2]u32 = values;
 global names: [2]*const u8 = .{ "alpha", "beta" };
 global copied_names: [2]*const u8 = names;
@@ -47,6 +62,7 @@ global table_item_ptr: *const u32 = &table.items[first_index];
 global message: *const u8 = "ready";
 global maybe_ptrs: [2]?*mut u32 = .{ null, &seed };
 global maybe_box: MaybeBox = .{ .ptr = &seed };
+global folded_pair: Pair = static_pair();
 global global_const_ptr: *const u32 = &shared_cell;
 global global_mut_ptr: *mut u32 = &shared_cell;
 global nullable_handle: ?*mut u8 = null;
@@ -60,6 +76,14 @@ fn read_shared_cell() -> u32 {
 
 fn read_copied_seed() -> u32 {
     return copied_seed;
+}
+
+fn read_folded_sum() -> u32 {
+    return folded_sum;
+}
+
+fn read_folded_call() -> u32 {
+    return folded_call;
 }
 
 fn read_letter() -> u8 {
@@ -98,6 +122,10 @@ fn read_copied_value() -> u32 {
     return copied_values[1];
 }
 
+fn read_folded_value() -> u32 {
+    return folded_values[1];
+}
+
 fn read_name() -> *const u8 {
     return names[1];
 }
@@ -120,6 +148,10 @@ fn read_copied_table_item() -> u32 {
 
 fn read_copied_pair() -> u32 {
     return copied_pair.right;
+}
+
+fn read_folded_pair() -> u32 {
+    return folded_pair.right;
 }
 
 fn inferred_pair_right() -> u32 {

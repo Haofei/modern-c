@@ -3914,7 +3914,8 @@ opaque asm
 trap lowering
 #[no_lang_trap] verifier
 #[unsafe_contract] markers
-narrow scalar/aggregate const globals and const-fn comptime folding
+narrow scalar/aggregate const globals, typed static global initializers, and
+const-fn comptime folding
 layout reflection for size/alignment/field offsets/bit offsets/repr,
 including slices and tagged unions
 C source-line hints and line-oriented .mcmap output, including deferred cleanup

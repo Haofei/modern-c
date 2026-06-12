@@ -58,7 +58,8 @@ Prototype or incomplete:
   checked C-emission path.
 - Package registry, releases/publishing, and production toolchain support.
 - Full comptime execution (§22): the evaluator handles scalar/unit/enum-tag
-  folding, scalar and aggregate const globals, const-fn calls with
+  folding, scalar and aggregate const globals and typed static global
+  initializers, const-fn calls with
   loops/for/switch/asserts, top-level comptime block assignments/loops/switches,
   aggregate literals and mutable aggregate updates, comptime/type feedback, and
   C-ABI layout reflection for size/alignment/offsets/repr, including slices and
