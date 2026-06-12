@@ -4112,8 +4112,9 @@ coverage in `zig build llvm-obj-test`.
 The `zig build llvm-sweep` gate strips expected-reject declarations from the
 spec corpus and verifies every in-scope valid spec fixture emits assemblable
 LLVM IR. It also rejects hidden optimizer-assumption tokens
-(`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef`/`reassoc`,
-with `reassoc` allowed only for explicit `reduce.sum_fast` floating reductions)
+(`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef` and
+hidden fast-math flags, with `reassoc` allowed only for explicit
+`reduce.sum_fast` floating reductions)
 in the swept IR. The
 current sweep has no allowlisted LLVM backend gaps. The
 `zig build llvm-c-sweep` gate additionally verifies every current
@@ -4137,8 +4138,9 @@ These LLVM IR, object, and link/run gates are included in the `zig build m0`
 milestone gate.
 It intentionally emits no hidden optimizer-assumption tokens outside proven
 verifier conditions, and the broad LLVM sweep gates enforce that policy for
-`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef`/`reassoc`,
-except the explicit `reduce.sum_fast` floating-reduction reassociation opt-in. Additional
+`nuw`/`nsw`/`nonnull`/`noalias`/`noundef`/`poison`/`inbounds`/`undef` and hidden
+fast-math flags, except the explicit `reduce.sum_fast` floating-reduction
+reassociation opt-in. Additional
 runtime/toolchain coverage, deeper optimizer proof work, and fuller native
 debug mapping remain
 future work.
@@ -4185,7 +4187,7 @@ Must not be emitted as persistent parameter, return, global, or call-site metada
 Must be stripped or ended at region exit when it exists only because of #[unsafe_contract].
 ```
 
-LLVM `undef`, `poison`, `noundef`, `nonnull`, `noalias`, `nuw`, `nsw`, `inbounds`, and `reassoc` are not allowed to become hidden semantic assumptions outside the MC verifier rules. The only current `reassoc` emission is the explicit `reduce.sum_fast` floating-reduction opt-in.
+LLVM `undef`, `poison`, `noundef`, `nonnull`, `noalias`, `nuw`, `nsw`, `inbounds`, and hidden fast-math flags are not allowed to become hidden semantic assumptions outside the MC verifier rules. The only current fast-math emission is `reassoc` for the explicit `reduce.sum_fast` floating-reduction opt-in.
 
 LLVM is a backend, not a semantic source.
 
