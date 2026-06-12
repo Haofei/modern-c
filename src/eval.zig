@@ -452,6 +452,21 @@ pub fn collectConstGlobals(
     funcs: *const std.StringHashMap(ast.FnDecl),
     out: *std.StringHashMap(ComptimeValue),
 ) !void {
+    try collectConstGlobalsWithOptions(allocator, module, funcs, out, .{});
+}
+
+pub const CollectConstGlobalsOptions = struct {
+    reflect: ?ReflectFn = null,
+    reflect_ctx: ?*anyopaque = null,
+};
+
+pub fn collectConstGlobalsWithOptions(
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    funcs: *const std.StringHashMap(ast.FnDecl),
+    out: *std.StringHashMap(ComptimeValue),
+    options: CollectConstGlobalsOptions,
+) !void {
     // Fold scratch (e.g. array temporaries) lives in an arena that is freed
     // here; values retained in `out` must therefore be deep-cloned.
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -460,6 +475,8 @@ pub fn collectConstGlobals(
     defer scope.deinit();
     scope.funcs = funcs;
     scope.globals = out;
+    scope.reflect = options.reflect;
+    scope.reflect_ctx = options.reflect_ctx;
     for (module.decls) |decl| {
         const global = switch (decl.kind) {
             .global_decl => |g| g,

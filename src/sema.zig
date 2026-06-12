@@ -85,9 +85,23 @@ pub const Checker = struct {
         self.const_fns = &const_fns;
         defer self.const_fns = null;
 
+        var reflect_env = ReflectEnv{
+            .structs = &structs,
+            .packed_bits = &packed_bits,
+            .overlay_unions = &overlay_unions,
+            .tagged_unions = &tagged_unions,
+            .enums = &enums,
+            .aliases = &type_aliases,
+        };
+        self.reflect_env = &reflect_env;
+        defer self.reflect_env = null;
+
         var const_globals = std.StringHashMap(eval.ComptimeValue).init(self.reporter.allocator);
         defer eval.deinitConstGlobals(self.reporter.allocator, &const_globals);
-        eval.collectConstGlobals(self.reporter.allocator, module, &const_fns, &const_globals) catch {
+        eval.collectConstGlobalsWithOptions(self.reporter.allocator, module, &const_fns, &const_globals, .{
+            .reflect = comptimeReflectThunk,
+            .reflect_ctx = self,
+        }) catch {
             self.oom = true;
         };
         self.const_globals = &const_globals;
@@ -118,17 +132,6 @@ pub const Checker = struct {
         }
         self.comptime_fns = &comptime_fns;
         defer self.comptime_fns = null;
-
-        var reflect_env = ReflectEnv{
-            .structs = &structs,
-            .packed_bits = &packed_bits,
-            .overlay_unions = &overlay_unions,
-            .tagged_unions = &tagged_unions,
-            .enums = &enums,
-            .aliases = &type_aliases,
-        };
-        self.reflect_env = &reflect_env;
-        defer self.reflect_env = null;
 
         var move_types = std.StringHashMap(void).init(self.reporter.allocator);
         defer move_types.deinit();

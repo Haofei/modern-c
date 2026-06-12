@@ -10,10 +10,16 @@
 
 const MAX: usize = 4;
 const DOUBLE: usize = MAX * 2;
+const WORD_SIZE: usize = sizeof(u32);
 
 struct ConstPair {
     left: u32,
     right: u32,
+}
+
+extern struct ConstPacket {
+    len: u16,
+    tag: u8,
 }
 
 const fn align_up(x: usize, a: usize) -> usize {
@@ -29,6 +35,9 @@ const fn make_const_pair() -> ConstPair {
 }
 
 const ALIGNED: usize = align_up(3, 4);
+const PACKET_SIZE: usize = sizeof(ConstPacket);
+const PACKET_TAG_OFFSET: usize = field_offset(ConstPacket, .tag);
+const PACKET_TAG_BIT_OFFSET: usize = bit_offset(ConstPacket, .tag);
 const CONST_NUMBERS: [4]u32 = make_const_numbers();
 const CONST_PAIR: ConstPair = make_const_pair();
 
@@ -44,6 +53,18 @@ fn accept_const_fn_const_global_array() -> [ALIGNED]u8 {
     return .{1, 2, 3, 4};
 }
 
+fn accept_reflected_const_global_array() -> [WORD_SIZE]u8 {
+    return .{1, 2, 3, 4};
+}
+
+fn accept_reflected_struct_const_global_array() -> [PACKET_SIZE]u8 {
+    return .{1, 2, 3, 4};
+}
+
+fn accept_reflected_field_offset_const_global_array() -> [PACKET_TAG_OFFSET]u8 {
+    return .{1, 2};
+}
+
 fn accept_const_global_runtime_use() -> usize {
     return DOUBLE;
 }
@@ -57,6 +78,10 @@ fn accept_comptime_const_global_assert() -> void {
         assert(MAX == 4);
         assert(DOUBLE == 8);
         assert(ALIGNED == 4);
+        assert(WORD_SIZE == 4);
+        assert(PACKET_SIZE == 4);
+        assert(PACKET_TAG_OFFSET == 2);
+        assert(PACKET_TAG_BIT_OFFSET == 16);
         assert(DOUBLE == MAX * 2);
         assert(CONST_NUMBERS[1] == 5);
         assert(CONST_PAIR.left == 8);

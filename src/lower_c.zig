@@ -687,8 +687,6 @@ const CEmitter = struct {
                 if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
             }
         }
-        try eval.collectConstGlobals(self.allocator, module, &self.const_fns, &self.const_globals);
-        try self.collectConstGlobalWidths(module);
         // Pre-register every (non-MMIO) struct and type alias name so type-name
         // mangling (`typeSuffix`'s `struct_` prefix) is consistent regardless of
         // declaration/import order — e.g. an array-of-struct field (`[N]S`) whose
@@ -701,9 +699,15 @@ const CEmitter = struct {
                 .struct_decl => |struct_decl| {
                     if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
                 },
+                .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
                 else => {},
             }
         }
+        try eval.collectConstGlobalsWithOptions(self.allocator, module, &self.const_fns, &self.const_globals, .{
+            .reflect = cComptimeReflectThunk,
+            .reflect_ctx = self,
+        });
+        try self.collectConstGlobalWidths(module);
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),

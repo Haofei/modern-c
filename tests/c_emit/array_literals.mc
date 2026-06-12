@@ -1,4 +1,13 @@
 global default_values: [2]u32 = .{1, 2};
+const WORD_SIZE: usize = sizeof(u32);
+
+extern struct Packet {
+    len: u16,
+    tag: u8,
+}
+
+const PACKET_SIZE: usize = sizeof(Packet);
+const PACKET_TAG_OFFSET: usize = field_offset(Packet, .tag);
 
 struct Cell {
     value: u32,
@@ -43,6 +52,21 @@ fn call_literal() -> void {
 fn const_expr_length() -> u32 {
     let xs: [1 + 2]u32 = .{10, 20, 30};
     return xs[2];
+}
+
+fn reflected_const_length() -> u8 {
+    let xs: [WORD_SIZE]u8 = .{1, 2, 3, 4};
+    return xs[3];
+}
+
+fn reflected_struct_const_length() -> u8 {
+    let xs: [PACKET_SIZE]u8 = .{1, 2, 3, 4};
+    return xs[2];
+}
+
+fn reflected_field_offset_const_length() -> u8 {
+    let xs: [PACKET_TAG_OFFSET]u8 = .{7, 8};
+    return xs[1];
 }
 
 fn nested_struct_array_literal() -> u32 {

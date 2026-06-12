@@ -250,6 +250,7 @@ const FunctionSummary = struct {
 const EnumSummary = struct {
     is_open: bool,
     cases: []const ast.EnumCase,
+    repr: ?ast.TypeExpr,
 };
 
 const StructSummary = struct {
@@ -263,6 +264,13 @@ const UnionSummary = struct {
 const PackedBitsSummary = struct {
     repr: ast.TypeExpr,
     fields: []const ast.Field,
+};
+
+const MirReflectEnv = struct {
+    enums: *const std.StringHashMap(EnumSummary),
+    structs: *const std.StringHashMap(StructSummary),
+    packed_bits: *const std.StringHashMap(PackedBitsSummary),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
 };
 
 pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
@@ -279,7 +287,7 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
 
     for (module.decls) |decl| {
         switch (decl.kind) {
-            .enum_decl => |enum_decl| try enums.put(enum_decl.name.text, .{ .is_open = enum_decl.is_open, .cases = enum_decl.cases }),
+            .enum_decl => |enum_decl| try enums.put(enum_decl.name.text, .{ .is_open = enum_decl.is_open, .cases = enum_decl.cases, .repr = enum_decl.repr }),
             .struct_decl => |struct_decl| try structs.put(struct_decl.name.text, .{ .fields = struct_decl.fields }),
             .union_decl => |union_decl| try unions.put(union_decl.name.text, .{ .cases = union_decl.cases }),
             .overlay_union_decl => |overlay_union_decl| try structs.put(overlay_union_decl.name.text, .{ .fields = overlay_union_decl.fields }),
@@ -322,7 +330,16 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
         }
     }
 
-    try eval.collectConstGlobals(allocator, module, &const_fns, &const_globals);
+    var reflect_env = MirReflectEnv{
+        .enums = &enums,
+        .structs = &structs,
+        .packed_bits = &packed_bits,
+        .aliases = &aliases,
+    };
+    try eval.collectConstGlobalsWithOptions(allocator, module, &const_fns, &const_globals, .{
+        .reflect = mirComptimeReflectThunk,
+        .reflect_ctx = &reflect_env,
+    });
 
     var functions: std.ArrayList(Function) = .empty;
     errdefer {
@@ -3639,6 +3656,264 @@ fn unionCasePayloadType(info: UnionSummary, case_name: []const u8) ?ast.TypeExpr
         if (std.mem.eql(u8, case.name.text, case_name)) return case.ty;
     }
     return null;
+}
+
+fn mirComptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
+    const env: *MirReflectEnv = @ptrCast(@alignCast(ctx orelse return null));
+    return mirComptimeReflect(env, call);
+}
+
+fn mirComptimeReflect(env: *const MirReflectEnv, call: ast.Expr) ?i128 {
+    const node = switch (call.kind) {
+        .call => |n| n,
+        else => return null,
+    };
+    const kind = mirReflectionKind(node.callee.*) orelse return null;
+    if (node.type_args.len != 1) return null;
+    const ty = node.type_args[0];
+    return switch (kind) {
+        .size => if (node.args.len == 0) mirComptimeSizeOf(env, ty, 0) else null,
+        .alignment => if (node.args.len == 0) mirComptimeAlignOf(env, ty, 0) else null,
+        .repr => if (node.args.len == 0) mirComptimeReprOf(env, ty, 0) else null,
+        .field_offset => if (node.args.len == 1) mirComptimeFieldOffset(env, ty, mirReflectionFieldName(node.args[0]) orelse return null, 0) else null,
+        .bit_offset => if (node.args.len == 1) mirComptimeBitOffset(env, ty, mirReflectionFieldName(node.args[0]) orelse return null, 0) else null,
+    };
+}
+
+const MirReflectionKind = enum { size, alignment, field_offset, bit_offset, repr };
+
+fn mirReflectionKind(callee: ast.Expr) ?MirReflectionKind {
+    return switch (callee.kind) {
+        .ident => |ident| {
+            if (std.mem.eql(u8, ident.text, "size_of") or std.mem.eql(u8, ident.text, "sizeof")) return .size;
+            if (std.mem.eql(u8, ident.text, "alignof")) return .alignment;
+            if (std.mem.eql(u8, ident.text, "field_offset")) return .field_offset;
+            if (std.mem.eql(u8, ident.text, "bit_offset")) return .bit_offset;
+            if (std.mem.eql(u8, ident.text, "repr_of")) return .repr;
+            return null;
+        },
+        .grouped => |inner| mirReflectionKind(inner.*),
+        else => null,
+    };
+}
+
+fn mirReflectionFieldName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .enum_literal => |literal| literal.text,
+        .grouped => |inner| mirReflectionFieldName(inner.*),
+        else => null,
+    };
+}
+
+fn mirComptimeSizeOf(env: *const MirReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+    if (depth > 32) return null;
+    return switch (ty.kind) {
+        .name => |name| {
+            if (mirScalarLayout(name.text)) |layout| return @intCast(layout.size);
+            if (env.aliases.get(name.text)) |aliased| return mirComptimeSizeOf(env, aliased, depth + 1);
+            if (env.structs.get(name.text)) |info| {
+                const layout = mirComptimeStructLayout(env, info, depth + 1, null) orelse return null;
+                return layout.size;
+            }
+            if (env.enums.get(name.text)) |info| {
+                const repr = info.repr orelse mirSimpleNameType("isize", ty.span);
+                return mirComptimeSizeOf(env, repr, depth + 1);
+            }
+            if (env.packed_bits.get(name.text)) |info| return mirComptimeSizeOf(env, info.repr, depth + 1);
+            return null;
+        },
+        .pointer, .raw_many_pointer => 8,
+        .slice => 16,
+        .generic => |g| {
+            if (mirPointerLikeGeneric(g.base.text)) return 8;
+            if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
+            if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return mirComptimeSizeOf(env, g.args[0], depth + 1);
+            if ((std.mem.eql(u8, g.base.text, "atomic") or std.mem.eql(u8, g.base.text, "MaybeUninit")) and g.args.len == 1) return mirComptimeSizeOf(env, g.args[0], depth + 1);
+            if (mirArithmeticLayoutGeneric(g.base.text) and g.args.len == 1) return mirComptimeSizeOf(env, g.args[0], depth + 1);
+            return null;
+        },
+        .array => |node| {
+            const len = mirStaticArrayLen(node.len) orelse return null;
+            const elem = mirComptimeSizeOf(env, node.child.*, depth + 1) orelse return null;
+            return @as(i128, @intCast(len)) * elem;
+        },
+        .qualified => |node| mirComptimeSizeOf(env, node.child.*, depth + 1),
+        else => null,
+    };
+}
+
+fn mirComptimeAlignOf(env: *const MirReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+    if (depth > 32) return null;
+    return switch (ty.kind) {
+        .name => |name| {
+            if (mirScalarLayout(name.text)) |layout| return @intCast(layout.alignment);
+            if (env.aliases.get(name.text)) |aliased| return mirComptimeAlignOf(env, aliased, depth + 1);
+            if (env.structs.get(name.text)) |info| {
+                const layout = mirComptimeStructLayout(env, info, depth + 1, null) orelse return null;
+                return layout.alignment;
+            }
+            if (env.enums.get(name.text)) |info| {
+                const repr = info.repr orelse mirSimpleNameType("isize", ty.span);
+                return mirComptimeAlignOf(env, repr, depth + 1);
+            }
+            if (env.packed_bits.get(name.text)) |info| return mirComptimeAlignOf(env, info.repr, depth + 1);
+            return null;
+        },
+        .pointer, .raw_many_pointer, .slice => 8,
+        .generic => |g| {
+            if (mirPointerLikeGeneric(g.base.text)) return 8;
+            if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
+            if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return mirComptimeAlignOf(env, g.args[0], depth + 1);
+            if ((std.mem.eql(u8, g.base.text, "atomic") or std.mem.eql(u8, g.base.text, "MaybeUninit")) and g.args.len == 1) return mirComptimeAlignOf(env, g.args[0], depth + 1);
+            if (mirArithmeticLayoutGeneric(g.base.text) and g.args.len == 1) return mirComptimeAlignOf(env, g.args[0], depth + 1);
+            return null;
+        },
+        .array => |node| mirComptimeAlignOf(env, node.child.*, depth + 1),
+        .qualified => |node| mirComptimeAlignOf(env, node.child.*, depth + 1),
+        else => null,
+    };
+}
+
+fn mirComptimeReprOf(env: *const MirReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+    if (depth > 32) return null;
+    const name = mirTypeName(ty) orelse return null;
+    if (env.aliases.get(name)) |aliased| return mirComptimeReprOf(env, aliased, depth + 1);
+    if (env.enums.get(name)) |info| {
+        const repr = info.repr orelse mirSimpleNameType("isize", ty.span);
+        return mirComptimeSizeOf(env, repr, depth + 1);
+    }
+    if (env.packed_bits.get(name)) |info| return mirComptimeSizeOf(env, info.repr, depth + 1);
+    return null;
+}
+
+fn mirComptimeFieldOffset(env: *const MirReflectEnv, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+    if (depth > 32) return null;
+    const name = mirTypeName(ty) orelse return null;
+    if (env.aliases.get(name)) |aliased| return mirComptimeFieldOffset(env, aliased, field, depth + 1);
+    if (env.structs.get(name)) |info| {
+        const layout = mirComptimeStructLayout(env, info, depth + 1, field) orelse return null;
+        return layout.field_offset;
+    }
+    return null;
+}
+
+fn mirComptimeBitOffset(env: *const MirReflectEnv, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+    if (depth > 32) return null;
+    const name = mirTypeName(ty) orelse return null;
+    if (env.aliases.get(name)) |aliased| return mirComptimeBitOffset(env, aliased, field, depth + 1);
+    if (env.packed_bits.get(name)) |info| {
+        for (info.fields, 0..) |packed_field, bit| {
+            if (std.mem.eql(u8, packed_field.name.text, field)) return @intCast(bit);
+        }
+        return null;
+    }
+    const byte_offset = mirComptimeFieldOffset(env, ty, field, depth + 1) orelse return null;
+    return byte_offset * 8;
+}
+
+const MirStructLayout = struct {
+    size: i128,
+    alignment: i128,
+    field_offset: ?i128,
+};
+
+fn mirComptimeStructLayout(env: *const MirReflectEnv, info: StructSummary, depth: usize, want_field: ?[]const u8) ?MirStructLayout {
+    if (depth > 32) return null;
+    var offset: i128 = 0;
+    var max_align: i128 = 1;
+    var found: ?i128 = null;
+    for (info.fields) |field| {
+        const size = mirComptimeSizeOf(env, field.ty, depth + 1) orelse return null;
+        const alignment = mirComptimeAlignOf(env, field.ty, depth + 1) orelse return null;
+        if (alignment <= 0) return null;
+        if (alignment > max_align) max_align = alignment;
+        if (field.offset) |explicit| {
+            const explicit_offset: i128 = @intCast(explicit);
+            if (explicit_offset < offset) return null;
+            offset = explicit_offset;
+        } else {
+            offset = mirAlignForward(offset, alignment) orelse return null;
+        }
+        if (want_field) |wanted| {
+            if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
+        }
+        offset += size;
+    }
+    return .{
+        .size = mirAlignForward(offset, max_align) orelse return null,
+        .alignment = max_align,
+        .field_offset = found,
+    };
+}
+
+const MirScalarLayout = struct { size: u32, alignment: u32 };
+
+fn mirScalarLayout(name: []const u8) ?MirScalarLayout {
+    const table = [_]struct { n: []const u8, s: u32 }{
+        .{ .n = "u8", .s = 1 },      .{ .n = "i8", .s = 1 },    .{ .n = "bool", .s = 1 },
+        .{ .n = "u16", .s = 2 },     .{ .n = "i16", .s = 2 },   .{ .n = "u32", .s = 4 },
+        .{ .n = "i32", .s = 4 },     .{ .n = "f32", .s = 4 },   .{ .n = "u64", .s = 8 },
+        .{ .n = "i64", .s = 8 },     .{ .n = "f64", .s = 8 },   .{ .n = "usize", .s = 8 },
+        .{ .n = "isize", .s = 8 },   .{ .n = "PAddr", .s = 8 }, .{ .n = "VAddr", .s = 8 },
+        .{ .n = "DmaAddr", .s = 8 },
+    };
+    for (table) |entry| {
+        if (std.mem.eql(u8, name, entry.n)) return .{ .size = entry.s, .alignment = entry.s };
+    }
+    return null;
+}
+
+fn mirTypeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |name| name.text,
+        .qualified => |node| mirTypeName(node.child.*),
+        else => null,
+    };
+}
+
+fn mirSimpleNameType(name: []const u8, span: ast.Span) ast.TypeExpr {
+    return .{ .span = span, .kind = .{ .name = .{ .text = name, .span = span } } };
+}
+
+fn mirPointerLikeGeneric(name: []const u8) bool {
+    return std.mem.eql(u8, name, "MmioPtr") or std.mem.eql(u8, name, "UserPtr");
+}
+
+fn mirArithmeticLayoutGeneric(name: []const u8) bool {
+    return std.mem.eql(u8, name, "wrap") or
+        std.mem.eql(u8, name, "sat") or
+        std.mem.eql(u8, name, "serial") or
+        std.mem.eql(u8, name, "counter") or
+        std.mem.eql(u8, name, "Duration");
+}
+
+fn mirAlignForward(value: i128, alignment: i128) ?i128 {
+    if (alignment <= 0) return null;
+    const rem = @rem(value, alignment);
+    if (rem == 0) return value;
+    return std.math.add(i128, value, alignment - rem) catch null;
+}
+
+fn mirStaticArrayLen(expr: ast.Expr) ?usize {
+    return switch (expr.kind) {
+        .int_literal => |literal| parseUsizeLiteral(literal),
+        .grouped => |inner| mirStaticArrayLen(inner.*),
+        .binary => |node| {
+            const left = mirStaticArrayLen(node.left.*) orelse return null;
+            const right = mirStaticArrayLen(node.right.*) orelse return null;
+            return switch (node.op) {
+                .add => std.math.add(usize, left, right) catch null,
+                .sub => std.math.sub(usize, left, right) catch null,
+                .mul => std.math.mul(usize, left, right) catch null,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                .mod => if (right == 0) null else @mod(left, right),
+                .shl => if (right >= @bitSizeOf(usize)) null else std.math.shl(usize, left, right),
+                .shr => if (right >= @bitSizeOf(usize)) null else left >> @intCast(right),
+                else => null,
+            };
+        },
+        else => null,
+    };
 }
 
 fn parseArrayLen(expr: ast.Expr, const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue)) ?usize {
