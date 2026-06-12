@@ -3997,6 +3997,8 @@ Checked integer arithmetic includes signed unary negation with an `INT_MIN`
 overflow trap.
 Character literal lowering covers target-typed `u8` returns, locals, call
 arguments, comparisons, escapes, and checked `u8` arithmetic.
+String literal lowering covers target-typed `u8` pointers via private LLVM byte
+constants with MC escape decoding for returns, locals, and call arguments.
 Floating-point scalar lowering covers `f32`/`f64` literals, globals, calls,
 locals, arithmetic, comparison, and unary negation. Domain scalar lowering covers
 `wrap<T>`/`sat<T>` payload representation, `wrap` modular add/sub/mul/bitwise/

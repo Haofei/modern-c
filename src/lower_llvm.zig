@@ -41,6 +41,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
+        .string_literals = std.ArrayList(StringLiteralGlobal).empty,
         .debug_functions = std.ArrayList(DebugFunction).empty,
         .debug_locations = std.ArrayList(DebugLocation).empty,
         .source_path = source_path,
@@ -96,6 +97,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
             else => {},
         }
     }
+    try ctx.emitStringLiteralGlobals();
     try ctx.emitIntrinsicDecls();
     try ctx.emitDebugMetadata();
 }
@@ -135,6 +137,7 @@ const LlvmEmitter = struct {
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
     loop_stack: std.ArrayList(LoopLabels) = undefined,
+    string_literals: std.ArrayList(StringLiteralGlobal) = undefined,
     debug_functions: std.ArrayList(DebugFunction) = undefined,
     debug_locations: std.ArrayList(DebugLocation) = undefined,
     debug_next_id: usize = 6,
@@ -160,6 +163,7 @@ const LlvmEmitter = struct {
         self.local_types.deinit();
         self.local_slots.deinit();
         self.loop_stack.deinit(self.allocator);
+        self.string_literals.deinit(self.allocator);
         self.debug_functions.deinit(self.allocator);
         self.debug_locations.deinit(self.allocator);
         self.scratch.deinit();
@@ -468,6 +472,7 @@ const LlvmEmitter = struct {
             .ident => |ident| try self.emitIdent(ident),
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
+            .string_literal => |literal| try self.emitStringLiteral(literal, expected_ty),
             .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(expected_ty)),
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
@@ -2041,6 +2046,30 @@ const LlvmEmitter = struct {
         }
     }
 
+    fn emitStringLiteral(self: *LlvmEmitter, literal: []const u8, expected_ty: ast.TypeExpr) ![]const u8 {
+        if (!isStringLiteralTarget(self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
+
+        const bytes = try llvmStringLiteralBytes(self.scratch.allocator(), literal);
+        const name = try std.fmt.allocPrint(self.scratch.allocator(), ".str.{d}", .{self.string_literals.items.len});
+        try self.string_literals.append(self.allocator, .{
+            .name = name,
+            .escaped_bytes = bytes.escaped,
+            .len = bytes.len,
+        });
+
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds [{d} x i8], ptr @{s}, i64 0, i64 0\n", .{ result, bytes.len, name });
+        return result;
+    }
+
+    fn emitStringLiteralGlobals(self: *LlvmEmitter) !void {
+        if (self.string_literals.items.len == 0) return;
+        for (self.string_literals.items) |global| {
+            try self.out.print(self.allocator, "@{s} = private unnamed_addr constant [{d} x i8] c\"{s}\", align 1\n", .{ global.name, global.len, global.escaped_bytes });
+        }
+        try self.out.appendSlice(self.allocator, "\n");
+    }
+
     fn emitDebugMetadata(self: *LlvmEmitter) !void {
         if (self.debug_functions.items.len == 0) return;
         const escaped_path = try escapedLlvmString(self.scratch.allocator(), self.source_path);
@@ -2783,6 +2812,12 @@ const ArgValue = struct {
     value: []const u8,
 };
 
+const StringLiteralGlobal = struct {
+    name: []const u8,
+    escaped_bytes: []const u8,
+    len: usize,
+};
+
 const DebugFunction = struct {
     id: usize,
     name: []const u8,
@@ -2920,6 +2955,59 @@ fn escapedLlvmString(allocator: std.mem.Allocator, text: []const u8) ![]const u8
     return escaped.toOwnedSlice(allocator);
 }
 
+const LlvmStringBytes = struct {
+    escaped: []const u8,
+    len: usize,
+};
+
+fn llvmStringLiteralBytes(allocator: std.mem.Allocator, literal: []const u8) !LlvmStringBytes {
+    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return error.UnsupportedLlvmEmission;
+
+    var escaped: std.ArrayList(u8) = .empty;
+    var len: usize = 0;
+    var i: usize = 1;
+    while (i + 1 < literal.len) {
+        const byte = if (literal[i] == '\\') blk: {
+            i += 1;
+            if (i + 1 >= literal.len) return error.UnsupportedLlvmEmission;
+            break :blk switch (literal[i]) {
+                '\\' => @as(u8, '\\'),
+                '\'' => @as(u8, '\''),
+                '"' => @as(u8, '"'),
+                '0' => @as(u8, 0),
+                'n' => @as(u8, '\n'),
+                'r' => @as(u8, '\r'),
+                't' => @as(u8, '\t'),
+                else => return error.UnsupportedLlvmEmission,
+            };
+        } else literal[i];
+        try appendLlvmStringByte(allocator, &escaped, byte);
+        len += 1;
+        i += 1;
+    }
+    try appendLlvmStringByte(allocator, &escaped, 0);
+    len += 1;
+    return .{ .escaped = try escaped.toOwnedSlice(allocator), .len = len };
+}
+
+fn appendLlvmStringByte(allocator: std.mem.Allocator, escaped: *std.ArrayList(u8), byte: u8) !void {
+    switch (byte) {
+        '\\' => try escaped.appendSlice(allocator, "\\5C"),
+        '"' => try escaped.appendSlice(allocator, "\\22"),
+        0 => try escaped.appendSlice(allocator, "\\00"),
+        32...33, 35...91, 93...126 => try escaped.append(allocator, byte),
+        else => {
+            try escaped.append(allocator, '\\');
+            try escaped.append(allocator, hexDigit(byte >> 4));
+            try escaped.append(allocator, hexDigit(byte & 0x0f));
+        },
+    }
+}
+
+fn hexDigit(value: u8) u8 {
+    return if (value < 10) '0' + value else 'A' + (value - 10);
+}
+
 fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
     if (isPhysCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1) return simpleType(call.callee.*.span, "PAddr");
     if (isRawLoadCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1) return call.type_args[0];
@@ -2938,6 +3026,16 @@ fn typeNameEql(ty: ast.TypeExpr, expected: []const u8) bool {
         .name => |name| std.mem.eql(u8, name.text, expected),
         else => false,
     };
+}
+
+fn isStringLiteralTarget(ty: ast.TypeExpr) bool {
+    const child = switch (ty.kind) {
+        .pointer => |node| node.child.*,
+        .raw_many_pointer => |node| node.child.*,
+        else => return false,
+    };
+    const name = typeName(child) orelse return false;
+    return std.mem.eql(u8, name, "u8");
 }
 
 fn isRawStoreCall(callee: ast.Expr) bool {

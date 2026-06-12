@@ -75,7 +75,8 @@ invalid-count and shifted-out-bit traps, plus verified integer/enum coercions at
 target-typed expression sites and fixed-layout scalar bitcasts. Checked integer
 arithmetic includes signed unary negation with an `INT_MIN` overflow trap. Character literal lowering covers
 target-typed `u8` returns, locals, call arguments, comparisons, escapes, and
-checked `u8` arithmetic. Floating-point scalar lowering covers `f32`/`f64`
+checked `u8` arithmetic. String literal lowering covers target-typed `u8`
+pointers via private LLVM byte constants with MC escape decoding. Floating-point scalar lowering covers `f32`/`f64`
 literals, globals, calls, locals, arithmetic, comparison, and unary negation.
 Domain scalar lowering covers `wrap<T>`/`sat<T>` payload representation,
 `wrap` modular add/sub/mul/bitwise/shift and unary negation, unsigned
@@ -238,6 +239,8 @@ LLVM atomics are covered for scalar `atomic<T>` storage, `atomic.init`,
 `load`, `store`, `fetch_add`, and `fetch_sub` over local and global atomics.
 LLVM function-pointer coverage includes static function-name initializers,
 indirect calls, arrays/struct fields, locals/params/globals, and returns.
+LLVM string literal coverage includes `*const u8`/raw-many `u8` pointer targets
+for returns, locals, and call arguments, including MC escape sequences.
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function
