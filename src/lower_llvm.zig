@@ -28,6 +28,7 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
+        .loop_stack = std.ArrayList(LoopLabels).empty,
     };
     defer ctx.deinit();
     for (module.decls) |decl| {
@@ -91,6 +92,7 @@ const LlvmEmitter = struct {
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
+    loop_stack: std.ArrayList(LoopLabels) = undefined,
 
     fn deinit(self: *LlvmEmitter) void {
         self.need_uadd.deinit();
@@ -104,6 +106,7 @@ const LlvmEmitter = struct {
         self.global_types.deinit();
         self.local_types.deinit();
         self.local_slots.deinit();
+        self.loop_stack.deinit(self.allocator);
         self.scratch.deinit();
     }
 
@@ -225,7 +228,13 @@ const LlvmEmitter = struct {
             }
         }
 
-        if (!try self.emitBlock(body, ret_ty)) return error.UnsupportedLlvmEmission;
+        if (!try self.emitBlock(body, ret_ty)) {
+            if (typeNameEql(ret_ty, "void")) {
+                try self.out.appendSlice(self.allocator, "  ret void\n");
+            } else {
+                return error.UnsupportedLlvmEmission;
+            }
+        }
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
@@ -280,7 +289,7 @@ const LlvmEmitter = struct {
                 .var_decl => |local| try self.emitLocalDecl(local),
                 .assignment => |node| try self.emitAssignment(node.target, node.value),
                 .loop => |node| {
-                    if (try self.emitWhile(node, ret_ty)) return true;
+                    if (try self.emitLoop(node, ret_ty)) return true;
                 },
                 .@"return" => |maybe_expr| {
                     if (ret_ty.kind == .name and std.mem.eql(u8, ret_ty.kind.name.text, "void")) {
@@ -294,6 +303,16 @@ const LlvmEmitter = struct {
                 },
                 .@"switch" => |node| {
                     if (try self.emitScalarSwitch(node, ret_ty)) return true;
+                },
+                .@"break" => {
+                    const labels = self.loop_stack.getLastOrNull() orelse return error.UnsupportedLlvmEmission;
+                    try self.out.print(self.allocator, "  br label %{s}\n", .{labels.break_label});
+                    return true;
+                },
+                .@"continue" => {
+                    const labels = self.loop_stack.getLastOrNull() orelse return error.UnsupportedLlvmEmission;
+                    try self.out.print(self.allocator, "  br label %{s}\n", .{labels.continue_label});
+                    return true;
                 },
                 else => return error.UnsupportedLlvmEmission,
             }
@@ -388,6 +407,13 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn emitLoop(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
+        return switch (loop.kind) {
+            .@"while" => try self.emitWhile(loop, ret_ty),
+            .@"for" => try self.emitFor(loop, ret_ty),
+        };
+    }
+
     fn emitWhile(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
         if (loop.kind != .@"while") return error.UnsupportedLlvmEmission;
         const condition_expr = loop.iterable orelse return error.UnsupportedLlvmEmission;
@@ -401,10 +427,113 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
         const condition = try self.emitExpr(condition_expr, condition_ty);
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ condition, body_label, end_label, body_label });
+        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = cond_label });
+        defer _ = self.loop_stack.pop();
         const body_terminated = try self.emitBlock(loop.body, ret_ty);
         if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{cond_label});
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
         return false;
+    }
+
+    fn emitFor(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
+        const binding = loop.label orelse return error.UnsupportedLlvmEmission;
+        const iterable = loop.iterable orelse return error.UnsupportedLlvmEmission;
+        const iterable_ty = self.exprType(iterable) orelse return error.UnsupportedLlvmEmission;
+        const element_ty = self.indexElementType(iterable) orelse return error.UnsupportedLlvmEmission;
+        const element_llvm = try self.llvmType(element_ty);
+
+        const index_ptr = try self.nextTemp();
+        const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{binding.text});
+        try self.out.print(self.allocator, "  {s} = alloca i64\n", .{index_ptr});
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, element_llvm });
+        try self.out.print(self.allocator, "  store i64 0, ptr {s}\n", .{index_ptr});
+
+        var iterable_slot: ?LocalSlot = null;
+        var iterable_ptr: ?[]const u8 = null;
+        if (iterable_ty.kind == .slice) {
+            const ptr = try self.nextTemp();
+            const value = try self.emitExpr(iterable, iterable_ty);
+            try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(iterable_ty) });
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(iterable_ty), value, ptr });
+            iterable_slot = .{ .ty = iterable_ty, .ptr = ptr };
+            iterable_ptr = ptr;
+        }
+
+        const old_type = self.local_types.fetchRemove(binding.text);
+        const old_slot = self.local_slots.fetchRemove(binding.text);
+        defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
+        defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
+        try self.local_types.put(binding.text, element_ty);
+        try self.local_slots.put(binding.text, .{ .ty = element_ty, .ptr = binding_ptr });
+
+        const cond_label = try self.nextLabel("for_cond");
+        const body_label = try self.nextLabel("for_body");
+        const step_label = try self.nextLabel("for_step");
+        const end_label = try self.nextLabel("for_end");
+
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, cond_label });
+        const index = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ index, index_ptr });
+        const len = try self.emitIterableLen(iterable, iterable_ty, iterable_slot);
+        const ok = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = icmp ult i64 {s}, {s}\n", .{ ok, index, len });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ ok, body_label, end_label, body_label });
+
+        const element_ptr = try self.emitForElementPtr(iterable, iterable_ty, iterable_ptr, index);
+        const element_value = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ element_value, element_llvm, element_ptr });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ element_llvm, element_value, binding_ptr });
+
+        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label });
+        defer _ = self.loop_stack.pop();
+        const body_terminated = try self.emitBlock(loop.body, ret_ty);
+        if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{step_label});
+        try self.out.print(self.allocator, "{s}:\n", .{step_label});
+        const step_index = try self.nextTemp();
+        const next_index = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load i64, ptr {s}\n", .{ step_index, index_ptr });
+        try self.out.print(self.allocator, "  {s} = add i64 {s}, 1\n", .{ next_index, step_index });
+        try self.out.print(self.allocator, "  store i64 {s}, ptr {s}\n", .{ next_index, index_ptr });
+        try self.out.print(self.allocator, "  br label %{s}\n{s}:\n", .{ cond_label, end_label });
+        return false;
+    }
+
+    fn emitIterableLen(self: *LlvmEmitter, iterable: ast.Expr, iterable_ty: ast.TypeExpr, iterable_slot: ?LocalSlot) ![]const u8 {
+        return switch (iterable_ty.kind) {
+            .array => |array| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission}),
+            .slice => blk: {
+                const slot = iterable_slot orelse return error.UnsupportedLlvmEmission;
+                _ = iterable;
+                const value = try self.nextTemp();
+                const len = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ value, try self.llvmType(iterable_ty), slot.ptr });
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ len, try self.llvmType(iterable_ty), value });
+                break :blk len;
+            },
+            else => error.UnsupportedLlvmEmission,
+        };
+    }
+
+    fn emitForElementPtr(self: *LlvmEmitter, iterable: ast.Expr, iterable_ty: ast.TypeExpr, iterable_ptr: ?[]const u8, index: []const u8) ![]const u8 {
+        return switch (iterable_ty.kind) {
+            .array => blk: {
+                const base_ptr = try self.arrayBasePointer(iterable);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(iterable_ty), base_ptr, index });
+                break :blk result;
+            },
+            .slice => |slice| blk: {
+                const ptr = iterable_ptr orelse return error.UnsupportedLlvmEmission;
+                const value = try self.nextTemp();
+                const data = try self.nextTemp();
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ value, try self.llvmType(iterable_ty), ptr });
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ data, try self.llvmType(iterable_ty), value });
+                try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(slice.child.*), data, index });
+                break :blk result;
+            },
+            else => error.UnsupportedLlvmEmission,
+        };
     }
 
     fn emitScalarSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr) !bool {
@@ -1030,6 +1159,19 @@ const ArgValue = struct {
     ty: ast.TypeExpr,
     value: []const u8,
 };
+
+const LoopLabels = struct {
+    break_label: []const u8,
+    continue_label: []const u8,
+};
+
+fn restoreLocal(map: anytype, key: []const u8, old: anytype) !void {
+    if (old) |entry| {
+        try map.put(key, entry.value);
+    } else {
+        _ = map.remove(key);
+    }
+}
 
 fn assignmentIdent(target: ast.Expr) ?ast.Ident {
     return switch (target.kind) {
