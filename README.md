@@ -138,7 +138,8 @@ literals plus const-folded `sizeof`/`alignof`/`field_offset` array lengths.
 LLVM debug metadata now includes `source_filename`, a compile unit/file record,
 function `DISubprogram` records, and line/column locations on local
 initialization stores, direct assignment stores, returns, call instructions, and
-loop/break/continue branch terminators for the covered backend subset.
+loop/break/continue branch terminators plus switch dispatches for the covered
+backend subset.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles textual IR
 to linkable object files through `llc`, and
 `zig build llvm-obj-test` validates representative scalar, statement-workflow,
@@ -169,7 +170,7 @@ Prototype or incomplete:
   global initializer, statement/expression, and deferred cleanup spans.
   `emit-llvm` now emits initial LLVM debug metadata for source files,
   functions, calls, returns, stores, and loop/break/continue branch
-  terminators. DWARF-quality native debug mapping with richer
+  terminators plus switch dispatches. DWARF-quality native debug mapping with richer
   statement/expression coverage is still pending.
 
 Deferred:
@@ -326,7 +327,8 @@ address-width values, `cache.clean`/`cache.invalidate` fences,
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function
-subprograms, and call/return/loop-branch line locations for the covered subset.
+subprograms, and call/return/loop-branch/switch-dispatch line locations for the
+covered subset.
 LLVM inferred-local coverage includes initializer-derived slice, array, and
 struct locals in covered expression and assignment workflows.
 LLVM aggregate layout coverage includes dependency-ordered struct/array/slice

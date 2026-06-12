@@ -1480,7 +1480,7 @@ const LlvmEmitter = struct {
         const end_label = try self.nextLabel("nullable_end");
         const is_some = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = icmp ne ptr {s}, null\n", .{ is_some, subject });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ is_some, some_label, none_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n", .{ is_some, some_label, none_label, try self.debugCallSuffix() });
 
         var all_terminated = true;
         try self.out.print(self.allocator, "{s}:\n", .{some_label});
@@ -1497,7 +1497,7 @@ const LlvmEmitter = struct {
         const some_terminated = try self.emitSwitchBody(node.arms[some_i].body, ret_ty);
         if (!some_terminated) {
             all_terminated = false;
-            try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+            try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
         }
         _ = self.local_types.remove(bind.text);
         _ = self.local_slots.remove(bind.text);
@@ -1506,7 +1506,7 @@ const LlvmEmitter = struct {
         const none_terminated = try self.emitSwitchBody(node.arms[none_i].body, ret_ty);
         if (!none_terminated) {
             all_terminated = false;
-            try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+            try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
         }
         if (all_terminated) return true;
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
@@ -1554,21 +1554,21 @@ const LlvmEmitter = struct {
         const end_label = try self.nextLabel("result_end");
         const is_ok = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_ok, try self.llvmType(subject_ty), subject });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ is_ok, ok_label, err_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n", .{ is_ok, ok_label, err_label, try self.debugCallSuffix() });
 
         var all_terminated = true;
         try self.out.print(self.allocator, "{s}:\n", .{ok_label});
         const ok_terminated = try self.emitResultSwitchArm(node.arms[ok_i], ret_ty, subject, subject_ty, info.ok_ty, 1, if (ok_index != null) ok_binding else null);
         if (!ok_terminated) {
             all_terminated = false;
-            try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+            try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
         }
 
         try self.out.print(self.allocator, "{s}:\n", .{err_label});
         const err_terminated = try self.emitResultSwitchArm(node.arms[err_i], ret_ty, subject, subject_ty, info.err_ty, 2, if (err_index != null) err_binding else null);
         if (!err_terminated) {
             all_terminated = false;
-            try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+            try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
         }
         if (all_terminated) return true;
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
@@ -1626,7 +1626,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "    i32 {d}, label %{s}\n", .{ case_index, arm_labels[i] });
             }
         }
-        try self.out.appendSlice(self.allocator, "  ]\n");
+        try self.out.print(self.allocator, "  ]{s}\n", .{try self.debugCallSuffix()});
 
         var all_terminated = true;
         for (node.arms, 0..) |arm, i| {
@@ -1634,7 +1634,7 @@ const LlvmEmitter = struct {
             const terminated = try self.emitTaggedUnionSwitchArm(arm, ret_ty, subject_ptr, subject_ty, union_decl);
             if (!terminated) {
                 all_terminated = false;
-                try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+                try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
             }
         }
         if (wildcard_index == null) {
@@ -1713,7 +1713,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "    {s} {s}, label %{s}\n", .{ subject_llvm, value, arm_labels[i] });
             }
         }
-        try self.out.appendSlice(self.allocator, "  ]\n");
+        try self.out.print(self.allocator, "  ]{s}\n", .{try self.debugCallSuffix()});
 
         var all_terminated = true;
         for (node.arms, 0..) |arm, i| {
@@ -1721,7 +1721,7 @@ const LlvmEmitter = struct {
             const terminated = try self.emitSwitchBody(arm.body, ret_ty);
             if (!terminated) {
                 all_terminated = false;
-                try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+                try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
             }
         }
         if (wildcard_index == null and !typeNameEql(self.resolveAliasType(subject_ty), "bool") and self.enumDeclForType(subject_ty) == null) all_terminated = false;
