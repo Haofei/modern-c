@@ -207,7 +207,8 @@ Deferred:
   monomorphization and generic-struct runtime checks, reflection object
   lowering, manifest package builds, and multi-object
   `std/{core,bits,math,ascii,fmt,addr}` runtime checks, plus LLVM object
-  coverage for the framebuffer/gpio/irq/spi/timer/uart hardware demos.
+  coverage for the framebuffer/gpio/irq/spi/timer/uart hardware demos and the
+  hosted elementwise demo.
   Remaining work is additional runtime/toolchain coverage, deeper optimizer
   proof work, and fuller native debug mapping.
 
@@ -309,8 +310,8 @@ lowering. `zig build llvm-std-test` links and runs LLVM-built std module objects
 against a C driver. `zig build llvm-pkg-test` builds the package-manifest demo
 through LLVM, links the resulting object, and runs it. `zig build
 llvm-demo-test` compiles the framebuffer/gpio/irq/spi/timer/uart hardware demo
-drivers through LLVM to non-empty objects under the same hidden-assumption token
-check.
+drivers and the hosted elementwise demo through LLVM to non-empty objects under
+the same hidden-assumption token check.
 
 ## Conformance Snapshot
 
@@ -377,6 +378,8 @@ struct locals in covered expression and assignment workflows.
 LLVM aggregate layout coverage includes dependency-ordered struct/array/slice
 combinations and target-typed integer coercions such as `usize` slice lengths
 returned as narrower integer types after MIR verification.
+LLVM pointer coverage includes explicit pointer-to-`usize`/`isize` address
+casts for pointer-width integer interop.
 LLVM iterable coverage includes arrays and slices from parameters, globals,
 nested array rows, aggregate fields, direct-call aggregate fields, and
 direct-call array/slice results.

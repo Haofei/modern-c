@@ -1028,7 +1028,7 @@ const LlvmEmitter = struct {
         defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
 
-        const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{binding.text});
+        const binding_ptr = try self.nextBindingPtr(binding.text);
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(inner_ty) });
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(inner_ty), subject, binding_ptr, try self.debugCallSuffix() });
         try self.local_types.put(binding.text, inner_ty);
@@ -1082,7 +1082,7 @@ const LlvmEmitter = struct {
         defer restoreLocal(&self.local_types, tag_bind.binding.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, tag_bind.binding.text, old_slot) catch {};
 
-        const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{tag_bind.binding.text});
+        const binding_ptr = try self.nextBindingPtr(tag_bind.binding.text);
         const payload = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, try self.llvmType(subject_ty), subject, payload_index });
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.resultPayloadLlvmType(binding_ty) });
@@ -1348,7 +1348,7 @@ const LlvmEmitter = struct {
         const element_llvm = try self.llvmType(element_ty);
 
         const index_ptr = try self.nextTemp();
-        const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{binding.text});
+        const binding_ptr = try self.nextBindingPtr(binding.text);
         try self.out.print(self.allocator, "  {s} = alloca i64\n", .{index_ptr});
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, element_llvm });
         try self.out.print(self.allocator, "  store i64 0, ptr {s}\n", .{index_ptr});
@@ -1489,7 +1489,7 @@ const LlvmEmitter = struct {
         defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
         defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
 
-        const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{bind.text});
+        const binding_ptr = try self.nextBindingPtr(bind.text);
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(inner_ty) });
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(inner_ty), subject, binding_ptr, try self.debugCallSuffix() });
         try self.local_types.put(bind.text, inner_ty);
@@ -1582,7 +1582,7 @@ const LlvmEmitter = struct {
             defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
             defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
 
-            const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{bind.text});
+            const binding_ptr = try self.nextBindingPtr(bind.text);
             const payload = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, try self.llvmType(subject_ty), subject, payload_index });
             try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.resultPayloadLlvmType(payload_ty) });
@@ -1677,7 +1677,7 @@ const LlvmEmitter = struct {
             defer restoreLocal(&self.local_types, binding.binding.text, old_type) catch {};
             defer restoreLocal(&self.local_slots, binding.binding.text, old_slot) catch {};
 
-            const binding_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{binding.binding.text});
+            const binding_ptr = try self.nextBindingPtr(binding.binding.text);
             const payload = try self.taggedUnionLoadPayload(subject_ptr, subject_ty, payload_ty);
             try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(payload_ty) });
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(payload_ty), payload, binding_ptr, try self.debugCallSuffix() });
@@ -3390,6 +3390,12 @@ const LlvmEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "%t{d}", .{index});
     }
 
+    fn nextBindingPtr(self: *LlvmEmitter, name: []const u8) ![]const u8 {
+        const index = self.temp_index;
+        self.temp_index += 1;
+        return std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr.{d}", .{ name, index });
+    }
+
     fn nextLabel(self: *LlvmEmitter, prefix: []const u8) ![]const u8 {
         const index = self.trap_index;
         self.trap_index += 1;
@@ -4657,7 +4663,7 @@ const LlvmEmitter = struct {
         const target = self.resolveAliasType(target_ty);
         return switch (source.kind) {
             .pointer, .raw_many_pointer, .nullable => switch (target.kind) {
-                .name => |name| isOpaqueAddressTypeName(name.text),
+                .name => |name| isOpaqueAddressTypeName(name.text) or isPointerWidthIntegerTypeName(name.text),
                 else => false,
             },
             .name => |name| if (isOpaqueAddressTypeName(name.text)) switch (target.kind) {
@@ -5506,6 +5512,10 @@ fn isOpaqueAddressTypeName(name: []const u8) bool {
     return std.mem.eql(u8, name, "PAddr") or
         std.mem.eql(u8, name, "VAddr") or
         std.mem.eql(u8, name, "DmaAddr");
+}
+
+fn isPointerWidthIntegerTypeName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize");
 }
 
 fn isOpaqueAddressGenericName(name: []const u8) bool {

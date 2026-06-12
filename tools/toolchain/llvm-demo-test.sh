@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# LLVM demo-driver object gate: compile the hardware-oriented demo drivers that
-# are in the current LLVM backend surface to non-empty objects through llc.
+# LLVM demo-driver object gate: compile the demos that are in the current LLVM
+# backend surface to non-empty objects through llc.
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
@@ -19,6 +19,7 @@ demos=(
     "demo/spi/spi.mc"
     "demo/timer/timer.mc"
     "demo/uart/uart.mc"
+    "demo/hosted/elementwise.mc"
 )
 
 count=0
@@ -68,4 +69,4 @@ PY
     count=$((count + 1))
 done
 
-echo "PASS: llvm-demo-test - $count hardware demo drivers compiled to LLVM objects"
+echo "PASS: llvm-demo-test - $count demo drivers compiled to LLVM objects"

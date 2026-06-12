@@ -13,3 +13,7 @@ fn local_address(value: u32) -> u32 {
     *p = x + 1;
     return x;
 }
+
+fn pointer_to_usize(p: *mut u32) -> usize {
+    return p as usize;
+}

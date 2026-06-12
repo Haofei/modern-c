@@ -4060,9 +4060,11 @@ Reflection lowering covers
 `field_type(...)` in monomorphized type-argument position. Result `?`
 propagation lowers to early `err(...)` returns in `Result`-returning functions,
 and unsafe-contract noalias scopes lower `compiler.assume_noalias_unchecked(...)`
-as a checked identity with pointer-to-address raw-store coercion. Precise asm
-lowering covers operand templates, scalar output storage, input constraints, and
-declared clobbers. Alias and enum lowering covers scalar, array,
+as a checked identity with pointer-to-address raw-store coercion. Pointer
+address coercion also covers explicit pointer-to-`usize`/`isize` casts for
+pointer-width integer interop. Precise asm lowering covers operand templates,
+scalar output storage, input constraints, and declared clobbers. Alias and enum
+lowering covers scalar, array,
 raw-pointer, closed-enum, and open-enum representation cases, including enum
 globals, calls, returns, arrays, struct fields, `.raw()`, integer casts to open
 enums, enum switches over direct calls, and void switch expression arms.
@@ -4141,8 +4143,8 @@ exported function checks.
 The `zig build llvm-pkg-test` gate builds the package-manifest demo through
 the LLVM object driver, links the resulting object, and runs it.
 The `zig build llvm-demo-test` gate compiles the framebuffer/gpio/irq/spi/timer/uart
-hardware demo drivers through LLVM to non-empty object files under the same
-hidden-assumption token check.
+hardware demo drivers and the hosted elementwise demo through LLVM to non-empty
+object files under the same hidden-assumption token check.
 These LLVM IR, object, and link/run gates are included in the `zig build m0`
 milestone gate.
 It intentionally emits no hidden optimizer-assumption tokens outside proven
