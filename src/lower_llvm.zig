@@ -246,7 +246,7 @@ const LlvmEmitter = struct {
         }
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
-            .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal),
+            .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(ty)),
             .unary => |node| if (node.op == .neg and self.isFloatTypeOf(ty)) blk: {
                 const literal = switch ((node.expr.*).kind) {
                     .float_literal => |literal| literal,
@@ -256,7 +256,7 @@ const LlvmEmitter = struct {
                     },
                     else => break :blk error.UnsupportedLlvmEmission,
                 };
-                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedFloatLiteral(self.scratch.allocator(), literal)});
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(ty))});
             } else error.UnsupportedLlvmEmission,
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
@@ -355,7 +355,7 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .ident => |ident| try self.emitIdent(ident),
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
-            .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal),
+            .float_literal => |literal| try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(expected_ty)),
             .bool_literal => |value| if (value) "1" else "0",
             .null_literal => "null",
             .enum_literal => |literal| if (self.enumDeclForType(expected_ty)) |enum_decl|
@@ -2127,6 +2127,14 @@ const LlvmEmitter = struct {
         return isFloatType(self.resolveAliasType(ty));
     }
 
+    fn isF32TypeOf(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .name => |name| std.mem.eql(u8, name.text, "f32"),
+            else => false,
+        };
+    }
+
     fn signedMinLiteralOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?[]const u8 {
         if (self.enumDeclForType(ty)) |enum_decl| return self.signedMinLiteralOf(enumReprType(enum_decl));
         return signedMinLiteral(self.resolveAliasType(ty));
@@ -2538,12 +2546,17 @@ fn normalizedIntLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]co
     return std.fmt.allocPrint(allocator, "{d}", .{value});
 }
 
-fn normalizedFloatLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
+fn normalizedFloatLiteral(allocator: std.mem.Allocator, literal: []const u8, f32_target: bool) ![]const u8 {
     var cleaned: std.ArrayList(u8) = .empty;
     for (literal) |ch| {
         if (ch != '_') try cleaned.append(allocator, ch);
     }
-    return cleaned.toOwnedSlice(allocator);
+    const text = try cleaned.toOwnedSlice(allocator);
+    if (!f32_target) return text;
+    const parsed = std.fmt.parseFloat(f32, text) catch return text;
+    const widened: f64 = parsed;
+    const bits: u64 = @bitCast(widened);
+    return std.fmt.allocPrint(allocator, "0x{X:0>16}", .{bits});
 }
 
 fn arrayLenValue(expr: ast.Expr) ?u64 {
