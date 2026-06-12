@@ -47,6 +47,18 @@ fn check(x: u32) -> bool {
 fn install_at(i: usize) -> void {
     g_table[i] = .{ .run = bind(&g_env, run_impl), .probe = probe_impl, .active = true };
 }
+
+// Field stores through a global-array element must still use each field's storage mode.
+fn set_active_at(i: usize, active: bool) -> void {
+    g_table[i].active = active;
+}
+fn set_run_at(i: usize) -> void {
+    g_table[i].run = bind(&g_env, run_impl);
+}
+fn set_probe_at(i: usize) -> void {
+    g_table[i].probe = probe_impl;
+}
+
 fn invoke_at(i: usize, x: u32) -> u32 {
     let s: *Slot = &g_table[i];
     let f: closure(u32) -> u32 = s.run;

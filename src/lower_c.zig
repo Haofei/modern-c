@@ -1704,6 +1704,7 @@ const CEmitter = struct {
             .assignment => |node| {
                 if (try self.emitPackedBitsFieldWriteStmt(node, locals)) return;
                 if (try self.emitOverlayFieldWriteStmt(node, locals)) return;
+                if (try self.emitGlobalArrayElementMemberAssignmentStmt(node, locals)) return;
                 if (try self.emitGlobalArrayIndexAssignmentStmt(node, locals)) return;
                 if (try self.emitResultTryAssignmentStmt(node, locals, return_ty)) return;
                 if (try self.emitNullableTryAssignmentStmt(node, locals)) return;
@@ -4890,6 +4891,60 @@ const CEmitter = struct {
             self.allocator,
             "mc_race_store_{s}(&{s}.elems[mc_check_index_usize({s}, {s})], ({s}){s});\n",
             .{ access.element_info.race_type_name, access.base_name, index_temp.name, access.len, access.element_info.race_c_type, value_temp.name },
+        );
+        return true;
+    }
+
+    fn emitGlobalArrayElementMemberAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const member = switch (assignment.target.kind) {
+            .member => |node| node,
+            .grouped => |inner| return try self.emitGlobalArrayElementMemberAssignmentStmt(.{ .target = inner.*, .value = assignment.value }, locals),
+            else => return false,
+        };
+        const index = switch (member.base.kind) {
+            .index => |node| node,
+            .grouped => |inner| switch (inner.kind) {
+                .index => |node| node,
+                else => return false,
+            },
+            else => return false,
+        };
+        const access = self.globalArrayElementAccess(index, locals) orelse return false;
+        const element_ty = self.resolveAliasType(access.element_info.source_ty);
+        const element_name = typeName(element_ty) orelse return false;
+        const struct_decl = self.structs.get(element_name) orelse return false;
+
+        const field = blk: {
+            for (struct_decl.fields) |field| {
+                if (std.mem.eql(u8, field.name.text, member.name.text)) break :blk field;
+            }
+            return false;
+        };
+        const field_info = try self.globalElementInfoFromType(field.ty);
+        const index_temp = try self.emitSequencedCallArgTemp(access.index, locals, simpleNameType("usize", access.index.span));
+        const value_temp = try self.emitSequencedCallArgTemp(assignment.value, locals, field.ty);
+
+        try self.writeIndent();
+        if (field_info.aggregate) {
+            try self.out.print(
+                self.allocator,
+                "{s}.elems[mc_check_index_usize({s}, {s})].{s} = ({s}){s};\n",
+                .{ access.base_name, index_temp.name, access.len, try self.cIdent(member.name.text), field_info.c_type, value_temp.name },
+            );
+            return true;
+        }
+        if (field_info.pointer_like) {
+            try self.out.print(
+                self.allocator,
+                "__atomic_store_n(&{s}.elems[mc_check_index_usize({s}, {s})].{s}, ({s}){s}, __ATOMIC_RELAXED);\n",
+                .{ access.base_name, index_temp.name, access.len, try self.cIdent(member.name.text), field_info.c_type, value_temp.name },
+            );
+            return true;
+        }
+        try self.out.print(
+            self.allocator,
+            "mc_race_store_{s}(&{s}.elems[mc_check_index_usize({s}, {s})].{s}, ({s}){s});\n",
+            .{ field_info.race_type_name, access.base_name, index_temp.name, access.len, try self.cIdent(member.name.text), field_info.race_c_type, value_temp.name },
         );
         return true;
     }
