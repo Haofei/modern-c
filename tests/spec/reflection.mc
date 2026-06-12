@@ -2,7 +2,7 @@
 // SPEC: milestone=comptime-reflection
 // SPEC: phase=parse,sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_UNKNOWN_STRUCT_FIELD,E_REFLECTION_FIELD_LITERAL,E_REFLECTION_TYPE_ARG,E_REFLECTION_GENERIC_ARG_COUNT,E_CALL_ARG_COUNT,E_REFLECTION_UNKNOWN_TYPE,E_C_VOID_NO_LAYOUT,E_DMA_BUF_MODE
+// SPEC: check=E_UNKNOWN_STRUCT_FIELD,E_REFLECTION_FIELD_LITERAL,E_REFLECTION_TYPE_ARG,E_REFLECTION_GENERIC_ARG_COUNT,E_CALL_ARG_COUNT,E_REFLECTION_UNKNOWN_TYPE,E_REFLECTION_TYPE_VALUE,E_C_VOID_NO_LAYOUT,E_DMA_BUF_MODE
 
 extern struct Packet {
     len: u16,
@@ -88,6 +88,11 @@ fn accept_reflected_field_type_arg(comptime T: type, value: T) -> void {
 
 fn accept_field_type_type_arg(packet: Packet) -> void {
     accept_reflected_field_type_arg(field_type(Packet, .len), packet.len);
+}
+
+fn reject_field_type_value() -> usize {
+    // EXPECT_ERROR: E_REFLECTION_TYPE_VALUE
+    return field_type(Packet, .len);
 }
 
 fn accept_comptime_reflection_offsets() -> void {

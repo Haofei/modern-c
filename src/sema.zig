@@ -2567,6 +2567,7 @@ pub const Checker = struct {
 
     fn checkReflectionCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) ?TypeClass {
         const kind = reflectionKind(call.callee.*) orelse return null;
+        const errors_before = self.reporter.diagnostics.items.len;
         const target = self.reflectionTarget(span, call) orelse return reflectionReturnClass(kind);
         const reflected_ty = target.ty;
         if (isTypeName(reflected_ty, "c_void")) {
@@ -2587,6 +2588,10 @@ pub const Checker = struct {
             self.checkReflectedField(reflected_ty, field, ctx);
         } else if (target.args.len != 0) {
             self.errorCode(span, "E_CALL_ARG_COUNT", "type reflection builtin does not take runtime arguments");
+        }
+
+        if (kind == .field_type and self.reporter.diagnostics.items.len == errors_before) {
+            self.errorCode(span, "E_REFLECTION_TYPE_VALUE", "field_type produces a type and is valid only in type position");
         }
 
         return reflectionReturnClass(kind);
