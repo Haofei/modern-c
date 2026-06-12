@@ -11,6 +11,11 @@ struct Table {
     items: [2]u32,
 }
 
+struct Pair {
+    left: u32,
+    right: u32,
+}
+
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
 global letter: u8 = 'A';
@@ -20,8 +25,15 @@ global cast_seed: u32 = 1 as u32;
 global cast_copied_seed: u32 = seed as u32;
 global first_index: usize = 0;
 global values: [2]u32 = .{ 7, 8 };
+global copied_values: [2]u32 = values;
+global names: [2]*const u8 = .{ "alpha", "beta" };
+global copied_names: [2]*const u8 = names;
+global raws: [2][*]const u8 = .{ "raw-a", "raw-b" };
 global first_value_ptr: *const u32 = &values[first_index];
 global table: Table = .{ .items = .{ 11, 12 } };
+global copied_table: Table = table;
+global pair: Pair = .{ .left = 3, .right = 4 };
+global copied_pair: Pair = pair;
 global table_item_ptr: *const u32 = &table.items[first_index];
 global message: *const u8 = "ready";
 global nullable_handle: ?*mut u8 = null;

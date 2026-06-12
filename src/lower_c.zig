@@ -797,9 +797,11 @@ const CEmitter = struct {
             } else if (global.ty != null and isArrayLiteralExpr(initializer)) {
                 try self.out.appendSlice(self.allocator, " = ");
                 try self.emitExprWithTarget(initializer, null, global.ty.?);
+                try self.static_initializers.put(global.name.text, initializer);
             } else if (global.ty != null and isStructLiteralExpr(initializer)) {
                 try self.out.appendSlice(self.allocator, " = ");
                 try self.emitExprWithTarget(initializer, null, global.ty.?);
+                try self.static_initializers.put(global.name.text, initializer);
             } else if (global.ty != null and global.ty.?.kind == .array) {
                 try self.out.appendSlice(self.allocator, "/* unsupported non-static global array initializer */");
                 return error.UnsupportedCEmission;
@@ -8708,7 +8710,7 @@ const CEmitter = struct {
             .race_type_name = name,
             .race_c_type = c_type,
             .aggregate = is_aggregate,
-            .pointer_like = resolved_ty.kind == .fn_pointer,
+            .pointer_like = isPointerLikeGlobalType(resolved_ty) or resolved_ty.kind == .fn_pointer,
         };
     }
 

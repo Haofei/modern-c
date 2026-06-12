@@ -2,6 +2,11 @@ struct Table {
     items: [2]u32,
 }
 
+struct Pair {
+    left: u32,
+    right: u32,
+}
+
 global shared_cell: u32 = 0;
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
@@ -14,8 +19,15 @@ global signed_seed: i32 = -1;
 global grouped_signed_seed: i16 = (-12);
 global first_index: usize = 0;
 global values: [2]u32 = .{ 7, 8 };
+global copied_values: [2]u32 = values;
+global names: [2]*const u8 = .{ "alpha", "beta" };
+global copied_names: [2]*const u8 = names;
+global raws: [2][*]const u8 = .{ "raw-a", "raw-b" };
 global first_value_ptr: *const u32 = &values[first_index];
 global table: Table = .{ .items = .{ 11, 12 } };
+global copied_table: Table = table;
+global pair: Pair = .{ .left = 3, .right = 4 };
+global copied_pair: Pair = pair;
 global table_item_ptr: *const u32 = &table.items[first_index];
 global message: *const u8 = "ready";
 global global_const_ptr: *const u32 = &shared_cell;
@@ -62,8 +74,32 @@ fn read_first_value_ptr() -> u32 {
     return first_value_ptr.*;
 }
 
+fn read_copied_value() -> u32 {
+    return copied_values[1];
+}
+
+fn read_name() -> *const u8 {
+    return names[1];
+}
+
+fn read_copied_name() -> *const u8 {
+    return copied_names[0];
+}
+
+fn read_raw_name() -> [*]const u8 {
+    return raws[0];
+}
+
 fn read_table_item_ptr() -> u32 {
     return table_item_ptr.*;
+}
+
+fn read_copied_table_item() -> u32 {
+    return copied_table.items[1];
+}
+
+fn read_copied_pair() -> u32 {
+    return copied_pair.right;
 }
 
 fn read_message() -> *const u8 {
