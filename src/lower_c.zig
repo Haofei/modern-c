@@ -423,7 +423,6 @@ const SourceMapEmitter = struct {
 
     fn emitBlock(self: *SourceMapEmitter, block: ast.Block) !void {
         for (block.items) |stmt| {
-            if (std.meta.activeTag(stmt.kind) == .@"defer") continue;
             try self.emitStmt(stmt);
             switch (stmt.kind) {
                 .block, .unsafe_block => |nested| try self.emitBlock(nested),
@@ -439,6 +438,10 @@ const SourceMapEmitter = struct {
                         .block => |arm_block| try self.emitBlock(arm_block),
                         .expr => |expr| try self.emitEntry("switch_expr", self.current_function orelse "-", expr.span, self.current_function orelse "-", "mir:switch:expr"),
                     };
+                },
+                .@"defer" => |expr| switch (expr.kind) {
+                    .block => |nested| try self.emitBlock(nested),
+                    else => {},
                 },
                 else => {},
             }
@@ -465,7 +468,8 @@ const SourceMapEmitter = struct {
             .loop => |loop| if (loop.iterable) |expr| try self.emitExprEntry(if (loop.kind == .@"while") "while_condition_expr" else "for_iterable_expr", expr.span),
             .if_let => |node| try self.emitExprEntry("if_let_value_expr", node.value.span),
             .@"switch" => |node| try self.emitExprEntry("switch_subject_expr", node.subject.span),
-            .@"defer", .expr => |expr| try self.emitExprEntry("expr", expr.span),
+            .@"defer" => |expr| try self.emitExprEntry("defer_expr", expr.span),
+            .expr => |expr| try self.emitExprEntry("expr", expr.span),
             else => {},
         }
     }
@@ -11808,6 +11812,47 @@ test "C source map records source spans and generated C lines" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:initializer_expr:add_one@4:18\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typed_ast_node=\"ast:return_expr:add_one@5:12\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mir_block=\"mir:add_one:block:") != null);
+}
+
+test "C source map records defer cleanup spans" {
+    const source =
+        \\extern fn close_resource() -> void;
+        \\
+        \\fn cleanup(flag: bool) -> void {
+        \\    defer close_resource();
+        \\    defer {
+        \\        close_resource();
+        \\    };
+        \\    while flag {
+        \\        defer close_resource();
+        \\        break;
+        \\    }
+        \\    return;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "debug_map_defer.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCSourceMap(std.testing.allocator, module, &output, .kernel, "debug_map_defer.mc", "debug_map_defer.c");
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"defer\" symbol=\"cleanup\" source_line=4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"defer_expr\" symbol=\"cleanup\" source_line=4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"defer\" symbol=\"cleanup\" source_line=5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"expr\" symbol=\"cleanup\" source_line=6") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"defer\" symbol=\"cleanup\" source_line=9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"defer_expr\" symbol=\"cleanup\" source_line=9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "generated_c_line=0") == null);
 }
 
 test "C emission materializes closure callees once" {

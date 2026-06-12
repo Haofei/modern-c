@@ -71,8 +71,9 @@ Prototype or incomplete:
   cache clean/invalidate, and the linear `move` checker are implemented; a
   complete hardware coherence simulation is not.
 - Debug mapping: `emit-c` writes `#line` source hints for generated C, and
-  `emit-map` emits an initial `.mcmap`-style source/generated-C map. DWARF-quality
-  native debug mapping is still pending.
+  `emit-map` emits an initial `.mcmap`-style source/generated-C map, including
+  statement/expression spans for deferred cleanup paths. DWARF-quality native
+  debug mapping is still pending.
 
 Deferred:
 
@@ -136,8 +137,8 @@ target for programs that use `std/hosted_io` (explicit, fallible byte I/O —
 `exp2`/`log2`/`exp`/`log`/`tanh` for `f32`/`f64`). See `demo/hosted/` for the
 stdin-to-stdout float round-trip; run it with `zig build hosted-test`.
 `emit-map` uses the same verified C-emission path and writes a line-oriented
-`.mcmap` artifact to stdout, including statement and selected expression spans
-with typed-AST and MIR labels.
+`.mcmap` artifact to stdout, including statement, deferred cleanup, and selected
+expression spans with typed-AST and MIR labels.
 
 ## Conformance Snapshot
 
