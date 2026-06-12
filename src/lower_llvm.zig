@@ -565,20 +565,23 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, llvm_ty });
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
+        if (init.kind == .uninit_literal) return;
         if (resolved_ty.kind == .array) {
-            const items = switch (init.kind) {
-                .array_literal => |items| items,
-                else => return error.UnsupportedLlvmEmission,
-            };
-            try self.emitArrayLiteralStores(ptr, resolved_ty, items);
+            if (init.kind == .array_literal) {
+                try self.emitArrayLiteralStores(ptr, resolved_ty, init.kind.array_literal);
+            } else {
+                const value = try self.emitExpr(init, ty);
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+            }
             return;
         }
         if (self.structDeclForType(resolved_ty)) |_| {
-            const fields = switch (init.kind) {
-                .struct_literal => |fields| fields,
-                else => return error.UnsupportedLlvmEmission,
-            };
-            try self.emitStructLiteralStores(ptr, resolved_ty, fields);
+            if (init.kind == .struct_literal) {
+                try self.emitStructLiteralStores(ptr, resolved_ty, init.kind.struct_literal);
+            } else {
+                const value = try self.emitExpr(init, ty);
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
+            }
             return;
         }
         const value = try self.emitExpr(init, ty);

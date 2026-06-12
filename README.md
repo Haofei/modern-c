@@ -89,6 +89,9 @@ nullable `if let`, and simple nullable switches. Atomic lowering covers
 Function-pointer lowering covers `fn(...) -> T` values as opaque pointers,
 static function-name initializers, indirect calls through parameters, locals,
 globals, arrays, and struct fields, plus function-pointer returns.
+Aggregate assignment lowering covers `uninit` aggregate storage, whole
+array/struct literal assignment, aggregate copies from nested elements/fields,
+and nested aggregate stores through globals, arrays, and struct fields.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the
 covered textual IR subset to linkable object files through `llc`, and
 `zig build llvm-obj-test` validates representative scalar, statement-workflow,
@@ -216,3 +219,5 @@ LLVM atomics are covered for scalar `atomic<T>` storage, `atomic.init`,
 `load`, `store`, `fetch_add`, and `fetch_sub` over local and global atomics.
 LLVM function-pointer coverage includes static function-name initializers,
 indirect calls, arrays/struct fields, locals/params/globals, and returns.
+LLVM aggregate assignment coverage includes whole array/struct assignment and
+nested aggregate field/element replacement.

@@ -4011,6 +4011,9 @@ local and global atomics.
 Function-pointer lowering covers `fn(...) -> T` values as opaque pointers,
 static function-name initializers, indirect calls through parameters, locals,
 globals, arrays, and struct fields, plus function-pointer returns.
+Aggregate assignment lowering covers `uninit` aggregate storage, whole
+array/struct literal assignment, aggregate copies from nested elements/fields,
+and nested aggregate stores through globals, arrays, and struct fields.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
 textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.
