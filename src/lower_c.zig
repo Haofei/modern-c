@@ -3527,6 +3527,7 @@ const CEmitter = struct {
                 if (try self.emitPhysCall(node, locals)) return;
                 if (try self.emitEnumRawCall(node, locals)) return;
                 if (try self.emitConversionCall(node, locals)) return;
+                if (try self.emitBitcastCall(node, locals)) return;
                 if (try self.emitResidueCall(node, locals)) return;
                 if (try self.emitDomainOpCall(node, locals)) return;
                 if (try self.emitReflectionCall(node)) return;
@@ -3782,6 +3783,24 @@ const CEmitter = struct {
             try self.emitExpr(value, locals);
             try self.out.print(self.allocator, ") > (__int128)({s})", .{range.c_max});
         }
+    }
+
+    fn emitBitcastCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        if (!isBitcastCall(call) or call.type_args.len != 1 or call.args.len != 1) return false;
+        const target_ty = self.resolveAliasType(call.type_args[0]);
+        const source_ty = self.exprSourceTypeForEmission(call.args[0], locals) orelse return error.UnsupportedCEmission;
+        const source_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_bc_src{d}", .{self.temp_index});
+        self.temp_index += 1;
+        const target_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_bc_dst{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.out.appendSlice(self.allocator, "({ ");
+        try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(source_ty, .typedef_name), source_name });
+        try self.emitExpr(call.args[0], locals);
+        try self.out.appendSlice(self.allocator, "; ");
+        try self.out.print(self.allocator, "{s} {s}; ", .{ try self.cTypeFor(target_ty, .typedef_name), target_name });
+        try self.out.print(self.allocator, "__builtin_memcpy(&{s}, &{s}, sizeof({s})); {s}; }})", .{ target_name, source_name, target_name, target_name });
+        return true;
     }
 
     fn underlyingIntTypeName(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
