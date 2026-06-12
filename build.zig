@@ -850,11 +850,17 @@ pub fn build(b: *std.Build) void {
         "sh", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc",
     });
     const e1000_test_cmd = b.addSystemCommand(&.{
-        "sh", "tools/net/e1000-test.sh", "zig-out/bin/mcc",
+        "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_e1000_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "llvm",
     });
     e1000_test_cmd.step.dependOn(b.getInstallStep());
     const e1000_test_step = b.step("e1000-test", "Real e1000 NIC PCI probe");
     e1000_test_step.dependOn(&e1000_test_cmd.step);
+    llvm_e1000_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_e1000_test_step = b.step("llvm-e1000-test", "LLVM-lowered real e1000 NIC PCI probe");
+    llvm_e1000_test_step.dependOn(&llvm_e1000_test_cmd.step);
 
 
     sbi_boot_test_cmd.step.dependOn(b.getInstallStep());
@@ -1454,13 +1460,23 @@ pub fn build(b: *std.Build) void {
     net_fuzz_test_step.dependOn(&net_fuzz_test_cmd.step);
 
     const net_rx_live_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/net/net-rx-live-test.sh",
         "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_net_rx_live_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/net/net-rx-live-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
     });
     net_rx_live_test_cmd.step.dependOn(b.getInstallStep());
     const net_rx_live_test_step = b.step("net-rx-live-test", "Route a real virtio-net RX frame through net_rx_deliver under QEMU");
     net_rx_live_test_step.dependOn(&net_rx_live_test_cmd.step);
+    llvm_net_rx_live_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_net_rx_live_test_step = b.step("llvm-net-rx-live-test", "Route a real LLVM-lowered virtio-net RX frame through net_rx_deliver under QEMU");
+    llvm_net_rx_live_test_step.dependOn(&llvm_net_rx_live_test_cmd.step);
 
     const backtrace_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -1973,6 +1989,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_udp_net_test_cmd.step);
     m0_step.dependOn(&llvm_blk_test_cmd.step);
     m0_step.dependOn(&llvm_net_test_cmd.step);
+    m0_step.dependOn(&llvm_e1000_test_cmd.step);
+    m0_step.dependOn(&llvm_net_rx_live_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

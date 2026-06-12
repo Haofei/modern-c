@@ -33,6 +33,8 @@ extern mmio struct Uart16550 {
 }
 
 fn uart_putc(uart: MmioPtr<Uart16550>, ch: u8) -> void {
+    while (uart.lsr.read(.acquire) & (0x20 as u8)) == (0 as u8) {
+    }
     uart.thr.write(ch, .release);
 }
 
@@ -65,13 +67,17 @@ export fn nic_transmit(uart: MmioPtr<Uart16550>, l: *SpinLock) -> void {
     // 3. Doorbell + payload: write the frame (fixed length) to the device
     //    register (the UART). `queued` is the descriptor that round-tripped the
     //    ring; transmit only when it matches what we enqueued.
-    if queued == desc_addr {
-        let frame: [10]u8 = .{ 'N', 'I', 'C', '-', 'T', 'X', '-', 'O', 'K', 10 };
-        var i: usize = 0;
-        while i < 10 {
-            uart_putc(uart, frame[i]);
-            i = i + 1;
-        }
+    if pushed && queued == desc_addr {
+        uart_putc(uart, 'N');
+        uart_putc(uart, 'I');
+        uart_putc(uart, 'C');
+        uart_putc(uart, '-');
+        uart_putc(uart, 'T');
+        uart_putc(uart, 'X');
+        uart_putc(uart, '-');
+        uart_putc(uart, 'O');
+        uart_putc(uart, 'K');
+        uart_putc(uart, 10);
     }
     unlock(g); // guard consumed
 

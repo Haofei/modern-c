@@ -225,7 +225,8 @@ LLVM backend status:
   per-server MMU isolation, user-mode block/filesystem/network servers, RTC
   MMIO, user-mode server syscalls, a user-mode TCP passive-open server
   handshake, virtio-net device bring-up, pcap-verified UDP transmit,
-  virtio-blk sector read, ARP/ICMP gateway round trip over virtio-net,
+  virtio-blk sector read, ARP/ICMP gateway round trip over virtio-net, e1000
+  PCI probe, live virtio-net RX routing through the production demux,
   backtrace symbolization, char-device driver dispatch, timer preemption, SMP
   boot/sync, SMP ticket-lock mutual exclusion, inter-processor interrupts, the
   integrated RISC-V kernel image, and the integrated kernel+network image, LLVM
@@ -370,7 +371,8 @@ llvm-userserver-test`, `zig build llvm-backtrace-test`, `zig build
 llvm-driver-test`, `zig build llvm-preempt-test`, `zig build llvm-smp-test`,
 `zig build llvm-smp-lock-test`, `zig build llvm-ipi-test`, and `zig build
 llvm-tcp-server-test`, `zig build llvm-virtio-test`, and `zig build
-llvm-udp-net-test`, `zig build llvm-blk-test`, and `zig build llvm-net-test`
+llvm-udp-net-test`, `zig build llvm-blk-test`, `zig build llvm-net-test`,
+`zig build llvm-e1000-test`, and `zig build llvm-net-rx-live-test`
 for typed MMIO, timer traps, cooperative context switching, round-robin
 scheduling, syscall dispatch, U-mode entry, process lifecycle, ELF load/run,
 VFS syscalls, socket syscalls, exec, `satp` address-space switching,
@@ -384,7 +386,8 @@ servers, RTC MMIO, user-mode server syscalls, backtrace symbolization,
 char-device driver dispatch, timer preemption, SMP boot/sync, SMP ticket-lock
 mutual exclusion, inter-processor interrupts, a user-mode TCP passive-open
 server handshake, virtio-net device bring-up, pcap-verified UDP transmit,
-virtio-blk sector reads, and ARP/ICMP gateway round trips over virtio-net. `zig build llvm-kmain-test` boots the integrated
+virtio-blk sector reads, ARP/ICMP gateway round trips over virtio-net, e1000
+PCI probing, and live virtio-net RX routing through the production demux. `zig build llvm-kmain-test` boots the integrated
 kernel image from an LLVM-lowered MC object under QEMU, and `zig build llvm-kmain-net-test`
 boots the integrated kernel+network image and verifies the transmitted UDP packet
 in the QEMU pcap. `zig build llvm-page-test`, `zig build llvm-heap-test`, and

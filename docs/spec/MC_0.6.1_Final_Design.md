@@ -4185,7 +4185,8 @@ llvm-backtrace-test`, `zig build llvm-driver-test`, and `zig build
 llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
 llvm-smp-lock-test`, `zig build llvm-ipi-test`, and `zig build
 llvm-tcp-server-test`, `zig build llvm-virtio-test`, and `zig build
-llvm-udp-net-test`, `zig build llvm-blk-test`, and `zig build llvm-net-test`
+llvm-udp-net-test`, `zig build llvm-blk-test`, `zig build llvm-net-test`,
+`zig build llvm-e1000-test`, and `zig build llvm-net-rx-live-test`
 gates boot LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer
 traps, cooperative context switching, round-robin scheduling, syscall dispatch,
 U-mode entry, process lifecycle, ELF load/run, VFS syscalls, socket syscalls,
@@ -4199,8 +4200,9 @@ isolation, user-mode block/filesystem/network servers, RTC MMIO, user-mode
 server syscalls, backtrace symbolization, char-device driver dispatch, timer
 preemption, SMP boot/sync, SMP ticket-lock mutual exclusion, inter-processor
 interrupts, a user-mode TCP passive-open server handshake, virtio-net device
-bring-up, pcap-verified UDP transmit, virtio-blk sector reads, and ARP/ICMP
-gateway round trips over virtio-net.
+bring-up, pcap-verified UDP transmit, virtio-blk sector reads, ARP/ICMP
+gateway round trips over virtio-net, e1000 PCI probing, and live virtio-net RX
+routing through the production demux.
 The `zig build llvm-kmain-test` and `zig build llvm-kmain-net-test` gates boot
 LLVM-lowered integrated RISC-V kernel images under QEMU; the network variant also
 checks that QEMU captures the expected transmitted UDP payload.
