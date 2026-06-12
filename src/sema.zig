@@ -1853,6 +1853,7 @@ pub const Checker = struct {
                 self.checkTypeStaticCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkResidueCall(expr.span, node.callee.*, node.args, ctx);
                 self.checkReduceCall(expr.span, node, ctx);
+                self.checkByteViewCall(expr.span, node, ctx);
                 const bitcast_class = self.checkBitcastCall(expr.span, node, ctx);
                 const raw_many_offset_class = self.checkRawManyOffsetCall(expr.span, node, ctx);
                 const reflection_class = self.checkReflectionCall(expr.span, node, ctx);
@@ -1947,6 +1948,7 @@ pub const Checker = struct {
                 if (typeStaticCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (residueCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (reduceCallReturnClass(node, ctx)) |class| return class;
+                if (byteViewCallReturnClass(node)) |class| return class;
                 if (bitcast_class) |class| return class;
                 if (raw_many_offset_class) |class| return class;
                 if (directCallReturnClass(node.callee.*, ctx)) |class| return class;
@@ -2516,6 +2518,55 @@ pub const Checker = struct {
         const target_class = classifyTypeCtx(t, ctx);
         if (elem_class != target_class) {
             self.errorCode(call.args[0].span, "E_REDUCE_ARG_NOT_SLICE", "reduction slice element type must match the reduction type argument");
+        }
+    }
+
+    fn checkByteViewCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) void {
+        const kind = byteViewCallKind(call.callee.*) orelse return;
+        if (call.type_args.len != 0) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "byte-view operations do not take type arguments");
+        }
+        switch (kind) {
+            .as_bytes => {
+                if (call.args.len != 1) {
+                    self.errorCode(span, "E_CALL_ARG_COUNT", "mem.as_bytes expects exactly one address argument");
+                    return;
+                }
+                const inner = switch (call.args[0].kind) {
+                    .address_of => |target| target.*,
+                    .grouped => |grouped| switch (grouped.kind) {
+                        .address_of => |target| target.*,
+                        else => {
+                            self.errorCode(call.args[0].span, "E_BYTE_VIEW_ADDRESS", "mem.as_bytes requires an address expression");
+                            return;
+                        },
+                    },
+                    else => {
+                        self.errorCode(call.args[0].span, "E_BYTE_VIEW_ADDRESS", "mem.as_bytes requires an address expression");
+                        return;
+                    },
+                };
+                const source_ty = exprResultType(inner, ctx) orelse exprStorageType(inner, ctx) orelse {
+                    self.errorCode(call.args[0].span, "E_BYTE_VIEW_ADDRESS", "mem.as_bytes requires an addressable value with known storage type");
+                    return;
+                };
+                const resolved = resolveAliasType(source_ty, ctx);
+                if (isTypeName(resolved, "void") or isTypeName(resolved, "never")) {
+                    self.errorCode(call.args[0].span, "E_BYTE_VIEW_ADDRESS", "mem.as_bytes requires byte-addressable storage");
+                }
+            },
+            .bytes_equal => {
+                if (call.args.len != 2) {
+                    self.errorCode(span, "E_CALL_ARG_COUNT", "mem.bytes_equal expects exactly two byte slices");
+                    return;
+                }
+                for (call.args) |arg| {
+                    const arg_ty = exprResultType(arg, ctx) orelse exprStorageType(arg, ctx) orelse continue;
+                    if (!isConstU8SliceType(resolveAliasType(arg_ty, ctx))) {
+                        self.errorCode(arg.span, "E_BYTE_VIEW_SLICE", "mem.bytes_equal expects []const u8 byte slices");
+                    }
+                }
+            },
         }
     }
 
@@ -4432,6 +4483,31 @@ fn reduceCallReturnClass(call: anytype, ctx: Context) ?TypeClass {
     };
 }
 
+const ByteViewCallKind = enum {
+    as_bytes,
+    bytes_equal,
+};
+
+fn byteViewCallKind(callee: ast.Expr) ?ByteViewCallKind {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return byteViewCallKind(inner.*),
+        else => return null,
+    };
+    if (!isIdentNamed(member.base.*, "mem")) return null;
+    if (std.mem.eql(u8, member.name.text, "as_bytes")) return .as_bytes;
+    if (std.mem.eql(u8, member.name.text, "bytes_equal")) return .bytes_equal;
+    return null;
+}
+
+fn byteViewCallReturnClass(call: anytype) ?TypeClass {
+    const kind = byteViewCallKind(call.callee.*) orelse return null;
+    return switch (kind) {
+        .as_bytes => .slice,
+        .bytes_equal => .bool,
+    };
+}
+
 fn typeStaticCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
     const member = switch (callee.kind) {
         .member => |node| node,
@@ -5398,7 +5474,7 @@ fn globalClass(name: []const u8, ctx: Context) ?TypeClass {
 
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .try_expr => |inner| tryPayloadType(inner.operand.*, ctx),
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),
@@ -5418,6 +5494,29 @@ fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
 
 fn boolTypeExpr(span: diagnostics.Span) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .text = "bool", .span = span } } };
+}
+
+const builtin_zero_span = diagnostics.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+const builtin_u8_type = ast.TypeExpr{ .span = builtin_zero_span, .kind = .{ .name = .{ .text = "u8", .span = builtin_zero_span } } };
+
+fn constU8SliceType(span: diagnostics.Span) ast.TypeExpr {
+    return .{ .span = span, .kind = .{ .slice = .{ .mutability = .@"const", .child = @constCast(&builtin_u8_type) } } };
+}
+
+fn byteViewCallReturnType(call: anytype) ?ast.TypeExpr {
+    const kind = byteViewCallKind(call.callee.*) orelse return null;
+    return switch (kind) {
+        .as_bytes => constU8SliceType(call.callee.*.span),
+        .bytes_equal => boolTypeExpr(call.callee.*.span),
+    };
+}
+
+fn isConstU8SliceType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .slice => |node| node.mutability == .@"const" and isTypeName(node.child.*, "u8"),
+        .qualified => |node| isConstU8SliceType(node.child.*),
+        else => false,
+    };
 }
 
 fn constGetMember(callee: ast.Expr) ?struct { base: *ast.Expr, name: ast.Ident } {
@@ -6098,6 +6197,7 @@ fn isBuiltinNamespaceMember(member: anytype) bool {
     if (std.mem.eql(u8, base, "unchecked")) return isUncheckedNoOverflowMember(member.name.text);
     if (std.mem.eql(u8, base, "wrapping")) return std.mem.eql(u8, member.name.text, "add");
     if (std.mem.eql(u8, base, "reduce")) return std.mem.eql(u8, member.name.text, "sum_checked") or std.mem.eql(u8, member.name.text, "sum_left") or std.mem.eql(u8, member.name.text, "sum_fast");
+    if (std.mem.eql(u8, base, "mem")) return std.mem.eql(u8, member.name.text, "as_bytes") or std.mem.eql(u8, member.name.text, "bytes_equal");
     if (std.mem.eql(u8, base, "compiler")) return std.mem.eql(u8, member.name.text, "assume_noalias_unchecked");
     if (std.mem.eql(u8, base, "cpu")) return std.mem.eql(u8, member.name.text, "pause");
     if (std.mem.eql(u8, base, "atomic")) return std.mem.eql(u8, member.name.text, "init");

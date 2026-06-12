@@ -8,6 +8,10 @@
 // `mem_copy` / `mem_set` centralize byte moves between physical regions: the raw
 // load/store is the *single* `unsafe` site, so callers (uaccess, the ELF loader, …)
 // stop hand-rolling a `while { raw.store }` loop each with its own unsafe block.
+//
+// `mem.as_bytes(&value)` and `mem.bytes_equal(left, right)` are compiler-recognized
+// byte-view operations from §14: `as_bytes` exposes a `[]const u8` view of typed
+// storage, and `bytes_equal` compares byte slices explicitly, including padding.
 
 import "std/addr.mc";
 

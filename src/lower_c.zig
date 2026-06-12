@@ -1820,6 +1820,7 @@ const CEmitter = struct {
     fn collectExprTypeArtifacts(self: *CEmitter, expr: ast.Expr) anyerror!void {
         switch (expr.kind) {
             .call => |node| {
+                if (byteViewCallReturnTypeForCall(node)) |ty| try self.collectTypeArtifacts(ty);
                 for (node.type_args) |ty| try self.collectTypeArtifacts(ty);
                 try self.collectExprTypeArtifacts(node.callee.*);
                 for (node.args) |arg| try self.collectExprTypeArtifacts(arg);
@@ -4151,6 +4152,7 @@ const CEmitter = struct {
                 if (try self.emitReflectionCall(node)) return;
                 if (try self.emitConstGetCall(node, locals)) return;
                 if (try self.emitRawManyOffsetCall(node, locals)) return;
+                if (try self.emitByteViewCall(node, locals)) return;
                 if (try self.emitAssumeNoaliasCall(node, locals)) return;
                 if (try self.emitWrappingCall(node, locals)) return;
                 if (try self.emitReduceSumCheckedCall(node, locals)) return;
@@ -4750,6 +4752,34 @@ const CEmitter = struct {
             try self.out.print(self.allocator, "for (uintptr_t mc_i{d} = 0; mc_i{d} < mc_xs{d}.len; mc_i{d}++) mc_acc{d} = ({s})(mc_acc{d} + mc_xs{d}.ptr[mc_i{d}]); mc_acc{d}; }})", .{ n, n, n, n, n, t_cty, n, n, n, n });
         }
         return true;
+    }
+
+    fn emitByteViewCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const kind = byteViewCallKind(call.callee.*) orelse return false;
+        if (call.type_args.len != 0) return error.UnsupportedCEmission;
+        switch (kind) {
+            .as_bytes => {
+                if (call.args.len != 1) return error.UnsupportedCEmission;
+                const target = byteViewAddressTarget(call.args[0]) orelse return error.UnsupportedCEmission;
+                const source_ty = self.operandEmitType(target, locals) orelse self.exprSourceTypeForEmission(target, locals) orelse return error.UnsupportedCEmission;
+                const slice_name = try self.sliceTypeName(simpleNameType("u8", call.callee.*.span), .@"const");
+                try self.out.print(self.allocator, "(({s}){{ .ptr = (uint8_t const *)(void *)(", .{slice_name});
+                try self.emitExpr(call.args[0], locals);
+                try self.out.print(self.allocator, "), .len = (uintptr_t)sizeof({s}) }})", .{try self.cTypeFor(source_ty, .typedef_name)});
+                return true;
+            },
+            .bytes_equal => {
+                if (call.args.len != 2) return error.UnsupportedCEmission;
+                const n = self.temp_index;
+                self.temp_index += 1;
+                try self.out.print(self.allocator, "({{ __auto_type mc_a{d} = (", .{n});
+                try self.emitExpr(call.args[0], locals);
+                try self.out.print(self.allocator, "); __auto_type mc_b{d} = (", .{n});
+                try self.emitExpr(call.args[1], locals);
+                try self.out.print(self.allocator, "); (mc_a{d}.len == mc_b{d}.len) && (__builtin_memcmp(mc_a{d}.ptr, mc_b{d}.ptr, mc_a{d}.len) == 0); }})", .{ n, n, n, n, n });
+                return true;
+            },
+        }
     }
 
     fn emitDmaCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
@@ -8793,6 +8823,7 @@ const CEmitter = struct {
                 if (bitcastReturnTypeForCall(node)) |ty| break :blk ty;
                 if (self.assumeNoaliasReturnTypeForCall(node, locals)) |ty| break :blk ty;
                 if (self.rawManyOffsetReturnTypeForCall(node, locals)) |ty| break :blk ty;
+                if (byteViewCallReturnTypeForCall(node)) |ty| break :blk ty;
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
                 break :blk info.return_type;
@@ -8820,6 +8851,7 @@ const CEmitter = struct {
                 if (bitcastReturnTypeForCall(node)) |ty| break :blk ty;
                 if (self.assumeNoaliasReturnTypeForCall(node, locals)) |ty| break :blk ty;
                 if (self.rawManyOffsetReturnTypeForCall(node, locals)) |ty| break :blk ty;
+                if (byteViewCallReturnTypeForCall(node)) |ty| break :blk ty;
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
                 break :blk info.return_type;
@@ -11766,6 +11798,46 @@ fn isRawPtrCall(callee: ast.Expr) bool {
         .member => |member| std.mem.eql(u8, member.name.text, "ptr") and isIdentNamed(member.base.*, "raw"),
         .grouped => |inner| isRawPtrCall(inner.*),
         else => false,
+    };
+}
+
+const ByteViewCallKind = enum {
+    as_bytes,
+    bytes_equal,
+};
+
+fn byteViewCallKind(callee: ast.Expr) ?ByteViewCallKind {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return byteViewCallKind(inner.*),
+        else => return null,
+    };
+    if (!isIdentNamed(member.base.*, "mem")) return null;
+    if (std.mem.eql(u8, member.name.text, "as_bytes")) return .as_bytes;
+    if (std.mem.eql(u8, member.name.text, "bytes_equal")) return .bytes_equal;
+    return null;
+}
+
+fn byteViewAddressTarget(expr: ast.Expr) ?ast.Expr {
+    return switch (expr.kind) {
+        .address_of => |target| target.*,
+        .grouped => |inner| byteViewAddressTarget(inner.*),
+        else => null,
+    };
+}
+
+const builtin_zero_span = diagnostics.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+const builtin_u8_type = ast.TypeExpr{ .span = builtin_zero_span, .kind = .{ .name = .{ .text = "u8", .span = builtin_zero_span } } };
+
+fn constU8SliceType(span: diagnostics.Span) ast.TypeExpr {
+    return .{ .span = span, .kind = .{ .slice = .{ .mutability = .@"const", .child = @constCast(&builtin_u8_type) } } };
+}
+
+fn byteViewCallReturnTypeForCall(call: anytype) ?ast.TypeExpr {
+    const kind = byteViewCallKind(call.callee.*) orelse return null;
+    return switch (kind) {
+        .as_bytes => constU8SliceType(call.callee.*.span),
+        .bytes_equal => simpleNameType("bool", call.callee.*.span),
     };
 }
 
