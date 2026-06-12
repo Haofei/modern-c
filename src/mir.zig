@@ -294,7 +294,7 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
     var const_fns = std.StringHashMap(ast.FnDecl).init(allocator);
     defer const_fns.deinit();
     var const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator);
-    defer const_globals.deinit();
+    defer eval.deinitConstGlobals(allocator, &const_globals);
     var globals = std.StringHashMap(ValueType).init(allocator);
     defer globals.deinit();
     var global_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator);

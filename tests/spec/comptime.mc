@@ -19,6 +19,8 @@ enum BootState : u8 {
 
 const DEFAULT_BOOT_STATE: BootState = .ready;
 
+const DEFAULT_NUMBERS: [4]u32 = .{ 1, 2, 3, 4 };
+
 const fn is_power_of_two(x: u32) -> bool {
     return x != 0 && (x & (x - 1)) == 0;
 }
@@ -50,6 +52,8 @@ struct ComptimeRect {
     w: u32,
     h: u32,
 }
+
+const DEFAULT_RECT: ComptimeRect = .{ .w = 5, .h = 6 };
 
 const fn rect_area(r: ComptimeRect) -> u32 {
     return r.w * r.h;
@@ -322,6 +326,21 @@ fn reject_comptime_array_fold() -> void {
     }
 }
 
+// Named aggregate const globals participate in comptime evaluation too.
+fn accept_comptime_const_array_global() -> void {
+    comptime {
+        assert(DEFAULT_NUMBERS[2] == 3);
+        assert(array_sum(DEFAULT_NUMBERS) == 10);
+    }
+}
+
+fn reject_comptime_const_array_global() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(DEFAULT_NUMBERS[1] == 3);
+    }
+}
+
 // Comptime struct values: a const fn folds over a struct argument's fields.
 fn accept_comptime_struct_fold() -> void {
     comptime {
@@ -333,6 +352,20 @@ fn reject_comptime_struct_fold() -> void {
     comptime {
         // EXPECT_ERROR: E_COMPTIME_TRAP
         assert(rect_area(.{ .w = 3, .h = 4 }) == 13);
+    }
+}
+
+fn accept_comptime_const_struct_global() -> void {
+    comptime {
+        assert(DEFAULT_RECT.w == 5);
+        assert(rect_area(DEFAULT_RECT) == 30);
+    }
+}
+
+fn reject_comptime_const_struct_global() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        assert(DEFAULT_RECT.h == 5);
     }
 }
 

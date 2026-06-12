@@ -267,6 +267,61 @@ pub const ComptimeValue = union(enum) {
     @"struct": []const ComptimeStructField,
 };
 
+pub fn cloneComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) !ComptimeValue {
+    return switch (value) {
+        .int, .boolean, .tag => value,
+        .array => |items| blk: {
+            const copy = try allocator.alloc(ComptimeValue, items.len);
+            var initialized: usize = 0;
+            errdefer {
+                for (copy[0..initialized]) |item| freeComptimeValue(allocator, item);
+                allocator.free(copy);
+            }
+            for (items, 0..) |item, index| {
+                copy[index] = try cloneComptimeValue(allocator, item);
+                initialized += 1;
+            }
+            break :blk .{ .array = copy };
+        },
+        .@"struct" => |fields| blk: {
+            const copy = try allocator.alloc(ComptimeStructField, fields.len);
+            var initialized: usize = 0;
+            errdefer {
+                for (copy[0..initialized]) |field| freeComptimeValue(allocator, field.value);
+                allocator.free(copy);
+            }
+            for (fields, 0..) |field, index| {
+                copy[index] = .{
+                    .name = field.name,
+                    .value = try cloneComptimeValue(allocator, field.value),
+                };
+                initialized += 1;
+            }
+            break :blk .{ .@"struct" = copy };
+        },
+    };
+}
+
+pub fn freeComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) void {
+    switch (value) {
+        .int, .boolean, .tag => {},
+        .array => |items| {
+            for (items) |item| freeComptimeValue(allocator, item);
+            allocator.free(items);
+        },
+        .@"struct" => |fields| {
+            for (fields) |field| freeComptimeValue(allocator, field.value);
+            allocator.free(fields);
+        },
+    }
+}
+
+pub fn deinitConstGlobals(allocator: std.mem.Allocator, globals: *std.StringHashMap(ComptimeValue)) void {
+    var it = globals.valueIterator();
+    while (it.next()) |value| freeComptimeValue(allocator, value.*);
+    globals.deinit();
+}
+
 pub const ComptimeFold = union(enum) {
     value: ComptimeValue,
     trap, // a provable trap during const eval (divide-by-zero, invalid shift)
@@ -387,8 +442,7 @@ pub fn collectConstGlobals(
     out: *std.StringHashMap(ComptimeValue),
 ) !void {
     // Fold scratch (e.g. array temporaries) lives in an arena that is freed
-    // here; only scalar values are copied into `out` (by value), so the named
-    // constant table owns no separately-allocated storage.
+    // here; values retained in `out` must therefore be deep-cloned.
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var scope = ComptimeScope.init(arena.allocator());
@@ -403,11 +457,10 @@ pub fn collectConstGlobals(
         if (!global.is_const) continue;
         const init_expr = global.init orelse continue;
         switch (foldComptimeExpr(&scope, init_expr)) {
-            .value => |v| switch (v) {
-                .int, .boolean, .tag => try out.put(global.name.text, v),
-                // Aggregate const globals are not exposed as named scalar
-                // constants (they cannot drive array lengths or scalar asserts).
-                .array, .@"struct" => {},
+            .value => |v| {
+                const cloned = try cloneComptimeValue(allocator, v);
+                errdefer freeComptimeValue(allocator, cloned);
+                try out.put(global.name.text, cloned);
             },
             else => {},
         }

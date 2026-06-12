@@ -644,7 +644,7 @@ const CEmitter = struct {
         self.mmio_structs.deinit();
         self.structs.deinit();
         self.const_fns.deinit();
-        self.const_globals.deinit();
+        eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.functions.deinit();
         self.type_aliases.deinit();
         self.static_initializers.deinit();

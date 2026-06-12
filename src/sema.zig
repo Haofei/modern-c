@@ -83,7 +83,7 @@ pub const Checker = struct {
         defer self.const_fns = null;
 
         var const_globals = std.StringHashMap(eval.ComptimeValue).init(self.reporter.allocator);
-        defer const_globals.deinit();
+        defer eval.deinitConstGlobals(self.reporter.allocator, &const_globals);
         eval.collectConstGlobals(self.reporter.allocator, module, &const_fns, &const_globals) catch {
             self.oom = true;
         };
