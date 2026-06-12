@@ -3989,6 +3989,8 @@ and `for` over arrays/slices with loop-local bindings plus `break`/`continue`.
 Scalar expression lowering covers integer casts, unsigned bitwise operations,
 bitwise not, and checked unsigned shifts with invalid-count and shifted-out-bit
 traps.
+Statement workflow covers expression statements, void calls, nested blocks,
+unsafe blocks, and transparent unsafe-contract blocks.
 The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
 textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.

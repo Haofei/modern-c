@@ -292,6 +292,15 @@ const LlvmEmitter = struct {
                 .loop => |node| {
                     if (try self.emitLoop(node, ret_ty)) return true;
                 },
+                .block => |node| {
+                    if (try self.emitScopedBlock(node, ret_ty)) return true;
+                },
+                .unsafe_block => |node| {
+                    if (try self.emitScopedBlock(node, ret_ty)) return true;
+                },
+                .contract_block => |node| {
+                    if (try self.emitScopedBlock(node.block, ret_ty)) return true;
+                },
                 .@"return" => |maybe_expr| {
                     if (ret_ty.kind == .name and std.mem.eql(u8, ret_ty.kind.name.text, "void")) {
                         try self.out.appendSlice(self.allocator, "  ret void\n");
@@ -315,10 +324,59 @@ const LlvmEmitter = struct {
                     try self.out.print(self.allocator, "  br label %{s}\n", .{labels.continue_label});
                     return true;
                 },
+                .expr => |expr| try self.emitExprStatement(expr),
                 else => return error.UnsupportedLlvmEmission,
             }
         }
         return false;
+    }
+
+    fn emitScopedBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) !bool {
+        var saved_types = std.StringHashMap(ast.TypeExpr).init(self.allocator);
+        var restore_installed = false;
+        errdefer if (!restore_installed) saved_types.deinit();
+        var type_it = self.local_types.iterator();
+        while (type_it.next()) |entry| try saved_types.put(entry.key_ptr.*, entry.value_ptr.*);
+
+        var saved_slots = std.StringHashMap(LocalSlot).init(self.allocator);
+        errdefer if (!restore_installed) saved_slots.deinit();
+        var slot_it = self.local_slots.iterator();
+        while (slot_it.next()) |entry| try saved_slots.put(entry.key_ptr.*, entry.value_ptr.*);
+
+        restore_installed = true;
+        defer {
+            self.local_types.deinit();
+            self.local_slots.deinit();
+            self.local_types = saved_types;
+            self.local_slots = saved_slots;
+        }
+
+        return try self.emitBlock(block, ret_ty);
+    }
+
+    fn emitExprStatement(self: *LlvmEmitter, expr: ast.Expr) !void {
+        switch (expr.kind) {
+            .call => |call| {
+                const callee = switch (call.callee.kind) {
+                    .ident => |ident| ident.text,
+                    else => return error.UnsupportedLlvmEmission,
+                };
+                if (self.callReturnType(call)) |ret_ty| {
+                    if (typeNameEql(ret_ty, "void")) {
+                        try self.emitVoidCall(callee, call);
+                        return;
+                    }
+                    _ = try self.emitCall(call, ret_ty);
+                    return;
+                }
+                return error.UnsupportedLlvmEmission;
+            },
+            .grouped => |inner| try self.emitExprStatement(inner.*),
+            else => {
+                const ty = self.exprType(expr) orelse return error.UnsupportedLlvmEmission;
+                _ = try self.emitExpr(expr, ty);
+            },
+        }
     }
 
     fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl) !void {
@@ -874,6 +932,23 @@ const LlvmEmitter = struct {
         }
         try self.out.appendSlice(self.allocator, ")\n");
         return result;
+    }
+
+    fn emitVoidCall(self: *LlvmEmitter, callee: []const u8, call: anytype) !void {
+        const sig = self.fn_sigs.get(callee) orelse return error.UnsupportedLlvmEmission;
+        if (!typeNameEql(sig.ret, "void")) return error.UnsupportedLlvmEmission;
+        var args: std.ArrayList(ArgValue) = .empty;
+        defer args.deinit(self.allocator);
+        for (call.args, 0..) |arg, i| {
+            const arg_ty = self.expectedTyForCallArg(callee, i) orelse self.exprType(arg) orelse return error.UnsupportedLlvmEmission;
+            try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExpr(arg, arg_ty) });
+        }
+        try self.out.print(self.allocator, "  call void @{s}(", .{callee});
+        for (args.items, 0..) |arg, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.print(self.allocator, "{s} {s}", .{ try self.llvmType(arg.ty), arg.value });
+        }
+        try self.out.appendSlice(self.allocator, ")\n");
     }
 
     fn emitBinary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {
