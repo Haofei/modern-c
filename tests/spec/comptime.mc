@@ -298,6 +298,19 @@ fn reject_comptime_const_fn_assert() -> void {
     }
 }
 
+fn accept_comptime_const_fn_expr_statement() -> void {
+    comptime {
+        require_power_of_two(16);
+    }
+}
+
+fn reject_comptime_const_fn_expr_statement() -> void {
+    comptime {
+        // EXPECT_ERROR: E_COMPTIME_TRAP
+        require_power_of_two(18);
+    }
+}
+
 fn accept_comptime_const_fn_loop() -> void {
     comptime {
         assert(gcd(48, 36) == 12);

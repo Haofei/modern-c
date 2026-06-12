@@ -944,7 +944,7 @@ pub const Checker = struct {
                         .unknown => {},
                     }
                 },
-                .assignment, .loop, .@"switch" => {
+                .assignment, .expr, .loop, .@"switch" => {
                     var single = [_]ast.Stmt{stmt};
                     switch (eval.foldComptimeBlock(scope, .{ .span = stmt.span, .items = &single })) {
                         .ok, .unknown => {},

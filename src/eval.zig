@@ -682,6 +682,13 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                     .unknown => return .unknown,
                 }
             },
+            .expr => |expr| {
+                switch (foldComptimeExpr(scope, expr)) {
+                    .value => {},
+                    .trap => return .trap,
+                    .unknown => return .unknown,
+                }
+            },
             .@"break" => return .broke,
             .@"continue" => return .continued,
             .loop => |loop| {
