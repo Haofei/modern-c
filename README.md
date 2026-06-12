@@ -1,8 +1,8 @@
 # MC / modern-c
 
 MC is a spec-first compiler prototype for a kernel-profile, Zig-like systems language.
-The current repository is an early MC-C0 prototype, not a production-ready C
-replacement.
+The current repository implements the MC-C0 baseline and a growing MC-C1 kernel
+profile slice, but it is not a production-ready C replacement.
 
 The design goal is to make low-level machine contracts explicit: ordinary
 language errors should become compile errors, traps, or `Result` values, rather
@@ -44,14 +44,16 @@ Implemented today:
 - Local package manifests via `mcc-pkg.sh`: `info`, recursive `deps` with
   transitive version checks, and `build` through the `mcc-cc` driver.
 
-The full type-checking surface of the core language spec is implemented, and
-most operations covered by the current spec fixtures lower to clang-checked C.
-The remaining items are the larger runtime/toolchain subsystems outside the
-initial MC-C0 snapshot.
+The type-checking surface covered by the core language fixtures is implemented,
+and most operations covered by the current spec fixtures lower to clang-checked
+C. The non-LLVM finish line is the C backend plus verifier/tooling contract in
+`docs/spec/MC_0.6.1_Final_Design.md`; LLVM remains a deferred backend, not a
+requirement for the current implementation profile.
 
 Prototype or incomplete:
 
-- Production-grade typed MIR/CFG and verifier.
+- Production-grade typed MIR/CFG and verifier hardening beyond the current
+  checked C-emission path.
 - Package registry, releases/publishing, and production toolchain support.
 - Full comptime execution (§22): the evaluator handles scalar/enum-tag folding,
   const globals, const-fn calls with loops/for/switch/asserts, top-level comptime
@@ -62,9 +64,9 @@ Prototype or incomplete:
 - Production MIR optimizer use: MIR records and consumes scoped no-overflow
   range facts for covered unchecked arithmetic; broader range algebra and
   optimization passes are still incomplete.
-- Full DMA/cache-coherence model (§18): typed `DmaBuf`, cache clean/invalidate,
-  and the address-class rules are implemented; a complete coherence simulation
-  is not.
+- Full DMA/cache-coherence model (§18): address-class rules, typed `DmaBuf`,
+  cache clean/invalidate, and the linear `move` checker are implemented; a
+  complete hardware coherence simulation is not.
 - Debug mapping: `emit-c` writes `#line` source hints for generated C, and
   `emit-map` emits an initial `.mcmap`-style source/generated-C map. DWARF-quality
   native debug mapping is still pending.

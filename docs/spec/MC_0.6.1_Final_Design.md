@@ -2,9 +2,9 @@
 
 ## A kernel-profile, Zig-like Modern C
 
-**Status:** design draft  
+**Status:** implementation-aligned design draft
 **Version:** 0.6.1  
-**Scope:** kernels, drivers, allocators, runtimes, freestanding systems code, boot code, and low-level libraries.
+**Scope:** kernels, drivers, allocators, runtimes, freestanding systems code, boot code, and low-level libraries. The current implementation target is the verified C backend; LLVM is a deferred backend appendix, not part of the non-LLVM conformance target.
 
 ---
 
@@ -3416,10 +3416,12 @@ uint32_t z = (uint32_t)(x + y);
 
 `wrap<iN>` should either be forbidden in early profiles or represented internally through unsigned storage.
 
-Recommended initial rule:
+Baseline MC-C0 rule:
 
 ```txt
-MC-C0 supports wrap<unsigned> only.
+MC-C0 supports wrap/sat over the scalar integer storage types that the verifier
+and C backend model explicitly. Signed storage must lower through checked or
+unsigned-intermediate code paths that avoid C signed overflow.
 ```
 
 ---
@@ -3864,19 +3866,24 @@ Unsound lowering is the limitation.
 
 # L. MC-C Conformance Levels
 
-The C backend may define staged conformance levels.
+The C backend defines staged conformance levels. These are implementation
+profiles, not language dialects: an MC program has one semantic meaning, and a
+backend either supports emitting that program or rejects it before code
+generation.
 
 ---
 
-## L.1 MC-C0: Minimal Trustworthy Backend
+## L.1 MC-C0: Baseline Trustworthy Backend
 
 Supports:
 
 ```txt
 fixed-width scalars
 checked integer arithmetic
-wrap<unsigned>
-sat<unsigned>
+wrap/sat arithmetic domains
+serial/counter arithmetic operations
+scalar/domain conversion builtins
+floating f32/f64 arithmetic
 bool
 arrays/slices
 non-null/nullable pointers
@@ -3885,29 +3892,36 @@ if let
 switch
 basic struct/enum
 basic packed bits via mask/shift
+overlay union via byte storage
 Reg / RegBits via helpers
 PAddr/VAddr/UserPtr/MmioPtr/DmaAddr as opaque wrappers
 opaque asm
 trap lowering
 #[no_lang_trap] verifier
 #[unsafe_contract] markers
+narrow const globals and const-fn comptime folding
+layout reflection for size/alignment/field offsets/bit offsets/repr
+C source-line hints and line-oriented .mcmap output
 ```
 
 ---
 
-## L.2 MC-C1: Full Kernel Backend
+## L.2 MC-C1: Kernel Backend Profile
 
 Adds:
 
 ```txt
-overlay union via byte storage
 full packed layout via mask/shift
 full typed MMIO
 compiler builtin atomics / arch atomics
 advanced address-space lowering
 closed/open enum representation validation
-safe noalias split
-better debug mapping
+typed DMA primitives: DmaAddr, DmaBuf, cache.clean/cache.invalidate
+linear move checking for resource handles
+field_type reflection in type-argument position
+contract-scoped noalias assumptions
+hosted profile for explicit fallible host I/O and libm float intrinsics
+package manifests with recursive dependency/version checks
 ```
 
 ---
@@ -3922,13 +3936,13 @@ precise asm per compiler/arch
 full comptime reflection
 advanced packed ABI validation
 more complete backend optimization verification
-LLVM-compatible metadata model
+native debug-info quality mapping
 ```
 
-These levels are implementation profiles, not language dialects.
-
-An MC program has one semantic meaning.  
-A backend may or may not support emitting that program.
+MC-C0 and the implemented MC-C1 slice are the non-LLVM target for this
+repository. MC-C2 work is intentionally larger than the current backend finish
+line: it requires broader interpreter coverage, production optimizer proof
+work, and debug mapping beyond `.mcmap`.
 
 ---
 
