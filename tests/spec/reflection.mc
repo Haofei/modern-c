@@ -14,6 +14,11 @@ enum Mode: u8 {
     fast = 1,
 }
 
+enum DefaultMode {
+    normal,
+    fast,
+}
+
 extern mmio struct Uart16550 {
     thr: Reg<u8, .write>,
     lsr: Reg<u8, .read>,
@@ -63,6 +68,14 @@ fn accept_spec_repr_of_enum() -> usize {
     return repr_of(Mode);
 }
 
+fn accept_spec_sizeof_default_enum() -> usize {
+    return sizeof(DefaultMode);
+}
+
+fn accept_spec_alignof_default_enum() -> usize {
+    return alignof(DefaultMode);
+}
+
 fn accept_field_offset() -> usize {
     return field_offset<Packet>(.len);
 }
@@ -100,6 +113,9 @@ fn accept_comptime_reflection_offsets() -> void {
         assert(sizeof(Packet) == 4);
         assert(alignof(Packet) == 2);
         assert(repr_of(Mode) == 1);
+        assert(sizeof(DefaultMode) == 8);
+        assert(alignof(DefaultMode) == 8);
+        assert(repr_of(DefaultMode) == 8);
         assert(field_offset(Packet, .len) == 0);
         assert(field_offset(Packet, .tag) == 2);
         assert(field_offset(Uart16550, .lsr) == 1);

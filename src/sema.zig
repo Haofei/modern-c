@@ -1030,7 +1030,10 @@ pub const Checker = struct {
                 if (self.reflect_env) |env| {
                     if (env.aliases.get(name.text)) |aliased| return self.comptimeSizeOf(aliased, depth + 1);
                     if (env.structs.get(name.text)) |info| return self.comptimeStructSize(info, depth);
-                    if (env.enums.get(name.text)) |info| return if (info.repr) |repr| self.comptimeSizeOf(repr, depth + 1) else null;
+                    if (env.enums.get(name.text)) |info| {
+                        const repr = info.repr orelse simpleNameType("isize", ty.span);
+                        return self.comptimeSizeOf(repr, depth + 1);
+                    }
                 }
                 return null;
             },
@@ -1061,7 +1064,10 @@ pub const Checker = struct {
                 if (self.reflect_env) |env| {
                     if (env.aliases.get(name.text)) |aliased| return self.comptimeAlignOf(aliased, depth + 1);
                     if (env.structs.get(name.text)) |info| return self.comptimeStructAlign(info, depth);
-                    if (env.enums.get(name.text)) |info| return if (info.repr) |repr| self.comptimeAlignOf(repr, depth + 1) else null;
+                    if (env.enums.get(name.text)) |info| {
+                        const repr = info.repr orelse simpleNameType("isize", ty.span);
+                        return self.comptimeAlignOf(repr, depth + 1);
+                    }
                 }
                 return null;
             },
