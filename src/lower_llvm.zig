@@ -35,6 +35,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         .const_global_widths = std.StringHashMap(u16).init(allocator),
         .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
         .enum_types = std.StringHashMap(ast.EnumDecl).init(allocator),
+        .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
@@ -51,6 +52,12 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         if (decl.kind == .fn_decl) {
             const fn_decl = decl.kind.fn_decl;
             if (fn_decl.is_const and !ctx.const_fns.contains(fn_decl.name.text)) try ctx.const_fns.put(fn_decl.name.text, fn_decl);
+        }
+    }
+    for (module.decls) |decl| {
+        switch (decl.kind) {
+            .packed_bits_decl => |packed_bits| try ctx.collectPackedBits(packed_bits),
+            else => {},
         }
     }
     for (module.decls) |decl| {
@@ -131,6 +138,7 @@ const LlvmEmitter = struct {
     const_global_widths: std.StringHashMap(u16) = undefined,
     type_aliases: std.StringHashMap(ast.TypeExpr) = undefined,
     enum_types: std.StringHashMap(ast.EnumDecl) = undefined,
+    packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
@@ -157,6 +165,7 @@ const LlvmEmitter = struct {
         eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.type_aliases.deinit();
         self.enum_types.deinit();
+        self.packed_bits.deinit();
         self.struct_types.deinit();
         self.fn_sigs.deinit();
         self.global_types.deinit();
@@ -198,6 +207,14 @@ const LlvmEmitter = struct {
         if (self.integerBitsOf(repr) == null) return error.UnsupportedLlvmEmission;
         for (enum_decl.cases) |case| _ = try self.enumCaseValue(enum_decl, case);
         try self.enum_types.put(enum_decl.name.text, enum_decl);
+    }
+
+    fn collectPackedBits(self: *LlvmEmitter, packed_bits: ast.PackedBitsDecl) !void {
+        if (self.integerBitsOf(packed_bits.repr) == null) return error.UnsupportedLlvmEmission;
+        try self.packed_bits.put(packed_bits.name.text, .{
+            .repr = packed_bits.repr,
+            .fields = packed_bits.fields,
+        });
     }
 
     fn collectFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl) !void {
@@ -246,6 +263,13 @@ const LlvmEmitter = struct {
                 .enum_literal => |literal| try self.enumCaseValueByName(enum_decl, literal.text),
                 .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
                 else => try self.emitGlobalInitializer(expr, enumReprType(enum_decl)),
+            };
+        }
+        if (self.packedBitsInfoForType(ty)) |info| {
+            return switch (expr.kind) {
+                .struct_literal => |fields| try self.packedBitsLiteralValue(info, fields),
+                .grouped => |inner| try self.emitGlobalInitializer(inner.*, ty),
+                else => try self.emitGlobalInitializer(expr, info.repr),
             };
         }
         switch (resolved_ty.kind) {
@@ -377,6 +401,7 @@ const LlvmEmitter = struct {
                 break :blk try text.toOwnedSlice(self.scratch.allocator());
             },
             .@"struct" => |fields| blk: {
+                if (self.packedBitsInfoForType(resolved)) |info| break :blk try self.packedBitsComptimeValue(info, fields);
                 const struct_decl = self.structDeclForType(resolved) orelse return error.UnsupportedLlvmEmission;
                 var text: std.ArrayList(u8) = .empty;
                 try text.appendSlice(self.scratch.allocator(), "{ ");
@@ -483,7 +508,10 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
             .call => |call| try self.emitCall(call, expected_ty),
             .array_literal => |items| try self.emitArrayLiteralValue(expected_ty, items),
-            .struct_literal => |fields| try self.emitStructLiteralValue(expected_ty, fields),
+            .struct_literal => |fields| if (self.packedBitsInfoForType(expected_ty)) |info|
+                try self.packedBitsLiteralValue(info, fields)
+            else
+                try self.emitStructLiteralValue(expected_ty, fields),
             .binary => |node| try self.emitBinary(node, expected_ty),
             .unary => |node| try self.emitUnary(node, expected_ty),
             .cast => |node| try self.emitCast(node.value.*, node.ty.*),
@@ -1202,6 +1230,15 @@ const LlvmEmitter = struct {
             const base = try self.emitExpr(node.base.*, base_ty);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ result, try self.llvmType(base_ty), base });
+            return result;
+        }
+        if (self.packedBitsInfoForType(base_ty)) |info| {
+            const bit_index = self.packedBitsFieldIndex(info, node.name.text) orelse return error.UnsupportedLlvmEmission;
+            const base = try self.emitExpr(node.base.*, base_ty);
+            const masked = try self.nextTemp();
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = and {s} {s}, {d}\n", .{ masked, try self.llvmType(info.repr), base, packedBitsMask(bit_index) });
+            try self.out.print(self.allocator, "  {s} = icmp ne {s} {s}, 0\n", .{ result, try self.llvmType(info.repr), masked });
             return result;
         }
         const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
@@ -2138,6 +2175,8 @@ const LlvmEmitter = struct {
                 try std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{bits})
             else if (self.enum_types.get(name.text)) |enum_decl|
                 try self.llvmType(enumReprType(enum_decl))
+            else if (self.packed_bits.get(name.text)) |info|
+                try self.llvmType(info.repr)
             else if (self.struct_types.get(name.text)) |struct_decl|
                 try self.structLlvmType(struct_decl)
             else
@@ -2185,6 +2224,9 @@ const LlvmEmitter = struct {
             .member => |node| if (self.exprType(node.base.*)) |base_ty| blk: {
                 const resolved_base_ty = self.resolveAliasType(base_ty);
                 if (resolved_base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) break :blk simpleType(expr.span, "usize");
+                if (self.packedBitsInfoForType(base_ty)) |info| {
+                    if (self.packedBitsFieldIndex(info, node.name.text) != null) break :blk simpleType(expr.span, "bool");
+                }
                 if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
                 break :blk null;
             } else null,
@@ -2302,6 +2344,22 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn packedBitsInfoForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?PackedBitsInfo {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
+            .name => |name| self.packed_bits.get(name.text),
+            else => null,
+        };
+    }
+
+    fn packedBitsFieldIndex(self: *LlvmEmitter, info: PackedBitsInfo, field_name: []const u8) ?usize {
+        _ = self;
+        for (info.fields, 0..) |field, i| {
+            if (std.mem.eql(u8, field.name.text, field_name)) return i;
+        }
+        return null;
+    }
+
     fn enumDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.EnumDecl {
         const resolved_ty = self.resolveAliasType(ty);
         return switch (resolved_ty.kind) {
@@ -2358,6 +2416,36 @@ const LlvmEmitter = struct {
             },
             else => error.UnsupportedLlvmEmission,
         };
+    }
+
+    fn packedBitsLiteralValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const ast.StructLiteralField) ![]const u8 {
+        var value: u64 = 0;
+        for (fields) |field| {
+            const bit_index = self.packedBitsFieldIndex(info, field.name.text) orelse return error.UnsupportedLlvmEmission;
+            const enabled = switch (field.value.kind) {
+                .bool_literal => |enabled| enabled,
+                .grouped => |inner| switch ((inner.*).kind) {
+                    .bool_literal => |enabled| enabled,
+                    else => return error.UnsupportedLlvmEmission,
+                },
+                else => return error.UnsupportedLlvmEmission,
+            };
+            if (enabled) value |= packedBitsMask(bit_index);
+        }
+        return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
+    }
+
+    fn packedBitsComptimeValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const eval.ComptimeStructField) ![]const u8 {
+        var value: u64 = 0;
+        for (fields) |field| {
+            const bit_index = self.packedBitsFieldIndex(info, field.name) orelse return error.UnsupportedLlvmEmission;
+            const enabled = switch (field.value) {
+                .boolean => |enabled| enabled,
+                else => return error.UnsupportedLlvmEmission,
+            };
+            if (enabled) value |= packedBitsMask(bit_index);
+        }
+        return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 
     fn resolveAliasType(self: *LlvmEmitter, ty: ast.TypeExpr) ast.TypeExpr {
@@ -2636,6 +2724,7 @@ const LlvmEmitter = struct {
                 if (self.type_aliases.get(name.text)) |aliased| return self.comptimeSizeOf(aliased, depth + 1);
                 if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructSize(struct_decl, depth + 1);
                 if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeSizeOf(enumReprType(enum_decl), depth + 1);
+                if (self.packed_bits.get(name.text)) |info| return self.comptimeSizeOf(info.repr, depth + 1);
                 return null;
             },
             .pointer, .raw_many_pointer => 8,
@@ -2664,6 +2753,7 @@ const LlvmEmitter = struct {
                 if (self.type_aliases.get(name.text)) |aliased| return self.comptimeAlignOf(aliased, depth + 1);
                 if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructAlign(struct_decl, depth + 1);
                 if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeAlignOf(enumReprType(enum_decl), depth + 1);
+                if (self.packed_bits.get(name.text)) |info| return self.comptimeAlignOf(info.repr, depth + 1);
                 return null;
             },
             .pointer, .raw_many_pointer, .slice => 8,
@@ -2725,12 +2815,14 @@ const LlvmEmitter = struct {
 
     fn integerBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
         if (self.enumDeclForType(ty)) |enum_decl| return self.integerBitsOf(enumReprType(enum_decl));
+        if (self.packedBitsInfoForType(ty)) |info| return self.integerBitsOf(info.repr);
         if (self.domainPayloadType(ty)) |payload_ty| return self.integerBitsOf(payload_ty);
         return integerBits(self.resolveAliasType(ty));
     }
 
     fn isSignedIntegerType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         if (self.enumDeclForType(ty)) |enum_decl| return self.isSignedIntegerType(enumReprType(enum_decl));
+        if (self.packedBitsInfoForType(ty)) |info| return self.isSignedIntegerType(info.repr);
         if (self.domainPayloadType(ty)) |payload_ty| return self.isSignedIntegerType(payload_ty);
         return isSignedInteger(self.resolveAliasType(ty));
     }
@@ -2787,10 +2879,11 @@ const LlvmEmitter = struct {
     }
 
     fn isAggregateType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
-        return switch (ty.kind) {
+        const resolved_ty = self.resolveAliasType(ty);
+        return switch (resolved_ty.kind) {
             .array => true,
             .slice => true,
-            .name => self.structDeclForType(ty) != null,
+            .name => self.structDeclForType(resolved_ty) != null,
             else => false,
         };
     }
@@ -2805,6 +2898,11 @@ const FnSig = struct {
     ret: ast.TypeExpr,
     params: []const ast.Param,
     debug_id: ?usize = null,
+};
+
+const PackedBitsInfo = struct {
+    repr: ast.TypeExpr,
+    fields: []const ast.Field,
 };
 
 const ArgValue = struct {
@@ -3006,6 +3104,10 @@ fn appendLlvmStringByte(allocator: std.mem.Allocator, escaped: *std.ArrayList(u8
 
 fn hexDigit(value: u8) u8 {
     return if (value < 10) '0' + value else 'A' + (value - 10);
+}
+
+fn packedBitsMask(bit_index: usize) u64 {
+    return @as(u64, 1) << @intCast(bit_index);
 }
 
 fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {

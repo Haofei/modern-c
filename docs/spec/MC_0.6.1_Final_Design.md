@@ -3999,6 +3999,8 @@ Character literal lowering covers target-typed `u8` returns, locals, call
 arguments, comparisons, escapes, and checked `u8` arithmetic.
 String literal lowering covers target-typed `u8` pointers via private LLVM byte
 constants with MC escape decoding for returns, locals, and call arguments.
+Packed-bits lowering uses the declared integer representation for LLVM ABI,
+global/static values, aliases, literals, and boolean field mask tests.
 Floating-point scalar lowering covers `f32`/`f64` literals, globals, calls,
 locals, arithmetic, comparison, and unary negation. Domain scalar lowering covers
 `wrap<T>`/`sat<T>` payload representation, `wrap` modular add/sub/mul/bitwise/

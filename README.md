@@ -241,6 +241,8 @@ LLVM function-pointer coverage includes static function-name initializers,
 indirect calls, arrays/struct fields, locals/params/globals, and returns.
 LLVM string literal coverage includes `*const u8`/raw-many `u8` pointer targets
 for returns, locals, and call arguments, including MC escape sequences.
+LLVM packed-bits coverage uses the declared integer representation for ABI,
+globals, aliases, literals, and boolean field mask tests.
 LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function
