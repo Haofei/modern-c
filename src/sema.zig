@@ -277,7 +277,7 @@ pub const Checker = struct {
     fn collectPackedBits(self: *Checker, module: ast.Module, packed_bits: *std.StringHashMap(LayoutFieldInfo)) void {
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .packed_bits_decl => |packed_bits_decl| self.collectLayoutFields(packed_bits_decl.name.text, packed_bits_decl.fields, packed_bits),
+                .packed_bits_decl => |packed_bits_decl| self.collectLayoutFields(packed_bits_decl.name.text, packed_bits_decl.fields, packed_bits_decl.repr, packed_bits),
                 .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .union_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
             }
         }
@@ -286,7 +286,7 @@ pub const Checker = struct {
     fn collectOverlayUnions(self: *Checker, module: ast.Module, overlay_unions: *std.StringHashMap(LayoutFieldInfo)) void {
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .overlay_union_decl => |overlay_union_decl| self.collectLayoutFields(overlay_union_decl.name.text, overlay_union_decl.fields, overlay_unions),
+                .overlay_union_decl => |overlay_union_decl| self.collectLayoutFields(overlay_union_decl.name.text, overlay_union_decl.fields, null, overlay_unions),
                 .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .opaque_decl, .global_decl => {},
             }
         }
@@ -314,7 +314,7 @@ pub const Checker = struct {
         };
     }
 
-    fn collectLayoutFields(self: *Checker, name: []const u8, fields_in: []const ast.Field, infos: *std.StringHashMap(LayoutFieldInfo)) void {
+    fn collectLayoutFields(self: *Checker, name: []const u8, fields_in: []const ast.Field, repr: ?ast.TypeExpr, infos: *std.StringHashMap(LayoutFieldInfo)) void {
         if (infos.contains(name)) return;
         var fields = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
         for (fields_in) |field| {
@@ -322,7 +322,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        infos.put(name, .{ .fields = fields, .ordered = fields_in }) catch {
+        infos.put(name, .{ .fields = fields, .ordered = fields_in, .repr = repr }) catch {
             fields.deinit();
         };
     }
@@ -985,6 +985,7 @@ pub const Checker = struct {
             .alignment => self.comptimeAlignOf(ty, 0),
             .field_offset => self.comptimeFieldOffset(ty, reflectionFieldFromCall(node) orelse return null, 0),
             .bit_offset => self.comptimeBitOffset(ty, reflectionFieldFromCall(node) orelse return null, 0),
+            .repr => self.comptimeReprOf(ty, 0),
             else => null,
         };
     }
@@ -1092,6 +1093,22 @@ pub const Checker = struct {
         }
         const byte_offset = self.comptimeFieldOffset(ty, field, depth + 1) orelse return null;
         return byte_offset * 8;
+    }
+
+    fn comptimeReprOf(self: *Checker, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        const name = typeName(ty) orelse return null;
+        const env = self.reflect_env orelse return null;
+        if (env.aliases.get(name)) |aliased| return self.comptimeReprOf(aliased, depth + 1);
+        if (env.enums.get(name)) |info| {
+            const repr = info.repr orelse simpleNameType("isize", ty.span);
+            return self.comptimeSizeOf(repr, depth + 1);
+        }
+        if (env.packed_bits.get(name)) |info| {
+            const repr = info.repr orelse return null;
+            return self.comptimeSizeOf(repr, depth + 1);
+        }
+        return null;
     }
 
     const ComptimeStructLayout = struct {
@@ -3621,6 +3638,7 @@ const MoveSlot = struct {
 const LayoutFieldInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
     ordered: []const ast.Field,
+    repr: ?ast.TypeExpr = null,
 };
 
 const EnumInfo = struct {
@@ -5975,8 +5993,8 @@ fn reflectionRequiresField(kind: ReflectionKind) bool {
 
 fn reflectionReturnClass(kind: ReflectionKind) TypeClass {
     return switch (kind) {
-        .size, .alignment, .field_offset, .bit_offset => .checked_usize,
-        .field_type, .repr => .unknown,
+        .size, .alignment, .field_offset, .bit_offset, .repr => .checked_usize,
+        .field_type => .unknown,
     };
 }
 
@@ -6116,7 +6134,7 @@ fn knownTaggedUnionName(name: []const u8, ctx: Context) bool {
 
 fn layoutFieldInfo(name: []const u8, ctx: Context) ?LayoutFieldInfo {
     if (ctx.structs) |structs| {
-        if (structs.get(name)) |info| return .{ .fields = info.fields, .ordered = info.ordered };
+        if (structs.get(name)) |info| return .{ .fields = info.fields, .ordered = info.ordered, .repr = null };
     }
     if (ctx.packed_bits) |packed_bits| {
         if (packed_bits.get(name)) |info| return info;
