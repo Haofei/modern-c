@@ -3687,8 +3687,7 @@ const CEmitter = struct {
     }
 
     // Cast-style scalar/domain conversions (`from`, `wrap_from`, `from_mod`) lower
-    // to a plain C cast; `wrap<T>` already lowers to its inner integer type.
-    // Checked conversions (`trap_from`/`sat_from`/`try_from`) are not yet emitted.
+    // to a plain C cast; checked conversions emit explicit bounds or traps.
     fn emitConversionCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         if (call.type_args.len != 0) return false;
         const member = switch (call.callee.kind) {
@@ -4070,11 +4069,9 @@ const CEmitter = struct {
         return true;
     }
 
-    // reduce.sum_checked<T>(xs) -> Result<T, Overflow> (section 8.2). Sum the
-    // slice in a wide (`__int128`) accumulator, then range-check the final result
-    // into T — distinct from stepwise checked addition, which would trap on an
-    // intermediate overflow. Lowered as a GCC/Clang statement-expression so it is
-    // a self-contained value; the slice is bound once to avoid double evaluation.
+    // Reductions are lowered as GCC/Clang statement-expressions so each slice
+    // operand is evaluated once. `sum_checked` uses the §8.2 wide integer
+    // accumulator/result path; floating reductions use an explicit typed loop.
     fn emitReduceSumCheckedCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const member = switch (call.callee.kind) {
             .member => |node| node,
@@ -4085,8 +4082,12 @@ const CEmitter = struct {
             else => return false,
         };
         if (!isIdentNamed(member.base.*, "reduce")) return false;
-        if (!std.mem.eql(u8, member.name.text, "sum_checked")) return error.UnsupportedCEmission;
         if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+
+        if (std.mem.eql(u8, member.name.text, "sum_left") or std.mem.eql(u8, member.name.text, "sum_fast")) {
+            return try self.emitFloatReduceCall(call, locals);
+        }
+        if (!std.mem.eql(u8, member.name.text, "sum_checked")) return error.UnsupportedCEmission;
 
         const t_ty = call.type_args[0];
         const t_cty = try self.cTypeFor(t_ty, .typedef_name);
@@ -4101,6 +4102,18 @@ const CEmitter = struct {
         try self.emitExpr(call.args[0], locals);
         try self.out.print(self.allocator, "); __int128 mc_acc{d} = 0; for (uintptr_t mc_i{d} = 0; mc_i{d} < mc_xs{d}.len; mc_i{d}++) mc_acc{d} += (__int128)mc_xs{d}.ptr[mc_i{d}]; ", .{ n, n, n, n, n, n, n, n });
         try self.out.print(self.allocator, "(mc_acc{d} < (__int128)({s}) || mc_acc{d} > (__int128)({s})) ? (({s}){{ .is_ok = false, .payload.err = 0 }}) : (({s}){{ .is_ok = true, .payload.ok = ({s})mc_acc{d} }}); }})", .{ n, range.c_min, n, range.c_max, struct_name, struct_name, t_cty, n });
+        return true;
+    }
+
+    fn emitFloatReduceCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const t_ty = call.type_args[0];
+        const t_cty = floatCTypeName(t_ty) orelse return error.UnsupportedCEmission;
+        const n = self.temp_index;
+        self.temp_index += 1;
+
+        try self.out.print(self.allocator, "({{ __auto_type mc_xs{d} = (", .{n});
+        try self.emitExpr(call.args[0], locals);
+        try self.out.print(self.allocator, "); {s} mc_acc{d} = ({s})0; for (uintptr_t mc_i{d} = 0; mc_i{d} < mc_xs{d}.len; mc_i{d}++) mc_acc{d} = ({s})(mc_acc{d} + mc_xs{d}.ptr[mc_i{d}]); mc_acc{d}; }})", .{ t_cty, n, t_cty, n, n, n, n, n, t_cty, n, n, n, n });
         return true;
     }
 

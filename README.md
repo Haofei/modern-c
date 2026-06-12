@@ -49,7 +49,8 @@ Prototype or incomplete:
 - Production-grade typed MIR/CFG and verifier.
 - Package manager, releases, and production toolchain support.
 - Floating-point reductions `reduce.sum_left` / `reduce.sum_fast` from section
-  8.3 are still design-level; only integer `reduce.sum_checked` is implemented.
+  8.3 lower to explicit typed C loops; `sum_fast` is currently conservative
+  and does not yet enable reassociation/vectorization.
 - Full comptime execution (§22): the comptime evaluator currently const-folds
   arithmetic and enforces the comptime effect rules, but does not yet interpret
   arbitrary comptime code.

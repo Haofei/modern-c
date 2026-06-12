@@ -30,3 +30,12 @@ fn use_u8(x: u8) -> u8 {
     let p: Pair<u8> = make_pair(u8, x, x);
     return p.a;
 }
+
+fn make_pair_result(x: u32, y: u32) -> Result<Pair<u32>, Error> {
+    return ok(make_pair(u32, x, y));
+}
+
+fn unwrap_pair_result(result: Result<Pair<u32>, Error>) -> u32 {
+    let p: Pair<u32> = result?;
+    return p.a + p.b;
+}

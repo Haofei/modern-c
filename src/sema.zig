@@ -1748,7 +1748,7 @@ pub const Checker = struct {
                 if (mmioMapCallPayloadType(node)) |_| return .nullable_pointer;
                 if (typeStaticCallReturnClass(node.callee.*, ctx)) |class| return class;
                 if (residueCallReturnClass(node.callee.*, ctx)) |class| return class;
-                if (reduceCallReturnClass(node.callee.*)) |class| return class;
+                if (reduceCallReturnClass(node, ctx)) |class| return class;
                 if (bitcast_class) |class| return class;
                 if (raw_many_offset_class) |class| return class;
                 if (directCallReturnClass(node.callee.*, ctx)) |class| return class;
@@ -2239,30 +2239,40 @@ pub const Checker = struct {
     }
 
     fn checkReduceCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) void {
-        if (!isReduceSumCheckedCallee(call.callee.*)) return;
-        // reduce.sum_checked<T>(xs: []const T) -> Result<T, Overflow>
+        const kind = reduceCallKind(call.callee.*) orelse return;
+        const requires_float = kind != .sum_checked;
         if (call.type_args.len != 1) {
-            self.errorCode(span, "E_REDUCE_REQUIRES_INTEGER", "reduce.sum_checked requires exactly one integer type argument");
+            self.errorCode(span, if (requires_float) "E_REDUCE_REQUIRES_FLOAT" else "E_REDUCE_REQUIRES_INTEGER", if (requires_float) "floating-point reduction requires exactly one f32/f64 type argument" else "reduce.sum_checked requires exactly one integer type argument");
             return;
         }
         const t = call.type_args[0];
         const t_name = typeName(t) orelse {
-            self.errorCode(t.span, "E_REDUCE_REQUIRES_INTEGER", "reduce.sum_checked is restricted to integer types");
+            self.errorCode(t.span, if (requires_float) "E_REDUCE_REQUIRES_FLOAT" else "E_REDUCE_REQUIRES_INTEGER", if (requires_float) "floating-point reductions are restricted to f32/f64" else "reduce.sum_checked is restricted to integer types");
             return;
         };
-        if (!isIntegerScalarName(t_name)) {
+        if (!requires_float and !isIntegerScalarName(t_name)) {
             self.errorCode(t.span, "E_REDUCE_REQUIRES_INTEGER", "reduce.sum_checked is restricted to integer types");
         }
+        if (requires_float and !isFloatScalarName(t_name)) {
+            self.errorCode(t.span, "E_REDUCE_REQUIRES_FLOAT", "floating-point reductions are restricted to f32/f64");
+        }
         if (call.args.len != 1) {
-            self.errorCode(span, "E_CALL_ARG_COUNT", "reduce.sum_checked expects exactly one slice argument");
+            self.errorCode(span, "E_CALL_ARG_COUNT", "reduction expects exactly one slice argument");
             return;
         }
         // The argument is type-checked by the enclosing call arm; here we only
-        // confirm it is a slice of the element type (§8.2: `xs: []const T`).
+        // confirm it is a slice (§8.2/§8.3: `xs: []const T`).
         const arg_ty = exprResultType(call.args[0], ctx) orelse exprStorageType(call.args[0], ctx) orelse return;
         const arg_class = classifyTypeCtx(arg_ty, ctx);
         if (arg_class != .slice) {
-            self.errorCode(call.args[0].span, "E_REDUCE_ARG_NOT_SLICE", "reduce.sum_checked expects a slice (`[]const T`) of the element type");
+            self.errorCode(call.args[0].span, "E_REDUCE_ARG_NOT_SLICE", "reduction expects a slice (`[]const T`) of the element type");
+            return;
+        }
+        const elem_ty = storageElementType(resolveAliasType(arg_ty, ctx)) orelse return;
+        const elem_class = classifyTypeCtx(elem_ty, ctx);
+        const target_class = classifyTypeCtx(t, ctx);
+        if (elem_class != target_class) {
+            self.errorCode(call.args[0].span, "E_REDUCE_ARG_NOT_SLICE", "reduction slice element type must match the reduction type argument");
         }
     }
 
@@ -4083,17 +4093,31 @@ fn isIntegerScalarName(name: []const u8) bool {
     };
 }
 
-fn isReduceSumCheckedCallee(callee: ast.Expr) bool {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return isReduceSumCheckedCallee(inner.*),
-        else => return false,
-    };
-    return isIdentNamed(member.base.*, "reduce") and std.mem.eql(u8, member.name.text, "sum_checked");
+fn isFloatScalarName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64");
 }
 
-fn reduceCallReturnClass(callee: ast.Expr) ?TypeClass {
-    return if (isReduceSumCheckedCallee(callee)) .result else null;
+const ReduceCallKind = enum { sum_checked, sum_left, sum_fast };
+
+fn reduceCallKind(callee: ast.Expr) ?ReduceCallKind {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return reduceCallKind(inner.*),
+        else => return null,
+    };
+    if (!isIdentNamed(member.base.*, "reduce")) return null;
+    if (std.mem.eql(u8, member.name.text, "sum_checked")) return .sum_checked;
+    if (std.mem.eql(u8, member.name.text, "sum_left")) return .sum_left;
+    if (std.mem.eql(u8, member.name.text, "sum_fast")) return .sum_fast;
+    return null;
+}
+
+fn reduceCallReturnClass(call: anytype, ctx: Context) ?TypeClass {
+    const kind = reduceCallKind(call.callee.*) orelse return null;
+    return switch (kind) {
+        .sum_checked => .result,
+        .sum_left, .sum_fast => if (call.type_args.len == 1) classifyTypeCtx(call.type_args[0], ctx) else .unknown,
+    };
 }
 
 fn typeStaticCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
@@ -5696,7 +5720,7 @@ fn isBuiltinNamespaceMember(member: anytype) bool {
     if (std.mem.eql(u8, base, "mmio")) return std.mem.eql(u8, member.name.text, "map");
     if (std.mem.eql(u8, base, "unchecked")) return isUncheckedNoOverflowMember(member.name.text);
     if (std.mem.eql(u8, base, "wrapping")) return std.mem.eql(u8, member.name.text, "add");
-    if (std.mem.eql(u8, base, "reduce")) return std.mem.eql(u8, member.name.text, "sum_checked");
+    if (std.mem.eql(u8, base, "reduce")) return std.mem.eql(u8, member.name.text, "sum_checked") or std.mem.eql(u8, member.name.text, "sum_left") or std.mem.eql(u8, member.name.text, "sum_fast");
     if (std.mem.eql(u8, base, "compiler")) return std.mem.eql(u8, member.name.text, "assume_noalias_unchecked");
     if (std.mem.eql(u8, base, "cpu")) return std.mem.eql(u8, member.name.text, "pause");
     if (std.mem.eql(u8, base, "atomic")) return std.mem.eql(u8, member.name.text, "init");

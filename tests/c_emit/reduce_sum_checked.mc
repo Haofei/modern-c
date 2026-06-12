@@ -22,3 +22,11 @@ fn sum_u8(xs: []const u8) -> Result<u8, Overflow> {
 fn sum_u64(xs: []u64) -> Result<u64, Overflow> {
     return reduce.sum_checked<u64>(xs);
 }
+
+fn sum_left_f64(xs: []const f64) -> f64 {
+    return reduce.sum_left<f64>(xs);
+}
+
+fn sum_fast_f32(xs: []const f32) -> f32 {
+    return reduce.sum_fast<f32>(xs);
+}

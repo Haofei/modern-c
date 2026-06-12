@@ -2915,6 +2915,7 @@ const FunctionBuilder = struct {
             },
             .call => |node| self.mmioReceiverReadTypeExpr(node.callee.*) orelse
                 mmioMapCallPayloadType(node) orelse
+                reduceCallReturnTypeExpr(node) orelse
                 self.constGetCallTypeExpr(node) orelse
                 self.ptrOffsetReceiverTypeExpr(node.callee.*) orelse
                 if (self.summaries.get(self.calleeName(node.callee.*))) |summary| summary.return_type_expr else null,
@@ -2940,6 +2941,8 @@ const FunctionBuilder = struct {
                 ty
             else if (mmioMapCallPayloadType(node)) |ty|
                 .{ .nullable_pointer = .{ .kind = .single, .mutability = .none, .child = typeText(ty) } }
+            else if (reduceCallReturnTypeExpr(node)) |ty|
+                valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
             else if (directCalleeName(node.callee.*)) |callee|
                 if (self.summaries.get(callee)) |summary| summary.return_ty else .unknown
             else
@@ -4185,6 +4188,30 @@ fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
         .ident => |ident| std.mem.eql(u8, ident.text, name),
         .grouped => |inner| isIdentNamed(inner.*, name),
         else => false,
+    };
+}
+
+const ReduceCallKind = enum { sum_checked, sum_left, sum_fast };
+
+fn reduceCallKind(callee: ast.Expr) ?ReduceCallKind {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return reduceCallKind(inner.*),
+        else => return null,
+    };
+    if (!isIdentNamed(member.base.*, "reduce")) return null;
+    if (std.mem.eql(u8, member.name.text, "sum_checked")) return .sum_checked;
+    if (std.mem.eql(u8, member.name.text, "sum_left")) return .sum_left;
+    if (std.mem.eql(u8, member.name.text, "sum_fast")) return .sum_fast;
+    return null;
+}
+
+fn reduceCallReturnTypeExpr(call: anytype) ?ast.TypeExpr {
+    const kind = reduceCallKind(call.callee.*) orelse return null;
+    if (call.type_args.len != 1) return null;
+    return switch (kind) {
+        .sum_checked => null,
+        .sum_left, .sum_fast => call.type_args[0],
     };
 }
 
