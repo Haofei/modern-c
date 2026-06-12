@@ -960,12 +960,11 @@ pub const Checker = struct {
 
     // --- Comptime reflection layout model (section 22) ----------------------
     //
-    // Folds `sizeof(T)` / `alignof(T)` to a constant ONLY where the result is
-    // provably the same as the C-ABI value clang computes for the lowered type:
-    // scalars, pointers, fixed arrays, closed enums (by repr), and plain structs
-    // whose fields all share one alignment (so there is no order-dependent
-    // padding — the field HashMap has no order). Anything else returns null, so
-    // the assertion simply does not fold (no false positive/negative).
+    // Folds layout reflection to a constant ONLY where the result is provably
+    // the same as the C-ABI value clang computes for the lowered type: scalar,
+    // pointer, fixed-array, enum/packed repr, and ordered struct/field layouts.
+    // Anything else returns null, so the assertion simply does not fold (no
+    // false positive/negative).
 
     // eval.ReflectFn thunk: `self` is passed as the opaque context.
     fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {

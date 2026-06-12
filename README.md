@@ -53,11 +53,11 @@ Prototype or incomplete:
 
 - Production-grade typed MIR/CFG and verifier.
 - Package registry, releases/publishing, and production toolchain support.
-- Full comptime execution (§22): the evaluator handles scalar folding, const
-  globals, const-fn calls with loops/for/switch/asserts, top-level comptime
+- Full comptime execution (§22): the evaluator handles scalar/enum-tag folding,
+  const globals, const-fn calls with loops/for/switch/asserts, top-level comptime
   block assignments/loops/switches, aggregate literals and mutable aggregate
-  updates, and comptime/type feedback; broader arbitrary interpreter coverage
-  is still incomplete.
+  updates, comptime/type feedback, and layout reflection for size/alignment/
+  offsets/repr; broader arbitrary interpreter coverage is still incomplete.
 - Production MIR optimizer use: MIR records and consumes scoped no-overflow
   range facts for covered unchecked arithmetic; broader range algebra and
   optimization passes are still incomplete.
