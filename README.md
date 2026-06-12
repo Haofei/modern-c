@@ -51,8 +51,8 @@ clang-checked C without `unsupported` emission placeholders. The non-LLVM finish
 line is the C backend plus verifier/tooling contract in
 `docs/spec/MC_0.6.1_Final_Design.md`. LLVM now has an initial MIR-backed
 textual IR path for scalar functions, calls, checked integer arithmetic,
-checked division/remainder, boolean control flow, and simple scalar locals/while
-loops, but it is not yet a complete lowering target.
+checked division/remainder, boolean control flow with simple joins, and simple
+scalar locals/while loops, but it is not yet a complete lowering target.
 
 Prototype or incomplete:
 
@@ -84,7 +84,7 @@ Deferred:
 - LLVM backend (see Appendix M of `docs/spec/MC_0.6.1_Final_Design.md`). Initial
   `emit-llvm` support exists for a scalar/control-flow subset and validates
   through `llvm-as`; aggregates, memory, ABI, object emission, broader
-  control-flow joins, and debug-info lowering are still pending.
+  CFG/phi lowering, and debug-info lowering are still pending.
 
 ## Requirements
 

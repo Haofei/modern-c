@@ -140,7 +140,9 @@ const LlvmEmitter = struct {
                     }
                     return true;
                 },
-                .@"switch" => |node| return try self.emitBoolSwitch(node, ret_ty),
+                .@"switch" => |node| {
+                    if (try self.emitBoolSwitch(node, ret_ty)) return true;
+                },
                 else => return error.UnsupportedLlvmEmission,
             }
         }
@@ -199,12 +201,17 @@ const LlvmEmitter = struct {
         const subject = try self.emitExpr(node.subject, subject_ty);
         const true_label = try self.nextLabel("switch_true");
         const false_label = try self.nextLabel("switch_false");
+        const end_label = try self.nextLabel("switch_end");
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n", .{ subject, true_label, false_label });
         try self.out.print(self.allocator, "{s}:\n", .{true_label});
-        if (!try self.emitSwitchBody(true_arm.?.body, ret_ty)) return error.UnsupportedLlvmEmission;
+        const true_terminated = try self.emitSwitchBody(true_arm.?.body, ret_ty);
+        if (!true_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
         try self.out.print(self.allocator, "{s}:\n", .{false_label});
-        if (!try self.emitSwitchBody(false_arm.?.body, ret_ty)) return error.UnsupportedLlvmEmission;
-        return true;
+        const false_terminated = try self.emitSwitchBody(false_arm.?.body, ret_ty);
+        if (!false_terminated) try self.out.print(self.allocator, "  br label %{s}\n", .{end_label});
+        if (true_terminated and false_terminated) return true;
+        try self.out.print(self.allocator, "{s}:\n", .{end_label});
+        return false;
     }
 
     fn emitSwitchBody(self: *LlvmEmitter, body: ast.SwitchBody, ret_ty: ast.TypeExpr) !bool {
