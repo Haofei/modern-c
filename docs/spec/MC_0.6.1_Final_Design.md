@@ -4078,9 +4078,12 @@ and nested aggregate stores through globals, arrays, and struct fields. Inferred
 local lowering covers initializer-derived scalar, slice, array, and struct
 storage for the covered backend subset. Aggregate layout coverage includes
 structs containing arrays/slices, slices of structs/arrays, and nested array
-indexing. Static aggregate global coverage includes nested array/struct
-literals, scalar and function-pointer aggregate global copies, plus
-const-folded `sizeof`/`alignof`/`field_offset` array lengths.
+indexing. Aggregate ABI coverage includes struct literals, array values,
+generic struct monomorphizations, aggregate payloads inside Result values, and
+comptime-parameter array specializations. Static aggregate global coverage
+includes nested array/struct literals, scalar and function-pointer aggregate
+global copies, plus const-folded `sizeof`/`alignof`/`field_offset` array
+lengths and monomorphized generic layout reflection.
 Iterable lowering covers arrays and slices from parameters, globals, nested
 array rows, aggregate fields, direct-call aggregate fields, and direct-call
 array/slice results.
