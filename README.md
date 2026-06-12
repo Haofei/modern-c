@@ -91,7 +91,9 @@ static function-name initializers, indirect calls through parameters, locals,
 globals, arrays, and struct fields, plus function-pointer returns.
 Aggregate assignment lowering covers `uninit` aggregate storage, whole
 array/struct literal assignment, aggregate copies from nested elements/fields,
-and nested aggregate stores through globals, arrays, and struct fields.
+and nested aggregate stores through globals, arrays, and struct fields. Inferred
+local lowering covers initializer-derived scalar, slice, array, and struct
+storage for the covered backend subset.
 LLVM debug metadata now includes `source_filename`, a compile unit/file record,
 function `DISubprogram` records, and line/column locations on returns and call
 instructions for the covered backend subset.
@@ -228,3 +230,5 @@ LLVM aggregate assignment coverage includes whole array/struct assignment and
 nested aggregate field/element replacement.
 LLVM debug metadata coverage includes compile-unit/file records, function
 subprograms, and call/return line locations for the covered subset.
+LLVM inferred-local coverage includes initializer-derived slice, array, and
+struct locals in covered expression and assignment workflows.

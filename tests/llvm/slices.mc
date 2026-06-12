@@ -1,4 +1,8 @@
 extern fn make_u8_slice() -> []const u8;
+extern fn make_u8_array() -> [4]u8;
+extern fn make_u8_slice_from(seed: u8) -> []const u8;
+extern fn next_byte() -> u8;
+extern fn next_index() -> usize;
 
 fn read_slice(xs: []const u8, i: usize) -> u8 {
     return xs[i];
@@ -34,4 +38,14 @@ fn slice_from_slice(xs: []const u8, lo: usize, hi: usize) -> usize {
 
 fn direct_call_slice() -> u8 {
     return make_u8_slice()[0];
+}
+
+fn inferred_slice_call_base_arg() -> u8 {
+    let xs = make_u8_slice_from(next_byte());
+    return xs[next_index()];
+}
+
+fn inferred_array_call_base() -> u8 {
+    let xs = make_u8_array();
+    return xs[next_index()];
 }

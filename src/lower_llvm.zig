@@ -598,8 +598,8 @@ const LlvmEmitter = struct {
 
     fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl) !void {
         if (local.names.len != 1) return error.UnsupportedLlvmEmission;
-        const ty = local.ty orelse return error.UnsupportedLlvmEmission;
         const init = local.init orelse return error.UnsupportedLlvmEmission;
+        const ty = local.ty orelse self.exprType(init) orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(ty);
         const resolved_ty = self.resolveAliasType(ty);
         const name = local.names[0].text;
