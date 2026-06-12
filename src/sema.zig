@@ -855,6 +855,8 @@ pub const Checker = struct {
     fn seedComptimeScope(self: *Checker, scope: *eval.ComptimeScope) void {
         scope.funcs = self.const_fns;
         scope.globals = self.const_globals;
+        scope.reflect = comptimeReflectThunk;
+        scope.reflect_ctx = self;
         if (self.const_global_widths) |widths| {
             var it = widths.iterator();
             while (it.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
@@ -1260,6 +1262,11 @@ pub const Checker = struct {
         self.seedComptimeScope(&scope);
         for (fn_decl.params, args) |param, arg| {
             if (!param.is_comptime) continue;
+            if (isTypeName(param.ty, "type")) {
+                const ty = eval.comptimeTypeArg(&scope, arg) orelse return;
+                scope.bindType(param.name.text, ty) catch return;
+                continue;
+            }
             const value = self.comptimeFoldValue(arg) orelse return; // non-const arg already diagnosed
             scope.bind(param.name.text, value) catch return;
         }
@@ -1383,8 +1390,6 @@ pub const Checker = struct {
                 defer arena.deinit();
                 var scope = eval.ComptimeScope.init(arena.allocator());
                 self.seedComptimeScope(&scope);
-                scope.reflect = comptimeReflectThunk;
-                scope.reflect_ctx = self;
                 self.foldComptimeBlock(block, &scope);
             },
             .block => |block| self.checkBlock(block, ctx),

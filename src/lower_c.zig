@@ -854,10 +854,7 @@ const CEmitter = struct {
         var buf: [64 * 1024]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buf);
         var scope = eval.ComptimeScope.init(fba.allocator());
-        scope.funcs = &self.const_fns;
-        scope.globals = &self.const_globals;
-        var widths = self.const_global_widths.iterator();
-        while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
+        self.seedConstFoldScope(&scope);
         return switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => |v| switch (v) {
                 // Values above the signed-64 range need an unsigned suffix, or C
@@ -885,14 +882,182 @@ const CEmitter = struct {
         var buf: [64 * 1024]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buf);
         var scope = eval.ComptimeScope.init(fba.allocator());
-        scope.funcs = &self.const_fns;
-        scope.globals = &self.const_globals;
-        var widths = self.const_global_widths.iterator();
-        while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
+        self.seedConstFoldScope(&scope);
         return switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => |v| v,
             else => null,
         };
+    }
+
+    fn seedConstFoldScope(self: *CEmitter, scope: *eval.ComptimeScope) void {
+        scope.funcs = &self.const_fns;
+        scope.globals = &self.const_globals;
+        scope.reflect = cComptimeReflectThunk;
+        scope.reflect_ctx = self;
+        var widths = self.const_global_widths.iterator();
+        while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    fn cComptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx orelse return null));
+        return self.comptimeReflect(call);
+    }
+
+    fn comptimeReflect(self: *CEmitter, call: ast.Expr) ?i128 {
+        const node = switch (call.kind) {
+            .call => |n| n,
+            else => return null,
+        };
+        const kind = reflectionCallKind(node.callee.*) orelse return null;
+        if (node.type_args.len != 1) return null;
+        const ty = node.type_args[0];
+        return switch (kind) {
+            .size => if (node.args.len == 0) self.comptimeSizeOf(ty, 0) else null,
+            .alignment => if (node.args.len == 0) self.comptimeAlignOf(ty, 0) else null,
+            .field_offset => if (node.args.len == 1) self.comptimeFieldOffset(ty, reflectionFieldName(node.args[0]) orelse return null, 0) else null,
+            .bit_offset => if (node.args.len == 1) self.comptimeBitOffset(ty, reflectionFieldName(node.args[0]) orelse return null, 0) else null,
+            .repr => if (node.args.len == 0) self.comptimeReprOf(ty, 0) else null,
+        };
+    }
+
+    fn comptimeSizeOf(self: *CEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        switch (ty.kind) {
+            .name => |name| {
+                if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
+                if (self.type_aliases.get(name.text)) |aliased| return self.comptimeSizeOf(aliased, depth + 1);
+                if (self.structs.get(name.text)) |info| return self.comptimeStructSize(info, depth + 1);
+                if (self.enums.get(name.text)) |info| {
+                    const repr = info.repr orelse simpleNameType("isize", ty.span);
+                    return self.comptimeSizeOf(repr, depth + 1);
+                }
+                return null;
+            },
+            .pointer, .raw_many_pointer => return 8,
+            .slice => return 16,
+            .generic => |g| {
+                if (isPointerLikeGeneric(g.base.text)) return 8;
+                if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
+                if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                if ((std.mem.eql(u8, g.base.text, "atomic") or std.mem.eql(u8, g.base.text, "MaybeUninit")) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                if (isArithmeticLayoutGeneric(g.base.text) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
+                return null;
+            },
+            .array => |node| {
+                const len = constArrayLenValue(node.len, &self.const_fns, &self.const_globals) orelse return null;
+                const elem = self.comptimeSizeOf(node.child.*, depth + 1) orelse return null;
+                return @as(i128, @intCast(len)) * elem;
+            },
+            .qualified => |node| return self.comptimeSizeOf(node.child.*, depth + 1),
+            else => return null,
+        }
+    }
+
+    fn comptimeAlignOf(self: *CEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        switch (ty.kind) {
+            .name => |name| {
+                if (scalarLayout(name.text)) |layout| return @intCast(layout.alignment);
+                if (self.type_aliases.get(name.text)) |aliased| return self.comptimeAlignOf(aliased, depth + 1);
+                if (self.structs.get(name.text)) |info| return self.comptimeStructAlign(info, depth + 1);
+                if (self.enums.get(name.text)) |info| {
+                    const repr = info.repr orelse simpleNameType("isize", ty.span);
+                    return self.comptimeAlignOf(repr, depth + 1);
+                }
+                return null;
+            },
+            .pointer, .raw_many_pointer, .slice => return 8,
+            .generic => |g| {
+                if (isPointerLikeGeneric(g.base.text)) return 8;
+                if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
+                if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                if ((std.mem.eql(u8, g.base.text, "atomic") or std.mem.eql(u8, g.base.text, "MaybeUninit")) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                if (isArithmeticLayoutGeneric(g.base.text) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
+                return null;
+            },
+            .array => |node| return self.comptimeAlignOf(node.child.*, depth + 1),
+            .qualified => |node| return self.comptimeAlignOf(node.child.*, depth + 1),
+            else => return null,
+        }
+    }
+
+    fn comptimeStructSize(self: *CEmitter, struct_decl: ast.StructDecl, depth: usize) ?i128 {
+        const layout = self.comptimeStructLayout(struct_decl, null, depth + 1) orelse return null;
+        return layout.size;
+    }
+
+    fn comptimeStructAlign(self: *CEmitter, struct_decl: ast.StructDecl, depth: usize) ?i128 {
+        const layout = self.comptimeStructLayout(struct_decl, null, depth + 1) orelse return null;
+        return layout.alignment;
+    }
+
+    fn comptimeStructLayout(self: *CEmitter, struct_decl: ast.StructDecl, wanted_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
+        if (depth > 32) return null;
+        var offset: i128 = 0;
+        var max_align: i128 = 1;
+        var found: ?i128 = null;
+        for (struct_decl.fields) |field| {
+            const size = self.comptimeSizeOf(field.ty, depth + 1) orelse return null;
+            const alignment = self.comptimeAlignOf(field.ty, depth + 1) orelse return null;
+            if (alignment <= 0) return null;
+            if (alignment > max_align) max_align = alignment;
+            if (field.offset) |explicit| {
+                const explicit_offset: i128 = @intCast(explicit);
+                if (explicit_offset < offset) return null;
+                offset = explicit_offset;
+            } else {
+                offset = alignForward(offset, alignment) orelse return null;
+            }
+            if (wanted_field) |wanted| {
+                if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
+            }
+            offset += size;
+        }
+        return .{
+            .size = alignForward(offset, max_align) orelse return null,
+            .alignment = max_align,
+            .field_offset = found,
+        };
+    }
+
+    fn comptimeFieldOffset(self: *CEmitter, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        const name = typeName(ty) orelse return null;
+        if (self.type_aliases.get(name)) |aliased| return self.comptimeFieldOffset(aliased, field, depth + 1);
+        if (self.structs.get(name)) |info| {
+            const layout = self.comptimeStructLayout(info, field, depth + 1) orelse return null;
+            return layout.field_offset;
+        }
+        if (self.overlay_unions.get(name)) |info| {
+            if (info.fields.contains(field)) return 0;
+        }
+        return null;
+    }
+
+    fn comptimeBitOffset(self: *CEmitter, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        const name = typeName(ty) orelse return null;
+        if (self.type_aliases.get(name)) |aliased| return self.comptimeBitOffset(aliased, field, depth + 1);
+        if (self.packed_bits.get(name)) |info| {
+            const packed_field = info.fields.get(field) orelse return null;
+            return @intCast(packed_field.bit_index);
+        }
+        const byte_offset = self.comptimeFieldOffset(ty, field, depth + 1) orelse return null;
+        return byte_offset * 8;
+    }
+
+    fn comptimeReprOf(self: *CEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+        if (depth > 32) return null;
+        const name = typeName(ty) orelse return null;
+        if (self.type_aliases.get(name)) |aliased| return self.comptimeReprOf(aliased, depth + 1);
+        if (self.enums.get(name)) |info| {
+            const repr = info.repr orelse simpleNameType("isize", ty.span);
+            return self.comptimeSizeOf(repr, depth + 1);
+        }
+        if (self.packed_bits.get(name)) |info| {
+            return self.comptimeSizeOf(simpleNameType(info.repr_name, ty.span), depth + 1);
+        }
+        return null;
     }
 
     fn emitComptimeValueInitializer(self: *CEmitter, value: eval.ComptimeValue, target_ty: ast.TypeExpr) anyerror!void {
@@ -10240,6 +10405,48 @@ fn simpleNameType(name: []const u8, span: diagnostics.Span) ast.TypeExpr {
         .span = span,
         .kind = .{ .name = .{ .text = name, .span = span } },
     };
+}
+
+const ScalarLayout = struct { size: u32, alignment: u32 };
+
+const ComptimeStructLayout = struct {
+    size: i128,
+    alignment: i128,
+    field_offset: ?i128,
+};
+
+fn scalarLayout(name: []const u8) ?ScalarLayout {
+    const table = [_]struct { n: []const u8, s: u32 }{
+        .{ .n = "u8", .s = 1 },      .{ .n = "i8", .s = 1 },    .{ .n = "bool", .s = 1 },
+        .{ .n = "u16", .s = 2 },     .{ .n = "i16", .s = 2 },   .{ .n = "u32", .s = 4 },
+        .{ .n = "i32", .s = 4 },     .{ .n = "f32", .s = 4 },   .{ .n = "u64", .s = 8 },
+        .{ .n = "i64", .s = 8 },     .{ .n = "f64", .s = 8 },   .{ .n = "usize", .s = 8 },
+        .{ .n = "isize", .s = 8 },   .{ .n = "PAddr", .s = 8 }, .{ .n = "VAddr", .s = 8 },
+        .{ .n = "DmaAddr", .s = 8 },
+    };
+    for (table) |entry| {
+        if (std.mem.eql(u8, name, entry.n)) return .{ .size = entry.s, .alignment = entry.s };
+    }
+    return null;
+}
+
+fn isPointerLikeGeneric(name: []const u8) bool {
+    return std.mem.eql(u8, name, "MmioPtr") or std.mem.eql(u8, name, "UserPtr");
+}
+
+fn isArithmeticLayoutGeneric(name: []const u8) bool {
+    return std.mem.eql(u8, name, "wrap") or
+        std.mem.eql(u8, name, "sat") or
+        std.mem.eql(u8, name, "serial") or
+        std.mem.eql(u8, name, "counter") or
+        std.mem.eql(u8, name, "Duration");
+}
+
+fn alignForward(value: i128, alignment: i128) ?i128 {
+    if (alignment <= 0) return null;
+    const rem = @rem(value, alignment);
+    if (rem == 0) return value;
+    return std.math.add(i128, value, alignment - rem) catch null;
 }
 
 fn isCKeyword(name: []const u8) bool {

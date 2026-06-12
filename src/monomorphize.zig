@@ -153,7 +153,8 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
             },
             .global_decl => |g| {
                 const ty = if (g.ty) |t| try cloneType(&ctx, t) else null;
-                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .kind = .{ .global_decl = .{ .name = g.name, .ty = ty, .init = g.init, .is_const = g.is_const } } });
+                const init = if (g.init) |init_expr| try cloneExprCtx(&ctx, init_expr) else null;
+                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .kind = .{ .global_decl = .{ .name = g.name, .ty = ty, .init = init, .is_const = g.is_const } } });
             },
             else => try out.append(arena, decl),
         }

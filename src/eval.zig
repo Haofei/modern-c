@@ -339,6 +339,10 @@ pub const ReflectFn = *const fn (ctx: ?*anyopaque, call: ast.Expr) ?i128;
 
 pub const ComptimeScope = struct {
     bindings: std.StringHashMap(ComptimeValue),
+    // Concrete type arguments for `comptime T: type` parameters. These are
+    // AST slices/pointers owned by the parsed module's arena; the map only
+    // borrows them for the duration of the fold.
+    type_bindings: std.StringHashMap(ast.TypeExpr),
     // Registry of `const fn` declarations callable at comptime (section 22).
     funcs: ?*const std.StringHashMap(ast.FnDecl) = null,
     // Named compile-time constants (`const NAME: T = …` globals), resolved when
@@ -360,17 +364,23 @@ pub const ComptimeScope = struct {
     pub fn init(allocator: std.mem.Allocator) ComptimeScope {
         return .{
             .bindings = std.StringHashMap(ComptimeValue).init(allocator),
+            .type_bindings = std.StringHashMap(ast.TypeExpr).init(allocator),
             .widths = std.StringHashMap(u16).init(allocator),
         };
     }
 
     pub fn deinit(self: *ComptimeScope) void {
         self.bindings.deinit();
+        self.type_bindings.deinit();
         self.widths.deinit();
     }
 
     pub fn bind(self: *ComptimeScope, name: []const u8, value: ComptimeValue) !void {
         try self.bindings.put(name, value);
+    }
+
+    pub fn bindType(self: *ComptimeScope, name: []const u8, ty: ast.TypeExpr) !void {
+        try self.type_bindings.put(name, ty);
     }
 
     pub fn bindWidth(self: *ComptimeScope, name: []const u8, bits: u16) void {
@@ -475,6 +485,112 @@ fn comptimeIdentValue(scope: *const ComptimeScope, name: []const u8) ?ComptimeVa
     return null;
 }
 
+fn isComptimeTypeParam(param: ast.Param) bool {
+    if (!param.is_comptime) return false;
+    return switch (param.ty.kind) {
+        .name => |name| std.mem.eql(u8, name.text, "type"),
+        .qualified => |node| switch (node.child.*.kind) {
+            .name => |name| std.mem.eql(u8, name.text, "type"),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+// Convert the expression syntax accepted for `comptime T: type` arguments into
+// a type expression. A bare identifier that names an already-bound type
+// parameter resolves to that concrete type, so nested const-fn calls can pass
+// type parameters through (`inner(T)`).
+pub fn comptimeTypeArg(scope: *const ComptimeScope, arg: ast.Expr) ?ast.TypeExpr {
+    return switch (arg.kind) {
+        .ident => |ident| scope.type_bindings.get(ident.text) orelse .{ .span = ident.span, .kind = .{ .name = ident } },
+        .grouped => |inner| comptimeTypeArg(scope, inner.*),
+        else => null,
+    };
+}
+
+fn substituteComptimeType(scope: *const ComptimeScope, ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .name => |name| scope.type_bindings.get(name.text) orelse ty,
+        .enum_literal => ty,
+        .member => |node| blk: {
+            const base = trySubstituteTypePtr(scope, node.base.*) orelse return null;
+            break :blk .{ .span = ty.span, .kind = .{ .member = .{ .base = base, .field = node.field } } };
+        },
+        .nullable => |child| blk: {
+            const next = trySubstituteTypePtr(scope, child.*) orelse return null;
+            break :blk .{ .span = ty.span, .kind = .{ .nullable = next } };
+        },
+        .qualified => |node| blk: {
+            const child = trySubstituteTypePtr(scope, node.child.*) orelse return null;
+            break :blk .{ .span = ty.span, .kind = .{ .qualified = .{ .mutability = node.mutability, .child = child } } };
+        },
+        .pointer => |node| blk: {
+            const child = trySubstituteTypePtr(scope, node.child.*) orelse return null;
+            break :blk .{ .span = ty.span, .kind = .{ .pointer = .{ .mutability = node.mutability, .child = child } } };
+        },
+        .raw_many_pointer => |node| blk: {
+            const child = trySubstituteTypePtr(scope, node.child.*) orelse return null;
+            break :blk .{ .span = ty.span, .kind = .{ .raw_many_pointer = .{ .mutability = node.mutability, .child = child } } };
+        },
+        .slice => |node| blk: {
+            const child = trySubstituteTypePtr(scope, node.child.*) orelse return null;
+            break :blk .{ .span = ty.span, .kind = .{ .slice = .{ .mutability = node.mutability, .child = child } } };
+        },
+        .array => |node| blk: {
+            const child = trySubstituteTypePtr(scope, node.child.*) orelse return null;
+            break :blk .{ .span = ty.span, .kind = .{ .array = .{ .len = node.len, .child = child } } };
+        },
+        .generic => |node| blk: {
+            const args = scope.bindings.allocator.alloc(ast.TypeExpr, node.args.len) catch return null;
+            for (node.args, 0..) |arg, i| args[i] = substituteComptimeType(scope, arg) orelse return null;
+            break :blk .{ .span = ty.span, .kind = .{ .generic = .{ .base = node.base, .args = args } } };
+        },
+        .fn_pointer => |node| blk: {
+            const params = scope.bindings.allocator.alloc(ast.TypeExpr, node.params.len) catch return null;
+            for (node.params, 0..) |param, i| params[i] = substituteComptimeType(scope, param) orelse return null;
+            const ret = trySubstituteTypePtr(scope, node.ret.*) orelse return null;
+            break :blk .{ .span = ty.span, .kind = .{ .fn_pointer = .{ .params = params, .ret = ret } } };
+        },
+        .closure_type => |node| blk: {
+            const params = scope.bindings.allocator.alloc(ast.TypeExpr, node.params.len) catch return null;
+            for (node.params, 0..) |param, i| params[i] = substituteComptimeType(scope, param) orelse return null;
+            const ret = trySubstituteTypePtr(scope, node.ret.*) orelse return null;
+            break :blk .{ .span = ty.span, .kind = .{ .closure_type = .{ .params = params, .ret = ret } } };
+        },
+    };
+}
+
+fn trySubstituteTypePtr(scope: *const ComptimeScope, ty: ast.TypeExpr) ?*ast.TypeExpr {
+    const substituted = substituteComptimeType(scope, ty) orelse return null;
+    return ast.makePtr(scope.bindings.allocator, substituted) catch null;
+}
+
+fn foldComptimeReflection(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFold {
+    const reflect = scope.reflect orelse return .unknown;
+    const rewritten = rewriteReflectionExpr(scope, expr) orelse return .unknown;
+    return if (reflect(scope.reflect_ctx, rewritten)) |v| .{ .value = .{ .int = v } } else .unknown;
+}
+
+fn rewriteReflectionExpr(scope: *const ComptimeScope, expr: ast.Expr) ?ast.Expr {
+    const call = switch (expr.kind) {
+        .call => |node| node,
+        else => return expr,
+    };
+    if (call.type_args.len > 0) {
+        const type_args = scope.bindings.allocator.alloc(ast.TypeExpr, call.type_args.len) catch return null;
+        for (call.type_args, 0..) |ty, i| type_args[i] = substituteComptimeType(scope, ty) orelse return null;
+        return .{ .span = expr.span, .kind = .{ .call = .{ .callee = call.callee, .type_args = type_args, .args = call.args } } };
+    }
+    if (call.args.len > 0) {
+        const ty = comptimeTypeArg(scope, call.args[0]) orelse return expr;
+        const type_args = scope.bindings.allocator.alloc(ast.TypeExpr, 1) catch return null;
+        type_args[0] = substituteComptimeType(scope, ty) orelse return null;
+        return .{ .span = expr.span, .kind = .{ .call = .{ .callee = call.callee, .type_args = type_args, .args = call.args[1..] } } };
+    }
+    return expr;
+}
+
 pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFold {
     return switch (expr.kind) {
         .void_literal => .{ .value = .void },
@@ -486,10 +602,7 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
         .unary => |node| foldComptimeUnary(scope, node.op, node.expr.*),
         .binary => |node| foldComptimeBinary(scope, node.op, node.left.*, node.right.*),
         .call => |call| switch (foldComptimeCall(scope, call)) {
-            .unknown => if (scope.reflect) |r|
-                (if (r(scope.reflect_ctx, expr)) |v| ComptimeFold{ .value = .{ .int = v } } else .unknown)
-            else
-                .unknown,
+            .unknown => foldComptimeReflection(scope, expr),
             else => |f| f,
         },
         // An explicit integer conversion (`v as T`): fold the operand, then apply T's
@@ -604,6 +717,11 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
     callee_scope.reflect_ctx = scope.reflect_ctx;
     callee_scope.call_depth = scope.call_depth + 1;
     for (fn_decl.params, call.args) |param, arg| {
+        if (isComptimeTypeParam(param)) {
+            const ty = comptimeTypeArg(scope, arg) orelse return .unknown;
+            callee_scope.bindType(param.name.text, ty) catch return .unknown;
+            continue;
+        }
         const value = switch (foldComptimeExpr(scope, arg)) {
             .value => |v| v,
             .trap => return .trap,

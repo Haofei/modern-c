@@ -32,12 +32,22 @@ const fn static_pair() -> Pair {
     return .{ .left = 15, .right = 16 };
 }
 
+const fn static_type_size(comptime T: type) -> usize {
+    return sizeof(T);
+}
+
+const fn static_type_alignment(comptime T: type) -> usize {
+    return alignof(T);
+}
+
 extern fn consume_default_slice(xs: []const u8) -> usize;
 
 global shared_cell: u32 = 0;
 global seed: u32 = 1;
 global folded_sum: u32 = 1 + 2;
 global folded_call: u32 = static_add(5, 6);
+global folded_type_size: usize = static_type_size(u32);
+global folded_type_alignment: usize = static_type_alignment(u32);
 global copied_seed: u32 = seed;
 global letter: u8 = 'A';
 global gain: f32 = 1.5;
@@ -84,6 +94,14 @@ fn read_folded_sum() -> u32 {
 
 fn read_folded_call() -> u32 {
     return folded_call;
+}
+
+fn read_folded_type_size() -> usize {
+    return folded_type_size;
+}
+
+fn read_folded_type_alignment() -> usize {
+    return folded_type_alignment;
 }
 
 fn read_letter() -> u8 {

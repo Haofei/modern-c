@@ -36,6 +36,13 @@ fn layout_box_alignment(comptime T: type) -> usize {
     return alignof(LayoutBox<T>);
 }
 
+const fn require_four_byte_type(comptime T: type) -> usize {
+    comptime {
+        assert(sizeof(T) == 4);
+    }
+    return sizeof(T);
+}
+
 fn accept_power_of_two_capacity() -> usize {
     return make_ring(16);
 }
@@ -46,6 +53,10 @@ fn accept_plain_comptime_param() -> usize {
 
 fn accept_generic_reflection_layout() -> usize {
     return layout_box_size(u32) + layout_box_alignment(u32);
+}
+
+fn accept_type_param_comptime_assert() -> usize {
+    return require_four_byte_type(u32);
 }
 
 fn reject_non_power_of_two_capacity() -> usize {
