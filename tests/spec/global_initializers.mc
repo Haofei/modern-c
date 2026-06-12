@@ -16,6 +16,10 @@ struct Pair {
     right: u32,
 }
 
+struct MaybeBox {
+    ptr: ?*mut u32,
+}
+
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
 global letter: u8 = 'A';
@@ -36,6 +40,8 @@ global pair: Pair = .{ .left = 3, .right = 4 };
 global copied_pair: Pair = pair;
 global table_item_ptr: *const u32 = &table.items[first_index];
 global message: *const u8 = "ready";
+global maybe_ptrs: [2]?*mut u32 = .{ null, &seed };
+global maybe_box: MaybeBox = .{ .ptr = &seed };
 global nullable_handle: ?*mut u8 = null;
 
 // EXPECT_ERROR: E_VOID_STORAGE

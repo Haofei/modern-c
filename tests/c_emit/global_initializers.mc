@@ -7,6 +7,10 @@ struct Pair {
     right: u32,
 }
 
+struct MaybeBox {
+    ptr: ?*mut u32,
+}
+
 global shared_cell: u32 = 0;
 global seed: u32 = 1;
 global copied_seed: u32 = seed;
@@ -30,6 +34,8 @@ global pair: Pair = .{ .left = 3, .right = 4 };
 global copied_pair: Pair = pair;
 global table_item_ptr: *const u32 = &table.items[first_index];
 global message: *const u8 = "ready";
+global maybe_ptrs: [2]?*mut u32 = .{ null, &seed };
+global maybe_box: MaybeBox = .{ .ptr = &seed };
 global global_const_ptr: *const u32 = &shared_cell;
 global global_mut_ptr: *mut u32 = &shared_cell;
 global nullable_handle: ?*mut u8 = null;
@@ -104,6 +110,18 @@ fn read_copied_pair() -> u32 {
 
 fn read_message() -> *const u8 {
     return message;
+}
+
+fn read_maybe_ptr() -> ?*mut u32 {
+    return maybe_ptrs[1];
+}
+
+fn set_maybe_ptr(next: ?*mut u32) -> void {
+    maybe_ptrs[0] = next;
+}
+
+fn read_maybe_box() -> ?*mut u32 {
+    return maybe_box.ptr;
 }
 
 fn read_global_const_ptr() -> u32 {

@@ -2812,7 +2812,7 @@ pub const Checker = struct {
     }
 
     fn checkAddressOfInitializer(self: *Checker, target: TypeClass, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
-        if (!isNonNullPointerLike(target)) return false;
+        if (!isNonNullPointerLike(target) and !isNullablePointerLike(target)) return false;
         const operand = addressOfOperand(expr) orelse return false;
         const source_ty = addressableStorageType(operand.*, ctx) orelse return true;
         if (!addressOfMatchesPointerTarget(target_ty, source_ty, operand.*, ctx)) {
@@ -4798,6 +4798,7 @@ fn addressOfMatchesPointerTarget(target: ast.TypeExpr, source_child: ast.TypeExp
             if (node.mutability == .mut and !addressableStorageIsMutable(operand, ctx)) return false;
             return sameTypeSyntaxCtx(node.child.*, source_child, ctx);
         },
+        .nullable => |child| addressOfMatchesPointerTarget(child.*, source_child, operand, ctx),
         .qualified => |node| addressOfMatchesPointerTarget(node.child.*, source_child, operand, ctx),
         else => false,
     };
