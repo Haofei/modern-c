@@ -1,22 +1,48 @@
 #!/usr/bin/env bash
-# Page/frame allocator test: compile kernel/core/page_alloc.mc (with its std/addr
-# + std/mem imports) to an object, link a C driver that exercises bump allocation,
-# free-list reclaim, and LIFO reuse over a real backing pool, and run it.
+# Page/frame allocator test: compile kernel/core/page_alloc.mc through the
+# selected backend, link a C driver that exercises bump allocation, free-list
+# reclaim, and LIFO reuse over a real backing pool, and run it.
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
+BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
-command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: page-test (clang not found)"; exit 0; }
+LLC="${LLC:-llc}"
+TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-page-test" || echo "page-test")
+command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: $TEST_NAME (clang not found)"; exit 0; }
+if [ "$BACKEND" = llvm ]; then
+    command -v "$LLC" >/dev/null 2>&1 || { echo "SKIP: $TEST_NAME (llc not found)"; exit 0; }
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/kernel/core/page_alloc.mc" -o "$WORK/page_alloc.o" >/dev/null
+case "$BACKEND" in
+    c)
+        MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/kernel/core/page_alloc.mc" -o "$WORK/page_alloc.o" >/dev/null
+        ;;
+    llvm)
+        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/kernel/core/page_alloc.mc" -o "$WORK/page_alloc.o" >/dev/null
+        ;;
+    *)
+        echo "unknown backend: $BACKEND" >&2
+        exit 2
+        ;;
+esac
 
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>
 #include <stdbool.h>
+
+void mc_trap_Assert(void) { __builtin_trap(); }
+void mc_trap_Bounds(void) { __builtin_trap(); }
+void mc_trap_DivideByZero(void) { __builtin_trap(); }
+void mc_trap_IntegerOverflow(void) { __builtin_trap(); }
+void mc_trap_InvalidRepresentation(void) { __builtin_trap(); }
+void mc_trap_InvalidShift(void) { __builtin_trap(); }
+void mc_trap_NullUnwrap(void) { __builtin_trap(); }
+void mc_trap_Unreachable(void) { __builtin_trap(); }
 
 // The opaque address class PAddr and the move handle Page lower to plain words;
 // only the struct *layout* matters for the ABI (the type names are erased).
@@ -66,9 +92,13 @@ int main(void) {
 EOF
 
 "$CLANG" -std=c11 -Wall -Wextra -Werror "$WORK/driver.c" "$WORK/page_alloc.o" -o "$WORK/app"
-if "$WORK/app"; then
-    echo "PASS: page-test — frame allocator bump + free-list reclaim + LIFO reuse compute correctly"
+set +e
+"$WORK/app"
+rc=$?
+set -e
+if [ "$rc" -eq 0 ]; then
+    echo "PASS: $TEST_NAME — $BACKEND backend frame allocator bump + free-list reclaim + LIFO reuse compute correctly"
     exit 0
 fi
-echo "FAIL: page-test — driver returned non-zero (failing CHECK line)"
+echo "FAIL: $TEST_NAME — driver returned non-zero (failing CHECK line or signal, rc=$rc)"
 exit 1

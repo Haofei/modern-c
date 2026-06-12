@@ -4197,6 +4197,9 @@ preemption.
 The `zig build llvm-kmain-test` and `zig build llvm-kmain-net-test` gates boot
 LLVM-lowered integrated RISC-V kernel images under QEMU; the network variant also
 checks that QEMU captures the expected transmitted UDP payload.
+The `zig build llvm-page-test`, `zig build llvm-heap-test`, and `zig build
+llvm-paging-test` gates link and run LLVM-lowered host checks for the frame
+allocator, kernel heap allocator, and Sv39 page-table map/translate helpers.
 The `zig build llvm-hosted-demo-test` gate links and runs the hosted
 elementwise demo through LLVM, libc, and libm, then verifies its binary
 stdin/stdout `f32` round trip.

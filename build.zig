@@ -415,22 +415,44 @@ pub fn build(b: *std.Build) void {
     kernel_test_step.dependOn(&kernel_test_cmd.step);
 
     const page_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/mem/page-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     page_test_cmd.step.dependOn(b.getInstallStep());
     const page_test_step = b.step("page-test", "Link + run the physical frame allocator (bump + free-list reclaim)");
     page_test_step.dependOn(&page_test_cmd.step);
 
+    const llvm_page_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/page-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_page_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_page_test_step = b.step("llvm-page-test", "Link + run the LLVM-lowered physical frame allocator");
+    llvm_page_test_step.dependOn(&llvm_page_test_cmd.step);
+
     const heap_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/mem/heap-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     heap_test_cmd.step.dependOn(b.getInstallStep());
     const heap_test_step = b.step("heap-test", "Link + run the kernel heap (aligned bump over a PhysRange)");
     heap_test_step.dependOn(&heap_test_cmd.step);
+
+    const llvm_heap_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/heap-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_heap_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_heap_test_step = b.step("llvm-heap-test", "Link + run the LLVM-lowered kernel heap");
+    llvm_heap_test_step.dependOn(&llvm_heap_test_cmd.step);
 
     const elf_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1382,13 +1404,24 @@ pub fn build(b: *std.Build) void {
     llvm_backtrace_test_step.dependOn(&llvm_backtrace_test_cmd.step);
 
     const paging_test_cmd = b.addSystemCommand(&.{
-        "sh",
+        "bash",
         "tools/mem/paging-test.sh",
         "zig-out/bin/mcc",
+        "c",
     });
     paging_test_cmd.step.dependOn(b.getInstallStep());
     const paging_test_step = b.step("paging-test", "Link + run Sv39 page-table map/translate");
     paging_test_step.dependOn(&paging_test_cmd.step);
+
+    const llvm_paging_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/paging-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_paging_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_paging_test_step = b.step("llvm-paging-test", "Link + run the LLVM-lowered Sv39 page-table map/translate");
+    llvm_paging_test_step.dependOn(&llvm_paging_test_cmd.step);
 
     const fnptr_test_cmd = b.addSystemCommand(&.{
         "sh",
@@ -1850,6 +1883,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_backtrace_test_cmd.step);
     m0_step.dependOn(&llvm_driver_test_cmd.step);
     m0_step.dependOn(&llvm_preempt_test_cmd.step);
+    m0_step.dependOn(&llvm_page_test_cmd.step);
+    m0_step.dependOn(&llvm_heap_test_cmd.step);
+    m0_step.dependOn(&llvm_paging_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.

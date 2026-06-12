@@ -226,8 +226,9 @@ LLVM backend status:
   MMIO, user-mode server syscalls, backtrace symbolization, char-device driver
   dispatch, timer preemption, the integrated RISC-V kernel image, and the
   integrated kernel+network image, LLVM link/run coverage for the hosted
-  elementwise stdin/stdout round trip, and LLVM link/run coverage for every current
-  data-driven host-driver manifest row. LLVM object debug info is verified for
+  elementwise stdin/stdout round trip, LLVM host link/run coverage for the frame
+  allocator, kernel heap, and Sv39 page-table map/translate helpers, and LLVM
+  link/run coverage for every current data-driven host-driver manifest row. LLVM object debug info is verified for
   DWARF file/function/source line mappings across calls, control flow,
   atomics/fences, and nullable/Result narrowing, and the broad emitted-IR corpus
   is accepted by LLVM verifier and `default<O2>` pipelines, then lowered from
@@ -376,7 +377,10 @@ backtrace symbolization, char-device driver dispatch, and timer preemption. `zig
 build llvm-kmain-test` boots the integrated kernel image from an LLVM-lowered MC
 object under QEMU, and `zig build llvm-kmain-net-test`
 boots the integrated kernel+network image and verifies the transmitted UDP packet
-in the QEMU pcap. `zig build llvm-hosted-demo-test`
+in the QEMU pcap. `zig build llvm-page-test`, `zig build llvm-heap-test`, and
+`zig build llvm-paging-test` link and run LLVM-lowered host checks for the frame
+allocator, kernel heap allocator, and Sv39 page-table map/translate helpers.
+`zig build llvm-hosted-demo-test`
 links and runs the hosted elementwise demo through LLVM, libc, and libm, then
 verifies the binary stdin/stdout `f32` round trip. `zig build
 llvm-host-suite-test` reuses every current data-driven host test manifest row
