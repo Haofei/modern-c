@@ -66,6 +66,9 @@ fn invoke_field_at(i: usize, x: u32) -> u32 {
     let f: closure(u32) -> u32 = g_table[i].run;
     return f(x);
 }
+fn invoke_field_direct_at(i: usize, x: u32) -> u32 {
+    return g_table[i].run(x);
+}
 fn check_field_at(i: usize, x: u32) -> bool {
     let p: fn(u32) -> bool = g_table[i].probe;
     return p(x);

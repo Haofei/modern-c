@@ -1468,18 +1468,16 @@ const CEmitter = struct {
     }
 
     fn emitClosureCall(self: *CEmitter, node: anytype, clos: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !void {
-        _ = clos;
-        // (c).code((c).env, args...)
-        try self.out.appendSlice(self.allocator, "(");
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.out.print(self.allocator, "({{ {s} {s} = ", .{ try self.cTypeFor(clos, .typedef_name), temp_name });
         try self.emitExpr(node.callee.*, locals);
-        try self.out.appendSlice(self.allocator, ").code((");
-        try self.emitExpr(node.callee.*, locals);
-        try self.out.appendSlice(self.allocator, ").env");
+        try self.out.print(self.allocator, "; {s}.code({s}.env", .{ temp_name, temp_name });
         for (node.args) |arg| {
             try self.out.appendSlice(self.allocator, ", ");
             try self.emitExpr(arg, locals);
         }
-        try self.out.appendSlice(self.allocator, ")");
+        try self.out.appendSlice(self.allocator, "); })");
     }
 
     fn collectArrayType(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
@@ -11240,6 +11238,46 @@ test "path-aware C emission writes source line hints" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 3 \"debug\\\"map\\\\case.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 4 \"debug\\\"map\\\\case.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 5 \"debug\\\"map\\\\case.mc\"") != null);
+}
+
+test "C emission materializes closure callees once" {
+    const source =
+        \\struct Env { tag: u32 }
+        \\fn run_impl(e: *mut Env, x: u32) -> u32 { return x + e.tag; }
+        \\struct Slot { run: closure(u32) -> u32 }
+        \\global g_env: Env;
+        \\global g_table: [4]Slot;
+        \\
+        \\fn call_direct(i: usize, x: u32) -> u32 {
+        \\    return g_table[i].run(x);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_closure_callee_once.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    const callee = "g_table.elems[mc_check_index_usize(i, 4)].run";
+    var count: usize = 0;
+    var search_from: usize = 0;
+    while (std.mem.indexOfPos(u8, output.items, search_from, callee)) |index| {
+        count += 1;
+        search_from = index + callee.len;
+    }
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".code(mc_tmp") != null);
 }
 
 test "emits C for simple MMIO register access" {
