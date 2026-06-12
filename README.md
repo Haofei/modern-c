@@ -56,7 +56,8 @@ scalar locals/while loops, and basic pointer load/store operations, but it is
 not yet a complete lowering target. Scalar/pointer globals are covered for
 literal and address-of-global initializers. Local fixed arrays of scalar
 elements support literals, checked indexing, element assignment, and
-element-address taking.
+element-address taking. Plain local structs with scalar fields support literals,
+field load/store, and field-address taking.
 
 Prototype or incomplete:
 

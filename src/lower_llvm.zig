@@ -22,11 +22,18 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
         .need_sadd = std.StringHashMap(void).init(allocator),
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
+        .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
     };
     defer ctx.deinit();
+    for (module.decls) |decl| {
+        switch (decl.kind) {
+            .struct_decl => |struct_decl| try ctx.collectStruct(struct_decl),
+            else => {},
+        }
+    }
     for (module.decls) |decl| {
         switch (decl.kind) {
             .global_decl => |global| try ctx.collectGlobal(global),
@@ -69,6 +76,7 @@ const LlvmEmitter = struct {
     need_sadd: std.StringHashMap(void) = undefined,
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
+    struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
@@ -80,10 +88,17 @@ const LlvmEmitter = struct {
         self.need_sadd.deinit();
         self.need_ssub.deinit();
         self.need_smul.deinit();
+        self.struct_types.deinit();
         self.global_types.deinit();
         self.local_types.deinit();
         self.local_slots.deinit();
         self.scratch.deinit();
+    }
+
+    fn collectStruct(self: *LlvmEmitter, struct_decl: ast.StructDecl) !void {
+        if (struct_decl.type_params.len != 0 or struct_decl.is_move or struct_decl.abi != null) return error.UnsupportedLlvmEmission;
+        for (struct_decl.fields) |field| _ = try self.llvmType(field.ty);
+        try self.struct_types.put(struct_decl.name.text, struct_decl);
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
@@ -166,6 +181,7 @@ const LlvmEmitter = struct {
             .address_of => |inner| try self.emitAddressOf(inner.*),
             .deref => |inner| try self.emitDeref(inner.*, expected_ty),
             .index => |node| try self.emitIndexLoad(node),
+            .member => |node| try self.emitMemberLoad(node),
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -230,12 +246,21 @@ const LlvmEmitter = struct {
             try self.emitArrayLiteralStores(ptr, ty, items);
             return;
         }
+        if (self.structDeclForType(ty)) |_| {
+            const fields = switch (init.kind) {
+                .struct_literal => |fields| fields,
+                else => return error.UnsupportedLlvmEmission,
+            };
+            try self.emitStructLiteralStores(ptr, ty, fields);
+            return;
+        }
         const value = try self.emitExpr(init, ty);
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ llvm_ty, value, ptr });
     }
 
     fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !void {
         if (try self.emitIndexAssignment(target, value_expr)) return;
+        if (try self.emitMemberAssignment(target, value_expr)) return;
         if (assignmentIdent(target)) |ident| {
             if (self.local_slots.get(ident.text)) |slot| {
                 const llvm_ty = try self.llvmType(slot.ty);
@@ -272,6 +297,20 @@ const LlvmEmitter = struct {
                 break :blk true;
             },
             .grouped => |inner| try self.emitIndexAssignment(inner.*, value_expr),
+            else => false,
+        };
+    }
+
+    fn emitMemberAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {
+        return switch (target.kind) {
+            .member => |node| blk: {
+                const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
+                const ptr = try self.emitMemberAddress(node);
+                const value = try self.emitExpr(value_expr, field.ty);
+                try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(field.ty), value, ptr });
+                break :blk true;
+            },
+            .grouped => |inner| try self.emitMemberAssignment(inner.*, value_expr),
             else => false,
         };
     }
@@ -340,6 +379,7 @@ const LlvmEmitter = struct {
             .grouped => |inner| return self.emitAddressOf(inner.*),
             .deref => |inner| return self.emitExpr(inner.*, self.exprType(inner.*) orelse return error.UnsupportedLlvmEmission),
             .index => |node| return self.emitIndexAddress(node),
+            .member => |node| return self.emitMemberAddress(node),
             else => return error.UnsupportedLlvmEmission,
         }
     }
@@ -348,6 +388,24 @@ const LlvmEmitter = struct {
         const ptr = try self.emitExpr(ptr_expr, try self.pointerTypeFor(pointee_ty));
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(pointee_ty), ptr });
+        return result;
+    }
+
+    fn emitMemberLoad(self: *LlvmEmitter, node: anytype) ![]const u8 {
+        const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
+        const ptr = try self.emitMemberAddress(node);
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(field.ty), ptr });
+        return result;
+    }
+
+    fn emitMemberAddress(self: *LlvmEmitter, node: anytype) ![]const u8 {
+        const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
+        const struct_decl = self.structDeclForType(base_ty) orelse return error.UnsupportedLlvmEmission;
+        const index = structFieldIndex(struct_decl, node.name.text) orelse return error.UnsupportedLlvmEmission;
+        const base_ptr = try self.aggregateBasePointer(node.base.*);
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 {d}\n", .{ result, try self.llvmType(base_ty), base_ptr, index });
         return result;
     }
 
@@ -375,13 +433,17 @@ const LlvmEmitter = struct {
     }
 
     fn arrayBasePointer(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+        return self.aggregateBasePointer(expr);
+    }
+
+    fn aggregateBasePointer(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
         return switch (expr.kind) {
             .ident => |ident| blk: {
                 if (self.local_slots.get(ident.text)) |slot| break :blk slot.ptr;
                 if (self.global_types.contains(ident.text)) break :blk try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
                 break :blk error.UnsupportedLlvmEmission;
             },
-            .grouped => |inner| self.arrayBasePointer(inner.*),
+            .grouped => |inner| self.aggregateBasePointer(inner.*),
             else => error.UnsupportedLlvmEmission,
         };
     }
@@ -408,6 +470,17 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i64 {d}\n", .{ ptr, try self.llvmType(array_ty), array_ptr, i });
             const value = try self.emitExpr(item, element_ty);
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ element_llvm, value, ptr });
+        }
+    }
+
+    fn emitStructLiteralStores(self: *LlvmEmitter, struct_ptr: []const u8, struct_ty: ast.TypeExpr, fields: []const ast.StructLiteralField) !void {
+        const struct_decl = self.structDeclForType(struct_ty) orelse return error.UnsupportedLlvmEmission;
+        for (struct_decl.fields, 0..) |field, i| {
+            const value_expr = structLiteralField(fields, field.name.text) orelse return error.UnsupportedLlvmEmission;
+            const ptr = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr inbounds {s}, ptr {s}, i64 0, i32 {d}\n", .{ ptr, try self.llvmType(struct_ty), struct_ptr, i });
+            const value = try self.emitExpr(value_expr, field.ty);
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(field.ty), value, ptr });
         }
     }
 
@@ -559,7 +632,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn llvmType(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
+    fn llvmType(self: *LlvmEmitter, ty: ast.TypeExpr) anyerror![]const u8 {
         return switch (ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "void"))
                 "void"
@@ -567,6 +640,8 @@ const LlvmEmitter = struct {
                 "i1"
             else if (integerBits(ty)) |bits|
                 try std.fmt.allocPrint(self.scratch.allocator(), "i{d}", .{bits})
+            else if (self.struct_types.get(name.text)) |struct_decl|
+                try self.structLlvmType(struct_decl)
             else
                 error.UnsupportedLlvmEmission,
             .pointer, .raw_many_pointer => "ptr",
@@ -596,6 +671,7 @@ const LlvmEmitter = struct {
             .address_of => |inner| if (self.exprType(inner.*)) |ty| self.pointerTypeFor(ty) catch null else null,
             .deref => |inner| self.derefPointeeType(inner.*),
             .index => |node| self.indexElementType(node.base.*),
+            .member => |node| if (self.memberField(node.base.*, node.name.text)) |field| field.ty else null,
             .binary => |node| if (binaryIsComparison(node.op)) simpleType(expr.span, "bool") else self.exprType(node.left.*),
             else => null,
         };
@@ -626,6 +702,33 @@ const LlvmEmitter = struct {
             else => null,
         };
     }
+
+    fn structDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.StructDecl {
+        return switch (ty.kind) {
+            .name => |name| self.struct_types.get(name.text),
+            else => null,
+        };
+    }
+
+    fn structLlvmType(self: *LlvmEmitter, struct_decl: ast.StructDecl) anyerror![]const u8 {
+        var text: std.ArrayList(u8) = .empty;
+        try text.appendSlice(self.scratch.allocator(), "{ ");
+        for (struct_decl.fields, 0..) |field, i| {
+            if (i != 0) try text.appendSlice(self.scratch.allocator(), ", ");
+            try text.appendSlice(self.scratch.allocator(), try self.llvmType(field.ty));
+        }
+        try text.appendSlice(self.scratch.allocator(), " }");
+        return text.toOwnedSlice(self.scratch.allocator());
+    }
+
+    fn memberField(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) ?ast.Field {
+        const base_ty = self.exprType(base) orelse return null;
+        const struct_decl = self.structDeclForType(base_ty) orelse return null;
+        for (struct_decl.fields) |field| {
+            if (std.mem.eql(u8, field.name.text, field_name)) return field;
+        }
+        return null;
+    }
 };
 
 const LocalSlot = struct {
@@ -647,6 +750,20 @@ fn derefTarget(target: ast.Expr) ?ast.Expr {
         .grouped => |inner| derefTarget(inner.*),
         else => null,
     };
+}
+
+fn structFieldIndex(struct_decl: ast.StructDecl, field_name: []const u8) ?usize {
+    for (struct_decl.fields, 0..) |field, i| {
+        if (std.mem.eql(u8, field.name.text, field_name)) return i;
+    }
+    return null;
+}
+
+fn structLiteralField(fields: []const ast.StructLiteralField, field_name: []const u8) ?ast.Expr {
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name.text, field_name)) return field.value;
+    }
+    return null;
 }
 
 fn expected_tyForCallArg(module_mir: mir.Module, callee: []const u8, index: usize) ?ast.TypeExpr {
