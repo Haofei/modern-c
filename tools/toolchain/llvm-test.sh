@@ -192,6 +192,7 @@ grep -q 'call void @mc_trap_IntegerOverflow()' "$OUT_DIR/smoke.ll"
 ! grep -q ' nuw ' "$OUT_DIR/smoke.ll"
 ! grep -R -q 'getelementptr inbounds' "$OUT_DIR"
 ! grep -R -q '\<undef\>' "$OUT_DIR"
+! grep -R '\<reassoc\>' "$OUT_DIR" | grep -v 'reduce_sum_checked.ll:.*fadd reassoc float'
 grep -q 'source_filename = "tests/c_emit/smoke.mc"' "$OUT_DIR/smoke.ll"
 grep -q '!llvm.dbg.cu = !{!0}' "$OUT_DIR/smoke.ll"
 grep -q '!DICompileUnit' "$OUT_DIR/smoke.ll"

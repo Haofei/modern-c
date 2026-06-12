@@ -20,17 +20,20 @@ import sys
 
 FORBIDDEN_ASSUMPTIONS = ("nuw", "nsw", "nonnull", "noalias", "noundef", "poison", "inbounds", "undef")
 FORBIDDEN_RE = re.compile(r"(^|[ ,(])(" + "|".join(FORBIDDEN_ASSUMPTIONS) + r")([ ,)]|$)")
+REASSOC_RE = re.compile(r"(^|[ ,(])reassoc([ ,)]|$)")
 
 
 def first_error(stderr):
     return next((l for l in stderr.splitlines() if "error:" in l), stderr.splitlines()[0] if stderr else "?").strip()
 
 
-def forbidden_assumption(ir):
+def forbidden_assumption(ir, source):
     for line_no, line in enumerate(ir.splitlines(), 1):
         match = FORBIDDEN_RE.search(line)
         if match:
             return match.group(2), line_no, line.strip()
+        if REASSOC_RE.search(line) and not ("fadd reassoc" in line and "reduce.sum_fast" in source):
+            return "reassoc", line_no, line.strip()
     return None
 
 
@@ -42,6 +45,7 @@ def main():
     fixtures = sorted(glob.glob(pattern))
     for path in fixtures:
         name = os.path.basename(path)
+        source = open(path).read()
         check = subprocess.run([mcc, "check", path], capture_output=True, text=True)
         if check.returncode != 0:
             failures.append((name, "CHECK", first_error(check.stderr)))
@@ -52,7 +56,7 @@ def main():
             failures.append((name, "EMIT", first_error(emit.stderr)))
             continue
 
-        forbidden = forbidden_assumption(emit.stdout)
+        forbidden = forbidden_assumption(emit.stdout, source)
         if forbidden:
             token, line_no, line = forbidden
             failures.append((name, "ASSUMPTION", f"forbidden LLVM assumption token '{token}' at line {line_no}: {line}"))
