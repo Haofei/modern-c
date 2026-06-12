@@ -1031,6 +1031,10 @@ const LlvmEmitter = struct {
         return switch (body) {
             .block => |block| try self.emitBlock(block, ret_ty),
             .expr => |expr| blk: {
+                if (typeNameEql(ret_ty, "void")) {
+                    try self.emitExprStatement(expr);
+                    break :blk false;
+                }
                 const value = try self.emitExpr(expr, ret_ty);
                 try self.emitReturnValue(ret_ty, value, expr.span);
                 break :blk true;
