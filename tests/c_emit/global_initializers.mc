@@ -7,6 +7,10 @@ struct Pair {
     right: u32,
 }
 
+struct NestedBox {
+    items: [2]u32,
+}
+
 struct MaybeBox {
     ptr: ?*mut u32,
 }
@@ -30,6 +34,18 @@ const fn static_values() -> [2]u32 {
 
 const fn static_pair() -> Pair {
     return .{ .left = 15, .right = 16 };
+}
+
+const fn static_nested_update() -> usize {
+    var box: NestedBox = .{ .items = .{ 0, 0 } };
+    box.items[1] = 7;
+    return box.items[1] as usize;
+}
+
+const fn static_nested_array_struct_update() -> usize {
+    var pairs: [2]Pair = .{ .{ .left = 1, .right = 2 }, .{ .left = 3, .right = 4 } };
+    pairs[1].right = 6;
+    return pairs[1].right as usize;
 }
 
 const fn static_type_size(comptime T: type) -> usize {
@@ -108,6 +124,14 @@ fn read_folded_type_size() -> usize {
 
 fn read_folded_type_alignment() -> usize {
     return folded_type_alignment;
+}
+
+fn nested_update_array() -> [static_nested_update()]u8 {
+    return .{1, 2, 3, 4, 5, 6, 7};
+}
+
+fn nested_array_struct_update_array() -> [static_nested_array_struct_update()]u8 {
+    return .{1, 2, 3, 4, 5, 6};
 }
 
 fn char_const_global_array() -> [CHAR_TAB_WIDTH]u8 {

@@ -980,27 +980,86 @@ const AssignResult = enum { ok, trap, unknown };
 // rebind the whole aggregate with an updated copy (copy-on-write). This is the
 // comptime "memory" model — values, no aliasing.
 fn foldComptimeAssign(scope: *ComptimeScope, target: ast.Expr, value_expr: ast.Expr) AssignResult {
+    const v = switch (foldComptimeExpr(scope, value_expr)) {
+        .value => |x| x,
+        .trap => return .trap,
+        .unknown => return .unknown,
+    };
+    const root_name = comptimeAssignRootName(target) orelse return .unknown;
+    const root = scope.bindings.get(root_name) orelse return .unknown;
+    const updated = switch (foldComptimeUpdateTarget(scope, root, target, v)) {
+        .value => |next| next,
+        .trap => return .trap,
+        .unknown => return .unknown,
+    };
+    scope.bind(root_name, updated) catch return .unknown;
+    return .ok;
+}
+
+fn comptimeAssignRootName(target: ast.Expr) ?[]const u8 {
+    return switch (target.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| comptimeAssignRootName(inner.*),
+        .index => |node| comptimeAssignRootName(node.base.*),
+        .member => |node| comptimeAssignRootName(node.base.*),
+        else => null,
+    };
+}
+
+const AssignPathSegment = union(enum) {
+    member: []const u8,
+    index: ast.Expr,
+};
+
+fn foldComptimeUpdateTarget(scope: *ComptimeScope, current: ComptimeValue, target: ast.Expr, replacement: ComptimeValue) ComptimeFold {
+    var path: std.ArrayList(AssignPathSegment) = .empty;
+    defer path.deinit(scope.bindings.allocator);
+    appendAssignPath(scope.bindings.allocator, &path, target) catch return .unknown;
+    return foldComptimeUpdatePath(scope, current, path.items, replacement);
+}
+
+fn appendAssignPath(allocator: std.mem.Allocator, path: *std.ArrayList(AssignPathSegment), target: ast.Expr) !void {
     switch (target.kind) {
-        .grouped => |inner| return foldComptimeAssign(scope, inner.*, value_expr),
-        .ident => |ident| {
-            const v = switch (foldComptimeExpr(scope, value_expr)) {
-                .value => |x| x,
-                .trap => return .trap,
-                .unknown => return .unknown,
-            };
-            scope.bind(ident.text, v) catch return .unknown;
-            return .ok;
+        .ident => {},
+        .grouped => |inner| try appendAssignPath(allocator, path, inner.*),
+        .member => |node| {
+            try appendAssignPath(allocator, path, node.base.*);
+            try path.append(allocator, .{ .member = node.name.text });
         },
         .index => |node| {
-            const base_name = switch (node.base.*.kind) {
-                .ident => |i| i.text,
+            try appendAssignPath(allocator, path, node.base.*);
+            try path.append(allocator, .{ .index = node.index.* });
+        },
+        else => return error.UnsupportedComptimeAssignmentTarget,
+    }
+}
+
+fn foldComptimeUpdatePath(scope: *ComptimeScope, current: ComptimeValue, path: []const AssignPathSegment, replacement: ComptimeValue) ComptimeFold {
+    if (path.len == 0) return .{ .value = replacement };
+    return switch (path[0]) {
+        .member => |name| {
+            const fields = switch (current) {
+                .@"struct" => |items| items,
                 else => return .unknown,
             };
-            const arr = switch (scope.bindings.get(base_name) orelse return .unknown) {
-                .array => |a| a,
+            const copy = scope.bindings.allocator.dupe(ComptimeStructField, fields) catch return .unknown;
+            for (copy) |*field| {
+                if (!std.mem.eql(u8, field.name, name)) continue;
+                field.value = switch (foldComptimeUpdatePath(scope, field.value, path[1..], replacement)) {
+                    .value => |value| value,
+                    .trap => return .trap,
+                    .unknown => return .unknown,
+                };
+                return .{ .value = .{ .@"struct" = copy } };
+            }
+            return .unknown;
+        },
+        .index => |index_expr| {
+            const arr = switch (current) {
+                .array => |items| items,
                 else => return .unknown,
             };
-            const idx = switch (foldComptimeExpr(scope, node.index.*)) {
+            const idx = switch (foldComptimeExpr(scope, index_expr)) {
                 .value => |x| switch (x) {
                     .int => |n| n,
                     else => return .unknown,
@@ -1009,45 +1068,15 @@ fn foldComptimeAssign(scope: *ComptimeScope, target: ast.Expr, value_expr: ast.E
                 .unknown => return .unknown,
             };
             if (idx < 0 or idx >= arr.len) return .trap;
-            const v = switch (foldComptimeExpr(scope, value_expr)) {
-                .value => |x| x,
-                .trap => return .trap,
-                .unknown => return .unknown,
-            };
             const copy = scope.bindings.allocator.dupe(ComptimeValue, arr) catch return .unknown;
-            copy[@intCast(idx)] = v;
-            scope.bind(base_name, .{ .array = copy }) catch return .unknown;
-            return .ok;
-        },
-        .member => |node| {
-            const base_name = switch (node.base.*.kind) {
-                .ident => |i| i.text,
-                else => return .unknown,
-            };
-            const fields = switch (scope.bindings.get(base_name) orelse return .unknown) {
-                .@"struct" => |f| f,
-                else => return .unknown,
-            };
-            const v = switch (foldComptimeExpr(scope, value_expr)) {
-                .value => |x| x,
+            copy[@intCast(idx)] = switch (foldComptimeUpdatePath(scope, arr[@intCast(idx)], path[1..], replacement)) {
+                .value => |value| value,
                 .trap => return .trap,
                 .unknown => return .unknown,
             };
-            const copy = scope.bindings.allocator.dupe(ComptimeStructField, fields) catch return .unknown;
-            var found = false;
-            for (copy) |*f| {
-                if (std.mem.eql(u8, f.name, node.name.text)) {
-                    f.value = v;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return .unknown;
-            scope.bind(base_name, .{ .@"struct" = copy }) catch return .unknown;
-            return .ok;
+            return .{ .value = .{ .array = copy } };
         },
-        else => return .unknown,
-    }
+    };
 }
 
 fn foldComptimeWhile(scope: *ComptimeScope, loop: ast.Loop) BodyFlow {

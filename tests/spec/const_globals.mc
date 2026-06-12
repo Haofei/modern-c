@@ -18,6 +18,10 @@ struct ConstPair {
     right: u32,
 }
 
+struct ConstBox {
+    items: [2]u32,
+}
+
 extern struct ConstPacket {
     len: u16,
     tag: u8,
@@ -44,7 +48,21 @@ const fn make_const_pair() -> ConstPair {
     return .{ .left = 8, .right = 9 };
 }
 
+const fn nested_update_value() -> usize {
+    var box: ConstBox = .{ .items = .{ 0, 0 } };
+    box.items[1] = 7;
+    return box.items[1] as usize;
+}
+
+const fn nested_array_struct_update_value() -> usize {
+    var pairs: [2]ConstPair = .{ .{ .left = 1, .right = 2 }, .{ .left = 3, .right = 4 } };
+    pairs[1].right = 6;
+    return pairs[1].right as usize;
+}
+
 const ALIGNED: usize = align_up(3, 4);
+const NESTED_UPDATE: usize = nested_update_value();
+const NESTED_ARRAY_STRUCT_UPDATE: usize = nested_array_struct_update_value();
 const PACKET_SIZE: usize = sizeof(ConstPacket);
 const PACKET_TAG_OFFSET: usize = field_offset(ConstPacket, .tag);
 const PACKET_TAG_BIT_OFFSET: usize = bit_offset(ConstPacket, .tag);
@@ -62,6 +80,14 @@ fn accept_derived_const_global_array() -> [DOUBLE]u8 {
 
 fn accept_const_fn_const_global_array() -> [ALIGNED]u8 {
     return .{1, 2, 3, 4};
+}
+
+fn accept_nested_update_const_global_array() -> [NESTED_UPDATE]u8 {
+    return .{1, 2, 3, 4, 5, 6, 7};
+}
+
+fn accept_nested_array_struct_update_const_global_array() -> [NESTED_ARRAY_STRUCT_UPDATE]u8 {
+    return .{1, 2, 3, 4, 5, 6};
 }
 
 fn accept_char_const_global_array() -> [TAB_WIDTH]u8 {
@@ -108,6 +134,8 @@ fn accept_comptime_const_global_assert() -> void {
         assert(newline_width() == 10);
         assert('A' == 65);
         assert(ALIGNED == 4);
+        assert(NESTED_UPDATE == 7);
+        assert(NESTED_ARRAY_STRUCT_UPDATE == 6);
         assert(WORD_SIZE == 4);
         assert(PACKET_SIZE == 4);
         assert(PACKET_TAG_OFFSET == 2);
