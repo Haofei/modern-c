@@ -1021,7 +1021,7 @@ const LlvmEmitter = struct {
         const end_label = try self.nextLabel("nullable_end");
         const is_some = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = icmp ne ptr {s}, null\n", .{ is_some, subject });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ is_some, then_label, else_label, then_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ is_some, then_label, else_label, try self.debugCallSuffix(), then_label });
 
         const old_type = self.local_types.fetchRemove(binding.text);
         const old_slot = self.local_slots.fetchRemove(binding.text);
@@ -1075,7 +1075,7 @@ const LlvmEmitter = struct {
         } else {
             try self.out.print(self.allocator, "  {s} = icmp eq i1 {s}, false\n", .{ matches, is_ok });
         }
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}\n{s}:\n", .{ matches, then_label, else_label, then_label });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ matches, then_label, else_label, try self.debugCallSuffix(), then_label });
 
         const old_type = self.local_types.fetchRemove(tag_bind.binding.text);
         const old_slot = self.local_slots.fetchRemove(tag_bind.binding.text);
