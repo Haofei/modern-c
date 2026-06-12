@@ -53,7 +53,9 @@ line is the C backend plus verifier/tooling contract in
 that runs after the same semantic and MIR verification gates as C emission. The
 valid declarations in the current spec fixture suite emit assemblable LLVM IR
 through `zig build llvm-sweep`, and `zig build llvm-c-sweep` verifies all 109
-current `tests/c_emit` fixtures emit assemblable LLVM IR. Scalar/pointer globals are covered for
+current `tests/c_emit` fixtures emit assemblable LLVM IR; `zig build
+llvm-c-obj-sweep` compiles the same fixture set to LLVM object files with
+`llc`. Scalar/pointer globals are covered for
 literal and address-of-global initializers. Local fixed arrays of scalar
 elements support literals, checked indexing, element assignment, and
 element-address taking. Plain local structs with scalar fields support literals,
@@ -170,9 +172,9 @@ Deferred:
 - LLVM backend production hardening (see Appendix M of
   `docs/spec/MC_0.6.1_Final_Design.md`). The current spec sweep is clear for
   valid declarations, all current C-emission fixtures emit assemblable LLVM IR,
-  and representative object output works through `llc`. Remaining work is
-  broader runtime/toolchain coverage, optimizer proof work, and fuller native
-  debug mapping.
+  and all current C-emission fixtures compile to LLVM object files with `llc`.
+  Remaining work is broader runtime/toolchain coverage, optimizer proof work,
+  and fuller native debug mapping.
 
 ## Requirements
 
@@ -197,6 +199,7 @@ zig build llvm-test
 zig build llvm-obj-test
 zig build llvm-sweep
 zig build llvm-c-sweep
+zig build llvm-c-obj-sweep
 ```
 
 Run the compiler prototype:
@@ -245,7 +248,8 @@ IR for the covered backend surface. `zig build llvm-test`, `zig build
 llvm-sweep`, and `zig build llvm-c-sweep` check LLVM IR with `llvm-as`.
 `tools/toolchain/mcc-llvm-cc.sh` compiles an MC module through `emit-llvm` and
 `llc -filetype=obj`; `zig build llvm-obj-test` checks representative LLVM object
-output.
+output, and `zig build llvm-c-obj-sweep` compiles every current `tests/c_emit`
+fixture to an object file.
 
 ## Conformance Snapshot
 

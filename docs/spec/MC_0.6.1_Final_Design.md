@@ -4101,15 +4101,16 @@ helper calls for the covered backend subset.
 Valid `#[no_lang_trap]` functions lower when the shared verifier proves they
 contain no language-trap edge; naked/boot-style opaque asm functions returning
 `never` lower fallthrough as LLVM `unreachable`.
-The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles the covered
-textual IR subset to linkable object files through `llc`, with representative
-object-output coverage in `zig build llvm-obj-test`.
+The LLVM toolchain driver `tools/toolchain/mcc-llvm-cc.sh` compiles textual IR
+to linkable object files through `llc`, with representative object-output
+coverage in `zig build llvm-obj-test`.
 The `zig build llvm-sweep` gate strips expected-reject declarations from the
 spec corpus and verifies every in-scope valid spec fixture emits assemblable
 LLVM IR. The current sweep has no allowlisted LLVM backend gaps. The
 `zig build llvm-c-sweep` gate additionally verifies every current
 `tests/c_emit` fixture emits assemblable LLVM IR, keeping the broad C-backend
-regression corpus covered by LLVM emission.
+regression corpus covered by LLVM emission. The `zig build llvm-c-obj-sweep`
+gate compiles the same fixture set to non-empty LLVM object files with `llc`.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
 Broader runtime/toolchain coverage, optimizer proof work, and fuller native
