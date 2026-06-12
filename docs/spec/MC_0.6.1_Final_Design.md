@@ -4079,6 +4079,9 @@ structs containing arrays/slices, slices of structs/arrays, and nested array
 indexing. Static aggregate global coverage includes nested array/struct
 literals, scalar and function-pointer aggregate global copies, plus
 const-folded `sizeof`/`alignof`/`field_offset` array lengths.
+Iterable lowering covers arrays and slices from parameters, globals, nested
+array rows, aggregate fields, direct-call aggregate fields, and direct-call
+array/slice results.
 LLVM debug metadata includes `source_filename`, compile-unit/file records,
 function `DISubprogram` records, and line/column locations on returns and call
 instructions for the covered backend subset.
@@ -4087,8 +4090,8 @@ textual IR subset to linkable object files through `llc`, with representative
 object-output coverage in `zig build llvm-obj-test`.
 It intentionally emits no
 `nuw`/`nsw`/`nonnull`/`noalias` metadata outside proven verifier conditions.
-Full aggregate ABI breadth, richer iterable forms, broader slice/pattern
-workflows, and fuller debug mapping remain future work.
+Full aggregate ABI breadth, broader slice/pattern workflows, and fuller debug
+mapping remain future work.
 
 LLVM lowering examples:
 
