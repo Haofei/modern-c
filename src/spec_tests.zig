@@ -1442,3 +1442,141 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
     }
     return false;
 }
+
+// ----- spec section coverage gate -----
+//
+// Turns the per-fixture `// SPEC: section=` metadata into an actual conformance gate: every
+// normative section of docs/spec that is meant to be exercised by a semantic/diagnostic
+// fixture must be referenced by at least one tests/spec fixture. Sections covered by other
+// suites (codegen sweeps, tests/llvm, the runtime tools/ suites) or that are prose are listed
+// in `coverage_exempt` with a note — so adding a section to the spec forces either a fixture
+// or an explicit, reviewed exemption. (This would have caught §7 Indexing falling through.)
+const coverage_exempt = [_][]const u8{
+    // Umbrella parent (its normative children 1.1/1.2/1.3 carry the fixtures).
+    "1",
+    // Rationale / final-contract prose — nothing to execute.
+    "26", "26.1", "26.2", "26.3", "27",
+    // §28 driver-library profile — exercised by the runtime suite (sync-test, stack-test,
+    // ring/endian/time/barrier tests under tools/), not by semantic fixtures.
+    "28",  "28.1", "28.2", "28.3", "28.4", "28.5", "28.6", "28.7",
+    // Implementation & conformance annex (Part II). Verifier passes (D.*) are exercised by the
+    // section fixtures whose rules they enforce; MIR/lowering (E.*, I.*) by the C-emit sweep and
+    // the llvm sweeps; the LLVM and debug backends (M, N) by tests/llvm; the rest is prose.
+    "A",  "A.1", "B", "C", "C.1", "C.2", "C.3",
+    "D",  "D.1", "D.2", "D.3", "D.4", "D.5", "D.6", "D.7",
+    "E",  "E.1", "E.2", "E.3", "F", "G", "H",
+    "I",  "I.1", "I.2", "I.3", "I.4", "I.5", "I.6", "I.7", "I.8",
+    "I.9", "I.10", "I.11", "I.12", "I.13", "I.14", "I.15",
+    "J", "K", "L", "L.1", "L.2", "L.3", "M", "N", "O",
+};
+
+fn coverageIsAllDigits(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |c| {
+        if (c < '0' or c > '9') return false;
+    }
+    return true;
+}
+
+// Extract the section id from a spec markdown header line, or null if the line is not a
+// numbered/lettered section header. `# 5. Title` -> "5", `## 5.2 Title` -> "5.2",
+// `## D.7 Title` -> "D.7". Rejects the document title, Part dividers, and the subtitle.
+fn parseSpecSectionId(line: []const u8) ?[]const u8 {
+    var h: usize = 0;
+    while (h < line.len and line[h] == '#') h += 1;
+    if (h == 0 or h > 2) return null;
+    if (h >= line.len or line[h] != ' ') return null;
+    var start = h;
+    while (start < line.len and line[start] == ' ') start += 1;
+    const rest = line[start..];
+    const sp = std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len;
+    var tok = rest[0..sp];
+    if (tok.len > 0 and tok[tok.len - 1] == '.') tok = tok[0 .. tok.len - 1];
+    if (tok.len == 0) return null;
+    var parts = std.mem.splitScalar(u8, tok, '.');
+    var idx: usize = 0;
+    while (parts.next()) |part| : (idx += 1) {
+        if (idx == 0) {
+            const ok = coverageIsAllDigits(part) or (part.len == 1 and part[0] >= 'A' and part[0] <= 'O');
+            if (!ok) return null;
+        } else if (!coverageIsAllDigits(part)) {
+            return null;
+        }
+    }
+    return tok;
+}
+
+fn sectionIsExempt(sec: []const u8) bool {
+    for (coverage_exempt) |e| {
+        if (std.mem.eql(u8, e, sec)) return true;
+    }
+    return false;
+}
+
+// A section counts as covered if a fixture tags it exactly, tags a more specific child (the
+// family is exercised), or tags its parent section.
+fn sectionIsCovered(sec: []const u8, covered: *const std.StringHashMap(void)) bool {
+    if (covered.contains(sec)) return true;
+    var it = covered.keyIterator();
+    while (it.next()) |k| {
+        const key = k.*;
+        if (key.len > sec.len + 1 and std.mem.startsWith(u8, key, sec) and key[sec.len] == '.') return true;
+    }
+    if (std.mem.lastIndexOfScalar(u8, sec, '.')) |dot| {
+        if (covered.contains(sec[0..dot])) return true;
+    }
+    return false;
+}
+
+test "spec section coverage: every normative section has a tests/spec fixture" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Collect the sections referenced by tests/spec fixtures.
+    var covered = std.StringHashMap(void).init(a);
+    var dir = try std.Io.Dir.cwd().openDir(io, "tests/spec", .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".mc")) continue;
+        const source = try dir.readFileAlloc(io, entry.path, a, .limited(1024 * 1024));
+        var metadata = parseLeadingMetadata(a, source) catch continue;
+        const sec = metadata.valueFor("section") orelse continue;
+        var it = std.mem.splitScalar(u8, sec, ',');
+        while (it.next()) |raw| {
+            const s = std.mem.trim(u8, raw, " \t");
+            if (s.len > 0) try covered.put(s, {});
+        }
+    }
+
+    // Walk the spec's section headers and require coverage of each non-exempt section.
+    const spec = try std.Io.Dir.cwd().readFileAlloc(io, "docs/spec/MC_0.6.1_Final_Design.md", a, .limited(2 * 1024 * 1024));
+    var seen = std.StringHashMap(void).init(a);
+    var missing: std.ArrayList([]const u8) = .empty;
+    var required: usize = 0;
+    var covered_required: usize = 0;
+    var line_it = std.mem.splitScalar(u8, spec, '\n');
+    while (line_it.next()) |raw_line| {
+        const id = parseSpecSectionId(std.mem.trim(u8, raw_line, "\r")) orelse continue;
+        if (seen.contains(id)) continue;
+        try seen.put(id, {});
+        if (sectionIsExempt(id)) continue;
+        required += 1;
+        if (sectionIsCovered(id, &covered)) {
+            covered_required += 1;
+        } else {
+            try missing.append(a, id);
+        }
+    }
+
+    if (missing.items.len > 0) {
+        std.debug.print("spec coverage: {d}/{d} required sections have a tests/spec fixture; missing:\n", .{ covered_required, required });
+        for (missing.items) |m| std.debug.print("  section {s} — add a tests/spec fixture or an entry in coverage_exempt\n", .{m});
+    }
+    try std.testing.expect(required > 0);
+    try std.testing.expectEqual(@as(usize, 0), missing.items.len);
+}

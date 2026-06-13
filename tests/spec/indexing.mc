@@ -1,8 +1,13 @@
-// SPEC: section=9
+// SPEC: section=7
 // SPEC: milestone=index-usize
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_INDEX_NOT_USIZE,E_INDEX_BASE_NOT_ARRAY_OR_SLICE,E_RETURN_TYPE_MISMATCH,E_C_VOID_NO_LAYOUT
+
+// §7 Indexing: array and slice indices must be a checked `usize`. A modular counter
+// (`wrap<usize>`) is not directly an index — it must be projected (`.residue()`) so the
+// modular->index-space step is explicit, then the normal bounds check applies. Indexing is
+// defined only for arrays and slices, never a bare pointer or scalar.
 
 extern fn make_u8_slice() -> []const u8;
 
@@ -16,6 +21,11 @@ fn accept_slice_literal_index(buf: []const u8) -> u8 {
 
 fn accept_array_usize_index(buf: [4]u8, i: usize) -> u8 {
     return buf[i];
+}
+
+// §7: a wrap counter projected to its residue is a valid checked-usize index.
+fn accept_projected_wrap_index(buf: []const u8, r: wrap<usize>) -> u8 {
+    return buf[r.residue()];
 }
 
 fn accept_direct_call_slice_index() -> u8 {
