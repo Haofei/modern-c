@@ -12,11 +12,23 @@
 
 move struct Res { v: u32 }
 move struct Pair { a: Res, b: Res }
+move struct Nest { p: Pair }
 
 extern fn mk() -> Pair;
+extern fn mknest() -> Nest;
 extern fn consume(r: Res) -> u32;
 extern fn peek(r: *Res) -> u32;
 extern fn take_whole(p: Pair) -> u32;
+
+// Rejected: a nested place (n.p.a) moved twice — place tracking is not just one level deep.
+fn reject_nested_field_move() -> u32 {
+    let n: Nest = mknest();
+    let x: Res = n.p.a;
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let y: Res = n.p.a;
+    unsafe { forget_unchecked(n); } // discard the rest of the husk so only the dup is reported
+    return consume(x) + consume(y);
+}
 
 // Accepted: move each field out exactly once, then discard the empty husk.
 fn accept_move_each_field() -> u32 {

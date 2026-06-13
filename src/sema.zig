@@ -1195,30 +1195,51 @@ pub const Checker = struct {
     // If `expr` is `<binding>.<field>` where the field is a `move` type and the base is a
     // tracked move binding, return the place key `binding.field` (allocated once, owned by
     // `move_place_keys`); otherwise null.
-    fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
-        _ = expr;
-        if (m.base.*.kind != .ident) return null; // one level only
-        const base = m.base.*.kind.ident.text;
-        const base_slot = state.get(base) orelse return null; // base is not a tracked move binding
-        const base_ty = base_slot.ty orelse return null;
-        const ctx = self.move_ctx orelse return null;
-        const field_ty = structFieldType(base_ty, m.name.text, ctx.*) orelse return null;
-        if (!self.isMoveTypeName(field_ty, aliases)) return null;
-        const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, m.name.text }) catch {
-            self.oom = true;
-            return null;
-        };
-        self.move_place_keys.append(self.reporter.allocator, key) catch {
-            self.oom = true;
-        };
-        return key;
+    const PlaceKeyTy = struct { key: []const u8, ty: ast.TypeExpr };
+
+    // Build the dotted place key and leaf type for a place expression (`x`, `x.f`, `x.f.g`)
+    // whose root is a tracked move binding — so nested fields, not just one level, are
+    // distinct places. The key is allocated and owned by `move_place_keys`. Returns null if
+    // the root is not a tracked move binding or a field type cannot be resolved.
+    fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?PlaceKeyTy {
+        switch (expr.kind) {
+            .grouped => |inner| return self.placeKeyAndType(inner.*, state),
+            .ident => |id| {
+                const slot = state.get(id.text) orelse return null;
+                const ty = slot.ty orelse return null;
+                return .{ .key = id.text, .ty = ty }; // root key = binding name (AST-owned)
+            },
+            .member => |m| {
+                const base = self.placeKeyAndType(m.base.*, state) orelse return null;
+                const ctx = self.move_ctx orelse return null;
+                const field_ty = structFieldType(base.ty, m.name.text, ctx.*) orelse return null;
+                const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base.key, m.name.text }) catch {
+                    self.oom = true;
+                    return null;
+                };
+                self.move_place_keys.append(self.reporter.allocator, key) catch {
+                    self.oom = true;
+                };
+                return .{ .key = key, .ty = field_ty };
+            },
+            else => return null,
+        }
     }
 
-    // Whether the field `base.field` is currently recorded as moved (no allocation).
-    fn placeIsMoved(base: []const u8, field: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
-        var buf: [256]u8 = undefined;
-        const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ base, field }) catch return false;
-        return state.contains(key);
+    // The place key for a `move`-typed field access (at any nesting depth), or null if the
+    // accessed place is not a tracked move field.
+    fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+        _ = m;
+        const pp = self.placeKeyAndType(expr, state) orelse return null;
+        if (!self.isMoveTypeName(pp.ty, aliases)) return null; // only a move field is a place
+        return pp.key;
+    }
+
+    // Whether the place denoted by `expr` (a possibly-nested field access) is recorded as
+    // moved out.
+    fn placeExprIsMoved(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) bool {
+        const pp = self.placeKeyAndType(expr, state) orelse return false;
+        return state.contains(pp.key);
     }
 
     // Whether any field of `base` has been moved out (a partial move of the aggregate).
@@ -1305,8 +1326,9 @@ pub const Checker = struct {
             },
             .member => |m| {
                 self.moveBorrow(m.base.*, state);
-                // Borrowing a field that was already moved out is a use-after-move.
-                if (m.base.*.kind == .ident and placeIsMoved(m.base.*.kind.ident.text, m.name.text, state)) {
+                // Borrowing a field (at any nesting depth) that was already moved out is a
+                // use-after-move.
+                if (self.placeExprIsMoved(expr, state)) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "borrow of linear `move` field after it was moved out");
                 }
             },
