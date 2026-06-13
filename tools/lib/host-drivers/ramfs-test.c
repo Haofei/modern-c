@@ -33,6 +33,20 @@ int main(void) {
     CHECK(r == 1);
     CHECK(fs_write(r, (uintptr_t)hello, 5) == 5);
 
+    // Per-file capacity is enforced; writes cannot run into the next file's
+    // reserved data slice.
+    static const char small_a[] = "aa";
+    static const char small_b[] = "bb";
+    uint64_t a = fs_create((uintptr_t)small_a, 2, 4);
+    uint64_t b = fs_create((uintptr_t)small_b, 2, 4);
+    CHECK(a == 2 && b == 3);
+    CHECK(fs_write(a, (uintptr_t)"1234", 4) == 4);
+    CHECK(fs_write(b, (uintptr_t)"WXYZ", 4) == 4);
+    CHECK(fs_write(a, (uintptr_t)"!", 1) == ERR);
+    for (int i = 0; i < 16; i++) buf[i] = 0;
+    CHECK(fs_read(b, (uintptr_t)buf, 16) == 4);
+    CHECK(buf[0] == 'W' && buf[1] == 'X' && buf[2] == 'Y' && buf[3] == 'Z');
+
     // Lookup by name.
     CHECK(fs_find((uintptr_t)hello, 5) == 0);
     CHECK(fs_find((uintptr_t)readme, 6) == 1);

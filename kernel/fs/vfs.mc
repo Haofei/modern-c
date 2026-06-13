@@ -84,7 +84,8 @@ fn fd_file(v: *mut Vfs, fd: usize) -> Result<usize, VfsError> {
 // Write `len` bytes from `src` to fd `fd`, advancing its position.
 export fn vfs_write(v: *mut Vfs, fd: usize, src: usize, len: usize) -> Result<usize, VfsError> {
     let file_idx: usize = fd_file(v, fd)?; // VfsError -> VfsError (plain propagate)
-    let n: usize = ramfs_write((&v.fs) as *mut Ramfs, file_idx, src, len)? else .WriteFailed;
+    let pos: usize = v.fds[fd].pos;
+    let n: usize = ramfs_write_at((&v.fs) as *mut Ramfs, file_idx, pos, src, len)? else .WriteFailed;
     v.fds[fd].pos = v.fds[fd].pos + n;
     return ok(n);
 }

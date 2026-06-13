@@ -27,8 +27,8 @@ struct VringUsed { flags: u16, idx: u16, ring: [8]UsedElem, avail_event: u16 }
 
 // A driver-side handle bundling the three vring regions, the negotiated size, a
 // free-descriptor list, the used-ring cursor, and an in-flight record (the bus
-// address each outstanding descriptor carries, so the buffer can be reconstructed
-// when the device returns it).
+// address/length each outstanding descriptor carries, so the buffer can be
+// reconstructed only after a valid device completion returns it).
 struct Virtq {
     desc: *mut DescTable,
     avail: *mut VringAvail,
@@ -38,6 +38,8 @@ struct Virtq {
     num_free: u16,
     last_used: u16,
     inflight_addr: [8]u64,
+    inflight_len: [8]u32,
+    inflight_present: [8]bool,
 }
 
 fn lo32(a: u64) -> u32 { return (a & 0x0000_0000_FFFF_FFFF) as u32; }
@@ -56,6 +58,9 @@ fn vq_init_free(vq: *mut Virtq) -> void {
     var i: u16 = 0;
     while i < vq.size {
         vq.desc.d[i as usize].next = i + 1;
+        vq.inflight_addr[i as usize] = 0;
+        vq.inflight_len[i as usize] = 0;
+        vq.inflight_present[i as usize] = false;
         i = i + 1;
     }
     vq.free_head = 0;
@@ -81,6 +86,9 @@ fn vq_alloc_desc(vq: *mut Virtq) -> u16 {
 
 // Return a descriptor to the free list.
 fn vq_free_desc(vq: *mut Virtq, id: u16) -> void {
+    vq.inflight_addr[id as usize] = 0;
+    vq.inflight_len[id as usize] = 0;
+    vq.inflight_present[id as usize] = false;
     vq.desc.d[id as usize].next = vq.free_head;
     vq.free_head = id;
     vq.num_free = vq.num_free + 1;
@@ -145,6 +153,8 @@ fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> u16 {
         flags = VRING_DESC_F_WRITE;
     }
     vq.inflight_addr[id as usize] = addr;
+    vq.inflight_len[id as usize] = len;
+    vq.inflight_present[id as usize] = true;
     vq.desc.d[id as usize].addr = addr;
     vq.desc.d[id as usize].len = len;
     vq.desc.d[id as usize].flags = flags;
@@ -207,7 +217,15 @@ export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuf
     vq.desc.d[id2 as usize].flags = VRING_DESC_F_WRITE;
     vq.desc.d[id2 as usize].next = 0;
 
-    vq.inflight_addr[id0 as usize] = a0; // track the head for bookkeeping
+    vq.inflight_addr[id0 as usize] = a0; // each descriptor records its own submitted length,
+    vq.inflight_len[id0 as usize] = l0;  // so completion can hand each buffer back at its true
+    vq.inflight_present[id0 as usize] = true; // allocation size (never the device-reported length)
+    vq.inflight_addr[id1 as usize] = a1;
+    vq.inflight_len[id1 as usize] = l1;
+    vq.inflight_present[id1 as usize] = true;
+    vq.inflight_addr[id2 as usize] = a2;
+    vq.inflight_len[id2 as usize] = l2;
+    vq.inflight_present[id2 as usize] = true;
 
     let slot: usize = (vq.avail.idx % vq.size) as usize;
     vq.avail.ring[slot] = id0;
@@ -216,33 +234,90 @@ export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuf
     return id0;
 }
 
-// Free a descriptor chain starting at `head` (following F_NEXT). `next` is read
-// before each descriptor is freed (freeing rewrites the `next` field).
-fn vq_free_chain(vq: *mut Virtq, head: u16) -> void {
-    var id: u16 = head;
-    var more: bool = true;
-    while more {
-        let flags: u16 = vq.desc.d[id as usize].flags;
-        let next: u16 = vq.desc.d[id as usize].next;
-        vq_free_desc(vq, id);
-        if (flags & VRING_DESC_F_NEXT) != 0 {
-            id = next;
-        } else {
-            more = false;
-        }
-    }
+// Why a device completion could not be trusted. A driver that sees one of these has
+// a misbehaving (or malicious) device and should reset the queue, not retry.
+enum VqCompleteError {
+    BadDescriptorId, // the used-ring id (or a chained `next`) is outside the queue
+    NotInFlight,     // the device completed a descriptor we never submitted
+    LengthOverflow,  // the device claims more bytes than the chain actually owns
+    BadChain,        // the completed chain is not the expected linked shape
 }
 
-// Reap one completed descriptor chain: read the used head, free the whole chain,
-// and return the device-written length. Call only when `vq_has_used` is true.
-export fn vq_complete_chain(vq: *mut Virtq) -> u32 {
+// The three DMA buffers of a completed virtio-blk-style request, handed back to the
+// caller to reclaim. It is `move`, so the caller must consume every buffer (or the
+// whole struct) — the descriptors are off the queue, and forgetting a buffer is a
+// compile-time `E_RESOURCE_LEAK`. Each buffer's length is its *submitted allocation*
+// size, never the device-reported length, so a CPU view of it cannot exceed the real
+// allocation. `used_len` is the device-reported total (already bounds-validated).
+move struct CompletedChain3 {
+    header: DeviceBuffer,
+    data: DeviceBuffer,
+    status: DeviceBuffer,
+    used_len: u32,
+}
+
+// Reap one completed three-descriptor chain (header → data → status). Validates the
+// device-supplied used-ring id, the chain links, and the reported length against what
+// was actually submitted; on any inconsistency it returns a typed error and leaves the
+// descriptors in flight (the driver resets). On success it frees the three descriptors
+// and hands the three owned buffers back, reconstructed at their submitted sizes.
+// Call only when `vq_has_used` is true.
+export fn vq_complete_chain(vq: *mut Virtq) -> Result<CompletedChain3, VqCompleteError> {
     rmb();
     let slot: usize = (vq.last_used % vq.size) as usize;
-    let head: u16 = vq.used.ring[slot].id as u16;
-    let len: u32 = vq.used.ring[slot].len;
+    let raw_id: u32 = vq.used.ring[slot].id;
+    if raw_id >= vq.size as u32 {
+        return err(.BadDescriptorId);
+    }
+    let id0: u16 = raw_id as u16;
+    if !vq.inflight_present[id0 as usize] {
+        return err(.NotInFlight);
+    }
+    // Walk the linked chain head → data → status, validating every hop against the
+    // queue bounds and our in-flight record before trusting any of it.
+    if (vq.desc.d[id0 as usize].flags & VRING_DESC_F_NEXT) == 0 {
+        return err(.BadChain);
+    }
+    let id1: u16 = vq.desc.d[id0 as usize].next;
+    if id1 >= vq.size {
+        return err(.BadDescriptorId);
+    }
+    if !vq.inflight_present[id1 as usize] {
+        return err(.NotInFlight);
+    }
+    if (vq.desc.d[id1 as usize].flags & VRING_DESC_F_NEXT) == 0 {
+        return err(.BadChain);
+    }
+    let id2: u16 = vq.desc.d[id1 as usize].next;
+    if id2 >= vq.size {
+        return err(.BadDescriptorId);
+    }
+    if !vq.inflight_present[id2 as usize] {
+        return err(.NotInFlight);
+    }
+
+    let a0: u64 = vq.inflight_addr[id0 as usize];
+    let a1: u64 = vq.inflight_addr[id1 as usize];
+    let a2: u64 = vq.inflight_addr[id2 as usize];
+    let l0: u32 = vq.inflight_len[id0 as usize];
+    let l1: u32 = vq.inflight_len[id1 as usize];
+    let l2: u32 = vq.inflight_len[id2 as usize];
+
+    let used: u32 = vq.used.ring[slot].len;
+    if used > (l0 + l1 + l2) {
+        return err(.LengthOverflow); // device over-reports the bytes it wrote
+    }
     vq.last_used = vq.last_used + 1;
-    vq_free_chain(vq, head);
-    return len;
+    // All three ids and addresses are captured; safe to return them to the free list.
+    vq_free_desc(vq, id0);
+    vq_free_desc(vq, id1);
+    vq_free_desc(vq, id2);
+    return ok(.{
+        .header = .{ .dev_addr = (a0 as usize) as DmaAddr, .len = l0 as usize },
+        .data = .{ .dev_addr = (a1 as usize) as DmaAddr, .len = l1 as usize },
+        .status = .{ .dev_addr = (a2 as usize) as DmaAddr, .len = l2 as usize },
+        .used_len = used,
+    });
 }
 
 // Notify the device that `q` has new buffers (§4.2.3.3): order then doorbell.
@@ -287,8 +362,18 @@ export fn vq_used_len(vq: *mut Virtq) -> u32 {
 export fn vq_complete(vq: *mut Virtq) -> DeviceBuffer {
     rmb();
     let slot: usize = (vq.last_used % vq.size) as usize;
-    let id: u16 = vq.used.ring[slot].id as u16;
+    let raw_id: u32 = vq.used.ring[slot].id;
+    if raw_id >= vq.size as u32 {
+        unreachable; // device reported an out-of-range descriptor id
+    }
+    let id: u16 = raw_id as u16;
+    if !vq.inflight_present[id as usize] {
+        unreachable; // device completed a descriptor that is not in flight
+    }
     let len: u32 = vq.used.ring[slot].len;
+    if len > vq.inflight_len[id as usize] {
+        unreachable; // device reported more bytes than the submitted buffer owns
+    }
     vq.last_used = vq.last_used + 1;
     let addr: u64 = vq.inflight_addr[id as usize];
     vq_free_desc(vq, id);

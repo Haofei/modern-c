@@ -9,11 +9,13 @@ import "std/addr.mc";
 
 const PAGE: usize = 4096;
 
-// Map a fresh anonymous page at `virt` with `flags`; returns the backing frame.
-export fn mmap_anon(pt: *mut PageTable, h: *mut Heap, virt: VAddr, flags: u64) -> PAddr {
+// Map a fresh anonymous page at `virt` with `flags`; returns the backing frame, or a
+// typed `MapError` (e.g. `AlreadyMapped`) if `virt` is already mapped — the caller
+// chose the address, so a clash is a recoverable runtime condition, not a kernel bug.
+export fn mmap_anon(pt: *mut PageTable, h: *mut Heap, virt: VAddr, flags: u64) -> Result<PAddr, MapError> {
     let frame: PAddr = heap_alloc(h, PAGE, PAGE);
-    page_table_map(pt, h, virt, frame, flags);
-    return frame;
+    page_table_try_map(pt, h, virt, frame, flags)?; // propagate MisalignedAddress/AlreadyMapped/...
+    return ok(frame);
 }
 
 // Remove a mapping; `virt` no longer resolves.

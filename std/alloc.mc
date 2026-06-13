@@ -33,14 +33,20 @@ export fn free_bytes(a: *Allocator, addr: PAddr, size: usize) -> void {
 // that is never freed/returned is a compile-time `E_RESOURCE_LEAK` — the
 // allocate-then-forget bug Zig can only catch at runtime in debug mode. Access the
 // storage via `own_addr` + `raw.load/store<T>`; end its life with `own_free`.
+//
+// The handle carries the `*Allocator` it was created from (its provenance), so
+// `own_free` reclaims through that exact allocator — there is no separate allocator
+// argument that could mismatch the one `create` used. The allocator must outlive
+// the handle (it is borrowed, not owned).
 
 move struct Owned<T> {
     addr: PAddr,
+    allocator: *Allocator, // provenance: the allocator that minted `addr`
 }
 
 // Allocate storage for one T from `a` (size/align via reflection on T).
 export fn create(comptime T: type, a: *Allocator) -> Owned<T> {
-    return .{ .addr = alloc_bytes(a, sizeof(T), alignof(T)) };
+    return .{ .addr = alloc_bytes(a, sizeof(T), alignof(T)), .allocator = a };
 }
 
 // The backing address — a borrow; does not consume the handle.
@@ -48,8 +54,10 @@ export fn own_addr(comptime T: type, o: *Owned<T>) -> PAddr {
     return o.addr;
 }
 
-// Free the storage back to `a`, consuming the linear handle (its end of life).
-export fn own_free(comptime T: type, a: *Allocator, o: Owned<T>) -> void {
-    free_bytes(a, o.addr, sizeof(T));
+// Free the storage back to its originating allocator, consuming the linear handle
+// (its end of life). The allocator is taken from the handle, so a resource can
+// never be freed through the wrong owner.
+export fn own_free(comptime T: type, o: Owned<T>) -> void {
+    free_bytes(o.allocator, o.addr, sizeof(T));
     drop(o); // consume the linear handle
 }

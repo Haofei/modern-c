@@ -16,6 +16,11 @@ export fn pool_demo_run() -> u32 {
         ok(r) => { r1 = r; }
         err(e) => { pass = 0; }
     }
+    // Reserved but not initialized yet: loading must fail closed.
+    switch pool_load(Cell, 16, &g_pool, r1) {
+        ok(c) => { pass = 0; }
+        err(e) => {}
+    }
     let v1: Cell = .{ .v = 0xAB };
     switch pool_set(Cell, 16, &g_pool, r1, v1) {
         ok(b) => {}

@@ -62,7 +62,9 @@ struct Process {
     state: ProcState,
     pid: u32,
     gen: u32,       // generation: bumped each time this slot is (re)used, for Endpoint validation
-    parent: u32,    // pid of the spawning process
+    parent: u32,    // pid of the spawning process (display/debug identity)
+    parent_slot: usize, // spawning process slot, paired with parent_gen
+    parent_gen: u32,    // spawning process generation; prevents stale-parent reuse
     exit_code: u32, // valid once state == Zombie
     satp: u64,      // this process's address space (Sv39 root); 0 = share the kernel's
     inbox: Mailbox<Message, IPC_SLOTS>, // multi-slot mailbox for kernel-mediated IPC
@@ -88,12 +90,22 @@ struct ProcTable {
     // else is runnable — so the kernel sleeps until an interrupt instead of busy-spinning as a
     // blocked "current" process. Defaults to a no-op (set by the platform via proc_set_idle).
     idle_hook: closure() -> void,
+    // Global resource-cleanup hook, invoked with (dead pid, dead gen) when a process dies, so
+    // subsystems that hold per-owner resources (grant tables, service registries, …) can revoke
+    // everything the dead process owned. The process table stays decoupled from those subsystems:
+    // whoever owns them registers a closure via proc_set_death_hook. Defaults to a no-op.
+    death_hook: closure(u32, u32) -> void,
 }
 
 // The no-op default idle action (a closure needs a captured env; this one is empty).
 struct IdleEnv { unused: u32 }
 global g_idle_env: IdleEnv;
 fn idle_noop(e: *mut IdleEnv) -> void {}
+
+// The no-op default death hook (same empty-env pattern as idle).
+struct DeathEnv { unused: u32 }
+global g_death_env: DeathEnv;
+fn death_noop(e: *mut DeathEnv, pid: u32, gen: u32) -> void {}
 
 // Runnable state is DERIVED: a process runs only when it is Ready/Running *and* has no
 // outstanding block reasons. Nothing sets a "runnable" bit directly — proc_block/proc_unblock
@@ -164,6 +176,8 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].pid = 0;
         t.procs[i].gen = 0;
         t.procs[i].parent = 0;
+        t.procs[i].parent_slot = MAX_PROCS;
+        t.procs[i].parent_gen = 0;
         t.procs[i].exit_code = 0;
         t.procs[i].satp = 0;
         mailbox_init(Message, IPC_SLOTS, &t.procs[i].inbox);
@@ -171,8 +185,8 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].wait_slot = MAX_PROCS; // no waiter target
         t.procs[i].wait_gen = 0;
         t.procs[i].pending_sig = mask32_zero();
-        t.procs[i].allow_mask = mask32_from(0xFFFF_FFFF); // permissive by default; restrict per server
-        t.procs[i].kcall_mask = mask32_from(0xFFFF_FFFF);
+        t.procs[i].allow_mask = mask32_zero();
+        t.procs[i].kcall_mask = mask32_zero();
         t.procs[i].priority = 0;
         t.procs[i].quantum = QUANTUM_DEFAULT;
         t.procs[i].ticks = 0;
@@ -181,9 +195,12 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
     }
     // Slot 0 is the running bootstrap context (filled on first switch out).
     t.procs[0].state = .Running;
+    t.procs[0].allow_mask = mask32_from(0xFFFF_FFFF); // bootstrap can seed policy
+    t.procs[0].kcall_mask = mask32_from(0xFFFF_FFFF);
     t.count = 1;
     t.current = 0;
     t.idle_hook = bind(&g_idle_env, idle_noop); // platform overrides with wfi via proc_set_idle
+    t.death_hook = bind(&g_death_env, death_noop); // subsystems override via proc_set_death_hook
 }
 
 // Set the platform's CPU-idle action (e.g. a `wfi` wrapper). Called when the scheduler has
@@ -197,6 +214,13 @@ export fn proc_set_idle(t: *mut ProcTable, hook: closure() -> void) -> void {
 fn proc_idle(t: *mut ProcTable) -> void {
     let hook: closure() -> void = t.idle_hook;
     hook();
+}
+
+// Install the global resource-cleanup hook, run with (pid, gen) on every process death.
+// A microkernel installs one closure that revokes the dead pid's grants and unregisters
+// its services, so a dead owner's resources can never outlive it. See proc_death_cleanup.
+export fn proc_set_death_hook(t: *mut ProcTable, hook: closure(u32, u32) -> void) -> void {
+    t.death_hook = hook;
 }
 
 export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -> u32 {
@@ -229,6 +253,8 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     t.procs[slot].pid = slot as u32;
     t.procs[slot].gen = t.procs[slot].gen + 1; // a new incarnation: invalidates old endpoints
     t.procs[slot].parent = t.procs[t.current].pid; // the spawner is the parent
+    t.procs[slot].parent_slot = t.current;
+    t.procs[slot].parent_gen = t.procs[t.current].gen;
     t.procs[slot].exit_code = 0;
     // Reset per-process state in case this slot was reaped from an earlier process.
     mailbox_init(Message, IPC_SLOTS, &t.procs[slot].inbox);
@@ -236,8 +262,8 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     t.procs[slot].wait_slot = MAX_PROCS;
     t.procs[slot].wait_gen = 0;
     t.procs[slot].pending_sig = mask32_zero();
-    t.procs[slot].allow_mask = mask32_from(0xFFFF_FFFF);
-    t.procs[slot].kcall_mask = mask32_from(0xFFFF_FFFF);
+    t.procs[slot].allow_mask = mask32_zero();
+    t.procs[slot].kcall_mask = mask32_zero();
     t.procs[slot].priority = 0;
     t.procs[slot].quantum = QUANTUM_DEFAULT;
     t.procs[slot].ticks = 0;
@@ -566,6 +592,12 @@ export fn ipc_tag_quantum() -> u32 {
 // clean. (MINIX clears IPC references on exit instead of leaving dangling waiters.)
 fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     let dead_gen: u32 = t.procs[dead].gen;
+    let dead_pid: u32 = t.procs[dead].pid;
+    // Revoke global resources the dead process owned (grants, registered services, …)
+    // through the installed hook, before the slot is reused. Decoupled: the hook is
+    // whatever the subsystem owner registered (a no-op if none).
+    let death_hook: closure(u32, u32) -> void = t.death_hook;
+    death_hook(dead_pid, dead_gen);
     // Drop the dead process's own pending IPC + signals + wait state.
     mailbox_init(Message, IPC_SLOTS, &t.procs[dead].inbox);
     t.procs[dead].pending_sig = mask32_zero();
@@ -595,7 +627,12 @@ export fn proc_exit(t: *mut ProcTable, code: u32) -> void {
     proc_death_cleanup(t, from); // release waiters + clear IPC before the slot becomes a zombie
     t.procs[from].state = .Zombie;
     // Wake the parent if it is blocked in proc_wait — this exit is the event it was waiting for.
-    proc_unblock(t, t.procs[from].parent as usize, BLOCK_WAIT);
+    let parent_slot: usize = t.procs[from].parent_slot;
+    if parent_slot < t.count {
+        if t.procs[parent_slot].gen == t.procs[from].parent_gen {
+            proc_unblock(t, parent_slot, BLOCK_WAIT);
+        }
+    }
     var target: usize = from;
     var picking: bool = true;
     while picking {
@@ -622,17 +659,32 @@ export fn proc_exit(t: *mut ProcTable, code: u32) -> void {
 // but none have exited yet (the caller can yield and retry). Reaping is what turns a Zombie
 // back into a free (Unused) slot.
 export fn proc_reap(t: *mut ProcTable, parent_pid: u32) -> Result<ReapInfo, ReapError> {
+    let parent_slot: usize = parent_pid as usize;
+    if parent_slot >= t.count {
+        return err(.NoChildren);
+    }
+    let parent_gen: u32 = t.procs[parent_slot].gen;
     var any_child: bool = false;
     var i: usize = 0;
     while i < t.count {
         let pid: u32 = t.procs[i].pid;
         let par: u32 = t.procs[i].parent;
         if par == parent_pid {
+            if t.procs[i].parent_slot != parent_slot {
+                i = i + 1;
+                continue;
+            }
+            if t.procs[i].parent_gen != parent_gen {
+                i = i + 1;
+                continue;
+            }
             if pid != parent_pid { // never the parent's own slot
                 let st: ProcState = t.procs[i].state;
                 if st == .Zombie {
                     let code: u32 = t.procs[i].exit_code;
                     t.procs[i].state = .Unused;
+                    t.procs[i].parent_slot = MAX_PROCS;
+                    t.procs[i].parent_gen = 0;
                     return ok(.{ .pid = pid, .code = code });
                 }
                 if st != .Unused {

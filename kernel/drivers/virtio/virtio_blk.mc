@@ -20,8 +20,9 @@ const IO_TIMEOUT_TICKS: u64 = 50_000_000; // ~5s of CLINT ticks
 enum BlkError {
     DeviceInitFailed,
     QueueUnavailable,
-    Timeout,    // the device did not complete the request in time
-    IoError,    // the device reported a non-OK status
+    Timeout,      // the device did not complete the request in time
+    IoError,      // the device reported a non-OK status
+    DeviceFault,  // the device returned an inconsistent completion (bad id/len/chain)
 }
 
 struct BlkDevice {
@@ -67,11 +68,6 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
     var data: CpuBuffer = alloc(SECTOR_SIZE); // the device writes the sector here
     var status: CpuBuffer = alloc(1);         // the device writes the status byte here
 
-    // Keep the CPU-visible addresses to read the results back (QEMU is coherent;
-    // a real platform would reclaim via invalidate_for_cpu after the chain).
-    let data_addr: PAddr = cpu_addr(&data);
-    let status_addr: PAddr = cpu_addr(&status);
-
     let hdr_d: DeviceBuffer = clean_for_device(hdr);
     let data_d: DeviceBuffer = clean_for_device(data);
     let status_d: DeviceBuffer = clean_for_device(status);
@@ -80,17 +76,38 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
     vq_kick(regs, 0);
 
     if !vq_wait_used(vq, IO_TIMEOUT_TICKS) {
+        // The request is still in flight: the device owns the buffers and may yet
+        // write them, so we cannot reclaim them here without a queue reset. Fail
+        // closed (the buffers stay device-owned until the queue is torn down).
         return err(.Timeout);
     }
-    let used: u32 = vq_complete_chain(vq);
-
-    var st: u8 = 0;
+    // Take the three buffers back as owned handles (the descriptors are freed inside).
     var first: u32 = 0;
-    unsafe {
-        st = raw.load<u8>(status_addr);
-        first = raw.load<u32>(data_addr);
+    var io_ok: bool = false;
+    switch vq_complete_chain(vq) {
+        ok(done) => {
+            // Move each owned buffer out of the completed chain, then consume the
+            // (now empty) chain shell. Reclaim each buffer through the typed DMA path
+            // (invalidate caches, regain CPU ownership) and read the results through
+            // bounds-checked views.
+            let hbuf: DeviceBuffer = done.header;
+            let dbuf: DeviceBuffer = done.data;
+            let sbuf: DeviceBuffer = done.status;
+            drop(done);
+            let chdr: CpuBuffer = invalidate_for_cpu(hbuf);
+            let cdata: CpuBuffer = invalidate_for_cpu(dbuf);
+            let cstatus: CpuBuffer = invalidate_for_cpu(sbuf);
+            first = read_le32(&cdata, 0);
+            io_ok = read_u8(&cstatus, 0) == BLK_STATUS_OK;
+            free(chdr);
+            free(cdata);
+            free(cstatus);
+        }
+        err(e) => {
+            return err(.DeviceFault);
+        }
     }
-    if st != BLK_STATUS_OK {
+    if !io_ok {
         return err(.IoError);
     }
     return ok(first);

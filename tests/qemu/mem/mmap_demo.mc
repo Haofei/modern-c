@@ -19,8 +19,15 @@ export fn mmap_demo(region_base: usize, region_len: usize) -> u64 {
     page_table_map_gigapage(&pt, va(0), pa(0), rwx);            // devices
     page_table_map_gigapage(&pt, va(2 * GIB), pa(2 * GIB), rwx); // kernel
 
-    mmap_anon(&pt, &heap, va(VA1), PTE_R | PTE_W); // two anonymous pages
-    mmap_anon(&pt, &heap, va(VA2), PTE_R | PTE_W);
+    // Two distinct, previously-unmapped anonymous pages — both maps must succeed.
+    switch mmap_anon(&pt, &heap, va(VA1), PTE_R | PTE_W) {
+        ok(f) => {}
+        err(e) => { return 0; } // 0 is an invalid satp: signals the mapping failed
+    }
+    switch mmap_anon(&pt, &heap, va(VA2), PTE_R | PTE_W) {
+        ok(f) => {}
+        err(e) => { return 0; }
+    }
 
     let root: PAddr = page_table_root(&pt);
     return SATP_SV39 | ((pa_value(root) >> 12) as u64);

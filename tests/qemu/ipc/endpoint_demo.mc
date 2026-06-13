@@ -44,6 +44,28 @@ export fn endpoint_run() -> u32 {
     if !endpoint_live(&g_t, ep_b) { pass = 0; }
     if ep_b.gen == ep_a.gen { pass = 0; }      // a new incarnation has a new generation
 
+    // Parent identity is generation-checked too: a child of an old slot-1
+    // incarnation must not be reaped by a later unrelated process that reuses pid 1.
+    g_t.current = 1;
+    let child: u32 = proc_spawn(&g_t, 0x3000, worker);
+    if child != 2 { pass = 0; }
+    g_t.current = 0;
+    let p_child: *mut Process = &tbl.procs[2];
+    p_child.state = .Zombie;
+    let old_parent: *mut Process = &tbl.procs[1];
+    old_parent.state = .Zombie;
+    switch proc_reap(&g_t, 0) {
+        ok(info2) => { if info2.pid != 1 { pass = 0; } }
+        err(e2) => { pass = 0; }
+    }
+    let reused_parent_pid: u32 = proc_spawn(&g_t, 0x4000, worker);
+    if reused_parent_pid != 1 { pass = 0; }
+    switch proc_reap(&g_t, reused_parent_pid) {
+        ok(info3) => { pass = 0; }
+        err(e3) => {}
+    }
+    p_child.state = .Unused;
+
     // a fabricated endpoint to a never-used slot validates as DeadEndpoint
     let bogus: Endpoint = .{ .slot = 1, .gen = 999 };
     switch endpoint_slot(&g_t, bogus) {

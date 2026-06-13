@@ -17,6 +17,7 @@ struct File {
     name_off: usize,
     name_len: usize,
     data_off: usize,
+    capacity: usize,
     size: usize,
     used: bool,
 }
@@ -93,6 +94,7 @@ export fn ramfs_create(fs: *mut Ramfs, name: usize, name_len: usize, capacity: u
     fs.files[slot].name_off = noff;
     fs.files[slot].name_len = name_len;
     fs.files[slot].data_off = fs.data_used;
+    fs.files[slot].capacity = capacity;
     fs.files[slot].size = 0;
     fs.files[slot].used = true;
     fs.name_used = noff + name_len;
@@ -118,20 +120,31 @@ export fn ramfs_find(fs: *mut Ramfs, name: usize, name_len: usize) -> Result<usi
 // Append `len` bytes from `src` to file `idx`. The file's data lives in a fixed
 // pool slice [data_off, data_off + capacity); appending past it is an error.
 export fn ramfs_write(fs: *mut Ramfs, idx: usize, src: usize, len: usize) -> Result<usize, FsError> {
+    return ramfs_write_at(fs, idx, fs.files[idx].size, src, len);
+}
+
+// Write `len` bytes from `src` to file `idx` starting at `offset`. The write may
+// overwrite existing bytes or extend the file, but never past its reserved slice.
+export fn ramfs_write_at(fs: *mut Ramfs, idx: usize, offset: usize, src: usize, len: usize) -> Result<usize, FsError> {
     let base: usize = fs.files[idx].data_off;
-    let cur: usize = fs.files[idx].size;
-    // The next file's data_off bounds this file's capacity; use data_used as the
-    // simple upper bound for the last file, and the pool end overall.
-    if (base + cur + len) > DATA_POOL {
+    let capacity: usize = fs.files[idx].capacity;
+    if offset > capacity {
+        return err(.TooLarge);
+    }
+    let room: usize = capacity - offset;
+    if len > room {
         return err(.TooLarge);
     }
     var sr: ByteReader = byte_reader(pa(src), len);
     var j: usize = 0;
     while j < len {
-        fs.data[base + cur + j] = br_u8(&sr, j);
+        fs.data[base + offset + j] = br_u8(&sr, j);
         j = j + 1;
     }
-    fs.files[idx].size = cur + len;
+    let end: usize = offset + len;
+    if end > fs.files[idx].size {
+        fs.files[idx].size = end;
+    }
     return ok(len);
 }
 

@@ -56,7 +56,18 @@ fi
 command -v "$CLANG" >/dev/null 2>&1 || { echo "mcc-cc: clang not found" >&2; exit 1; }
 
 # Default to a conservative, warnings-as-errors C compile; callers can override
-# the standard/flags through the passthrough args.
-"$MCC" emit-c "$INPUT" "${PROFILE_ARGS[@]}" | "$CLANG" -std=c11 -Wall -Wextra -Werror "${PASS[@]}" -c -x c - -o "$OUT"
+# the standard/flags through the passthrough args. Build argv explicitly so empty
+# arrays remain valid under `set -u` on older Bash.
+EMIT_CMD=("$MCC" emit-c "$INPUT")
+if [ "${#PROFILE_ARGS[@]}" -gt 0 ]; then
+    EMIT_CMD+=("${PROFILE_ARGS[@]}")
+fi
+CLANG_CMD=("$CLANG" -std=c11 -Wall -Wextra -Werror)
+if [ "${#PASS[@]}" -gt 0 ]; then
+    CLANG_CMD+=("${PASS[@]}")
+fi
+CLANG_CMD+=(-c -x c - -o "$OUT")
+
+"${EMIT_CMD[@]}" | "${CLANG_CMD[@]}"
 
 echo "mcc-cc: wrote $OUT"

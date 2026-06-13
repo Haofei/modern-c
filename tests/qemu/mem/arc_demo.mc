@@ -25,23 +25,23 @@ export fn arc_demo_run() -> u32 {
         pass = 0;
     }
 
-    let v1: *mut Payload = arc_get(Payload, &h1);
+    let v1: *const Payload = arc_get(Payload, &h1);
     if v1.value != 0xBEEF {
         pass = 0;
     }
-    let v2: *mut Payload = arc_get(Payload, &h2);
+    let v2: *const Payload = arc_get(Payload, &h2);
     if v2.value != 0xBEEF {
         pass = 0;
     }
 
-    if arc_drop(Payload, &a, h1) {
+    if arc_drop(Payload, h1) {
         pass = 0; // not the last owner -> must NOT free
     }
     if arc_count(Payload, &h2) != 1 {
         pass = 0; // h2 still valid; count back to 1
     }
 
-    if !arc_drop(Payload, &a, h2) {
+    if !arc_drop(Payload, h2) {
         pass = 0; // last owner -> must free
     }
 

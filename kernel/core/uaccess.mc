@@ -2,14 +2,24 @@
 //
 // A user pointer is the opaque `UserPtr` address class: the kernel cannot
 // dereference it directly (E_USER_PTR_DEREF) or confuse it with a kernel address.
-// Every user copy goes through this one bounds-checked path. The requested range
-// is validated against the process's user region *before* any access; an
-// out-of-range (or length-overflowing) request returns a typed error and copies
-// nothing — fail closed, never a wild read/write. The single `unsafe` block is the
-// raw byte copy, justified by the preceding validation and isolated here.
+// Every user copy goes through a bounds-checked path that copies nothing on any
+// validation failure — fail closed, never a wild read/write. The single `unsafe`
+// block (in mem_copy) is the raw byte copy, justified by the preceding validation.
+//
+// Two backends:
+//   - `UserSpace` (numeric): the user region is identity-mapped; validate the
+//     [addr, addr+len) range against [base, limit) and copy via `phys(addr)`. This
+//     is the bring-up path used before per-process page tables are active.
+//   - `UserAddrSpace` (page-table-aware): translate every user virtual address
+//     through the target process page table and validate PTE_U plus PTE_R/PTE_W
+//     page by page before copying. This is the real user/kernel boundary — a
+//     numeric range check alone cannot see unmapped holes or kernel-only pages.
 
 import "std/addr.mc";
 import "std/mem.mc";
+import "kernel/arch/riscv64/paging.mc";
+
+const UA_PAGE_SIZE: usize = 4096;
 
 // The half-open user-accessible region [base, limit).
 struct UserSpace {
@@ -18,7 +28,11 @@ struct UserSpace {
 }
 
 enum UaccessError {
-    OutOfRange, // [addr, addr+len) is not wholly inside the user region
+    OutOfRange,      // [addr, addr+len) is not wholly inside the user region
+    NotMapped,       // a page in the range has no valid user mapping
+    NotUserPage,     // a page in the range is mapped but not user-accessible (no PTE_U)
+    NotReadable,     // a source page is not readable (no PTE_R)
+    NotWritable,     // a destination page is not writable (no PTE_W)
 }
 
 export fn user_space(base: usize, limit: usize) -> UserSpace {
@@ -47,7 +61,10 @@ fn check_range(us: *UserSpace, addr: usize, len: usize) -> Result<bool, UaccessE
 // range escapes the user region.
 export fn copy_from_user(us: *UserSpace, dst: PAddr, src: UserPtr<u8>, len: usize) -> Result<bool, UaccessError> {
     let src_addr: usize = src as usize;
-    let validated: bool = check_range(us, src_addr, len)?; // propagate OutOfRange via `?`
+    switch check_range(us, src_addr, len) {
+        ok(v) => {}
+        err(e) => { return err(e); } // out of range: copy nothing
+    }
     mem_copy(dst, phys(src_addr), len); // range validated above; unsafe is in mem_copy
     return ok(true);
 }
@@ -56,7 +73,128 @@ export fn copy_from_user(us: *UserSpace, dst: PAddr, src: UserPtr<u8>, len: usiz
 // validating the destination range.
 export fn copy_to_user(us: *UserSpace, dst: UserPtr<u8>, src: PAddr, len: usize) -> Result<bool, UaccessError> {
     let dst_addr: usize = dst as usize;
-    let validated: bool = check_range(us, dst_addr, len)?; // propagate OutOfRange via `?`
+    switch check_range(us, dst_addr, len) {
+        ok(v) => {}
+        err(e) => { return err(e); } // out of range: copy nothing
+    }
     mem_copy(phys(dst_addr), src, len); // range validated above; unsafe is in mem_copy
     return ok(true);
+}
+
+// ----- page-table-aware path -----
+//
+// A target address space: the process page table plus its [base, limit) user-region
+// bound. Copies translate each user VA through `pt` and check PTE_U plus the access
+// direction's permission, so unmapped holes and kernel-only pages in the middle of a
+// range are caught — something a numeric range check cannot do.
+struct UserAddrSpace {
+    pt: *PageTable,
+    base: usize,
+    limit: usize,
+}
+
+export fn user_addr_space(pt: *PageTable, base: usize, limit: usize) -> UserAddrSpace {
+    return .{ .pt = pt, .base = base, .limit = limit };
+}
+
+// Whether each page touched by [addr, addr+len) is mapped, user-accessible, and has
+// the required permission (PTE_W when `need_write`, else PTE_R). Validates the whole
+// range up front so a copy is all-or-nothing: if any page fails, the caller copies
+// nothing. `addr <= limit` is checked before `limit - addr` to avoid underflow.
+fn check_pages(uas: *UserAddrSpace, addr: usize, len: usize, need_write: bool) -> Result<bool, UaccessError> {
+    if addr < uas.base {
+        return err(.OutOfRange);
+    }
+    if addr > uas.limit {
+        return err(.OutOfRange);
+    }
+    let room: usize = uas.limit - addr;
+    if len > room {
+        return err(.OutOfRange);
+    }
+    if len == 0 {
+        return ok(true);
+    }
+    // Walk page by page from the page containing `addr` to the page containing the
+    // last byte, so a multi-page range with a hole in the middle is rejected.
+    var page: usize = addr - (addr % UA_PAGE_SIZE);
+    let last: usize = addr + (len - 1);
+    var more: bool = true;
+    while more {
+        switch page_table_lookup(uas.pt, va(page)) {
+            ok(m) => {
+                if !mapping_is_user(&m) {
+                    return err(.NotUserPage);
+                }
+                if need_write {
+                    if !mapping_is_writable(&m) {
+                        return err(.NotWritable);
+                    }
+                } else {
+                    if !mapping_is_readable(&m) {
+                        return err(.NotReadable);
+                    }
+                }
+            }
+            err(e) => {
+                return err(.NotMapped);
+            }
+        }
+        if page >= (last - (last % UA_PAGE_SIZE)) {
+            more = false;
+        } else {
+            page = page + UA_PAGE_SIZE;
+        }
+    }
+    return ok(true);
+}
+
+// Copy `len` bytes from user VA `src` (in `uas`) into the kernel buffer at `dst`,
+// translating each page through the page table and requiring it be user-readable.
+// Validated all-or-nothing: on any failure, nothing is copied.
+export fn copy_from_user_pt(uas: *UserAddrSpace, dst: PAddr, src: UserPtr<u8>, len: usize) -> Result<bool, UaccessError> {
+    let src_addr: usize = src as usize;
+    switch check_pages(uas, src_addr, len, false) { // require PTE_U + PTE_R on every page
+        ok(v) => {}
+        err(e) => { return err(e); } // copy nothing on any unmapped/permission failure
+    }
+    copy_pages(uas, dst, src_addr, len, false);
+    return ok(true);
+}
+
+// Copy `len` bytes from the kernel buffer at `src` to user VA `dst` (in `uas`),
+// translating each page through the page table and requiring it be user-writable.
+export fn copy_to_user_pt(uas: *UserAddrSpace, dst: UserPtr<u8>, src: PAddr, len: usize) -> Result<bool, UaccessError> {
+    let dst_addr: usize = dst as usize;
+    switch check_pages(uas, dst_addr, len, true) { // require PTE_U + PTE_W on every page
+        ok(v) => {}
+        err(e) => { return err(e); } // copy nothing on any unmapped/permission failure
+    }
+    copy_pages(uas, src, dst_addr, len, true);
+    return ok(true);
+}
+
+// Copy `len` bytes between kernel buffer `kbuf` and user range [uaddr, uaddr+len),
+// one page-slice at a time (each user page may map to a discontiguous frame). When
+// `to_user` is true the user range is the destination, else the source. The range was
+// fully validated by `check_pages`, so every lookup here succeeds.
+fn copy_pages(uas: *UserAddrSpace, kbuf: PAddr, uaddr: usize, len: usize, to_user: bool) -> void {
+    var done: usize = 0;
+    while done < len {
+        let cur: usize = uaddr + done;
+        let page_off: usize = cur % UA_PAGE_SIZE;
+        var chunk: usize = UA_PAGE_SIZE - page_off; // bytes left in this user page
+        let remaining: usize = len - done;
+        if chunk > remaining {
+            chunk = remaining;
+        }
+        let user_pa: PAddr = page_table_translate(uas.pt, va(cur)); // validated mapped above
+        let k: PAddr = pa_offset(kbuf, done);
+        if to_user {
+            mem_copy(user_pa, k, chunk);
+        } else {
+            mem_copy(k, user_pa, chunk);
+        }
+        done = done + chunk;
+    }
 }

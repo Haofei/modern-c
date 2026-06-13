@@ -2,7 +2,7 @@
 // SPEC: milestone=linear-move
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_USE_AFTER_MOVE,E_RESOURCE_LEAK,E_RESOURCE_OVERWRITE,E_MOVE_BRANCH_MISMATCH
+// SPEC: check=E_USE_AFTER_MOVE,E_RESOURCE_LEAK,E_RESOURCE_OVERWRITE,E_MOVE_BRANCH_MISMATCH,E_MOVE_LOOP_RESOURCE
 
 // Linear `move` resource types (section 18.1): a `move` value is used linearly —
 // consumed (moved) exactly once. A by-value use moves it; `&x` borrows.
@@ -76,6 +76,67 @@ fn reject_branch_mismatch(flag: bool) -> u32 {
     return 0;
 }
 
+fn reject_return_path_leak(flag: bool) -> u32 {
+    let t: Token = make(); // EXPECT_ERROR: E_RESOURCE_LEAK
+    switch flag {
+        true => { return 0; }
+        false => { return consume(t); }
+    }
+}
+
+fn reject_branch_local_leak(flag: bool) -> u32 {
+    switch flag {
+        true => {
+            let t: Token = make(); // EXPECT_ERROR: E_RESOURCE_LEAK
+        }
+        false => { }
+    }
+    return 0;
+}
+
+fn reject_loop_outer_move(flag: bool) -> u32 {
+    let t: Token = make(); // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while flag {
+        let a: u32 = consume(t);
+    }
+    return 0;
+}
+
+// A loop-body-local move value that is live when `break` exits the iteration leaks
+// on that edge — the iteration ends without consuming it.
+fn reject_loop_break_leak(flag: bool) -> u32 {
+    while flag {
+        let t: Token = make(); // EXPECT_ERROR: E_RESOURCE_LEAK
+        if flag {
+            break;             // t leaks on the break edge
+        }
+        let a: u32 = consume(t);
+    }
+    return 0;
+}
+
+// Same for `continue`: a live body-local at the continue edge leaks.
+fn reject_loop_continue_leak(flag: bool) -> u32 {
+    while flag {
+        let t: Token = make(); // EXPECT_ERROR: E_RESOURCE_LEAK
+        if flag {
+            continue;          // t leaks on the continue edge
+        }
+        let a: u32 = consume(t);
+    }
+    return 0;
+}
+
+// Consuming the body-local before `continue` is fine — nothing is live at the edge.
+fn accept_loop_consume_then_continue(flag: bool) -> u32 {
+    while flag {
+        let t: Token = make();
+        let a: u32 = consume(t);
+        continue;
+    }
+    return 0;
+}
+
 // --- move values bound in a switch arm are tracked too (regression: ok(t) must be linear) ---
 
 enum MoveErr { Bad }
@@ -106,4 +167,28 @@ fn reject_switch_leak() -> u32 {
         ok(t) => { return 0; } // EXPECT_ERROR: E_RESOURCE_LEAK
         err(e) => { return 0; }
     }
+}
+
+// --- move values bound in an if-let branch are tracked too ---
+
+fn accept_if_let_consume() -> u32 {
+    if let ok(t) = try_make() {
+        return consume(t);
+    }
+    return 0;
+}
+
+fn reject_if_let_use_after_move() -> u32 {
+    if let ok(t) = try_make() {
+        let a: u32 = consume(t);
+        return consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    }
+    return 0;
+}
+
+fn reject_if_let_leak() -> u32 {
+    if let ok(t) = try_make() { // EXPECT_ERROR: E_RESOURCE_LEAK
+        return 0;
+    }
+    return 0;
 }

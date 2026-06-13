@@ -15,15 +15,27 @@
 
 import "std/addr.mc";
 
+fn check_power_of_two_align(align: usize) -> void {
+    if align == 0 {
+        unreachable;
+    }
+    if (align & (align - 1)) != 0 {
+        unreachable;
+    }
+}
+
 export fn is_aligned(addr: usize, align: usize) -> bool {
+    check_power_of_two_align(align);
     return (addr % align) == 0;
 }
 
 export fn align_down(addr: usize, align: usize) -> usize {
+    check_power_of_two_align(align);
     return addr - (addr % align);
 }
 
 export fn align_up(addr: usize, align: usize) -> usize {
+    check_power_of_two_align(align);
     let bumped: usize = addr + (align - 1); // checked: traps on overflow
     return align_down(bumped, align);
 }
@@ -32,6 +44,15 @@ export fn align_up(addr: usize, align: usize) -> usize {
 // only unsafe operation; callers pass typed PAddrs. (Regions must not overlap with
 // dst after src — like C memcpy.)
 export fn mem_copy(dst: PAddr, src: PAddr, len: usize) -> void {
+    let d: usize = pa_value(dst);
+    let s: usize = pa_value(src);
+    if len > 0 {
+        if d < (s + len) {
+            if s < (d + len) {
+                unreachable; // overlapping ranges: use a memmove-style helper instead
+            }
+        }
+    }
     var i: usize = 0;
     while i < len {
         unsafe {

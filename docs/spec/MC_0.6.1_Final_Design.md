@@ -1665,7 +1665,7 @@ fn unlock(h: Held) -> Lock;          // consumes Held, returns the Lock
 
 `move` is a **compile-time** contract only: a `move` value lowers to its ordinary
 representation with no runtime cost; the linearity is checked by a per-function
-move/liveness pass (annex D) and erased. This keeps MC's stance — *explicit
+control-flow move/liveness pass (annex D) and erased. This keeps MC's stance — *explicit
 machine contract, not memory safety*: `move` enforces **hardware ownership
 protocols** for resource handles, and is deliberately *not* a whole-program
 borrow/lifetime system.
@@ -3120,8 +3120,9 @@ Like the trap verifier, this is a call-graph contract, not a theorem-proving mod
 ## D.7 Linear (`move`) Verifier
 
 The linear verifier (section 18.1) enforces single-use ownership of `move`-typed
-values with a per-function move/liveness analysis over the lexical scope. It is
-not a borrow checker — there are no borrows, lifetimes, or aliasing analysis.
+values with a per-function move/liveness analysis over explicit control-flow
+edges. It is not a borrow checker — there are no borrows, lifetimes, or aliasing
+analysis.
 
 ```txt
 For each binding of a `move` type:
@@ -3133,9 +3134,13 @@ For each binding of a `move` type:
     - a `move` value cannot be copied/aliased (it has a single owner).
 ```
 
-Conditional control flow joins conservatively: a binding is live after a join
-only if it is live on every predecessor path; otherwise a later use is rejected.
-`move` is erased after checking — it has no runtime representation or cost.
+Every function-exit edge (`return`, fallthrough, trap-like exits admitted by the
+frontend) is checked for still-live resources. Conditional control flow joins
+conservatively: a binding is live after a join only if it is live on every
+reachable predecessor path; otherwise a later use is rejected. Loops are
+conservative unless proven one-shot: moving an outer `move` resource inside a
+loop is rejected because the loop may execute zero or multiple times. `move` is
+erased after checking — it has no runtime representation or cost.
 
 ---
 

@@ -29,6 +29,19 @@ int main(void) {
     CHECK(buf[0] == 'a' && buf[1] == 'b' && buf[2] == 'c' && buf[3] == 'd' && buf[4] == 'e');
     CHECK(v_read(r, (uintptr_t)buf, 8) == 0);  // position now at end
 
+    // Writes use the fd's current position. A fresh fd reads two bytes, then
+    // writes in the middle; the write must not append to the file.
+    uint64_t rw = v_open((uintptr_t)log, 3);
+    CHECK(rw == 2);
+    for (int i = 0; i < 8; i++) buf[i] = 0;
+    CHECK(v_read(rw, (uintptr_t)buf, 2) == 2);
+    CHECK(v_write(rw, (uintptr_t)"XY", 2) == 2);
+    uint64_t check = v_open((uintptr_t)log, 3);
+    CHECK(check == 3);
+    for (int i = 0; i < 8; i++) buf[i] = 0;
+    CHECK(v_read(check, (uintptr_t)buf, 8) == 5);
+    CHECK(buf[0] == 'a' && buf[1] == 'b' && buf[2] == 'X' && buf[3] == 'Y' && buf[4] == 'e');
+
     // close + use-after-close is rejected.
     CHECK(v_close(w) == 0);
     CHECK(v_write(w, (uintptr_t)"x", 1) == ERR); // bad fd

@@ -26,6 +26,6 @@ export fn owned_demo_run() -> u32 {
             pass = 0;
         }
     }
-    own_free(Cell, &a, o); // consume the linear handle (else E_RESOURCE_LEAK)
+    own_free(Cell, o); // consume the linear handle (else E_RESOURCE_LEAK)
     return pass;
 }

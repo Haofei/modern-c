@@ -58,5 +58,6 @@ export fn cow_handle_fault(fault_va: usize) -> void {
     let aligned: usize = fault_va - (fault_va % PAGE);
     let copy: PAddr = heap_alloc(&g_heap, PAGE, PAGE);
     mem_copy(copy, g_shared, PAGE);
+    page_table_unmap(&g_pt_parent, va(aligned));
     page_table_map(&g_pt_parent, &g_heap, va(aligned), copy, PTE_R | PTE_W);
 }

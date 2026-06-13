@@ -13,6 +13,7 @@ struct Pool<T, N> {
     slots: [N]T,
     gen: [N]u32, // current generation of each slot
     used: [N]bool,
+    initialized: [N]bool,
     count: usize,
 }
 
@@ -24,12 +25,14 @@ struct PoolRef<T> {
 enum PoolError {
     Full,
     StaleHandle, // the slot was freed (or freed + reused) since this handle was issued
+    Uninitialized, // the slot is reserved but has not been written yet
 }
 
 export fn pool_init(comptime T: type, comptime N: usize, p: *mut Pool<T, N>) -> void {
     var i: usize = 0;
     while i < N {
         p.used[i] = false;
+        p.initialized[i] = false;
         p.gen[i] = 0;
         i = i + 1;
     }
@@ -42,6 +45,7 @@ export fn pool_alloc(comptime T: type, comptime N: usize, p: *mut Pool<T, N>) ->
     while i < N {
         if !p.used[i] {
             p.used[i] = true;
+            p.initialized[i] = false;
             p.count = p.count + 1;
             return ok(.{ .index = i, .gen = p.gen[i] });
         }
@@ -63,6 +67,7 @@ export fn pool_free(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: 
         return err(.StaleHandle); // stale handle
     }
     p.used[r.index] = false;
+    p.initialized[r.index] = false;
     p.gen[r.index] = wrapping_add_u32(p.gen[r.index], 1);
     p.count = p.count - 1;
     return ok(true);
@@ -80,6 +85,7 @@ export fn pool_set(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: P
         return err(.StaleHandle);
     }
     p.slots[r.index] = value;
+    p.initialized[r.index] = true;
     return ok(true);
 }
 
@@ -93,6 +99,9 @@ export fn pool_load(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: 
     }
     if p.gen[r.index] != r.gen {
         return err(.StaleHandle);
+    }
+    if !p.initialized[r.index] {
+        return err(.Uninitialized);
     }
     return ok(p.slots[r.index]);
 }
