@@ -61,13 +61,15 @@ fn post_rx_buffer(rxq: *mut Virtq) -> void {
     }
 }
 
-// A completion timed out, or the device returned an inconsistent used-ring entry: the queue
-// still owns submitted buffers. Reset the device so it relinquishes them, then reclaim and
-// free every in-flight buffer (rather than abandoning them or trapping). After a fault the
-// NIC must be re-initialised (`nic_init`) before reuse; callers report the failure upward.
-fn nic_fault_reset(regs: MmioPtr<VirtioMmio>, q: *mut Virtq) -> void {
-    virtio_reset(regs);
-    vq_reset_reclaim(q);
+// A completion timed out, or the device returned an inconsistent used-ring entry. A virtio
+// reset drops the WHOLE device, so this reclaims the in-flight buffers of BOTH queues — not
+// only the one that faulted, whose sibling would otherwise be stranded (e.g. a TX fault would
+// leak the posted RX buffers). After a fault the NIC must be re-initialised (`nic_init`)
+// before reuse; callers report the failure upward.
+fn nic_fault_reset(dev: *NetDevice) -> void {
+    virtio_reset(dev.regs);
+    vq_reset_reclaim(dev.rxq);
+    vq_reset_reclaim(dev.txq);
 }
 
 // Bring the card up: require VERSION_1, set up both queues, go live, and post the
@@ -100,19 +102,21 @@ export fn nic_init(dev: *NetDevice) -> Result<bool, NetError> {
 }
 
 // Send a broadcast ARP request for `target_ip` and reclaim the TX buffer.
-export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr, src_ip: u32, target_ip: u32) -> bool {
+export fn nic_send_arp(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_ip: u32) -> bool {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let txq: *mut Virtq = dev.txq;
     var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
     // The virtio_net_hdr at offset 0 is left zeroed by the allocator.
     arp_write_request(&cpu, FRAME_AT, src_mac, src_ip, target_ip);
-    let dev: DeviceBuffer = clean_for_device(cpu); // cpu consumed
-    switch vq_submit_tx(txq, dev) {                // dev consumed (in flight, or reclaimed)
+    let txbuf: DeviceBuffer = clean_for_device(cpu); // cpu consumed
+    switch vq_submit_tx(txq, txbuf) {                 // txbuf consumed (in flight, or reclaimed)
         ok(id) => {}
         err(e) => { return false; } // queue full: buffer reclaimed inside, nothing to send
     }
     vq_kick(regs, TX_QUEUE);
 
     if !vq_wait_used(txq, IO_TIMEOUT_TICKS) {
-        nic_fault_reset(regs, txq); // device never completed: reclaim, don't abandon
+        nic_fault_reset(dev); // device never completed: reclaim, don't abandon
         return false;
     }
     switch vq_complete(txq) {
@@ -123,7 +127,7 @@ export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *Mac
             return true;
         }
         err(e) => {
-            nic_fault_reset(regs, txq); // inconsistent completion: reset and reclaim
+            nic_fault_reset(dev); // inconsistent completion: reset and reclaim
             return false;
         }
     }
@@ -131,15 +135,17 @@ export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *Mac
 
 // Poll the RX queue once. Returns the sender IP of a received ARP reply, or 0 if
 // nothing was received (or it was not an ARP reply). Refills the consumed buffer.
-export fn nic_poll_arp(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> u32 {
+export fn nic_poll_arp(dev: *NetDevice) -> u32 {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let rxq: *mut Virtq = dev.rxq;
     if !vq_has_used(rxq) {
         return 0;
     }
     switch vq_complete(rxq) {
         ok(cb) => {
-            let dev: DeviceBuffer = cb.buf; // buffer len = full allocation; used in cb.used_len
+            let rxbuf: DeviceBuffer = cb.buf; // buffer len = full allocation; used in cb.used_len
             unsafe { forget_unchecked(cb); }
-            var cpu: CpuBuffer = invalidate_for_cpu(dev);
+            var cpu: CpuBuffer = invalidate_for_cpu(rxbuf);
 
             var sender: u32 = 0;
             if eth_ethertype(&cpu, FRAME_AT) == ETHERTYPE_ARP {
@@ -155,7 +161,7 @@ export fn nic_poll_arp(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> u32 {
             return sender;
         }
         err(e) => {
-            nic_fault_reset(regs, rxq); // inconsistent completion: reset and reclaim
+            nic_fault_reset(dev); // inconsistent completion: reset and reclaim
             return 0;
         }
     }
@@ -234,7 +240,9 @@ fn parse_rx_frame(cpu: *CpuBuffer, len: usize) -> RxFrame {
 
 // Wait (bounded) for one RX frame, parse it, free + refill the buffer, and return
 // the plain record. `valid` is false on timeout.
-fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
+fn rx_receive(dev: *NetDevice) -> RxFrame {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let rxq: *mut Virtq = dev.rxq;
     var out: RxFrame = .{
         .valid = false, .ethertype = 0,
         .is_arp_reply = false, .is_arp_request = false,
@@ -249,9 +257,9 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
             switch vq_complete(rxq) {
                 ok(cb) => {
                     let recv: usize = cb.used_len as usize; // bytes the device actually wrote
-                    let dev: DeviceBuffer = cb.buf;
+                    let rxbuf: DeviceBuffer = cb.buf;
                     unsafe { forget_unchecked(cb); }
-                    var cpu: CpuBuffer = invalidate_for_cpu(dev);
+                    var cpu: CpuBuffer = invalidate_for_cpu(rxbuf);
                     out = parse_rx_frame(&cpu, recv);
                     free(cpu);
                     post_rx_buffer(rxq);
@@ -259,7 +267,7 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
                     return out;
                 }
                 err(e) => {
-                    nic_fault_reset(regs, rxq); // inconsistent completion: reset and reclaim
+                    nic_fault_reset(dev); // inconsistent completion: reset and reclaim
                     return out; // out.valid stays false
                 }
             }
@@ -269,7 +277,8 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
 }
 
 // Wait (bounded by a real-time deadline) for the device to return a TX buffer.
-fn tx_wait_reclaim(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> bool {
+fn tx_wait_reclaim(dev: *NetDevice) -> bool {
+    let txq: *mut Virtq = dev.txq;
     if vq_wait_used(txq, IO_TIMEOUT_TICKS) {
         switch vq_complete(txq) {
             ok(cb) => {
@@ -279,12 +288,12 @@ fn tx_wait_reclaim(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> bool {
                 return true;
             }
             err(e) => {
-                nic_fault_reset(regs, txq); // inconsistent completion: reset and reclaim
+                nic_fault_reset(dev); // inconsistent completion: reset and reclaim
                 return false;
             }
         }
     }
-    nic_fault_reset(regs, txq); // timeout: reclaim the stuck buffer rather than abandon it
+    nic_fault_reset(dev); // timeout: reclaim the stuck buffer rather than abandon it
     return false;
 }
 
@@ -292,13 +301,12 @@ fn tx_wait_reclaim(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> bool {
 // The full Ethernet/IPv4/ICMP path over real virtio-net DMA.
 export fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr, gw_ip: Ipv4Addr) -> Result<bool, NetError> {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
-    let rxq: *mut Virtq = dev.rxq;
     let txq: *mut Virtq = dev.txq;
     // 1. Resolve the gateway's hardware address.
-    if !nic_send_arp(regs, txq, src_mac, src_ip.raw, gw_ip.raw) {
+    if !nic_send_arp(dev, src_mac, src_ip.raw, gw_ip.raw) {
         return err(.ArpFailed);
     }
-    var arp_rx: RxFrame = rx_receive(regs, rxq);
+    var arp_rx: RxFrame = rx_receive(dev);
     if !arp_rx.is_arp_reply {
         return err(.ArpFailed);
     }
@@ -316,13 +324,13 @@ export fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr,
         err(e) => { return err(.PingTimeout); } // queue full: buffer reclaimed inside
     }
     vq_kick(regs, TX_QUEUE);
-    if !tx_wait_reclaim(regs, txq) {
+    if !tx_wait_reclaim(dev) {
         return err(.PingTimeout);
     }
 
     // 3. Await the ICMP echo reply — and confirm it is *our* reply (from the
     // gateway, echoing our identifier and sequence) rather than unrelated traffic.
-    var icmp_rx: RxFrame = rx_receive(regs, rxq);
+    var icmp_rx: RxFrame = rx_receive(dev);
     if !icmp_rx.is_icmp_reply {
         return err(.PingTimeout);
     }
@@ -340,13 +348,10 @@ export fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr,
 
 // Resolve `target_ip`'s hardware address via ARP (send a request, await the reply).
 export fn nic_arp_resolve(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_ip: u32) -> Result<MacAddr, NetError> {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
-    let rxq: *mut Virtq = dev.rxq;
-    let txq: *mut Virtq = dev.txq;
-    if !nic_send_arp(regs, txq, src_mac, src_ip, target_ip) {
+    if !nic_send_arp(dev, src_mac, src_ip, target_ip) {
         return err(.ArpFailed);
     }
-    var rx: RxFrame = rx_receive(regs, rxq);
+    var rx: RxFrame = rx_receive(dev);
     if !rx.is_arp_reply {
         return err(.ArpFailed);
     }
@@ -394,7 +399,7 @@ export fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
                     return n;
                 }
                 err(e) => {
-                    nic_fault_reset(regs, rxq); // inconsistent completion: reset and reclaim
+                    nic_fault_reset(dev); // inconsistent completion: reset and reclaim
                     return 0;
                 }
             }
@@ -405,51 +410,52 @@ export fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
 
 // ----- inbound responder (the host→guest "pingable" path) -----
 
-fn send_arp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32) -> void {
+fn send_arp_reply(dev: *NetDevice, src_mac: *MacAddr, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32) -> bool {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let txq: *mut Virtq = dev.txq;
     var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
     arp_write_reply(&cpu, FRAME_AT, src_mac, our_ip, dst_mac, dst_ip);
-    let dev: DeviceBuffer = clean_for_device(cpu);
-    switch vq_submit_tx(txq, dev) {
+    let txbuf: DeviceBuffer = clean_for_device(cpu);
+    switch vq_submit_tx(txq, txbuf) {
         ok(id) => {}
-        err(e) => { return; } // queue full: buffer reclaimed inside, drop the reply
+        err(e) => { return false; } // queue full: buffer reclaimed inside, drop the reply
     }
     vq_kick(regs, TX_QUEUE);
-    tx_wait_reclaim(regs, txq);
+    return tx_wait_reclaim(dev); // true only if the reply's TX actually completed
 }
 
-fn send_icmp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32, ident: u16, seq: u16) -> void {
+fn send_icmp_reply(dev: *NetDevice, src_mac: *MacAddr, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32, ident: u16, seq: u16) -> bool {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let txq: *mut Virtq = dev.txq;
     var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
     icmp_write_echo_reply(&cpu, FRAME_AT, src_mac, dst_mac, our_ip, dst_ip, ident, seq);
-    let dev: DeviceBuffer = clean_for_device(cpu);
-    switch vq_submit_tx(txq, dev) {
+    let txbuf: DeviceBuffer = clean_for_device(cpu);
+    switch vq_submit_tx(txq, txbuf) {
         ok(id) => {}
-        err(e) => { return; } // queue full: buffer reclaimed inside, drop the reply
+        err(e) => { return false; } // queue full: buffer reclaimed inside, drop the reply
     }
     vq_kick(regs, TX_QUEUE);
-    tx_wait_reclaim(regs, txq);
+    return tx_wait_reclaim(dev); // true only if the reply's TX actually completed
 }
 
 // Serve one inbound frame: answer an ARP request or an ICMP echo request aimed at
 // our address. Returns true if a reply was sent. This is what makes the guest
 // answerable to a host `ping` (host→guest needs a tap netdev to exercise).
 export fn nic_serve_once(dev: *NetDevice, src_mac: *MacAddr, our_ip: Ipv4Addr) -> bool {
-    let regs: MmioPtr<VirtioMmio> = dev.regs;
-    let rxq: *mut Virtq = dev.rxq;
-    let txq: *mut Virtq = dev.txq;
-    var rx: RxFrame = rx_receive(regs, rxq);
+    var rx: RxFrame = rx_receive(dev);
     if !rx.valid {
         return false;
     }
+    // Report success only if the reply's TX actually completed — not merely that a reply was
+    // attempted (it may have hit a full queue, a timeout, or a device fault).
     if rx.is_arp_request {
         if rx.target_ip == our_ip.raw {
-            send_arp_reply(regs, txq, src_mac, our_ip.raw, &rx.src_mac, rx.src_ip);
-            return true;
+            return send_arp_reply(dev, src_mac, our_ip.raw, &rx.src_mac, rx.src_ip);
         }
     }
     if rx.is_icmp_request {
         if rx.target_ip == our_ip.raw {
-            send_icmp_reply(regs, txq, src_mac, our_ip.raw, &rx.src_mac, rx.src_ip, rx.icmp_ident, rx.icmp_seq);
-            return true;
+            return send_icmp_reply(dev, src_mac, our_ip.raw, &rx.src_mac, rx.src_ip, rx.icmp_ident, rx.icmp_seq);
         }
     }
     return false;

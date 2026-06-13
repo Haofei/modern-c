@@ -30,7 +30,7 @@ export fn rx_live_get_frame(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq, txq: *mu
         }
     }
     var mac: MacAddr = .{ .bytes = .{ 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 } };
-    if !nic_send_arp(regs, txq, &mac, OUR_IP, GW_IP) {
+    if !nic_send_arp(&dev, &mac, OUR_IP, GW_IP) {
         return 0;
     }
     return nic_rx_into(&dev, buf, max);
