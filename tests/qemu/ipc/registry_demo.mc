@@ -38,7 +38,7 @@ fn registry_server() -> void {
                 g_keys[g_reg_count] = req.a0;
                 g_pids[g_reg_count] = req.a1 as u32;
                 g_reg_count = g_reg_count + 1;
-                ipc_send(&g_procs, req.from, TAG_REPLY, 1, 0, 0);
+                ipc_reply(&g_procs, &req, TAG_REPLY, 1, 0, 0);
             }
             if req.tag == REG_LOOKUP {
                 var found: u32 = 0;
@@ -49,7 +49,7 @@ fn registry_server() -> void {
                     }
                     i = i + 1;
                 }
-                ipc_send(&g_procs, req.from, TAG_REPLY, found as u64, 0, 0);
+                ipc_reply(&g_procs, &req, TAG_REPLY, found as u64, 0, 0);
             }
         }
     }
@@ -67,7 +67,7 @@ fn echo_service() -> void {
         if req.tag == TAG_DONE {
             running = false;
         } else {
-            ipc_send(&g_procs, req.from, TAG_REPLY, req.a0, 0, 0); // echo the payload
+            ipc_reply(&g_procs, &req, TAG_REPLY, req.a0, 0, 0); // echo the payload
         }
     }
     proc_exit(&g_procs, 0);

@@ -29,7 +29,7 @@ fn server() -> void {
             running = false;
         } else {
             console_putc('S'); // served one request
-            ipc_send(&g_procs, req.from, TAG_REPLY, req.a0 * 2, 0, 0);
+            ipc_reply(&g_procs, &req, TAG_REPLY, req.a0 * 2, 0, 0);
         }
     }
     proc_exit(&g_procs, 0);

@@ -95,6 +95,9 @@ struct ProcTable {
     // everything the dead process owned. The process table stays decoupled from those subsystems:
     // whoever owns them registers a closure via proc_set_death_hook. Defaults to a no-op.
     death_hook: closure(u32, u32) -> void,
+    // Monotonic source of correlation ids for synchronous calls (ipc_call / ipc_call_ep), so
+    // each outstanding call is distinguishable and its reply can be matched. Never reused.
+    next_call_id: u64,
 }
 
 // The no-op default idle action (a closure needs a captured env; this one is empty).
@@ -199,6 +202,7 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
     t.procs[0].kcall_mask = mask32_from(0xFFFF_FFFF);
     t.count = 1;
     t.current = 0;
+    t.next_call_id = 1; // 0 means "not a call"; real call ids start at 1
     t.idle_hook = bind(&g_idle_env, idle_noop); // platform overrides with wfi via proc_set_idle
     t.death_hook = bind(&g_death_env, death_noop); // subsystems override via proc_set_death_hook
 }
@@ -837,29 +841,49 @@ fn wake_if_blocked(t: *mut ProcTable, dst: usize) -> void {
 // Non-blocking send: deliver if the mailbox has room, else false (the caller decides
 // whether to retry, drop, or block). This is the primitive both send policies build on,
 // so a caller never has to spin against a full mailbox unless it explicitly chooses to.
-export fn ipc_send_try(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> bool {
+// Build a message stamped with the current process's endpoint identity (slot + generation)
+// and a correlation id (0 for a non-call send). The kernel stamps `from`/`from_gen`, so the
+// receiver can trust the sender identity across slot reuse, and a synchronous caller can
+// match the reply to its request.
+fn proc_make_msg(t: *mut ProcTable, tag: u32, a0: u64, a1: u64, a2: u64, call_id: u64) -> Message {
+    return .{
+        .from = t.procs[t.current].pid,
+        .from_gen = t.procs[t.current].gen,
+        .call_id = call_id,
+        .tag = tag,
+        .a0 = a0,
+        .a1 = a1,
+        .a2 = a2,
+    };
+}
+
+// Try-post a message carrying an explicit correlation id (0 = not a call).
+fn ipc_send_try_id(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, call_id: u64) -> bool {
     let dst: usize = dst_pid as usize;
     if !proc_is_live(t, dst) {
         return false; // no such process, or it has exited/died — never post into a dead slot
     }
-    let me: u32 = t.procs[t.current].pid;
-    let msg: Message = .{ .from = me, .tag = tag, .a0 = a0, .a1 = a1, .a2 = a2 };
-    if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, me) {
+    let msg: Message = proc_make_msg(t, tag, a0, a1, a2, call_id);
+    if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
         wake_if_blocked(t, dst);
         return true;
     }
     return false; // mailbox full
 }
 
+export fn ipc_send_try(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> bool {
+    return ipc_send_try_id(t, dst_pid, tag, a0, a1, a2, 0);
+}
+
 // Endpoint-validated send: the hardened path. Rejects a stale endpoint (slot reused by a new
 // generation, or freed/dead) with DeadEndpoint before touching any mailbox. `ok(false)` means
 // the destination's mailbox was full.
-export fn ipc_send_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a2: u64) -> Result<bool, EpError> {
+// Endpoint-validated send carrying an explicit correlation id (0 = not a call).
+fn ipc_send_ep_id(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a2: u64, call_id: u64) -> Result<bool, EpError> {
     switch endpoint_slot(t, ep) {
         ok(dst) => {
-            let me: u32 = t.procs[t.current].pid;
-            let msg: Message = .{ .from = me, .tag = tag, .a0 = a0, .a1 = a1, .a2 = a2 };
-            if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, me) {
+            let msg: Message = proc_make_msg(t, tag, a0, a1, a2, call_id);
+            if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
                 wake_if_blocked(t, dst);
                 return ok(true);
             }
@@ -869,6 +893,10 @@ export fn ipc_send_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u6
             return err(.DeadEndpoint);
         }
     }
+}
+
+export fn ipc_send_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a2: u64) -> Result<bool, EpError> {
+    return ipc_send_ep_id(t, ep, tag, a0, a1, a2, 0);
 }
 
 // Bounded blocking send: retry up to `max_yields` times (yielding so the receiver can
@@ -916,9 +944,8 @@ export fn ipc_notify(t: *mut ProcTable, dst_pid: u32, tag: u32) -> bool {
     if !proc_is_live(t, dst) {
         return false; // never notify a free/exited/dead slot
     }
-    let me: u32 = t.procs[t.current].pid;
-    let msg: Message = .{ .from = me, .tag = tag, .a0 = 0, .a1 = 0, .a2 = 0 };
-    if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, me) {
+    let msg: Message = proc_make_msg(t, tag, 0, 0, 0, 0);
+    if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
         wake_if_blocked(t, dst);
         return true;
     }
@@ -930,9 +957,8 @@ export fn ipc_notify(t: *mut ProcTable, dst_pid: u32, tag: u32) -> bool {
 export fn ipc_notify_ep(t: *mut ProcTable, ep: Endpoint, tag: u32) -> Result<bool, EpError> {
     switch endpoint_slot(t, ep) {
         ok(dst) => {
-            let me: u32 = t.procs[t.current].pid;
-            let msg: Message = .{ .from = me, .tag = tag, .a0 = 0, .a1 = 0, .a2 = 0 };
-            if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, me) {
+            let msg: Message = proc_make_msg(t, tag, 0, 0, 0, 0);
+            if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
                 wake_if_blocked(t, dst);
                 return ok(true);
             }
@@ -944,10 +970,77 @@ export fn ipc_notify_ep(t: *mut ProcTable, ep: Endpoint, tag: u32) -> Result<boo
     }
 }
 
-// sendrec: send a request to `dst_pid` and block for the reply, as one primitive.
+// Blocking send carrying an explicit correlation id (0 = not a call). Blocks only while the
+// destination mailbox is full; gives up if the destination is gone.
+fn ipc_send_id(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, call_id: u64) -> void {
+    let dst: usize = dst_pid as usize;
+    var sending: bool = true;
+    while sending {
+        if !proc_is_live(t, dst) {
+            return; // destination gone — give up rather than spin
+        }
+        if ipc_send_try_id(t, dst_pid, tag, a0, a1, a2, call_id) {
+            return;
+        }
+        proc_yield_or_idle(t);
+    }
+}
+
+// Reply to a received request, echoing its correlation id so the original caller's
+// ipc_call / ipc_call_ep matches this as *its* reply (and not an unrelated queued message).
+// Servers should use this instead of a bare `ipc_send` back to `req.from`.
+export fn ipc_reply(t: *mut ProcTable, req: *Message, tag: u32, a0: u64, a1: u64, a2: u64) -> void {
+    ipc_send_id(t, req.from, tag, a0, a1, a2, req.call_id);
+}
+
+// Receive the reply to a synchronous call: the message must come from the awaited endpoint
+// (source slot AND the generation we called), and carry the request's correlation id. A
+// message from a stale incarnation, or any other queued message from that source, is dropped
+// so it cannot be mistaken for the reply. If the endpoint dies first, a DEAD result is
+// synthesized out-of-band.
+fn ipc_receive_reply(t: *mut ProcTable, ep: Endpoint, expected_call_id: u64, out: *mut Message) -> void {
+    let src_pid: u32 = ep.slot as u32;
+    var got: bool = false;
+    while !got {
+        if mailbox_take_from(Message, IPC_SLOTS, &t.procs[t.current].inbox, src_pid, out) {
+            if out.from_gen == ep.gen {
+                if out.call_id == expected_call_id {
+                    got = true; // the reply to this call
+                }
+                // else: another message from the live server, not this call's reply — drop it
+            }
+            // else: a message from a dead incarnation of the slot — drop it
+        } else {
+            if !endpoint_live(t, ep) {
+                let dead_msg: Message = .{ .from = src_pid, .from_gen = ep.gen, .call_id = expected_call_id, .tag = TAG_DEAD, .a0 = 0, .a1 = 0, .a2 = 0 };
+                out.* = dead_msg;
+                got = true;
+            } else {
+                t.procs[t.current].wait_slot = ep.slot;
+                t.procs[t.current].wait_gen = ep.gen;
+                proc_block(t, t.current, BLOCK_RECV);
+                proc_yield_or_idle(t);
+            }
+        }
+    }
+    t.procs[t.current].wait_slot = MAX_PROCS;
+    proc_unblock(t, t.current, BLOCK_RECV);
+}
+
+// sendrec: send a request to `dst_pid` and block for its reply, as one primitive. The reply
+// is correlated by source endpoint (slot + generation) and call id, so a stale or unrelated
+// queued message is never mistaken for the reply.
 export fn ipc_call(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, out: *mut Message) -> void {
-    ipc_send(t, dst_pid, tag, a0, a1, a2);
-    ipc_receive(t, out);
+    let dst: usize = dst_pid as usize;
+    var dst_gen: u32 = 0;
+    if dst < t.count {
+        dst_gen = t.procs[dst].gen;
+    }
+    let ep: Endpoint = .{ .slot = dst, .gen = dst_gen };
+    let call_id: u64 = t.next_call_id;
+    t.next_call_id = t.next_call_id + 1;
+    ipc_send_id(t, dst_pid, tag, a0, a1, a2, call_id);
+    ipc_receive_reply(t, ep, call_id, out);
 }
 
 // Endpoint-validated sendrec — the recommended hardened call path. Rejects a stale endpoint
@@ -959,9 +1052,13 @@ export fn ipc_call_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u6
     // front. The blocking raw-pid path captured a pid and could deliver to a new incarnation if
     // the slot died and was reused while we waited for mailbox room; here, if the endpoint dies
     // before the message lands, the next ipc_send_ep fails DeadEndpoint instead of misdelivering.
+    // A fresh correlation id for this call, stamped into the request so the reply can be
+    // matched to it (and not to some unrelated queued message from the same server).
+    let call_id: u64 = t.next_call_id;
+    t.next_call_id = t.next_call_id + 1;
     var sending: bool = true;
     while sending {
-        switch ipc_send_ep(t, ep, tag, a0, a1, a2) {
+        switch ipc_send_ep_id(t, ep, tag, a0, a1, a2, call_id) {
             ok(delivered) => {
                 if delivered {
                     sending = false; // landed in the (still-valid) endpoint's mailbox
@@ -974,12 +1071,11 @@ export fn ipc_call_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u6
             }
         }
     }
-    // Receive the reply only from the endpoint we called, not whatever arrives first: a
-    // plain `ipc_receive` would accept an unrelated queued message as the reply (a
-    // confused-deputy / reordering hazard). `ipc_receive_from` filters by source and, if
-    // that exact incarnation dies before replying, reports DEAD out-of-band instead of
-    // blocking forever. (pid == slot in this table, so `ep.slot` is the source pid.)
-    ipc_receive_from(t, ep.slot as u32, out);
+    // Receive only the reply to *this* call: from the exact endpoint incarnation we called
+    // (slot + generation) and carrying this call's id. A plain receive would accept an
+    // unrelated queued message; matching source generation rules out a reused slot, and
+    // matching the call id rules out a stale/extra message from the live server.
+    ipc_receive_reply(t, ep, call_id, out);
     return ok(true);
 }
 
@@ -1031,7 +1127,7 @@ export fn ipc_receive_from(t: *mut ProcTable, src_pid: u32, out: *mut Message) -
             // The awaited source died: stop waiting and report DEAD out-of-band (not via the
             // mailbox, which could be full) — guaranteed delivery of the dead-endpoint result.
             if !endpoint_live(t, src_ep) {
-                let dead_msg: Message = .{ .from = src_pid, .tag = TAG_DEAD, .a0 = 0, .a1 = 0, .a2 = 0 };
+                let dead_msg: Message = .{ .from = src_pid, .from_gen = src_gen, .call_id = 0, .tag = TAG_DEAD, .a0 = 0, .a1 = 0, .a2 = 0 };
                 out.* = dead_msg;
                 got = true;
             } else {

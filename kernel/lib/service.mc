@@ -27,7 +27,7 @@ export fn service_step(t: *mut ProcTable, handler: closure(Message) -> Reply) ->
     var req: Message = message_zero();
     ipc_receive(t, &req);
     let rep: Reply = handler(req);
-    ipc_send(t, req.from, rep.tag, rep.a0, 0, 0);
+    ipc_reply(t, &req, rep.tag, rep.a0, 0, 0); // echo the request's call id for correlation
     return req.tag;
 }
 
@@ -38,7 +38,7 @@ export fn service_loop(t: *mut ProcTable, handler: closure(Message) -> Reply, st
         var req: Message = message_zero();
         ipc_receive(t, &req);
         let rep: Reply = handler(req);
-        ipc_send(t, req.from, rep.tag, rep.a0, 0, 0);
+        ipc_reply(t, &req, rep.tag, rep.a0, 0, 0); // echo the request's call id for correlation
         if rep.tag == stop_tag {
             running = false;
         }

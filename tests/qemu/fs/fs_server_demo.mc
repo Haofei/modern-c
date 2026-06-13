@@ -53,7 +53,7 @@ fn fs_server() -> void {
                     err(e) => {}
                 }
             }
-            ipc_send(&g_procs, req.from, TAG_REPLY, rc, 0, 0);
+            ipc_reply(&g_procs, &req, TAG_REPLY, rc, 0, 0);
         }
     }
     proc_exit(&g_procs, 0);

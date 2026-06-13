@@ -43,7 +43,7 @@ fn storage_server() -> void {
             } else {
                 mem_copy(pa(buf), pa(disk + off), BLOCK_SIZE);
             }
-            ipc_send(&g_procs, req.from, TAG_REPLY, 0, 0, 0);
+            ipc_reply(&g_procs, &req, TAG_REPLY, 0, 0, 0);
         }
     }
     cap_revoke(usize, cap);

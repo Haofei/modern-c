@@ -52,7 +52,7 @@ fn tcp_server() -> void {
             if req.tag == TAG_SEG {
                 let act: TcpAction = tcp_on_segment(&g_conn, req.a0 as u16, req.a1 as u32);
             }
-            ipc_send(&g_procs, req.from, TAG_REPLY, state_code(g_conn.state) as u64, 0, 0);
+            ipc_reply(&g_procs, &req, TAG_REPLY, state_code(g_conn.state) as u64, 0, 0);
         }
     }
     proc_exit(&g_procs, 0);
