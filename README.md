@@ -230,6 +230,22 @@ zig build llvm-test
 zig build llvm-opt-sweep
 ```
 
+Differential and dynamic gates (also part of `m0`) — these execute the emitted
+code rather than only compiling it, which is what static review and `-fsyntax-only`
+sweeps cannot do:
+
+```sh
+zig build diff-backend   # compile each host fixture through BOTH backends; assert C and LLVM agree
+zig build diff-fuzz      # generate random MC programs; assert the two backends agree on each (seed-reproducible)
+zig build move-fuzz      # generate move-resource programs; assert every resource is released once (live_count==0)
+zig build sanitize       # run the host-driver corpus under ASan + UBSan over the emitted C
+zig build vqfault-test   # virtqueue completion fault injection (bad id / not-in-flight / length overflow)
+zig build wrap-test      # long-running ring-index / pool-generation wrap and pool-exhaustion invariants
+```
+
+A `diff-fuzz`/`move-fuzz` failure prints the seed; reproduce the exact program with
+`tools/toolchain/mcgen.py <seed>` (or `mcgen_move.py <seed>`). Raise `COUNT=` to explore further.
+
 ## Compiler CLI
 
 Run the compiler through Zig:
