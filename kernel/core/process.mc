@@ -807,13 +807,32 @@ export fn kcall(t: *mut ProcTable, op: u32, arg: u64) -> Result<u64, KError> {
 // wakes a blocked process; the target polls/takes pending signals. -----
 
 // Deliver signal `sig` to `target_pid` (sets the pending bit, wakes a blocked target).
+// Raw-pid signal delivery: a non-capability path. It validates that the slot holds a *live*
+// process (not free/exited/dead), but a bare pid can still refer to a different incarnation
+// after slot reuse — prefer proc_kill_ep, which checks the endpoint generation.
 export fn proc_kill(t: *mut ProcTable, target_pid: u32, sig: u32) -> void {
     let target: usize = target_pid as usize;
-    if target >= t.count {
-        return;
+    if !proc_is_live(t, target) {
+        return; // out of range, or a free/exited/dead slot — never signal it
     }
     mask32_set(&t.procs[target].pending_sig, sig);
     proc_unblock(t, target, BLOCK_RECV); // a pending signal wakes a blocked receiver
+}
+
+// Endpoint-validated signal delivery: rejects a stale endpoint (slot reused by a new
+// generation, or freed/dead) with DeadEndpoint before signaling, so a signal can never be
+// delivered to a different incarnation than the one the caller named.
+export fn proc_kill_ep(t: *mut ProcTable, ep: Endpoint, sig: u32) -> Result<bool, EpError> {
+    switch endpoint_slot(t, ep) {
+        ok(target) => {
+            mask32_set(&t.procs[target].pending_sig, sig);
+            proc_unblock(t, target, BLOCK_RECV);
+            return ok(true);
+        }
+        err(e) => {
+            return err(.DeadEndpoint);
+        }
+    }
 }
 
 // The current process's pending-signal bitmask.
