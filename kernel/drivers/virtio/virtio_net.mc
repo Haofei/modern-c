@@ -153,17 +153,20 @@ export fn nic_poll_arp(dev: *NetDevice) -> u32 {
     }
     switch vq_complete(rxq) {
         ok(cb) => {
-            let rxbuf: DeviceBuffer = cb.buf; // buffer len = full allocation; used in cb.used_len
+            // Parse only the bytes the device actually wrote (cb.used_len), through the same
+            // length-checked parser rx_receive uses — never the whole allocation, whose tail is
+            // stale/zeroed and must not be read as packet fields.
+            let recv: usize = cb.used_len as usize;
+            let rxbuf: DeviceBuffer = cb.buf;
             unsafe { forget_unchecked(cb); }
             var cpu: CpuBuffer = invalidate_for_cpu(rxbuf);
+            let frame: RxFrame = parse_rx_frame(&cpu, recv);
+            free(cpu);
 
             var sender: u32 = 0;
-            if eth_ethertype(&cpu, FRAME_AT) == ETHERTYPE_ARP {
-                if arp_oper(&cpu, FRAME_AT) == ARP_OP_REPLY {
-                    sender = arp_sender_ip(&cpu, FRAME_AT);
-                }
+            if frame.is_arp_reply {
+                sender = frame.src_ip;
             }
-            free(cpu);
 
             // Keep the RX ring topped up.
             post_rx_buffer(rxq);
