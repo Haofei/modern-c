@@ -101,7 +101,7 @@ export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *Mac
     }
     let cb: CompletedBuffer = vq_complete(txq);
     let rb: DeviceBuffer = cb.buf; // reclaim the full allocation, not the used length
-    drop(cb);
+    forget_unchecked(cb);
     free(invalidate_for_cpu(rb));
     return true;
 }
@@ -114,7 +114,7 @@ export fn nic_poll_arp(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> u32 {
     }
     let cb: CompletedBuffer = vq_complete(rxq);
     let dev: DeviceBuffer = cb.buf; // buffer len = full allocation; used bytes in cb.used_len
-    drop(cb);
+    forget_unchecked(cb);
     var cpu: CpuBuffer = invalidate_for_cpu(dev);
 
     var sender: u32 = 0;
@@ -164,7 +164,7 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
             let cb: CompletedBuffer = vq_complete(rxq);
             let recv: usize = cb.used_len as usize; // bytes the device actually wrote
             let dev: DeviceBuffer = cb.buf;
-            drop(cb);
+            forget_unchecked(cb);
             var cpu: CpuBuffer = invalidate_for_cpu(dev);
             let len: usize = recv; // parse only the received bytes, not the whole allocation
             out.valid = true;
@@ -224,7 +224,7 @@ fn tx_wait_reclaim(txq: *mut Virtq) -> bool {
     if vq_wait_used(txq, IO_TIMEOUT_TICKS) {
         let cb: CompletedBuffer = vq_complete(txq);
         let rb: DeviceBuffer = cb.buf; // reclaim the full allocation, not the used length
-        drop(cb);
+        forget_unchecked(cb);
         free(invalidate_for_cpu(rb));
         return true;
     }
@@ -309,7 +309,7 @@ export fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
             let cb: CompletedBuffer = vq_complete(rxq);
             let recv: usize = cb.used_len as usize; // bytes the device actually wrote
             let d: DeviceBuffer = cb.buf;
-            drop(cb);
+            forget_unchecked(cb);
             var cpu: CpuBuffer = invalidate_for_cpu(d);
             let total: usize = recv; // copy out only the received bytes
             var n: usize = 0;

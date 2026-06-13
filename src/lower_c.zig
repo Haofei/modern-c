@@ -4190,7 +4190,10 @@ const CEmitter = struct {
                 // void so the value is evaluated and discarded (linearity is
                 // erased — it was a compile-time check).
                 if (calleeIdentName(node.callee.*)) |name| {
-                    if (std.mem.eql(u8, name, "drop") and node.args.len == 1) {
+                    // `drop(x)` and `forget_unchecked(x)` both evaluate and discard the
+                    // operand (linearity is a compile-time check). The difference is in the
+                    // checker: `forget_unchecked` is the only one legal on a resource.
+                    if ((std.mem.eql(u8, name, "drop") or std.mem.eql(u8, name, "forget_unchecked")) and node.args.len == 1) {
                         try self.out.appendSlice(self.allocator, "(void)(");
                         try self.emitExpr(node.args[0], locals);
                         try self.out.appendSlice(self.allocator, ")");

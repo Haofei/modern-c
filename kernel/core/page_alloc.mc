@@ -82,7 +82,7 @@ export fn page_alloc(a: *mut PageAllocator) -> Page {
 // Free a page (consumes the linear handle) and return its frame to the free list.
 export fn page_free(a: *mut PageAllocator, p: Page) -> void {
     let frame: PAddr = p.addr; // borrow before consuming
-    drop(p);
+    forget_unchecked(p);
     unsafe {
         raw.store<usize>(frame, a.free_head); // push: store old head in this frame
     }

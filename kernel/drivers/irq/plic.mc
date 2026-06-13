@@ -72,7 +72,7 @@ export fn enable(base: usize, l: IrqLine<Unclaimed>) -> IrqLine<Enabled> {
     plic_set_priority(base, line, 1);
     plic_set_threshold(base, 0);
     plic_enable_line(base, line);
-    drop(l);
+    forget_unchecked(l);
     return .{ .line = line };
 }
 
@@ -87,7 +87,7 @@ export fn claim_if_pending(base: usize, l: IrqLine<Enabled>) -> IrqLine<Pending>
     if claimed != line {
         unreachable; // claimed source does not match this line
     }
-    drop(l);
+    forget_unchecked(l);
     return .{ .line = line };
 }
 
@@ -95,7 +95,7 @@ export fn claim_if_pending(base: usize, l: IrqLine<Enabled>) -> IrqLine<Pending>
 export fn complete(base: usize, l: IrqLine<Pending>) -> IrqLine<Enabled> {
     let line: u32 = l.line;
     plic_complete_raw(base, line);
-    drop(l);
+    forget_unchecked(l);
     return .{ .line = line };
 }
 
@@ -103,5 +103,5 @@ export fn complete(base: usize, l: IrqLine<Pending>) -> IrqLine<Enabled> {
 // its priority) before retiring the token.
 export fn release(base: usize, l: IrqLine<Enabled>) -> void {
     plic_disable_line(base, l.line);
-    drop(l);
+    forget_unchecked(l);
 }

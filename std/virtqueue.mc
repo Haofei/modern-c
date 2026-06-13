@@ -146,7 +146,7 @@ fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> u16 {
     let id: u16 = vq_alloc_desc(vq);
     let addr: u64 = (device_addr(&buf) as usize) as u64; // bus addr → descriptor word
     let len: u32 = buf.len as u32;
-    drop(buf); // the device now owns the buffer; we keep its address on record
+    forget_unchecked(buf); // the device now owns the buffer; we keep its address on record
 
     var flags: u16 = 0;
     if device_writable {
@@ -191,9 +191,9 @@ export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuf
     let l1: u32 = data.len as u32;
     let a2: u64 = (device_addr(&status) as usize) as u64;
     let l2: u32 = status.len as u32;
-    drop(header);
-    drop(data);
-    drop(status);
+    forget_unchecked(header);
+    forget_unchecked(data);
+    forget_unchecked(status);
 
     // header: device-read, chains to data.
     vq.desc.d[id0 as usize].addr = a0;

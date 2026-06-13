@@ -1063,7 +1063,22 @@ pub const Checker = struct {
                 self.moveBorrow(ix.base.*, state);
                 self.moveConsume(ix.index.*, state, aliases);
             },
-            .call => |c| for (c.args) |arg| self.moveConsume(arg, state, aliases),
+            .call => |c| {
+                // `drop(x)` is a safe discard for plain values, but on a linear `move`
+                // value it consumes the binding while freeing nothing — a leak the
+                // checker would otherwise bless. Reject it and point at the real options:
+                // a release function, or `forget_unchecked` when the contents were already
+                // transferred. (The argument is still consumed below so a single mistake
+                // does not cascade into use-after-move noise.)
+                if (isDropCall(c.callee.*)) {
+                    for (c.args) |arg| {
+                        if (self.exprIsMoveTyped(arg, state, aliases)) {
+                            self.errorCode(arg.span, "E_DROP_LINEAR_RESOURCE", "a linear `move` value cannot be `drop`ped (it frees nothing); release it with its free function, or `forget_unchecked` it in an unsafe block once its contents have been transferred");
+                        }
+                    }
+                }
+                for (c.args) |arg| self.moveConsume(arg, state, aliases);
+            },
             .binary => |b| {
                 self.moveConsume(b.left.*, state, aliases);
                 self.moveConsume(b.right.*, state, aliases);
@@ -1073,6 +1088,23 @@ pub const Checker = struct {
             .array_literal => |items| for (items) |item| self.moveConsume(item, state, aliases),
             else => {},
         }
+    }
+
+    // Whether `expr` denotes a linear `move` value — a tracked move binding by name, or
+    // any expression whose inferred type is a move type. Used to reject `drop` of a
+    // resource.
+    fn exprIsMoveTyped(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        switch (expr.kind) {
+            .ident => |id| if (state.contains(id.text)) return true,
+            .grouped => |inner| return self.exprIsMoveTyped(inner.*, state, aliases),
+            else => {},
+        }
+        if (self.move_ctx) |mctx| {
+            if (exprResultType(expr, mctx.*)) |ty| {
+                if (self.isMoveTypeName(ty, aliases)) return true;
+            }
+        }
+        return false;
     }
 
     // Borrow: check the move bindings referenced are live, without consuming.
@@ -2302,6 +2334,17 @@ pub const Checker = struct {
                 if (isDropCall(node.callee.*)) {
                     if (node.args.len != 1) {
                         self.errorCode(expr.span, "E_CALL_ARG_COUNT", "drop takes exactly one argument");
+                    }
+                    return .void;
+                }
+                // `forget_unchecked(x)`: discard a linear value without releasing it — the
+                // explicit, greppable escape hatch for the tail of a destructor / a transfer
+                // API that already moved the resource's contents elsewhere. Its deliberately
+                // alarming name is the audit signal that no release runs here; unlike `drop`
+                // it is the only form legal on a resource.
+                if (isForgetUncheckedCall(node.callee.*)) {
+                    if (node.args.len != 1) {
+                        self.errorCode(expr.span, "E_CALL_ARG_COUNT", "forget_unchecked takes exactly one argument");
                     }
                     return .void;
                 }
@@ -6621,6 +6664,7 @@ fn isUncheckedNoOverflowMember(name: []const u8) bool {
 fn isBuiltinFunctionName(name: []const u8) bool {
     if (std.mem.eql(u8, name, "trap")) return true;
     if (std.mem.eql(u8, name, "drop")) return true;
+    if (std.mem.eql(u8, name, "forget_unchecked")) return true;
     if (std.mem.eql(u8, name, "bind")) return true; // closure construction
     if (std.mem.eql(u8, name, "unwrap")) return true;
     if (std.mem.eql(u8, name, "bitcast")) return true;
@@ -6995,6 +7039,14 @@ fn isTrapCall(callee: ast.Expr) bool {
 
 fn isDropCall(callee: ast.Expr) bool {
     return isIdentNamed(callee, "drop");
+}
+
+// `forget_unchecked(x)` consumes a linear `move` value WITHOUT running any release —
+// the unsafe escape hatch for the tail of a destructor / a transfer API that has already
+// moved the resource's contents elsewhere (e.g. recorded a DMA buffer's address before
+// discarding the husk). Unlike `drop`, it is legal on a resource, but only in `unsafe`.
+fn isForgetUncheckedCall(callee: ast.Expr) bool {
+    return isIdentNamed(callee, "forget_unchecked");
 }
 
 // `trap_from` is the only conversion builtin that raises a language (range) trap;

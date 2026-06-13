@@ -5351,8 +5351,11 @@ fn isPhysCall(callee: ast.Expr) bool {
     };
 }
 
+// `drop(x)` and `forget_unchecked(x)` lower identically — evaluate the operand and
+// discard it (linearity is a compile-time concept). They differ only in the checker:
+// `forget_unchecked` is the unsafe form legal on a linear resource.
 fn isDropCall(callee: ast.Expr) bool {
-    return isIdentNamed(callee, "drop");
+    return isIdentNamed(callee, "drop") or isIdentNamed(callee, "forget_unchecked");
 }
 
 fn isMmioMapCallName(callee: ast.Expr) bool {

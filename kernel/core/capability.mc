@@ -28,5 +28,5 @@ export fn cap_resource(comptime R: type, c: *Cap<R>) -> R {
 
 // Revoke the capability, consuming it (its linear end of life).
 export fn cap_revoke(comptime R: type, c: Cap<R>) -> void {
-    drop(c);
+    forget_unchecked(c);
 }

@@ -59,6 +59,6 @@ export fn kernel_tick_demo(trap_vector: usize, target: u32) -> u32 {
             break;
         }
     }
-    drop(h2); // interrupts stay on; we just retire the typestate token
+    forget_unchecked(h2); // interrupts stay on; we just retire the typestate token
     return tick_count();
 }
