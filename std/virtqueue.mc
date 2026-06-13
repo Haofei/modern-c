@@ -371,26 +371,31 @@ move struct CompletedBuffer {
 // submitted allocation size; the device-reported byte count rides alongside as `used_len`
 // so reclaim (`invalidate_for_cpu`) frees/invalidates the full allocation while packet
 // parsing reads only `used_len` bytes. Call only when `vq_has_used` is true.
-export fn vq_complete(vq: *mut Virtq) -> CompletedBuffer {
+//
+// The device-supplied used-ring entry is untrusted, so a bad descriptor id, a descriptor
+// that is not in flight, or an over-reported length is returned as a typed error (the queue
+// is left untouched — no descriptor freed, cursor not advanced) so the driver can reset and
+// reclaim rather than trap, exactly like the chain path.
+export fn vq_complete(vq: *mut Virtq) -> Result<CompletedBuffer, VqCompleteError> {
     rmb();
     let slot: usize = (vq.last_used % vq.size) as usize;
     let raw_id: u32 = vq.used.ring[slot].id;
     if raw_id >= vq.size as u32 {
-        unreachable; // device reported an out-of-range descriptor id
+        return err(.BadDescriptorId); // device reported an out-of-range descriptor id
     }
     let id: u16 = raw_id as u16;
     if !vq.inflight_present[id as usize] {
-        unreachable; // device completed a descriptor that is not in flight
+        return err(.NotInFlight); // device completed a descriptor that is not in flight
     }
     let alloc_len: u32 = vq.inflight_len[id as usize];
     let used: u32 = vq.used.ring[slot].len;
     if used > alloc_len {
-        unreachable; // device reported more bytes than the submitted buffer owns
+        return err(.LengthOverflow); // device over-reports the bytes it wrote
     }
     vq.last_used = vq.last_used + 1;
     let addr: u64 = vq.inflight_addr[id as usize];
     vq_free_desc(vq, id);
-    return .{ .buf = .{ .dev_addr = (addr as usize) as DmaAddr, .len = alloc_len as usize }, .used_len = used };
+    return ok(.{ .buf = .{ .dev_addr = (addr as usize) as DmaAddr, .len = alloc_len as usize }, .used_len = used });
 }
 
 // Reclaim every in-flight buffer after a fault or timeout, so a failed request does not

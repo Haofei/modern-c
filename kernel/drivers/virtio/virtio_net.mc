@@ -58,6 +58,15 @@ fn post_rx_buffer(rxq: *mut Virtq) -> void {
     vq_submit_rx(rxq, dev);                        // dev consumed (in flight)
 }
 
+// A completion timed out, or the device returned an inconsistent used-ring entry: the queue
+// still owns submitted buffers. Reset the device so it relinquishes them, then reclaim and
+// free every in-flight buffer (rather than abandoning them or trapping). After a fault the
+// NIC must be re-initialised (`nic_init`) before reuse; callers report the failure upward.
+fn nic_fault_reset(regs: MmioPtr<VirtioMmio>, q: *mut Virtq) -> void {
+    virtio_reset(regs);
+    vq_reset_reclaim(q);
+}
+
 // Bring the card up: require VERSION_1, set up both queues, go live, and post the
 // initial RX buffers.
 export fn nic_init(dev: *NetDevice) -> Result<bool, NetError> {
@@ -97,13 +106,21 @@ export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *Mac
     vq_kick(regs, TX_QUEUE);
 
     if !vq_wait_used(txq, IO_TIMEOUT_TICKS) {
-        return false; // buffer stuck in flight (device never completed)
+        nic_fault_reset(regs, txq); // device never completed: reclaim, don't abandon
+        return false;
     }
-    let cb: CompletedBuffer = vq_complete(txq);
-    let rb: DeviceBuffer = cb.buf; // reclaim the full allocation, not the used length
-    forget_unchecked(cb);
-    free(invalidate_for_cpu(rb));
-    return true;
+    switch vq_complete(txq) {
+        ok(cb) => {
+            let rb: DeviceBuffer = cb.buf; // reclaim the full allocation, not the used length
+            forget_unchecked(cb);
+            free(invalidate_for_cpu(rb));
+            return true;
+        }
+        err(e) => {
+            nic_fault_reset(regs, txq); // inconsistent completion: reset and reclaim
+            return false;
+        }
+    }
 }
 
 // Poll the RX queue once. Returns the sender IP of a received ARP reply, or 0 if
@@ -112,23 +129,30 @@ export fn nic_poll_arp(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> u32 {
     if !vq_has_used(rxq) {
         return 0;
     }
-    let cb: CompletedBuffer = vq_complete(rxq);
-    let dev: DeviceBuffer = cb.buf; // buffer len = full allocation; used bytes in cb.used_len
-    forget_unchecked(cb);
-    var cpu: CpuBuffer = invalidate_for_cpu(dev);
+    switch vq_complete(rxq) {
+        ok(cb) => {
+            let dev: DeviceBuffer = cb.buf; // buffer len = full allocation; used in cb.used_len
+            forget_unchecked(cb);
+            var cpu: CpuBuffer = invalidate_for_cpu(dev);
 
-    var sender: u32 = 0;
-    if eth_ethertype(&cpu, FRAME_AT) == ETHERTYPE_ARP {
-        if arp_oper(&cpu, FRAME_AT) == ARP_OP_REPLY {
-            sender = arp_sender_ip(&cpu, FRAME_AT);
+            var sender: u32 = 0;
+            if eth_ethertype(&cpu, FRAME_AT) == ETHERTYPE_ARP {
+                if arp_oper(&cpu, FRAME_AT) == ARP_OP_REPLY {
+                    sender = arp_sender_ip(&cpu, FRAME_AT);
+                }
+            }
+            free(cpu);
+
+            // Keep the RX ring topped up.
+            post_rx_buffer(rxq);
+            vq_kick(regs, RX_QUEUE);
+            return sender;
+        }
+        err(e) => {
+            nic_fault_reset(regs, rxq); // inconsistent completion: reset and reclaim
+            return 0;
         }
     }
-    free(cpu);
-
-    // Keep the RX ring topped up.
-    post_rx_buffer(rxq);
-    vq_kick(regs, RX_QUEUE);
-    return sender;
 }
 
 // A received frame parsed into plain (copyable) fields, so callers never touch
@@ -147,6 +171,61 @@ struct RxFrame {
     icmp_seq: u16,
 }
 
+// Parse the Ethernet frame in a received RX buffer into a plain record, reading only the
+// `len` bytes the device actually delivered (never the whole allocation).
+fn parse_rx_frame(cpu: *CpuBuffer, len: usize) -> RxFrame {
+    var out: RxFrame = .{
+        .valid = true, .ethertype = 0,
+        .is_arp_reply = false, .is_arp_request = false,
+        .is_icmp_reply = false, .is_icmp_request = false,
+        .src_ip = 0, .target_ip = 0,
+        .src_mac = .{ .bytes = .{ 0, 0, 0, 0, 0, 0 } },
+        .icmp_ident = 0, .icmp_seq = 0,
+    };
+    // Only parse fields the device actually delivered: check the received length before
+    // reading the Ethernet header, then the ARP / IPv4+ICMP bodies (42 bytes past FRAME_AT).
+    if len >= FRAME_AT + 14 {
+        out.ethertype = eth_ethertype(cpu, FRAME_AT);
+        out.src_mac = eth_read_mac(cpu, FRAME_AT + 6);
+        if out.ethertype == ETHERTYPE_ARP {
+            if len >= FRAME_AT + 28 {
+                let oper: u16 = arp_oper(cpu, FRAME_AT);
+                out.src_ip = arp_sender_ip(cpu, FRAME_AT);
+                out.target_ip = arp_target_ip(cpu, FRAME_AT);
+                if oper == ARP_OP_REPLY {
+                    out.is_arp_reply = true;
+                }
+                if oper == ARP_OP_REQUEST {
+                    out.is_arp_request = true;
+                }
+            }
+        }
+        if out.ethertype == ETHERTYPE_IPV4 {
+            // Only treat it as ICMP after the IPv4 header checks out: full length, valid
+            // header checksum, and protocol == ICMP.
+            let ip_at: usize = FRAME_AT + 14;
+            if len >= FRAME_AT + 42 {
+                if ipv4_checksum_valid(cpu, ip_at) {
+                    if ipv4_protocol(cpu, ip_at) == IP_PROTO_ICMP {
+                        let kind: u8 = icmp_type(cpu, FRAME_AT);
+                        out.src_ip = ipv4_src_ip(cpu, ip_at);
+                        out.target_ip = ipv4_dst_ip(cpu, ip_at);
+                        out.icmp_ident = icmp_ident(cpu, FRAME_AT);
+                        out.icmp_seq = icmp_seq(cpu, FRAME_AT);
+                        if kind == ICMP_ECHO_REPLY {
+                            out.is_icmp_reply = true;
+                        }
+                        if kind == ICMP_ECHO_REQUEST {
+                            out.is_icmp_request = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}
+
 // Wait (bounded) for one RX frame, parse it, free + refill the buffer, and return
 // the plain record. `valid` is false on timeout.
 fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
@@ -161,73 +240,45 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
     let start: Ticks = read_ticks();
     while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
         if vq_has_used(rxq) {
-            let cb: CompletedBuffer = vq_complete(rxq);
-            let recv: usize = cb.used_len as usize; // bytes the device actually wrote
-            let dev: DeviceBuffer = cb.buf;
-            forget_unchecked(cb);
-            var cpu: CpuBuffer = invalidate_for_cpu(dev);
-            let len: usize = recv; // parse only the received bytes, not the whole allocation
-            out.valid = true;
-            // Only parse fields the device actually delivered: check the received
-            // length before reading the Ethernet header, then the ARP / IPv4+ICMP
-            // bodies (both 42 bytes past FRAME_AT).
-            if len >= FRAME_AT + 14 {
-                out.ethertype = eth_ethertype(&cpu, FRAME_AT);
-                out.src_mac = eth_read_mac(&cpu, FRAME_AT + 6);
-                if out.ethertype == ETHERTYPE_ARP {
-                    if len >= FRAME_AT + 28 {
-                        let oper: u16 = arp_oper(&cpu, FRAME_AT);
-                        out.src_ip = arp_sender_ip(&cpu, FRAME_AT);
-                        out.target_ip = arp_target_ip(&cpu, FRAME_AT);
-                        if oper == ARP_OP_REPLY {
-                            out.is_arp_reply = true;
-                        }
-                        if oper == ARP_OP_REQUEST {
-                            out.is_arp_request = true;
-                        }
-                    }
+            switch vq_complete(rxq) {
+                ok(cb) => {
+                    let recv: usize = cb.used_len as usize; // bytes the device actually wrote
+                    let dev: DeviceBuffer = cb.buf;
+                    forget_unchecked(cb);
+                    var cpu: CpuBuffer = invalidate_for_cpu(dev);
+                    out = parse_rx_frame(&cpu, recv);
+                    free(cpu);
+                    post_rx_buffer(rxq);
+                    vq_kick(regs, RX_QUEUE);
+                    return out;
                 }
-                if out.ethertype == ETHERTYPE_IPV4 {
-                    // Only treat it as ICMP after the IPv4 header checks out: full
-                    // length, valid header checksum, and protocol == ICMP.
-                    let ip_at: usize = FRAME_AT + 14;
-                    if len >= FRAME_AT + 42 {
-                        if ipv4_checksum_valid(&cpu, ip_at) {
-                            if ipv4_protocol(&cpu, ip_at) == IP_PROTO_ICMP {
-                                let kind: u8 = icmp_type(&cpu, FRAME_AT);
-                                out.src_ip = ipv4_src_ip(&cpu, ip_at);
-                                out.target_ip = ipv4_dst_ip(&cpu, ip_at);
-                                out.icmp_ident = icmp_ident(&cpu, FRAME_AT);
-                                out.icmp_seq = icmp_seq(&cpu, FRAME_AT);
-                                if kind == ICMP_ECHO_REPLY {
-                                    out.is_icmp_reply = true;
-                                }
-                                if kind == ICMP_ECHO_REQUEST {
-                                    out.is_icmp_request = true;
-                                }
-                            }
-                        }
-                    }
+                err(e) => {
+                    nic_fault_reset(regs, rxq); // inconsistent completion: reset and reclaim
+                    return out; // out.valid stays false
                 }
             }
-            free(cpu);
-            post_rx_buffer(rxq);
-            vq_kick(regs, RX_QUEUE);
-            return out;
         }
     }
     return out;
 }
 
 // Wait (bounded by a real-time deadline) for the device to return a TX buffer.
-fn tx_wait_reclaim(txq: *mut Virtq) -> bool {
+fn tx_wait_reclaim(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> bool {
     if vq_wait_used(txq, IO_TIMEOUT_TICKS) {
-        let cb: CompletedBuffer = vq_complete(txq);
-        let rb: DeviceBuffer = cb.buf; // reclaim the full allocation, not the used length
-        forget_unchecked(cb);
-        free(invalidate_for_cpu(rb));
-        return true;
+        switch vq_complete(txq) {
+            ok(cb) => {
+                let rb: DeviceBuffer = cb.buf; // reclaim the full allocation, not used length
+                forget_unchecked(cb);
+                free(invalidate_for_cpu(rb));
+                return true;
+            }
+            err(e) => {
+                nic_fault_reset(regs, txq); // inconsistent completion: reset and reclaim
+                return false;
+            }
+        }
     }
+    nic_fault_reset(regs, txq); // timeout: reclaim the stuck buffer rather than abandon it
     return false;
 }
 
@@ -256,7 +307,7 @@ export fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr,
     let frame: DeviceBuffer = clean_for_device(cpu);
     vq_submit_tx(txq, frame);
     vq_kick(regs, TX_QUEUE);
-    if !tx_wait_reclaim(txq) {
+    if !tx_wait_reclaim(regs, txq) {
         return err(.PingTimeout);
     }
 
@@ -306,31 +357,38 @@ export fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
     let start: Ticks = read_ticks();
     while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
         if vq_has_used(rxq) {
-            let cb: CompletedBuffer = vq_complete(rxq);
-            let recv: usize = cb.used_len as usize; // bytes the device actually wrote
-            let d: DeviceBuffer = cb.buf;
-            forget_unchecked(cb);
-            var cpu: CpuBuffer = invalidate_for_cpu(d);
-            let total: usize = recv; // copy out only the received bytes
-            var n: usize = 0;
-            if total > FRAME_AT {
-                n = total - FRAME_AT;
-                if n > max {
-                    n = max;
-                }
-                var i: usize = 0;
-                while i < n {
-                    let b: u8 = read_u8(&cpu, FRAME_AT + i);
-                    unsafe {
-                        raw.store<u8>(phys(dst + i), b);
+            switch vq_complete(rxq) {
+                ok(cb) => {
+                    let recv: usize = cb.used_len as usize; // bytes the device actually wrote
+                    let d: DeviceBuffer = cb.buf;
+                    forget_unchecked(cb);
+                    var cpu: CpuBuffer = invalidate_for_cpu(d);
+                    let total: usize = recv; // copy out only the received bytes
+                    var n: usize = 0;
+                    if total > FRAME_AT {
+                        n = total - FRAME_AT;
+                        if n > max {
+                            n = max;
+                        }
+                        var i: usize = 0;
+                        while i < n {
+                            let b: u8 = read_u8(&cpu, FRAME_AT + i);
+                            unsafe {
+                                raw.store<u8>(phys(dst + i), b);
+                            }
+                            i = i + 1;
+                        }
                     }
-                    i = i + 1;
+                    free(cpu);
+                    post_rx_buffer(rxq);
+                    vq_kick(regs, RX_QUEUE);
+                    return n;
+                }
+                err(e) => {
+                    nic_fault_reset(regs, rxq); // inconsistent completion: reset and reclaim
+                    return 0;
                 }
             }
-            free(cpu);
-            post_rx_buffer(rxq);
-            vq_kick(regs, RX_QUEUE);
-            return n;
         }
     }
     return 0;
@@ -344,7 +402,7 @@ fn send_arp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr,
     let dev: DeviceBuffer = clean_for_device(cpu);
     vq_submit_tx(txq, dev);
     vq_kick(regs, TX_QUEUE);
-    tx_wait_reclaim(txq);
+    tx_wait_reclaim(regs, txq);
 }
 
 fn send_icmp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr, our_ip: u32, dst_mac: *MacAddr, dst_ip: u32, ident: u16, seq: u16) -> void {
@@ -353,7 +411,7 @@ fn send_icmp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr
     let dev: DeviceBuffer = clean_for_device(cpu);
     vq_submit_tx(txq, dev);
     vq_kick(regs, TX_QUEUE);
-    tx_wait_reclaim(txq);
+    tx_wait_reclaim(regs, txq);
 }
 
 // Serve one inbound frame: answer an ARP request or an ICMP echo request aimed at
