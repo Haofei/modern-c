@@ -97,6 +97,31 @@ export fn user_addr_space(pt: *PageTable, base: usize, limit: usize) -> UserAddr
     return .{ .pt = pt, .base = base, .limit = limit };
 }
 
+// Validate one user page: mapped, user-accessible (PTE_U), and with the required permission
+// (PTE_W when `need_write`, else PTE_R).
+fn validate_page(uas: *UserAddrSpace, page: usize, need_write: bool) -> Result<bool, UaccessError> {
+    switch page_table_lookup(uas.pt, va(page)) {
+        ok(m) => {
+            if !mapping_is_user(&m) {
+                return err(.NotUserPage);
+            }
+            if need_write {
+                if !mapping_is_writable(&m) {
+                    return err(.NotWritable);
+                }
+            } else {
+                if !mapping_is_readable(&m) {
+                    return err(.NotReadable);
+                }
+            }
+            return ok(true);
+        }
+        err(e) => {
+            return err(.NotMapped);
+        }
+    }
+}
+
 // Whether each page touched by [addr, addr+len) is mapped, user-accessible, and has
 // the required permission (PTE_W when `need_write`, else PTE_R). Validates the whole
 // range up front so a copy is all-or-nothing: if any page fails, the caller copies
@@ -121,24 +146,9 @@ fn check_pages(uas: *UserAddrSpace, addr: usize, len: usize, need_write: bool) -
     let last: usize = addr + (len - 1);
     var more: bool = true;
     while more {
-        switch page_table_lookup(uas.pt, va(page)) {
-            ok(m) => {
-                if !mapping_is_user(&m) {
-                    return err(.NotUserPage);
-                }
-                if need_write {
-                    if !mapping_is_writable(&m) {
-                        return err(.NotWritable);
-                    }
-                } else {
-                    if !mapping_is_readable(&m) {
-                        return err(.NotReadable);
-                    }
-                }
-            }
-            err(e) => {
-                return err(.NotMapped);
-            }
+        switch validate_page(uas, page, need_write) {
+            ok(v) => {}
+            err(e) => { return err(e); }
         }
         if page >= (last - (last % UA_PAGE_SIZE)) {
             more = false;
@@ -158,8 +168,7 @@ export fn copy_from_user_pt(uas: *UserAddrSpace, dst: PAddr, src: UserPtr<u8>, l
         ok(v) => {}
         err(e) => { return err(e); } // copy nothing on any unmapped/permission failure
     }
-    copy_pages(uas, dst, src_addr, len, false);
-    return ok(true);
+    return copy_pages(uas, dst, src_addr, len, false);
 }
 
 // Copy `len` bytes from the kernel buffer at `src` to user VA `dst` (in `uas`),
@@ -170,25 +179,35 @@ export fn copy_to_user_pt(uas: *UserAddrSpace, dst: UserPtr<u8>, src: PAddr, len
         ok(v) => {}
         err(e) => { return err(e); } // copy nothing on any unmapped/permission failure
     }
-    copy_pages(uas, src, dst_addr, len, true);
-    return ok(true);
+    return copy_pages(uas, src, dst_addr, len, true);
 }
 
-// Copy `len` bytes between kernel buffer `kbuf` and user range [uaddr, uaddr+len),
-// one page-slice at a time (each user page may map to a discontiguous frame). When
-// `to_user` is true the user range is the destination, else the source. The range was
-// fully validated by `check_pages`, so every lookup here succeeds.
-fn copy_pages(uas: *UserAddrSpace, kbuf: PAddr, uaddr: usize, len: usize, to_user: bool) -> void {
+// Copy `len` bytes between kernel buffer `kbuf` and user range [uaddr, uaddr+len), one
+// page-slice at a time (each user page may map to a discontiguous frame). When `to_user` is
+// true the user range is the destination, else the source.
+//
+// Each page is re-validated immediately before its slice is copied — not only by the up-front
+// check_pages — so the validate→copy window shrinks to a single page. (Under cooperative
+// single-core scheduling nothing changes the address space mid-copy; this is defense for when
+// preemption/SMP land, where a fuller fix also locks the address space against concurrent
+// unmap/TLB shootdown.) On a page that became invalid, the copy stops and returns the error,
+// having copied the earlier pages.
+fn copy_pages(uas: *UserAddrSpace, kbuf: PAddr, uaddr: usize, len: usize, to_user: bool) -> Result<bool, UaccessError> {
     var done: usize = 0;
     while done < len {
         let cur: usize = uaddr + done;
+        let page: usize = cur - (cur % UA_PAGE_SIZE);
+        switch validate_page(uas, page, to_user) { // re-check this page right before copying it
+            ok(v) => {}
+            err(e) => { return err(e); }
+        }
         let page_off: usize = cur % UA_PAGE_SIZE;
         var chunk: usize = UA_PAGE_SIZE - page_off; // bytes left in this user page
         let remaining: usize = len - done;
         if chunk > remaining {
             chunk = remaining;
         }
-        let user_pa: PAddr = page_table_translate(uas.pt, va(cur)); // validated mapped above
+        let user_pa: PAddr = page_table_translate(uas.pt, va(cur));
         let k: PAddr = pa_offset(kbuf, done);
         if to_user {
             mem_copy(user_pa, k, chunk);
@@ -197,4 +216,5 @@ fn copy_pages(uas: *UserAddrSpace, kbuf: PAddr, uaddr: usize, len: usize, to_use
         }
         done = done + chunk;
     }
+    return ok(true);
 }

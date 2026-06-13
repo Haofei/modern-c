@@ -58,7 +58,7 @@ export fn grant_table_make(tab: *mut GrantTable, owner_slot: u32, owner_gen: u32
             // Continue the slot's generation (it is never reset), so an outstanding ref to a
             // previous grant on this slot — even with matching base/len — cannot validate
             // against the new grant. grant_revoke also advanced it when the old grant died.
-            let next_gen: u32 = wrapping_add_u32(tab.slots[i].grant.gen, 1);
+            let next_gen: u32 = tab.slots[i].grant.gen + 1; // checked: fail closed on exhaustion
             tab.slots[i].grant = grant_make_gen(base, len, next_gen);
             tab.slots[i].owner_slot = owner_slot;
             tab.slots[i].owner_gen = owner_gen;

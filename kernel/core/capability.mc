@@ -28,5 +28,5 @@ export fn cap_resource(comptime R: type, c: *Cap<R>) -> R {
 
 // Revoke the capability, consuming it (its linear end of life).
 export fn cap_revoke(comptime R: type, c: Cap<R>) -> void {
-    forget_unchecked(c);
+    unsafe { forget_unchecked(c); } // husk: a capability owns nothing to release
 }

@@ -64,9 +64,11 @@ export fn grant_ref(g: *Grant) -> GrantRef {
     return .{ .base = g.base, .len = g.len, .gen = g.gen };
 }
 
-// Owner side: revoke — outstanding refs become stale.
+// Owner side: revoke — outstanding refs become stale. The generation uses checked addition so
+// it fails closed (traps) on exhaustion rather than wrapping back to a value a stale ref could
+// match — a capability generation must never silently revive an old handle.
 export fn grant_revoke(g: *mut Grant) -> void {
-    g.gen = wrapping_add_u32(g.gen, 1);
+    g.gen = g.gen + 1;
 }
 
 // Server side: validate a ref against the live grant (catches use-after-revoke and forgery).
