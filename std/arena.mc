@@ -36,10 +36,13 @@ export fn arena_alloc(a: *mut Arena, size: usize, align: usize) -> PAddr {
     return start;
 }
 
-// Reclaim every allocation at once and invalidate outstanding generational handles.
+// Reclaim every allocation at once and invalidate outstanding generational handles. The
+// generation uses checked addition so it fails closed (traps) on exhaustion rather than
+// wrapping back to a value an old `GenRef` could match — a generational handle must never
+// silently revive after 2^32 resets. This matches std/grant's revoke discipline.
 export fn arena_reset(a: *mut Arena) -> void {
     a.next = a.base;
-    a.gen = wrapping_add_u32(a.gen, 1);
+    a.gen = a.gen + 1;
 }
 
 // Bytes still available between the bump frontier and the end of the region.

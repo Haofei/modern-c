@@ -68,7 +68,10 @@ export fn pool_free(comptime T: type, comptime N: usize, p: *mut Pool<T, N>, r: 
     }
     p.used[r.index] = false;
     p.initialized[r.index] = false;
-    p.gen[r.index] = wrapping_add_u32(p.gen[r.index], 1);
+    // Checked increment so the slot generation fails closed (traps) on exhaustion rather
+    // than wrapping back to a value a stale handle could match — a freed slot must never be
+    // revived by an old PoolRef after 2^32 reuses. Same discipline as std/arena and std/grant.
+    p.gen[r.index] = p.gen[r.index] + 1;
     p.count = p.count - 1;
     return ok(true);
 }

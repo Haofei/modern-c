@@ -49,15 +49,19 @@ export fn arc_new_uninit(comptime T: type, a: *Allocator) -> Arc<T> {
 // the same allocator provenance.
 export fn arc_clone(comptime T: type, h: *Arc<T>) -> Arc<T> {
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
-    // Take a ref with a single atomic read-modify-write, then inspect the value it
-    // returned (the count *before* the add). A separate `load` then `fetch_add` is racy:
-    // two clones near the cap can both pass the load and then both overflow. `fetch_add`
-    // is one indivisible step, so checking its returned previous value detects an
-    // overflow that no concurrent clone can have slipped past.
-    let prev: u32 = blk.count.fetch_add(1, .acq_rel);
-    if prev == 0xFFFF_FFFF {
-        unreachable; // refcount overflow — the add wrapped past the maximum
+    // Check the saturation cap *before* incrementing, so the count is never wrapped to a
+    // bogus value. A plain `fetch_add` would write `0` for one instant when the previous
+    // value was the maximum — corrupting the refcount before any overflow check could run.
+    // This is the reviewer's CAS form (load, refuse at the cap, store the +1) specialized
+    // to the kernel's current cooperative single-core model, where no concurrent clone can
+    // slip between the load and the store. A genuinely SMP-safe version needs an atomic
+    // compare-exchange retry loop; that lands with preemption/SMP, alongside the address-
+    // space locking uaccess already defers to the same milestone.
+    let cur: u32 = blk.count.load(.acquire);
+    if cur == 0xFFFF_FFFF {
+        unreachable; // refcount saturated — too many owners; never wrap the counter
     }
+    blk.count.store(cur + 1, .release); // cur < max, so the checked add cannot overflow
     return .{ .block = h.block, .allocator = h.allocator };
 }
 
