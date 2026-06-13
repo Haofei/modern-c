@@ -21,7 +21,18 @@ global g_seq: W;
 fn w(x: u64) -> W { return W.from(x); }
 fn tick() -> W { g_seq = g_seq + w(1); return g_seq; }
 fn add(a: W, b: W) -> W { return a + b; }
+fn sub(a: W, b: W) -> W { return a - b; } // modular: never traps
 fn mul(a: W, b: W) -> W { return a * b; }
+fn band(a: W, b: W) -> W { return a & b; }
+fn bor(a: W, b: W) -> W { return a | b; }
+fn bxor(a: W, b: W) -> W { return a ^ b; }
+fn shl(a: W, n: u64) -> W { return a << (n % 64); } // wrap shift is modular/truncating
+fn shr(a: W, n: u64) -> W { return a >> (n % 64); }
+// narrow to a smaller width (modular, never traps) then widen back — exercises the scalar
+// conversion lowering (the eval-order-sensitive path).
+fn nu8(x: W) -> W { return W.from(u8.wrap_from(x as u64) as u64); }
+fn nu16(x: W) -> W { return W.from(u16.wrap_from(x as u64) as u64); }
+fn nu32(x: W) -> W { return W.from(u32.wrap_from(x as u64) as u64); }
 fn dig(x: W) -> u64 { return x as u64; }
 """
 
@@ -35,6 +46,9 @@ class Gen:
         self.depth = 0          # nesting depth guard
 
     # ----- expressions (all of type W, trap-free) -----
+    BINOPS = ("add", "sub", "mul", "band", "bor", "bxor")
+    UNOPS = ("nu8", "nu16", "nu32")  # narrow→widen conversions
+
     def wexpr(self, d=0):
         # Leaves bias higher as depth grows so expressions terminate.
         if d >= 3 or self.rng.random() < 0.35 + 0.2 * d:
@@ -44,7 +58,12 @@ class Gen:
             if choice < 0.75:
                 return "tick()"                        # side effect: order-sensitive
             return "w(%d)" % self.rng.randrange(0, 1000)
-        op = self.rng.choice(("add", "mul"))
+        r = self.rng.random()
+        if r < 0.20:
+            return "%s(%s)" % (self.rng.choice(self.UNOPS), self.wexpr(d + 1))
+        if r < 0.35:
+            return "%s(%s, %d)" % (self.rng.choice(("shl", "shr")), self.wexpr(d + 1), self.rng.randrange(0, 64))
+        op = self.rng.choice(self.BINOPS)
         return "%s(%s, %s)" % (op, self.wexpr(d + 1), self.wexpr(d + 1))
 
     # A u64 control value in [0, k): dig(<wexpr>) % k, never a divide-by-zero (k >= 2).
