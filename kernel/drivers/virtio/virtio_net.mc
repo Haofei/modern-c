@@ -55,7 +55,10 @@ struct NetDevice {
 fn post_rx_buffer(rxq: *mut Virtq) -> void {
     let cpu: CpuBuffer = alloc(RX_BUF_LEN);
     let dev: DeviceBuffer = clean_for_device(cpu); // cpu consumed
-    vq_submit_rx(rxq, dev);                        // dev consumed (in flight)
+    switch vq_submit_rx(rxq, dev) {                // dev consumed (in flight, or reclaimed)
+        ok(id) => {}
+        err(e) => {} // queue full: the refill is skipped and the buffer reclaimed inside
+    }
 }
 
 // A completion timed out, or the device returned an inconsistent used-ring entry: the queue
@@ -102,7 +105,10 @@ export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *Mac
     // The virtio_net_hdr at offset 0 is left zeroed by the allocator.
     arp_write_request(&cpu, FRAME_AT, src_mac, src_ip, target_ip);
     let dev: DeviceBuffer = clean_for_device(cpu); // cpu consumed
-    vq_submit_tx(txq, dev);                        // dev consumed (in flight)
+    switch vq_submit_tx(txq, dev) {                // dev consumed (in flight, or reclaimed)
+        ok(id) => {}
+        err(e) => { return false; } // queue full: buffer reclaimed inside, nothing to send
+    }
     vq_kick(regs, TX_QUEUE);
 
     if !vq_wait_used(txq, IO_TIMEOUT_TICKS) {
@@ -305,7 +311,10 @@ export fn nic_ping_gateway(dev: *NetDevice, src_mac: *MacAddr, src_ip: Ipv4Addr,
     var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
     icmp_write_echo_request(&cpu, FRAME_AT, src_mac, &gw_mac, src_ip.raw, gw_ip.raw, PING_IDENT, PING_SEQ);
     let frame: DeviceBuffer = clean_for_device(cpu);
-    vq_submit_tx(txq, frame);
+    switch vq_submit_tx(txq, frame) {
+        ok(id) => {}
+        err(e) => { return err(.PingTimeout); } // queue full: buffer reclaimed inside
+    }
     vq_kick(regs, TX_QUEUE);
     if !tx_wait_reclaim(regs, txq) {
         return err(.PingTimeout);
@@ -400,7 +409,10 @@ fn send_arp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr,
     var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
     arp_write_reply(&cpu, FRAME_AT, src_mac, our_ip, dst_mac, dst_ip);
     let dev: DeviceBuffer = clean_for_device(cpu);
-    vq_submit_tx(txq, dev);
+    switch vq_submit_tx(txq, dev) {
+        ok(id) => {}
+        err(e) => { return; } // queue full: buffer reclaimed inside, drop the reply
+    }
     vq_kick(regs, TX_QUEUE);
     tx_wait_reclaim(regs, txq);
 }
@@ -409,7 +421,10 @@ fn send_icmp_reply(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *MacAddr
     var cpu: CpuBuffer = alloc(NET_HDR_LEN + ETH_MIN_FRAME);
     icmp_write_echo_reply(&cpu, FRAME_AT, src_mac, dst_mac, our_ip, dst_ip, ident, seq);
     let dev: DeviceBuffer = clean_for_device(cpu);
-    vq_submit_tx(txq, dev);
+    switch vq_submit_tx(txq, dev) {
+        ok(id) => {}
+        err(e) => { return; } // queue full: buffer reclaimed inside, drop the reply
+    }
     vq_kick(regs, TX_QUEUE);
     tx_wait_reclaim(regs, txq);
 }

@@ -50,14 +50,25 @@ export fn udp_transmit(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> bool {
 
     // DMA ownership cycle: hand off, submit, wait, reclaim.
     let dev: DeviceBuffer = clean_for_device(cpu);
-    vq_submit_tx(txq, dev);
+    switch vq_submit_tx(txq, dev) {
+        ok(id) => {}
+        err(e) => { return false; } // queue full: buffer reclaimed inside
+    }
     vq_kick(regs, TX_QUEUE);
     var spins: u32 = 0;
     while spins < 1_000_000 {
         if vq_has_used(txq) {
-            let done: DeviceBuffer = vq_complete(txq);
-            free(invalidate_for_cpu(done));
-            return true;
+            switch vq_complete(txq) {
+                ok(cb) => {
+                    let done: DeviceBuffer = cb.buf;
+                    forget_unchecked(cb);
+                    free(invalidate_for_cpu(done));
+                    return true;
+                }
+                err(e) => {
+                    return false; // device returned an inconsistent completion
+                }
+            }
         }
         spins = spins + 1;
     }

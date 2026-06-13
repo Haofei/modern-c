@@ -32,16 +32,27 @@ export fn nic_init(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> bool {
 export fn nic_transmit(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, payload_len: u16) -> bool {
     let cpu: CpuBuffer = alloc((payload_len as usize) + 12);
     let dev: DeviceBuffer = clean_for_device(cpu); // cpu consumed at handoff
-    vq_submit_tx(txq, dev);                        // dev consumed; now in flight
+    switch vq_submit_tx(txq, dev) {                // dev consumed; now in flight (or reclaimed)
+        ok(id) => {}
+        err(e) => { return false; } // queue full: buffer reclaimed inside
+    }
     vq_kick(regs, TX_QUEUE);
 
     // Wait (bounded) for the device to return the buffer on the used ring.
     var spins: u32 = 0;
     while spins < 1_000_000 {
         if vq_has_used(txq) {
-            let done: DeviceBuffer = vq_complete(txq); // reconstructed handle
-            free(invalidate_for_cpu(done));            // reclaim and free
-            return true;
+            switch vq_complete(txq) {
+                ok(cb) => {
+                    let done: DeviceBuffer = cb.buf; // reconstructed handle (full allocation)
+                    forget_unchecked(cb);
+                    free(invalidate_for_cpu(done));  // reclaim and free
+                    return true;
+                }
+                err(e) => {
+                    return false; // device returned an inconsistent completion
+                }
+            }
         }
         spins = spins + 1;
     }

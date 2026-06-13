@@ -72,7 +72,12 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
     let data_d: DeviceBuffer = clean_for_device(data);
     let status_d: DeviceBuffer = clean_for_device(status);
 
-    vq_submit_chain3(vq, hdr_d, data_d, status_d, true);
+    switch vq_submit_chain3(vq, hdr_d, data_d, status_d, true) {
+        ok(id) => {}
+        err(e) => {
+            return err(.QueueUnavailable); // not enough descriptors; buffers reclaimed inside
+        }
+    }
     vq_kick(regs, 0);
 
     if !vq_wait_used(vq, IO_TIMEOUT_TICKS) {

@@ -101,6 +101,11 @@ enum VqError {
     QueueUnavailable, // the device reports queue_num_max == 0 for this queue
 }
 
+// Why a submission could not be enqueued.
+enum VqSubmitError {
+    QueueFull, // not enough free descriptors for the (possibly multi-descriptor) request
+}
+
 // Program the queue's three region addresses into the device, negotiate the size
 // against `queue_num_max`, and initialize the free list. Returns `QueueUnavailable`
 // if the device does not provide this queue.
@@ -142,7 +147,12 @@ export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> Result<
 // can be reconstructed on completion), publish it in the available ring, and
 // consume the device-owned handle. `device_writable` = the device writes it (RX);
 // otherwise the device reads it (TX). Returns the descriptor id (the token).
-fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> u16 {
+fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> Result<u16, VqSubmitError> {
+    if vq_free_count(vq) < 1 {
+        // No descriptor free: reclaim the buffer and fail closed rather than trap.
+        free(invalidate_for_cpu(buf));
+        return err(.QueueFull);
+    }
     let id: u16 = vq_alloc_desc(vq);
     let addr: u64 = (device_addr(&buf) as usize) as u64; // bus addr → descriptor word
     let len: u32 = buf.len as u32;
@@ -164,14 +174,14 @@ fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> u16 {
     vq.avail.ring[slot] = id;
     wmb(); // descriptor + ring entry visible before the index bump
     vq.avail.idx = vq.avail.idx + 1;
-    return id;
+    return ok(id);
 }
 
-export fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -> u16 {
+export fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -> Result<u16, VqSubmitError> {
     return vq_submit(vq, buf, false);
 }
 
-export fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -> u16 {
+export fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -> Result<u16, VqSubmitError> {
     return vq_submit(vq, buf, true);
 }
 
@@ -179,8 +189,19 @@ export fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -> u16 {
 // `data` (device reads if `data_writable` is false, writes if true), and `status`
 // (device writes). The descriptors are linked via F_NEXT; only the head is
 // published in the available ring. Consumes the three device-owned buffers and
-// returns the head descriptor id (the completion token).
-export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -> u16 {
+// returns the head descriptor id (the completion token), or QueueFull.
+//
+// The whole chain needs three descriptors, so the free count is checked up front: a
+// partial allocation that then trapped would leave the free list inconsistent and the
+// buffers in limbo. If there is not room for all three, the buffers are reclaimed and
+// QueueFull is returned — no descriptor is touched.
+export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -> Result<u16, VqSubmitError> {
+    if vq_free_count(vq) < 3 {
+        free(invalidate_for_cpu(header));
+        free(invalidate_for_cpu(data));
+        free(invalidate_for_cpu(status));
+        return err(.QueueFull);
+    }
     let id0: u16 = vq_alloc_desc(vq);
     let id1: u16 = vq_alloc_desc(vq);
     let id2: u16 = vq_alloc_desc(vq);
@@ -231,7 +252,7 @@ export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuf
     vq.avail.ring[slot] = id0;
     wmb(); // descriptors + ring entry visible before the index bump
     vq.avail.idx = vq.avail.idx + 1;
-    return id0;
+    return ok(id0);
 }
 
 // Why a device completion could not be trusted. A driver that sees one of these has
