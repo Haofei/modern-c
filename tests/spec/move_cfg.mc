@@ -2,7 +2,7 @@
 // SPEC: milestone=linear-move
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_RESOURCE_LEAK,E_MOVE_FIELD_IN_NONMOVE
+// SPEC: check=E_RESOURCE_LEAK,E_MOVE_FIELD_IN_NONMOVE,E_MOVE_ARRAY_UNSUPPORTED
 
 // Regression coverage for the move checker's control-flow model (section 18.1):
 //   * `?` is an exit edge — on its error branch the function returns, so any other
@@ -76,8 +76,9 @@ struct BadContainer {
     h: Handle,
 }
 
-// --- rejected: an array of a `move` resource in a non-`move` struct ---
+// --- rejected: an array of a `move` resource as a struct field (not yet trackable — element
+//     moves need the indexed-place model), so it is rejected in any struct, move or not ---
 struct BadArrayContainer {
-    // EXPECT_ERROR: E_MOVE_FIELD_IN_NONMOVE
+    // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
     hs: [4]Handle,
 }

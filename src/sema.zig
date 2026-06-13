@@ -540,7 +540,14 @@ pub const Checker = struct {
             // container hole — `Pool<Token, N>`, `Arc<Token>`, etc. monomorphize to a
             // non-move struct with a move-typed field and are rejected here. Hold a move
             // resource in another `move` type, or store it behind a pointer.
-            if (!struct_decl.is_move and self.typeEmbedsMoveByValue(field.ty, aliases)) {
+            if (self.typeIsMoveArray(field.ty, aliases)) {
+                // An array of a `move` type as a field is not yet trackable — element moves need
+                // the indexed-place model the checker does not have. Reject it in *any* struct,
+                // including a `move` struct: otherwise `s.items[i]` could be moved out twice with
+                // no use-after-move diagnostic (a double free). Hold the resources behind
+                // pointers, or in a `move` container, until indexed move places exist.
+                self.errorCode(field.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable as a struct field (element moves need place analysis); hold the resources behind pointers or in a `move` container instead");
+            } else if (!struct_decl.is_move and self.typeEmbedsMoveByValue(field.ty, aliases)) {
                 self.errorCode(field.ty.span, "E_MOVE_FIELD_IN_NONMOVE", "a linear `move` value cannot be stored by value in a non-`move` struct (it would be duplicated or leaked); make the struct `move`, or store the resource behind a pointer");
             }
             if (fields.contains(field.name.text)) {
@@ -1272,19 +1279,24 @@ pub const Checker = struct {
     // Remove every `base.field` place key when the whole aggregate leaves play (consumed or
     // forgotten), so a later same-named binding starts clean.
     fn clearSubplaces(base: []const u8, state: *std.StringHashMap(MoveSlot)) void {
-        var doomed: [16][]const u8 = undefined;
-        var n: usize = 0;
-        var it = state.iterator();
-        while (it.next()) |entry| {
-            const k = entry.key_ptr.*;
-            if (k.len > base.len + 1 and std.mem.startsWith(u8, k, base) and k[base.len] == '.') {
-                if (n < doomed.len) {
-                    doomed[n] = k;
-                    n += 1;
+        // Remove every `base.field…` subplace. A HashMap iterator is invalidated by a removal,
+        // so rescan from the top after each one until none remain — rather than collecting into
+        // a fixed-size batch, which would silently leave stale subplace state behind once an
+        // aggregate had more moved-out fields than the batch could hold. The number of tracked
+        // subplaces per function is tiny, so the repeated scan is cheap.
+        var removed_any = true;
+        while (removed_any) {
+            removed_any = false;
+            var it = state.iterator();
+            while (it.next()) |entry| {
+                const k = entry.key_ptr.*;
+                if (k.len > base.len + 1 and std.mem.startsWith(u8, k, base) and k[base.len] == '.') {
+                    _ = state.remove(k);
+                    removed_any = true;
+                    break; // the iterator is now invalid; rescan with a fresh one
                 }
             }
         }
-        for (doomed[0..n]) |k| _ = state.remove(k);
     }
 
     // `forget_unchecked(x)` discards the whole aggregate husk: consume the binding and drop

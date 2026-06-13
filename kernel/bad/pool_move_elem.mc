@@ -1,4 +1,4 @@
-// EXPECT: E_MOVE_FIELD_IN_NONMOVE — a generic container that stores its element by value
+// EXPECT: E_MOVE_ARRAY_UNSUPPORTED — a generic container that stores its element by value
 // cannot hold a linear `move` type: pool_load/pool_set would duplicate or leak the resource.
 // Pool<T> stores [N]T by value, so instantiating it over a move T is rejected here.
 import "std/pool.mc";
