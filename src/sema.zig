@@ -523,8 +523,21 @@ pub const Checker = struct {
         var ctx = ctx_in;
         if (struct_decl.type_params.len > 0) ctx.type_params = &type_params;
 
+        var empty_aliases = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
+        defer empty_aliases.deinit();
+        const aliases = ctx.type_aliases orelse &empty_aliases;
+
         for (struct_decl.fields) |field| {
             self.checkType(field.ty, .storage, ctx);
+            // A linear `move` resource stored by value in a non-`move` struct escapes
+            // linear tracking: the aggregate is copyable/leakable, so the resource could be
+            // duplicated or dropped without being consumed. This also closes the generic
+            // container hole — `Pool<Token, N>`, `Arc<Token>`, etc. monomorphize to a
+            // non-move struct with a move-typed field and are rejected here. Hold a move
+            // resource in another `move` type, or store it behind a pointer.
+            if (!struct_decl.is_move and self.typeEmbedsMoveByValue(field.ty, aliases)) {
+                self.errorCode(field.ty.span, "E_MOVE_FIELD_IN_NONMOVE", "a linear `move` value cannot be stored by value in a non-`move` struct (it would be duplicated or leaked); make the struct `move`, or store the resource behind a pointer");
+            }
             if (fields.contains(field.name.text)) {
                 self.errorCode(field.name.span, "E_DUPLICATE_STRUCT_FIELD", "struct field names must be unique");
             } else {
@@ -564,6 +577,22 @@ pub const Checker = struct {
         return false;
     }
 
+    // Whether `ty` embeds a linear `move` resource *by value* — directly, in an array, or
+    // behind a qualifier/nullable. A pointer or slice to a move type is NOT by-value (it
+    // borrows; the resource lives elsewhere). Used to reject storing a move resource inside
+    // a non-move aggregate, where it would escape linear tracking (and be duplicated or
+    // leaked) — including a generic container monomorphized over a move type, e.g.
+    // `Pool<Token, N>`'s `[N]Token` or `Arc<Token>`'s embedded value.
+    fn typeEmbedsMoveByValue(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        switch (ty.kind) {
+            .name, .generic => return self.isMoveTypeName(ty, aliases),
+            .array => |node| return self.typeEmbedsMoveByValue(node.child.*, aliases),
+            .qualified => |node| return self.typeEmbedsMoveByValue(node.child.*, aliases),
+            .nullable => |child| return self.typeEmbedsMoveByValue(child.*, aliases),
+            else => return false, // pointers, slices, fn/closure types: not by-value
+        }
+    }
+
     fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         const body = fn_decl.body orelse return;
         var state = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
@@ -575,26 +604,41 @@ pub const Checker = struct {
                 };
             }
         }
-        self.moveBlock(body, &state, aliases);
-        // Function exit: any still-live (and not deferred-for-consumption) move
-        // binding was never consumed — a leak.
-        var it = state.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.live and !entry.value_ptr.deferred) {
-                self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value is never consumed (must be moved, returned, or freed)");
+        const fell_through = !self.moveBlock(body, &state, aliases);
+        // Implicit fall-through exit at the end of the body (a `void` return): only a
+        // real exit edge if control can actually reach it. If the body diverges on every
+        // path (e.g. ends in `return`), each such exit edge was already leak-checked.
+        if (fell_through) {
+            var it = state.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.live and !entry.value_ptr.deferred) {
+                    self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value is never consumed (must be moved, returned, or freed)");
+                }
             }
         }
     }
 
-    fn moveBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-        for (block.items) |stmt| self.moveStmt(stmt, state, aliases);
+    // Analyze the statements of a block in order. Returns `true` if the block diverges
+    // (every path through it ends in `return`/`break`/`continue`), in which case the
+    // join after the block is unreachable. Statements after a diverging statement are
+    // dead code and are not analyzed.
+    fn moveBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        for (block.items) |stmt| {
+            if (self.moveStmt(stmt, state, aliases)) return true;
+        }
+        return false;
     }
 
-    fn moveScopedBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    // A lexical `{ ... }` sub-scope. Returns whether the block diverges. Block-local
+    // `move` bindings are dropped from `state` on the way out; if the block falls through
+    // (does not diverge) any still-live local is a leak at the scope's normal exit edge.
+    fn moveScopedBlock(self: *Checker, block: ast.Block, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
         var before = self.cloneMoveState(state);
         defer before.deinit();
-        self.moveBlock(block, state, aliases);
-        self.reportMoveLocalsLeavingScope(state, &before, "linear `move` value declared in this block is never consumed (must be moved, returned, or freed before the block ends)");
+        const diverges = self.moveBlock(block, state, aliases);
+        if (!diverges) {
+            self.reportMoveLocalsLeavingScope(state, &before, "linear `move` value declared in this block is never consumed (must be moved, returned, or freed before the block ends)");
+        }
 
         var scoped = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
         defer scoped.deinit();
@@ -606,24 +650,24 @@ pub const Checker = struct {
             };
         }
         self.replaceMoveState(state, &scoped);
+        return diverges;
     }
 
-    fn checkMoveExit(self: *Checker, state: *const std.StringHashMap(MoveSlot)) void {
+    // Leak-check every `move` binding live at an exit edge. Used both at an explicit
+    // `return` (the whole function exits) and at a `?` operator (the function exits on
+    // the error branch). A `deferred` binding is scheduled for lexical cleanup that runs
+    // on the exit edge, so it is not a leak.
+    fn checkMoveExitEdge(self: *Checker, state: *const std.StringHashMap(MoveSlot), message: []const u8) void {
         var it = state.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.live and !entry.value_ptr.deferred) {
-                self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value is still live on this function-exit path (must be moved, returned, or freed)");
+                self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", message);
             }
         }
     }
 
-    fn clearMoveExitState(self: *Checker, state: *std.StringHashMap(MoveSlot)) void {
-        _ = self;
-        var it = state.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.live = false;
-            entry.value_ptr.deferred = false;
-        }
+    fn checkMoveExit(self: *Checker, state: *const std.StringHashMap(MoveSlot)) void {
+        self.checkMoveExitEdge(state, "linear `move` value is still live on this function-exit path (must be moved, returned, or freed)");
     }
 
     fn reportMoveLocalsLeavingScope(self: *Checker, inner: *const std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), message: []const u8) void {
@@ -660,7 +704,11 @@ pub const Checker = struct {
         }
     }
 
-    fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    // Analyze one statement. Returns `true` if it diverges — transfers control out of the
+    // enclosing block on every path (`return`, `break`, `continue`, or a branch all of
+    // whose arms diverge) — so the statements that follow are unreachable and the join
+    // after it has no predecessor here.
+    fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
         switch (stmt.kind) {
             .let_decl, .var_decl => |decl| {
                 if (decl.init) |init_expr| self.moveConsume(init_expr, state, aliases);
@@ -671,13 +719,17 @@ pub const Checker = struct {
                         };
                     }
                 }
+                return false;
             },
             .@"return" => |maybe| {
                 if (maybe) |v| self.moveConsume(v, state, aliases);
                 self.checkMoveExit(state);
-                self.clearMoveExitState(state);
+                return true; // the rest of the block is unreachable
             },
-            .expr => |e| self.moveConsume(e, state, aliases),
+            .expr => |e| {
+                self.moveConsume(e, state, aliases);
+                return false;
+            },
             .assignment => |a| {
                 if (a.target.kind == .ident) {
                     if (state.getPtr(a.target.kind.ident.text)) |slot| {
@@ -692,14 +744,21 @@ pub const Checker = struct {
                 if (a.target.kind == .ident) {
                     if (state.getPtr(a.target.kind.ident.text)) |slot| slot.live = true;
                 }
+                return false;
             },
             // `defer <expr>` runs at scope end: it reserves (does not immediately
             // move) the values it will consume, so they neither leak nor remain
             // movable.
-            .@"defer" => |e| self.moveDefer(e, state),
-            .assert => |e| self.moveBorrow(e, state),
-            .block, .unsafe_block, .comptime_block => |b| self.moveScopedBlock(b, state, aliases),
-            .contract_block => |c| self.moveScopedBlock(c.block, state, aliases),
+            .@"defer" => |e| {
+                self.moveDefer(e, state);
+                return false;
+            },
+            .assert => |e| {
+                self.moveBorrow(e, state);
+                return false;
+            },
+            .block, .unsafe_block, .comptime_block => |b| return self.moveScopedBlock(b, state, aliases),
+            .contract_block => |c| return self.moveScopedBlock(c.block, state, aliases),
             .loop => |l| {
                 if (l.iterable) |iter| self.moveBorrow(iter, state);
                 // Snapshot the names live at loop entry so a `break`/`continue` inside
@@ -717,7 +776,7 @@ pub const Checker = struct {
                 };
                 var body_state = self.cloneMoveState(state);
                 defer body_state.deinit();
-                self.moveBlock(l.body, &body_state, aliases);
+                _ = self.moveBlock(l.body, &body_state, aliases);
                 if (self.move_loop_stack.pop()) |popped| {
                     var p = popped;
                     p.deinit();
@@ -733,6 +792,8 @@ pub const Checker = struct {
                         entry.value_ptr.deferred = false;
                     }
                 }
+                // A loop may run zero times, so control can always fall through past it.
+                return false;
             },
             .if_let => |n| {
                 // The condition/scrutinee is evaluated, so by-value `move` operands in
@@ -743,30 +804,44 @@ pub const Checker = struct {
                 var else_state = self.cloneMoveState(state);
                 defer else_state.deinit();
                 const bound_name = self.addIfLetMoveBinding(n.pattern, n.value, &then_state, aliases);
-                self.moveBlock(n.then_block, &then_state, aliases);
+                const then_div = self.moveBlock(n.then_block, &then_state, aliases);
                 if (bound_name) |bn| {
-                    if (then_state.getPtr(bn)) |slot| {
-                        if (slot.live and !slot.deferred) {
-                            self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in an if-let branch is never consumed (must be moved, returned, or freed)");
+                    // A diverging arm already leak-checked the binding at its exit edge.
+                    if (!then_div) {
+                        if (then_state.getPtr(bn)) |slot| {
+                            if (slot.live and !slot.deferred) {
+                                self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in an if-let branch is never consumed (must be moved, returned, or freed)");
+                            }
                         }
                     }
                     _ = then_state.remove(bn);
                 }
-                if (n.else_block) |eb| self.moveBlock(eb, &else_state, aliases);
-                self.mergeMoveBranches(state, &then_state, &else_state);
+                var else_div = false;
+                if (n.else_block) |eb| {
+                    else_div = self.moveBlock(eb, &else_state, aliases);
+                }
+                self.finalizeBranchLocals(&then_state, state, !then_div);
+                self.finalizeBranchLocals(&else_state, state, !else_div);
+                self.joinMoveBranches(state, &then_state, then_div, &else_state, else_div);
+                // Diverges only when an `else` exists and both arms diverge; a missing
+                // `else` arm falls through.
+                return then_div and (n.else_block != null) and else_div;
             },
             .@"switch" => |sw| {
                 // The subject is evaluated, so by-value `move` operands in it are
                 // consumed (a plain `if cond` desugars to a switch on `cond`; borrow
                 // operands `&x` and non-move subjects stay no-ops in moveConsume).
                 self.moveConsume(sw.subject, state, aliases);
-                var merged: ?std.StringHashMap(MoveSlot) = null;
-                defer if (merged) |*m| m.deinit();
+                var joined: ?std.StringHashMap(MoveSlot) = null;
+                defer if (joined) |*m| m.deinit();
                 // Infer the subject's type so a pattern binding (`ok(p)`) that names a `move`
                 // value is tracked inside the arm — otherwise use-after-move / a leak through a
                 // switch arm goes undetected.
                 const subject_ty: ?ast.TypeExpr = if (self.move_ctx) |ctx| exprResultType(sw.subject, ctx.*) else null;
+                var any_arm = false;
+                var all_diverge = true;
                 for (sw.arms) |arm| {
+                    any_arm = true;
                     var arm_state = self.cloneMoveState(state);
                     defer arm_state.deinit();
                     var bound_name: ?[]const u8 = null;
@@ -792,31 +867,92 @@ pub const Checker = struct {
                             }
                         }
                     }
-                    switch (arm.body) {
+                    const arm_div = switch (arm.body) {
                         .block => |b| self.moveBlock(b, &arm_state, aliases),
-                        .expr => |e| self.moveConsume(e, &arm_state, aliases),
-                    }
+                        .expr => |e| blk: {
+                            self.moveConsume(e, &arm_state, aliases);
+                            break :blk false;
+                        },
+                    };
                     // A `move` value bound by this arm must be consumed within it; then it leaves
-                    // scope (remove it so a later arm's same-named binding starts fresh).
+                    // scope (remove it so a later arm's same-named binding starts fresh). A
+                    // diverging arm already leak-checked it at its exit edge.
                     if (bound_name) |bn| {
-                        if (arm_state.getPtr(bn)) |slot| {
-                            if (slot.live and !slot.deferred) {
-                                self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in a switch arm is never consumed (must be moved, returned, or freed)");
+                        if (!arm_div) {
+                            if (arm_state.getPtr(bn)) |slot| {
+                                if (slot.live and !slot.deferred) {
+                                    self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in a switch arm is never consumed (must be moved, returned, or freed)");
+                                }
                             }
                         }
                         _ = arm_state.remove(bn);
                     }
-                    if (merged) |*m| {
-                        self.mergeMoveBranches(m, m, &arm_state);
-                    } else {
-                        merged = self.cloneMoveState(&arm_state);
+                    self.finalizeBranchLocals(&arm_state, state, !arm_div);
+                    // Only an arm that falls through reaches the join after the switch.
+                    if (!arm_div) {
+                        all_diverge = false;
+                        if (joined) |*m| {
+                            self.mergeMoveBranches(m, m, &arm_state);
+                        } else {
+                            joined = self.cloneMoveState(&arm_state);
+                        }
                     }
                 }
-                if (merged) |*m| self.replaceMoveState(state, m);
+                if (joined) |*m| self.replaceMoveState(state, m);
+                // The switch diverges only if it has arms and every arm diverges.
+                return any_arm and all_diverge;
             },
-            .@"break", .@"continue" => self.checkLoopExitLeaks(state),
-            .asm_stmt => {},
+            .@"break", .@"continue" => {
+                self.checkLoopExitLeaks(state);
+                return true; // the rest of the loop body is unreachable
+            },
+            .asm_stmt => return false,
         }
+    }
+
+    // Drop branch-local `move` bindings (names not present in `outer`) from `branch` on
+    // the way out of an if/switch arm. If the arm falls through (`report`), any still-live
+    // local is a leak at the arm's normal exit; a diverging arm already leak-checked its
+    // locals at the exit edge. Afterwards `branch` holds only outer names, so two arms can
+    // be merged by comparing the same keys.
+    fn finalizeBranchLocals(self: *Checker, branch: *std.StringHashMap(MoveSlot), outer: *const std.StringHashMap(MoveSlot), report: bool) void {
+        var removals: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer removals.deinit(self.reporter.allocator);
+        var it = branch.iterator();
+        while (it.next()) |entry| {
+            if (outer.contains(entry.key_ptr.*)) continue;
+            if (report and entry.value_ptr.live and !entry.value_ptr.deferred) {
+                self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value declared in this branch is never consumed before the branch exits");
+            }
+            removals.append(self.reporter.allocator, entry.key_ptr.*) catch {
+                self.oom = true;
+            };
+        }
+        for (removals.items) |k| _ = branch.remove(k);
+    }
+
+    // Join two control-flow arms into `dest`. A diverging arm does not reach the join, so
+    // it contributes nothing: the join is the surviving arm's state (or unreachable if
+    // both diverge). Only when both arms fall through are they merged — and a `move` value
+    // must then have consistent ownership across them (else E_MOVE_BRANCH_MISMATCH).
+    fn joinMoveBranches(
+        self: *Checker,
+        dest: *std.StringHashMap(MoveSlot),
+        left: *const std.StringHashMap(MoveSlot),
+        left_div: bool,
+        right: *const std.StringHashMap(MoveSlot),
+        right_div: bool,
+    ) void {
+        if (left_div and right_div) return; // join is unreachable; leave `dest` as-is
+        if (left_div) {
+            self.replaceMoveState(dest, right);
+            return;
+        }
+        if (right_div) {
+            self.replaceMoveState(dest, left);
+            return;
+        }
+        self.mergeMoveBranches(dest, left, right);
     }
 
     // At a `break`/`continue`, the current iteration ends. Any loop-body-local `move`
@@ -912,7 +1048,13 @@ pub const Checker = struct {
                 }
             },
             .grouped => |inner| self.moveConsume(inner.*, state, aliases),
-            .try_expr => |inner| self.moveConsume(inner.operand.*, state, aliases),
+            .try_expr => |inner| {
+                // `?` is an exit edge: on error it returns from the function. The operand's
+                // `ok` payload is consumed and flows on; every *other* live `move` value
+                // would leak on the error return unless it is registered with `defer`.
+                self.moveConsume(inner.operand.*, state, aliases);
+                self.checkMoveExitEdge(state, "linear `move` value is still live where `?` may return on error (consume it before `?`, or register it with `defer`)");
+            },
             .cast => |c| self.moveConsume(c.value.*, state, aliases),
             .address_of => |inner| self.moveBorrow(inner.*, state),
             .member => |m| self.moveBorrow(m.base.*, state),
@@ -942,7 +1084,12 @@ pub const Checker = struct {
                 }
             },
             .grouped, .address_of, .deref => |inner| self.moveBorrow(inner.*, state),
-            .try_expr => |inner| self.moveBorrow(inner.operand.*, state),
+            .try_expr => |inner| {
+                // `?` is an exit edge even in a borrow position: on error it returns, so any
+                // other live `move` value would leak unless registered with `defer`.
+                self.moveBorrow(inner.operand.*, state);
+                self.checkMoveExitEdge(state, "linear `move` value is still live where `?` may return on error (consume it before `?`, or register it with `defer`)");
+            },
             .member => |m| self.moveBorrow(m.base.*, state),
             .index => |ix| self.moveBorrow(ix.base.*, state),
             .cast => |c| self.moveBorrow(c.value.*, state),

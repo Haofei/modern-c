@@ -92,7 +92,8 @@ struct GenRef<T> {
 }
 
 enum ArenaError {
-    StaleHandle, // the handle predates a reset — its memory may have been reused
+    StaleHandle,  // the handle predates a reset — its memory may have been reused
+    ForgedHandle, // the handle's address is outside the arena's allocated region
 }
 
 // Allocate `size` bytes (aligned to `align`) and return a generational handle for a T.
@@ -105,6 +106,16 @@ export fn arena_alloc_gen(comptime T: type, a: *mut Arena, size: usize, align: u
 export fn arena_resolve(comptime T: type, a: *mut Arena, h: GenRef<T>) -> Result<PAddr, ArenaError> {
     if h.gen != a.gen {
         return err(.StaleHandle); // used after a reset — memory may have been reused
+    }
+    // Defence in depth: a resolved address must point into allocated space [base, next).
+    // Without strict module privacy a GenRef is structurally forgeable, so a matching
+    // generation alone is not enough — a forged handle with the current generation but a
+    // bogus address must not resolve to memory outside the arena.
+    if pa_lt(h.addr, a.base) {
+        return err(.ForgedHandle); // below the arena base
+    }
+    if !pa_lt(h.addr, a.next) {
+        return err(.ForgedHandle); // at or past the bump frontier — never allocated
     }
     return ok(h.addr);
 }

@@ -355,11 +355,23 @@ export fn vq_used_len(vq: *mut Virtq) -> u32 {
     return vq.used.ring[slot].len;
 }
 
-// Reap one completed buffer: read the used entry, free its descriptor, and hand
-// back the device-owned buffer reconstructed from the in-flight record, with its
-// length set to the bytes the device wrote. The driver then reclaims it
-// (`invalidate_for_cpu`). Call only when `vq_has_used` is true.
-export fn vq_complete(vq: *mut Virtq) -> DeviceBuffer {
+// A single completed DMA buffer handed back to the caller to reclaim. Like
+// `CompletedChain3`, the buffer's `len` is its *submitted allocation* size — never the
+// device-reported length — so the CPU view of it, and the cache invalidate / free that
+// use `len`, cover the whole allocation rather than just the bytes the device touched.
+// `used_len` is how many bytes the device actually wrote (the received length on RX),
+// already bounds-validated against the allocation.
+move struct CompletedBuffer {
+    buf: DeviceBuffer,
+    used_len: u32,
+}
+
+// Reap one completed buffer: read the used entry, free its descriptor, and hand back the
+// device-owned buffer reconstructed from the in-flight record. The buffer's `len` is the
+// submitted allocation size; the device-reported byte count rides alongside as `used_len`
+// so reclaim (`invalidate_for_cpu`) frees/invalidates the full allocation while packet
+// parsing reads only `used_len` bytes. Call only when `vq_has_used` is true.
+export fn vq_complete(vq: *mut Virtq) -> CompletedBuffer {
     rmb();
     let slot: usize = (vq.last_used % vq.size) as usize;
     let raw_id: u32 = vq.used.ring[slot].id;
@@ -370,12 +382,42 @@ export fn vq_complete(vq: *mut Virtq) -> DeviceBuffer {
     if !vq.inflight_present[id as usize] {
         unreachable; // device completed a descriptor that is not in flight
     }
-    let len: u32 = vq.used.ring[slot].len;
-    if len > vq.inflight_len[id as usize] {
+    let alloc_len: u32 = vq.inflight_len[id as usize];
+    let used: u32 = vq.used.ring[slot].len;
+    if used > alloc_len {
         unreachable; // device reported more bytes than the submitted buffer owns
     }
     vq.last_used = vq.last_used + 1;
     let addr: u64 = vq.inflight_addr[id as usize];
     vq_free_desc(vq, id);
-    return .{ .dev_addr = (addr as usize) as DmaAddr, .len = len as usize };
+    return .{ .buf = .{ .dev_addr = (addr as usize) as DmaAddr, .len = alloc_len as usize }, .used_len = used };
+}
+
+// Reclaim every in-flight buffer after a fault or timeout, so a failed request does not
+// abandon its DMA buffers. The caller MUST reset the device first (e.g. `virtio_reset`) so
+// it has relinquished ownership of all queued buffers; this then walks the in-flight record,
+// reconstructs each buffer at its *allocation* length, invalidates it back to CPU ownership
+// and frees it, and rebuilds the descriptor free list and ring cursors so the queue is empty
+// and reusable. Returns how many buffers were reclaimed.
+export fn vq_reset_reclaim(vq: *mut Virtq) -> usize {
+    var reclaimed: usize = 0;
+    var i: usize = 0;
+    while i < vq.size as usize {
+        if vq.inflight_present[i] {
+            let addr: u64 = vq.inflight_addr[i];
+            let len: usize = vq.inflight_len[i] as usize;
+            // Reconstruct the owned buffer from the in-flight record and reclaim it. The
+            // device was reset above, so these bytes are CPU-owned again.
+            let dev: DeviceBuffer = .{ .dev_addr = (addr as usize) as DmaAddr, .len = len };
+            free(invalidate_for_cpu(dev));
+            reclaimed = reclaimed + 1;
+        }
+        i = i + 1;
+    }
+    // Empty the queue: rebuild the free list (clears in-flight records) and reset our
+    // producer/consumer cursors. The driver re-runs queue setup before reusing it.
+    vq_init_free(vq);
+    vq.avail.idx = 0;
+    vq.last_used = 0;
+    return reclaimed;
 }

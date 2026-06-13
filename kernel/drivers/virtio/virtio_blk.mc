@@ -76,9 +76,11 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
     vq_kick(regs, 0);
 
     if !vq_wait_used(vq, IO_TIMEOUT_TICKS) {
-        // The request is still in flight: the device owns the buffers and may yet
-        // write them, so we cannot reclaim them here without a queue reset. Fail
-        // closed (the buffers stay device-owned until the queue is torn down).
+        // The request is still in flight: the device owns the buffers and may yet write
+        // them. Reset the device so it relinquishes ownership, then reclaim and free every
+        // in-flight buffer — failing closed without abandoning the DMA allocations.
+        virtio_reset(regs);
+        vq_reset_reclaim(vq);
         return err(.Timeout);
     }
     // Take the three buffers back as owned handles (the descriptors are freed inside).
@@ -104,6 +106,10 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
             free(cstatus);
         }
         err(e) => {
+            // The device returned an inconsistent completion (bad id/len/chain). Reset the
+            // device and reclaim every in-flight buffer rather than leaving them queued.
+            virtio_reset(regs);
+            vq_reset_reclaim(vq);
             return err(.DeviceFault);
         }
     }

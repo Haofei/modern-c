@@ -974,7 +974,12 @@ export fn ipc_call_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u6
             }
         }
     }
-    ipc_receive(t, out);
+    // Receive the reply only from the endpoint we called, not whatever arrives first: a
+    // plain `ipc_receive` would accept an unrelated queued message as the reply (a
+    // confused-deputy / reordering hazard). `ipc_receive_from` filters by source and, if
+    // that exact incarnation dies before replying, reports DEAD out-of-band instead of
+    // blocking forever. (pid == slot in this table, so `ep.slot` is the source pid.)
+    ipc_receive_from(t, ep.slot as u32, out);
     return ok(true);
 }
 

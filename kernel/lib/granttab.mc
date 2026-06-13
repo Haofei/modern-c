@@ -138,7 +138,10 @@ export fn grant_table_copy_in(tab: *mut GrantTable, id: usize, r: GrantRef, off:
     }
 }
 
-// Revoke one grant (outstanding refs become stale), or BadId.
+// Revoke one grant (outstanding refs become stale) and reclaim its slot, or BadId. The
+// generation bump invalidates any outstanding ref before the slot is freed; clearing
+// `present` and decrementing `count` return the slot to the free pool so a long-lived
+// table is not exhausted by a sequence of make/revoke cycles.
 export fn grant_table_revoke(tab: *mut GrantTable, id: usize) -> Result<bool, GrantTabError> {
     if id >= GRANTTAB_MAX {
         return err(.BadId);
@@ -146,18 +149,24 @@ export fn grant_table_revoke(tab: *mut GrantTable, id: usize) -> Result<bool, Gr
     if !tab.slots[id].present {
         return err(.BadId);
     }
-    grant_revoke(&tab.slots[id].grant);
+    grant_revoke(&tab.slots[id].grant); // bump gen first: outstanding refs fail closed
+    tab.slots[id].present = false;       // then reclaim the slot
+    tab.count = tab.count - 1;
     return ok(true);
 }
 
-// Revoke every grant owned by `owner` — the process-death hook. Returns how many were revoked.
+// Revoke every grant owned by `owner` — the process-death hook. Returns how many were
+// revoked. Each revoked grant's slot is reclaimed (gen bumped, `present` cleared, `count`
+// decremented), so a dead owner's grants do not occupy table slots forever.
 export fn grant_table_revoke_owner(tab: *mut GrantTable, owner: u32) -> usize {
     var revoked: usize = 0;
     var i: usize = 0;
     while i < GRANTTAB_MAX {
         if tab.slots[i].present {
             if tab.slots[i].owner == owner {
-                grant_revoke(&tab.slots[i].grant);
+                grant_revoke(&tab.slots[i].grant); // invalidate outstanding refs
+                tab.slots[i].present = false;       // reclaim the dead owner's slot
+                tab.count = tab.count - 1;
                 revoked = revoked + 1;
             }
         }

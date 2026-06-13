@@ -49,10 +49,15 @@ export fn arc_new_uninit(comptime T: type, a: *Allocator) -> Arc<T> {
 // the same allocator provenance.
 export fn arc_clone(comptime T: type, h: *Arc<T>) -> Arc<T> {
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
-    if blk.count.load(.acquire) == 0xFFFF_FFFF {
-        unreachable; // refcount overflow
+    // Take a ref with a single atomic read-modify-write, then inspect the value it
+    // returned (the count *before* the add). A separate `load` then `fetch_add` is racy:
+    // two clones near the cap can both pass the load and then both overflow. `fetch_add`
+    // is one indivisible step, so checking its returned previous value detects an
+    // overflow that no concurrent clone can have slipped past.
+    let prev: u32 = blk.count.fetch_add(1, .acq_rel);
+    if prev == 0xFFFF_FFFF {
+        unreachable; // refcount overflow — the add wrapped past the maximum
     }
-    blk.count.fetch_add(1, .acq_rel);
     return .{ .block = h.block, .allocator = h.allocator };
 }
 

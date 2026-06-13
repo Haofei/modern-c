@@ -99,7 +99,10 @@ export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *Mac
     if !vq_wait_used(txq, IO_TIMEOUT_TICKS) {
         return false; // buffer stuck in flight (device never completed)
     }
-    free(invalidate_for_cpu(vq_complete(txq)));
+    let cb: CompletedBuffer = vq_complete(txq);
+    let rb: DeviceBuffer = cb.buf; // reclaim the full allocation, not the used length
+    drop(cb);
+    free(invalidate_for_cpu(rb));
     return true;
 }
 
@@ -109,7 +112,9 @@ export fn nic_poll_arp(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> u32 {
     if !vq_has_used(rxq) {
         return 0;
     }
-    let dev: DeviceBuffer = vq_complete(rxq);  // reconstructed, len = bytes received
+    let cb: CompletedBuffer = vq_complete(rxq);
+    let dev: DeviceBuffer = cb.buf; // buffer len = full allocation; used bytes in cb.used_len
+    drop(cb);
     var cpu: CpuBuffer = invalidate_for_cpu(dev);
 
     var sender: u32 = 0;
@@ -156,9 +161,12 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
     let start: Ticks = read_ticks();
     while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
         if vq_has_used(rxq) {
-            let dev: DeviceBuffer = vq_complete(rxq);
+            let cb: CompletedBuffer = vq_complete(rxq);
+            let recv: usize = cb.used_len as usize; // bytes the device actually wrote
+            let dev: DeviceBuffer = cb.buf;
+            drop(cb);
             var cpu: CpuBuffer = invalidate_for_cpu(dev);
-            let len: usize = cpu_len(&cpu);
+            let len: usize = recv; // parse only the received bytes, not the whole allocation
             out.valid = true;
             // Only parse fields the device actually delivered: check the received
             // length before reading the Ethernet header, then the ARP / IPv4+ICMP
@@ -214,7 +222,10 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
 // Wait (bounded by a real-time deadline) for the device to return a TX buffer.
 fn tx_wait_reclaim(txq: *mut Virtq) -> bool {
     if vq_wait_used(txq, IO_TIMEOUT_TICKS) {
-        free(invalidate_for_cpu(vq_complete(txq)));
+        let cb: CompletedBuffer = vq_complete(txq);
+        let rb: DeviceBuffer = cb.buf; // reclaim the full allocation, not the used length
+        drop(cb);
+        free(invalidate_for_cpu(rb));
         return true;
     }
     return false;
@@ -295,9 +306,12 @@ export fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
     let start: Ticks = read_ticks();
     while !timed_out(start, read_ticks(), IO_TIMEOUT_TICKS) {
         if vq_has_used(rxq) {
-            let d: DeviceBuffer = vq_complete(rxq);
+            let cb: CompletedBuffer = vq_complete(rxq);
+            let recv: usize = cb.used_len as usize; // bytes the device actually wrote
+            let d: DeviceBuffer = cb.buf;
+            drop(cb);
             var cpu: CpuBuffer = invalidate_for_cpu(d);
-            let total: usize = cpu_len(&cpu);
+            let total: usize = recv; // copy out only the received bytes
             var n: usize = 0;
             if total > FRAME_AT {
                 n = total - FRAME_AT;

@@ -58,6 +58,22 @@ fn mark_failed(regs: MmioPtr<VirtioMmio>) -> void {
     regs.status.write(STATUS_FAILED, .release);
 }
 
+// Reset the device and wait for it to acknowledge (status reads back 0). Returns true on
+// acknowledgement, false on timeout. Used by the init handshake and by a driver reclaiming
+// a queue after a fault: the reset makes the device relinquish ownership of every in-flight
+// buffer, so the driver can then reclaim them without racing device writes.
+export fn virtio_reset(regs: MmioPtr<VirtioMmio>) -> bool {
+    regs.status.write(0, .release);
+    var spins: u32 = 0;
+    while spins < RESET_SPINS {
+        if regs.status.read(.acquire) == 0 {
+            return true;
+        }
+        spins = spins + 1;
+    }
+    return false;
+}
+
 // The device-init handshake (§3.1.1): verify the device; reset and wait for the
 // device to acknowledge it (status reads back 0); ACKNOWLEDGE + DRIVER; read the
 // device's *offered* features and accept only the intersection with what we want
@@ -79,17 +95,7 @@ export fn virtio_init(regs: MmioPtr<VirtioMmio>, device_id: u32, want_lo: u32, w
     }
 
     // Reset, then poll until the device confirms (status == 0).
-    regs.status.write(0, .release);
-    var spins: u32 = 0;
-    var reset_done: bool = false;
-    while spins < RESET_SPINS {
-        if regs.status.read(.acquire) == 0 {
-            reset_done = true;
-            break;
-        }
-        spins = spins + 1;
-    }
-    if !reset_done {
+    if !virtio_reset(regs) {
         mark_failed(regs);
         return err(.ResetTimeout);
     }
