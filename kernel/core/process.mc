@@ -989,8 +989,28 @@ fn ipc_send_id(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: 
 // Reply to a received request, echoing its correlation id so the original caller's
 // ipc_call / ipc_call_ep matches this as *its* reply (and not an unrelated queued message).
 // Servers should use this instead of a bare `ipc_send` back to `req.from`.
+//
+// The reply is delivered to the requester's *endpoint* — its slot AND the generation it held
+// when it sent the request — not a bare pid. So if the requester exited and its slot was
+// reused, the endpoint no longer validates and the reply is dropped rather than delivered to
+// the new occupant of the slot.
 export fn ipc_reply(t: *mut ProcTable, req: *Message, tag: u32, a0: u64, a1: u64, a2: u64) -> void {
-    ipc_send_id(t, req.from, tag, a0, a1, a2, req.call_id);
+    let ep: Endpoint = .{ .slot = req.from as usize, .gen = req.from_gen };
+    var sending: bool = true;
+    while sending {
+        switch ipc_send_ep_id(t, ep, tag, a0, a1, a2, req.call_id) {
+            ok(delivered) => {
+                if delivered {
+                    sending = false; // landed in the requester's still-valid mailbox
+                } else {
+                    proc_yield_or_idle(t); // mailbox full -- retry, re-validating the endpoint
+                }
+            }
+            err(e) => {
+                return; // the requesting incarnation is gone -- drop the reply
+            }
+        }
+    }
 }
 
 // Receive the reply to a synchronous call: the message must come from the awaited endpoint
