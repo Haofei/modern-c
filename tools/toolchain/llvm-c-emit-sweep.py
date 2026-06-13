@@ -12,6 +12,7 @@ Usage:
 
 Defaults: zig-out/bin/mcc, tests/c_emit/*.mc.
 """
+import concurrent.futures
 import glob
 import os
 import re
@@ -37,34 +38,41 @@ def forbidden_assumption(ir, source):
     return None
 
 
+# Check + emit-llvm + assemble one fixture; returns a failure tuple or None. Each
+# fixture is an independent subprocess chain, so the corpus fans out across cores
+# (override with JOBS=N); failures are sorted by the caller for stable output.
+def sweep_one(mcc, path):
+    name = os.path.basename(path)
+    source = open(path).read()
+    check = subprocess.run([mcc, "check", path], capture_output=True, text=True)
+    if check.returncode != 0:
+        return (name, "CHECK", first_error(check.stderr))
+
+    emit = subprocess.run([mcc, "emit-llvm", path], capture_output=True, text=True)
+    if emit.returncode != 0:
+        return (name, "EMIT", first_error(emit.stderr))
+
+    forbidden = forbidden_assumption(emit.stdout, source)
+    if forbidden:
+        token, line_no, line = forbidden
+        return (name, "ASSUMPTION", f"forbidden LLVM assumption token '{token}' at line {line_no}: {line}")
+
+    asm = subprocess.run(["llvm-as", "-o", os.devnull], input=emit.stdout, capture_output=True, text=True)
+    if asm.returncode != 0:
+        return (name, "LLVM-AS", first_error(asm.stderr))
+    return None
+
+
 def main():
     mcc = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/mcc"
     pattern = sys.argv[2] if len(sys.argv) > 2 else "tests/c_emit/*.mc"
 
-    failures = []
     fixtures = sorted(glob.glob(pattern))
-    for path in fixtures:
-        name = os.path.basename(path)
-        source = open(path).read()
-        check = subprocess.run([mcc, "check", path], capture_output=True, text=True)
-        if check.returncode != 0:
-            failures.append((name, "CHECK", first_error(check.stderr)))
-            continue
-
-        emit = subprocess.run([mcc, "emit-llvm", path], capture_output=True, text=True)
-        if emit.returncode != 0:
-            failures.append((name, "EMIT", first_error(emit.stderr)))
-            continue
-
-        forbidden = forbidden_assumption(emit.stdout, source)
-        if forbidden:
-            token, line_no, line = forbidden
-            failures.append((name, "ASSUMPTION", f"forbidden LLVM assumption token '{token}' at line {line_no}: {line}"))
-            continue
-
-        asm = subprocess.run(["llvm-as", "-o", os.devnull], input=emit.stdout, capture_output=True, text=True)
-        if asm.returncode != 0:
-            failures.append((name, "LLVM-AS", first_error(asm.stderr)))
+    jobs = int(os.environ.get("JOBS") or (os.cpu_count() or 4))
+    workers = max(1, min(jobs, len(fixtures))) if fixtures else 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        failures = [f for f in ex.map(lambda p: sweep_one(mcc, p), fixtures) if f]
+    failures.sort()
 
     print(f"c_emit fixtures checked for LLVM: {len(fixtures)}")
     if failures:

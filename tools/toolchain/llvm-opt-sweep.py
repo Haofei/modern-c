@@ -12,6 +12,7 @@ Usage:
 
 Defaults: zig-out/bin/mcc, tests/spec, tests/c_emit/*.mc.
 """
+import concurrent.futures
 import glob
 import os
 import re
@@ -159,6 +160,23 @@ def check_module(mcc, label, source_path, source, extra_check=False):
     return None
 
 
+# One unit of work: emit + verify + O2 + lower one fixture. Each call is its own
+# subprocess chain, so the corpus fans out across cores (override with JOBS=N).
+# Returns (basename, spec-function-count, failure-or-None); failures are collected
+# and sorted by the caller so parallel ordering does not perturb the report.
+def sweep_one(mcc, path, is_spec):
+    name = os.path.basename(path)
+    if is_spec:
+        source = valid_program(open(path).read())
+        fn_count = len(re.findall(r"\bfn\s+\w+", source))
+        failure = check_module(mcc, name, path, source)
+    else:
+        source = open(path).read()
+        fn_count = 0
+        failure = check_module(mcc, name, path, source, extra_check=True)
+    return (name, fn_count, failure)
+
+
 def main():
     mcc = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/mcc"
     spec_dir = sys.argv[2] if len(sys.argv) > 2 else "tests/spec"
@@ -171,24 +189,22 @@ def main():
         print("SKIP: llvm-opt-sweep (llc not found)")
         return 0
 
-    failures = []
     spec_fixtures = sorted(glob.glob(os.path.join(spec_dir, "*.mc")))
-    spec_functions = 0
-    for path in spec_fixtures:
-        source = valid_program(open(path).read())
-        spec_functions += len(re.findall(r"\bfn\s+\w+", source))
-        failure = check_module(mcc, os.path.basename(path), path, source)
-        if failure:
-            kind, message = failure
-            failures.append((os.path.basename(path), kind, message))
-
     c_emit_fixtures = sorted(glob.glob(c_emit_glob))
-    for path in c_emit_fixtures:
-        source = open(path).read()
-        failure = check_module(mcc, os.path.basename(path), path, source, extra_check=True)
-        if failure:
-            kind, message = failure
-            failures.append((os.path.basename(path), kind, message))
+    tasks = [(p, True) for p in spec_fixtures] + [(p, False) for p in c_emit_fixtures]
+
+    failures = []
+    spec_functions = 0
+    jobs = int(os.environ.get("JOBS") or (os.cpu_count() or 4))
+    workers = max(1, min(jobs, len(tasks))) if tasks else 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        results = ex.map(lambda t: sweep_one(mcc, t[0], t[1]), tasks)
+        for name, fn_count, failure in results:
+            spec_functions += fn_count
+            if failure:
+                kind, message = failure
+                failures.append((name, kind, message))
+    failures.sort()
 
     print(
         f"LLVM optimizer sweep: spec fixtures {len(spec_fixtures)} "

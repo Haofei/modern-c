@@ -13,7 +13,7 @@ Usage:
 Defaults: zig-out/bin/mcc, tests/spec. Exit status is non-zero if any valid
 fixture fails to emit or compile.
 """
-import sys, os, re, glob, subprocess, tempfile
+import sys, os, re, glob, subprocess, tempfile, concurrent.futures
 
 # No valid spec fixtures are currently excluded from the lower-C sweep.
 OUT_OF_SCOPE = set()
@@ -48,39 +48,50 @@ def strip_expect_error(src):
     return "".join(ch for ch in split_top_level(src) if "EXPECT_ERROR" not in ch)
 
 
+# Emit + clang-check one fixture's valid (non-EXPECT_ERROR) declarations. Returns
+# (name, kept-fn-count, failure-or-None). Each fixture is an independent subprocess
+# chain, so the corpus fans out across cores (override with JOBS=N).
+def sweep_one(mcc, path):
+    name = os.path.basename(path)
+    program = strip_expect_error(open(path).read())
+    kept = len(re.findall(r"\bfn\s+\w+", program))
+
+    with tempfile.NamedTemporaryFile("w", suffix=".mc", delete=False) as tmp:
+        tmp.write(program)
+        tmp_path = tmp.name
+    try:
+        emit = subprocess.run([mcc, "emit-c", tmp_path], capture_output=True, text=True)
+    finally:
+        os.unlink(tmp_path)
+
+    if emit.returncode != 0:
+        first = next((l for l in emit.stderr.splitlines() if "error:" in l), "?")
+        return (name, kept, (name, "EMIT", first.strip()))
+    unsupported = next((l for l in emit.stdout.splitlines() if "/* unsupported" in l), None)
+    if unsupported is not None:
+        return (name, kept, (name, "UNSUPPORTED", unsupported.strip()))
+    clang = subprocess.run(CLANG, input=emit.stdout, capture_output=True, text=True)
+    if clang.returncode != 0:
+        first = next((l for l in clang.stderr.splitlines() if "error:" in l), "?")
+        return (name, kept, (name, "CLANG", first.strip()))
+    return (name, kept, None)
+
+
 def main():
     mcc = sys.argv[1] if len(sys.argv) > 1 else "zig-out/bin/mcc"
     spec_dir = sys.argv[2] if len(sys.argv) > 2 else "tests/spec"
 
-    failures, oos_failures, swept, kept_fns = [], [], 0, 0
-    for path in sorted(glob.glob(os.path.join(spec_dir, "*.mc"))):
-        name = os.path.basename(path)
-        swept += 1
-        program = strip_expect_error(open(path).read())
-        kept_fns += len(re.findall(r"\bfn\s+\w+", program))
-
-        with tempfile.NamedTemporaryFile("w", suffix=".mc", delete=False) as tmp:
-            tmp.write(program)
-            tmp_path = tmp.name
-        try:
-            emit = subprocess.run([mcc, "emit-c", tmp_path],
-                                  capture_output=True, text=True)
-        finally:
-            os.unlink(tmp_path)
-
-        bucket = oos_failures if name in OUT_OF_SCOPE else failures
-        if emit.returncode != 0:
-            first = next((l for l in emit.stderr.splitlines() if "error:" in l), "?")
-            bucket.append((name, "EMIT", first.strip()))
-            continue
-        unsupported = next((l for l in emit.stdout.splitlines() if "/* unsupported" in l), None)
-        if unsupported is not None:
-            bucket.append((name, "UNSUPPORTED", unsupported.strip()))
-            continue
-        clang = subprocess.run(CLANG, input=emit.stdout, capture_output=True, text=True)
-        if clang.returncode != 0:
-            first = next((l for l in clang.stderr.splitlines() if "error:" in l), "?")
-            bucket.append((name, "CLANG", first.strip()))
+    fixtures = sorted(glob.glob(os.path.join(spec_dir, "*.mc")))
+    failures, oos_failures, swept, kept_fns = [], [], len(fixtures), 0
+    jobs = int(os.environ.get("JOBS") or (os.cpu_count() or 4))
+    workers = max(1, min(jobs, len(fixtures))) if fixtures else 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        for name, kept, failure in ex.map(lambda p: sweep_one(mcc, p), fixtures):
+            kept_fns += kept
+            if failure:
+                (oos_failures if name in OUT_OF_SCOPE else failures).append(failure)
+    failures.sort()
+    oos_failures.sort()
 
     print(f"spec fixtures swept: {swept}, valid functions checked: {kept_fns}")
     if oos_failures:
