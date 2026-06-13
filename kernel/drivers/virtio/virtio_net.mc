@@ -67,9 +67,19 @@ fn post_rx_buffer(rxq: *mut Virtq) -> void {
 // leak the posted RX buffers). After a fault the NIC must be re-initialised (`nic_init`)
 // before reuse; callers report the failure upward.
 fn nic_fault_reset(dev: *NetDevice) -> void {
-    virtio_reset(dev.regs);
-    vq_reset_reclaim(dev.rxq);
-    vq_reset_reclaim(dev.txq);
+    if virtio_reset(dev.regs) {
+        // Reset acknowledged: the device has relinquished every in-flight buffer, so it is
+        // safe to reconstruct them as CPU-owned and free them. A reset drops the WHOLE device,
+        // so reclaim BOTH queues — the faulted queue's sibling would otherwise strand its
+        // posted buffers (a TX fault would leak the posted RX buffers).
+        vq_reset_reclaim(dev.rxq);
+        vq_reset_reclaim(dev.txq);
+    }
+    // else: the device did not acknowledge the reset and may still own — and write — the
+    // in-flight DMA buffers. Reconstructing them as CPU-owned and freeing them would be a
+    // use-after-free racing the device, so we deliberately leak the backing memory instead:
+    // the safe choice for a device that will not relinquish ownership. Either way the NIC is
+    // poisoned and must be re-initialised (nic_init) before reuse.
 }
 
 // Bring the card up: require VERSION_1, set up both queues, go live, and post the

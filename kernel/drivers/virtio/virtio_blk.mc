@@ -81,11 +81,14 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
     vq_kick(regs, 0);
 
     if !vq_wait_used(vq, IO_TIMEOUT_TICKS) {
-        // The request is still in flight: the device owns the buffers and may yet write
-        // them. Reset the device so it relinquishes ownership, then reclaim and free every
-        // in-flight buffer — failing closed without abandoning the DMA allocations.
-        virtio_reset(regs);
-        vq_reset_reclaim(vq);
+        // The request is still in flight: the device owns the buffers and may yet write them.
+        // Reset so it relinquishes ownership; only THEN is it safe to reconstruct and free the
+        // in-flight buffers. If the reset is not acknowledged the device may still write them,
+        // so reclaiming (freeing) them would be a use-after-free racing the device — leak the
+        // backing memory instead. Either way the device is poisoned; blk_init before reuse.
+        if virtio_reset(regs) {
+            vq_reset_reclaim(vq);
+        }
         return err(.Timeout);
     }
     // Take the three buffers back as owned handles (the descriptors are freed inside).
@@ -111,10 +114,13 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
             free(cstatus);
         }
         err(e) => {
-            // The device returned an inconsistent completion (bad id/len/chain). Reset the
-            // device and reclaim every in-flight buffer rather than leaving them queued.
-            virtio_reset(regs);
-            vq_reset_reclaim(vq);
+            // The device returned an inconsistent completion (bad id/len/chain). Reset so it
+            // relinquishes the in-flight buffers, then reclaim them — but only if the reset is
+            // acknowledged; otherwise the device may still write them and freeing would be a
+            // use-after-free, so leak the backing memory instead. The device is poisoned.
+            if virtio_reset(regs) {
+                vq_reset_reclaim(vq);
+            }
             return err(.DeviceFault);
         }
     }
