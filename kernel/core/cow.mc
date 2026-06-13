@@ -64,6 +64,8 @@ export fn cow_handle_fault(fault_va: usize) -> void {
     }
     let copy: PAddr = heap_alloc(&g_heap, PAGE, PAGE);
     mem_copy(copy, g_shared, PAGE);
+    // Editing the *active* address space: remap read-only→writable, then sfence.vma the page so
+    // the old read-only translation is dropped (the map_active wrapper fences after the remap).
     page_table_unmap(&g_pt_parent, va(aligned));
-    page_table_map(&g_pt_parent, &g_heap, va(aligned), copy, PTE_R | PTE_W);
+    page_table_map_active(&g_pt_parent, &g_heap, va(aligned), copy, PTE_R | PTE_W);
 }

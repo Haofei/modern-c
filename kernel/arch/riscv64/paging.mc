@@ -215,6 +215,41 @@ export fn page_table_unmap(pt: *mut PageTable, virt: VAddr) -> void {
     pte_store(table, vpn(virt, 0), 0);
 }
 
+// ----- editing the *active* address space -----
+//
+// page_table_map/unmap only store PTEs; that is correct for *building an inactive* page table
+// (no translations use it yet). But on RISC-V a store to a page table that is *currently in
+// use* is not ordered with subsequent implicit translation-table reads — stale TLB entries can
+// persist — so any edit to the active address space must be followed by `sfence.vma` for the
+// affected page. The fault handlers (demand paging, COW) use the `_active` wrappers below.
+
+// Synchronize a page-table edit for `virt` with address translation (flush its TLB entry for
+// all ASIDs). A full implementation would also shoot down other harts that share this address
+// space; this is the single-hart fence.
+export fn sfence_vma_page(virt: VAddr) -> void {
+    let v: usize = va_value(virt);
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm precise volatile {
+                "sfence.vma %0, zero"
+                in("r") v: usize
+            }
+        }
+    }
+}
+
+// Map a page in the active address space, then fence so the new translation is visible.
+export fn page_table_map_active(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_target: PAddr, flags: u64) -> void {
+    page_table_map(pt, h, virt, phys_target, flags);
+    sfence_vma_page(virt);
+}
+
+// Unmap a page in the active address space, then fence so the stale translation is dropped.
+export fn page_table_unmap_active(pt: *mut PageTable, virt: VAddr) -> void {
+    page_table_unmap(pt, virt);
+    sfence_vma_page(virt);
+}
+
 // A resolved leaf mapping: the physical address `virt` resolves to, plus the raw
 // leaf PTE so callers can inspect its permission bits without knowing the encoding.
 struct LeafMapping {

@@ -53,5 +53,6 @@ export fn dp_handle_fault(fault_va: usize) -> void {
         unreachable; // fault outside the demand region — fail closed, do not map
     }
     let frame: PAddr = heap_alloc(&g_heap, PAGE, PAGE);
-    page_table_map(&g_pt, &g_heap, va(aligned), frame, PTE_R | PTE_W);
+    // Editing the *active* address space: map then sfence.vma so the new translation is seen.
+    page_table_map_active(&g_pt, &g_heap, va(aligned), frame, PTE_R | PTE_W);
 }
