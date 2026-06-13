@@ -38,6 +38,10 @@ pub const Checker = struct {
     // loop-body-local `move` value live at that edge (a name not in the top frame) is a
     // leak — the same check `return` does at function exit, but scoped to the loop body.
     move_loop_stack: std.ArrayListUnmanaged(std.StringHashMap(void)) = .empty,
+    // Owns the synthetic place-key strings (`binding.field`) the move pass inserts into
+    // its state to track a `move` field that has been moved out of its aggregate. Freed at
+    // the end of each function's analysis.
+    move_place_keys: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -166,6 +170,7 @@ pub const Checker = struct {
             self.move_ctx = &move_ctx;
             defer self.move_ctx = null;
             defer self.move_loop_stack.deinit(self.reporter.allocator); // free the loop-entry snapshot stack
+            defer self.move_place_keys.deinit(self.reporter.allocator); // free the field-move place-key list
             for (module.decls) |decl| {
                 if (decl.kind == .fn_decl) self.checkMoveLinearity(decl.kind.fn_decl, &type_aliases);
             }
@@ -597,9 +602,13 @@ pub const Checker = struct {
         const body = fn_decl.body orelse return;
         var state = std.StringHashMap(MoveSlot).init(self.reporter.allocator);
         defer state.deinit();
+        defer {
+            for (self.move_place_keys.items) |k| self.reporter.allocator.free(k);
+            self.move_place_keys.clearRetainingCapacity();
+        }
         for (fn_decl.params) |param| {
             if (self.isMoveTypeName(param.ty, aliases)) {
-                state.put(param.name.text, .{ .live = true, .span = param.name.span }) catch {
+                state.put(param.name.text, .{ .live = true, .span = param.name.span, .ty = param.ty }) catch {
                     self.oom = true;
                 };
             }
@@ -687,7 +696,7 @@ pub const Checker = struct {
             .bind => |ident| {
                 const payload_ty = nullableInnerType(value_ty) orelse return null;
                 if (!self.isMoveTypeName(payload_ty, aliases)) return null;
-                state.put(ident.text, .{ .live = true, .span = ident.span }) catch {
+                state.put(ident.text, .{ .live = true, .span = ident.span, .ty = payload_ty }) catch {
                     self.oom = true;
                 };
                 return ident.text;
@@ -695,7 +704,7 @@ pub const Checker = struct {
             .tag_bind => |node| {
                 const payload_ty = resultPayloadType(value_ty, node.tag.text) orelse return null;
                 if (!self.isMoveTypeName(payload_ty, aliases)) return null;
-                state.put(node.binding.text, .{ .live = true, .span = node.binding.span }) catch {
+                state.put(node.binding.text, .{ .live = true, .span = node.binding.span, .ty = payload_ty }) catch {
                     self.oom = true;
                 };
                 return node.binding.text;
@@ -714,7 +723,7 @@ pub const Checker = struct {
                 if (decl.init) |init_expr| self.moveConsume(init_expr, state, aliases);
                 if (decl.ty) |ty| {
                     if (self.isMoveTypeName(ty, aliases) and decl.names.len > 0) {
-                        state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span }) catch {
+                        state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span, .ty = ty }) catch {
                             self.oom = true;
                         };
                     }
@@ -859,7 +868,7 @@ pub const Checker = struct {
                         if (name) |id| {
                             if (payload_ty) |pty| {
                                 if (self.isMoveTypeName(pty, aliases)) {
-                                    arm_state.put(id.text, .{ .live = true, .span = id.span }) catch {
+                                    arm_state.put(id.text, .{ .live = true, .span = id.span, .ty = pty }) catch {
                                         self.oom = true;
                                     };
                                     bound_name = id.text;
@@ -1042,6 +1051,12 @@ pub const Checker = struct {
                         self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
                     } else if (slot.deferred) {
                         self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be moved");
+                    } else if (hasMovedSubplace(id.text, state)) {
+                        // Moving the whole aggregate would also move the field already taken
+                        // out of it — a duplicate move. (`forget_unchecked` discards the husk
+                        // instead and goes through moveForget, which is allowed.)
+                        self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` value used as a whole after one of its fields was moved out");
+                        slot.live = false;
                     } else {
                         slot.live = false;
                     }
@@ -1057,7 +1072,20 @@ pub const Checker = struct {
             },
             .cast => |c| self.moveConsume(c.value.*, state, aliases),
             .address_of => |inner| self.moveBorrow(inner.*, state),
-            .member => |m| self.moveBorrow(m.base.*, state),
+            .member => |m| {
+                self.moveBorrow(m.base.*, state); // the base must be live to take a field
+                // Moving a `move`-typed field out of a tracked aggregate: poison the field
+                // so a second move (or a borrow) of it is caught.
+                if (self.moveFieldPlaceKey(expr, m, state, aliases)) |key| {
+                    if (state.contains(key)) {
+                        self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` field after it was moved out");
+                    } else {
+                        state.put(key, .{ .live = false, .span = expr.span }) catch {
+                            self.oom = true;
+                        };
+                    }
+                }
+            },
             .deref => |inner| self.moveBorrow(inner.*, state),
             .index => |ix| {
                 self.moveBorrow(ix.base.*, state);
@@ -1076,8 +1104,14 @@ pub const Checker = struct {
                             self.errorCode(arg.span, "E_DROP_LINEAR_RESOURCE", "a linear `move` value cannot be `drop`ped (it frees nothing); release it with its free function, or `forget_unchecked` it in an unsafe block once its contents have been transferred");
                         }
                     }
+                    for (c.args) |arg| self.moveConsume(arg, state, aliases);
+                } else if (isForgetUncheckedCall(c.callee.*)) {
+                    // Discard the husk wholesale — moved-out fields and all — so a partial
+                    // move is fine here (the aggregate is being thrown away, not reused).
+                    for (c.args) |arg| self.moveForget(arg, state, aliases);
+                } else {
+                    for (c.args) |arg| self.moveConsume(arg, state, aliases);
                 }
-                for (c.args) |arg| self.moveConsume(arg, state, aliases);
             },
             .binary => |b| {
                 self.moveConsume(b.left.*, state, aliases);
@@ -1087,6 +1121,92 @@ pub const Checker = struct {
             .struct_literal => |fields| for (fields) |f| self.moveConsume(f.value, state, aliases),
             .array_literal => |items| for (items) |item| self.moveConsume(item, state, aliases),
             else => {},
+        }
+    }
+
+    // ----- place sensitivity: track a `move` field moved out of its aggregate -----
+    //
+    // The state is keyed by binding name; a one-level field move is recorded with a
+    // synthetic key `binding.field` whose presence means "this field has been moved out".
+    // This lets the checker reject a duplicate field move, a borrow of a moved-out field,
+    // and a whole-aggregate move after a field was taken (which would duplicate it).
+
+    // If `expr` is `<binding>.<field>` where the field is a `move` type and the base is a
+    // tracked move binding, return the place key `binding.field` (allocated once, owned by
+    // `move_place_keys`); otherwise null.
+    fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+        _ = expr;
+        if (m.base.*.kind != .ident) return null; // one level only
+        const base = m.base.*.kind.ident.text;
+        const base_slot = state.get(base) orelse return null; // base is not a tracked move binding
+        const base_ty = base_slot.ty orelse return null;
+        const ctx = self.move_ctx orelse return null;
+        const field_ty = structFieldType(base_ty, m.name.text, ctx.*) orelse return null;
+        if (!self.isMoveTypeName(field_ty, aliases)) return null;
+        const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, m.name.text }) catch {
+            self.oom = true;
+            return null;
+        };
+        self.move_place_keys.append(self.reporter.allocator, key) catch {
+            self.oom = true;
+        };
+        return key;
+    }
+
+    // Whether the field `base.field` is currently recorded as moved (no allocation).
+    fn placeIsMoved(base: []const u8, field: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
+        var buf: [256]u8 = undefined;
+        const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ base, field }) catch return false;
+        return state.contains(key);
+    }
+
+    // Whether any field of `base` has been moved out (a partial move of the aggregate).
+    fn hasMovedSubplace(base: []const u8, state: *const std.StringHashMap(MoveSlot)) bool {
+        var it = state.iterator();
+        while (it.next()) |entry| {
+            const k = entry.key_ptr.*;
+            if (k.len > base.len + 1 and std.mem.startsWith(u8, k, base) and k[base.len] == '.') return true;
+        }
+        return false;
+    }
+
+    // Remove every `base.field` place key when the whole aggregate leaves play (consumed or
+    // forgotten), so a later same-named binding starts clean.
+    fn clearSubplaces(base: []const u8, state: *std.StringHashMap(MoveSlot)) void {
+        var doomed: [16][]const u8 = undefined;
+        var n: usize = 0;
+        var it = state.iterator();
+        while (it.next()) |entry| {
+            const k = entry.key_ptr.*;
+            if (k.len > base.len + 1 and std.mem.startsWith(u8, k, base) and k[base.len] == '.') {
+                if (n < doomed.len) {
+                    doomed[n] = k;
+                    n += 1;
+                }
+            }
+        }
+        for (doomed[0..n]) |k| _ = state.remove(k);
+    }
+
+    // `forget_unchecked(x)` discards the whole aggregate husk: consume the binding and drop
+    // its field-move records (the husk is being thrown away, moved-out fields and all), so a
+    // partial move is fine here — unlike a real whole-aggregate move.
+    fn moveForget(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+        switch (expr.kind) {
+            .ident => |id| {
+                if (state.getPtr(id.text)) |slot| {
+                    if (!slot.live) {
+                        self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
+                    } else if (slot.deferred) {
+                        self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be moved");
+                    } else {
+                        slot.live = false;
+                    }
+                }
+                clearSubplaces(id.text, state);
+            },
+            .grouped => |inner| self.moveForget(inner.*, state, aliases),
+            else => self.moveConsume(expr, state, aliases),
         }
     }
 
@@ -1122,7 +1242,13 @@ pub const Checker = struct {
                 self.moveBorrow(inner.operand.*, state);
                 self.checkMoveExitEdge(state, "linear `move` value is still live where `?` may return on error (consume it before `?`, or register it with `defer`)");
             },
-            .member => |m| self.moveBorrow(m.base.*, state),
+            .member => |m| {
+                self.moveBorrow(m.base.*, state);
+                // Borrowing a field that was already moved out is a use-after-move.
+                if (m.base.*.kind == .ident and placeIsMoved(m.base.*.kind.ident.text, m.name.text, state)) {
+                    self.errorCode(expr.span, "E_USE_AFTER_MOVE", "borrow of linear `move` field after it was moved out");
+                }
+            },
             .index => |ix| self.moveBorrow(ix.base.*, state),
             .cast => |c| self.moveBorrow(c.value.*, state),
             .call => |c| for (c.args) |arg| self.moveBorrow(arg, state),
@@ -4318,6 +4444,9 @@ const MoveSlot = struct {
     span: diagnostics.Span,
     // Reserved by a `defer` to be consumed at scope end: not a leak, not movable.
     deferred: bool = false,
+    // The binding's declared/inferred type, when known — used to look up a `move` field's
+    // type for place-sensitive field-move tracking. Null for synthetic field place keys.
+    ty: ?ast.TypeExpr = null,
 };
 
 const LayoutFieldInfo = struct {
