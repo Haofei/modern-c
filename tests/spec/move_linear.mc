@@ -2,7 +2,7 @@
 // SPEC: milestone=linear-move
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_USE_AFTER_MOVE,E_RESOURCE_LEAK,E_RESOURCE_OVERWRITE,E_MOVE_BRANCH_MISMATCH,E_MOVE_LOOP_RESOURCE
+// SPEC: check=E_USE_AFTER_MOVE,E_RESOURCE_LEAK,E_RESOURCE_OVERWRITE,E_MOVE_BRANCH_MISMATCH,E_MOVE_LOOP_RESOURCE,E_UNUSED_MOVE_RESULT
 
 // Linear `move` resource types (section 18.1): a `move` value is used linearly —
 // consumed (moved) exactly once. A by-value use moves it; `&x` borrows.
@@ -191,4 +191,29 @@ fn reject_if_let_leak() -> u32 {
         return 0;
     }
     return 0;
+}
+
+// --- a move result discarded by a bare expression statement leaks (section 18.1) ---
+//
+// A move-returning call (or a `?` whose ok payload is a move) used as a statement is never
+// bound, returned, or consumed — the resource leaks. It must become a tracked value.
+
+// rejected: the returned move value is discarded by a bare expression statement
+fn reject_unused_move_call() -> u32 {
+    // EXPECT_ERROR: E_UNUSED_MOVE_RESULT
+    make();
+    return 0;
+}
+
+// rejected: the `?` ok payload is a move value, discarded
+fn reject_unused_move_try() -> Result<u32, MoveErr> {
+    // EXPECT_ERROR: E_UNUSED_MOVE_RESULT
+    try_make()?;
+    return ok(0);
+}
+
+// accepted: binding the move result makes it trackable, then consumed exactly once
+fn accept_bound_move_result() -> u32 {
+    let t: Token = make();
+    return consume(t);
 }

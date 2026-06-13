@@ -779,6 +779,20 @@ pub const Checker = struct {
             },
             .expr => |e| {
                 self.moveConsume(e, state, aliases);
+                // A bare expression statement discards its result. If that result embeds a
+                // linear `move` resource by value — a `move` struct, a `Result<…move…,…>`, or
+                // a `?move` — the resource is leaked: it was never bound, returned, or passed
+                // to a consuming function. (A direct call's return type and a `?` operand's ok
+                // payload are resolved here; a generic call with explicit type args is not
+                // type-resolved at this point, but its by-value storage is still caught at
+                // monomorphization by E_MOVE_FIELD_IN_NONMOVE.)
+                if (self.move_ctx) |mctx| {
+                    if (exprResultType(e, mctx.*)) |rty| {
+                        if (self.typeEmbedsMoveByValue(rty, aliases)) {
+                            self.errorCode(e.span, "E_UNUSED_MOVE_RESULT", "the linear `move` result of this expression is discarded; bind it with `let`, return it, or pass it to a consuming function");
+                        }
+                    }
+                }
                 return false;
             },
             .assignment => |a| {
