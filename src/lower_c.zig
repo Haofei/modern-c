@@ -850,6 +850,12 @@ const CEmitter = struct {
 
     fn emitGlobal(self: *CEmitter, global: ast.GlobalDecl) !void {
         try self.writeLineDirective(global.name.span);
+        // A user global is a real definition and must win over any same-named macro a
+        // system header leaked on hosted builds (e.g. ARG_MAX / PATH_MAX / NAME_MAX from
+        // <limits.h>) — otherwise its declaration and every read expand the macro and
+        // fail to compile. `#undef` of a non-macro is a legal no-op, so this is safe for
+        // the common (non-colliding) case.
+        try self.out.print(self.allocator, "#undef {s}\n", .{global.name.text});
         try self.out.appendSlice(self.allocator, "static MC_UNUSED ");
         if (global.ty) |global_ty| {
             try self.emitDeclarator(global_ty, global.name.text);
