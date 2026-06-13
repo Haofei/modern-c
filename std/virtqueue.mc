@@ -13,6 +13,7 @@ import "virtio.mc";
 import "barrier.mc";
 import "dma.mc";
 import "time.mc";
+import "math.mc";
 
 const QUEUE_SIZE: u16 = 8; // backing-array capacity (negotiated size is ≤ this)
 const VRING_DESC_F_NEXT: u16 = 1;  // descriptor chains to `next`
@@ -173,7 +174,7 @@ fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> Result
     let slot: usize = (vq.avail.idx % vq.size) as usize;
     vq.avail.ring[slot] = id;
     wmb(); // descriptor + ring entry visible before the index bump
-    vq.avail.idx = vq.avail.idx + 1;
+    vq.avail.idx = wrapping_add_u16(vq.avail.idx, 1); // virtio ring cursor wraps mod 2^16
     return ok(id);
 }
 
@@ -251,7 +252,7 @@ export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuf
     let slot: usize = (vq.avail.idx % vq.size) as usize;
     vq.avail.ring[slot] = id0;
     wmb(); // descriptors + ring entry visible before the index bump
-    vq.avail.idx = vq.avail.idx + 1;
+    vq.avail.idx = wrapping_add_u16(vq.avail.idx, 1); // virtio ring cursor wraps mod 2^16
     return ok(id0);
 }
 
@@ -325,10 +326,13 @@ export fn vq_complete_chain(vq: *mut Virtq) -> Result<CompletedChain3, VqComplet
     let l2: u32 = vq.inflight_len[id2 as usize];
 
     let used: u32 = vq.used.ring[slot].len;
-    if used > (l0 + l1 + l2) {
+    // Sum the three descriptor lengths in 64 bits: each is a u32, so their sum can exceed
+    // u32 and would trap under checked arithmetic before we could return LengthOverflow.
+    let total: u64 = (l0 as u64) + (l1 as u64) + (l2 as u64);
+    if (used as u64) > total {
         return err(.LengthOverflow); // device over-reports the bytes it wrote
     }
-    vq.last_used = vq.last_used + 1;
+    vq.last_used = wrapping_add_u16(vq.last_used, 1); // virtio ring cursor wraps mod 2^16
     // All three ids and addresses are captured; safe to return them to the free list.
     vq_free_desc(vq, id0);
     vq_free_desc(vq, id1);
@@ -413,7 +417,7 @@ export fn vq_complete(vq: *mut Virtq) -> Result<CompletedBuffer, VqCompleteError
     if used > alloc_len {
         return err(.LengthOverflow); // device over-reports the bytes it wrote
     }
-    vq.last_used = vq.last_used + 1;
+    vq.last_used = wrapping_add_u16(vq.last_used, 1); // virtio ring cursor wraps mod 2^16
     let addr: u64 = vq.inflight_addr[id as usize];
     vq_free_desc(vq, id);
     return ok(.{ .buf = .{ .dev_addr = (addr as usize) as DmaAddr, .len = alloc_len as usize }, .used_len = used });

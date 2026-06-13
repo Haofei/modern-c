@@ -35,7 +35,7 @@ fn accept_borrow_then_consume() -> u32 {
 
 fn install_trap_vector(h: Boot) -> TrapReady {
     let id: u32 = h.hartid;
-    forget_unchecked(h);
+    unsafe { forget_unchecked(h); }
     return .{ .hartid = id };
 }
 
@@ -43,6 +43,6 @@ fn accept_drop_chain(id: u32) -> u32 {
     let b: Boot = boot_hart(id);
     let t: TrapReady = install_trap_vector(b);
     let final_id: u32 = t.hartid;
-    forget_unchecked(t);
+    unsafe { forget_unchecked(t); }
     return final_id;
 }

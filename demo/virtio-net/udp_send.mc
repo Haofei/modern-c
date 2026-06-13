@@ -61,7 +61,7 @@ export fn udp_transmit(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> bool {
             switch vq_complete(txq) {
                 ok(cb) => {
                     let done: DeviceBuffer = cb.buf;
-                    forget_unchecked(cb);
+                    unsafe { forget_unchecked(cb); }
                     free(invalidate_for_cpu(done));
                     return true;
                 }

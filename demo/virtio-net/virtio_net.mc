@@ -45,7 +45,7 @@ export fn nic_transmit(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, payload_len: 
             switch vq_complete(txq) {
                 ok(cb) => {
                     let done: DeviceBuffer = cb.buf; // reconstructed handle (full allocation)
-                    forget_unchecked(cb);
+                    unsafe { forget_unchecked(cb); }
                     free(invalidate_for_cpu(done));  // reclaim and free
                     return true;
                 }
