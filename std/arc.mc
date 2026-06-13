@@ -71,7 +71,11 @@ export fn arc_get(comptime T: type, h: *Arc<T>) -> *const T {
     return p;
 }
 
-// Borrow the value mutably only while this is the unique Arc owner.
+// Borrow the value mutably while this is the unique Arc owner. UNSAFE: the uniqueness is only
+// proven at the refcount check below — the language has no borrow analysis to stop a later
+// `arc_clone` from aliasing the returned `*mut T`. Callers must be in an `unsafe` block and
+// must not clone or publish the handle while the pointer is live (the checker enforces the
+// unsafe context, not the no-aliasing rule).
 export fn arc_get_mut(comptime T: type, h: *Arc<T>) -> *mut T {
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
     if blk.count.load(.acquire) != 1 {

@@ -36,8 +36,12 @@ export fn arc_pkt_run() -> u32 {
 
     var owner: Arc<Packet> = arc_new_uninit(Packet, &a); // filled below via arc_get_mut
 
-    // Fill the packet once while this handle is still unique.
-    let p: *mut Packet = arc_get_mut(Packet, &owner);
+    // Fill the packet once while this handle is still unique. arc_get_mut is unsafe (the
+    // checker can't prove no clone aliases the pointer); we do not clone `owner` until after.
+    var p: *mut Packet = raw.ptr<Packet>(0);
+    unsafe {
+        p = arc_get_mut(Packet, &owner);
+    }
     p.len = 4;
     p.data[0] = 10;
     p.data[1] = 20;

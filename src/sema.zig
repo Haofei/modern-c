@@ -2462,6 +2462,13 @@ pub const Checker = struct {
                 if (isUnsafeOperationCall(node.callee.*) and !ctx.in_unsafe) {
                     self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "operation requires unsafe context");
                 }
+                // `arc_get_mut` proves uniqueness only at the instant of its refcount check; the
+                // language has no borrow analysis to stop a later `arc_clone` from aliasing the
+                // returned `*mut T`. So it requires an unsafe context, where the caller asserts
+                // it will not clone or publish the handle while the pointer is live.
+                if (isIdentNamed(node.callee.*, "arc_get_mut") and !ctx.in_unsafe) {
+                    self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "arc_get_mut yields an aliasable `*mut T` whose uniqueness the checker cannot enforce; it requires an unsafe context (do not arc_clone/publish the handle while the pointer lives)");
+                }
                 if (ctx.in_comptime and isComptimeForbiddenCall(node.callee.*)) {
                     self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
                 }
