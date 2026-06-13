@@ -590,11 +590,36 @@ pub const Checker = struct {
     // `Pool<Token, N>`'s `[N]Token` or `Arc<Token>`'s embedded value.
     fn typeEmbedsMoveByValue(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
         switch (ty.kind) {
-            .name, .generic => return self.isMoveTypeName(ty, aliases),
+            .name => return self.isMoveTypeName(ty, aliases),
+            .generic => |g| {
+                if (self.isMoveTypeName(ty, aliases)) return true; // a `move` generic (Arc<T>, …)
+                // A built-in generic that stores its type arguments by value (e.g. Result<T,E>)
+                // embeds a move resource if any argument does. (User generic structs aren't
+                // handled here: they monomorphize to a concrete struct whose fields are checked
+                // directly, and a move field in a non-`move` struct is rejected there.)
+                if (genericHoldsArgsByValue(g.base.text)) {
+                    for (g.args) |arg| {
+                        if (self.typeEmbedsMoveByValue(arg, aliases)) return true;
+                    }
+                }
+                return false;
+            },
             .array => |node| return self.typeEmbedsMoveByValue(node.child.*, aliases),
             .qualified => |node| return self.typeEmbedsMoveByValue(node.child.*, aliases),
             .nullable => |child| return self.typeEmbedsMoveByValue(child.*, aliases),
             else => return false, // pointers, slices, fn/closure types: not by-value
+        }
+    }
+
+    // Whether the resolved type is an array (possibly under a qualifier/nullable) whose element
+    // embeds a `move` resource. Such a binding can't be tracked yet — element moves need the
+    // place model — so it is rejected rather than silently allowed to duplicate/leak.
+    fn typeIsMoveArray(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        switch (ty.kind) {
+            .array => |node| return self.typeEmbedsMoveByValue(node.child.*, aliases),
+            .qualified => |node| return self.typeIsMoveArray(node.child.*, aliases),
+            .nullable => |child| return self.typeIsMoveArray(child.*, aliases),
+            else => return false,
         }
     }
 
@@ -607,7 +632,9 @@ pub const Checker = struct {
             self.move_place_keys.clearRetainingCapacity();
         }
         for (fn_decl.params) |param| {
-            if (self.isMoveTypeName(param.ty, aliases)) {
+            if (self.typeIsMoveArray(param.ty, aliases)) {
+                self.errorCode(param.name.span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable (element moves need place analysis); pass the resources behind pointers or in a `move` container instead");
+            } else if (self.typeEmbedsMoveByValue(param.ty, aliases)) {
                 state.put(param.name.text, .{ .live = true, .span = param.name.span, .ty = param.ty }) catch {
                     self.oom = true;
                 };
@@ -731,10 +758,16 @@ pub const Checker = struct {
                     }
                 }
                 if (binding_ty) |ty| {
-                    if (self.isMoveTypeName(ty, aliases) and decl.names.len > 0) {
-                        state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span, .ty = ty }) catch {
-                            self.oom = true;
-                        };
+                    if (decl.names.len > 0) {
+                        if (self.typeIsMoveArray(ty, aliases)) {
+                            self.errorCode(decl.names[0].span, "E_MOVE_ARRAY_UNSUPPORTED", "an array of a linear `move` type is not yet trackable (element moves need place analysis); hold the resources behind pointers or in a `move` container instead");
+                        } else if (self.typeEmbedsMoveByValue(ty, aliases)) {
+                            // A binding whose type embeds a `move` resource by value — a `move`
+                            // struct, a `Result<…move…, …>`, or a `?move` — must be consumed.
+                            state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span, .ty = ty }) catch {
+                                self.oom = true;
+                            };
+                        }
                     }
                 }
                 return false;
@@ -7082,6 +7115,13 @@ fn isArithmeticDomainTypeName(name: []const u8) bool {
         std.mem.eql(u8, name, "sat") or
         std.mem.eql(u8, name, "serial") or
         std.mem.eql(u8, name, "counter");
+}
+
+// Built-in generics that store their type arguments by value (so they embed a `move` resource
+// when an argument does). `Result<T,E>` carries its ok/err payload inline; nullable `?T` and
+// arrays are handled structurally elsewhere.
+fn genericHoldsArgsByValue(name: []const u8) bool {
+    return std.mem.eql(u8, name, "Result");
 }
 
 fn genericHasStoragePayload(name: []const u8) bool {

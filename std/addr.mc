@@ -134,6 +134,12 @@ export fn va_align_down(a: VAddr, align: usize) -> VAddr {
 }
 
 export fn va_align_up(a: VAddr, align: usize) -> VAddr {
+    if align == 0 {
+        unreachable; // alignment must be non-zero
+    }
+    if (align & (align - 1)) != 0 {
+        unreachable; // alignment must be a power of two (matches pa_align_up / std/mem)
+    }
     let v: usize = a as usize;
     let bumped: usize = v + (align - 1); // checked: traps on overflow
     return (bumped - (bumped % align)) as VAddr;
