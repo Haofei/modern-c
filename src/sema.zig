@@ -747,6 +747,21 @@ pub const Checker = struct {
         }
     }
 
+    // An expression used only for its side effects (a bare expression statement, or a switch /
+    // if-let arm whose body is an expression) discards its result. If that result embeds a
+    // linear `move` resource by value — a `move` struct, a `Result<…move…,…>`, or a `?move` —
+    // the resource leaks: it was never bound, returned, or passed to a consuming function.
+    // (A direct call's return type and a `?` operand's ok payload are resolved here; a generic
+    // call with explicit type args is not, but its by-value storage is still caught at
+    // monomorphization by E_MOVE_FIELD_IN_NONMOVE.)
+    fn checkUnusedMoveResult(self: *Checker, e: ast.Expr, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+        const mctx = self.move_ctx orelse return;
+        const rty = exprResultType(e, mctx.*) orelse return;
+        if (self.typeEmbedsMoveByValue(rty, aliases)) {
+            self.errorCode(e.span, "E_UNUSED_MOVE_RESULT", "the linear `move` result of this expression is discarded; bind it with `let`, return it, or pass it to a consuming function");
+        }
+    }
+
     // Analyze one statement. Returns `true` if it diverges — transfers control out of the
     // enclosing block on every path (`return`, `break`, `continue`, or a branch all of
     // whose arms diverge) — so the statements that follow are unreachable and the join
@@ -786,20 +801,7 @@ pub const Checker = struct {
             },
             .expr => |e| {
                 self.moveConsume(e, state, aliases);
-                // A bare expression statement discards its result. If that result embeds a
-                // linear `move` resource by value — a `move` struct, a `Result<…move…,…>`, or
-                // a `?move` — the resource is leaked: it was never bound, returned, or passed
-                // to a consuming function. (A direct call's return type and a `?` operand's ok
-                // payload are resolved here; a generic call with explicit type args is not
-                // type-resolved at this point, but its by-value storage is still caught at
-                // monomorphization by E_MOVE_FIELD_IN_NONMOVE.)
-                if (self.move_ctx) |mctx| {
-                    if (exprResultType(e, mctx.*)) |rty| {
-                        if (self.typeEmbedsMoveByValue(rty, aliases)) {
-                            self.errorCode(e.span, "E_UNUSED_MOVE_RESULT", "the linear `move` result of this expression is discarded; bind it with `let`, return it, or pass it to a consuming function");
-                        }
-                    }
-                }
+                self.checkUnusedMoveResult(e, aliases);
                 return false;
             },
             .assignment => |a| {
@@ -965,6 +967,7 @@ pub const Checker = struct {
                         .block => |b| self.moveBlock(b, &arm_state, aliases),
                         .expr => |e| blk: {
                             self.moveConsume(e, &arm_state, aliases);
+                            self.checkUnusedMoveResult(e, aliases); // arm body is used for effect; its move result must not be discarded
                             break :blk false;
                         },
                     };
@@ -1255,7 +1258,12 @@ pub const Checker = struct {
     fn moveFieldPlaceKey(self: *Checker, expr: ast.Expr, m: anytype, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
         _ = m;
         const pp = self.placeKeyAndType(expr, state) orelse return null;
-        if (!self.isMoveTypeName(pp.ty, aliases)) return null; // only a move field is a place
+        // A field is a move place if its type *embeds* a move resource by value — not only a
+        // direct move type name, but also a `?move` / `Result<…move…,…>` field. Otherwise moving
+        // such a wrapper field out of an aggregate would not poison the place, and a second
+        // move of the same field (a double free) would go undetected. (Move-typed array fields
+        // are rejected at declaration, so a place leaf is never an untrackable array.)
+        if (!self.typeEmbedsMoveByValue(pp.ty, aliases)) return null;
         return pp.key;
     }
 

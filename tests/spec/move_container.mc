@@ -87,3 +87,17 @@ fn reject_switch_wrapper_payload_leak() -> u32 {
         err(e) => { return 0; }
     }
 }
+
+// --- rejected: a wrapper field (?Token) is a move place too, so moving it out of an aggregate
+//     twice is a double move — even though ?Token is not a direct move type *name* ---
+move struct OptBox { item: ?Token }
+extern fn consume_opt(o: ?Token) -> u32;
+
+fn reject_wrapper_field_double_move(b: OptBox) -> u32 {
+    let a: ?Token = b.item;
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let c: ?Token = b.item;
+    let x: u32 = consume_opt(a) + consume_opt(c);
+    unsafe { forget_unchecked(b); }
+    return x;
+}

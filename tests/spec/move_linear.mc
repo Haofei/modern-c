@@ -217,3 +217,12 @@ fn accept_bound_move_result() -> u32 {
     let t: Token = make();
     return consume(t);
 }
+
+// rejected: a move-returning expression discarded by a switch-arm body leaks, exactly like a
+// bare expression statement (the arm body is evaluated only for its effect).
+fn reject_unused_move_switch_arm(tag: u32) -> void {
+    switch tag {
+        0 => make(), // EXPECT_ERROR: E_UNUSED_MOVE_RESULT
+        _ => {}
+    }
+}
