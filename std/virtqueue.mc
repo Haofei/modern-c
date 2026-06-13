@@ -123,6 +123,17 @@ export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> Result<
     vq.size = size as u16;
     regs.queue_num.write(size, .release);
 
+    // Initialize ALL driver-side ring state and the descriptor free list *before* telling the
+    // device the queue is ready — otherwise the device can observe a half-initialized queue
+    // (e.g. a stale used.idx) the instant queue_ready is written. used.idx is reset too so a
+    // reused queue's stale value can't read as a phantom completion against last_used = 0.
+    vq.avail.flags = 0;
+    vq.avail.idx = 0;
+    vq.used.flags = 0;
+    vq.used.idx = 0;
+    vq.last_used = 0;
+    vq_init_free(vq);
+
     let desc_a: u64 = vq.desc as usize as u64;
     let avail_a: u64 = vq.avail as usize as u64;
     let used_a: u64 = vq.used as usize as u64;
@@ -132,13 +143,8 @@ export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> Result<
     regs.queue_driver_high.write(hi32(avail_a), .release);
     regs.queue_device_low.write(lo32(used_a), .release);
     regs.queue_device_high.write(hi32(used_a), .release);
+    wmb(); // ring state + programmed addresses visible before the device sees queue_ready
     regs.queue_ready.write(1, .release);
-
-    vq.avail.flags = 0;
-    vq.avail.idx = 0;
-    vq.used.flags = 0;
-    vq.last_used = 0;
-    vq_init_free(vq);
     return ok(true);
 }
 
@@ -448,6 +454,7 @@ export fn vq_reset_reclaim(vq: *mut Virtq) -> usize {
     // producer/consumer cursors. The driver re-runs queue setup before reusing it.
     vq_init_free(vq);
     vq.avail.idx = 0;
+    vq.used.idx = 0; // clear the consumer index too, else a stale used.idx reads as a phantom
     vq.last_used = 0;
     return reclaimed;
 }
