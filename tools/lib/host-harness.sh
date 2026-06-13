@@ -35,8 +35,22 @@ CLANG="${CLANG:-clang}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: $NAME (clang not found)"; exit 0; }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
+# Optional sanitizer instrumentation: when SANITIZE is set, build the fixture object and the
+# linked app with ASan + UBSan and abort on the first report, so undefined behavior or a bad
+# access in the emitted C fails the test. (-fno-sanitize-recover makes UBSan trap rather than
+# print-and-continue.) Driven by tools/toolchain/sanitize-test.sh.
+# `function` is excluded: the closure / Allocator vtable ABI deliberately calls a concrete
+# function through a type-erased `RET (*)(void *, …)` pointer (env passed as void*). That is
+# representation-identical and ABI-correct on every target — and identical across both backends
+# — but -fsanitize=function flags the pointer-type mismatch. The valuable checks (signed
+# overflow, OOB, null, alignment, shifts, …) stay on.
+SAN_FLAGS=()
+if [ -n "${SANITIZE:-}" ]; then
+    SAN_FLAGS=(-fsanitize=address,undefined -fno-sanitize=function -fno-sanitize-recover=all)
+fi
+
 # 1. MC fixture -> object. mcc_flags (e.g. -Wno-switch-bool) flow to the fixture's C compile.
-MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/$fixture" -o "$WORK/mod.o" $mcc_flags >/dev/null
+MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/$fixture" -o "$WORK/mod.o" $mcc_flags ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} >/dev/null
 
 # 2. the C driver: generated for the trivial single-call case, or a bespoke file.
 case "$mode" in
@@ -52,7 +66,7 @@ esac
 # 3. link the driver with the fixture object and run it; PASS iff it exits 0.
 # (No -Werror on the driver: it is test glue, and the fixture's emitted C was already
 # compiled -Werror by mcc-cc; driver warnings can't change the app's pass/fail exit.)
-"$CLANG" -std=c11 -Wall -Wextra "$WORK/driver.c" "$WORK/mod.o" -o "$WORK/app"
+"$CLANG" -std=c11 -Wall -Wextra ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} "$WORK/driver.c" "$WORK/mod.o" -o "$WORK/app"
 if OUT="$("$WORK/app")"; then
     [ -n "$OUT" ] && printf '%s\n' "$OUT"
     echo "PASS: $NAME — $desc"

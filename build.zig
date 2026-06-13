@@ -80,6 +80,15 @@ pub fn build(b: *std.Build) void {
     const sweep_step = b.step("sweep", "Emit C for every valid spec-corpus function and compile-check it with clang");
     sweep_step.dependOn(&sweep_cmd.step);
 
+    const sanitize_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/sanitize-test.sh",
+        "zig-out/bin/mcc",
+    });
+    sanitize_cmd.step.dependOn(b.getInstallStep());
+    const sanitize_step = b.step("sanitize", "Run the host-driver corpus under ASan + UBSan over the emitted C");
+    sanitize_step.dependOn(&sanitize_cmd.step);
+
     const llvm_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-llvm-sweep.py",
@@ -1975,6 +1984,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);
     m0_step.dependOn(&sweep_cmd.step);
+    m0_step.dependOn(&sanitize_cmd.step);
     // LLVM backend gates: IR assembly, object lowering, spec sweep, broad
     // c_emit fixture sweeps, and host link/run smoke tests.
     m0_step.dependOn(&llvm_test_cmd.step);
