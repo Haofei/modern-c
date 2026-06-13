@@ -104,8 +104,11 @@ enum VqError {
 
 // Why a submission could not be enqueued.
 enum VqSubmitError {
-    QueueFull, // not enough free descriptors for the (possibly multi-descriptor) request
+    QueueFull,       // not enough free descriptors for the (possibly multi-descriptor) request
+    LengthTooLarge,  // a buffer exceeds the u32 length a vring descriptor can encode
 }
+
+const VRING_DESC_LEN_MAX: usize = 0xFFFF_FFFF; // a descriptor's `len` field is u32
 
 // Program the queue's three region addresses into the device, negotiate the size
 // against `queue_num_max`, and initialize the free list. Returns `QueueUnavailable`
@@ -155,6 +158,12 @@ export fn vq_setup(regs: MmioPtr<VirtioMmio>, q: u32, vq: *mut Virtq) -> Result<
 // consume the device-owned handle. `device_writable` = the device writes it (RX);
 // otherwise the device reads it (TX). Returns the descriptor id (the token).
 fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> Result<u16, VqSubmitError> {
+    if buf.len > VRING_DESC_LEN_MAX {
+        // The length would not fit a descriptor's u32 `len`; reclaim and return a typed
+        // error rather than truncating (or trapping) on the `as u32` cast below.
+        free(invalidate_for_cpu(buf));
+        return err(.LengthTooLarge);
+    }
     if vq_free_count(vq) < 1 {
         // No descriptor free: reclaim the buffer and fail closed rather than trap.
         free(invalidate_for_cpu(buf));
@@ -203,6 +212,19 @@ export fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -> Result<u16, VqSubmi
 // buffers in limbo. If there is not room for all three, the buffers are reclaimed and
 // QueueFull is returned — no descriptor is touched.
 export fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -> Result<u16, VqSubmitError> {
+    // Preflight every length before any descriptor is touched: if one would not fit a
+    // descriptor's u32 `len`, reclaim all three buffers and return a typed error rather than
+    // truncating (or trapping) on the `as u32` casts below. (MC has no `||`, so accumulate.)
+    var too_large: bool = false;
+    if header.len > VRING_DESC_LEN_MAX { too_large = true; }
+    if data.len > VRING_DESC_LEN_MAX { too_large = true; }
+    if status.len > VRING_DESC_LEN_MAX { too_large = true; }
+    if too_large {
+        free(invalidate_for_cpu(header));
+        free(invalidate_for_cpu(data));
+        free(invalidate_for_cpu(status));
+        return err(.LengthTooLarge);
+    }
     if vq_free_count(vq) < 3 {
         free(invalidate_for_cpu(header));
         free(invalidate_for_cpu(data));
