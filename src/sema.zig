@@ -722,7 +722,7 @@ pub const Checker = struct {
         switch (pattern.kind) {
             .bind => |ident| {
                 const payload_ty = nullableInnerType(value_ty) orelse return null;
-                if (!self.isMoveTypeName(payload_ty, aliases)) return null;
+                if (!self.typeEmbedsMoveByValue(payload_ty, aliases)) return null;
                 state.put(ident.text, .{ .live = true, .span = ident.span, .ty = payload_ty }) catch {
                     self.oom = true;
                 };
@@ -730,7 +730,7 @@ pub const Checker = struct {
             },
             .tag_bind => |node| {
                 const payload_ty = resultPayloadType(value_ty, node.tag.text) orelse return null;
-                if (!self.isMoveTypeName(payload_ty, aliases)) return null;
+                if (!self.typeEmbedsMoveByValue(payload_ty, aliases)) return null;
                 state.put(node.binding.text, .{ .live = true, .span = node.binding.span, .ty = payload_ty }) catch {
                     self.oom = true;
                 };
@@ -942,7 +942,10 @@ pub const Checker = struct {
                         };
                         if (name) |id| {
                             if (payload_ty) |pty| {
-                                if (self.isMoveTypeName(pty, aliases)) {
+                                // Recursive predicate: a payload that is itself a `?move` or
+                                // `Result<…move…,…>` embeds a linear resource and must be tracked
+                                // inside the arm too, not only a payload that is a move type name.
+                                if (self.typeEmbedsMoveByValue(pty, aliases)) {
                                     arm_state.put(id.text, .{ .live = true, .span = id.span, .ty = pty }) catch {
                                         self.oom = true;
                                     };
@@ -1317,7 +1320,10 @@ pub const Checker = struct {
         }
         if (self.move_ctx) |mctx| {
             if (exprResultType(expr, mctx.*)) |ty| {
-                if (self.isMoveTypeName(ty, aliases)) return true;
+                // Use the recursive predicate, not isMoveTypeName: a `?move`, `Result<…move…,…>`,
+                // or array-of-move result also denotes a linear resource (so `drop` of it frees
+                // nothing and leaks), even though the wrapper itself is not a move type *name*.
+                if (self.typeEmbedsMoveByValue(ty, aliases)) return true;
             }
         }
         return false;
