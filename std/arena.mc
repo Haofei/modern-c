@@ -99,6 +99,16 @@ enum ArenaError {
 // Allocate `size` bytes (aligned to `align`) and return a generational handle for a T.
 // `size`/`align` come from the concrete call site (e.g. sizeof(T)/alignof(T)).
 export fn arena_alloc_gen(comptime T: type, a: *mut Arena, size: usize, align: usize) -> GenRef<T> {
+    // A `GenRef<T>` reads `sizeof(T)` bytes at the returned address, so the allocation must
+    // hold at least a T and be at least as aligned — otherwise resolving the handle would
+    // read past the allocation or at a misaligned address. (`size` may exceed `sizeof(T)`:
+    // an `arena_alloc_gen(u8, n, …)` byte buffer is a `GenRef<u8>` over `n` bytes.)
+    if size < sizeof(T) {
+        unreachable; // allocation smaller than the typed object it is handed out as
+    }
+    if align < alignof(T) {
+        unreachable; // allocation under-aligned for the typed object
+    }
     return .{ .addr = arena_alloc(a, size, align), .gen = a.gen };
 }
 
@@ -116,6 +126,16 @@ export fn arena_resolve(comptime T: type, a: *mut Arena, h: GenRef<T>) -> Result
     }
     if !pa_lt(h.addr, a.next) {
         return err(.ForgedHandle); // at or past the bump frontier — never allocated
+    }
+    // The typed object must fit entirely within the allocated region and be aligned for T:
+    // `sizeof(T)` bytes from `addr` must not run past the bump frontier, and `addr` must
+    // satisfy `alignof(T)`. Catches a handle whose address is in-bounds but whose typed
+    // extent (or alignment) is not — e.g. a `GenRef<u64>` minted over a 1-byte allocation.
+    if sizeof(T) > pa_diff(h.addr, a.next) {
+        return err(.ForgedHandle); // sizeof(T) would read past the bump frontier
+    }
+    if !pa_is_aligned(h.addr, alignof(T)) {
+        return err(.ForgedHandle); // misaligned for T
     }
     return ok(h.addr);
 }
