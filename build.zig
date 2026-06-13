@@ -2263,4 +2263,24 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&sched_vm_test_cmd.step);
     // kmain-net-test boots the integrated kernel + network in one image.
     m0_step.dependOn(&kmain_net_test_cmd.step);
+
+    // Spec §L conformance-level tiers: subsets of the full m0 gate aligned to the
+    // staged C-backend profiles, so a contributor can validate the level they touch.
+    //   c0 (§L.1 baseline trustworthy backend): the core language surface — the
+    //     fixture/unit harness (including the spec-section coverage gate), the spec
+    //     emit-C sweep, and the demo driver lowering.
+    //   c1 (§L.2 kernel backend profile): c0 plus the kernel suite, whose modules
+    //     exercise the C1 additions — full typed MMIO, typed DMA, linear move
+    //     checking, and advanced address-space lowering.
+    // (§L.3 MC-C2 is intentionally beyond this repo's backend finish line, so it is
+    // not gated here.)
+    const c0_step = b.step("c0", "Spec §L.1 MC-C0 baseline-language gates: fixtures + spec coverage, emit-C sweep, demo lowering");
+    c0_step.dependOn(&test_cmd.step);
+    c0_step.dependOn(&c_test_cmd.step);
+    c0_step.dependOn(&sweep_cmd.step);
+    c0_step.dependOn(&demo_test_cmd.step);
+
+    const c1_step = b.step("c1", "Spec §L.2 MC-C1 kernel-profile gates: c0 + kernel suite (MMIO, DMA, move checking, address-space lowering)");
+    c1_step.dependOn(c0_step);
+    c1_step.dependOn(&kernel_test_cmd.step);
 }

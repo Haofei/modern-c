@@ -208,6 +208,18 @@ Run the full milestone gate:
 zig build m0
 ```
 
+Run a spec conformance-level tier (subsets of `m0` aligned to the staged
+C-backend profiles in spec §L — validate the level you touch):
+
+```sh
+zig build c0   # §L.1 baseline language: fixtures + spec-coverage gate, emit-C sweep, demo lowering
+zig build c1   # §L.2 kernel profile: c0 + kernel suite (MMIO, DMA, move checking, address-space lowering)
+```
+
+The `test` gate includes a spec-section coverage check: every normative section
+of the spec must be exercised by at least one `tests/spec/*.mc` fixture (tagged
+`// SPEC: section=`), or be listed in `coverage_exempt` in `src/spec_tests.zig`.
+
 Run core checks:
 
 ```sh
