@@ -5,6 +5,7 @@
 
 import "std/grant.mc";
 import "std/addr.mc";
+import "std/math.mc";
 
 const GRANTTAB_MAX: usize = 8;
 
@@ -35,6 +36,10 @@ export fn grant_table_init(tab: *mut GrantTable) -> void {
     var i: usize = 0;
     while i < GRANTTAB_MAX {
         tab.slots[i].present = false;
+        // Seed each slot's generation so the first grant on it starts at 1 and every reuse
+        // monotonically advances — a slot's generation is never reset, so a stale ref can't
+        // be revived by a later grant on the same slot.
+        tab.slots[i].grant = grant_make_gen(pa(0), 0, 0);
         i = i + 1;
     }
     tab.count = 0;
@@ -50,7 +55,11 @@ export fn grant_table_make(tab: *mut GrantTable, owner_slot: u32, owner_gen: u32
     var i: usize = 0;
     while i < GRANTTAB_MAX {
         if !tab.slots[i].present {
-            tab.slots[i].grant = grant_make(base, len);
+            // Continue the slot's generation (it is never reset), so an outstanding ref to a
+            // previous grant on this slot — even with matching base/len — cannot validate
+            // against the new grant. grant_revoke also advanced it when the old grant died.
+            let next_gen: u32 = wrapping_add_u32(tab.slots[i].grant.gen, 1);
+            tab.slots[i].grant = grant_make_gen(base, len, next_gen);
             tab.slots[i].owner_slot = owner_slot;
             tab.slots[i].owner_gen = owner_gen;
             tab.slots[i].present = true;

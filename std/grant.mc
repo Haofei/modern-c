@@ -51,6 +51,14 @@ export fn grant_make(base: PAddr, len: usize) -> Grant {
     return .{ .base = base, .len = len, .gen = 0 };
 }
 
+// Grant access to [base, base+len) at an explicit starting generation. A grant-table slot
+// uses this so a reused slot continues past the previous incarnation's generation instead of
+// resetting to 0 — otherwise a stale ref (matching base/len) could re-validate against the
+// reused slot once its generation wrapped back to the ref's.
+export fn grant_make_gen(base: PAddr, len: usize, gen: u32) -> Grant {
+    return .{ .base = base, .len = len, .gen = gen };
+}
+
 // Owner side: hand out a reference to pass to a server.
 export fn grant_ref(g: *Grant) -> GrantRef {
     return .{ .base = g.base, .len = g.len, .gen = g.gen };
