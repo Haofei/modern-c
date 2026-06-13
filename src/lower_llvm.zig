@@ -1007,6 +1007,11 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 2\n", .{ err_value, try self.llvmType(operand_ty), value });
         const ok_zero = try self.resultPayloadZero(return_info.ok_ty);
         const propagated_value = try self.emitResultValue(return_ty, "false", ok_zero, err_value);
+        // `?` returns from the function on the error branch, so it must run every active
+        // defer first — exactly like an explicit `return`. Flush from 0 (whole function
+        // scope) without truncating: the ok path continues after this block with the same
+        // active defers.
+        try self.emitDeferredCleanupsFrom(0, return_ty);
         try self.emitReturnValue(return_ty, propagated_value, span);
         try self.out.print(self.allocator, "{s}:\n", .{ok_label});
         return true;

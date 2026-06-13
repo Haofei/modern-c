@@ -306,6 +306,15 @@ pub fn build(b: *std.Build) void {
     const llvm_move_test_step = b.step("llvm-move-test", "Build, link, and run a linear `move` handle through the LLVM toolchain");
     llvm_move_test_step.dependOn(&llvm_move_test_cmd.step);
 
+    const try_defer_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/toolchain/try-defer-test.sh",
+        "zig-out/bin/mcc",
+    });
+    try_defer_test_cmd.step.dependOn(b.getInstallStep());
+    const try_defer_test_step = b.step("try-defer-test", "Build, link, and run a `defer` before `?` through the C and LLVM backends (issue #3 regression)");
+    try_defer_test_step.dependOn(&try_defer_test_cmd.step);
+
     const llvm_runtime_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/llvm-runtime-test.sh",
@@ -2055,6 +2064,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&stack_test_cmd.step);
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(&move_test_cmd.step);
+    // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).
+    m0_step.dependOn(&try_defer_test_cmd.step);
     // sync-test exercises std/sync locks + linear guards (needs clang).
     m0_step.dependOn(&sync_test_cmd.step);
     // nic-test runs the demo NIC driver under QEMU (self-skips without QEMU).

@@ -656,6 +656,14 @@ const CEmitter = struct {
     // `switch` (a C `break` inside a `switch` would otherwise break the switch).
     loop_ids: std.ArrayList(u32) = .empty,
     next_loop_id: u32 = 0,
+    // Active `defer` expressions for the function currently being emitted, in source
+    // order (a function-scoped stack). Every exit edge — `return`, `break`, `continue`,
+    // and `?` error propagation — flushes the appropriate suffix of this stack so lexical
+    // cleanup runs on all paths, including across nested blocks. `loop_defer_marks` records
+    // the stack depth at each enclosing loop's entry, so a `break`/`continue` flushes only
+    // the defers declared inside that loop, not the whole function.
+    defer_stack: std.ArrayList(ast.Expr) = .empty,
+    loop_defer_marks: std.ArrayList(usize) = .empty,
 
     fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8), mir_module: *const mir.Module, source_path: ?[]const u8) CEmitter {
         return .{
@@ -713,6 +721,8 @@ const CEmitter = struct {
         self.static_initializers.deinit();
         self.globals.deinit();
         self.loop_ids.deinit(self.allocator);
+        self.defer_stack.deinit(self.allocator);
+        self.loop_defer_marks.deinit(self.allocator);
         self.scratch.deinit();
     }
 
@@ -2441,6 +2451,8 @@ const CEmitter = struct {
                     const jumps = loopBodyHasOwnBreakContinue(loop.body);
                     try self.loop_ids.append(self.allocator, id);
                     defer _ = self.loop_ids.pop();
+                    try self.loop_defer_marks.append(self.allocator, self.defer_stack.items.len);
+                    defer _ = self.loop_defer_marks.pop();
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "while (");
                     if (loop.iterable) |condition| {
@@ -2878,32 +2890,51 @@ const CEmitter = struct {
     }
 
     fn emitBlockItems(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        var deferred: std.ArrayList(ast.Expr) = .empty;
-        defer deferred.deinit(self.scratch.allocator());
+        // Defers declared in this block live on the function-scoped stack between
+        // `block_start` and the current top; they are flushed (in reverse) when the block
+        // is left by any edge.
+        const block_start = self.defer_stack.items.len;
 
         for (block.items) |stmt| {
             switch (stmt.kind) {
                 .@"defer" => |expr| {
-                    try deferred.append(self.scratch.allocator(), expr);
+                    self.defer_stack.append(self.allocator, expr) catch return error.OutOfMemory;
                     continue;
                 },
-                .@"return", .@"break", .@"continue" => {
-                    try self.emitDeferredCleanups(deferred.items, locals, return_ty);
+                .@"return" => {
+                    // `return` exits the whole function: run every active defer.
+                    try self.emitDeferredCleanupsFrom(0, locals, return_ty);
                     try self.emitStmt(stmt, locals, return_ty);
+                    self.defer_stack.items.len = block_start;
+                    return;
+                },
+                .@"break", .@"continue" => {
+                    // `break`/`continue` exits the innermost loop body: run the defers
+                    // declared from that loop's boundary inward, not the whole function.
+                    const mark = self.loop_defer_marks.getLastOrNull() orelse block_start;
+                    try self.emitDeferredCleanupsFrom(mark, locals, return_ty);
+                    try self.emitStmt(stmt, locals, return_ty);
+                    self.defer_stack.items.len = block_start;
                     return;
                 },
                 else => {},
             }
             try self.emitStmt(stmt, locals, return_ty);
         }
-        try self.emitDeferredCleanups(deferred.items, locals, return_ty);
+        // Normal fall-through off the end of the block: run this block's defers only.
+        try self.emitDeferredCleanupsFrom(block_start, locals, return_ty);
+        self.defer_stack.items.len = block_start;
     }
 
-    fn emitDeferredCleanups(self: *CEmitter, deferred: []const ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        var index = deferred.len;
-        while (index > 0) {
+    // Emit the active defers from index `start` to the top of the stack, in reverse
+    // (innermost first). Only reads the stack — callers truncate it when a scope ends — so
+    // an exit edge such as `?` that does not pop the scope (the ok path continues) leaves
+    // the active defers intact.
+    fn emitDeferredCleanupsFrom(self: *CEmitter, start: usize, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        var index = self.defer_stack.items.len;
+        while (index > start) {
             index -= 1;
-            try self.emitDeferredCleanup(deferred[index], locals, return_ty);
+            try self.emitDeferredCleanup(self.defer_stack.items[index], locals, return_ty);
         }
     }
 
@@ -3475,6 +3506,8 @@ const CEmitter = struct {
         const jumps = loopBodyHasOwnBreakContinue(loop.body);
         try self.loop_ids.append(self.allocator, id);
         defer _ = self.loop_ids.pop();
+        try self.loop_defer_marks.append(self.allocator, self.defer_stack.items.len);
+        defer _ = self.loop_defer_marks.pop();
 
         var nested = try cloneLocals(self.allocator, locals.*);
         defer nested.deinit();
@@ -6602,6 +6635,11 @@ const CEmitter = struct {
     // Emit the `?` early-return on error: propagate the original error, or — for
     // `EXPR? else MAPPED` — `err(MAPPED)` mapped into the enclosing error type.
     fn emitTryErrReturn(self: *CEmitter, enclosing_return_ty: ast.TypeExpr, temp_name: []const u8, mapped: ?*ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        // `?` returns from the function on the error branch, so run every active defer
+        // first — the same cleanup path as an explicit `return`. The ok path continues
+        // after this branch, so the defer stack is left intact (only read, not popped).
+        if (locals) |l| try self.emitDeferredCleanupsFrom(0, l, enclosing_return_ty);
+        try self.writeIndent();
         const ret_c = try self.cTypeFor(enclosing_return_ty, .typedef_name);
         if (mapped) |m| {
             try self.out.print(self.allocator, "return (({s}){{ .is_ok = false, .payload.err = ", .{ret_c});
@@ -6642,7 +6680,6 @@ const CEmitter = struct {
         try self.writeIndent();
         try self.out.print(self.allocator, "if (!{s}.is_ok) {{\n", .{temp_name});
         self.indent += 1;
-        try self.writeIndent();
         try self.emitTryErrReturn(enclosing_return_ty, temp_name, try_mapped, locals);
         self.indent -= 1;
         try self.writeIndent();
@@ -8277,7 +8314,6 @@ const CEmitter = struct {
                 try self.writeIndent();
                 try self.out.print(self.allocator, "if (!{s}.is_ok) {{\n", .{temp_name});
                 self.indent += 1;
-                try self.writeIndent();
                 try self.emitTryErrReturn(enclosing_return_ty, temp_name, inner.mapped, locals);
                 self.indent -= 1;
                 try self.writeIndent();
