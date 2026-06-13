@@ -107,6 +107,15 @@ pub fn build(b: *std.Build) void {
     const diff_fuzz_step = b.step("diff-fuzz", "Generate random MC programs and assert the C and LLVM backends agree on each");
     diff_fuzz_step.dependOn(&diff_fuzz_cmd.step);
 
+    const move_fuzz_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/move-fuzz.sh",
+        "zig-out/bin/mcc",
+    });
+    move_fuzz_cmd.step.dependOn(b.getInstallStep());
+    const move_fuzz_step = b.step("move-fuzz", "Generate move-resource programs; assert every resource is released once (live_count==0) on both backends");
+    move_fuzz_step.dependOn(&move_fuzz_cmd.step);
+
     const llvm_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-llvm-sweep.py",
@@ -2005,6 +2014,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&sanitize_cmd.step);
     m0_step.dependOn(&diff_backend_cmd.step);
     m0_step.dependOn(&diff_fuzz_cmd.step);
+    m0_step.dependOn(&move_fuzz_cmd.step);
     // LLVM backend gates: IR assembly, object lowering, spec sweep, broad
     // c_emit fixture sweeps, and host link/run smoke tests.
     m0_step.dependOn(&llvm_test_cmd.step);
