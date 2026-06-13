@@ -4435,56 +4435,57 @@ const CEmitter = struct {
             const need_lower = src_range.min < dst_range.min;
             const need_upper = src_range.max > dst_range.max;
 
-            // try_from -> Result<T, ConversionError> (section 3): ok on success,
-            // a conversion error when the source is out of the target range.
-            if (std.mem.eql(u8, op, "try_from")) {
-                const struct_name = try self.resultTypeName(resolved, simpleNameType("ConversionError", member.name.span));
-                if (!need_lower and !need_upper) {
+            // When no range check is needed the operand is emitted exactly once, so emit it
+            // directly. try_from still wraps the value in its Result.
+            if (!need_lower and !need_upper) {
+                if (std.mem.eql(u8, op, "try_from")) {
+                    const struct_name = try self.resultTypeName(resolved, simpleNameType("ConversionError", member.name.span));
                     try self.out.print(self.allocator, "(({s}){{ .is_ok = true, .payload.ok = ({s})(", .{ struct_name, cty });
                     try self.emitExpr(call.args[0], locals);
                     try self.out.appendSlice(self.allocator, ") })");
-                    return true;
+                } else {
+                    try self.out.print(self.allocator, "(({s})(", .{cty});
+                    try self.emitExpr(call.args[0], locals);
+                    try self.out.appendSlice(self.allocator, "))");
                 }
-                try self.out.appendSlice(self.allocator, "(");
-                try self.emitConversionBound(call.args[0], locals, dst_range, need_lower, need_upper);
-                try self.out.print(self.allocator, " ? (({s}){{ .is_ok = false, .payload.err = 0 }}) : (({s}){{ .is_ok = true, .payload.ok = ({s})(", .{ struct_name, struct_name, cty });
-                try self.emitExpr(call.args[0], locals);
-                try self.out.appendSlice(self.allocator, ") }))");
                 return true;
             }
 
-            if (!need_lower and !need_upper) {
-                try self.out.print(self.allocator, "(({s})(", .{cty});
-                try self.emitExpr(call.args[0], locals);
-                try self.out.appendSlice(self.allocator, "))");
-                return true;
-            }
-
-            if (std.mem.eql(u8, op, "trap_from")) {
-                try self.out.appendSlice(self.allocator, "(");
-                try self.emitConversionBound(call.args[0], locals, dst_range, need_lower, need_upper);
-                try self.out.print(self.allocator, " ? (mc_trap_IntegerOverflow(), ({s})0) : ({s})(", .{ cty, cty });
-                try self.emitExpr(call.args[0], locals);
-                try self.out.appendSlice(self.allocator, "))");
-                return true;
-            }
-
-            // sat_from: clamp into the destination range.
-            try self.out.print(self.allocator, "(({s})(", .{cty});
-            if (need_lower) {
-                try self.out.appendSlice(self.allocator, "(__int128)(");
-                try self.emitExpr(call.args[0], locals);
-                try self.out.print(self.allocator, ") < (__int128)({s}) ? ({s}) : (", .{ dst_range.c_min, dst_range.c_min });
-            }
-            if (need_upper) {
-                try self.out.appendSlice(self.allocator, "(__int128)(");
-                try self.emitExpr(call.args[0], locals);
-                try self.out.print(self.allocator, ") > (__int128)({s}) ? ({s}) : (", .{ dst_range.c_max, dst_range.c_max });
-            }
+            // A range check references the operand more than once (the bound test plus the
+            // converted value, and sat clamps it at each end). MC requires the operand to
+            // evaluate exactly once, so bind it to a temp in a statement-expression and
+            // reference the temp everywhere — never re-emit a possibly side-effecting operand.
+            const src_cty = primitiveCTypeName(src_name) orelse return error.UnsupportedCEmission;
+            const tmp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.out.print(self.allocator, "({{ {s} {s} = (", .{ src_cty, tmp });
             try self.emitExpr(call.args[0], locals);
-            if (need_upper) try self.out.appendSlice(self.allocator, ")");
-            if (need_lower) try self.out.appendSlice(self.allocator, ")");
-            try self.out.appendSlice(self.allocator, "))");
+            try self.out.appendSlice(self.allocator, "); ");
+
+            if (std.mem.eql(u8, op, "try_from")) {
+                const struct_name = try self.resultTypeName(resolved, simpleNameType("ConversionError", member.name.span));
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitConversionBoundTemp(tmp, dst_range, need_lower, need_upper);
+                try self.out.print(self.allocator, " ? (({s}){{ .is_ok = false, .payload.err = 0 }}) : (({s}){{ .is_ok = true, .payload.ok = ({s})({s}) }}))", .{ struct_name, struct_name, cty, tmp });
+            } else if (std.mem.eql(u8, op, "trap_from")) {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitConversionBoundTemp(tmp, dst_range, need_lower, need_upper);
+                try self.out.print(self.allocator, " ? (mc_trap_IntegerOverflow(), ({s})0) : ({s})({s}))", .{ cty, cty, tmp });
+            } else {
+                // sat_from: clamp into the destination range.
+                try self.out.print(self.allocator, "(({s})(", .{cty});
+                if (need_lower) {
+                    try self.out.print(self.allocator, "(__int128)({s}) < (__int128)({s}) ? ({s}) : (", .{ tmp, dst_range.c_min, dst_range.c_min });
+                }
+                if (need_upper) {
+                    try self.out.print(self.allocator, "(__int128)({s}) > (__int128)({s}) ? ({s}) : (", .{ tmp, dst_range.c_max, dst_range.c_max });
+                }
+                try self.out.appendSlice(self.allocator, tmp);
+                if (need_upper) try self.out.appendSlice(self.allocator, ")");
+                if (need_lower) try self.out.appendSlice(self.allocator, ")");
+                try self.out.appendSlice(self.allocator, "))");
+            }
+            try self.out.appendSlice(self.allocator, "; })");
             return true;
         }
 
@@ -4494,17 +4495,15 @@ const CEmitter = struct {
         return true;
     }
 
-    fn emitConversionBound(self: *CEmitter, value: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), range: IntTypeRange, need_lower: bool, need_upper: bool) !void {
+    // Out-of-range test over an already-materialized temp
+    // (a bare C identifier) so the operand is evaluated once, not re-emitted per bound.
+    fn emitConversionBoundTemp(self: *CEmitter, tmp: []const u8, range: IntTypeRange, need_lower: bool, need_upper: bool) !void {
         if (need_lower) {
-            try self.out.appendSlice(self.allocator, "(__int128)(");
-            try self.emitExpr(value, locals);
-            try self.out.print(self.allocator, ") < (__int128)({s})", .{range.c_min});
+            try self.out.print(self.allocator, "(__int128)({s}) < (__int128)({s})", .{ tmp, range.c_min });
         }
         if (need_lower and need_upper) try self.out.appendSlice(self.allocator, " || ");
         if (need_upper) {
-            try self.out.appendSlice(self.allocator, "(__int128)(");
-            try self.emitExpr(value, locals);
-            try self.out.print(self.allocator, ") > (__int128)({s})", .{range.c_max});
+            try self.out.print(self.allocator, "(__int128)({s}) > (__int128)({s})", .{ tmp, range.c_max });
         }
     }
 
@@ -14260,6 +14259,44 @@ test "emits C for Result switch narrowing" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error result = make_result();\n    if (result.is_ok) {\n        return 1;\n    }\n    else {\n        return 0;\n    }") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t result_multi_payloadless_switch(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error result = make_result();\n    if (result.is_ok || !result.is_ok) {\n        return 1;\n    }") != null);
+}
+
+test "emits C: checked conversion evaluates a side-effecting operand exactly once" {
+    // A range-checked conversion references its operand for both the bound test and the
+    // converted value (and sat clamps it at each end). MC defines a single evaluation, so the
+    // operand must be materialized into a temp and never re-emitted (else a side-effecting
+    // operand would run multiple times). See the spec's left-to-right / single-evaluation rule.
+    const source =
+        \\extern fn src() -> u64;
+        \\fn narrow() -> u8 {
+        \\    return u8.trap_from(src());
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_conv_once.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    // The operand is bound to a temp inside a statement-expression...
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "= (src());") != null);
+    // ...and the call `src()` appears exactly once in the emitted C (never re-evaluated).
+    var count: usize = 0;
+    var idx: usize = 0;
+    while (std.mem.indexOfPos(u8, output.items, idx, "src()")) |pos| {
+        count += 1;
+        idx = pos + 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), count);
 }
 
 test "emits C extern structs and member access" {
