@@ -1,9 +1,10 @@
-// kernel/core/cow — copy-on-write, the core mechanism of fork+COW. Two address spaces
-// (a "parent" and a forked "child") share a frame mapped READ-ONLY at the same VA. A
-// write faults; the COW handler allocates a private copy, copies the bytes, and remaps
-// it writable in the faulting space — so the writer diverges while the other still sees
-// the original. (A full `fork` duplicates the whole address space this way; this is the
-// per-page mechanism it is built from.)
+// kernel/core/cow — copy-on-write, the core mechanism of fork+COW, shown on a single shared
+// page (a demonstration of the per-page mechanism, not yet a general COW subsystem: there are
+// no per-frame share counts or COW PTE bits, just one read-only shared frame and one writable
+// copy on the first write). Two address spaces (a "parent" and a forked "child") share a frame
+// mapped READ-ONLY at the same VA. A write faults; the COW handler allocates a private copy,
+// copies the bytes, and remaps it writable in the faulting space — so the writer diverges
+// while the other still sees the original.
 
 import "kernel/arch/riscv64/paging.mc";
 import "kernel/core/heap.mc";
@@ -53,9 +54,14 @@ export fn cow_satp_child() -> u64 {
     return satp_of(&g_pt_child);
 }
 
-// COW fault (parent's space active): give the parent a private, writable copy.
+// COW fault (parent's space active): give the parent a private, writable copy. Only the one
+// shared COW page is copy-on-write here; a write fault at any other address is a real fault,
+// not a COW miss, so it fails closed rather than copying an unrelated page.
 export fn cow_handle_fault(fault_va: usize) -> void {
     let aligned: usize = fault_va - (fault_va % PAGE);
+    if aligned != COW_VA {
+        unreachable; // write fault outside the COW page — fail closed, do not copy
+    }
     let copy: PAddr = heap_alloc(&g_heap, PAGE, PAGE);
     mem_copy(copy, g_shared, PAGE);
     page_table_unmap(&g_pt_parent, va(aligned));

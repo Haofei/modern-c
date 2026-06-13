@@ -35,6 +35,17 @@ enum FsError {
     NameTooLong, // name pool exhausted
     NotFound,    // no file with that name
     TooLarge,    // write would exceed the file's data capacity
+    BadIndex,    // file index out of range, or refers to an unused slot
+}
+
+// A file index is valid only if it is in range and names a live (used) slot. The raw API is
+// public, so it validates every caller-supplied index rather than trusting the VFS layer —
+// a stray index must fail closed, not read or corrupt a neighbouring file's metadata.
+fn ramfs_valid(fs: *mut Ramfs, idx: usize) -> bool {
+    if idx >= MAX_FILES {
+        return false;
+    }
+    return fs.files[idx].used;
 }
 
 export fn ramfs_init(fs: *mut Ramfs) -> void {
@@ -120,12 +131,18 @@ export fn ramfs_find(fs: *mut Ramfs, name: usize, name_len: usize) -> Result<usi
 // Append `len` bytes from `src` to file `idx`. The file's data lives in a fixed
 // pool slice [data_off, data_off + capacity); appending past it is an error.
 export fn ramfs_write(fs: *mut Ramfs, idx: usize, src: usize, len: usize) -> Result<usize, FsError> {
+    if !ramfs_valid(fs, idx) {
+        return err(.BadIndex);
+    }
     return ramfs_write_at(fs, idx, fs.files[idx].size, src, len);
 }
 
 // Write `len` bytes from `src` to file `idx` starting at `offset`. The write may
 // overwrite existing bytes or extend the file, but never past its reserved slice.
 export fn ramfs_write_at(fs: *mut Ramfs, idx: usize, offset: usize, src: usize, len: usize) -> Result<usize, FsError> {
+    if !ramfs_valid(fs, idx) {
+        return err(.BadIndex);
+    }
     let base: usize = fs.files[idx].data_off;
     let capacity: usize = fs.files[idx].capacity;
     if offset > capacity {
@@ -151,6 +168,9 @@ export fn ramfs_write_at(fs: *mut Ramfs, idx: usize, offset: usize, src: usize, 
 // Read up to `len` bytes of file `idx` starting at `offset` into `dst`. Returns the
 // number copied (0 if `offset` is at/past end).
 export fn ramfs_read_at(fs: *mut Ramfs, idx: usize, offset: usize, dst: usize, len: usize) -> usize {
+    if !ramfs_valid(fs, idx) {
+        return 0; // invalid/unused index: no bytes (a read returns a count, not a Result)
+    }
     let base: usize = fs.files[idx].data_off;
     let size: usize = fs.files[idx].size;
     if offset >= size {
@@ -178,5 +198,8 @@ export fn ramfs_read(fs: *mut Ramfs, idx: usize, dst: usize, len: usize) -> usiz
 }
 
 export fn ramfs_size(fs: *mut Ramfs, idx: usize) -> usize {
+    if !ramfs_valid(fs, idx) {
+        return 0; // invalid/unused index reports empty rather than reading stale metadata
+    }
     return fs.files[idx].size;
 }
