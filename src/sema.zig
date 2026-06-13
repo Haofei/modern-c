@@ -721,7 +721,16 @@ pub const Checker = struct {
         switch (stmt.kind) {
             .let_decl, .var_decl => |decl| {
                 if (decl.init) |init_expr| self.moveConsume(init_expr, state, aliases);
-                if (decl.ty) |ty| {
+                // The binding's type: an explicit annotation, else inferred from the
+                // initializer. An inferred `let b = alloc()` over a `move` type must still be
+                // tracked as a live resource, or it leaks undetected.
+                var binding_ty: ?ast.TypeExpr = decl.ty;
+                if (binding_ty == null) {
+                    if (decl.init) |init_expr| {
+                        if (self.move_ctx) |mctx| binding_ty = exprResultType(init_expr, mctx.*);
+                    }
+                }
+                if (binding_ty) |ty| {
                     if (self.isMoveTypeName(ty, aliases) and decl.names.len > 0) {
                         state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span, .ty = ty }) catch {
                             self.oom = true;
@@ -740,18 +749,37 @@ pub const Checker = struct {
                 return false;
             },
             .assignment => |a| {
-                if (a.target.kind == .ident) {
-                    if (state.getPtr(a.target.kind.ident.text)) |slot| {
-                        if (slot.live and !slot.deferred) {
-                            self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot overwrite a live linear `move` value; consume it first");
-                        } else if (slot.deferred) {
-                            self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be reassigned");
+                switch (a.target.kind) {
+                    .ident => |id| {
+                        if (state.getPtr(id.text)) |slot| {
+                            if (slot.live and !slot.deferred) {
+                                self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot overwrite a live linear `move` value; consume it first");
+                            } else if (slot.deferred) {
+                                self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be reassigned");
+                            }
                         }
-                    }
-                }
-                self.moveConsume(a.value, state, aliases);
-                if (a.target.kind == .ident) {
-                    if (state.getPtr(a.target.kind.ident.text)) |slot| slot.live = true;
+                        self.moveConsume(a.value, state, aliases);
+                        if (state.getPtr(id.text)) |slot| slot.live = true;
+                    },
+                    .member => |m| {
+                        // Assigning through `p.field`: the base must be live, and overwriting a
+                        // live `move` field (one not already moved out) would drop the old
+                        // resource without consuming it.
+                        self.moveBorrow(m.base.*, state);
+                        const key_opt = self.moveFieldPlaceKey(a.target, m, state, aliases);
+                        if (key_opt) |key| {
+                            if (!state.contains(key)) {
+                                self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot overwrite a live linear `move` field; consume it first");
+                            }
+                        }
+                        self.moveConsume(a.value, state, aliases);
+                        if (key_opt) |key| {
+                            _ = state.remove(key); // the field now holds a fresh live resource
+                        }
+                    },
+                    else => {
+                        self.moveConsume(a.value, state, aliases);
+                    },
                 }
                 return false;
             },
@@ -759,7 +787,7 @@ pub const Checker = struct {
             // move) the values it will consume, so they neither leak nor remain
             // movable.
             .@"defer" => |e| {
-                self.moveDefer(e, state);
+                self.moveDefer(e, state, aliases);
                 return false;
             },
             .assert => |e| {
@@ -1257,7 +1285,7 @@ pub const Checker = struct {
     }
 
     // `defer <expr>`: reserve the move bindings the deferred expr will consume.
-    fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot)) void {
+    fn moveDefer(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         switch (expr.kind) {
             .ident => |id| {
                 if (state.getPtr(id.text)) |slot| {
@@ -1268,9 +1296,22 @@ pub const Checker = struct {
                     }
                 }
             },
-            .grouped => |inner| self.moveDefer(inner.*, state),
-            .call => |c| for (c.args) |arg| self.moveDefer(arg, state),
-            .member => |m| self.moveBorrow(m.base.*, state),
+            .grouped => |inner| self.moveDefer(inner.*, state, aliases),
+            .call => |c| for (c.args) |arg| self.moveDefer(arg, state, aliases),
+            .member => |m| {
+                self.moveBorrow(m.base.*, state);
+                // `defer free(p.field)`: reserve the move field for lexical cleanup so it is
+                // neither leaked at exit nor moved out before the defer runs.
+                if (self.moveFieldPlaceKey(expr, m, state, aliases)) |key| {
+                    if (state.contains(key)) {
+                        self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer reserves a linear `move` field already moved out");
+                    } else {
+                        state.put(key, .{ .live = true, .span = expr.span, .deferred = true }) catch {
+                            self.oom = true;
+                        };
+                    }
+                }
+            },
             else => {},
         }
     }
@@ -2471,6 +2512,13 @@ pub const Checker = struct {
                 if (isForgetUncheckedCall(node.callee.*)) {
                     if (node.args.len != 1) {
                         self.errorCode(expr.span, "E_CALL_ARG_COUNT", "forget_unchecked takes exactly one argument");
+                    }
+                    // It discards a linear value without releasing it — a leak if misused — so
+                    // it is gated behind `unsafe`, not merely a scary name. Only the trusted
+                    // tail of a destructor / transfer API (which has already recorded or moved
+                    // the resource) should reach for it, and that code is `unsafe`.
+                    if (!ctx.in_unsafe) {
+                        self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "forget_unchecked discards a linear value without releasing it; it requires an unsafe context");
                     }
                     return .void;
                 }

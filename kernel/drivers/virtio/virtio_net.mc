@@ -118,7 +118,7 @@ export fn nic_send_arp(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq, src_mac: *Mac
     switch vq_complete(txq) {
         ok(cb) => {
             let rb: DeviceBuffer = cb.buf; // reclaim the full allocation, not the used length
-            forget_unchecked(cb);
+            unsafe { forget_unchecked(cb); }
             free(invalidate_for_cpu(rb));
             return true;
         }
@@ -138,7 +138,7 @@ export fn nic_poll_arp(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> u32 {
     switch vq_complete(rxq) {
         ok(cb) => {
             let dev: DeviceBuffer = cb.buf; // buffer len = full allocation; used in cb.used_len
-            forget_unchecked(cb);
+            unsafe { forget_unchecked(cb); }
             var cpu: CpuBuffer = invalidate_for_cpu(dev);
 
             var sender: u32 = 0;
@@ -250,7 +250,7 @@ fn rx_receive(regs: MmioPtr<VirtioMmio>, rxq: *mut Virtq) -> RxFrame {
                 ok(cb) => {
                     let recv: usize = cb.used_len as usize; // bytes the device actually wrote
                     let dev: DeviceBuffer = cb.buf;
-                    forget_unchecked(cb);
+                    unsafe { forget_unchecked(cb); }
                     var cpu: CpuBuffer = invalidate_for_cpu(dev);
                     out = parse_rx_frame(&cpu, recv);
                     free(cpu);
@@ -274,7 +274,7 @@ fn tx_wait_reclaim(regs: MmioPtr<VirtioMmio>, txq: *mut Virtq) -> bool {
         switch vq_complete(txq) {
             ok(cb) => {
                 let rb: DeviceBuffer = cb.buf; // reclaim the full allocation, not used length
-                forget_unchecked(cb);
+                unsafe { forget_unchecked(cb); }
                 free(invalidate_for_cpu(rb));
                 return true;
             }
@@ -370,7 +370,7 @@ export fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
                 ok(cb) => {
                     let recv: usize = cb.used_len as usize; // bytes the device actually wrote
                     let d: DeviceBuffer = cb.buf;
-                    forget_unchecked(cb);
+                    unsafe { forget_unchecked(cb); }
                     var cpu: CpuBuffer = invalidate_for_cpu(d);
                     let total: usize = recv; // copy out only the received bytes
                     var n: usize = 0;

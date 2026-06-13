@@ -98,6 +98,6 @@ export fn arc_drop(comptime T: type, h: Arc<T>) -> bool {
         free_bytes(h.allocator, h.block, sizeof(ArcBlock<T>));
         freed = true;
     }
-    forget_unchecked(h); // husk: the refcounted block was already freed above if last
+    unsafe { forget_unchecked(h); } // husk: the refcounted block was already freed above if last
     return freed;
 }

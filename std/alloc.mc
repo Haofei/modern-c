@@ -59,5 +59,5 @@ export fn own_addr(comptime T: type, o: *Owned<T>) -> PAddr {
 // never be freed through the wrong owner.
 export fn own_free(comptime T: type, o: Owned<T>) -> void {
     free_bytes(o.allocator, o.addr, sizeof(T));
-    forget_unchecked(o); // husk: the storage was already freed above
+    unsafe { forget_unchecked(o); } // husk: the storage was already freed above
 }

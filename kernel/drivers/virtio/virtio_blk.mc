@@ -100,7 +100,7 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
             let hbuf: DeviceBuffer = done.header;
             let dbuf: DeviceBuffer = done.data;
             let sbuf: DeviceBuffer = done.status;
-            forget_unchecked(done);
+            unsafe { forget_unchecked(done); }
             let chdr: CpuBuffer = invalidate_for_cpu(hbuf);
             let cdata: CpuBuffer = invalidate_for_cpu(dbuf);
             let cstatus: CpuBuffer = invalidate_for_cpu(sbuf);

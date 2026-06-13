@@ -17,7 +17,7 @@ extern fn boot_hart(id: u32) -> Boot;
 // Accepted: retire the old typestate token (it owns nothing), return the new state.
 fn install_trap_vector(h: Boot) -> TrapReady {
     let id: u32 = h.hartid;  // borrow before consuming
-    forget_unchecked(h);     // retire the Boot token (no resource to free)
+    unsafe { forget_unchecked(h); }     // retire the Boot token (no resource to free)
     return .{ .hartid = id };
 }
 
@@ -25,14 +25,14 @@ fn accept_chain(id: u32) -> u32 {
     let b: Boot = boot_hart(id);
     let t: TrapReady = install_trap_vector(b);
     let final_id: u32 = t.hartid;
-    forget_unchecked(t);
+    unsafe { forget_unchecked(t); }
     return final_id;
 }
 
 // Rejected: using a value after it was forgotten.
 fn reject_use_after_forget(id: u32) -> u32 {
     let b: Boot = boot_hart(id);
-    forget_unchecked(b);
+    unsafe { forget_unchecked(b); }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return b.hartid;
 }
@@ -41,7 +41,7 @@ fn reject_use_after_forget(id: u32) -> u32 {
 fn reject_forget_arity(id: u32) -> void {
     let b: Boot = boot_hart(id);
     // EXPECT_ERROR: E_CALL_ARG_COUNT
-    forget_unchecked(b, id);
+    unsafe { forget_unchecked(b, id); }
 }
 
 // Rejected: `drop` on a linear value frees nothing — use a release fn or forget_unchecked.

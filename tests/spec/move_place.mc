@@ -23,7 +23,7 @@ fn accept_move_each_field() -> u32 {
     let p: Pair = mk();
     let x: Res = p.a;
     let y: Res = p.b;
-    forget_unchecked(p);
+    unsafe { forget_unchecked(p); }
     return consume(x) + consume(y);
 }
 
@@ -33,7 +33,7 @@ fn reject_duplicate_field_move() -> u32 {
     let x: Res = p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = p.a;
-    forget_unchecked(p);
+    unsafe { forget_unchecked(p); }
     return consume(x) + consume(y);
 }
 
@@ -43,7 +43,7 @@ fn reject_borrow_after_field_move() -> u32 {
     let x: Res = p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(&p.a);
-    forget_unchecked(p);
+    unsafe { forget_unchecked(p); }
     return consume(x) + v;
 }
 

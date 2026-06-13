@@ -40,7 +40,7 @@ export fn free(b: CpuBuffer) -> void {
     let cpu: PAddr = b.cpu_addr;
     let n: usize = b.len;
     mc_dma_free_base(dev, cpu, n);
-    forget_unchecked(b);
+    unsafe { forget_unchecked(b); }
 }
 
 // Hand the buffer to the device: clean (flush) caches, consume the CpuBuffer,
@@ -50,7 +50,7 @@ export fn clean_for_device(b: CpuBuffer) -> DeviceBuffer {
     let cpu: PAddr = b.cpu_addr;
     let n: usize = b.len;
     mc_dma_clean_for_device_base(dev, cpu, n);
-    forget_unchecked(b);
+    unsafe { forget_unchecked(b); }
     return .{ .dev_addr = dev, .len = n };
 }
 
@@ -60,7 +60,7 @@ export fn invalidate_for_cpu(b: DeviceBuffer) -> CpuBuffer {
     let dev: DmaAddr = b.dev_addr;
     let n: usize = b.len;
     let cpu: usize = mc_dma_invalidate_for_cpu_base(dev, n);
-    forget_unchecked(b);
+    unsafe { forget_unchecked(b); }
     return .{ .dev_addr = dev, .cpu_addr = pa(cpu), .len = n };
 }
 

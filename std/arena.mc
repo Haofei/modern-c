@@ -50,7 +50,7 @@ export fn arena_available(a: *mut Arena) -> usize {
 // Consume the linear arena (its end of life). The backing region is the caller's; we
 // only need to consume `a` so the move checker is satisfied (no leak).
 export fn arena_destroy(a: Arena) -> void {
-    forget_unchecked(a); // consume the linear arena (the backing region is the caller's)
+    unsafe { forget_unchecked(a); } // consume the linear arena (the backing region is the caller's)
 }
 
 // The arena's no-op free for the Allocator interface (it reclaims via reset). Validates

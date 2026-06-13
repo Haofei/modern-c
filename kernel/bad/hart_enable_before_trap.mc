@@ -3,5 +3,5 @@ import "kernel/arch/riscv64/hart.mc";
 fn bad() -> void {
     let h: Hart<Boot> = boot_hart(0);
     let on: Hart<IrqsOn> = enable_interrupts(h);
-    forget_unchecked(on);
+    unsafe { forget_unchecked(on); }
 }

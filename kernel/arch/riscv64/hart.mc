@@ -27,7 +27,7 @@ export fn boot_hart(id: u32) -> Hart<Boot> {
 export fn install_trap_vector(h: Hart<Boot>, vector: usize) -> Hart<TrapReady> {
     let id: u32 = h.id;
     write_trap_vector(vector);
-    forget_unchecked(h);
+    unsafe { forget_unchecked(h); }
     return .{ .id = id };
 }
 
@@ -37,7 +37,7 @@ export fn enable_interrupts(h: Hart<TrapReady>) -> Hart<IrqsOn> {
     let id: u32 = h.id;
     enable_timer_interrupt();
     enable_interrupts_global();
-    forget_unchecked(h);
+    unsafe { forget_unchecked(h); }
     return .{ .id = id };
 }
 
@@ -45,7 +45,7 @@ export fn enable_interrupts(h: Hart<TrapReady>) -> Hart<IrqsOn> {
 export fn disable_interrupts(h: Hart<IrqsOn>) -> Hart<TrapReady> {
     let id: u32 = h.id;
     disable_interrupts_global();
-    forget_unchecked(h);
+    unsafe { forget_unchecked(h); }
     return .{ .id = id };
 }
 
