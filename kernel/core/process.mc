@@ -1165,7 +1165,27 @@ export fn ipc_receive_timeout(t: *mut ProcTable, out: *mut Message, max_yields: 
     return false;
 }
 
-// Receive only a message from `src_pid`, blocking until one arrives (source filtering).
+// Match a message to a specific source endpoint: the same slot AND the generation captured
+// when the receive began. `mailbox_take_from` filters by slot only, so it would also accept a
+// message left queued by an *older* incarnation of a since-reused slot; matching `from_gen`
+// rejects that stale message, keeping the raw-pid receive capability-safe.
+struct SourceMatch {
+    src_pid: u32,
+    gen: u32,
+}
+fn source_matches(e: *SourceMatch, msg: *Message) -> bool {
+    if msg.from != e.src_pid {
+        return false;
+    }
+    if msg.from_gen != e.gen {
+        return false;
+    }
+    return true;
+}
+
+// Receive only a message from `src_pid`'s current incarnation, blocking until one arrives
+// (source + generation filtering). A message from a stale incarnation of a reused slot is left
+// in the mailbox, not delivered as if it were the awaited source.
 export fn ipc_receive_from(t: *mut ProcTable, src_pid: u32, out: *mut Message) -> void {
     let src: usize = src_pid as usize;
     // Capture the awaited source's generation up front; if that exact incarnation dies, the
@@ -1175,9 +1195,13 @@ export fn ipc_receive_from(t: *mut ProcTable, src_pid: u32, out: *mut Message) -
         src_gen = t.procs[src].gen;
     }
     let src_ep: Endpoint = .{ .slot = src, .gen = src_gen };
+    var menv: SourceMatch = .{ .src_pid = src_pid, .gen = src_gen };
+    let pred: closure(*Message) -> bool = bind(&menv, source_matches);
     var got: bool = false;
     while !got {
-        got = mailbox_take_from(Message, IPC_SLOTS, &t.procs[t.current].inbox, src_pid, out);
+        // Match both source slot and the captured generation, so a stale message from an older
+        // incarnation is not mistaken for the awaited source (and is left queued, not dropped).
+        got = mailbox_take_if(Message, IPC_SLOTS, &t.procs[t.current].inbox, pred, out);
         if !got {
             // The awaited source died: stop waiting and report DEAD out-of-band (not via the
             // mailbox, which could be full) — guaranteed delivery of the dead-endpoint result.
