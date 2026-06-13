@@ -44,6 +44,12 @@ export fn pa_is_aligned(a: PAddr, align: usize) -> bool {
 }
 
 export fn pa_align_down(a: PAddr, align: usize) -> PAddr {
+    if align == 0 {
+        unreachable; // alignment must be non-zero (else `% align` divides by zero)
+    }
+    if (align & (align - 1)) != 0 {
+        unreachable; // alignment must be a power of two (matches pa_align_up)
+    }
     let v: usize = a as usize;
     return phys(v - (v % align));
 }
@@ -125,10 +131,22 @@ export fn va_diff(from: VAddr, to: VAddr) -> usize {
 }
 
 export fn va_is_aligned(a: VAddr, align: usize) -> bool {
+    if align == 0 {
+        unreachable; // alignment must be non-zero (else `% align` divides by zero)
+    }
+    if (align & (align - 1)) != 0 {
+        unreachable; // alignment must be a power of two (matches va_align_up)
+    }
     return ((a as usize) % align) == 0;
 }
 
 export fn va_align_down(a: VAddr, align: usize) -> VAddr {
+    if align == 0 {
+        unreachable; // alignment must be non-zero (else `% align` divides by zero)
+    }
+    if (align & (align - 1)) != 0 {
+        unreachable; // alignment must be a power of two (matches va_align_up)
+    }
     let v: usize = a as usize;
     return (v - (v % align)) as VAddr;
 }
