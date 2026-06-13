@@ -17,7 +17,12 @@ enum GrantTabError {
 
 struct GrantSlot {
     grant: Grant,
-    owner: u32, // the pid that owns (and may revoke) this grant
+    // The owner is an endpoint identity (slot + generation), not a bare pid: process slots
+    // are reused, so a bare pid could let a new incarnation in a recycled slot revoke (or be
+    // matched against) a dead owner's grants. Matching the generation too means a reused slot
+    // is a different owner.
+    owner_slot: u32,
+    owner_gen: u32,
     present: bool,
 }
 
@@ -39,13 +44,15 @@ export fn grant_table_count(tab: *mut GrantTable) -> usize {
     return tab.count;
 }
 
-// Owner `owner` grants access to [base, base+len). Returns the grant id, or Full.
-export fn grant_table_make(tab: *mut GrantTable, owner: u32, base: PAddr, len: usize) -> Result<usize, GrantTabError> {
+// Owner endpoint (owner_slot, owner_gen) grants access to [base, base+len). Returns the
+// grant id, or Full.
+export fn grant_table_make(tab: *mut GrantTable, owner_slot: u32, owner_gen: u32, base: PAddr, len: usize) -> Result<usize, GrantTabError> {
     var i: usize = 0;
     while i < GRANTTAB_MAX {
         if !tab.slots[i].present {
             tab.slots[i].grant = grant_make(base, len);
-            tab.slots[i].owner = owner;
+            tab.slots[i].owner_slot = owner_slot;
+            tab.slots[i].owner_gen = owner_gen;
             tab.slots[i].present = true;
             tab.count = tab.count + 1;
             return ok(i);
@@ -155,19 +162,23 @@ export fn grant_table_revoke(tab: *mut GrantTable, id: usize) -> Result<bool, Gr
     return ok(true);
 }
 
-// Revoke every grant owned by `owner` — the process-death hook. Returns how many were
-// revoked. Each revoked grant's slot is reclaimed (gen bumped, `present` cleared, `count`
-// decremented), so a dead owner's grants do not occupy table slots forever.
-export fn grant_table_revoke_owner(tab: *mut GrantTable, owner: u32) -> usize {
+// Revoke every grant owned by the endpoint (owner_slot, owner_gen) — the process-death
+// hook. Returns how many were revoked. Each revoked grant's slot is reclaimed (gen bumped,
+// `present` cleared, `count` decremented), so a dead owner's grants do not occupy table
+// slots forever. Matching the generation as well as the slot means a reused slot (a new
+// incarnation) does not inherit or revoke the previous owner's grants.
+export fn grant_table_revoke_owner(tab: *mut GrantTable, owner_slot: u32, owner_gen: u32) -> usize {
     var revoked: usize = 0;
     var i: usize = 0;
     while i < GRANTTAB_MAX {
         if tab.slots[i].present {
-            if tab.slots[i].owner == owner {
-                grant_revoke(&tab.slots[i].grant); // invalidate outstanding refs
-                tab.slots[i].present = false;       // reclaim the dead owner's slot
-                tab.count = tab.count - 1;
-                revoked = revoked + 1;
+            if tab.slots[i].owner_slot == owner_slot {
+                if tab.slots[i].owner_gen == owner_gen {
+                    grant_revoke(&tab.slots[i].grant); // invalidate outstanding refs
+                    tab.slots[i].present = false;       // reclaim the dead owner's slot
+                    tab.count = tab.count - 1;
+                    revoked = revoked + 1;
+                }
             }
         }
         i = i + 1;

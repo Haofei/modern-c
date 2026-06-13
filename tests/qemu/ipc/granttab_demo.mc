@@ -17,7 +17,7 @@ export fn granttab_run() -> u32 {
 
     // client pid 5 grants its 16-byte buffer to a server
     var id: usize = 0;
-    switch grant_table_make(&g_tab, 5, pa((&g_src[0]) as usize), 16) {
+    switch grant_table_make(&g_tab, 5, 0, pa((&g_src[0]) as usize), 16) { // owner (pid 5, gen 0)
         ok(gi) => { id = gi; }
         err(ge) => { pass = 0; }
     }
@@ -56,13 +56,13 @@ export fn granttab_run() -> u32 {
     }
 
     // REVOKE ON DEATH: client pid 5 exits -> the kernel revokes all of its grants
-    if grant_table_revoke_owner(&g_tab, 5) != 1 { pass = 0; }
+    if grant_table_revoke_owner(&g_tab, 5, 0) != 1 { pass = 0; }
     // the server's ref is now stale: open fails Revoked, so no use-after-death
     switch grant_table_open(&g_tab, id, gref) {
         ok(ob2) => { pass = 0; }
         err(oe2) => {}
     }
     // revoking some other pid's grants removes nothing
-    if grant_table_revoke_owner(&g_tab, 9) != 0 { pass = 0; }
+    if grant_table_revoke_owner(&g_tab, 9, 0) != 0 { pass = 0; }
     return pass;
 }

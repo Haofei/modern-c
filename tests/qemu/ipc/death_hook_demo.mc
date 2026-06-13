@@ -21,7 +21,7 @@ global g_cleanup_env: CleanupEnv;
 // Revoke everything the dead pid owned. (Counts returned by the revoke calls are
 // ignored — the hook's contract is "leave nothing owned by `pid`".)
 fn on_death(e: *mut CleanupEnv, pid: u32, gen: u32) -> void {
-    let revoked: usize = grant_table_revoke_owner(e.grants, pid);
+    let revoked: usize = grant_table_revoke_owner(e.grants, pid, gen);
     let dropped: usize = registry_unregister_endpoint(e.reg, pid);
 }
 
@@ -44,7 +44,7 @@ export fn death_hook_run() -> u32 {
 
     // The bootstrap (pid 0) owns a memory grant and a registered service.
     var gid: usize = 0;
-    switch grant_table_make(&g_grants, 0, pa(0x4000), 256) {
+    switch grant_table_make(&g_grants, 0, 0, pa(0x4000), 256) { // owner endpoint (pid 0, gen 0)
         ok(id) => { gid = id; }
         err(e) => { pass = 0; }
     }
