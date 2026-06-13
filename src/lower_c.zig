@@ -9292,6 +9292,24 @@ const CEmitter = struct {
                 .source_ty = resolved_ty,
             };
         }
+        // A wrap<T>/sat<T>/serial<T> arithmetic-domain global is stored as its underlying
+        // integer, so it uses that integer's scalar race helper. typeName() is null for the
+        // generic (name == "unknown"), so without this it would emit a call to a nonexistent
+        // mc_race_*_unknown helper — uncompilable C. (Plain integers already have name ==
+        // repr_name, so they are unaffected.)
+        if (self.underlyingIntTypeName(resolved_ty)) |repr_name| {
+            if (!std.mem.eql(u8, repr_name, name)) {
+                return .{
+                    .type_name = name,
+                    .c_type = c_type,
+                    .race_type_name = repr_name,
+                    .race_c_type = primitiveCTypeName(repr_name) orelse c_type,
+                    .width_bits = widthBits(repr_name),
+                    .pointer_like = false,
+                    .source_ty = resolved_ty,
+                };
+            }
+        }
         return .{
             .type_name = name,
             .c_type = c_type,
@@ -9330,6 +9348,17 @@ const CEmitter = struct {
                 .race_type_name = packed_bits.repr_name,
                 .race_c_type = packed_bits.repr_c_type,
             };
+        }
+        // A wrap<T>/sat<T> element is stored as its underlying integer (see globalInfoFromType).
+        if (self.underlyingIntTypeName(resolved_ty)) |repr_name| {
+            if (!std.mem.eql(u8, repr_name, name)) {
+                return .{
+                    .source_ty = resolved_ty,
+                    .c_type = c_type,
+                    .race_type_name = repr_name,
+                    .race_c_type = primitiveCTypeName(repr_name) orelse c_type,
+                };
+            }
         }
         // Array/slice/struct/result/union/closure elements have no scalar race
         // helper: access them as plain aggregates. Function-pointer elements are
