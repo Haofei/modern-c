@@ -107,3 +107,34 @@ export fn mailbox_take_from(comptime T: type, comptime N: usize, m: *mut Mailbox
     take_slot(T, N, m, slot, out);
     return true;
 }
+
+// Take the oldest message for which `keep` returns true, leaving every other message in the
+// mailbox. Lets a caller select on message *contents* (e.g. a reply's correlation id) without
+// consuming unrelated messages — unlike take_from, which only filters by source key.
+export fn mailbox_take_if(comptime T: type, comptime N: usize, m: *mut Mailbox<T, N>, keep: closure(*T) -> bool, out: *mut T) -> bool {
+    let pred: closure(*T) -> bool = keep;
+    var best: usize = N;
+    var best_seq: u64 = 0;
+    var i: usize = 0;
+    while i < N {
+        if m.valid[i] {
+            if pred(&m.msg[i]) {
+                if best >= N {
+                    best = i;
+                    best_seq = m.seq[i];
+                } else {
+                    if m.seq[i] < best_seq {
+                        best = i;
+                        best_seq = m.seq[i];
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if best >= N {
+        return false; // no message currently matches
+    }
+    take_slot(T, N, m, best, out);
+    return true;
+}

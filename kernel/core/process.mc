@@ -1013,23 +1013,39 @@ export fn ipc_reply(t: *mut ProcTable, req: *Message, tag: u32, a0: u64, a1: u64
     }
 }
 
-// Receive the reply to a synchronous call: the message must come from the awaited endpoint
-// (source slot AND the generation we called), and carry the request's correlation id. A
-// message from a stale incarnation, or any other queued message from that source, is dropped
-// so it cannot be mistaken for the reply. If the endpoint dies first, a DEAD result is
-// synthesized out-of-band.
+// Match the reply to a synchronous call: it must come from the awaited endpoint (source slot
+// AND the generation we called) and carry the request's correlation id.
+struct ReplyMatch {
+    src_pid: u32,
+    gen: u32,
+    call_id: u64,
+}
+fn reply_matches(e: *ReplyMatch, msg: *Message) -> bool {
+    if msg.from != e.src_pid {
+        return false;
+    }
+    if msg.from_gen != e.gen {
+        return false;
+    }
+    if msg.call_id != e.call_id {
+        return false;
+    }
+    return true;
+}
+
+// Receive the reply to a synchronous call. Only the matching reply is taken (via a content
+// predicate); any other queued message — an unrelated notification, a second conversation from
+// the same server, or a message from a stale incarnation — is LEFT in the mailbox rather than
+// dropped, so a pending call never silently loses unrelated IPC. If the endpoint dies first, a
+// DEAD result is synthesized out-of-band.
 fn ipc_receive_reply(t: *mut ProcTable, ep: Endpoint, expected_call_id: u64, out: *mut Message) -> void {
     let src_pid: u32 = ep.slot as u32;
+    var menv: ReplyMatch = .{ .src_pid = src_pid, .gen = ep.gen, .call_id = expected_call_id };
+    let pred: closure(*Message) -> bool = bind(&menv, reply_matches);
     var got: bool = false;
     while !got {
-        if mailbox_take_from(Message, IPC_SLOTS, &t.procs[t.current].inbox, src_pid, out) {
-            if out.from_gen == ep.gen {
-                if out.call_id == expected_call_id {
-                    got = true; // the reply to this call
-                }
-                // else: another message from the live server, not this call's reply — drop it
-            }
-            // else: a message from a dead incarnation of the slot — drop it
+        if mailbox_take_if(Message, IPC_SLOTS, &t.procs[t.current].inbox, pred, out) {
+            got = true; // only the matching reply is ever taken; everything else stays queued
         } else {
             if !endpoint_live(t, ep) {
                 let dead_msg: Message = .{ .from = src_pid, .from_gen = ep.gen, .call_id = expected_call_id, .tag = TAG_DEAD, .a0 = 0, .a1 = 0, .a2 = 0 };
