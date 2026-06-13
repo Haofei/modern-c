@@ -36,6 +36,7 @@ enum FsError {
     NotFound,    // no file with that name
     TooLarge,    // write would exceed the file's data capacity
     BadIndex,    // file index out of range, or refers to an unused slot
+    Exists,      // a file with that name already exists
 }
 
 // A file index is valid only if it is in range and names a live (used) slot. The raw API is
@@ -74,9 +75,20 @@ fn name_matches(fs: *mut Ramfs, idx: usize, q: *ByteReader, qlen: usize) -> bool
     return true;
 }
 
-// Create a file with the given name (no duplicate check; caller may `find` first).
-// Reserves a fixed slice of the data pool for the file's bytes.
+// Create a file with the given name. Rejects a duplicate name (so `find` stays unambiguous)
+// and reserves a fixed slice of the data pool for the file's bytes. The raw API is public, so
+// it enforces uniqueness itself rather than trusting the caller to `find` first.
 export fn ramfs_create(fs: *mut Ramfs, name: usize, name_len: usize, capacity: usize) -> Result<usize, FsError> {
+    var qr: ByteReader = byte_reader(pa(name), name_len);
+    var k: usize = 0;
+    while k < MAX_FILES {
+        if fs.files[k].used {
+            if name_matches(fs, k, &qr, name_len) {
+                return err(.Exists);
+            }
+        }
+        k = k + 1;
+    }
     var slot: usize = MAX_FILES;
     var i: usize = 0;
     while i < MAX_FILES {

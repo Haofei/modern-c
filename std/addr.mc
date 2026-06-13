@@ -49,6 +49,12 @@ export fn pa_align_down(a: PAddr, align: usize) -> PAddr {
 }
 
 export fn pa_align_up(a: PAddr, align: usize) -> PAddr {
+    if align == 0 {
+        unreachable; // alignment must be non-zero
+    }
+    if (align & (align - 1)) != 0 {
+        unreachable; // alignment must be a power of two (matches std/mem's stricter check)
+    }
     let v: usize = a as usize;
     let bumped: usize = v + (align - 1); // checked: traps on overflow
     return phys(bumped - (bumped % align));
