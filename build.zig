@@ -771,6 +771,13 @@ pub fn build(b: *std.Build) void {
     const vqfault_test_step = b.step("vqfault-test", "virtqueue completion fault injection (bad id / not-in-flight / length overflow)");
     vqfault_test_step.dependOn(&vqfault_test_cmd.step);
 
+    const wrap_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "wrap-test",
+    });
+    wrap_test_cmd.step.dependOn(b.getInstallStep());
+    const wrap_test_step = b.step("wrap-test", "long-running ring-index/pool-generation wrap and pool exhaustion invariants");
+    wrap_test_step.dependOn(&wrap_test_cmd.step);
+
     const args_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "args-test",
     });
@@ -2180,6 +2187,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&tty_test_cmd.step);
     m0_step.dependOn(&time_test_cmd.step);
     m0_step.dependOn(&vqfault_test_cmd.step);
+    m0_step.dependOn(&wrap_test_cmd.step);
     m0_step.dependOn(&args_test_cmd.step);
     m0_step.dependOn(&libc_test_cmd.step);
     // hosted-test runs the hosted-profile float I/O round-trip (needs clang+python3).
