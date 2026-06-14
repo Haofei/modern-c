@@ -102,10 +102,11 @@ INTS = UINTS + SINTS
 SATS = [n for n, t in TYPES.items() if t["kind"] == "sat"]
 WRAPS = [n for n, t in TYPES.items() if t["kind"] == "wrap"]
 FLOATS = [n for n, t in TYPES.items() if t["kind"] == "float"]
-# f32 is excluded from generation pending a real C-backend bug this framework found: f32
-# constant expressions are emitted with bare C `double` literals, so `a * b` is computed in
-# double then narrowed, diverging by ~1 ULP from the LLVM backend's f32 `fmul`. (f64 is fine.)
-GEN_SKIP = {"f32"}
+# f32 generation is enabled (A7). The C-backend bug it was blocked on — f32 constant
+# expressions emitted with bare C `double` literals, computed in double then narrowed (~1 ULP
+# off the LLVM f32 path) — is fixed (lower_c emitF32Expr suffixes f32 literals with `f`). Floats
+# (f32 and f64) are folded by *comparison*, not bitcast, so NaN/inf observations stay stable.
+GEN_SKIP = set()
 VALUE_TYPES = [t for t in (INTS + FLOATS) if t not in GEN_SKIP]  # foldable into the digest
 
 

@@ -5281,6 +5281,14 @@ const CEmitter = struct {
     }
 
     fn emitExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+        // f32 target: compute the float expression in `float`, not `double`. A bare C decimal
+        // literal is `double`, so `1.7 * 2.3` would multiply in double and round twice when
+        // narrowed to f32 — diverging ~1 ULP from the LLVM `fmul`. Suffix f32 literals with `f`.
+        if (target_ty) |ty| {
+            if (typeName(self.resolveAliasType(ty))) |tn| {
+                if (std.mem.eql(u8, tn, "f32")) return self.emitF32Expr(expr, locals);
+            }
+        }
         switch (expr.kind) {
             .array_literal => |items| {
                 const target = target_ty orelse return error.UnsupportedCEmission;
@@ -5328,6 +5336,39 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, "(");
                 try self.emitExprWithTarget(inner.*, locals, target_ty);
                 try self.out.appendSlice(self.allocator, ")");
+            },
+            else => try self.emitExpr(expr, locals),
+        }
+    }
+
+    // Emit a float expression whose target type is f32: every float literal gets an `f` suffix
+    // and arithmetic recurses with the same f32 target, so the whole computation runs in `float`
+    // (matching the LLVM f32 path). Non-float-shaped leaves (vars/calls/casts — already float in
+    // C) fall back to the normal emit.
+    fn emitF32Expr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        switch (expr.kind) {
+            .float_literal => |lit| {
+                try self.out.appendSlice(self.allocator, lit);
+                try self.out.appendSlice(self.allocator, "f");
+            },
+            .grouped => |inner| {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitF32Expr(inner.*, locals);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .binary => |node| {
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitF32Expr(node.left.*, locals);
+                try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
+                try self.emitF32Expr(node.right.*, locals);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .unary => |node| {
+                if (node.op == .neg) {
+                    try self.out.appendSlice(self.allocator, "(-");
+                    try self.emitF32Expr(node.expr.*, locals);
+                    try self.out.appendSlice(self.allocator, ")");
+                } else try self.emitExpr(expr, locals);
             },
             else => try self.emitExpr(expr, locals),
         }
@@ -12670,6 +12711,35 @@ test "C source map records defer cleanup spans" {
         try std.testing.expect(std.mem.indexOf(u8, line, "symbol_kind=\"extern_fn\"") != null or
             std.mem.indexOf(u8, line, "symbol_kind=\"type\"") != null);
     }
+}
+
+test "f32 literal expressions compute in float (f suffix), not double" {
+    const source =
+        \\export fn harness() -> u64 {
+        \\    var c: f32 = (1.7 * 2.3);
+        \\    return bitcast<u32>(c) as u64;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "f32.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    // f32-typed literals are suffixed with `f` so the multiply runs in float, not double
+    // (double would round twice when narrowed and diverge ~1 ULP from the LLVM f32 fmul).
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "1.7f") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "2.3f") != null);
 }
 
 test "tuples desugar to a single nominal struct with numeric field access" {
