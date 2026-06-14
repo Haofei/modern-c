@@ -3123,7 +3123,13 @@ const CEmitter = struct {
             defer nested.deinit();
             self.indent += 1;
             if (branch.binding_name) |binding_name| {
-                try nested.put(binding_name, .{ .c_type = branch.binding_type.? });
+                // Register the binding with full type info (from the Result's MC payload type) so
+                // a nested switch on it resolves — e.g. `switch e { .Variant => … }` over an enum
+                // err payload. Fall back to the bare C type if the payload type is unavailable.
+                const payload_src = if (std.mem.eql(u8, branch.payload_field.?, "err")) subject.err_source_ty else subject.ok_source_ty;
+                var binding_info: LocalInfo = .{ .c_type = branch.binding_type.? };
+                if (payload_src) |src| binding_info = try self.localInfoFromType(src);
+                try nested.put(binding_name, binding_info);
                 try self.writeIndent();
                 try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s}.payload.{s};\n", .{ branch.binding_type.?, binding_name, subject.name, branch.payload_field.? });
             }
@@ -3274,7 +3280,17 @@ const CEmitter = struct {
         const info = locals.get(name) orelse return null;
         const ok_ty = info.result_ok_c_type orelse return null;
         const err_ty = info.result_err_c_type orelse return null;
-        return .{ .name = name, .ok_c_type = ok_ty, .err_c_type = err_ty };
+        // Carry the MC payload types from Result<T,E> so an arm binding gets full type info.
+        var ok_src: ?ast.TypeExpr = null;
+        var err_src: ?ast.TypeExpr = null;
+        if (info.result_ty) |rty| switch (rty.kind) {
+            .generic => |g| if (g.args.len == 2) {
+                ok_src = g.args[0];
+                err_src = g.args[1];
+            },
+            else => {},
+        };
+        return .{ .name = name, .ok_c_type = ok_ty, .err_c_type = err_ty, .ok_source_ty = ok_src, .err_source_ty = err_src };
     }
 
     fn resultSubjectForValueExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?ResultSwitchSubject {
@@ -9723,6 +9739,10 @@ const ResultSwitchSubject = struct {
     name: []const u8,
     ok_c_type: []const u8,
     err_c_type: []const u8,
+    // The MC payload types (Result<T,E>'s T and E), so an arm binding can be registered with
+    // full type info — e.g. a nested `switch e { .Variant => … }` on an enum err payload.
+    ok_source_ty: ?ast.TypeExpr = null,
+    err_source_ty: ?ast.TypeExpr = null,
 };
 
 const ResultSwitchBranch = struct {
