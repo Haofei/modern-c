@@ -17,6 +17,10 @@ pub const Parser = struct {
     // tuple shape is one nominal struct everywhere.
     synth_decls: std.ArrayList(ast.Decl) = .empty,
     tuple_names: std.StringHashMap(void) = undefined,
+    // Tuple destructuring `let (a, b) = e` expands to several statements (a temp + per-field
+    // bindings); the extra statements wait here and are drained into the enclosing block.
+    pending_stmts: std.ArrayList(ast.Stmt) = .empty,
+    destr_counter: usize = 0,
 
     pub fn init(source: []const u8, reporter: *diagnostics.Reporter) Parser {
         var lx = lexer.Lexer.init(source, reporter);
@@ -470,6 +474,11 @@ pub const Parser = struct {
         errdefer items.deinit(self.allocator);
         while (self.current.kind != .r_brace and self.current.kind != .eof) {
             try items.append(self.allocator, try self.parseStmt());
+            // Drain statements synthesized by tuple destructuring into this block.
+            if (self.pending_stmts.items.len > 0) {
+                try items.appendSlice(self.allocator, self.pending_stmts.items);
+                self.pending_stmts.clearRetainingCapacity();
+            }
         }
         const end = try self.expectTok(.r_brace, "expected '}' after block");
         return .{ .span = joinSpan(start.span, end.span), .items = try items.toOwnedSlice(self.allocator) };
@@ -651,8 +660,47 @@ pub const Parser = struct {
         };
     }
 
+    // `let (a, b) = e;` -> `let __destrN = e; let a = __destrN._0; let b = __destrN._1;`.
+    // The returned statement is the temp binding; the per-field bindings are queued and drained
+    // into the enclosing block by parseBlock. Field types are inferred from the member access.
+    fn parseTupleDestructure(self: *Parser, is_let: bool, start: ast.Span) anyerror!ast.Stmt {
+        try self.expect(.l_paren, "expected '(' for tuple destructuring");
+        var names: std.ArrayList(ast.Ident) = .empty;
+        errdefer names.deinit(self.allocator);
+        try names.append(self.allocator, try self.expectName("expected binding name"));
+        while (self.match(.comma)) {
+            if (self.current.kind == .r_paren) break;
+            try names.append(self.allocator, try self.expectName("expected binding name"));
+        }
+        try self.expect(.r_paren, "expected ')' after tuple destructuring pattern");
+        try self.expect(.equal, "expected '=' in tuple destructuring");
+        const init_expr = try self.parseExpr(0);
+        const end = try self.expectTok(.semicolon, "expected ';' after destructuring");
+        const span = joinSpan(start, end.span);
+
+        const tmp_name = try std.fmt.allocPrint(self.allocator, "__destr{d}", .{self.destr_counter});
+        self.destr_counter += 1;
+        const tmp_ident = ast.Ident{ .text = tmp_name, .span = span };
+
+        for (names.items, 0..) |nm, i| {
+            const base = try ast.makePtr(self.allocator, ast.Expr{ .span = span, .kind = .{ .ident = tmp_ident } });
+            const fname = try std.fmt.allocPrint(self.allocator, "_{d}", .{i});
+            const member = ast.Expr{ .span = span, .kind = .{ .member = .{ .base = base, .name = .{ .text = fname, .span = span } } } };
+            const name_slice = try self.allocator.alloc(ast.Ident, 1);
+            name_slice[0] = nm;
+            const local = ast.LocalDecl{ .names = name_slice, .ty = null, .init = member };
+            try self.pending_stmts.append(self.allocator, .{ .span = span, .kind = if (is_let) .{ .let_decl = local } else .{ .var_decl = local } });
+        }
+        names.deinit(self.allocator);
+
+        const tmp_slice = try self.allocator.alloc(ast.Ident, 1);
+        tmp_slice[0] = tmp_ident;
+        return .{ .span = span, .kind = .{ .let_decl = .{ .names = tmp_slice, .ty = null, .init = init_expr } } };
+    }
+
     fn parseLocal(self: *Parser, is_let: bool) anyerror!ast.Stmt {
         const start = self.current.span;
+        if (self.current.kind == .l_paren) return self.parseTupleDestructure(is_let, start);
         var names: std.ArrayList(ast.Ident) = .empty;
         errdefer names.deinit(self.allocator);
         try names.append(self.allocator, try self.expectName("expected local name"));

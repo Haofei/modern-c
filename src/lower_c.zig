@@ -12671,6 +12671,36 @@ test "tuples desugar to a single nominal struct with numeric field access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "t._1") != null);
 }
 
+test "tuple destructuring binds each name to a field of a temporary" {
+    const source =
+        \\fn make() -> (u32, u64) { return (7, 100); }
+        \\export fn harness() -> u64 {
+        \\    let (a, b) = make();
+        \\    return (a as u64) + b;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "destr.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    // `let (a, b) = make()` -> a temp holding the tuple, then a/b bound to its fields.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__destr0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__destr0._0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__destr0._1") != null);
+}
+
 test "backend_name attribute renames the object symbol via an asm label" {
     const source =
         \\#[backend_name("rss_helper_x")]
