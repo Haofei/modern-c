@@ -712,8 +712,12 @@ class Gen:
                     out.append("    }")
             terms.append("eobs")
 
-        acc = terms[0] if terms else "0"
-        for t in terms[1:]:
+        # Metamorph (G16): XOR is commutative+associative, so folding the terms in reverse order
+        # must give the identical digest — a second semantics-preserving transform (on top of the
+        # body-in-helper) that re-orders the final reduction.
+        fold_terms = list(reversed(terms)) if metamorph else terms
+        acc = fold_terms[0] if fold_terms else "0"
+        for t in fold_terms[1:]:
             acc = "(%s ^ %s)" % (acc, t)
         out.append("    return %s;" % acc)
         body = "\n".join(out)
