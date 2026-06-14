@@ -856,11 +856,11 @@ def oracle_pipeline(env, seed, src_path, work):
     return None
 
 
-def _compile_run_c(env, src_path, work, tag):
-    """Emit C, compile, link with the driver, run. Returns (returncode, stdout) or None if the
-    emit/compile/link failed (a different oracle's concern)."""
+def _compile_run_c(env, src_path, work, tag, opt=None):
+    """Emit C, compile (optionally at an -O level), link with the driver, run. Returns
+    (returncode, stdout) or None if the emit/compile/link failed (a different oracle's concern)."""
     obj = os.path.join(work, tag + ".o")
-    if _emit_c_obj(env["mcc"], env["clang"], src_path, obj) is not None:
+    if _emit_c_obj(env["mcc"], env["clang"], src_path, obj, extra=((opt,) if opt else ())) is not None:
         return None
     drv = os.path.join(work, "d.c")
     open(drv, "w").write(DRIVER)
@@ -888,10 +888,25 @@ def oracle_metamorphic(env, seed, src_path, work):
     return None
 
 
+def oracle_optlevel(env, seed, src_path, work):
+    """Compile the emitted C at -O0 and -O2 and compare. Generated MC is deterministic and the
+    emitted C is UB-free, so the optimizer must not change the result. A divergence means
+    optimization-sensitive UB the unoptimized build hides (or a backend codegen bug)."""
+    o0 = _compile_run_c(env, src_path, work, "o0", opt="-O0")
+    o2 = _compile_run_c(env, src_path, work, "o2", opt="-O2")
+    if o0 is None or o2 is None:
+        return None
+    if o0[0] != o2[0]:
+        return "OPT-LEVEL DIVERGENCE (status): -O0 rc=%d, -O2 rc=%d" % (o0[0], o2[0])
+    if o0[0] == 0 and o0[1] != o2[1]:
+        return "OPT-LEVEL DIVERGENCE (output): -O0=%r -O2=%r" % (o0[1].strip(), o2[1].strip())
+    return None
+
+
 ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize,
            "robust": oracle_robust, "failclosed": oracle_failclosed,
            "determinism": oracle_determinism, "pipeline": oracle_pipeline,
-           "metamorphic": oracle_metamorphic}
+           "metamorphic": oracle_metamorphic, "optlevel": oracle_optlevel}
 
 
 def oracle_on_source(env, oracle, source):

@@ -172,6 +172,13 @@ pub fn build(b: *std.Build) void {
     const fuzz_metamorphic_step = b.step("fuzz-metamorphic", "mcfuzz: a semantics-preserving source transform must not change the result");
     fuzz_metamorphic_step.dependOn(&fuzz_metamorphic_cmd.step);
 
+    const fuzz_optlevel_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "optlevel", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_optlevel_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_optlevel_step = b.step("fuzz-optlevel", "mcfuzz: emitted C must give the same result at -O0 and -O2 (no optimization-sensitive UB)");
+    fuzz_optlevel_step.dependOn(&fuzz_optlevel_cmd.step);
+
     const llvm_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-llvm-sweep.py",
