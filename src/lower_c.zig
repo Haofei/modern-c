@@ -347,8 +347,8 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
     var line_index = try buildGeneratedLineIndex(allocator, generated_c.items);
     defer line_index.deinit(allocator);
 
-    try out.appendSlice(allocator, "# mcmap v0\n");
-    try out.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol\n");
+    try out.appendSlice(allocator, "# mcmap v1\n");
+    try out.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol source_module source_qualname symbol_kind visibility backend_name\n");
     var mapper = SourceMapEmitter{
         .allocator = allocator,
         .out = out,
@@ -356,8 +356,49 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
         .generated_c_path = generated_c_path orelse "-",
         .line_index = line_index.items,
         .mir_module = &typed_mir,
+        .module_name = moduleNameFromPath(source_path),
     };
     try mapper.emitModule(module);
+}
+
+// The source module name a symbol belongs to: the file basename without directory or
+// extension (MC is one module per file). Provenance tooling keys on this; RSS namespace
+// isolation can later override it per symbol once a richer module model exists.
+fn moduleNameFromPath(source_path: []const u8) []const u8 {
+    if (source_path.len == 0) return "-";
+    var name = source_path;
+    if (std.mem.lastIndexOfScalar(u8, name, '/')) |slash| name = name[slash + 1 ..];
+    if (std.mem.lastIndexOfScalar(u8, name, '.')) |dot| {
+        if (dot > 0) name = name[0..dot];
+    }
+    return if (name.len == 0) "-" else name;
+}
+
+// The declared name of a type-level declaration, for inventory rows.
+fn declTypeName(kind: ast.Decl.Kind) ?ast.Ident {
+    return switch (kind) {
+        .struct_decl => |d| d.name,
+        .enum_decl => |d| d.name,
+        .union_decl => |d| d.name,
+        .packed_bits_decl => |d| d.name,
+        .overlay_union_decl => |d| d.name,
+        .opaque_decl => |name| name,
+        .type_alias => |d| d.name,
+        else => null,
+    };
+}
+
+fn declKindName(kind: ast.Decl.Kind) []const u8 {
+    return switch (kind) {
+        .struct_decl => "struct",
+        .enum_decl => "enum",
+        .union_decl => "union",
+        .packed_bits_decl => "packed_bits",
+        .overlay_union_decl => "overlay_union",
+        .opaque_decl => "opaque",
+        .type_alias => "type_alias",
+        else => "decl",
+    };
 }
 
 const GeneratedLine = struct {
@@ -404,24 +445,48 @@ const SourceMapEmitter = struct {
     line_index: []const GeneratedLine,
     mir_module: *const mir.Module,
     current_function: ?[]const u8 = null,
+    module_name: []const u8 = "-",
+    // SymbolMeta for the declaration whose rows are currently being emitted; expression
+    // rows inherit the owning declaration's identity/provenance.
+    symbol_kind: []const u8 = "value",
+    visibility: []const u8 = "internal",
 
     fn emitModule(self: *SourceMapEmitter, module: ast.Module) !void {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .global_decl => |global| {
+                    self.symbol_kind = if (global.is_const) "assoc_const" else "value";
+                    self.visibility = "internal";
                     try self.emitEntry("global", global.name.text, global.name.span, global.name.text, "mir:global:init");
                     if (global.init) |init| try self.emitEntry("global_initializer_expr", global.name.text, init.span, global.name.text, "mir:global:init");
                 },
                 .fn_decl => |fn_decl| if (fn_decl.body) |body| {
+                    self.symbol_kind = "free_fn";
+                    self.visibility = if (fn_decl.exported) "exported" else "internal";
                     try self.emitEntry("function", fn_decl.name.text, fn_decl.name.span, fn_decl.name.text, "mir:function:entry");
                     const previous_function = self.current_function;
                     self.current_function = fn_decl.name.text;
                     try self.emitBlock(body);
                     self.current_function = previous_function;
                 },
-                else => {},
+                .extern_fn => |fn_decl| {
+                    self.symbol_kind = "extern_fn";
+                    self.visibility = "exported";
+                    try self.emitEntry("extern_fn", fn_decl.name.text, fn_decl.name.span, fn_decl.name.text, "mir:function:entry");
+                },
+                else => {
+                    // Type-level declarations: emit one inventory row each so the symbol map
+                    // is a complete declared-symbol inventory, not just executable code.
+                    if (declTypeName(decl.kind)) |name| {
+                        self.symbol_kind = if (std.meta.activeTag(decl.kind) == .type_alias) "type_alias" else "type";
+                        self.visibility = "internal";
+                        try self.emitEntry(declKindName(decl.kind), name.text, name.span, name.text, "-");
+                    }
+                },
             }
         }
+        self.symbol_kind = "value";
+        self.visibility = "internal";
     }
 
     fn emitBlock(self: *SourceMapEmitter, block: ast.Block) !void {
@@ -564,6 +629,18 @@ const SourceMapEmitter = struct {
             try appendMapString(self.out, self.allocator, mir_block);
         }
         try self.out.appendSlice(self.allocator, " object_symbol=");
+        try appendMapString(self.out, self.allocator, object_symbol);
+        // mcmap v1: SymbolMeta provenance. backend_name defaults to the object symbol until a
+        // per-symbol override exists; source_qualname is the symbol name (MC is flat today).
+        try self.out.appendSlice(self.allocator, " source_module=");
+        try appendMapString(self.out, self.allocator, self.module_name);
+        try self.out.appendSlice(self.allocator, " source_qualname=");
+        try appendMapString(self.out, self.allocator, symbol);
+        try self.out.appendSlice(self.allocator, " symbol_kind=");
+        try appendMapString(self.out, self.allocator, self.symbol_kind);
+        try self.out.appendSlice(self.allocator, " visibility=");
+        try appendMapString(self.out, self.allocator, self.visibility);
+        try self.out.appendSlice(self.allocator, " backend_name=");
         try appendMapString(self.out, self.allocator, object_symbol);
         try self.out.appendSlice(self.allocator, "\n");
     }
@@ -12444,7 +12521,13 @@ test "C source map records source spans and generated C lines" {
     defer output.deinit(std.testing.allocator);
     try appendCSourceMap(std.testing.allocator, module, &output, .kernel, "debug_map.mc", "debug_map.c");
 
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "# mcmap v0\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "# mcmap v1\n") != null);
+    // mcmap v1 SymbolMeta columns.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "source_module=\"debug_map\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "symbol_kind=\"free_fn\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "source_qualname=\"add_one\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "backend_name=\"add_one\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "symbol_kind=\"assoc_const\"") == null); // count is a `global`, not `const`
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"global\" symbol=\"count\" source_line=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"global_initializer_expr\" symbol=\"count\" source_line=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"function\" symbol=\"add_one\" source_line=3") != null);
@@ -12502,7 +12585,14 @@ test "C source map records defer cleanup spans" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"expr\" symbol=\"cleanup\" source_line=6") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"defer\" symbol=\"cleanup\" source_line=9") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"defer_expr\" symbol=\"cleanup\" source_line=9") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "generated_c_line=0") == null);
+    // mcmap v1: only inventory rows (type-level / extern declarations, which map to no
+    // executable C line) may carry generated_c_line=0; every executable row keeps a real line.
+    var defer_lines = std.mem.splitScalar(u8, output.items, '\n');
+    while (defer_lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "generated_c_line=0") == null) continue;
+        try std.testing.expect(std.mem.indexOf(u8, line, "symbol_kind=\"extern_fn\"") != null or
+            std.mem.indexOf(u8, line, "symbol_kind=\"type\"") != null);
+    }
 }
 
 test "C emission materializes closure callees once" {
