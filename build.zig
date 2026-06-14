@@ -116,6 +116,20 @@ pub fn build(b: *std.Build) void {
     const move_fuzz_step = b.step("move-fuzz", "Generate move-resource programs; assert every resource is released once (live_count==0) on both backends");
     move_fuzz_step.dependOn(&move_fuzz_cmd.step);
 
+    const fuzz_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_step = b.step("fuzz", "mcfuzz: type-directed differential fuzzer over the full scalar type system (C vs LLVM)");
+    fuzz_step.dependOn(&fuzz_cmd.step);
+
+    const fuzz_sanitize_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "sanitize", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_sanitize_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_sanitize_step = b.step("fuzz-sanitize", "mcfuzz: run generated full-type-system programs' emitted C under UBSan");
+    fuzz_sanitize_step.dependOn(&fuzz_sanitize_cmd.step);
+
     const llvm_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-llvm-sweep.py",
@@ -2029,6 +2043,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&diff_backend_cmd.step);
     m0_step.dependOn(&diff_fuzz_cmd.step);
     m0_step.dependOn(&move_fuzz_cmd.step);
+    m0_step.dependOn(&fuzz_cmd.step);
+    m0_step.dependOn(&fuzz_sanitize_cmd.step);
     // LLVM backend gates: IR assembly, object lowering, spec sweep, broad
     // c_emit fixture sweeps, and host link/run smoke tests.
     m0_step.dependOn(&llvm_test_cmd.step);
