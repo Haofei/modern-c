@@ -327,6 +327,11 @@ class Gen:
             fields = [("f%d" % j, self.rng.choice(ftypes)) for j in range(self.rng.randrange(1, 4))]
             self.structs[name] = fields
             decls.append("struct %s { %s }" % (name, ", ".join("%s: %s" % (f, t) for f, t in fields)))
+        for _ in range(self.rng.randrange(0, 2)):  # arrays of structs (declared after structs exist)
+            if self.structs:
+                elem = self.rng.choice(list(self.structs))
+                length = self.rng.randrange(2, 4)
+                self.arrays["[%d]%s" % (length, elem)] = (elem, length)
         for i in range(self.rng.randrange(1, 3)):
             variants = ["V%d" % j for j in range(self.rng.randrange(2, 5))]
             name = "E%d" % i
