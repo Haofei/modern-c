@@ -498,7 +498,12 @@ class Gen:
             variants = ["V%d" % j for j in range(self.rng.randrange(2, 5))]
             name = "E%d" % i
             self.enums[name] = variants
-            decls.append("enum %s { %s }" % (name, ", ".join(variants)))
+            if self.rng.random() < 0.4:  # A13: explicit `: u8` repr with custom discriminants
+                vals = sorted(self.rng.sample(range(256), len(variants)))
+                fields = ", ".join("%s = %d" % (v, val) for v, val in zip(variants, vals))
+                decls.append("enum %s: u8 { %s }" % (name, fields))
+            else:
+                decls.append("enum %s { %s }" % (name, ", ".join(variants)))
         self.gen_functions(decls)
 
         # D1: module-level globals — read/written/folded by the harness like locals, but they
@@ -510,6 +515,13 @@ class Gen:
             self.nvars += 1
             decls.append("global %s: %s = %s;" % (name, ty, TYPES[ty]["lit"](self.rng)))
             self.env.setdefault(ty, []).append(name)
+        for _ in range(self.rng.randrange(0, 2)):  # D4: const globals (named compile-time constants)
+            ty = self.rng.choice(INTS)
+            name = "c%d" % self.nvars
+            self.nvars += 1
+            decls.append("const %s: %s = %s;" % (name, ty, TYPES[ty]["lit"](self.rng)))
+            self.env.setdefault(ty, []).append(name)
+            self.immutable.add(name)  # a const is read-only
 
         out = []
         types = self.local_types()
