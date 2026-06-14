@@ -1456,6 +1456,10 @@ const coverage_exempt = [_][]const u8{
     "1",
     // Rationale / final-contract prose — nothing to execute.
     "26", "26.1", "26.2", "26.3", "27",
+    // §29 tuples — desugar to structs; the type/literal/access/destructure/lowering rules are
+    // exercised by the lower_c.zig unit tests (tuple desugaring + destructuring) and both-backend
+    // run checks. The n>=2 arity rule is a parse-time error (not a sema diagnostic fixture).
+    "29", "29.1", "29.2",
     // §28 driver-library profile — exercised by the runtime suite (sync-test, stack-test,
     // ring/endian/time/barrier tests under tools/), not by semantic fixtures.
     "28",  "28.1", "28.2", "28.3", "28.4", "28.5", "28.6", "28.7",

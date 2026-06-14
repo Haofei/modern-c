@@ -10,6 +10,10 @@ pub const Ident = struct {
 
 pub const Module = struct {
     decls: []Decl,
+    /// Names that own a qualified namespace (`module X`, `impl X`). Resolution rewrites
+    /// `X.member` to a mangled top-level symbol, so these names are reserved against local
+    /// bindings — a local may not shadow them (sema enforces this).
+    qualified_owners: [][]const u8 = &.{},
 
     /// Shallow free of the top-level `decls` slice only. The AST is built with an
     /// arena allocator that owns all nested allocations (params, bodies, block

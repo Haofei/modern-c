@@ -2654,6 +2654,16 @@ declarations and calls. This also gives each symbol role a distinct object symbo
 (`Tensor__get` for an associated function, `Math__PI` for a module constant, `Tensor` for
 the type) without dummy prefixes.
 
+## 30.4 Owner Name Reservation
+
+Because `Owner.member` resolves to the qualified symbol, an `Owner` name (a `module` or `impl`
+target) is reserved: a local binding, parameter, or other binding may not shadow it. A local
+named the same as an owner is rejected (`E_RESERVED_QUALIFIED_NAME`), so `Owner.member` can
+never silently bind to the qualified symbol in place of an intended local member access.
+
+A qualified `Owner.member` use must follow the `module`/`impl` block that declares it
+(declaration before use).
+
 ---
 
 # Part II — Implementation and Conformance Annex

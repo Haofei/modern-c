@@ -25,6 +25,9 @@ pub const Parser = struct {
     // `impl_methods` maps the call form `Type.m` to the mangled free-function name so that
     // `Type.m(args)` call sites can be rewritten (impl block must precede the call).
     impl_methods: std.StringHashMap([]const u8) = undefined,
+    // Names that own a qualified namespace (module/impl), exported on the Module so sema can
+    // reserve them against local bindings (prevents a local from shadowing a qualified owner).
+    qualified_owners: std.StringHashMap(void) = undefined,
 
     pub fn init(source: []const u8, reporter: *diagnostics.Reporter) Parser {
         var lx = lexer.Lexer.init(source, reporter);
@@ -43,6 +46,8 @@ pub const Parser = struct {
         defer self.tuple_names.deinit();
         self.impl_methods = std.StringHashMap([]const u8).init(allocator);
         defer self.impl_methods.deinit();
+        self.qualified_owners = std.StringHashMap(void).init(allocator);
+        defer self.qualified_owners.deinit();
         var decls: std.ArrayList(ast.Decl) = .empty;
         errdefer decls.deinit(allocator);
 
@@ -60,13 +65,14 @@ pub const Parser = struct {
         }
 
         // Prepend synthesized tuple structs so they precede any use.
-        if (self.synth_decls.items.len == 0) return .{ .decls = try decls.toOwnedSlice(allocator) };
+        const owners = try self.collectOwnerNames(allocator);
+        if (self.synth_decls.items.len == 0) return .{ .decls = try decls.toOwnedSlice(allocator), .qualified_owners = owners };
         var all: std.ArrayList(ast.Decl) = .empty;
         errdefer all.deinit(allocator);
         try all.appendSlice(allocator, self.synth_decls.items);
         try all.appendSlice(allocator, decls.items);
         decls.deinit(allocator);
-        return .{ .decls = try all.toOwnedSlice(allocator) };
+        return .{ .decls = try all.toOwnedSlice(allocator), .qualified_owners = owners };
     }
 
     // `impl Type { fn m(…) {…} … }` — associated functions desugared to free functions named
@@ -138,6 +144,15 @@ pub const Parser = struct {
     fn registerQualified(self: *Parser, owner: []const u8, name: []const u8) !void {
         const key = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ owner, name });
         try self.impl_methods.put(key, try self.mangleQualified(owner, name));
+        try self.qualified_owners.put(owner, {});
+    }
+
+    fn collectOwnerNames(self: *Parser, allocator: std.mem.Allocator) ![][]const u8 {
+        var list: std.ArrayList([]const u8) = .empty;
+        errdefer list.deinit(allocator);
+        var it = self.qualified_owners.keyIterator();
+        while (it.next()) |k| try list.append(allocator, k.*);
+        return list.toOwnedSlice(allocator);
     }
 
     // ---- tuple desugaring (tuples -> synthesized nominal structs) ----
@@ -757,6 +772,7 @@ pub const Parser = struct {
             if (self.current.kind == .r_paren) break;
             try names.append(self.allocator, try self.expectName("expected binding name"));
         }
+        if (names.items.len < 2) return self.fail("tuple destructuring requires at least two bindings");
         try self.expect(.r_paren, "expected ')' after tuple destructuring pattern");
         try self.expect(.equal, "expected '=' in tuple destructuring");
         const init_expr = try self.parseExpr(0);
@@ -948,6 +964,8 @@ pub const Parser = struct {
             const end = try self.expectTok(.r_paren, "expected ')' to close tuple type");
             const elem_slice = try elems.toOwnedSlice(self.allocator);
             if (elem_slice.len == 1) return elem_slice[0];
+            // A tuple has at least two element types; `()` is not a unit/void type (use `void`).
+            if (elem_slice.len == 0) return self.fail("tuple type requires at least two element types");
             const tuple_span = joinSpan(start, end.span);
             const name = try self.synthTupleStruct(elem_slice, tuple_span);
             return .{ .span = tuple_span, .kind = .{ .name = name } };

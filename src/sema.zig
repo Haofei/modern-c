@@ -10,6 +10,10 @@ pub const Checker = struct {
     // Set when building a symbol table runs out of memory. Surfaced as a fatal
     // diagnostic so an incomplete table never silently passes checking.
     oom: bool = false,
+    // Names that own a qualified namespace (`module`/`impl`); a local binding may not shadow
+    // one, or `Owner.member` access would silently bind to the qualified symbol instead of the
+    // local. Set for the duration of checkModule.
+    qualified_owners: [][]const u8 = &.{},
     // Registry of `const fn` declarations, populated for the duration of
     // checkModule so comptime folding can evaluate const-fn calls (section 22).
     const_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
@@ -66,6 +70,7 @@ pub const Checker = struct {
         defer globals.deinit();
         var type_aliases = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
         defer type_aliases.deinit();
+        self.qualified_owners = module.qualified_owners;
         self.checkTopLevelNames(module);
         self.checkBackendNameUniqueness(module);
         self.collectTypeAliases(module, &type_aliases);
@@ -1551,7 +1556,9 @@ pub const Checker = struct {
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .storage, sig_ctx);
-            if (scope.contains(param.name.text)) {
+            if (self.isQualifiedOwner(param.name.text)) {
+                self.errorCode(param.name.span, "E_RESERVED_QUALIFIED_NAME", "a parameter may not shadow a module/impl name");
+            } else if (scope.contains(param.name.text)) {
                 self.errorCode(param.name.span, "E_DUPLICATE_PARAMETER", "function parameter names must be unique");
             } else {
                 scope.put(param.name.text, .{ .class = classifyTypeCtx(param.ty, sig_ctx), .mutable = false, .ty = param.ty, .origin = .param }) catch {
@@ -2250,6 +2257,10 @@ pub const Checker = struct {
     }
 
     fn addLocalBinding(self: *Checker, scope: *Scope, name: ast.Ident, info: LocalInfo) void {
+        if (self.isQualifiedOwner(name.text)) {
+            self.errorCode(name.span, "E_RESERVED_QUALIFIED_NAME", "a local binding may not shadow a module/impl name");
+            return;
+        }
         if (scope.contains(name.text)) {
             self.errorCode(name.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
             return;
@@ -2257,6 +2268,13 @@ pub const Checker = struct {
         scope.put(name.text, info) catch {
             self.oom = true;
         };
+    }
+
+    fn isQualifiedOwner(self: *Checker, name: []const u8) bool {
+        for (self.qualified_owners) |owner| {
+            if (std.mem.eql(u8, owner, name)) return true;
+        }
+        return false;
     }
 
     fn checkAssignmentTarget(self: *Checker, target: ast.Expr, ctx: Context) void {
