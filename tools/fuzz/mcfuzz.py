@@ -251,6 +251,19 @@ class Gen:
         return "(%s %s %s)" % (a, op, b)
 
     def gen_bool(self, d=0):
+        if d < 2 and self.rng.random() < 0.25:  # short-circuit nesting (C8)
+            op = self.rng.choice(("&&", "||"))
+            return "(%s %s %s)" % (self.gen_bool(d + 1), op, self.gen_bool(d + 1))
+        # A domain comparison (C3): sat supports ordering+equality, wrap equality only; both
+        # operands must be live vars of the same domain (a domain value can't compare to a plain
+        # int literal), so it needs two such vars in scope.
+        dom = [t for t in SATS + WRAPS if len(self.env.get(t, [])) >= 2]
+        if dom and d < 2 and self.rng.random() < 0.3:
+            ty = self.rng.choice(dom)
+            pool = self.env[ty]
+            a, b = self.rng.choice(pool), self.rng.choice(pool)
+            cmps = ("==", "!=") if TYPES[ty]["kind"] == "wrap" else ("<", "<=", ">", ">=", "==", "!=")
+            return "(%s %s %s)" % (a, self.rng.choice(cmps), b)
         typed = [t for t in VALUE_TYPES if self.env.get(t)]
         if not typed:
             return self.rng.choice(("true", "false"))
