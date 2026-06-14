@@ -1200,6 +1200,9 @@ def main():
     r.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
     rp = sub.add_parser("report", help="construct-coverage statistics over generated programs")
     rp.add_argument("--count", type=int, default=int(os.environ.get("COUNT", "300")))
+    cp = sub.add_parser("corpus", help="replay the persisted regression corpus (fixed-bug repros)")
+    cp.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
+    cp.set_defaults(trapping=False)
     sh = sub.add_parser("shrink", help="minimize a failing seed to a small repro")
     sh.add_argument("--seed", type=int, required=True)
     sh.add_argument("--oracle", choices=list(ORACLES), default="differential")
@@ -1251,6 +1254,27 @@ def main():
         "link_flags": ["-no-pie"] if sys.platform.startswith("linux") else [],
         "trapping": args.trapping,
     }
+
+    if args.cmd == "corpus":  # G17: persisted regression gates — each fixed-bug repro stays clean
+        import glob
+        files = sorted(glob.glob(os.path.join(ROOT, "tools/fuzz/corpus", "*.mc")))
+        if not files:
+            print("SKIP: mcfuzz/corpus (no corpus files)"); return 0
+        checks = (("differential", oracle_differential), ("sanitize", oracle_sanitize))
+        fails = []
+        for f in files:
+            src = open(f).read()
+            for oname, oracle in checks:
+                res = oracle_on_source(env, oracle, src)
+                if res is not None:
+                    msg = "%s [%s]: %s" % (os.path.basename(f), oname, res)
+                    print(msg); fails.append(msg)
+        if fails:
+            print("FAIL: mcfuzz/corpus — %d regression(s) over %d file(s)" % (len(fails), len(files)))
+            return 1
+        print("PASS: mcfuzz/corpus — %d historical-bug repro(s) stay clean (differential+sanitize)"
+              % len(files))
+        return 0
 
     if args.cmd == "shrink":
         oracle = ORACLES[args.oracle]

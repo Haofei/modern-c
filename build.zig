@@ -193,6 +193,13 @@ pub fn build(b: *std.Build) void {
     const fuzz_reference_step = b.step("fuzz-reference", "mcfuzz: compiled output must match the independent Python reference interpreter (shared-frontend bugs)");
     fuzz_reference_step.dependOn(&fuzz_reference_cmd.step);
 
+    const fuzz_corpus_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "corpus", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_corpus_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_corpus_step = b.step("fuzz-corpus", "mcfuzz: replay the persisted regression corpus — each fixed-bug repro must stay clean");
+    fuzz_corpus_step.dependOn(&fuzz_corpus_cmd.step);
+
     const llvm_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-llvm-sweep.py",
