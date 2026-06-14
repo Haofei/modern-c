@@ -32,6 +32,14 @@ fn free_res(r: TestRes) -> void {
 }
 fn relabel(r: TestRes) -> TestRes { return r; } // pure move transfer (live_count unchanged)
 fn live() -> u64 { return live_count; }
+enum Fault { Bad, Other }
+// A fallible step: its `?` in an inner function early-returns the error, so the deferred frees
+// already in scope must still fire on that error edge.
+fn fallible(flag: u64) -> Result<u64, Fault> {
+    if (flag % 4) == 0 { return err(.Bad); }
+    if (flag % 4) == 1 { return err(.Other); }
+    return ok(flag);
+}
 """
 
 
@@ -48,23 +56,31 @@ class Gen:
         return "(%s %% %d)" % (flag, self.rng.choice((2, 3, 4)))
 
     def control_tail(self, out, indent, depth):
-        # Emit a control-flow body that returns a u64 on every path, with possible early returns
-        # (which must still run the function's deferred frees).
+        # Emit a Result<u64,Fault> body that returns on every path — via ok/err early returns and
+        # `?` propagation — all of which must still run the function's deferred frees.
         pad = "    " * indent
+        if self.rng.random() < 0.5:
+            # a fallible step whose `?` may early-return the error (defers must fire on that edge)
+            self.qcount += 1
+            out.append("%slet q%d: u64 = fallible(%s)?;" % (pad, self.qcount, self.u64()))
         if depth < 2 and self.rng.random() < 0.6:
             k = self.rng.choice((2, 3))
             c = self.rng.randrange(k)
             out.append("%sif (flag %% %d) == %d {" % (pad, k, c))
-            if self.rng.random() < 0.5:
-                out.append("%s    return %s;" % (pad, self.u64()))   # early return: defers fire
+            r = self.rng.random()
+            if r < 0.4:
+                out.append("%s    return ok(%s);" % (pad, self.u64()))   # early return: defers fire
+            elif r < 0.6:
+                out.append("%s    return err(.Bad);" % pad)             # early error return: defers fire
             else:
                 self.control_tail(out, indent + 1, depth + 1)
             out.append("%s}" % pad)
-        out.append("%sreturn %s;" % (pad, self.u64()))
+        out.append("%sreturn ok(%s);" % (pad, self.u64()))
 
     def inner(self, idx):
+        self.qcount = 0
         out = []
-        out.append("fn inner_%d(flag: u64) -> u64 {" % idx)
+        out.append("fn inner_%d(flag: u64) -> Result<u64, Fault> {" % idx)
         nres = self.rng.randrange(1, 4)
         for j in range(nres):
             if self.rng.random() < 0.5:
@@ -90,8 +106,11 @@ class Gen:
         body.append("    var i: u64 = 0;")
         body.append("    while i < 8 {")
         for i in range(ninner):
-            body.append("        let x%d: u64 = inner_%d(i + %d);" % (i, i, self.rng.randrange(0, 5)))
-            body.append("        if live() != 0 { bad = bad + 1; }")
+            body.append("        switch inner_%d(i + %d) {" % (i, self.rng.randrange(0, 5)))
+            body.append("            ok(v) => {}")
+            body.append("            err(f) => {}")
+            body.append("        }")
+            body.append("        if live() != 0 { bad = bad + 1; }") # defers must fire on every path
         body.append("        i = i + 1;")
         body.append("    }")
         body.append("    return bad;")
