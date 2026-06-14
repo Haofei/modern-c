@@ -4776,9 +4776,11 @@ const CEmitter = struct {
         return true;
     }
 
-    // `wrapping.add(a, b)` is explicit modular addition (no trap edge); it
-    // lowers to plain C `+`, matching how `a + b` on `wrap<T>` operands already
-    // emits (unsigned/two's-complement wraparound is well-defined).
+    // `wrapping.add(a, b)` is explicit modular addition (no trap edge). On unsigned operands a
+    // plain C `+` already wraps; but a plain `+` on *signed* C integers is overflow UB, so a
+    // signed wrapping add is computed in the unsigned domain of the same width and converted
+    // back — `(int32_t)((uint32_t)a + (uint32_t)b)` — which is well-defined two's-complement
+    // wraparound with no UB.
     fn emitWrappingCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const member = switch (call.callee.kind) {
             .member => |node| node,
@@ -4792,6 +4794,29 @@ const CEmitter = struct {
         if (!std.mem.eql(u8, member.name.text, "add")) return error.UnsupportedCEmission;
         if (call.args.len != 2) return error.UnsupportedCEmission;
 
+        // For a signed operand type, route through the unsigned domain to avoid signed-overflow UB.
+        if (locals) |ls| {
+            if (self.numericExprTypeForEmission(call.args[0], ls)) |ty| {
+                if (self.underlyingIntTypeName(ty)) |name| {
+                    if (name.len > 0 and name[0] == 'i') {
+                        const s_cty = primitiveCTypeName(name) orelse return self.emitWrappingPlusAdd(call, locals);
+                        const u_name = try std.fmt.allocPrint(self.scratch.allocator(), "u{s}", .{name[1..]});
+                        const u_cty = primitiveCTypeName(u_name) orelse return self.emitWrappingPlusAdd(call, locals);
+                        try self.out.print(self.allocator, "(({s})(({s})(", .{ s_cty, u_cty });
+                        try self.emitExpr(call.args[0], locals);
+                        try self.out.print(self.allocator, ") + ({s})(", .{u_cty});
+                        try self.emitExpr(call.args[1], locals);
+                        try self.out.appendSlice(self.allocator, ")))");
+                        return true;
+                    }
+                }
+            }
+        }
+        return self.emitWrappingPlusAdd(call, locals);
+    }
+
+    // Unsigned / unknown operands: a plain `+` already wraps (well-defined).
+    fn emitWrappingPlusAdd(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         try self.out.appendSlice(self.allocator, "(");
         try self.emitExpr(call.args[0], locals);
         try self.out.appendSlice(self.allocator, " + ");
