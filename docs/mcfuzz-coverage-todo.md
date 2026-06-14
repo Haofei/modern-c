@@ -164,27 +164,37 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 - **A1** `Result<T, u32>` helper functions: ok/err returns, `?` propagation chains, folded by
   the harness via `switch r { ok(v)=>… err(e)=>… }` (XOR fold — a checked `+` would overflow/trap).
 - **A11** type aliases (`type Alias = <int>`), transparent in use.
+- **A7** f32 — **enabled** by fixing the C-backend f32 double-rounding bug (literal exprs now
+  computed in `float` via an `f` suffix; was ~1 ULP off LLVM). Third real bug found+fixed.
+- **A3** nullable pointers `?*T` to globals, read via `if let` narrowing.
+- **A4** non-nullable pointers `*T` + deref.
+- **A8** comptime-generic functions (`gid(comptime T: type, …)`, monomorphized per call type).
+- **A9** capturing closures via `bind(&env, fn)` -> `closure(T)->R`.
+- **E3** optimization-level differential oracle (`fuzz-optlevel`): emitted C must give the same
+  result at -O0 and -O2 (no optimization-sensitive UB).
+
+**Tally: 19 coverage items + 2 new oracles (metamorphic, optlevel) + 3 real C-backend bugs found
+& fixed (INT64_MIN, narrow wrap-mul UB, f32 double-rounding). Nine oracles now gate `m0`-style.**
 
 ### Blocked by missing backend support (can't be generated into runnable programs)
 
 - **A2** tagged unions with payload — **not runtime-lowerable**: even the spec's own
   `ReflectToken` union fails both `emit-c` and `emit-llvm` (`UnsupportedC/LlvmEmission`); tagged
-  unions are a sema/comptime-reflection construct only. Generating them would break the pipeline
-  oracle (check accepts, emit rejects). Needs tagged-union codegen first.
-- **A7** f32 — blocked on the f32 double-literal-suffix backend fix.
+  unions are a sema/comptime-reflection construct only. Needs tagged-union codegen first.
+- **A5** slices `[]T` — `arr[0..n]` -> `[]const T` hits `E_NO_IMPLICIT_POINTER_CONVERSION`; the
+  slice-construction surface is finicky/limited. Deferred (would unlock E5 memory-safety oracle).
 - **C4** cross-domain conversions — no clean plain↔`wrap`/`sat` conversion form
-  (`wrap<u8>.from(p)` → `E_NO_IMPLICIT_CONVERSION`); only literal init + domain ops + `wrap_from`
-  extraction exist. Limited surface; deferred.
-- **D2** `extern fn` calls — not runnable without linking external definitions the harness driver
-  doesn't provide.
+  (`wrap<u8>.from(p)` → `E_NO_IMPLICIT_CONVERSION`); only literal init + domain ops + `wrap_from`.
+- **D2** `extern fn` calls — not runnable without linking external definitions the harness can't
+  provide.
+- **A6** `move`/`defer` — already covered by the separate `mcgen_move.py` generator.
 
 ### Still open (largest — multi-session or architecture-gated)
 
-- **E1** reference interpreter — highest leverage, but a full precise interpreter of the
+- **E1** reference interpreter — highest leverage, but a full *precise* interpreter of the
   generated subset (all arithmetic domains, structs/arrays/enums/switch/loops/globals/tuples/
-  Result); high effort + high risk (a wrong interpreter yields false findings).
-- **A3→A5** optionals → pointers → slices (unlocks **E5** memory-safety oracle); **C9** ptr arith.
-- **A8** generics, **A9** closures, **D5** multi-module — runtime language-feature-heavy.
-- **A6** `move`/`defer` — already covered by the separate `mcgen_move.py` generator.
+  Result/pointers); high effort + high risk (a wrong interpreter yields false findings).
+- **D5** multi-module — needs an import/module system (no such surface today).
 - **F1** coverage-guided — blocked by subprocess speed (needs persistent/in-process harness).
-- Misc lower-value: C6/C7, D3/D6, E3/E4/E6/E7/E8, F2–F7, A10/A12.
+- Misc lower-value: C6/C7 (mostly covered), D3/D6, E4/E5/E6/E7/E8, F2–F7, A10 (usize already
+  generated)/A12 (depends on A2/A5).
