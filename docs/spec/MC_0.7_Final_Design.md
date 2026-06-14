@@ -3466,6 +3466,50 @@ unchecked_add_assume_no_overflow may appear only inside no_overflow contract reg
 
 ---
 
+## E.4 Fact-Gated MIR Optimizer
+
+MIR carries the facts a safe optimizer needs: each checked operation records a **trap edge**
+(`Bounds`, `IntegerOverflow`, `DivideByZero`, …), and `no_overflow` contracts record
+**range facts**. The optimizer is the pass that turns a *provably-dead* trap edge into a
+removed check. It is **off by default** (`mcc verify|lower-mir <file> --optimize`); the
+standard pipeline emits identical MIR, so an unfinished or unsound transform can never
+silently affect a normal build.
+
+**Discipline — every transform must state, and a test must enforce:**
+
+1. **Proof obligation.** A precise, compile-time-checkable condition under which the
+   transform is sound. The transform fires *only* when the obligation is discharged from
+   MIR facts/constants; when it cannot be proved, the check is kept (conservative — a missed
+   optimization, never an unsound one).
+2. **Equivalence.** The optimized program must observably equal the unoptimized one. Each
+   transform is gated by a test asserting the MIR change is exactly the intended one and that
+   it does not fire where the obligation fails, plus — once a transform reaches codegen — a
+   C-vs-LLVM differential (annex F, `diff-backend`/`diff-fuzz`) on the affected programs.
+3. **One at a time.** Transforms land individually, each with its proof and test, so a
+   regression localizes to one rule.
+
+**Implemented — const-index bounds-check elision.**
+
+> *Proof obligation:* the index is a non-negative integer literal `k`, the base names a fixed
+> array of statically-known length `N`, and `k < N`. All three are compile-time constants, so
+> the `Bounds` check provably never traps.
+>
+> *Transform:* omit the `cmp_bounds` instruction and its `Bounds` trap edge; the access is
+> marked `const_in_bounds`. A trap-free MIR means a `#[no_lang_trap]` function may now index a
+> fixed array at a constant position (§20.1). The frontend `no_lang_trap` check applies the
+> same proof, so sema and MIR agree.
+>
+> *Tests:* a MIR unit test asserts the `Bounds` edge is dropped for `a[2]` on `[4]u32` and
+> **kept** for a variable index `a[i]`; `opt-test` (annex test) asserts `verify` rejects and
+> `verify --optimize` accepts the contract, the optimized MIR has no `Bounds` edge, and a
+> variable index stays rejected.
+
+The next increment is to have the backends consume the optimized MIR — actually eliding the
+emitted runtime check — gated by the same flag and the C-vs-LLVM equivalence obligation
+above. Until then the transform refines verification precision at zero codegen risk.
+
+---
+
 # F. Backend Independence
 
 Backend may target:

@@ -57,10 +57,11 @@ pub fn main(init: std.process.Init) !void {
     // Optional flags follow the path. `emit-c` and `emit-map` accept:
     // `--profile=kernel` (default) or `--profile=hosted`.
     var profile: lower_c.Profile = .kernel;
-    var saw_flag = false;
+    var saw_profile_flag = false;
+    var optimize = false;
     while (args.next()) |flag| {
-        saw_flag = true;
         if (std.mem.startsWith(u8, flag, "--profile=")) {
+            saw_profile_flag = true;
             const value = flag["--profile=".len..];
             if (std.mem.eql(u8, value, "kernel")) {
                 profile = .kernel;
@@ -69,13 +70,19 @@ pub fn main(init: std.process.Init) !void {
             } else {
                 return failUsage();
             }
+        } else if (std.mem.eql(u8, flag, "--optimize")) {
+            optimize = true;
         } else {
             return failUsage();
         }
     }
-    // Only C artifact commands consume flags; any flag with another command is an error.
+    // `--profile` is consumed only by the C artifact commands; `--optimize` (the fact-gated
+    // MIR optimizer, annex E) only by the MIR-level commands. A flag on any other command
+    // is an error.
     const is_c_artifact_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map");
-    if (saw_flag and !is_c_artifact_command) return failUsage();
+    const is_mir_command = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir");
+    if (saw_profile_flag and !is_c_artifact_command) return failUsage();
+    if (optimize and !is_mir_command) return failUsage();
 
     const root_source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(root_source);
@@ -99,9 +106,9 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "verify-hir")) {
         try runVerifyHir(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-mir")) {
-        try runLowerMir(allocator, path, source);
+        try runLowerMir(allocator, path, source, optimize);
     } else if (std.mem.eql(u8, command, "verify")) {
-        try runVerify(allocator, path, source);
+        try runVerify(allocator, path, source, optimize);
     } else if (std.mem.eql(u8, command, "lower-ir")) {
         try runLowerIr(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-c")) {
@@ -161,7 +168,7 @@ fn runVerifyHir(allocator: std.mem.Allocator, path: []const u8, source: []const 
     try writeStdout(output.items);
 }
 
-fn runLowerMir(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+fn runLowerMir(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -179,11 +186,11 @@ fn runLowerMir(allocator: std.mem.Allocator, path: []const u8, source: []const u
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try mir.appendDump(allocator, module, &output);
+    try mir.appendDumpOpt(allocator, module, &output, .{ .optimize = optimize });
     try writeStdout(output.items);
 }
 
-fn runVerify(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+fn runVerify(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -200,13 +207,14 @@ fn runVerify(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     }
 
     var checker = sema.Checker.init(&diag);
+    checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();
         return error.VerifyFailed;
     }
 
-    try mir.verify(allocator, module, &diag);
+    try mir.verifyOpt(allocator, module, &diag, .{ .optimize = optimize });
     if (diag.has_errors) {
         diag.render();
         return error.VerifyFailed;

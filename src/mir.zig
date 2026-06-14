@@ -274,7 +274,18 @@ const MirReflectEnv = struct {
     aliases: *const std.StringHashMap(ast.TypeExpr),
 };
 
+// Options for the MIR build/verify pipeline. `optimize` enables the fact-gated
+// optimizer passes (annex E); off by default, so the standard pipeline and every
+// existing caller are byte-for-byte unchanged.
+pub const BuildOptions = struct {
+    optimize: bool = false,
+};
+
 pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
+    return buildOpt(allocator, module, .{});
+}
+
+pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: BuildOptions) !Module {
     var enums = std.StringHashMap(EnumSummary).init(allocator);
     defer enums.deinit();
     var structs = std.StringHashMap(StructSummary).init(allocator);
@@ -355,6 +366,7 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
                 if (global.ty) |ty| {
                     if (global.init) |initializer| {
                         var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals, &globals, &global_type_exprs);
+                        builder.optimize = options.optimize;
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
                         try functions.append(allocator, try builder.finish());
@@ -364,6 +376,7 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
                     var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &const_fns, &const_globals, &globals, &global_type_exprs);
+                    builder.optimize = options.optimize;
                     errdefer builder.deinit();
                     try builder.buildBody(body);
                     try functions.append(allocator, try builder.finish());
@@ -388,7 +401,11 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
 }
 
 pub fn appendDump(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    var mir = try build(allocator, module);
+    return appendDumpOpt(allocator, module, out, .{});
+}
+
+pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), options: BuildOptions) !void {
+    var mir = try buildOpt(allocator, module, options);
     defer mir.deinit();
 
     for (mir.functions) |function| {
@@ -624,7 +641,11 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
 }
 
 pub fn verify(allocator: std.mem.Allocator, module: ast.Module, reporter: *diagnostics.Reporter) !void {
-    var mir = try build(allocator, module);
+    return verifyOpt(allocator, module, reporter, .{});
+}
+
+pub fn verifyOpt(allocator: std.mem.Allocator, module: ast.Module, reporter: *diagnostics.Reporter, options: BuildOptions) !void {
+    var mir = try buildOpt(allocator, module, options);
     defer mir.deinit();
     try verifyBuiltMir(mir, reporter);
 }
@@ -904,6 +925,9 @@ const FunctionBuilder = struct {
     break_targets: std.ArrayList(usize),
     continue_targets: std.ArrayList(usize),
     current: usize,
+    // Fact-gated optimizer toggle (annex E); set from BuildOptions. Off by default so
+    // the standard pipeline emits identical MIR.
+    optimize: bool = false,
     active_contract: ?[]const u8 = null,
     active_contract_region_id: ?usize = null,
     active_unsafe: bool = false,
@@ -2187,10 +2211,20 @@ const FunctionBuilder = struct {
             .index => |node| {
                 try self.addIndexBaseCheck(node.base.*, node.base.span);
                 try self.addIndexOperandCheck(node.index.*, node.index.span);
-                try self.addInstr(.cmp_bounds, "i < len", .bool, expr.span);
-                try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
+                // OPT (annex E) — const-index bounds-check elision. When optimization is on
+                // and the index is a non-negative integer literal `k` into a fixed array of
+                // statically-known length `N` with `k < N`, the bounds check provably never
+                // traps, so the `cmp_bounds` instruction and its `Bounds` trap edge are
+                // omitted. Proof obligation: `k < N` with both compile-time constants —
+                // airtight, so the result is identical and a `#[no_lang_trap]` function may
+                // now contain the access. Off by default, so the standard MIR is unchanged.
+                const elide_bounds = self.optimize and self.indexProvablyInBounds(node.base.*, node.index.*);
+                if (!elide_bounds) {
+                    try self.addInstr(.cmp_bounds, "i < len", .bool, expr.span);
+                    try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
+                }
                 const ty = self.exprType(expr);
-                try self.addInstr(.index, "bounds_checked", ty, expr.span);
+                try self.addInstr(.index, if (elide_bounds) "const_in_bounds" else "bounds_checked", ty, expr.span);
                 if (representationCheckKind(ty) != null) {
                     try self.addInstr(.typed_load, exprText(expr), ty, expr.span);
                     try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
@@ -2593,6 +2627,39 @@ const FunctionBuilder = struct {
             },
             else => {},
         }
+    }
+
+    // OPT (annex E) proof obligation for const-index bounds-check elision: the index is a
+    // non-negative integer literal `k`, the base names a fixed array of statically-known
+    // length `N`, and `k < N`. All three are compile-time constants, so the bounds check
+    // provably never traps. Conservative: returns false for any non-literal index or any
+    // base whose length is not statically known (the check is then kept).
+    fn indexProvablyInBounds(self: *FunctionBuilder, base: ast.Expr, index: ast.Expr) bool {
+        const k = integerLiteralValue(index) orelse return false;
+        if (k.negative) return false;
+        const n = self.baseArrayLen(base) orelse return false;
+        return k.magnitude < n;
+    }
+
+    fn baseArrayLen(self: *FunctionBuilder, base: ast.Expr) ?usize {
+        const ty = self.baseTypeExpr(base) orelse return null;
+        const array = switch (aggregateTargetTypeAlias(ty, self.aliases).kind) {
+            .array => |node| node,
+            else => return null,
+        };
+        return parseArrayLen(array.len, self.const_fns, self.const_globals);
+    }
+
+    // The declared AST type of an index base, when it is a local/param/global name (the
+    // cases whose array length is statically recoverable). A more general place analysis
+    // could cover fields and nested indexing; this conservative subset is enough for the
+    // first transform and never proves an out-of-range access in-bounds.
+    fn baseTypeExpr(self: *FunctionBuilder, base: ast.Expr) ?ast.TypeExpr {
+        return switch (base.kind) {
+            .ident => |id| self.local_type_exprs.get(id.text) orelse self.global_type_exprs.get(id.text),
+            .grouped => |inner| self.baseTypeExpr(inner.*),
+            else => null,
+        };
     }
 
     fn addArrayLiteralShapeCheck(self: *FunctionBuilder, target_ty: ast.TypeExpr, item_count: usize, span: ast.Span) !void {
@@ -5738,6 +5805,39 @@ test "MIR resolves type aliases for checked ints and arithmetic domains" {
     try std.testing.expectEqual(@as(usize, 0), sat_fn.trap_edges.len);
     try std.testing.expectEqual(@as(usize, 0), wrap_cast_fn.trap_edges.len);
     try std.testing.expectEqual(@as(usize, 0), sat_cast_fn.trap_edges.len);
+}
+
+test "OPT const-index bounds-check elision drops only provably-dead Bounds trap edges" {
+    const source =
+        \\fn const_index(a: [4]u32) -> u32 {
+        \\    return a[2];
+        \\}
+        \\fn var_index(a: [4]u32, i: usize) -> u32 {
+        \\    return a[i];
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_opt_bounds.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    // Default build keeps the bounds check and its Bounds trap edge for both indices.
+    var base = try build(std.testing.allocator, module);
+    defer base.deinit();
+    try std.testing.expectEqual(@as(usize, 1), functionByName(base, "const_index").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(base, "var_index").?.trap_edges.len);
+
+    // Optimized build elides the provably-in-range constant index's trap edge (2 < 4) but
+    // must keep the variable index's check — the proof is conservative.
+    var opt = try buildOpt(std.testing.allocator, module, .{ .optimize = true });
+    defer opt.deinit();
+    try std.testing.expectEqual(@as(usize, 0), functionByName(opt, "const_index").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(opt, "var_index").?.trap_edges.len);
 }
 
 test "MIR verifier reports arithmetic-domain misuse" {

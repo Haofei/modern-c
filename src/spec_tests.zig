@@ -1468,7 +1468,8 @@ const coverage_exempt = [_][]const u8{
     // the llvm sweeps; the LLVM and debug backends (M, N) by tests/llvm; the rest is prose.
     "A",  "A.1", "B", "C", "C.1", "C.2", "C.3",
     "D",  "D.1", "D.2", "D.3", "D.4", "D.5", "D.6", "D.7",
-    "E",  "E.1", "E.2", "E.3", "F", "G", "H",
+    // E.4 fact-gated optimizer is exercised by the dedicated `opt-test` (not a sema fixture).
+    "E",  "E.1", "E.2", "E.3", "E.4", "F", "G", "H",
     "I",  "I.1", "I.2", "I.3", "I.4", "I.5", "I.6", "I.7", "I.8",
     "I.9", "I.10", "I.11", "I.12", "I.13", "I.14", "I.15",
     "J", "K", "L", "L.1", "L.2", "L.3", "M", "N", "O",

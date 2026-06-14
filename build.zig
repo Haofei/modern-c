@@ -354,6 +354,15 @@ pub fn build(b: *std.Build) void {
     const abi_test_step = b.step("abi-test", "Validate advanced packed/overlay/MMIO layout against clang's C ABI and the LLVM backend");
     abi_test_step.dependOn(&abi_test_cmd.step);
 
+    const opt_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/opt-test.sh",
+        "zig-out/bin/mcc",
+    });
+    opt_test_cmd.step.dependOn(b.getInstallStep());
+    const opt_test_step = b.step("opt-test", "Validate the fact-gated MIR optimizer: const-index bounds-check elision under --optimize");
+    opt_test_step.dependOn(&opt_test_cmd.step);
+
     const stack_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/stack-test.sh",
@@ -2221,6 +2230,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&reflect_test_cmd.step);
     // abi-test validates advanced packed/overlay/MMIO layout against the C ABI + LLVM.
     m0_step.dependOn(&abi_test_cmd.step);
+    // opt-test validates the fact-gated MIR optimizer (const-index bounds-check elision).
+    m0_step.dependOn(&opt_test_cmd.step);
     // pkg-test exercises the mcc-pkg manifest build (needs clang).
     m0_step.dependOn(&pkg_test_cmd.step);
     // stack-test exercises the generic std/stack collection (needs clang).

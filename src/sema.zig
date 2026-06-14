@@ -19,6 +19,11 @@ pub const Checker = struct {
     // struct's own associated functions (`Struct__member`, from `impl Struct`) may.
     // Null at module scope (globals/initializers), where no private field is in reach.
     current_fn_name: ?[]const u8 = null,
+    // Fact-gated MIR optimizer toggle (annex E), set by the caller for `verify --optimize`.
+    // When on, a provably-in-range constant index is treated as non-trapping so it is
+    // allowed inside `#[no_lang_trap]` (mirrors the MIR-level bounds-check elision). Off by
+    // default, so `check` and the standard pipeline are unchanged.
+    optimize: bool = false,
     // Registry of `const fn` declarations, populated for the duration of
     // checkModule so comptime folding can evaluate const-fn calls (section 22).
     const_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
@@ -2691,7 +2696,10 @@ pub const Checker = struct {
                 return .unknown;
             },
             .index => |node| {
-                if (ctx.no_lang_trap) {
+                // OPT (annex E): a provably-in-range constant index never emits a Bounds
+                // trap, so under `--optimize` it is allowed in `#[no_lang_trap]` — mirroring
+                // the MIR-level bounds-check elision so sema and MIR agree.
+                if (ctx.no_lang_trap and !(self.optimize and self.indexProvablyInBounds(node.base.*, node.index.*, ctx))) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "indexing may trap in #[no_lang_trap]");
                 }
                 const base_class = self.checkExpr(node.base.*, ctx);
@@ -4283,6 +4291,22 @@ pub const Checker = struct {
         }
     }
 
+    // OPT (annex E) proof obligation for const-index bounds-check elision, mirroring the
+    // MIR builder's `indexProvablyInBounds`: the index is a non-negative integer literal `k`,
+    // the base names a fixed array of statically-known length `N`, and `k < N`. Conservative
+    // (false when not provable), so it can never let an out-of-range access pass.
+    fn indexProvablyInBounds(self: *Checker, base: ast.Expr, index: ast.Expr, ctx: Context) bool {
+        _ = self;
+        const k = constIndexLiteral(index) orelse return false;
+        const base_ty = exprStorageType(base, ctx) orelse return false;
+        const arr = switch (resolveAliasType(base_ty, ctx).kind) {
+            .array => |node| node,
+            else => return false,
+        };
+        const n = parseArrayLen(arr.len, ctx.const_fns, ctx.const_globals) orelse return false;
+        return k < n;
+    }
+
     // An `opaque struct`'s private fields may be named only by the struct's own associated
     // functions — those declared in `impl Name { … }`, which the parser mangles to the free
     // symbol `Name__member`. Membership is decided on the leading owner segment (the text
@@ -5771,6 +5795,15 @@ fn parseCharLiteral(literal: []const u8) ?u128 {
         'n' => '\n',
         'r' => '\r',
         't' => '\t',
+        else => null,
+    };
+}
+
+// A non-negative integer-literal array index value, or null if the index is not a literal.
+fn constIndexLiteral(index: ast.Expr) ?usize {
+    return switch (index.kind) {
+        .int_literal => |literal| parseUsizeLiteral(literal),
+        .grouped => |inner| constIndexLiteral(inner.*),
         else => null,
     };
 }
