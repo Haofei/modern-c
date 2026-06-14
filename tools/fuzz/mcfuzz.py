@@ -132,6 +132,7 @@ class Gen:
         self.arrays = {}     # "[N]T" -> (element type, length)
         self.tuples = {}     # "(T0, T1, …)" -> [element type names] (G14; structural, no decl)
         self._spk = None     # G14: ("SPk", elem type) struct-of-pointers, or None
+        self._slice_helpers = set()  # G8: element types for which a `[]mut T` sum helper is declared
         self.aliases = {}    # alias name -> underlying int type (A11); transparent in use
         self.packed = {}     # packed-bits type name -> [bool field names] (G2 kernel surface)
         self.immutable = set()  # binding names that are read-only (e.g. a `for x in …` element)
@@ -611,6 +612,40 @@ class Gen:
                    % (it, bv, sm, sm, bv, it, it, it))
         terms.append(sm)
 
+    def gen_slice_body(self, decls, out, terms):
+        # G8 (full slices): a `[]mut T` view over a live integer array for a *general* element type
+        # T (not just the byte-view u8 of G12). Array-slicing yields a mutable view because the
+        # array is mutable (mut->const would need an explicit conversion), so we keep it `[]mut`.
+        # Construction `a[lo..hi]`, bounds-checked indexing `s[i]`, `.len`, and passing `[]mut T` to
+        # a helper fn all lower through both backends. The array's values are final at this point
+        # (emitted after all stmts) so the view is a deterministic, backend-stable observable.
+        cands = [(ty, elem, length) for ty, (elem, length) in self.arrays.items()
+                 if elem in INTS and self.env.get(ty)]
+        if not cands:
+            return
+        ty, elem, length = self.rng.choice(cands)
+        vn = self.rng.choice(self.env[ty])
+        lo = self.rng.randrange(0, max(1, length - 1))
+        hi = self.rng.randrange(lo + 1, length + 1)
+        sl = "sl%d" % self.nvars; self.nvars += 1
+        out.append("    let %s: []mut %s = %s[%d..%d];" % (sl, elem, vn, lo, hi))
+        it = "sli%d" % self.nvars; self.nvars += 1
+        sm = "sls%d" % self.nvars; self.nvars += 1
+        out.append("    var %s: u64 = 0;" % sm)
+        out.append("    var %s: usize = 0;" % it)
+        out.append("    while %s < %s.len { %s = (%s ^ (%s[%s] as u64)); %s = %s + 1; }"
+                   % (it, sl, sm, sm, sl, it, it, it))
+        terms.append(sm)
+        if elem not in self._slice_helpers:  # one `[]mut T` sum helper per element type (param ABI)
+            self._slice_helpers.add(elem)
+            decls.append("fn slcsum_%s(xs: []mut %s) -> u64 {\n"
+                         "    var a: u64 = 0;\n    var i: usize = 0;\n"
+                         "    while i < xs.len { a = (a ^ (xs[i] as u64)); i = i + 1; }\n"
+                         "    return a;\n}" % (elem, elem))
+        cv = "slc%d" % self.nvars; self.nvars += 1
+        out.append("    var %s: u64 = slcsum_%s(%s);" % (cv, elem, sl))
+        terms.append(cv)
+
     def program(self, metamorph=False):
         # Declare a couple of user types the generator can construct, read, and match.
         decls = []
@@ -814,7 +849,8 @@ class Gen:
                             cmp = self.rng.choice(("<", "<=", ">", ">=", "==", "!="))
                             out.append("    if %s %s %s { fobs = fobs + %d; }" % (name, cmp, TYPES[ty]["lit"](self.rng), 1 << k))
                 terms.append("fobs")
-        self.gen_byteview_body(decls, out, terms)  # G12/G8: byte-view reduction + slice indexing
+        self.gen_byteview_body(decls, out, terms)  # G12: byte-view reduction + slice indexing
+        self.gen_slice_body(decls, out, terms)  # G8: general `[]mut T` slice construction + ABI
         if self._spk is not None:  # G14: construct the struct-of-pointers and fold via field deref
             _, spty = self._spk
             out.append("    var spv: SPk = .{ .p = &gspk };")
@@ -1231,6 +1267,7 @@ def main():
             ("tuple", r": \([^)]+, "), ("struct-of-ptr", r"struct SPk"), ("array-of-Result", r"\]Result<"),
             ("byte-view slice", r"mem\.as_bytes"), ("checked reduce", r"reduce\.sum_checked"),
             ("slice .len/index", r"\.len \{"),
+            ("[]mut slice", r"\]mut \w+ = \w+\["), ("slice fn param", r"fn slcsum_"),
         ]
         counts = {name: 0 for name, _ in markers}
         for s in range(1, args.count + 1):
