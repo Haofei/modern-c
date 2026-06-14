@@ -40,6 +40,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         .tagged_unions = std.StringHashMap(ast.UnionDecl).init(allocator),
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
+        .backend_names = std.StringHashMap([]const u8).init(allocator),
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .global_initializers = std.StringHashMap(ast.Expr).init(allocator),
         .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
@@ -56,6 +57,10 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         if (decl.kind == .fn_decl) {
             const fn_decl = decl.kind.fn_decl;
             if (fn_decl.is_const and !ctx.const_fns.contains(fn_decl.name.text)) try ctx.const_fns.put(fn_decl.name.text, fn_decl);
+            for (decl.attrs) |attr| switch (attr.kind) {
+                .backend_name => |name| try ctx.backend_names.put(fn_decl.name.text, name),
+                else => {},
+            };
         }
     }
     try ctx.preRegisterTypeDecls(module);
@@ -111,6 +116,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
             else => {},
         }
     }
+    try ctx.emitBackendNameAliases(module);
     try ctx.emitStringLiteralGlobals();
     try ctx.emitIntrinsicDecls();
     try ctx.emitDebugMetadata();
@@ -150,6 +156,10 @@ const LlvmEmitter = struct {
     tagged_unions: std.StringHashMap(ast.UnionDecl) = undefined,
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
+    // Source function name -> `#[backend_name("Y")]` override; emitted as a module-level
+    // alias `@Y = alias <fnty>, ptr @name` so the override symbol is linkable (the C backend
+    // achieves the same via an asm label).
+    backend_names: std.StringHashMap([]const u8) = undefined,
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
     global_initializers: std.StringHashMap(ast.Expr) = undefined,
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
@@ -182,6 +192,7 @@ const LlvmEmitter = struct {
         self.tagged_unions.deinit();
         self.struct_types.deinit();
         self.fn_sigs.deinit();
+        self.backend_names.deinit();
         self.global_types.deinit();
         self.global_initializers.deinit();
         self.local_types.deinit();
@@ -610,6 +621,24 @@ const LlvmEmitter = struct {
                 error.UnsupportedLlvmEmission,
             else => error.UnsupportedLlvmEmission,
         };
+    }
+
+    // `#[backend_name("Y")]`: a module-level alias exposing the override symbol, pointing at the
+    // function emitted under its source name. The aliasee type is the function type.
+    fn emitBackendNameAliases(self: *LlvmEmitter, module: ast.Module) !void {
+        for (module.decls) |decl| {
+            if (decl.kind != .fn_decl) continue;
+            const fn_decl = decl.kind.fn_decl;
+            if (fn_decl.body == null) continue;
+            const backend = self.backend_names.get(fn_decl.name.text) orelse continue;
+            const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
+            try self.out.print(self.allocator, "@{s} = alias {s} (", .{ backend, try self.llvmType(ret_ty) });
+            for (fn_decl.params, 0..) |param, i| {
+                if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                try self.out.appendSlice(self.allocator, try self.llvmType(param.ty));
+            }
+            try self.out.print(self.allocator, "), ptr @{s}\n", .{fn_decl.name.text});
+        }
     }
 
     fn emitFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, body: ast.Block) !void {
@@ -5912,6 +5941,32 @@ fn intrinsicBits(name: []const u8) ?u16 {
     if (std.mem.endsWith(u8, name, ".i32")) return 32;
     if (std.mem.endsWith(u8, name, ".i64")) return 64;
     return null;
+}
+
+test "LLVM backend emits a backend_name alias for the override symbol" {
+    const source =
+        \\#[backend_name("rss_helper_x")]
+        \\fn helper(x: u64) -> u64 { return x + 1; }
+        \\export fn harness() -> u64 { return helper(7); }
+    ;
+
+    var reporter = @import("diagnostics.zig").Reporter.init(std.testing.allocator, "bn_llvm.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = @import("parser.zig").Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvm(std.testing.allocator, module, &output);
+    // The function keeps its source name; the override is exposed via a module-level alias.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "define i64 @helper(i64 %x)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@rss_helper_x = alias i64 (i64), ptr @helper") != null);
 }
 
 test "LLVM backend emits checked integer add from MIR-gated source" {
