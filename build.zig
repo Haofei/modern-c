@@ -345,6 +345,15 @@ pub fn build(b: *std.Build) void {
     const reflect_test_step = b.step("reflect-test", "Validate comptime sizeof/alignof folding against clang's C ABI");
     reflect_test_step.dependOn(&reflect_test_cmd.step);
 
+    const abi_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/abi-test.sh",
+        "zig-out/bin/mcc",
+    });
+    abi_test_cmd.step.dependOn(b.getInstallStep());
+    const abi_test_step = b.step("abi-test", "Validate advanced packed/overlay/MMIO layout against clang's C ABI and the LLVM backend");
+    abi_test_step.dependOn(&abi_test_cmd.step);
+
     const stack_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/stack-test.sh",
@@ -2210,6 +2219,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&mono_test_cmd.step);
     // reflect-test validates the comptime layout model against the C ABI.
     m0_step.dependOn(&reflect_test_cmd.step);
+    // abi-test validates advanced packed/overlay/MMIO layout against the C ABI + LLVM.
+    m0_step.dependOn(&abi_test_cmd.step);
     // pkg-test exercises the mcc-pkg manifest build (needs clang).
     m0_step.dependOn(&pkg_test_cmd.step);
     // stack-test exercises the generic std/stack collection (needs clang).
