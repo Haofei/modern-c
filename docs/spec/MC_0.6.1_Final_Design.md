@@ -2657,9 +2657,11 @@ the type) without dummy prefixes.
 ## 30.4 Owner Name Reservation
 
 Because `Owner.member` resolves to the qualified symbol, an `Owner` name (a `module` or `impl`
-target) is reserved: a local binding, parameter, or other binding may not shadow it. A local
-named the same as an owner is rejected (`E_RESERVED_QUALIFIED_NAME`), so `Owner.member` can
-never silently bind to the qualified symbol in place of an intended local member access.
+target) is reserved against **value** bindings: a local, parameter, or top-level value
+(function or global) may not shadow it. Such a shadow is rejected
+(`E_RESERVED_QUALIFIED_NAME`), so `Owner.member` can never silently bind to the qualified
+symbol in place of an intended value's member access. Type declarations are exempt — an
+`impl T` owner *is* the type `T`.
 
 A qualified `Owner.member` use must follow the `module`/`impl` block that declares it
 (declaration before use).

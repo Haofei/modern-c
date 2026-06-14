@@ -438,6 +438,13 @@ pub const Checker = struct {
                     self.oom = true;
                 };
             }
+            // A value-level top-level declaration (function or global) may not shadow a
+            // module/impl owner name, or `Owner.member` would bind to the qualified symbol
+            // instead of this value. Type declarations are exempt: an `impl T` owner IS the
+            // type `T`. (Locals and parameters are reserved at their binding sites.)
+            if (isValueLevelDecl(decl.kind) and self.isQualifiedOwner(name.text)) {
+                self.errorCode(name.span, "E_RESERVED_QUALIFIED_NAME", "a top-level value may not shadow a module/impl name");
+            }
         }
     }
 
@@ -4736,6 +4743,15 @@ fn declName(decl: ast.Decl) ast.Ident {
         .overlay_union_decl => |overlay_union| overlay_union.name,
         .opaque_decl => |name| name,
         .global_decl => |global| global.name,
+    };
+}
+
+// A declaration that introduces a value-level top-level name (function or global), as opposed
+// to a type-level name. Used to reserve qualified-owner names against value shadows.
+fn isValueLevelDecl(kind: ast.Decl.Kind) bool {
+    return switch (kind) {
+        .fn_decl, .extern_fn, .global_decl => true,
+        else => false,
     };
 }
 

@@ -13,8 +13,11 @@ module Config {
     fn doubled(x: u32) -> u32 { return x + x; }
 }
 
+// EXPECT_ERROR: E_RESERVED_QUALIFIED_NAME
+global Config: u32 = 7;    // reserved: a top-level value may not shadow module `Config`
+
 fn shadows() -> u32 {
     // EXPECT_ERROR: E_RESERVED_QUALIFIED_NAME
-    let Config: u32 = 9;   // reserved: shadows module `Config`
+    let Config: u32 = 9;   // reserved: a local may not shadow module `Config`
     return 0;
 }
