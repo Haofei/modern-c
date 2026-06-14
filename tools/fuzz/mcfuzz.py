@@ -888,7 +888,8 @@ def oracle_pipeline(env, seed, src_path, work):
     """Internal consistency: every lowering/verification stage must succeed on a program `mcc
     check` accepted. A stage that errors (or crashes) on accepted source is an internal
     inconsistency — the exact class where the checker accepts a program a backend can't lower."""
-    for stage in ("verify-hir", "verify", "emit-c", "emit-llvm"):
+    for stage in ("lower-hir", "verify-hir", "lower-mir", "verify", "lower-ir",
+                  "facts", "emit-c", "emit-map", "emit-llvm"):
         try:
             r = subprocess.run([env["mcc"], stage, src_path], capture_output=True, timeout=20)
         except subprocess.TimeoutExpired:
