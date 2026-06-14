@@ -8,33 +8,38 @@ Status legend: `[x]` done · `[ ]` open · `[~]` partial · `[blocked]` needs a 
 
 ## Progress (2026-06-14)
 
-**Done:** G3 aggregate ABI, G4 float bit-level oracle (`fuzz-floatbits`), G10 recursion,
-G16 second metamorphic transform (reverse-fold), G17 `report` coverage mode, G18 pipeline
-extended to all lowering stages (lower-hir/verify-hir/lower-mir/verify/lower-ir/facts/emit-c/
-emit-map/emit-llvm). Ten oracles now; all green at the gate.
+**Done:** G1 reference interpreter (`fuzz-reference`, `tools/fuzz/mcref.py` — independent Python
+evaluator over the unsigned-int core; closes the shared-frontend blind spot), G3 aggregate ABI,
+G4 float bit-level oracle (`fuzz-floatbits`), G10 recursion, G16 second metamorphic transform
+(reverse-fold), G17 `report` coverage mode, G18 pipeline extended to all lowering stages
+(lower-hir/verify-hir/lower-mir/verify/lower-ir/facts/emit-c/emit-map/emit-llvm). Eleven oracles
+now; all green at the gate.
 
 **Backend-limited (discovered this pass):** G11 expression-`switch` — `var r = switch e {…}`
 fails `emit-llvm`; statement/fold switch only.
 
-**Still large/blocked:** G1 (reference interpreter), G2 (kernel/driver surface) — the two big
-P0 items; plus G5–G9, G12–G15 (blocked on backend features, covered elsewhere, or architecture).
+**Still large/blocked:** G2 (kernel/driver surface) — the remaining big P0 item; plus G5–G9,
+G12–G15 (blocked on backend features, covered elsewhere, or architecture).
 
 ---
 
 ## P0 — highest leverage
 
-### G1 `[ ]` Reference interpreter (the shared-frontend blind spot)
+### G1 `[x]` Reference interpreter (the shared-frontend blind spot) — DONE (`fuzz-reference`)
 Every value oracle except `pipeline`/`failclosed` compares C vs LLVM (or a program against
 itself), so a bug in the **shared frontend / verifier / constant-folder** is invisible — a case
 where both backends *agree but are wrong* slips through. (The verifier bug was only caught
 because `pipeline` is a status oracle.)
-- **Do:** evaluate `harness()` from the AST/HIR in Python and assert the digest equals the
-  compiled output.
-- **Risk:** a subtly-wrong interpreter yields *false* findings. Build it **conservatively** —
-  model the domains' exact semantics (checked-trap / wrap-modular / sat-clamp / conversions /
-  enum discriminants / Result / pointers-to-globals), and **skip** (return None) any program it
-  can't fully evaluate, so it never emits a false positive.
-- **Effort:** high, multi-session.
+- **Done:** `tools/fuzz/mcref.py` is a self-contained generator over the **unsigned-integer
+  core** (plain/wrap/sat domains, modular conversions, comparisons, if/else, bounded `while`,
+  early return). It renders MC from a single typed AST **and** evaluates that same AST in pure
+  Python; the `reference` oracle asserts the compiled output equals the Python value.
+- **Soundness:** only unsigned types (so `as u64` is unambiguous zero-extension) and only
+  trap-free ops are generated, so a trap or a mismatch is necessarily a real compiler bug — it
+  can never emit a false finding. Validated 1000/1000 seeds = C backend, zero skips.
+- **Not yet modelled (deliberately out, to stay sound):** signed `as u64`, floats (fold-by-
+  comparison semantics), structs/enums/Result/pointers/closures. These can be added to `mcref`
+  incrementally once each one's exact semantics is pinned down.
 
 ### G2 `[ ]` Kernel / driver surface (MC's actual target domain)
 mcfuzz generates portable compute and touches **none** of the features the spec exists for
@@ -114,8 +119,9 @@ Pointers only target globals (no heap), so ASan finds little. Unblocks once slic
 ---
 
 ## Recommended order
-1. **G1** reference interpreter — closes the one bug class no current oracle can see.
-2. **G3** aggregate ABI — cheap, real new lowering surface.
-3. **G2** kernel/driver surface — where MC's safety guarantees actually live.
-4. **G4** float bit oracle — turns a known hidden class into a caught one.
+1. ~~**G1** reference interpreter~~ — DONE (unsigned-int core). Extend `mcref` to signed/floats
+   /aggregates next, once each one's exact `as u64`/fold semantics is pinned down.
+2. ~~**G3** aggregate ABI~~ — DONE.
+3. **G2** kernel/driver surface — where MC's safety guarantees actually live (the big remaining item).
+4. ~~**G4** float bit oracle~~ — DONE.
 5. Then unblock G7/G8 (tagged-union codegen, slice construction), which also unblock G6/G14.
