@@ -729,7 +729,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                         .{},
                     );
                 }
-                if (isRepresentationSensitiveUse(instruction) and !useHasDominatingRepresentationCheck(function, block_index, instruction_index, instruction.result_ty)) {
+                if (isRepresentationSensitiveUse(instruction) and !try useHasDominatingRepresentationCheck(mir.allocator, function, block_index, instruction_index, instruction.result_ty)) {
                     reporter.err(
                         sourcePointSpan(.{ .line = instruction.line, .column = instruction.column }),
                         "E_REPRESENTATION_CHECK_MISSING: MIR verifier found representation-sensitive value use without dominating check",
@@ -3328,15 +3328,19 @@ fn producerHasDominatingRepresentationCheck(block: Block, producer_index: usize,
     return false;
 }
 
-fn useHasDominatingRepresentationCheck(function: Function, block_index: usize, instruction_index: usize, ty: ValueType) bool {
+fn useHasDominatingRepresentationCheck(allocator: std.mem.Allocator, function: Function, block_index: usize, instruction_index: usize, ty: ValueType) !bool {
     const expected_kind = representationCheckKind(ty) orelse return true;
     const expected_value_id = function.blocks[block_index].instructions[instruction_index].value_id;
-    var visiting: [512]bool = [_]bool{false} ** 512;
-    if (function.blocks.len > visiting.len or block_index >= function.blocks.len) return false;
-    return blockHasDominatingRepresentationCheck(function, block_index, instruction_index, expected_kind, expected_value_id, &visiting);
+    if (block_index >= function.blocks.len) return false;
+    // The recursion guard must cover every block; a fixed cap would force a conservative
+    // false-positive (E_REPRESENTATION_CHECK_MISSING) on large functions.
+    const visiting = try allocator.alloc(bool, function.blocks.len);
+    defer allocator.free(visiting);
+    @memset(visiting, false);
+    return blockHasDominatingRepresentationCheck(function, block_index, instruction_index, expected_kind, expected_value_id, visiting);
 }
 
-fn blockHasDominatingRepresentationCheck(function: Function, block_index: usize, before_index: usize, expected_kind: []const u8, expected_value_id: ?[]const u8, visiting: *[512]bool) bool {
+fn blockHasDominatingRepresentationCheck(function: Function, block_index: usize, before_index: usize, expected_kind: []const u8, expected_value_id: ?[]const u8, visiting: []bool) bool {
     if (block_index >= function.blocks.len) return false;
     const block = function.blocks[block_index];
     var i = before_index;

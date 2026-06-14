@@ -29,6 +29,7 @@ Usage:
 import argparse
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -382,6 +383,11 @@ class Gen:
 
 
 # ----- oracles -----
+def _first_error(text):
+    """The first `… error: …` line (with its E_ code), else a short prefix."""
+    return next((l.strip() for l in text.splitlines() if "error:" in l), text.strip()[:120])
+
+
 def _emit_c_obj(mcc, clang, src_path, obj, extra=()):
     p1 = subprocess.run([mcc, "emit-c", src_path], capture_output=True)
     if p1.returncode != 0:
@@ -396,7 +402,12 @@ def oracle_differential(env, seed, src_path, work):
     c_obj, l_obj = os.path.join(work, "c.o"), os.path.join(work, "l.o")
     err = _emit_c_obj(env["mcc"], env["clang"], src_path, c_obj)
     if err is not None:
-        return "C backend emit/compile failed: %s" % err.strip().splitlines()[-1:]
+        # Status comparison (rss contract): the MIR verifier runs ahead of *both* backends, so a
+        # verifier rejection fails C and LLVM identically — that is consistent, not a divergence.
+        # Only a backend that rejects what the *other* accepts is a real C-vs-LLVM bug.
+        if subprocess.run([env["mcc"], "emit-llvm", src_path], capture_output=True).returncode != 0:
+            return None
+        return "C backend emit/compile failed (LLVM accepted): %s" % _first_error(err)
     p = subprocess.run(["bash", os.path.join(ROOT, "tools/toolchain/mcc-llvm-cc.sh"), src_path, "-o", l_obj],
                        capture_output=True, env={**os.environ, "MCC": env["mcc"], "LLC": env["llc"]})
     if p.returncode != 0:
@@ -644,8 +655,12 @@ def main():
         if res is None:
             print("seed %d does not fail mcfuzz/%s — nothing to shrink" % (args.seed, args.oracle))
             return 0
-        sig = next((s for s in ("DIVERGENCE", "CRASHED", "HANGS", "UBSan", "runtime error",
-                                "emit/compile failed", "link failed") if s in res), res[:24])
+        # Prefer a specific compiler error code (E_…) as the signature so the shrinker keeps the
+        # *same* failure and never over-reduces to a different one (e.g. a bare syntax error).
+        m = re.search(r"E_[A-Z0-9_]+", res)
+        sig = m.group(0) if m else next(
+            (s for s in ("DIVERGENCE", "CRASHED", "HANGS", "UBSan", "runtime error",
+                         "emit/compile failed", "link failed") if s in res), res[:24])
         sys.stderr.write("original finding: %s\nshrinking (signature %r)...\n" % (res.splitlines()[0], sig))
         minimal = shrink_source(env, oracle, source, sig)
         print("// minimal repro for seed %d (mcfuzz/%s, signature %r):\n%s" % (args.seed, args.oracle, sig, minimal))
