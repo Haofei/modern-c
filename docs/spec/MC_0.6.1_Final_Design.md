@@ -40,6 +40,8 @@
   - [26. Rationale Appendix](#26-rationale-appendix)
   - [27. Final Semantic Contract](#27-final-semantic-contract)
   - [28. Driver Library Profile (Network-Card Target)](#28-driver-library-profile-network-card-target)
+  - [29. Tuples](#29-tuples)
+  - [30. Modules and Associated Functions](#30-modules-and-associated-functions)
 - [Part II — Implementation and Conformance Annex](#part-ii--implementation-and-conformance-annex)
   - [A. Spec Layering](#a-spec-layering)
   - [B. Recommended Compilation Pipeline](#b-recommended-compilation-pipeline)
@@ -1125,7 +1127,8 @@ p: T
 
 The binding is scoped to the then-branch.
 
-This form does not destructure structs, arrays, tuples, or unions.
+This `if let` form does not destructure structs, arrays, tuples, or unions. Tuple
+destructuring uses the dedicated `let (a, b) = …` binding form (§29).
 
 ---
 
@@ -2209,6 +2212,31 @@ UB inside C code remains outside MC's guarantee.
 Boundary contracts must express nullability, alignment, ownership, and representation.
 ```
 
+## 24.1 Symbol Attributes
+
+Two declaration attributes control the object-symbol boundary, for tooling and for
+embedding MC into another linkage namespace.
+
+```mc
+#[backend_name("rss_tensor_train")]
+fn train(t: Tensor, x: u32) -> u32 { … }     // object symbol is rss_tensor_train
+
+#[origin("generated")]
+fn autogen_helper() -> void { … }            // classified as generated source
+```
+
+```txt
+#[backend_name("Y")]   The declaration's object symbol is Y instead of its source name.
+                       Call sites are unchanged; only the emitted/linked symbol differs
+                       (C: an asm label on the forward declaration; LLVM: a module alias).
+                       Two declarations may not map to the same backend symbol —
+                       a collision is E_DUPLICATE_BACKEND_NAME, naming both sources.
+
+#[origin("…")]         FFI/autogen boundary classification recorded in the symbol map
+                       (§N). `extern` declarations default to "external", others to
+                       "source"; the attribute marks "generated", "copied", etc.
+```
+
 ---
 
 # 25. Minimal Syntax Principles
@@ -2528,6 +2556,103 @@ Every hazard a C NIC driver hits by convention is here a typed contract: a buffe
 read after handoff, a lock left held, a descriptor write reordered past the
 doorbell, or a host-endian value written to a big-endian field is a **compile
 error**, not a runtime corruption.
+
+---
+
+# 29. Tuples
+
+A tuple is an ordered, fixed-size, heterogeneous aggregate.
+
+```mc
+let p: (u32, u64) = (7, 100);     // tuple type and tuple literal
+let first: u32 = p.0;             // positional access (also p._0)
+let second: u64 = p.1;
+```
+
+Rules:
+
+```txt
+A tuple type is `(T0, T1, …, Tn-1)` with n >= 2 element types.
+`(T)` is a parenthesized type, not a one-element tuple.
+A tuple value is `(e0, e1, …)`; a single comma (>= 2 elements) distinguishes it
+  from a parenthesized expression `(e)`.
+Element i is read as `t.i` (positional) or the equivalent field `t._i`.
+```
+
+A tuple literal is target-typed exactly like a struct literal: it takes its element
+types from the expected type (a binding annotation, a return type, or a parameter), so
+a bare tuple literal with no expected type is rejected, the same as `.{ … }`.
+
+## 29.1 Tuple Destructuring
+
+```mc
+let (a, b) = make_pair();         // a, b bound to the two elements
+var (x, y, z) = some_triple;      // mutable bindings
+```
+
+`let (a, b) = e;` (and the `var` form) binds each name to the corresponding tuple
+element. It is the only destructuring binding form (the `if let` of §11 does not
+destructure). Element types are inferred from the source tuple; the source must be a
+typed tuple value.
+
+## 29.2 Tuple Lowering
+
+A tuple is a nominal aggregate. Each distinct tuple **shape** lowers to one synthesized
+struct with fields `_0 … _n-1`, deduplicated structurally, so the same shape is the same
+type everywhere (a tuple returned by one function unifies with a tuple variable of the
+same shape). `t.i` lowers to the field `_i`; `let (a, b) = e` lowers to a temporary
+holding `e` plus one binding per element. The rest of the pipeline (verifier, MIR, both
+backends) sees an ordinary struct.
+
+---
+
+# 30. Modules and Associated Functions
+
+MC groups related declarations under a named namespace and associates functions with a
+type, so symbols can be qualified without ad-hoc name prefixes.
+
+## 30.1 Modules
+
+```mc
+module Math {
+    const PI: u32 = 3;
+    fn square(x: u32) -> u32 { return x * x; }
+}
+
+let a: u32 = Math.square(4);
+let b: u32 = Math.PI;
+```
+
+A `module Name { … }` block contains functions, `const` declarations, and `global`
+declarations. Each member is reached by its qualified name `Name.member`. Two modules may
+declare the same unqualified member name; the qualified names remain distinct
+(`Math.PI` and `Device.PI` are different symbols).
+
+## 30.2 Associated Functions
+
+```mc
+struct Tensor { v: u32 }
+impl Tensor {
+    fn make(x: u32) -> Tensor { return .{ .v = x }; }
+    fn get(self: Tensor) -> u32 { return self.v; }
+}
+
+let t: Tensor = Tensor.make(5);
+let n: u32 = Tensor.get(t);       // receiver passed explicitly
+```
+
+An `impl Type { … }` block declares functions associated with `Type`, reached as
+`Type.fn(args)`. The receiver is an ordinary explicit parameter (there is no implicit
+`self`-method call syntax); `Type.method(receiver, args)` is the call form.
+
+## 30.3 Lowering
+
+A module/impl member `Owner.member` lowers to a single mangled top-level symbol
+`Owner__member`, and every qualified-access site resolves to it. Modules and `impl` blocks
+introduce no new runtime semantics — after desugaring, the program is ordinary top-level
+declarations and calls. This also gives each symbol role a distinct object symbol
+(`Tensor__get` for an associated function, `Math__PI` for a module constant, `Tensor` for
+the type) without dummy prefixes.
 
 ---
 
@@ -4301,6 +4426,26 @@ Suggested output:
 ```txt
 kernel.mcmap
 ```
+
+The emitted format is `mcmap v1`. Each row is one declaration or expression with both
+the debug mapping and the symbol's identity/provenance (§24.1):
+
+```txt
+# columns:
+kind symbol source_line source_column source_len generated_c_line source_path
+generated_c_path typed_ast_node mir_block object_symbol
+source_module source_qualname symbol_kind visibility backend_name origin
+```
+
+```txt
+symbol_kind   free_fn | extern_fn | value | assoc_const | type | type_alias
+visibility    exported | internal       (from the `export` marker)
+backend_name  the object symbol (overridable per §24.1 #[backend_name])
+origin        source | external | a #[origin("…")] classification (§24.1)
+```
+
+In addition to executable code, the map emits one inventory row per type-level and
+`extern` declaration, so it is a complete declared-symbol inventory.
 
 Generated C should include source-line hints:
 
