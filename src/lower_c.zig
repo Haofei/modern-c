@@ -12640,6 +12640,37 @@ test "C source map records defer cleanup spans" {
     }
 }
 
+test "tuples desugar to a single nominal struct with numeric field access" {
+    const source =
+        \\fn make() -> (u32, u64) { return (7, 100); }
+        \\export fn harness() -> u64 {
+        \\    var t: (u32, u64) = make();
+        \\    return (t.0 as u64) + t.1;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "tup.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    // The `(u32, u64)` shape is one synthesized struct (deduped across the two uses), and
+    // numeric `.0`/`.1` access lowered to the `_0`/`_1` fields.
+    try std.testing.expect(std.mem.count(u8, output.items, "typedef struct __tuple2_u32_u64 __tuple2_u32_u64;") == 1);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "t._0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "t._1") != null);
+}
+
 test "backend_name attribute renames the object symbol via an asm label" {
     const source =
         \\#[backend_name("rss_helper_x")]

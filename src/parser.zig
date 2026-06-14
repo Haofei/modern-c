@@ -11,6 +11,12 @@ pub const Parser = struct {
     current: token.Token,
     reporter: *diagnostics.Reporter,
     allocator: std.mem.Allocator = undefined,
+    // Tuples are desugared to synthesized nominal structs at parse time, so the rest of the
+    // compiler only ever sees ordinary structs. `synth_decls` holds the generated struct decls
+    // (prepended to the module); `tuple_names` dedups them by structural signature so the same
+    // tuple shape is one nominal struct everywhere.
+    synth_decls: std.ArrayList(ast.Decl) = .empty,
+    tuple_names: std.StringHashMap(void) = undefined,
 
     pub fn init(source: []const u8, reporter: *diagnostics.Reporter) Parser {
         var lx = lexer.Lexer.init(source, reporter);
@@ -25,6 +31,8 @@ pub const Parser = struct {
 
     pub fn parseModule(self: *Parser, allocator: std.mem.Allocator) !ast.Module {
         self.allocator = allocator;
+        self.tuple_names = std.StringHashMap(void).init(allocator);
+        defer self.tuple_names.deinit();
         var decls: std.ArrayList(ast.Decl) = .empty;
         errdefer decls.deinit(allocator);
 
@@ -33,7 +41,108 @@ pub const Parser = struct {
             try decls.append(allocator, try self.parseDecl(attrs));
         }
 
-        return .{ .decls = try decls.toOwnedSlice(allocator) };
+        // Prepend synthesized tuple structs so they precede any use.
+        if (self.synth_decls.items.len == 0) return .{ .decls = try decls.toOwnedSlice(allocator) };
+        var all: std.ArrayList(ast.Decl) = .empty;
+        errdefer all.deinit(allocator);
+        try all.appendSlice(allocator, self.synth_decls.items);
+        try all.appendSlice(allocator, decls.items);
+        decls.deinit(allocator);
+        return .{ .decls = try all.toOwnedSlice(allocator) };
+    }
+
+    // ---- tuple desugaring (tuples -> synthesized nominal structs) ----
+    fn synthTupleStruct(self: *Parser, elems: []ast.TypeExpr, span: ast.Span) !ast.Ident {
+        const name = try self.tupleStructName(elems);
+        const name_ident = ast.Ident{ .text = name, .span = span };
+        if (self.tuple_names.contains(name)) return name_ident;
+        try self.tuple_names.put(name, {});
+        const fields = try self.allocator.alloc(ast.Field, elems.len);
+        for (elems, 0..) |elem, i| {
+            const fname = try std.fmt.allocPrint(self.allocator, "_{d}", .{i});
+            fields[i] = .{ .name = .{ .text = fname, .span = span }, .ty = elem, .offset = null };
+        }
+        try self.synth_decls.append(self.allocator, .{
+            .span = span,
+            .attrs = &[_]ast.Attr{},
+            .kind = .{ .struct_decl = .{ .name = name_ident, .abi = null, .fields = fields, .type_params = &[_]ast.Ident{}, .is_move = false } },
+        });
+        return name_ident;
+    }
+
+    fn tupleStructName(self: *Parser, elems: []ast.TypeExpr) ![]const u8 {
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(self.allocator);
+        try buf.appendSlice(self.allocator, try std.fmt.allocPrint(self.allocator, "__tuple{d}", .{elems.len}));
+        for (elems) |elem| {
+            try buf.append(self.allocator, '_');
+            try self.appendTypeSignature(&buf, elem);
+        }
+        return buf.toOwnedSlice(self.allocator);
+    }
+
+    fn appendTypeSignature(self: *Parser, buf: *std.ArrayList(u8), ty: ast.TypeExpr) anyerror!void {
+        const a = self.allocator;
+        switch (ty.kind) {
+            .name => |id| try buf.appendSlice(a, id.text),
+            .enum_literal => |id| {
+                try buf.appendSlice(a, "el");
+                try buf.appendSlice(a, id.text);
+            },
+            .nullable => |c| {
+                try buf.appendSlice(a, "opt");
+                try self.appendTypeSignature(buf, c.*);
+            },
+            .pointer => |p| {
+                try buf.appendSlice(a, "ptr");
+                try self.appendMutSig(buf, p.mutability);
+                try self.appendTypeSignature(buf, p.child.*);
+            },
+            .raw_many_pointer => |p| {
+                try buf.appendSlice(a, "mptr");
+                try self.appendMutSig(buf, p.mutability);
+                try self.appendTypeSignature(buf, p.child.*);
+            },
+            .slice => |p| {
+                try buf.appendSlice(a, "slice");
+                try self.appendMutSig(buf, p.mutability);
+                try self.appendTypeSignature(buf, p.child.*);
+            },
+            .qualified => |q| {
+                try self.appendMutSig(buf, q.mutability);
+                try self.appendTypeSignature(buf, q.child.*);
+            },
+            .array => |arr| {
+                try buf.appendSlice(a, "arr");
+                switch (arr.len.kind) {
+                    .int_literal => |lit| try buf.appendSlice(a, lit),
+                    else => try buf.appendSlice(a, "n"),
+                }
+                try buf.append(a, '_');
+                try self.appendTypeSignature(buf, arr.child.*);
+            },
+            .generic => |g| {
+                try buf.appendSlice(a, g.base.text);
+                for (g.args) |arg| {
+                    try buf.append(a, '_');
+                    try self.appendTypeSignature(buf, arg);
+                }
+            },
+            .member => |m| {
+                try self.appendTypeSignature(buf, m.base.*);
+                try buf.append(a, '_');
+                try buf.appendSlice(a, m.field.text);
+            },
+            .fn_pointer, .closure_type => try buf.appendSlice(a, "fn"),
+        }
+    }
+
+    fn appendMutSig(self: *Parser, buf: *std.ArrayList(u8), mutability: ast.Mutability) !void {
+        try buf.appendSlice(self.allocator, switch (mutability) {
+            .none => "",
+            .mut => "m",
+            .@"const" => "c",
+        });
     }
 
     fn parseDecl(self: *Parser, attrs: []ast.Attr) anyerror!ast.Decl {
@@ -692,6 +801,25 @@ pub const Parser = struct {
             return .{ .span = joinSpan(start, child.span), .kind = .{ .array = .{ .len = len, .child = child } } };
         }
 
+        // A tuple type `(T0, T1, …)` desugars to a synthesized nominal struct. `(T)` is just a
+        // parenthesized type (T), not a 1-tuple.
+        if (self.match(.l_paren)) {
+            var elems: std.ArrayList(ast.TypeExpr) = .empty;
+            errdefer elems.deinit(self.allocator);
+            if (self.current.kind != .r_paren) {
+                while (true) {
+                    try elems.append(self.allocator, try self.parseType());
+                    if (!self.match(.comma)) break;
+                }
+            }
+            const end = try self.expectTok(.r_paren, "expected ')' to close tuple type");
+            const elem_slice = try elems.toOwnedSlice(self.allocator);
+            if (elem_slice.len == 1) return elem_slice[0];
+            const tuple_span = joinSpan(start, end.span);
+            const name = try self.synthTupleStruct(elem_slice, tuple_span);
+            return .{ .span = tuple_span, .kind = .{ .name = name } };
+        }
+
         // A function-pointer type: `fn(P0, P1) -> R`.
         if (self.match(.kw_fn)) {
             try self.expect(.l_paren, "expected '(' after 'fn' in function-pointer type");
@@ -863,7 +991,26 @@ pub const Parser = struct {
         if (self.match(.l_paren)) {
             const start = self.lxTokenBeforeCurrent();
             if (self.match(.r_paren)) return .{ .span = joinSpan(start, self.lxTokenBeforeCurrent()), .kind = .void_literal };
-            const inner = try ast.makePtr(self.allocator, try self.parseExpr(0));
+            const first = try self.parseExpr(0);
+            // A tuple literal `(e0, e1, …)` desugars to a struct literal `.{ ._0 = e0, … }`,
+            // matching the synthesized tuple struct. A comma (≥2 elements) is the discriminator;
+            // `(e)` stays a grouped expression.
+            if (self.match(.comma)) {
+                var fields: std.ArrayList(ast.StructLiteralField) = .empty;
+                errdefer fields.deinit(self.allocator);
+                try fields.append(self.allocator, .{ .name = .{ .text = "_0", .span = first.span }, .value = first });
+                var idx: usize = 1;
+                while (true) {
+                    const value = try self.parseExpr(0);
+                    const fname = try std.fmt.allocPrint(self.allocator, "_{d}", .{idx});
+                    try fields.append(self.allocator, .{ .name = .{ .text = fname, .span = value.span }, .value = value });
+                    idx += 1;
+                    if (!self.match(.comma)) break;
+                }
+                const end = try self.expectTok(.r_paren, "expected ')' to close tuple literal");
+                return .{ .span = joinSpan(start, end.span), .kind = .{ .struct_literal = try fields.toOwnedSlice(self.allocator) } };
+            }
+            const inner = try ast.makePtr(self.allocator, first);
             const end = try self.expectTok(.r_paren, "expected ')' after expression");
             return .{ .span = joinSpan(start, end.span), .kind = .{ .grouped = inner } };
         }
@@ -908,6 +1055,15 @@ pub const Parser = struct {
                 if (self.match(.star)) {
                     const base = try ast.makePtr(self.allocator, expr);
                     expr = .{ .span = joinSpan(base.span, self.lxTokenBeforeCurrent()), .kind = .{ .deref = base } };
+                    continue;
+                }
+                // Numeric tuple access `t.0` -> the synthesized field `_0`.
+                if (self.current.kind == .integer_literal) {
+                    const idx_tok = self.current;
+                    self.advance();
+                    const fname = try std.fmt.allocPrint(self.allocator, "_{s}", .{idx_tok.lexeme});
+                    const base = try ast.makePtr(self.allocator, expr);
+                    expr = .{ .span = joinSpan(base.span, idx_tok.span), .kind = .{ .member = .{ .base = base, .name = .{ .text = fname, .span = idx_tok.span } } } };
                     continue;
                 }
                 const name = try self.expectSymbol("expected member name");
