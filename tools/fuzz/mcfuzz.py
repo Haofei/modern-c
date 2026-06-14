@@ -355,7 +355,46 @@ def oracle_sanitize(env, seed, src_path, work):
     return None
 
 
-ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize}
+def _mutate(data, rng):
+    """Corrupt valid source into (usually invalid) input that still reaches deep into the front
+    end: byte flips, deletions, duplications, truncation, and ASCII-noise insertions."""
+    b = bytearray(data)
+    for _ in range(rng.randint(1, 12)):
+        if not b:
+            b = bytearray(b"fn main() {}")
+        kind = rng.randrange(5)
+        i = rng.randrange(len(b))
+        if kind == 0:
+            b[i] ^= 1 << rng.randrange(8)
+        elif kind == 1:
+            del b[i]
+        elif kind == 2:
+            b.insert(i, rng.randrange(256))
+        elif kind == 3:
+            b.insert(i, b[i])
+        else:
+            del b[i:]  # truncate
+    return bytes(b)
+
+
+def oracle_robust(env, seed, src_path, work):
+    """Robustness: `mcc check` must never crash (signal) or hang on *any* input, even malformed.
+    A clean accept or a clean diagnostic exit are both fine; a Zig panic / segfault / timeout is
+    a front-end robustness bug. (rss-testgen's hostile/parse_check driver.)"""
+    rng = random.Random((seed * 2654435761) & 0xFFFFFFFF)
+    mutated = _mutate(open(src_path, "rb").read(), rng)
+    mpath = os.path.join(work, "m.mc")
+    open(mpath, "wb").write(mutated)
+    try:
+        r = subprocess.run([env["mcc"], "check", mpath], capture_output=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return "mcc check HANGS (>15s) on mutated input"
+    if r.returncode < 0:  # killed by a signal: a crash, not a clean rejection
+        return "mcc check CRASHED (signal %d) on mutated input" % (-r.returncode)
+    return None
+
+
+ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize, "robust": oracle_robust}
 
 
 def run_one(env, oracle, seed):
@@ -411,8 +450,14 @@ def main():
     if fails:
         print("FAIL: mcfuzz/%s — %d finding(s) over %d programs" % (args.oracle, len(fails), args.count))
         return 1
-    print("PASS: mcfuzz/%s — %d generated programs over the full scalar type system agree (seeds %d..%d)"
-          % (args.oracle, args.count, args.start, args.start + args.count - 1))
+    summary = {
+        "differential": "C and LLVM agree",
+        "sanitize": "emitted C is UBSan-clean",
+        "robust": "mcc check never crashed/hung on mutated input",
+    }.get(args.oracle, "no findings")
+    mode = " (trapping)" if args.trapping else ""
+    print("PASS: mcfuzz/%s%s — %s over %d programs (seeds %d..%d)"
+          % (args.oracle, mode, summary, args.count, args.start, args.start + args.count - 1))
     return 0
 
 
