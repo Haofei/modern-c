@@ -35,18 +35,16 @@ now; all green at the gate.
 - **G17 corpus** — `tools/fuzz/corpus/*.mc` freezes the three fixed codegen bugs as minimized
   repros; `mcfuzz.py corpus` + `fuzz-corpus` gate replay them through differential+sanitize.
 
-**Backend-limited (discovered this pass):** G11 expression-`switch` — `var r = switch e {…}`
-fails `emit-llvm`; statement/fold switch only.
-
 **Done this pass too:** G2 kernel surface (runnable subset) — atomics + packed-bits registers now
 fuzzed by all 11 oracles. The non-runnable kernel features (MMIO/address-classes/overlay/DMA/asm)
 are left to the sema + QEMU fixtures (they have no in-process digest-foldable observable).
 
-**Still blocked/covered:** G5–G9, G12–G15. These need net-new **compiler/backend features**, not
-fuzzer work: array→slice construction with bounds-checked dual-backend lowering (unblocks
-G6/G8/G12/G14 at once), tagged-union codegen (G7), expression-`switch` LLVM lowering (G11),
-cross-domain conversion runnable surface (G13), interceptable trap entrypoints (G5), and an
-in-process coverage harness (G15). G9 is covered by `mcgen_move.py`.
+**Genuinely remaining (NOT fuzzer work — see footer):** every gap closeable by
+generator/oracle work is done. The leftovers are a missing language feature (G11
+expression-`switch`, fails at the *parser* — not the backend), a safety property with no bug to
+find (G6 — bounds-checked slices trap before ASan sees anything), an optional oracle-observability
+hook (G5 interceptable traps), out-of-process surface (G13 extern/multi-module), a fuzzer-infra
+change (G15 in-process coverage harness), and G9 (already covered by `mcgen_move.py`).
 
 **Bonus bug found + fixed this pass:** probing slice construction surfaced a real sema hole —
 `as_slice`/`dma_addr` on a *non-DmaBuf* value (e.g. `someArray.as_slice()`) passed `check` (typed
