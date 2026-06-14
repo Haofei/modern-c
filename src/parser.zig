@@ -21,6 +21,10 @@ pub const Parser = struct {
     // bindings); the extra statements wait here and are drained into the enclosing block.
     pending_stmts: std.ArrayList(ast.Stmt) = .empty,
     destr_counter: usize = 0,
+    // `impl Type { fn m(…) }` associated functions are desugared to free functions `Type__m`;
+    // `impl_methods` maps the call form `Type.m` to the mangled free-function name so that
+    // `Type.m(args)` call sites can be rewritten (impl block must precede the call).
+    impl_methods: std.StringHashMap([]const u8) = undefined,
 
     pub fn init(source: []const u8, reporter: *diagnostics.Reporter) Parser {
         var lx = lexer.Lexer.init(source, reporter);
@@ -37,11 +41,17 @@ pub const Parser = struct {
         self.allocator = allocator;
         self.tuple_names = std.StringHashMap(void).init(allocator);
         defer self.tuple_names.deinit();
+        self.impl_methods = std.StringHashMap([]const u8).init(allocator);
+        defer self.impl_methods.deinit();
         var decls: std.ArrayList(ast.Decl) = .empty;
         errdefer decls.deinit(allocator);
 
         while (self.current.kind != .eof) {
             const attrs = try self.parseAttrs();
+            if (self.matchIdentifierText("impl")) {
+                try self.parseImplBlock(&decls, allocator);
+                continue;
+            }
             try decls.append(allocator, try self.parseDecl(attrs));
         }
 
@@ -53,6 +63,42 @@ pub const Parser = struct {
         try all.appendSlice(allocator, decls.items);
         decls.deinit(allocator);
         return .{ .decls = try all.toOwnedSlice(allocator) };
+    }
+
+    // `impl Type { fn m(…) {…} … }` — associated functions desugared to free functions named
+    // `Type__m`, appended to the module. `Type.m(args)` calls are rewritten to `Type__m(args)`
+    // at the call site (see resolveImplCallee); the impl block must precede such calls.
+    fn parseImplBlock(self: *Parser, decls: *std.ArrayList(ast.Decl), allocator: std.mem.Allocator) anyerror!void {
+        const start = self.previous.span;
+        const type_name = try self.expectName("expected type name after 'impl'");
+        try self.expect(.l_brace, "expected '{' after impl type name");
+        while (self.current.kind != .r_brace and self.current.kind != .eof) {
+            const exported = self.match(.kw_export);
+            try self.expect(.kw_fn, "expected 'fn' in impl block");
+            var fn_decl = try self.finishFnDecl(null, false, exported);
+            const mangled = try std.fmt.allocPrint(self.allocator, "{s}__{s}", .{ type_name.text, fn_decl.name.text });
+            const key = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name.text, fn_decl.name.text });
+            try self.impl_methods.put(key, mangled);
+            fn_decl.name = .{ .text = mangled, .span = fn_decl.name.span };
+            try decls.append(allocator, .{ .span = joinSpan(start, fn_decl.name.span), .attrs = &[_]ast.Attr{}, .kind = .{ .fn_decl = fn_decl } });
+        }
+        try self.expect(.r_brace, "expected '}' to close impl block");
+    }
+
+    // If `expr` is `Type.method` and `Type.method` is a known associated function, return an
+    // identifier expression for the mangled free function (so `Type.method(args)` calls it).
+    fn resolveImplCallee(self: *Parser, expr: ast.Expr) ?ast.Expr {
+        const mem = switch (expr.kind) {
+            .member => |m| m,
+            else => return null,
+        };
+        const base_ident = switch (mem.base.*.kind) {
+            .ident => |id| id,
+            else => return null,
+        };
+        const key = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ base_ident.text, mem.name.text }) catch return null;
+        const mangled = self.impl_methods.get(key) orelse return null;
+        return ast.Expr{ .span = expr.span, .kind = .{ .ident = .{ .text = mangled, .span = expr.span } } };
     }
 
     // ---- tuple desugaring (tuples -> synthesized nominal structs) ----
@@ -1080,7 +1126,8 @@ pub const Parser = struct {
                 continue;
             }
             if (self.match(.l_paren)) {
-                expr = try self.finishCall(expr, &.{});
+                const callee = self.resolveImplCallee(expr) orelse expr;
+                expr = try self.finishCall(callee, &.{});
                 continue;
             }
             if (self.match(.l_bracket)) {

@@ -12671,6 +12671,39 @@ test "tuples desugar to a single nominal struct with numeric field access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "t._1") != null);
 }
 
+test "impl blocks desugar to mangled free functions called as Type.method" {
+    const source =
+        \\struct Tensor { v: u32 }
+        \\impl Tensor {
+        \\    fn get(self: Tensor) -> u32 { return self.v; }
+        \\}
+        \\export fn harness() -> u64 {
+        \\    var t: Tensor = .{ .v = 5 };
+        \\    return Tensor.get(t) as u64;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "impl.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    // The associated function lowers to a free function `Tensor__get`, and the `Tensor.get(t)`
+    // call site resolves to it.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Tensor__get") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Tensor__get(t)") != null);
+}
+
 test "tuple destructuring binds each name to a field of a temporary" {
     const source =
         \\fn make() -> (u32, u64) { return (7, 100); }
