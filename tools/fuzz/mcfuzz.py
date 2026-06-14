@@ -135,6 +135,7 @@ class Gen:
         self._slice_helpers = set()  # G8: element types for which a `[]mut T` sum helper is declared
         self.aliases = {}    # alias name -> underlying int type (A11); transparent in use
         self.packed = {}     # packed-bits type name -> [bool field names] (G2 kernel surface)
+        self.unions = {}     # G7: union name -> ([(caseName, intPayloadType)], emptyCaseName|None)
         self.immutable = set()  # binding names that are read-only (e.g. a `for x in …` element)
         # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
         # so a program may trap (overflow / divide-by-zero). Under the differential's status
@@ -612,6 +613,41 @@ class Gen:
                    % (it, bv, sm, sm, bv, it, it, it))
         terms.append(sm)
 
+    def gen_unions(self, decls):
+        # G7: safe tagged unions with payloads. Each case constructor (`uNcK(v)` / `uNe()`) is a
+        # global name, so case names are made globally unique. Payloads are int-typed so every
+        # switch arm folds to u64 cleanly. A per-union fold helper switches the value (payload arms
+        # bind the value, the optional no-payload arm uses the dotted `.uNe`). Verified:
+        # construct + pass-by-value + switch + fold lowers and agrees across both backends.
+        for i in range(self.rng.randrange(0, 2)):
+            name = "U%d" % i
+            cases = [("u%dc%d" % (i, j), self.rng.choice(INTS))
+                     for j in range(self.rng.randrange(2, 4))]
+            empty = "u%de" % i if self.rng.random() < 0.5 else None
+            lines = ["    %s: %s," % (cn, pt) for cn, pt in cases]
+            if empty:
+                lines.append("    %s," % empty)
+            decls.append("union %s {\n%s\n}" % (name, "\n".join(lines)))
+            arms = ["        %s(b) => { return %s; }" % (cn, TYPES[pt]["fold"]("b")) for cn, pt in cases]
+            if empty:
+                arms.append("        .%s => { return 7; }" % empty)
+            decls.append("fn ufold_%s(s: %s) -> u64 {\n    switch s {\n%s\n    }\n}"
+                         % (name, name, "\n".join(arms)))
+            self.unions[name] = (cases, empty)
+
+    def gen_union_body(self, out, terms):
+        # G7: construct union values across the cases and fold each via its switch helper.
+        for uname, (cases, empty) in self.unions.items():
+            opts = list(cases) + ([(empty, None)] if empty else [])
+            for _ in range(self.rng.randrange(1, 3)):
+                cn, pt = self.rng.choice(opts)
+                ctor = "%s()" % cn if pt is None else "%s(%s)" % (cn, self.gen_leaf(pt))
+                uv = "uv%d" % self.nvars; self.nvars += 1
+                out.append("    var %s: %s = %s;" % (uv, uname, ctor))
+                fv = "ufv%d" % self.nvars; self.nvars += 1
+                out.append("    var %s: u64 = ufold_%s(%s);" % (fv, uname, uv))
+                terms.append(fv)
+
     def gen_slice_body(self, decls, out, terms):
         # G8 (full slices): a `[]mut T` view over a live integer array for a *general* element type
         # T (not just the byte-view u8 of G12). Array-slicing yields a mutable view because the
@@ -700,6 +736,7 @@ class Gen:
             self.aliases[name] = u
             decls.append("type %s = %s;" % (name, u))
         self.gen_kernel_decls(decls)
+        self.gen_unions(decls)  # G7: tagged unions + per-union fold helpers
         self.gen_functions(decls)
         self.gen_result_functions(decls)
         self.gen_aggregate_abi(decls)
@@ -851,6 +888,7 @@ class Gen:
                 terms.append("fobs")
         self.gen_byteview_body(decls, out, terms)  # G12: byte-view reduction + slice indexing
         self.gen_slice_body(decls, out, terms)  # G8: general `[]mut T` slice construction + ABI
+        self.gen_union_body(out, terms)  # G7: construct + switch-fold tagged union values
         if self._spk is not None:  # G14: construct the struct-of-pointers and fold via field deref
             _, spty = self._spk
             out.append("    var spv: SPk = .{ .p = &gspk };")
@@ -1268,6 +1306,7 @@ def main():
             ("byte-view slice", r"mem\.as_bytes"), ("checked reduce", r"reduce\.sum_checked"),
             ("slice .len/index", r"\.len \{"),
             ("[]mut slice", r"\]mut \w+ = \w+\["), ("slice fn param", r"fn slcsum_"),
+            ("tagged union", r"^union "), ("union switch-fold", r"fn ufold_"),
         ]
         counts = {name: 0 for name, _ in markers}
         for s in range(1, args.count + 1):
