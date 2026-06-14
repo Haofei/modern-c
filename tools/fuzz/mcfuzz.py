@@ -121,6 +121,7 @@ class Gen:
         self.open_enums = {} # open enum name -> [variant names] (`.raw()`-foldable; nests in aggregates)
         self.functions = []  # [(name, [(param, type)], ret type)] — call only earlier ones (a DAG)
         self.result_fns = []  # [(name, param type, ok type)] — Result<ok, u32> helpers (A1)
+        self.agg_fns = []    # [(name, param type, return type)] — aggregate-by-value helpers (G3)
         self.arrays = {}     # "[N]T" -> (element type, length)
         self.aliases = {}    # alias name -> underlying int type (A11); transparent in use
         self.immutable = set()  # binding names that are read-only (e.g. a `for x in …` element)
@@ -488,6 +489,26 @@ class Gen:
             decls.append("fn %s(p: %s) -> Result<%s, %s> {\n%s\n}" % (name, pt, ot, err_ty, "\n".join(lines)))
             self.result_fns.append((name, pt, ot))
 
+    def gen_aggregate_abi(self, decls):
+        # G3: helper functions that pass/return aggregates by value (struct/array ABI), plus a
+        # struct-field extractor (aggregate param -> scalar return). Called and folded by harness.
+        aggs = list(self.structs) + list(self.arrays)
+        for _ in range(self.rng.randrange(0, 2)):
+            if not aggs:
+                break
+            t = self.rng.choice(aggs)
+            name = "aggid%d" % self.nvars
+            self.nvars += 1
+            decls.append("fn %s(p: %s) -> %s {\n    return p;\n}" % (name, t, t))
+            self.agg_fns.append((name, t, t))
+        int_fields = [(s, f, ft) for s, fields in self.structs.items() for f, ft in fields if ft in INTS]
+        if int_fields and self.rng.random() < 0.6:
+            s, f, ft = self.rng.choice(int_fields)
+            name = "aggget%d" % self.nvars
+            self.nvars += 1
+            decls.append("fn %s(p: %s) -> %s {\n    return p.%s;\n}" % (name, s, ft, f))
+            self.agg_fns.append((name, s, ft))
+
     def program(self, metamorph=False):
         # Declare a couple of user types the generator can construct, read, and match.
         decls = []
@@ -538,6 +559,7 @@ class Gen:
             decls.append("type %s = %s;" % (name, u))
         self.gen_functions(decls)
         self.gen_result_functions(decls)
+        self.gen_aggregate_abi(decls)
 
         use_generic = self.rng.random() < 0.5  # A8: comptime-generic identity fn (monomorphized per call type)
         if use_generic:
@@ -587,6 +609,11 @@ class Gen:
                 self.nvars += 1
                 out.append("    var %s: %s = gid(%s, %s);" % (name, ty, ty, self.gen_value(ty)))
                 self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
+        for name, pt, rt in self.agg_fns:  # G3: call aggregate-by-value helpers, fold the result
+            vn = "av%d" % self.nvars
+            self.nvars += 1
+            out.append("    var %s: %s = %s(%s);" % (vn, rt, name, self.gen_value(pt)))
+            self.env.setdefault(self.aliases.get(rt, rt), []).append(vn)
         if closure_ty:  # A9: build a capturing closure and call it; fold the result
             name = "clr%d" % self.nvars
             self.nvars += 1
