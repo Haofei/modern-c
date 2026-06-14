@@ -12671,6 +12671,39 @@ test "tuples desugar to a single nominal struct with numeric field access" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "t._1") != null);
 }
 
+test "module blocks namespace functions and constants as Owner.name" {
+    const source =
+        \\module Math {
+        \\    const PI: u32 = 3;
+        \\    fn square(x: u32) -> u32 { return x * x; }
+        \\}
+        \\export fn harness() -> u64 {
+        \\    return (Math.square(4) + Math.PI) as u64;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mod.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    // Functions and constants are namespaced to `Math__square` / `Math__PI`, and qualified
+    // access `Math.square(…)` / `Math.PI` resolves to them.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Math__square") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Math__PI") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "Math__square(4)") != null);
+}
+
 test "impl blocks desugar to mangled free functions called as Type.method" {
     const source =
         \\struct Tensor { v: u32 }

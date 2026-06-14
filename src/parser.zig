@@ -52,6 +52,10 @@ pub const Parser = struct {
                 try self.parseImplBlock(&decls, allocator);
                 continue;
             }
+            if (self.matchIdentifierText("module")) {
+                try self.parseModuleBlock(&decls, allocator);
+                continue;
+            }
             try decls.append(allocator, try self.parseDecl(attrs));
         }
 
@@ -76,29 +80,64 @@ pub const Parser = struct {
             const exported = self.match(.kw_export);
             try self.expect(.kw_fn, "expected 'fn' in impl block");
             var fn_decl = try self.finishFnDecl(null, false, exported);
-            const mangled = try std.fmt.allocPrint(self.allocator, "{s}__{s}", .{ type_name.text, fn_decl.name.text });
-            const key = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name.text, fn_decl.name.text });
-            try self.impl_methods.put(key, mangled);
-            fn_decl.name = .{ .text = mangled, .span = fn_decl.name.span };
+            try self.registerQualified(type_name.text, fn_decl.name.text);
+            fn_decl.name = .{ .text = try self.mangleQualified(type_name.text, fn_decl.name.text), .span = fn_decl.name.span };
             try decls.append(allocator, .{ .span = joinSpan(start, fn_decl.name.span), .attrs = &[_]ast.Attr{}, .kind = .{ .fn_decl = fn_decl } });
         }
         try self.expect(.r_brace, "expected '}' to close impl block");
     }
 
-    // If `expr` is `Type.method` and `Type.method` is a known associated function, return an
-    // identifier expression for the mangled free function (so `Type.method(args)` calls it).
-    fn resolveImplCallee(self: *Parser, expr: ast.Expr) ?ast.Expr {
-        const mem = switch (expr.kind) {
-            .member => |m| m,
-            else => return null,
-        };
-        const base_ident = switch (mem.base.*.kind) {
+    // If `base` is a bare identifier `Owner` and `Owner.name` is a registered qualified symbol
+    // (impl associated function, module function, or module constant), return an identifier
+    // expression for the mangled free symbol `Owner__name`.
+    fn resolveQualified(self: *Parser, base: ast.Expr, name: ast.Ident) ?ast.Expr {
+        const owner = switch (base.kind) {
             .ident => |id| id,
             else => return null,
         };
-        const key = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ base_ident.text, mem.name.text }) catch return null;
+        const key = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ owner.text, name.text }) catch return null;
         const mangled = self.impl_methods.get(key) orelse return null;
-        return ast.Expr{ .span = expr.span, .kind = .{ .ident = .{ .text = mangled, .span = expr.span } } };
+        const span = joinSpan(base.span, name.span);
+        return ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = mangled, .span = span } } };
+    }
+
+    // `module Name { fn f(…) {…}  global g: T = …; … }` — a namespace. Each function and global
+    // is desugared to a mangled top-level declaration `Name__f` / `Name__g`, and `Name.f` /
+    // `Name.g` access sites resolve to it (qualified symbol identity; see resolveQualified).
+    fn parseModuleBlock(self: *Parser, decls: *std.ArrayList(ast.Decl), allocator: std.mem.Allocator) anyerror!void {
+        const start = self.previous.span;
+        const mod_name = try self.expectName("expected module name after 'module'");
+        try self.expect(.l_brace, "expected '{' after module name");
+        while (self.current.kind != .r_brace and self.current.kind != .eof) {
+            const exported = self.match(.kw_export);
+            if (self.match(.kw_fn)) {
+                var fn_decl = try self.finishFnDecl(null, false, exported);
+                try self.registerQualified(mod_name.text, fn_decl.name.text);
+                fn_decl.name = .{ .text = try self.mangleQualified(mod_name.text, fn_decl.name.text), .span = fn_decl.name.span };
+                try decls.append(allocator, .{ .span = joinSpan(start, fn_decl.name.span), .attrs = &[_]ast.Attr{}, .kind = .{ .fn_decl = fn_decl } });
+            } else if (self.matchIdentifierText("global") or self.current.kind == .kw_const) {
+                const is_const = self.match(.kw_const);
+                const g_name = try self.expectName("expected global name");
+                const ty = if (self.match(.colon)) try self.parseType() else null;
+                const initializer = if (self.match(.equal)) try self.parseExpr(0) else null;
+                _ = try self.expectTok(.semicolon, "expected ';' after module global");
+                try self.registerQualified(mod_name.text, g_name.text);
+                const mangled = try self.mangleQualified(mod_name.text, g_name.text);
+                try decls.append(allocator, .{ .span = joinSpan(start, g_name.span), .attrs = &[_]ast.Attr{}, .kind = .{ .global_decl = .{ .name = .{ .text = mangled, .span = g_name.span }, .ty = ty, .init = initializer, .is_const = is_const } } });
+            } else {
+                return self.fail("expected 'fn', 'global', or 'const' in module block");
+            }
+        }
+        try self.expect(.r_brace, "expected '}' to close module block");
+    }
+
+    fn mangleQualified(self: *Parser, owner: []const u8, name: []const u8) ![]const u8 {
+        return std.fmt.allocPrint(self.allocator, "{s}__{s}", .{ owner, name });
+    }
+
+    fn registerQualified(self: *Parser, owner: []const u8, name: []const u8) !void {
+        const key = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ owner, name });
+        try self.impl_methods.put(key, try self.mangleQualified(owner, name));
     }
 
     // ---- tuple desugaring (tuples -> synthesized nominal structs) ----
@@ -1126,8 +1165,7 @@ pub const Parser = struct {
                 continue;
             }
             if (self.match(.l_paren)) {
-                const callee = self.resolveImplCallee(expr) orelse expr;
-                expr = try self.finishCall(callee, &.{});
+                expr = try self.finishCall(expr, &.{});
                 continue;
             }
             if (self.match(.l_bracket)) {
@@ -1162,6 +1200,12 @@ pub const Parser = struct {
                     continue;
                 }
                 const name = try self.expectSymbol("expected member name");
+                // Qualified symbol access `Owner.name` (impl associated function / module
+                // function / module constant) -> the mangled free symbol `Owner__name`.
+                if (self.resolveQualified(expr, name)) |resolved| {
+                    expr = resolved;
+                    continue;
+                }
                 const base = try ast.makePtr(self.allocator, expr);
                 expr = .{ .span = joinSpan(base.span, name.span), .kind = .{ .member = .{ .base = base, .name = name } } };
                 continue;
