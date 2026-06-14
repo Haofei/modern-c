@@ -2411,6 +2411,29 @@ pub fn build(b: *std.Build) void {
     // kmain-net-test boots the integrated kernel + network in one image.
     m0_step.dependOn(&kmain_net_test_cmd.step);
 
+    // fast: the inner-loop gate — every host-only m0 check that never boots an
+    // emulator, so it finishes in seconds and parallelizes across cores. It is
+    // the compiler/spec unit suite, the emit-C sweep, the C-vs-LLVM differential
+    // and move-resource checks, and the type-directed fuzz family (generation,
+    // trap consistency, checker robustness, fail-closed soundness, emit
+    // determinism, and full-pipeline lowering). It deliberately omits the QEMU
+    // boot tests and the env-fragile gates (LLVM-IR sweeps needing `llvm-as`, the
+    // ASan/UBSan sanitize pass, and the riscv-assembler paths) — run `m0` for
+    // those. Pair it with `-j` oversubscription (e.g. `zig build fast -j28`).
+    const fast_step = b.step("fast", "Inner-loop gate: host-only unit + spec-coverage tests, emit-C sweep, C/LLVM differential, and the fuzz family — no QEMU");
+    fast_step.dependOn(&test_cmd.step);
+    fast_step.dependOn(&c_test_cmd.step);
+    fast_step.dependOn(&sweep_cmd.step);
+    fast_step.dependOn(&diff_backend_cmd.step);
+    fast_step.dependOn(&diff_fuzz_cmd.step);
+    fast_step.dependOn(&move_fuzz_cmd.step);
+    fast_step.dependOn(&fuzz_cmd.step);
+    fast_step.dependOn(&fuzz_trap_cmd.step);
+    fast_step.dependOn(&fuzz_robust_cmd.step);
+    fast_step.dependOn(&fuzz_failclosed_cmd.step);
+    fast_step.dependOn(&fuzz_determinism_cmd.step);
+    fast_step.dependOn(&fuzz_pipeline_cmd.step);
+
     // Spec §L conformance-level tiers: subsets of the full m0 gate aligned to the
     // staged C-backend profiles, so a contributor can validate the level they touch.
     //   c0 (§L.1 baseline trustworthy backend): the core language surface — the
