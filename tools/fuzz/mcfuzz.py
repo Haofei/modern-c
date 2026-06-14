@@ -138,7 +138,8 @@ class Gen:
             return ".%s" % self.rng.choice(self.enums[tyname])
         if tyname in self.arrays:   # an array literal `.{ e0, …, e{N-1} }`
             elem, length = self.arrays[tyname]
-            return ".{ %s }" % ", ".join(self.gen_leaf(elem) for _ in range(length))
+            gen = self.gen_value if (elem in self.structs or elem in self.arrays) else self.gen_leaf
+            return ".{ %s }" % ", ".join(gen(elem) for _ in range(length))
         # Sometimes call a (earlier-declared) function returning this type. Args are leaves so
         # the call is type-clean; the DAG of functions guarantees termination.
         if d < 2 and self.functions and self.rng.random() < 0.3:
@@ -279,14 +280,18 @@ class Gen:
         ty = self.rng.choice([t for t in VALUE_TYPES if self.env.get(t)])
         return ty, self.rng.choice(self.env[ty])
 
-    def fold_struct(self, access, sname, terms):
-        # Fold each field of a struct into the digest, recursing into nested struct fields.
-        for f, t in self.structs[sname]:
-            sub = "%s.%s" % (access, f)
-            if t in self.structs:
-                self.fold_struct(sub, t, terms)
-            else:
-                terms.append(TYPES[t]["fold"](sub))
+    def fold_type(self, access, tyname, terms):
+        # Fold a value of any aggregate/scalar type into the digest, recursing through nested
+        # structs and arrays down to scalar leaves.
+        if tyname in self.structs:
+            for f, t in self.structs[tyname]:
+                self.fold_type("%s.%s" % (access, f), t, terms)
+        elif tyname in self.arrays:
+            elem, length = self.arrays[tyname]
+            for k in range(length):
+                self.fold_type("%s[%d]" % (access, k), elem, terms)
+        else:
+            terms.append(TYPES[tyname]["fold"](access))
 
     def gen_functions(self, decls):
         # A DAG of helper functions: each takes scalar params and returns a scalar, may call
@@ -310,10 +315,14 @@ class Gen:
     def program(self):
         # Declare a couple of user types the generator can construct, read, and match.
         decls = []
+        for _ in range(self.rng.randrange(1, 3)):  # array types (int elements; structural, no decl)
+            elem = self.rng.choice(INTS)
+            length = self.rng.randrange(2, 6)
+            self.arrays["[%d]%s" % (length, elem)] = (elem, length)
         for i in range(self.rng.randrange(1, 4)):
             name = "S%d" % i
-            # fields are scalars or *earlier* structs (a DAG → nesting terminates, no cycles)
-            ftypes = INTS + list(self.structs)
+            # fields are scalars, int-arrays, or *earlier* structs (a DAG → nesting terminates)
+            ftypes = INTS + list(self.arrays) + list(self.structs)
             fields = [("f%d" % j, self.rng.choice(ftypes)) for j in range(self.rng.randrange(1, 4))]
             self.structs[name] = fields
             decls.append("struct %s { %s }" % (name, ", ".join("%s: %s" % (f, t) for f, t in fields)))
@@ -322,10 +331,6 @@ class Gen:
             name = "E%d" % i
             self.enums[name] = variants
             decls.append("enum %s { %s }" % (name, ", ".join(variants)))
-        for _ in range(self.rng.randrange(1, 3)):  # array types (structural; no declaration)
-            elem = self.rng.choice(INTS)
-            length = self.rng.randrange(2, 6)
-            self.arrays["[%d]%s" % (length, elem)] = (elem, length)
         self.gen_functions(decls)
 
         out = []
@@ -345,13 +350,9 @@ class Gen:
         for ty in INTS:
             for name in self.env.get(ty, []):
                 terms.append(TYPES[ty]["fold"](name))
-        for sname in self.structs:
-            for name in self.env.get(sname, []):
-                self.fold_struct(name, sname, terms)
-        for aname, (elem, length) in self.arrays.items():
-            for name in self.env.get(aname, []):
-                for k in range(length):
-                    terms.append(TYPES[elem]["fold"]("%s[%d]" % (name, k)))
+        for tyname in list(self.structs) + list(self.arrays):
+            for name in self.env.get(tyname, []):
+                self.fold_type(name, tyname, terms)
         if any(self.env.get(ty) for ty in FLOATS):
             out.append("    var fobs: u64 = 0;")
             for ty in FLOATS:
