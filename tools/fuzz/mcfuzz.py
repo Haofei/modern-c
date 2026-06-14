@@ -119,6 +119,7 @@ class Gen:
         self.enums = {}      # closed enum name -> [variant names] (folded via exhaustive switch)
         self.open_enums = {} # open enum name -> [variant names] (`.raw()`-foldable; nests in aggregates)
         self.functions = []  # [(name, [(param, type)], ret type)] — call only earlier ones (a DAG)
+        self.result_fns = []  # [(name, param type, ok type)] — Result<ok, u32> helpers (A1)
         self.arrays = {}     # "[N]T" -> (element type, length)
         self.immutable = set()  # binding names that are read-only (e.g. a `for x in …` element)
         # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
@@ -461,6 +462,28 @@ class Gen:
             decls.append("fn %s(%s) -> %s {\n    return %s;\n}" % (name, params_src, ret, ret_expr))
             self.functions.append((name, params, ret))
 
+    def gen_result_functions(self, decls):
+        # A1: `Result<T, u32>` helper functions returning ok(T)/err(u32) on a deterministic
+        # condition; a later one may `?`-propagate an earlier helper's error (the shared error
+        # type u32 makes propagation type-check). The harness folds them via switch.
+        err_ty = "u32"
+        for i in range(self.rng.randrange(0, 3)):
+            name = "r%d" % i
+            pt = self.rng.choice(INTS)
+            ot = self.rng.choice(INTS)
+            saved_env, saved_depth = self.env, self.depth
+            self.env, self.depth = {pt: ["p"]}, 1
+            lines = []
+            if self.result_fns and self.rng.random() < 0.5:  # `?` propagation chain
+                cname, cpt, cot = self.rng.choice(self.result_fns)
+                lines.append("    let cv: %s = %s(%s)?;" % (cot, cname, self.gen_leaf(cpt)))
+                self.env.setdefault(cot, []).append("cv")
+            lines.append("    if %s { return err(%s); }" % (self.gen_bool(), TYPES[err_ty]["lit"](self.rng)))
+            lines.append("    return ok(%s);" % self.gen_value(ot))
+            self.env, self.depth = saved_env, saved_depth
+            decls.append("fn %s(p: %s) -> Result<%s, %s> {\n%s\n}" % (name, pt, ot, err_ty, "\n".join(lines)))
+            self.result_fns.append((name, pt, ot))
+
     def program(self, metamorph=False):
         # Declare a couple of user types the generator can construct, read, and match.
         decls = []
@@ -505,6 +528,7 @@ class Gen:
             else:
                 decls.append("enum %s { %s }" % (name, ", ".join(variants)))
         self.gen_functions(decls)
+        self.gen_result_functions(decls)
 
         # D1: module-level globals — read/written/folded by the harness like locals, but they
         # lower through the race-tolerant load/store helpers (mc_race_load/store), a distinct path
@@ -546,6 +570,16 @@ class Gen:
         for ename in self.open_enums:  # standalone open-enum vars fold inline via `.raw()`
             for name in self.env.get(ename, []):
                 terms.append("(%s.raw() as u64)" % name)
+        if self.result_fns:  # A1: fold each Result helper by matching ok/err
+            out.append("    var robs: u64 = 0;")
+            for name, pt, ot in self.result_fns:
+                out.append("    switch %s(%s) {" % (name, self.gen_leaf(pt)))
+                # XOR accumulation: the ok/err payloads can be arbitrary values, so a checked `+`
+                # would overflow u64 and trap. XOR observes both arms without overflow.
+                out.append("        ok(v) => { robs = (robs ^ %s); }" % TYPES[ot]["fold"]("v"))
+                out.append("        err(e) => { robs = (robs ^ %s ^ 1000); }" % TYPES["u32"]["fold"]("e"))
+                out.append("    }")
+            terms.append("robs")
         if any(self.env.get(ty) for ty in FLOATS):
             out.append("    var fobs: u64 = 0;")
             for ty in FLOATS:
