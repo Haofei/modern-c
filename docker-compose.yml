@@ -1,0 +1,30 @@
+# Cross-platform development for the MC compiler. The repo is bind-mounted live, but the
+# build artifacts (.zig-cache, zig-out) and the global Zig cache are container-local named
+# volumes — host (e.g. macOS) artifacts are a different architecture and must not mix.
+#
+#   docker compose build dev                 # build the toolchain image (amd64 or arm64)
+#   docker compose run --rm dev              # interactive shell at /work
+#   docker compose run --rm dev zig build fast      # fast inner-loop gate
+#   docker compose run --rm dev zig build m0        # full milestone gate (qemu + llvm)
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: modern-c-dev
+    working_dir: /work
+    # Loop devices / KVM are not required: the integration tests run QEMU in TCG (software)
+    # mode, so the image is portable across CI and developer machines without privileges.
+    volumes:
+      - .:/work
+      - zig-cache:/work/.zig-cache
+      - zig-out:/work/zig-out
+      - zig-global-cache:/root/.cache/zig
+    # Keep an interactive session alive for `docker compose run`; one-shot commands override it.
+    stdin_open: true
+    tty: true
+
+volumes:
+  zig-cache:
+  zig-out:
+  zig-global-cache:

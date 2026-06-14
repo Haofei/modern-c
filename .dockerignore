@@ -1,0 +1,8 @@
+# The image is toolchain-only (no repo COPY), so the build context stays tiny. These are
+# also the host-built artifacts that must never leak into a Linux container (arch mismatch).
+.git
+zig-out
+.zig-cache
+zig-cache
+**/*.o
+**/*.app

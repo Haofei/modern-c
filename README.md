@@ -70,6 +70,34 @@ zig build m0
 checks, package/toolchain tests, host-driver tests, and the QEMU kernel matrix.
 Tests that require external tools self-skip when the required tool is absent.
 
+## Development Environment
+
+The toolchain is Zig 0.16.0 plus clang/lld/llvm and QEMU (riscv64/aarch64/x86_64).
+You can install those natively, or use the bundled container, which pins the exact
+toolchain from CI and runs on Linux, macOS (incl. Apple Silicon), and Windows/WSL.
+
+```sh
+make docker-build          # build the dev image (selects amd64 or arm64 automatically)
+make fast                  # host-only inner-loop gate (~seconds), no QEMU
+make test                  # compiler unit + spec suite
+make m0                    # full milestone gate: clang + llvm + QEMU
+make shell                 # interactive shell at /work
+make run CMD='zig build abi-test'
+```
+
+Equivalently, without `make`:
+
+```sh
+docker compose build dev
+docker compose run --rm dev zig build fast
+docker compose run --rm dev zig build m0
+docker compose run --rm dev                 # interactive shell
+```
+
+The repo is bind-mounted live; `.zig-cache` and `zig-out` are container-local volumes
+so host (e.g. macOS) artifacts never mix with the Linux build. With the toolchain on
+your `PATH`, the same gates run natively as `zig build <step>`.
+
 ## Backend Coverage
 
 ### C Backend

@@ -35,3 +35,14 @@ jobs:
             echo "m0 skipped at least one gate in CI" >&2
             exit 1
           fi
+
+  docker:
+    # Keeps the cross-platform dev image (Dockerfile / docker-compose.yml) honest: the image
+    # must build and the host-only inner-loop gate must pass inside it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the dev image
+        run: docker compose build dev
+      - name: Run the fast gate in the container
+        run: docker compose run --rm dev zig build fast
