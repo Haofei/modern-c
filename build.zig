@@ -165,6 +165,13 @@ pub fn build(b: *std.Build) void {
     const fuzz_pipeline_step = b.step("fuzz-pipeline", "mcfuzz: every lowering/verify stage must succeed on a check-accepted program");
     fuzz_pipeline_step.dependOn(&fuzz_pipeline_cmd.step);
 
+    const fuzz_metamorphic_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "metamorphic", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_metamorphic_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_metamorphic_step = b.step("fuzz-metamorphic", "mcfuzz: a semantics-preserving source transform must not change the result");
+    fuzz_metamorphic_step.dependOn(&fuzz_metamorphic_cmd.step);
+
     const llvm_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-llvm-sweep.py",
