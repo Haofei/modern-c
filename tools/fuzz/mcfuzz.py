@@ -120,6 +120,7 @@ class Gen:
         self.open_enums = {} # open enum name -> [variant names] (`.raw()`-foldable; nests in aggregates)
         self.functions = []  # [(name, [(param, type)], ret type)] — call only earlier ones (a DAG)
         self.arrays = {}     # "[N]T" -> (element type, length)
+        self.immutable = set()  # binding names that are read-only (e.g. a `for x in …` element)
         # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
         # so a program may trap (overflow / divide-by-zero). Under the differential's status
         # contract, both backends must then trap together — this exercises the trap-lowering
@@ -284,6 +285,24 @@ class Gen:
             return "(%s %s %s)" % (var, cmp, other)
         return "(%s %s %s)" % (other, cmp, var)
 
+    def _u64_expr(self):
+        # A deterministic u64 value: a live int var folded to u64, else a literal.
+        ints = [t for t in INTS if self.env.get(t)]
+        if ints:
+            ty = self.rng.choice(ints)
+            return TYPES[ty]["fold"](self.rng.choice(self.env[ty]))
+        return str(self.rng.randrange(0, 1000))
+
+    def _int_array_vars(self):
+        # (live array var, element type) for arrays whose element is a plain int — iterable with
+        # a usable scalar binding.
+        out = []
+        for tyname, (elem, _length) in self.arrays.items():
+            if elem in INTS:
+                for name in self.env.get(tyname, []):
+                    out.append((name, elem))
+        return out
+
     # ---- statements ----
     def stmt(self, out, indent):
         pad = "    " * indent
@@ -314,7 +333,7 @@ class Gen:
             out.append("%s} else {" % pad)
             self.block(out, indent + 1)
             out.append("%s}" % pad)
-        elif r < 0.90 and self.depth < 3 and self._live_enum_vars():
+        elif r < 0.84 and self.depth < 3 and self._live_enum_vars():
             # A `switch` in statement position with side-effecting arms — the construct that most
             # multiplies MIR block count (every arm is its own block), exercising control-flow
             # lowering the read-only digest switch never reaches. All-but-last variant explicit,
@@ -329,16 +348,37 @@ class Gen:
             self.block(out, indent + 2)
             out.append("%s    }" % pad)
             out.append("%s}" % pad)
+        elif r < 0.88:
+            # B3: a conditional early return (the harness otherwise has a single trailing return).
+            out.append("%sif %s { return %s; }" % (pad, self.gen_bool(), self._u64_expr()))
+        elif r < 0.93 and self.depth < 3 and self._int_array_vars():
+            # B1: a `for x in <array>` loop with the element bound in the body.
+            arr, elem = self.rng.choice(self._int_array_vars())
+            x = "x%d" % self.nvars
+            self.nvars += 1
+            out.append("%sfor %s in %s {" % (pad, x, arr))
+            self.env.setdefault(elem, []).append(x)
+            self.immutable.add(x)  # the loop element is read-only
+            self.block(out, indent + 1)
+            self.env[elem].remove(x)
+            self.immutable.discard(x)
+            out.append("%s}" % pad)
         else:
             n = self.rng.randrange(1, 5)
             i = "j%d" % self.nvars
             self.nvars += 1
             out.append("%svar %s: u64 = 0;" % (pad, i))
             out.append("%swhile %s < %d {" % (pad, i, n))
+            # Increment first so a `continue` can never skip it (no infinite loop). B2:
+            # optionally break/continue (guarded), then the body.
+            out.append("%s    %s = %s + 1;" % (pad, i, i))
+            if self.rng.random() < 0.3:
+                out.append("%s    if %s { break; }" % (pad, self.gen_bool()))
+            if self.rng.random() < 0.3:
+                out.append("%s    if %s { continue; }" % (pad, self.gen_bool()))
             if self._has_any_var():
                 ty, name = self._pick_var()
                 out.append("%s    %s = %s;" % (pad, name, self.gen_value(ty, 1)))
-            out.append("%s    %s = %s + 1;" % (pad, i, i))
             out.append("%s}" % pad)
 
     def block(self, out, indent):
@@ -347,12 +387,15 @@ class Gen:
             self.stmt(out, indent)
         self.depth -= 1
 
+    def _mutable(self, ty):
+        return [v for v in self.env.get(ty, []) if v not in self.immutable]
+
     def _has_any_var(self):
-        return any(self.env.get(t) for t in VALUE_TYPES)
+        return any(self._mutable(t) for t in VALUE_TYPES)
 
     def _pick_var(self):
-        ty = self.rng.choice([t for t in VALUE_TYPES if self.env.get(t)])
-        return ty, self.rng.choice(self.env[ty])
+        ty = self.rng.choice([t for t in VALUE_TYPES if self._mutable(t)])
+        return ty, self.rng.choice(self._mutable(ty))
 
     def _aggregate_types(self):
         return list(self.structs) + list(self.arrays)
