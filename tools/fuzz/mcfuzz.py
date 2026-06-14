@@ -121,6 +121,7 @@ class Gen:
         self.functions = []  # [(name, [(param, type)], ret type)] — call only earlier ones (a DAG)
         self.result_fns = []  # [(name, param type, ok type)] — Result<ok, u32> helpers (A1)
         self.arrays = {}     # "[N]T" -> (element type, length)
+        self.aliases = {}    # alias name -> underlying int type (A11); transparent in use
         self.immutable = set()  # binding names that are read-only (e.g. a `for x in …` element)
         # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
         # so a program may trap (overflow / divide-by-zero). Under the differential's status
@@ -153,10 +154,12 @@ class Gen:
     # comparison — fails to lower while the LLVM backend lowers it fine). Floats nest freely,
     # since float ops carry no such target requirement.
     def local_types(self):
-        return (VALUE_TYPES + SATS + WRAPS + list(self.structs) + list(self.enums)
+        return (VALUE_TYPES + SATS + WRAPS + list(self.aliases) + list(self.structs) + list(self.enums)
                 + list(self.open_enums) + list(self.arrays))
 
     def gen_value(self, tyname, d=0):
+        if tyname in self.aliases:  # a type alias is transparent: value of the underlying type
+            return self.gen_value(self.aliases[tyname], d)
         if tyname in self.structs:  # construct: `.{ .f = <field value>, … }`
             return ".{ %s }" % ", ".join(".%s = %s" % (f, self.gen_value(t)) for f, t in self.structs[tyname])
         if tyname in self.enums or tyname in self.open_enums:  # an enum literal: `.Variant`
@@ -314,7 +317,7 @@ class Gen:
             name = "v%d" % self.nvars
             self.nvars += 1
             out.append("%svar %s: %s = %s;" % (pad, name, ty, self.gen_value(ty)))
-            self.env.setdefault(ty, []).append(name)
+            self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
         elif r < 0.65 and (self._has_any_var() or self._has_aggregate_var()):
             # Either a whole-scalar assignment or an in-place store into an aggregate leaf
             # (`s.f = …`, `a[i] = …`, `s.f[i][j] = …`) — the latter exercises lvalue/field-store
@@ -527,6 +530,11 @@ class Gen:
                 decls.append("enum %s: u8 { %s }" % (name, fields))
             else:
                 decls.append("enum %s { %s }" % (name, ", ".join(variants)))
+        for i in range(self.rng.randrange(0, 2)):  # A11: type aliases over an int type
+            u = self.rng.choice(INTS)
+            name = "Alias%d" % i
+            self.aliases[name] = u
+            decls.append("type %s = %s;" % (name, u))
         self.gen_functions(decls)
         self.gen_result_functions(decls)
 
@@ -538,13 +546,13 @@ class Gen:
             name = "g%d" % self.nvars
             self.nvars += 1
             decls.append("global %s: %s = %s;" % (name, ty, TYPES[ty]["lit"](self.rng)))
-            self.env.setdefault(ty, []).append(name)
+            self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
         for _ in range(self.rng.randrange(0, 2)):  # D4: const globals (named compile-time constants)
             ty = self.rng.choice(INTS)
             name = "c%d" % self.nvars
             self.nvars += 1
             decls.append("const %s: %s = %s;" % (name, ty, TYPES[ty]["lit"](self.rng)))
-            self.env.setdefault(ty, []).append(name)
+            self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
             self.immutable.add(name)  # a const is read-only
 
         out = []
@@ -553,7 +561,7 @@ class Gen:
             name = "v%d" % self.nvars
             self.nvars += 1
             out.append("    var %s: %s = %s;" % (name, ty, self.gen_value(ty)))
-            self.env.setdefault(ty, []).append(name)
+            self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
         for _ in range(self.rng.randrange(5, 12)):
             self.stmt(out, 1)
 
