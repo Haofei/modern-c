@@ -4145,6 +4145,15 @@ const CEmitter = struct {
             },
             .unreachable_expr => try self.out.appendSlice(self.allocator, "mc_trap_Unreachable()"),
             .unary => |node| {
+                if (node.op == .neg and negatedLiteralIsI64Min(node.expr.*)) {
+                    // The most-negative i64 (INT64_MIN). Emitting `-(9223372036854775808)` is
+                    // wrong in C: the magnitude 2^63 exceeds LLONG_MAX, so the bare decimal
+                    // constant is *unsigned*, and negating it stays unsigned — silently flipping
+                    // the sign of any comparison it feeds. Emit the canonical INT64_MIN idiom
+                    // (exactly how <stdint.h> defines it), a portable signed constant expression.
+                    try self.out.appendSlice(self.allocator, "(-9223372036854775807LL - 1)");
+                    return;
+                }
                 if (node.op == .neg and !self.exprResolvesToFloat(node.expr.*, locals)) {
                     // Signed negation can overflow (`-INT_MIN`); like checked
                     // binary ops it must keep its trap edge even with no target
@@ -11148,6 +11157,29 @@ fn appendCIntLiteral(allocator: std.mem.Allocator, out: *std.ArrayList(u8), lite
     for (literal) |ch| {
         if (ch != '_') try out.append(allocator, ch);
     }
+}
+
+// True when `expr` is the integer literal 2^63 (the magnitude of INT64_MIN) — the one value
+// whose bare-decimal C emission is unsigned, so negating it needs the INT64_MIN idiom instead.
+fn negatedLiteralIsI64Min(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .int_literal => |literal| literalMagnitudeIsI64Min(literal),
+        .grouped => |inner| negatedLiteralIsI64Min(inner.*),
+        else => false,
+    };
+}
+
+fn literalMagnitudeIsI64Min(literal: []const u8) bool {
+    var buf: [64]u8 = undefined;
+    var n: usize = 0;
+    for (literal) |ch| {
+        if (ch == '_') continue;
+        if (n >= buf.len) return false;
+        buf[n] = ch;
+        n += 1;
+    }
+    const value = std.fmt.parseInt(u128, buf[0..n], 0) catch return false;
+    return value == (@as(u128, 1) << 63);
 }
 
 fn intLiteralText(expr: ast.Expr) ?[]const u8 {
