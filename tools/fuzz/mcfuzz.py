@@ -539,6 +539,16 @@ class Gen:
         self.gen_functions(decls)
         self.gen_result_functions(decls)
 
+        use_generic = self.rng.random() < 0.5  # A8: comptime-generic identity fn (monomorphized per call type)
+        if use_generic:
+            decls.append("fn gid(comptime T: type, x: T) -> T {\n    return x;\n}")
+        closure_ty = None  # A9: a capturing closure built with bind(&env, fn)
+        if self.rng.random() < 0.4:
+            closure_ty = self.rng.choice(UINTS)
+            decls.append("struct ClEnv { base: %s }" % closure_ty)
+            decls.append("global gclenv: ClEnv = .{ .base = %s };" % TYPES[closure_ty]["lit"](self.rng))
+            decls.append("fn clfn(e: *ClEnv, x: %s) -> %s {\n    return wrapping.add(e.base, x);\n}" % (closure_ty, closure_ty))
+
         # D1: module-level globals — read/written/folded by the harness like locals, but they
         # lower through the race-tolerant load/store helpers (mc_race_load/store), a distinct path
         # from stack locals (and a historical source of C-backend bugs).
@@ -570,6 +580,19 @@ class Gen:
             self.nvars += 1
             out.append("    var %s: %s = %s;" % (name, ty, self.gen_value(ty)))
             self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
+        if use_generic:  # A8: call the generic identity fn, instantiating it per type
+            for _ in range(self.rng.randrange(0, 3)):
+                ty = self.rng.choice(INTS)
+                name = "gv%d" % self.nvars
+                self.nvars += 1
+                out.append("    var %s: %s = gid(%s, %s);" % (name, ty, ty, self.gen_value(ty)))
+                self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
+        if closure_ty:  # A9: build a capturing closure and call it; fold the result
+            name = "clr%d" % self.nvars
+            self.nvars += 1
+            out.append("    let clf: closure(%s) -> %s = bind(&gclenv, clfn);" % (closure_ty, closure_ty))
+            out.append("    var %s: %s = clf(%s);" % (name, closure_ty, TYPES[closure_ty]["lit"](self.rng)))
+            self.env.setdefault(closure_ty, []).append(name)
         optionals = []  # A3: nullable pointers, read via `if let` narrowing
         plainptrs = []  # A4: non-nullable `*T` pointers, read by direct deref
         for gname, ty in opt_targets:
