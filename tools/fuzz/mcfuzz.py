@@ -94,6 +94,8 @@ class Gen:
         self.env = {}        # type name -> [var names in scope at top level]
         self.nvars = 0
         self.depth = 0       # block nesting (new vars only at depth 0)
+        self.structs = {}    # struct name -> [(field, scalar type name)]
+        self.enums = {}      # enum name -> [variant names]
         # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
         # so a program may trap (overflow / divide-by-zero). Under the differential's status
         # contract, both backends must then trap together — this exercises the trap-lowering
@@ -124,7 +126,14 @@ class Gen:
     # op embedded where its type must be re-inferred — under a bitwise operand, a cast, or a
     # comparison — fails to lower while the LLVM backend lowers it fine). Floats nest freely,
     # since float ops carry no such target requirement.
+    def local_types(self):
+        return VALUE_TYPES + list(self.structs) + list(self.enums)
+
     def gen_value(self, tyname, d=0):
+        if tyname in self.structs:  # construct: `.{ .f = <field value>, … }`
+            return ".{ %s }" % ", ".join(".%s = %s" % (f, self.gen_value(t)) for f, t in self.structs[tyname])
+        if tyname in self.enums:    # an enum literal: `.Variant`
+            return ".%s" % self.rng.choice(self.enums[tyname])
         ty = TYPES[tyname]
         kind = ty["kind"]
         if kind == "float":
@@ -216,7 +225,7 @@ class Gen:
         can_decl = self.depth == 0
         r = self.rng.random()
         if can_decl and r < 0.45:
-            ty = self.rng.choice(VALUE_TYPES)
+            ty = self.rng.choice(self.local_types())
             name = "v%d" % self.nvars
             self.nvars += 1
             out.append("%svar %s: %s = %s;" % (pad, name, ty, self.gen_value(ty)))
@@ -259,25 +268,41 @@ class Gen:
         return ty, self.rng.choice(self.env[ty])
 
     def program(self):
-        # seed one var of a few types so blocks have something to read/mutate
+        # Declare a couple of user types the generator can construct, read, and match.
+        decls = []
+        for i in range(self.rng.randrange(1, 3)):
+            fields = [("f%d" % j, self.rng.choice(INTS)) for j in range(self.rng.randrange(1, 4))]
+            name = "S%d" % i
+            self.structs[name] = fields
+            decls.append("struct %s { %s }" % (name, ", ".join("%s: %s" % (f, t) for f, t in fields)))
+        for i in range(self.rng.randrange(1, 3)):
+            variants = ["V%d" % j for j in range(self.rng.randrange(2, 5))]
+            name = "E%d" % i
+            self.enums[name] = variants
+            decls.append("enum %s { %s }" % (name, ", ".join(variants)))
+
         out = []
-        for ty in self.rng.sample(VALUE_TYPES, k=min(3, len(VALUE_TYPES))):
+        types = self.local_types()
+        for ty in self.rng.sample(types, k=min(4, len(types))):
             name = "v%d" % self.nvars
             self.nvars += 1
             out.append("    var %s: %s = %s;" % (name, ty, self.gen_value(ty)))
             self.env.setdefault(ty, []).append(name)
         for _ in range(self.rng.randrange(5, 12)):
             self.stmt(out, 1)
-        # Observe floats through comparisons, not bits: a float's bit pattern (NaN sign/payload,
-        # and f32 rounding) is not a stable cross-backend observable, but its ordering is. Fold
-        # each float local through threshold comparisons into an integer accumulator; integers
-        # fold by value. (rss-testgen observes Float via comparisons for the same reason.)
+
+        # Fold each kind into the digest. Integers and struct fields fold by value. Floats fold
+        # by comparison (a float's bit pattern is not a stable cross-backend observable, its
+        # ordering is). Enums fold by an exhaustive switch into an integer accumulator.
         terms = []
         for ty in INTS:
             for name in self.env.get(ty, []):
                 terms.append(TYPES[ty]["fold"](name))
-        has_float = any(self.env.get(ty) for ty in FLOATS)
-        if has_float:
+        for sname, fields in self.structs.items():
+            for name in self.env.get(sname, []):
+                for f, t in fields:
+                    terms.append(TYPES[t]["fold"]("%s.%s" % (name, f)))
+        if any(self.env.get(ty) for ty in FLOATS):
             out.append("    var fobs: u64 = 0;")
             for ty in FLOATS:
                 for name in self.env.get(ty, []):
@@ -285,13 +310,24 @@ class Gen:
                         cmp = self.rng.choice(("<", "<=", ">", ">=", "==", "!="))
                         out.append("    if %s %s %s { fobs = fobs + %d; }" % (name, cmp, TYPES[ty]["lit"](self.rng), 1 << k))
             terms.append("fobs")
+        if any(self.env.get(e) for e in self.enums):
+            out.append("    var eobs: u64 = 0;")
+            for ename, variants in self.enums.items():
+                for name in self.env.get(ename, []):
+                    out.append("    switch %s {" % name)
+                    for k, v in enumerate(variants[:-1]):
+                        out.append("        .%s => { eobs = eobs + %d; }" % (v, k + 1))
+                    out.append("        _ => { eobs = eobs + %d; }" % len(variants))
+                    out.append("    }")
+            terms.append("eobs")
+
         acc = terms[0] if terms else "0"
         for t in terms[1:]:
             acc = "(%s ^ %s)" % (acc, t)
         out.append("    return %s;" % acc)
         body = "\n".join(out)
-        return ("// Generated by tools/fuzz/mcfuzz.py — regenerate from the seed.\n"
-                "export fn harness() -> u64 {\n%s\n}\n" % body)
+        header = "// Generated by tools/fuzz/mcfuzz.py — regenerate from the seed.\n"
+        return header + "\n".join(decls) + "\nexport fn harness() -> u64 {\n" + body + "\n}\n"
 
 
 # ----- oracles -----
