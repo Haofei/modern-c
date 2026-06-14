@@ -5445,7 +5445,30 @@ const CEmitter = struct {
         if (unsignedTypeSuffix(inner_name) == null) return error.UnsupportedCEmission;
 
         switch (node.op) {
-            .add, .sub, .mul, .bit_and, .bit_or, .bit_xor => {
+            .add, .sub, .mul => {
+                // C integer promotion takes a sub-`int` unsigned operand (u8/u16) to signed
+                // `int`, so the arithmetic runs in `int` and a `mul` can overflow it (UB) before
+                // truncating back to the wrap type. Compute narrow wrap arithmetic in
+                // `unsigned int` (modular, no UB) and truncate to the wrap type. u32/u64 are
+                // already at/above `int` rank and wrap as unsigned with no UB.
+                const narrow = std.mem.eql(u8, inner_name, "u8") or std.mem.eql(u8, inner_name, "u16");
+                if (narrow) {
+                    const c_inner = try self.cTypeFor(inner, .typedef_name);
+                    try self.out.print(self.allocator, "({s})((unsigned int)(", .{c_inner});
+                    try self.emitExprWithTarget(node.left.*, locals, target);
+                    try self.out.print(self.allocator, ") {s} (unsigned int)(", .{binaryCOp(node.op)});
+                    try self.emitExprWithTarget(node.right.*, locals, target);
+                    try self.out.appendSlice(self.allocator, ")))");
+                    return true;
+                }
+                try self.out.appendSlice(self.allocator, "(");
+                try self.emitExprWithTarget(node.left.*, locals, target);
+                try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
+                try self.emitExprWithTarget(node.right.*, locals, target);
+                try self.out.appendSlice(self.allocator, ")");
+                return true;
+            },
+            .bit_and, .bit_or, .bit_xor => {
                 try self.out.appendSlice(self.allocator, "(");
                 try self.emitExprWithTarget(node.left.*, locals, target);
                 try self.out.print(self.allocator, " {s} ", .{binaryCOp(node.op)});
@@ -8183,6 +8206,10 @@ const CEmitter = struct {
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(target_ty, .typedef_name), result_temp });
         switch (plan) {
             .infix => |op_text| try self.out.print(self.allocator, "({s} {s} {s})", .{ left_name, op_text, right_name }),
+            // Narrow (u8/u16) wrap arithmetic computed in `unsigned int` to avoid C's signed-int
+            // promotion (where e.g. a u16 `*` overflows `int` — UB — before truncating). The
+            // result temp is the wrap type, so the assignment truncates back, modulo 2^N.
+            .unsigned_infix => |op_text| try self.out.print(self.allocator, "((unsigned int)({s}) {s} (unsigned int)({s}))", .{ left_name, op_text, right_name }),
             .helper => |helper| try self.out.print(self.allocator, "{s}{s}({s}, {s})", .{ helper.prefix, helper.suffix, left_name, right_name }),
         }
         try self.out.appendSlice(self.allocator, ";\n");
@@ -8191,6 +8218,7 @@ const CEmitter = struct {
 
     const SequencedBinaryPlan = union(enum) {
         infix: []const u8,
+        unsigned_infix: []const u8,
         helper: CheckedHelperParts,
     };
 
@@ -8211,8 +8239,12 @@ const CEmitter = struct {
         if (genericChildType(resolved_target_ty, "wrap")) |inner| {
             const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
             if (unsignedTypeSuffix(inner_name) == null) return error.UnsupportedCEmission;
+            // u8/u16 promote to signed `int`, so their arithmetic (notably `*`) must run in
+            // unsigned to avoid signed-overflow UB; u32/u64 already wrap as unsigned.
+            const narrow = std.mem.eql(u8, inner_name, "u8") or std.mem.eql(u8, inner_name, "u16");
             return switch (op) {
-                .add, .sub, .mul, .bit_and, .bit_or, .bit_xor => .{ .infix = binaryCOp(op) },
+                .add, .sub, .mul => if (narrow) .{ .unsigned_infix = binaryCOp(op) } else .{ .infix = binaryCOp(op) },
+                .bit_and, .bit_or, .bit_xor => .{ .infix = binaryCOp(op) },
                 .shl, .shr => .{ .helper = .{
                     .prefix = try std.fmt.allocPrint(self.scratch.allocator(), "mc_wrap_{s}_", .{if (op == .shl) "shl" else "shr"}),
                     .suffix = unsignedTypeSuffix(inner_name).?,

@@ -75,9 +75,11 @@ TYPES = {}
 def _t(name, kind, width, lit, fold):
     TYPES[name] = {"name": name, "kind": kind, "width": width, "lit": lit, "fold": fold}
 
-def _sat_fold(width):
-    # A `sat<uN>` is observed by extracting its underlying unsigned value, then widening.
+def _domain_fold(width):
+    # A `sat<uN>`/`wrap<uN>` is observed by extracting its underlying unsigned value, then widening.
     return lambda n: "((u%d.wrap_from(%s)) as u64)" % (width, n)
+
+_sat_fold = _domain_fold
 
 for w in (8, 16, 32, 64):
     _t("u%d" % w, "uint", w, _uint_lit(w), lambda n: "((%s) as u64)" % n)
@@ -85,7 +87,10 @@ for w in (8, 16, 32, 64):
     # Saturating arithmetic is a distinct *domain* (`sat<T>`, unsigned-only): `+ - *` saturate
     # instead of trapping or wrapping. Treated as its own value type so its operands never mix
     # with plain ints.
-    _t("sat<u%d>" % w, "sat", w, _uint_lit(w), _sat_fold(w))
+    _t("sat<u%d>" % w, "sat", w, _uint_lit(w), _domain_fold(w))
+    # Wrapping arithmetic domain (`wrap<T>`, unsigned-only): `+ - *` and bitwise/`>>` wrap modulo
+    # 2^N. Distinct lowering from the `wrapping.add` builtin, so it is its own value type.
+    _t("wrap<u%d>" % w, "wrap", w, _uint_lit(w), _domain_fold(w))
 _t("usize", "uint", 64, _uint_lit(64), lambda n: "((%s) as u64)" % n)
 _t("f64", "float", 64, _float_lit, lambda n: "bitcast<u64>(%s)" % n)
 _t("f32", "float", 32, _float_lit, lambda n: "(bitcast<u32>(%s) as u64)" % n)
@@ -95,6 +100,7 @@ UINTS = [n for n, t in TYPES.items() if t["kind"] == "uint"]
 SINTS = [n for n, t in TYPES.items() if t["kind"] == "sint"]
 INTS = UINTS + SINTS
 SATS = [n for n, t in TYPES.items() if t["kind"] == "sat"]
+WRAPS = [n for n, t in TYPES.items() if t["kind"] == "wrap"]
 FLOATS = [n for n, t in TYPES.items() if t["kind"] == "float"]
 # f32 is excluded from generation pending a real C-backend bug this framework found: f32
 # constant expressions are emitted with bare C `double` literals, so `a * b` is computed in
@@ -145,7 +151,7 @@ class Gen:
     # comparison — fails to lower while the LLVM backend lowers it fine). Floats nest freely,
     # since float ops carry no such target requirement.
     def local_types(self):
-        return (VALUE_TYPES + SATS + list(self.structs) + list(self.enums)
+        return (VALUE_TYPES + SATS + WRAPS + list(self.structs) + list(self.enums)
                 + list(self.open_enums) + list(self.arrays))
 
     def gen_value(self, tyname, d=0):
@@ -175,14 +181,18 @@ class Gen:
                 return self.gen_leaf(tyname)
             op = self.rng.choice(("+", "-", "*", "/"))
             return "(%s %s %s)" % (self.gen_value(tyname, d + 1), op, self.gen_value(tyname, d + 1))
-        if kind == "sat":
-            # Saturating `+ - *` never trap and never wrap (they clamp), so they are always safe —
-            # but both operands must share the `sat<uN>` type, so combine only *live* sat vars; with
-            # none yet in scope (the first such decl) fall back to a literal initializer.
+        if kind == "sat" or kind == "wrap":
+            # `sat<uN>` clamps and `wrap<uN>` wraps; both are trap-free unsigned domains. Operands
+            # must share the domain type, so combine only *live* vars of the same type; with none
+            # yet in scope (the first such decl) fall back to a literal initializer. `sat` has no
+            # bitwise; `wrap` adds bitwise/`>>` (all modular, no trap).
             live = self.env.get(tyname, [])
             if len(live) >= 1 and self.rng.random() < 0.6:
-                op = self.rng.choice(("+", "-", "*"))
+                ops = ("+", "-", "*") if kind == "sat" else ("+", "-", "*", "&", "|", "^")
+                op = self.rng.choice(ops)
                 return "(%s %s %s)" % (self.rng.choice(live), op, self.rng.choice(live))
+            if kind == "wrap" and live and self.rng.random() < 0.3:
+                return "(%s >> %d)" % (self.rng.choice(live), self.rng.randrange(0, ty["width"]))
             return self.gen_leaf(tyname)
         if self.rng.random() < 0.35:
             return self.gen_leaf(tyname)
@@ -228,14 +238,16 @@ class Gen:
             return "wrapping.add(%s, %s)" % (self.rng.choice(live), self.gen_leaf(tyname))
         raise AssertionError(kind)
 
-    # A *checked* integer op (may trap on overflow / divide-by-zero). Signed ints have no
-    # bitwise/shift, so they use only + * /.
+    # A *checked* integer op (may trap on overflow / divide-by-zero / underflow). Signed ints have
+    # no bitwise/shift but allow checked negation (`-INT_MIN` traps); unsigned allow `<<`.
     def gen_checked(self, tyname, width, signed):
         a, b = self.anchored_pair(tyname)
-        ops = ["+", "*", "/"] if signed else ["+", "*", "/", "<<"]
+        ops = ["+", "-", "*", "/", "neg"] if signed else ["+", "-", "*", "/", "<<"]
         op = self.rng.choice(ops)
         if op == "<<":
             return "(%s << %d)" % (a, self.rng.randrange(0, width))
+        if op == "neg":
+            return "(-%s)" % a
         return "(%s %s %s)" % (a, op, b)
 
     def gen_bool(self, d=0):
@@ -447,7 +459,7 @@ class Gen:
         # by comparison (a float's bit pattern is not a stable cross-backend observable, its
         # ordering is). Enums fold by an exhaustive switch into an integer accumulator.
         terms = []
-        for ty in INTS + SATS:
+        for ty in INTS + SATS + WRAPS:
             for name in self.env.get(ty, []):
                 terms.append(TYPES[ty]["fold"](name))
         for tyname in list(self.structs) + list(self.arrays):
