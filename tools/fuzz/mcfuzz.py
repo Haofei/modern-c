@@ -132,6 +132,7 @@ class Gen:
         self.arrays = {}     # "[N]T" -> (element type, length)
         self.tuples = {}     # "(T0, T1, …)" -> [element type names] (G14; structural, no decl)
         self._spk = None     # G14: ("SPk", elem type) struct-of-pointers, or None
+        self._conv_w = None  # G13: uint width for the `type Wconv = wrap<uN>` conversion alias
         self._slice_helpers = set()  # G8: element types for which a `[]mut T` sum helper is declared
         self.aliases = {}    # alias name -> underlying int type (A11); transparent in use
         self.packed = {}     # packed-bits type name -> [bool field names] (G2 kernel surface)
@@ -648,6 +649,26 @@ class Gen:
                 out.append("    var %s: u64 = ufold_%s(%s);" % (fv, uname, uv))
                 terms.append(fv)
 
+    def gen_conv_body(self, out, terms):
+        # G13: cross-domain / representation conversions (C4). Exercises the explicit conversion
+        # vocabulary the literal-initialized domain vars never hit: plain -> wrap (`W.from_mod`),
+        # wrap -> plain (`.residue()`), and exact unsigned widening (`u64.from`). `from_mod` needs a
+        # named type, so a `type Wconv = wrap<uN>;` alias is declared (see program()). All trap-free
+        # and verified to agree across both backends + the reference interpreter.
+        if self._conv_w is None:
+            return
+        cw = self._conv_w
+        cp = "cp%d" % self.nvars; self.nvars += 1
+        out.append("    var %s: %s = %s;" % (cp, cw, TYPES[cw]["lit"](self.rng)))
+        wd = "wd%d" % self.nvars; self.nvars += 1
+        out.append("    var %s: Wconv = Wconv.from_mod(%s);" % (wd, cp))
+        rd = "rd%d" % self.nvars; self.nvars += 1
+        out.append("    var %s: %s = %s.residue();" % (rd, cw, wd))
+        terms.append(TYPES[cw]["fold"](rd))
+        wide = "wide%d" % self.nvars; self.nvars += 1
+        out.append("    var %s: u64 = u64.from(%s);" % (wide, cp))
+        terms.append(wide)
+
     def gen_slice_body(self, decls, out, terms):
         # G8 (full slices): a `[]mut T` view over a live integer array for a *general* element type
         # T (not just the byte-view u8 of G12). Array-slicing yields a mutable view because the
@@ -737,6 +758,9 @@ class Gen:
             decls.append("type %s = %s;" % (name, u))
         self.gen_kernel_decls(decls)
         self.gen_unions(decls)  # G7: tagged unions + per-union fold helpers
+        if self.rng.random() < 0.6:  # G13: a wrap-domain alias for from_mod/residue conversions
+            self._conv_w = self.rng.choice(UINTS)
+            decls.append("type Wconv = wrap<%s>;" % self._conv_w)
         self.gen_functions(decls)
         self.gen_result_functions(decls)
         self.gen_aggregate_abi(decls)
@@ -889,6 +913,7 @@ class Gen:
         self.gen_byteview_body(decls, out, terms)  # G12: byte-view reduction + slice indexing
         self.gen_slice_body(decls, out, terms)  # G8: general `[]mut T` slice construction + ABI
         self.gen_union_body(out, terms)  # G7: construct + switch-fold tagged union values
+        self.gen_conv_body(out, terms)  # G13: cross-domain conversions (from_mod/residue/widening)
         if self._spk is not None:  # G14: construct the struct-of-pointers and fold via field deref
             _, spty = self._spk
             out.append("    var spv: SPk = .{ .p = &gspk };")
@@ -1307,6 +1332,7 @@ def main():
             ("slice .len/index", r"\.len \{"),
             ("[]mut slice", r"\]mut \w+ = \w+\["), ("slice fn param", r"fn slcsum_"),
             ("tagged union", r"^union "), ("union switch-fold", r"fn ufold_"),
+            ("domain conv", r"Wconv\.from_mod"), ("residue", r"\.residue\(\)"), ("widening from", r"u64\.from\("),
         ]
         counts = {name: 0 for name, _ in markers}
         for s in range(1, args.count + 1):
