@@ -130,6 +130,8 @@ class Gen:
         self.result_fns = []  # [(name, param type, ok type)] — Result<ok, u32> helpers (A1)
         self.agg_fns = []    # [(name, param type, return type)] — aggregate-by-value helpers (G3)
         self.arrays = {}     # "[N]T" -> (element type, length)
+        self.tuples = {}     # "(T0, T1, …)" -> [element type names] (G14; structural, no decl)
+        self._spk = None     # G14: ("SPk", elem type) struct-of-pointers, or None
         self.aliases = {}    # alias name -> underlying int type (A11); transparent in use
         self.packed = {}     # packed-bits type name -> [bool field names] (G2 kernel surface)
         self.immutable = set()  # binding names that are read-only (e.g. a `for x in …` element)
@@ -165,7 +167,7 @@ class Gen:
     # since float ops carry no such target requirement.
     def local_types(self):
         return (VALUE_TYPES + SATS + WRAPS + list(self.aliases) + list(self.structs) + list(self.enums)
-                + list(self.open_enums) + list(self.arrays))
+                + list(self.open_enums) + list(self.arrays) + list(self.tuples))
 
     def gen_value(self, tyname, d=0):
         if tyname in self.aliases:  # a type alias is transparent: value of the underlying type
@@ -179,6 +181,8 @@ class Gen:
             aggregate = elem in self.structs or elem in self.arrays or elem in self.open_enums
             gen = self.gen_value if aggregate else self.gen_leaf
             return ".{ %s }" % ", ".join(gen(elem) for _ in range(length))
+        if tyname in self.tuples:   # G14: a tuple literal `(e0, e1, …)` (>= 2 elements)
+            return "(%s)" % ", ".join(self.gen_value(et) for et in self.tuples[tyname])
         # Sometimes call a (earlier-declared) function returning this type. Args are leaves so
         # the call is type-clean; the DAG of functions guarantees termination.
         if d < 2 and self.functions and self.rng.random() < 0.3:
@@ -454,6 +458,9 @@ class Gen:
             elem, length = self.arrays[tyname]
             for k in range(length):
                 self.fold_type("%s[%d]" % (access, k), elem, terms)
+        elif tyname in self.tuples:  # G14: fold each element via `.i` access
+            for i, et in enumerate(self.tuples[tyname]):
+                self.fold_type("%s.%d" % (access, i), et, terms)
         elif tyname in self.open_enums:  # an open enum folds inline via `.raw()`
             terms.append("(%s.raw() as u64)" % access)
         else:
@@ -606,6 +613,10 @@ class Gen:
                 elem = self.rng.choice(elems)
                 length = self.rng.randrange(2, 4)
                 self.arrays["[%d]%s" % (length, elem)] = (elem, length)
+        for _ in range(self.rng.randrange(0, 2)):  # G14: tuples, incl. tuples-of-aggregates
+            pool = INTS + list(self.structs) + list(self.arrays) + list(self.open_enums)
+            elems = [self.rng.choice(pool) for _ in range(self.rng.randrange(2, 4))]
+            self.tuples["(%s)" % ", ".join(elems)] = elems
         for i in range(self.rng.randrange(1, 3)):
             variants = ["V%d" % j for j in range(self.rng.randrange(2, 5))]
             name = "E%d" % i
@@ -625,6 +636,11 @@ class Gen:
         self.gen_functions(decls)
         self.gen_result_functions(decls)
         self.gen_aggregate_abi(decls)
+        if self.rng.random() < 0.5:  # G14: struct-of-pointers (field is `*T` into a stable global)
+            spty = self.rng.choice(INTS)
+            self._spk = ("SPk", spty)
+            decls.append("global gspk: %s = %s;" % (spty, TYPES[spty]["lit"](self.rng)))
+            decls.append("struct SPk { p: *%s }" % spty)
 
         recf_ty = None  # G10: a depth-bounded self-recursive function (sum 1..n)
         if self.rng.random() < 0.4:
@@ -672,6 +688,11 @@ class Gen:
             self.nvars += 1
             out.append("    var %s: %s = %s;" % (name, ty, self.gen_value(ty)))
             self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
+        for ty in self.tuples:  # G14: always instantiate one var per declared tuple type, folded below
+            name = "v%d" % self.nvars
+            self.nvars += 1
+            out.append("    var %s: %s = %s;" % (name, ty, self.gen_value(ty)))
+            self.env.setdefault(ty, []).append(name)
         if use_generic:  # A8: call the generic identity fn, instantiating it per type
             for _ in range(self.rng.randrange(0, 3)):
                 ty = self.rng.choice(INTS)
@@ -718,7 +739,7 @@ class Gen:
         for ty in INTS + SATS + WRAPS:
             for name in self.env.get(ty, []):
                 terms.append(TYPES[ty]["fold"](name))
-        for tyname in list(self.structs) + list(self.arrays):
+        for tyname in list(self.structs) + list(self.arrays) + list(self.tuples):
             for name in self.env.get(tyname, []):
                 self.fold_type(name, tyname, terms)
         for ename in self.open_enums:  # standalone open-enum vars fold inline via `.raw()`
@@ -761,6 +782,23 @@ class Gen:
                             cmp = self.rng.choice(("<", "<=", ">", ">=", "==", "!="))
                             out.append("    if %s %s %s { fobs = fobs + %d; }" % (name, cmp, TYPES[ty]["lit"](self.rng), 1 << k))
                 terms.append("fobs")
+        if self._spk is not None:  # G14: construct the struct-of-pointers and fold via field deref
+            _, spty = self._spk
+            out.append("    var spv: SPk = .{ .p = &gspk };")
+            terms.append(TYPES[spty]["fold"]("spv.p.*"))
+        if self.rng.random() < 0.5:  # G14: an array of Result<T, u32>, each element folded by switch
+            arty = self.rng.choice(INTS)
+            arn = self.rng.randrange(2, 4)
+            elems = ["ok(%s)" % self.gen_leaf(arty) if self.rng.random() < 0.5
+                     else "err(%s)" % TYPES["u32"]["lit"](self.rng) for _ in range(arn)]
+            out.append("    var arres: [%d]Result<%s, u32> = .{ %s };" % (arn, arty, ", ".join(elems)))
+            out.append("    var arobs: u64 = 0;")
+            for k in range(arn):
+                out.append("    switch arres[%d] {" % k)
+                out.append("        ok(v) => { arobs = (arobs ^ %s); }" % TYPES[arty]["fold"]("v"))
+                out.append("        err(e) => { arobs = (arobs ^ %s ^ 7); }" % TYPES["u32"]["fold"]("e"))
+                out.append("    }")
+            terms.append("arobs")
         if any(self.env.get(e) for e in self.enums):
             out.append("    var eobs: u64 = 0;")
             for ename, variants in self.enums.items():
@@ -1154,6 +1192,7 @@ def main():
             ("generic fn", r"comptime T: type"), ("closure", r"bind\("),
             ("aggregate ABI", r"fn agg(id|get)"), ("&&/||", r"&&|\|\|"),
             ("atomic", r"atomic<u"), ("packed bits", r"^packed bits "),
+            ("tuple", r": \([^)]+, "), ("struct-of-ptr", r"struct SPk"), ("array-of-Result", r"\]Result<"),
         ]
         counts = {name: 0 for name, _ in markers}
         for s in range(1, args.count + 1):
