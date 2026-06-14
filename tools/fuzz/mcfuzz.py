@@ -89,11 +89,17 @@ VALUE_TYPES = [t for t in (INTS + FLOATS) if t not in GEN_SKIP]  # foldable into
 
 
 class Gen:
-    def __init__(self, seed):
+    def __init__(self, seed, trapping=False):
         self.rng = random.Random(seed)
         self.env = {}        # type name -> [var names in scope at top level]
         self.nvars = 0
         self.depth = 0       # block nesting (new vars only at depth 0)
+        # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
+        # so a program may trap (overflow / divide-by-zero). Under the differential's status
+        # contract, both backends must then trap together — this exercises the trap-lowering
+        # surface the trap-free mode skips. (Not for the sanitize oracle, where a trap is a
+        # non-zero exit.)
+        self.trapping = trapping
 
     # ---- expressions ----
     def gen_leaf(self, tyname):
@@ -101,6 +107,14 @@ class Gen:
         if live and self.rng.random() < 0.6:
             return self.rng.choice(live)
         return TYPES[tyname]["lit"](self.rng)
+
+    # A pair (a, b) for a checked op: anchor at least one operand to a live variable so the C
+    # emitter can type the op (two bare literals defeat its inference).
+    def anchored_pair(self, tyname):
+        live = self.env.get(tyname, [])
+        a = self.rng.choice(live) if live else self.gen_leaf(tyname)
+        b = self.gen_leaf(tyname)
+        return a, b
 
     # Integer expressions are kept FLAT — every checked op (wrapping.add / bitwise / shift /
     # conversion) is a complete value with *leaf* operands (variables or literals), and is only
@@ -125,6 +139,8 @@ class Gen:
         if self.rng.random() < 0.35:
             return self.gen_leaf(tyname)
         if kind == "uint":
+            if self.trapping and self.rng.random() < 0.5:
+                return self.gen_checked(tyname, ty["width"], signed=False)
             # Note: `<<` is a *checked* left shift that traps on value overflow (masking only the
             # amount prevents InvalidShift, not IntegerOverflow), so it is not trap-free and is
             # excluded; `>>` cannot overflow and stays.
@@ -153,6 +169,8 @@ class Gen:
                 srcval = TYPES[src]["lit"](self.rng)
             return "%s.wrap_from(%s)" % (tyname, TYPES[src]["fold"](srcval))
         if kind == "sint":
+            if self.trapping and self.rng.random() < 0.5:
+                return self.gen_checked(tyname, ty["width"], signed=True)
             # signed ints forbid bitwise/shift. A signed wrapping.add must anchor its type with a
             # live variable: the emitter routes a typed signed add through the unsigned domain
             # (UB-free), but cannot type two bare literals, so anchor or fall back to a literal.
@@ -161,6 +179,16 @@ class Gen:
                 return self.gen_leaf(tyname)
             return "wrapping.add(%s, %s)" % (self.rng.choice(live), self.gen_leaf(tyname))
         raise AssertionError(kind)
+
+    # A *checked* integer op (may trap on overflow / divide-by-zero). Signed ints have no
+    # bitwise/shift, so they use only + * /.
+    def gen_checked(self, tyname, width, signed):
+        a, b = self.anchored_pair(tyname)
+        ops = ["+", "*", "/"] if signed else ["+", "*", "/", "<<"]
+        op = self.rng.choice(ops)
+        if op == "<<":
+            return "(%s << %d)" % (a, self.rng.randrange(0, width))
+        return "(%s %s %s)" % (a, op, b)
 
     def gen_bool(self, d=0):
         typed = [t for t in VALUE_TYPES if self.env.get(t)]
@@ -285,9 +313,15 @@ def oracle_differential(env, seed, src_path, work):
         return "LLVM link failed"
     co = subprocess.run([c_app], capture_output=True)
     lo = subprocess.run([l_app], capture_output=True)
-    if co.returncode != lo.returncode or co.stdout != lo.stdout:
-        return "BACKEND DIVERGENCE: C=(rc=%d,%r) LLVM=(rc=%d,%r)" % (
-            co.returncode, co.stdout.strip(), lo.returncode, lo.stdout.strip())
+    # rss-testgen's contract: compare the success/failure *status*, and the stdout only when
+    # both succeed. A program that traps (overflow, div-by-zero, …) on one backend must trap on
+    # the other — but the exact trap mechanism/exit code differs (the C backend inlines its
+    # traps; the LLVM side links __builtin_trap stubs), so we compare "exited 0" not the code.
+    c_ok, l_ok = (co.returncode == 0), (lo.returncode == 0)
+    if c_ok != l_ok:
+        return "BACKEND DIVERGENCE (one trapped, one did not): C=(rc=%d) LLVM=(rc=%d)" % (co.returncode, lo.returncode)
+    if c_ok and co.stdout != lo.stdout:
+        return "BACKEND DIVERGENCE (output): C=%r LLVM=%r" % (co.stdout.strip(), lo.stdout.strip())
     return None
 
 
@@ -317,7 +351,7 @@ def run_one(env, oracle, seed):
     work = tempfile.mkdtemp()
     try:
         src = os.path.join(work, "p.mc")
-        open(src, "w").write(Gen(seed).program())
+        open(src, "w").write(Gen(seed, trapping=env.get("trapping", False)).program())
         chk = subprocess.run([env["mcc"], "check", src], capture_output=True)
         if chk.returncode != 0:
             return "FAIL seed=%d: mcc check rejected a generated program" % seed
@@ -332,17 +366,18 @@ def run_one(env, oracle, seed):
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    g = sub.add_parser("gen"); g.add_argument("seed", type=int)
+    g = sub.add_parser("gen"); g.add_argument("seed", type=int); g.add_argument("--trapping", action="store_true")
     r = sub.add_parser("run")
     r.add_argument("--count", type=int, default=int(os.environ.get("COUNT", "300")))
     r.add_argument("--start", type=int, default=1)
     r.add_argument("--oracle", choices=list(ORACLES), default="differential")
+    r.add_argument("--trapping", action="store_true", help="emit checked arithmetic that may trap (differential only)")
     r.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", os.cpu_count() or 4)))
     r.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
     args = ap.parse_args()
 
     if args.cmd == "gen":
-        sys.stdout.write(Gen(args.seed).program())
+        sys.stdout.write(Gen(args.seed, trapping=args.trapping).program())
         return 0
 
     import shutil
@@ -353,6 +388,7 @@ def main():
     env = {
         "mcc": args.mcc, "clang": os.environ.get("CLANG", "clang"), "llc": os.environ.get("LLC", "llc"),
         "link_flags": ["-no-pie"] if sys.platform.startswith("linux") else [],
+        "trapping": args.trapping,
     }
     oracle = ORACLES[args.oracle]
     seeds = range(args.start, args.start + args.count)
