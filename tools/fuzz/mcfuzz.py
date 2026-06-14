@@ -579,6 +579,38 @@ class Gen:
                 out.append("    if %s.%s { pbo_%s = (pbo_%s ^ %d); }" % (vn, f, vn, vn, 1 << k))
             self._kernel_terms.append("pbo_%s" % vn)
 
+    def gen_byteview_body(self, decls, out, terms):
+        # G12 / G8 (slices): a byte-view slice over a live *integer array* — contiguous and
+        # fully initialized, so its byte representation has no padding/unspecified bytes and is
+        # identical across backends (sound to observe). mem.as_bytes(&v) is the only
+        # slice-construction form that lowers through both backends. Exercised two ways: a checked
+        # reduction (reduce.sum_checked — the "hot checked reduction" path) and bounds-checked
+        # slice indexing with `.len`. The reduction goes through a wrapper fn because switching
+        # directly on the builtin call expression fails to lower.
+        cands = [n for ty, (elem, _l) in self.arrays.items() if elem in INTS
+                 for n in self.env.get(ty, [])]
+        if not cands:
+            return
+        decls.append("fn bvsum(xs: []const u8) -> Result<u8, Overflow> {\n"
+                     "    return reduce.sum_checked<u8>(xs);\n}")
+        vn = self.rng.choice(cands)
+        bv = "bv%d" % self.nvars; self.nvars += 1
+        out.append("    let %s: []const u8 = mem.as_bytes(&%s);" % (bv, vn))
+        rdo = "rdo%d" % self.nvars; self.nvars += 1
+        out.append("    var %s: u64 = 0;" % rdo)
+        out.append("    switch bvsum(%s) {" % bv)
+        out.append("        ok(rv) => { %s = (rv as u64); }" % rdo)
+        out.append("        err(eo) => { %s = 1; }" % rdo)
+        out.append("    }")
+        terms.append(rdo)
+        it = "bvi%d" % self.nvars; self.nvars += 1
+        sm = "bvs%d" % self.nvars; self.nvars += 1
+        out.append("    var %s: u64 = 0;" % sm)
+        out.append("    var %s: usize = 0;" % it)
+        out.append("    while %s < %s.len { %s = (%s ^ (%s[%s] as u64)); %s = %s + 1; }"
+                   % (it, bv, sm, sm, bv, it, it, it))
+        terms.append(sm)
+
     def program(self, metamorph=False):
         # Declare a couple of user types the generator can construct, read, and match.
         decls = []
@@ -782,6 +814,7 @@ class Gen:
                             cmp = self.rng.choice(("<", "<=", ">", ">=", "==", "!="))
                             out.append("    if %s %s %s { fobs = fobs + %d; }" % (name, cmp, TYPES[ty]["lit"](self.rng), 1 << k))
                 terms.append("fobs")
+        self.gen_byteview_body(decls, out, terms)  # G12/G8: byte-view reduction + slice indexing
         if self._spk is not None:  # G14: construct the struct-of-pointers and fold via field deref
             _, spty = self._spk
             out.append("    var spv: SPk = .{ .p = &gspk };")
@@ -1193,6 +1226,8 @@ def main():
             ("aggregate ABI", r"fn agg(id|get)"), ("&&/||", r"&&|\|\|"),
             ("atomic", r"atomic<u"), ("packed bits", r"^packed bits "),
             ("tuple", r": \([^)]+, "), ("struct-of-ptr", r"struct SPk"), ("array-of-Result", r"\]Result<"),
+            ("byte-view slice", r"mem\.as_bytes"), ("checked reduce", r"reduce\.sum_checked"),
+            ("slice .len/index", r"\.len \{"),
         ]
         counts = {name: 0 for name, _ in markers}
         for s in range(1, args.count + 1):
