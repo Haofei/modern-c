@@ -3126,15 +3126,29 @@ pub const Checker = struct {
             return;
         }
 
-        const info = dmaBufInfoForValue(member.base.*, ctx) orelse return;
-        if (std.mem.eql(u8, member.name.text, "dma_addr") or std.mem.eql(u8, member.name.text, "as_slice")) {
+        const is_dma_op = std.mem.eql(u8, member.name.text, "dma_addr") or
+            std.mem.eql(u8, member.name.text, "as_slice");
+        if (dmaBufInfoForValue(member.base.*, ctx)) |info| {
+            if (!is_dma_op) {
+                self.errorCode(member.name.span, "E_DMA_OPERATION", "unknown DmaBuf operation");
+                return;
+            }
             if (args.len != 0) {
                 self.errorCode(span, "E_CALL_ARG_COUNT", "DmaBuf operation does not take arguments");
             }
             _ = info;
             return;
         }
-        self.errorCode(member.name.span, "E_DMA_OPERATION", "unknown DmaBuf operation");
+        // The base is not a DmaBuf. `dma_addr`/`as_slice` are defined only on DmaBuf values
+        // (section 18 — the device-address vs CPU-view bridge), so calling them on anything else
+        // is ill-typed. Without this the checker silently accepted e.g. `someArray.as_slice()`
+        // (the result still typed as a slice), which no backend can lower — LLVM rejected it with
+        // UnsupportedLlvmEmission, a check-vs-backend inconsistency. Any other member call on a
+        // non-DmaBuf base is some other construct, so leave it to the remaining checkers.
+        if (is_dma_op) {
+            self.errorCode(member.name.span, "E_DMA_OPERATION", "dma_addr/as_slice are defined only on DmaBuf values");
+            _ = self.checkExpr(member.base.*, ctx);
+        }
     }
 
     fn checkTypeStaticCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {

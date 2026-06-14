@@ -46,3 +46,17 @@ fn reject_unknown_dma_operation(buf: DmaBuf<Packet, .noncoherent>) -> void {
     // EXPECT_ERROR: E_DMA_OPERATION
     buf.flush();
 }
+
+// `as_slice`/`dma_addr` are the DmaBuf CPU-view bridge; calling them on a non-DmaBuf value is
+// ill-typed. On a struct base this was already caught as an unknown field, but on an *array* base
+// it slipped through sema (the result still typed as a slice) and failed only at LLVM lowering
+// (UnsupportedLlvmEmission) — a check-vs-backend inconsistency now closed in sema.
+fn reject_as_slice_non_dma(items: [4]Packet) -> []mut Packet {
+    // EXPECT_ERROR: E_DMA_OPERATION
+    return items.as_slice();
+}
+
+fn reject_dma_addr_non_dma(words: [4]u8) -> DmaAddr {
+    // EXPECT_ERROR: E_DMA_OPERATION
+    return words.dma_addr();
+}
