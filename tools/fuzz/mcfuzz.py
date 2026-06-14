@@ -56,11 +56,16 @@ DRIVER = ('#include <stdint.h>\n#include <stdio.h>\n'
 # expression reducing a value of this type to bits/magnitude.
 def _uint_lit(width):
     hi = (1 << width) - 1
-    return lambda rng: str(rng.randint(0, hi))
+    # Bias toward representational corners (0, 1, max, max-1, the signed-split point) so checked
+    # ops land on overflow edges far more often than a uniform draw would — most integer bugs
+    # live at the boundaries, not in the bulk.
+    corners = [0, 1, 2, hi, hi - 1, hi >> 1, (hi >> 1) + 1]
+    return lambda rng: str(rng.choice(corners) if rng.random() < 0.3 else rng.randint(0, hi))
 
 def _sint_lit(width):
     lo, hi = -(1 << (width - 1)), (1 << (width - 1)) - 1
-    return lambda rng: str(rng.randint(lo, hi))
+    corners = [lo, lo + 1, -1, 0, 1, hi, hi - 1]
+    return lambda rng: str(rng.choice(corners) if rng.random() < 0.3 else rng.randint(lo, hi))
 
 def _float_lit(rng):
     # a finite decimal literal (keep magnitudes modest so products stay finite)
@@ -70,9 +75,17 @@ TYPES = {}
 def _t(name, kind, width, lit, fold):
     TYPES[name] = {"name": name, "kind": kind, "width": width, "lit": lit, "fold": fold}
 
+def _sat_fold(width):
+    # A `sat<uN>` is observed by extracting its underlying unsigned value, then widening.
+    return lambda n: "((u%d.wrap_from(%s)) as u64)" % (width, n)
+
 for w in (8, 16, 32, 64):
     _t("u%d" % w, "uint", w, _uint_lit(w), lambda n: "((%s) as u64)" % n)
     _t("i%d" % w, "sint", w, _sint_lit(w), lambda n: "((%s) as u64)" % n)
+    # Saturating arithmetic is a distinct *domain* (`sat<T>`, unsigned-only): `+ - *` saturate
+    # instead of trapping or wrapping. Treated as its own value type so its operands never mix
+    # with plain ints.
+    _t("sat<u%d>" % w, "sat", w, _uint_lit(w), _sat_fold(w))
 _t("usize", "uint", 64, _uint_lit(64), lambda n: "((%s) as u64)" % n)
 _t("f64", "float", 64, _float_lit, lambda n: "bitcast<u64>(%s)" % n)
 _t("f32", "float", 32, _float_lit, lambda n: "(bitcast<u32>(%s) as u64)" % n)
@@ -81,6 +94,7 @@ _t("bool", "bool", 1, lambda rng: rng.choice(("true", "false")), None)
 UINTS = [n for n, t in TYPES.items() if t["kind"] == "uint"]
 SINTS = [n for n, t in TYPES.items() if t["kind"] == "sint"]
 INTS = UINTS + SINTS
+SATS = [n for n, t in TYPES.items() if t["kind"] == "sat"]
 FLOATS = [n for n, t in TYPES.items() if t["kind"] == "float"]
 # f32 is excluded from generation pending a real C-backend bug this framework found: f32
 # constant expressions are emitted with bare C `double` literals, so `a * b` is computed in
@@ -96,7 +110,8 @@ class Gen:
         self.nvars = 0
         self.depth = 0       # block nesting (new vars only at depth 0)
         self.structs = {}    # struct name -> [(field, scalar type name)]
-        self.enums = {}      # enum name -> [variant names]
+        self.enums = {}      # closed enum name -> [variant names] (folded via exhaustive switch)
+        self.open_enums = {} # open enum name -> [variant names] (`.raw()`-foldable; nests in aggregates)
         self.functions = []  # [(name, [(param, type)], ret type)] — call only earlier ones (a DAG)
         self.arrays = {}     # "[N]T" -> (element type, length)
         # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
@@ -130,16 +145,18 @@ class Gen:
     # comparison — fails to lower while the LLVM backend lowers it fine). Floats nest freely,
     # since float ops carry no such target requirement.
     def local_types(self):
-        return VALUE_TYPES + list(self.structs) + list(self.enums) + list(self.arrays)
+        return (VALUE_TYPES + SATS + list(self.structs) + list(self.enums)
+                + list(self.open_enums) + list(self.arrays))
 
     def gen_value(self, tyname, d=0):
         if tyname in self.structs:  # construct: `.{ .f = <field value>, … }`
             return ".{ %s }" % ", ".join(".%s = %s" % (f, self.gen_value(t)) for f, t in self.structs[tyname])
-        if tyname in self.enums:    # an enum literal: `.Variant`
-            return ".%s" % self.rng.choice(self.enums[tyname])
+        if tyname in self.enums or tyname in self.open_enums:  # an enum literal: `.Variant`
+            return ".%s" % self.rng.choice((self.enums.get(tyname) or self.open_enums[tyname]))
         if tyname in self.arrays:   # an array literal `.{ e0, …, e{N-1} }`
             elem, length = self.arrays[tyname]
-            gen = self.gen_value if (elem in self.structs or elem in self.arrays) else self.gen_leaf
+            aggregate = elem in self.structs or elem in self.arrays or elem in self.open_enums
+            gen = self.gen_value if aggregate else self.gen_leaf
             return ".{ %s }" % ", ".join(gen(elem) for _ in range(length))
         # Sometimes call a (earlier-declared) function returning this type. Args are leaves so
         # the call is type-clean; the DAG of functions guarantees termination.
@@ -158,6 +175,15 @@ class Gen:
                 return self.gen_leaf(tyname)
             op = self.rng.choice(("+", "-", "*", "/"))
             return "(%s %s %s)" % (self.gen_value(tyname, d + 1), op, self.gen_value(tyname, d + 1))
+        if kind == "sat":
+            # Saturating `+ - *` never trap and never wrap (they clamp), so they are always safe —
+            # but both operands must share the `sat<uN>` type, so combine only *live* sat vars; with
+            # none yet in scope (the first such decl) fall back to a literal initializer.
+            live = self.env.get(tyname, [])
+            if len(live) >= 1 and self.rng.random() < 0.6:
+                op = self.rng.choice(("+", "-", "*"))
+                return "(%s %s %s)" % (self.rng.choice(live), op, self.rng.choice(live))
+            return self.gen_leaf(tyname)
         if self.rng.random() < 0.35:
             return self.gen_leaf(tyname)
         if kind == "uint":
@@ -244,17 +270,39 @@ class Gen:
             self.nvars += 1
             out.append("%svar %s: %s = %s;" % (pad, name, ty, self.gen_value(ty)))
             self.env.setdefault(ty, []).append(name)
-        elif r < 0.65 and self._has_any_var():
-            ty, name = self._pick_var()
-            rhs = self.gen_value(ty)
-            if rhs == name:
-                rhs = self.gen_value(ty, 1)
-            out.append("%s%s = %s;" % (pad, name, rhs))
-        elif r < 0.82 and self.depth < 3:
+        elif r < 0.65 and (self._has_any_var() or self._has_aggregate_var()):
+            # Either a whole-scalar assignment or an in-place store into an aggregate leaf
+            # (`s.f = …`, `a[i] = …`, `s.f[i][j] = …`) — the latter exercises lvalue/field-store
+            # lowering that whole-variable assignment never reaches.
+            if self._has_aggregate_var() and (not self._has_any_var() or self.rng.random() < 0.4):
+                path, t = self._aggregate_lvalue()
+                out.append("%s%s = %s;" % (pad, path, self.gen_value(t)))
+            else:
+                ty, name = self._pick_var()
+                rhs = self.gen_value(ty)
+                if rhs == name:
+                    rhs = self.gen_value(ty, 1)
+                out.append("%s%s = %s;" % (pad, name, rhs))
+        elif r < 0.80 and self.depth < 3:
             out.append("%sif %s {" % (pad, self.gen_bool()))
             self.block(out, indent + 1)
             out.append("%s} else {" % pad)
             self.block(out, indent + 1)
+            out.append("%s}" % pad)
+        elif r < 0.90 and self.depth < 3 and self._live_enum_vars():
+            # A `switch` in statement position with side-effecting arms — the construct that most
+            # multiplies MIR block count (every arm is its own block), exercising control-flow
+            # lowering the read-only digest switch never reaches. All-but-last variant explicit,
+            # `_` wildcard last (valid for both closed and open enums).
+            var, variants = self.rng.choice(self._live_enum_vars())
+            out.append("%sswitch %s {" % (pad, var))
+            for v in variants[:-1]:
+                out.append("%s    .%s => {" % (pad, v))
+                self.block(out, indent + 2)
+                out.append("%s    }" % pad)
+            out.append("%s    _ => {" % pad)
+            self.block(out, indent + 2)
+            out.append("%s    }" % pad)
             out.append("%s}" % pad)
         else:
             n = self.rng.randrange(1, 5)
@@ -281,6 +329,36 @@ class Gen:
         ty = self.rng.choice([t for t in VALUE_TYPES if self.env.get(t)])
         return ty, self.rng.choice(self.env[ty])
 
+    def _aggregate_types(self):
+        return list(self.structs) + list(self.arrays)
+
+    def _has_aggregate_var(self):
+        return any(self.env.get(t) for t in self._aggregate_types())
+
+    def _aggregate_lvalue(self):
+        # Walk a live struct/array var down to a scalar (int / open-enum) leaf, returning
+        # (lvalue path, leaf type). The struct/array nesting is a finite DAG, so the walk always
+        # terminates at a leaf.
+        cands = [(name, t) for t in self._aggregate_types() for name in self.env.get(t, [])]
+        path, tyname = self.rng.choice(cands)
+        while tyname in self.structs or tyname in self.arrays:
+            if tyname in self.structs:
+                f, tyname = self.rng.choice(self.structs[tyname])
+                path = "%s.%s" % (path, f)
+            else:
+                elem, length = self.arrays[tyname]
+                path, tyname = "%s[%d]" % (path, self.rng.randrange(length)), elem
+        return path, tyname
+
+    def _live_enum_vars(self):
+        # (var name, variants) for every live closed- or open-enum variable, for switch subjects.
+        out = []
+        for table in (self.enums, self.open_enums):
+            for ename, variants in table.items():
+                for name in self.env.get(ename, []):
+                    out.append((name, variants))
+        return out
+
     def fold_type(self, access, tyname, terms):
         # Fold a value of any aggregate/scalar type into the digest, recursing through nested
         # structs and arrays down to scalar leaves.
@@ -291,6 +369,8 @@ class Gen:
             elem, length = self.arrays[tyname]
             for k in range(length):
                 self.fold_type("%s[%d]" % (access, k), elem, terms)
+        elif tyname in self.open_enums:  # an open enum folds inline via `.raw()`
+            terms.append("(%s.raw() as u64)" % access)
         else:
             terms.append(TYPES[tyname]["fold"](access))
 
@@ -316,20 +396,34 @@ class Gen:
     def program(self):
         # Declare a couple of user types the generator can construct, read, and match.
         decls = []
+        int_arrays = []
         for _ in range(self.rng.randrange(1, 3)):  # array types (int elements; structural, no decl)
             elem = self.rng.choice(INTS)
             length = self.rng.randrange(2, 6)
-            self.arrays["[%d]%s" % (length, elem)] = (elem, length)
+            key = "[%d]%s" % (length, elem)
+            self.arrays[key] = (elem, length)
+            int_arrays.append(key)
+        for _ in range(self.rng.randrange(0, 2)):  # nested arrays `[N][M]T` over an int-array element
+            if int_arrays:
+                inner = self.rng.choice(int_arrays)
+                length = self.rng.randrange(2, 4)
+                self.arrays["[%d]%s" % (length, inner)] = (inner, length)
+        for i in range(self.rng.randrange(1, 3)):  # open enums (raw()-foldable; nest in aggregates)
+            variants = ["W%d" % j for j in range(self.rng.randrange(2, 5))]
+            name = "O%d" % i
+            self.open_enums[name] = variants
+            decls.append("open enum %s: u8 { %s }" % (name, ", ".join(variants)))
         for i in range(self.rng.randrange(1, 4)):
             name = "S%d" % i
-            # fields are scalars, int-arrays, or *earlier* structs (a DAG → nesting terminates)
-            ftypes = INTS + list(self.arrays) + list(self.structs)
+            # fields are scalars, arrays, open enums, or *earlier* structs (a DAG → nesting terminates)
+            ftypes = INTS + list(self.arrays) + list(self.open_enums) + list(self.structs)
             fields = [("f%d" % j, self.rng.choice(ftypes)) for j in range(self.rng.randrange(1, 4))]
             self.structs[name] = fields
             decls.append("struct %s { %s }" % (name, ", ".join("%s: %s" % (f, t) for f, t in fields)))
-        for _ in range(self.rng.randrange(0, 2)):  # arrays of structs (declared after structs exist)
-            if self.structs:
-                elem = self.rng.choice(list(self.structs))
+        for _ in range(self.rng.randrange(0, 2)):  # arrays of aggregates (declared after structs exist)
+            elems = list(self.structs) + list(self.open_enums)
+            if elems:
+                elem = self.rng.choice(elems)
                 length = self.rng.randrange(2, 4)
                 self.arrays["[%d]%s" % (length, elem)] = (elem, length)
         for i in range(self.rng.randrange(1, 3)):
@@ -353,12 +447,15 @@ class Gen:
         # by comparison (a float's bit pattern is not a stable cross-backend observable, its
         # ordering is). Enums fold by an exhaustive switch into an integer accumulator.
         terms = []
-        for ty in INTS:
+        for ty in INTS + SATS:
             for name in self.env.get(ty, []):
                 terms.append(TYPES[ty]["fold"](name))
         for tyname in list(self.structs) + list(self.arrays):
             for name in self.env.get(tyname, []):
                 self.fold_type(name, tyname, terms)
+        for ename in self.open_enums:  # standalone open-enum vars fold inline via `.raw()`
+            for name in self.env.get(ename, []):
+                terms.append("(%s.raw() as u64)" % name)
         if any(self.env.get(ty) for ty in FLOATS):
             out.append("    var fobs: u64 = 0;")
             for ty in FLOATS:
