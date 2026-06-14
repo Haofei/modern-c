@@ -279,6 +279,15 @@ class Gen:
         ty = self.rng.choice([t for t in VALUE_TYPES if self.env.get(t)])
         return ty, self.rng.choice(self.env[ty])
 
+    def fold_struct(self, access, sname, terms):
+        # Fold each field of a struct into the digest, recursing into nested struct fields.
+        for f, t in self.structs[sname]:
+            sub = "%s.%s" % (access, f)
+            if t in self.structs:
+                self.fold_struct(sub, t, terms)
+            else:
+                terms.append(TYPES[t]["fold"](sub))
+
     def gen_functions(self, decls):
         # A DAG of helper functions: each takes scalar params and returns a scalar, may call
         # *earlier* functions (no recursion → terminates), and harness then calls them. Exercises
@@ -301,9 +310,11 @@ class Gen:
     def program(self):
         # Declare a couple of user types the generator can construct, read, and match.
         decls = []
-        for i in range(self.rng.randrange(1, 3)):
-            fields = [("f%d" % j, self.rng.choice(INTS)) for j in range(self.rng.randrange(1, 4))]
+        for i in range(self.rng.randrange(1, 4)):
             name = "S%d" % i
+            # fields are scalars or *earlier* structs (a DAG → nesting terminates, no cycles)
+            ftypes = INTS + list(self.structs)
+            fields = [("f%d" % j, self.rng.choice(ftypes)) for j in range(self.rng.randrange(1, 4))]
             self.structs[name] = fields
             decls.append("struct %s { %s }" % (name, ", ".join("%s: %s" % (f, t) for f, t in fields)))
         for i in range(self.rng.randrange(1, 3)):
@@ -334,10 +345,9 @@ class Gen:
         for ty in INTS:
             for name in self.env.get(ty, []):
                 terms.append(TYPES[ty]["fold"](name))
-        for sname, fields in self.structs.items():
+        for sname in self.structs:
             for name in self.env.get(sname, []):
-                for f, t in fields:
-                    terms.append(TYPES[t]["fold"]("%s.%s" % (name, f)))
+                self.fold_struct(name, sname, terms)
         for aname, (elem, length) in self.arrays.items():
             for name in self.env.get(aname, []):
                 for k in range(length):
