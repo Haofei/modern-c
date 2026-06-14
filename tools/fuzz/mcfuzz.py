@@ -35,6 +35,9 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mcref  # noqa: E402  (reference interpreter for the `reference` oracle, G1)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = HERE
 while ROOT != "/" and not os.path.exists(os.path.join(ROOT, "build.zig")):
@@ -975,11 +978,37 @@ def oracle_floatbits(env, seed, src_path, work):
     return _differential_compare(env, src, work)
 
 
+def oracle_reference(env, seed, src_path, work):
+    """Reference-interpreter oracle (G1): generate a program over the unsigned-integer core with
+    `mcref`, which renders MC *and* evaluates the same AST in pure Python, then assert the compiled
+    output equals the Python value. Unlike the C-vs-LLVM oracles this is an INDEPENDENT evaluator,
+    so it catches shared-frontend bugs (constant-folder / verifier / wrap-sat domain semantics)
+    where both backends agree but are wrong. Sound by construction: only unsigned types and
+    trap-free ops are generated, so a trap or a mismatch is necessarily a real compiler bug."""
+    g = mcref.RefGen(seed).build()
+    src = os.path.join(work, "ref.mc")
+    open(src, "w").write(g.source())
+    if subprocess.run([env["mcc"], "check", src], capture_output=True).returncode != 0:
+        return None  # a generator soundness slip is the failclosed oracle's concern, not a finding
+    expected = g.evaluate()
+    res = _compile_run_c(env, src, work, "ref")
+    if res is None:
+        return None  # emit/compile/link failure is another oracle's concern
+    rc, out = res
+    if rc != 0:
+        return ("REFERENCE DIVERGENCE (trap): compiled program trapped (rc=%d) on a trap-free "
+                "program; interpreter computed %d" % (rc, expected))
+    got = out.strip()
+    if got != str(expected).encode():
+        return "REFERENCE DIVERGENCE (value): interpreter=%d compiled=%s" % (expected, got.decode("utf-8", "replace"))
+    return None
+
+
 ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize,
            "robust": oracle_robust, "failclosed": oracle_failclosed,
            "determinism": oracle_determinism, "pipeline": oracle_pipeline,
            "metamorphic": oracle_metamorphic, "optlevel": oracle_optlevel,
-           "floatbits": oracle_floatbits}
+           "floatbits": oracle_floatbits, "reference": oracle_reference}
 
 
 def oracle_on_source(env, oracle, source):
@@ -1126,6 +1155,7 @@ def main():
         "failclosed": "mcc check rejected every ill-typed program (no soundness hole)",
         "determinism": "emit-c/emit-llvm are byte-deterministic",
         "pipeline": "every lowering/verify stage succeeds on check-accepted programs",
+        "reference": "compiled output matches the independent Python interpreter",
     }.get(args.oracle, "no findings")
     mode = " (trapping)" if args.trapping else ""
     print("PASS: mcfuzz/%s%s — %s over %d programs (seeds %d..%d)"

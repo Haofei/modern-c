@@ -186,6 +186,13 @@ pub fn build(b: *std.Build) void {
     const fuzz_floatbits_step = b.step("fuzz-floatbits", "mcfuzz: f32/f64 results must match bit-for-bit across backends (finite-only)");
     fuzz_floatbits_step.dependOn(&fuzz_floatbits_cmd.step);
 
+    const fuzz_reference_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "reference", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_reference_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_reference_step = b.step("fuzz-reference", "mcfuzz: compiled output must match the independent Python reference interpreter (shared-frontend bugs)");
+    fuzz_reference_step.dependOn(&fuzz_reference_cmd.step);
+
     const llvm_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-llvm-sweep.py",
