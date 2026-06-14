@@ -15,6 +15,18 @@ G4 float bit-level oracle (`fuzz-floatbits`), G10 recursion, G16 second metamorp
 (lower-hir/verify-hir/lower-mir/verify/lower-ir/facts/emit-c/emit-map/emit-llvm). Eleven oracles
 now; all green at the gate.
 
+**Done (second pass, 2026-06-14):**
+- **G14** deeper aggregates — tuples (incl. tuples-of-aggregates), structs-of-pointers,
+  arrays-of-`Result`; all verified through both backends, each ~50% of seeds.
+- **G12 / partial G8** — `mem.as_bytes(&intArray)` is the one slice-construction form that lowers
+  through both backends; over a contiguous, fully-initialized integer array its bytes are a sound,
+  backend-stable observable. The generator now builds such a `[]const u8` and exercises it via
+  `reduce.sum_checked<u8>` (the hot checked-reduction path) and a bounds-checked `bv[i]`/`.len`
+  loop. (~46% of seeds.) Note: switching directly on the `reduce.*` builtin call doesn't lower —
+  it goes through a wrapper fn; the `arr[0..n]` general-slice form is still blocked (G8).
+- **G17 corpus** — `tools/fuzz/corpus/*.mc` freezes the three fixed codegen bugs as minimized
+  repros; `mcfuzz.py corpus` + `fuzz-corpus` gate replay them through differential+sanitize.
+
 **Backend-limited (discovered this pass):** G11 expression-`switch` — `var r = switch e {…}`
 fails `emit-llvm`; statement/fold switch only.
 
@@ -102,7 +114,12 @@ The trapping differential only checks "both backends trap," not "at the same log
   C. That is net-new backend instrumentation, deferred.
 
 ### G6 `[blocked]` Memory-safety oracle (E5)
-Pointers only target globals (no heap), so ASan finds little. Unblocks once slices/heap exist.
+Pointers only target globals (no heap). Byte-view slices now exist (G8/G12), but MC slice
+indexing is **bounds-checked** — an out-of-bounds access *traps* (a `mc_trap`) before it can
+become a memory error, so ASan still finds nothing. A useful G6 needs heap allocation or raw
+unchecked pointer arithmetic, neither of which has a runnable generated surface today. (The
+bounds-check *trap* itself is observable and could feed a trap-consistency oracle, but that's
+trap-location/G5 territory, not ASan.)
 
 ---
 
@@ -110,19 +127,24 @@ Pointers only target globals (no heap), so ASan finds little. Unblocks once slic
 
 - G7 `[blocked]` **Tagged unions with payload (A2)** — backend can't lower them (even the spec's
   `ReflectToken` fails both `emit-c`/`emit-llvm`). Needs tagged-union codegen first.
-- G8 `[blocked]` **Slices `[]T` (A5)** — `arr[0..n]` → `E_NO_IMPLICIT_POINTER_CONVERSION`;
-  construction surface is finicky. Unblocks G6.
+- G8 `[~]` **Slices `[]T` (A5)** — the general `arr[0..n]` form is still blocked
+  (`E_NO_IMPLICIT_POINTER_CONVERSION`), but the **byte-view** slice `mem.as_bytes(&intArray)` now
+  lowers through both backends and is fuzzed (see G12): a real `[]const u8` with `.len`, indexing,
+  and reduction. Full `[]T` of arbitrary element type still needs net-new construction lowering.
 - G9 `[ ]` **Aggregate function params/returns of `move` types**, and **`move`/`defer`** in
-  mcfuzz (today only in `mcgen_move.py`).
+  mcfuzz (today only in `mcgen_move.py` — covered there, just not in the type-directed framework).
 - G10 `[x]` **Recursion** — DONE (depth-bounded `recf(n)=n+recf(n-1)`, base `n==0`).
 - G11 `[blocked]` **`switch` as an expression** — `emit-llvm` rejects it; statement/fold switch
   only. (`defer` in non-move contexts still open.)
-- G12 `[ ]` **Closure captures of locals** — only global env tested; local capture hits a C-emit
-  gap. **Hot checked reductions** (`reduce.sum_checked`, floating reductions).
+- G12 `[~]` **Hot checked reductions** — DONE: `reduce.sum_checked<u8>` over a byte-view slice is
+  now fuzzed (see G8). Floating reductions (`reduce.sum_left`/`sum_fast`) need a `[]const fN` slice
+  which has no runnable construction form, and closure captures of *locals* still hit a C-emit gap
+  (only global-env captures work) — both still open.
 - G13 `[blocked]` **Cross-domain conversions (C4)**, **`extern fn` calls (D2)**, **multi-module /
   imports (D5)** — no clean/runnable surface today.
-- G14 `[ ]` Deeper aggregates: structs-of-pointers, arrays-of-`Result`, tuples-of-aggregates
-  (after G3/G7/G8).
+- G14 `[x]` Deeper aggregates: structs-of-pointers, arrays-of-`Result`, tuples-of-aggregates —
+  DONE (all three lower through both backends, ~50% of seeds each). Union/slice-of-aggregate forms
+  stay blocked on G7/G8.
 
 ---
 
@@ -134,9 +156,10 @@ Pointers only target globals (no heap), so ASan finds little. Unblocks once slic
   semantics-preserving transforms (body-in-helper + reverse digest fold); more could be added.
   (Original wording:) of valid programs (vs only crash/hang mutation
   in `robust`).
-- G17 `[~]` **`report` coverage-statistics mode** — DONE (`mcfuzz.py report`). Persisted
-  regression seed-corpus still open. (Original:) keep found-bug seeds as permanent gates, and a
-  `--report` coverage-statistics mode.
+- G17 `[x]` **`report` coverage mode + persisted regression corpus** — DONE. `mcfuzz.py report`
+  tallies construct coverage; `tools/fuzz/corpus/*.mc` + `mcfuzz.py corpus` + the `fuzz-corpus`
+  gate replay the three fixed codegen bugs as permanent regression gates. (Source is frozen rather
+  than bare seeds, since the generator drifts.)
 - G18 `[x]` **`facts` / `emit-map` / `lower-hir/-mir/-ir` in the pipeline oracle** (E4) — DONE.
   (Original also mentioned:) and
   **round-trip / idempotence** (E6).
@@ -150,4 +173,19 @@ Pointers only target globals (no heap), so ASan finds little. Unblocks once slic
 3. ~~**G2** kernel/driver surface~~ — runnable subset DONE (atomics + packed-bits). Non-runnable
    features (MMIO/address-classes/overlay/DMA/asm) stay as sema/QEMU fixtures.
 4. ~~**G4** float bit oracle~~ — DONE.
-5. Then unblock G7/G8 (tagged-union codegen, slice construction), which also unblock G6/G14.
+5. ~~**G14** deeper aggregates~~, ~~**G12** hot checked reductions / byte-view slices~~,
+   ~~**G17** corpus~~ — DONE.
+
+## What remains (all blocked on net-new compiler/backend features, not fuzzer work)
+Every gap that is implementable as pure fuzzer/generator/oracle work is now closed. The remainder
+each require a compiler change first, after which the fuzzer hook is small:
+- **G7** tagged-union payload codegen — both backends reject even the spec's `ReflectToken`.
+- **G8 (full)** general `arr[0..n]` → `[]T` slice construction for an arbitrary element type
+  (byte-view `[]const u8` already works). Unblocks G6/G14-of-slices and floating reductions.
+- **G11** expression-`switch` LLVM lowering.
+- **G13** cross-domain conversions / `extern fn` / multi-module runnable surface.
+- **G5** interceptable trap entrypoints (the C side's `mc_trap_*` are `static inline`).
+- **G6** heap / raw unchecked pointers (bounds-checked slices trap before ASan sees anything).
+- **G15** in-process coverage feedback (the subprocess-per-seed model can't do it).
+- **G9** is covered by `mcgen_move.py`; folding `move`/`defer` into the type-directed digest model
+  is duplicative and risks unsoundness, so it stays in the dedicated generator.
