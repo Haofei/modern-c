@@ -18,12 +18,20 @@ now; all green at the gate.
 **Done (second pass, 2026-06-14):**
 - **G14** deeper aggregates — tuples (incl. tuples-of-aggregates), structs-of-pointers,
   arrays-of-`Result`; all verified through both backends, each ~50% of seeds.
-- **G12 / partial G8** — `mem.as_bytes(&intArray)` is the one slice-construction form that lowers
-  through both backends; over a contiguous, fully-initialized integer array its bytes are a sound,
-  backend-stable observable. The generator now builds such a `[]const u8` and exercises it via
-  `reduce.sum_checked<u8>` (the hot checked-reduction path) and a bounds-checked `bv[i]`/`.len`
-  loop. (~46% of seeds.) Note: switching directly on the `reduce.*` builtin call doesn't lower —
-  it goes through a wrapper fn; the `arr[0..n]` general-slice form is still blocked (G8).
+- **G12** — byte-view `[]const u8` via `mem.as_bytes(&intArray)`, exercised via
+  `reduce.sum_checked<u8>` (the hot checked-reduction path, through a wrapper fn since switching
+  directly on the `reduce.*` builtin call doesn't lower) and a bounds-checked `bv[i]`/`.len` loop.
+- **G8 (full)** — general `[]mut T` slices. The earlier "blocked" call was a *mistake*: array
+  slicing works for any element type; the catch was view mutability — `a[lo..hi]` over a mutable
+  array yields `[]mut T` (mut→const needs an explicit conversion, which was the
+  `E_NO_IMPLICIT_POINTER_CONVERSION`). Now generates `[]mut T = a[lo..hi]` with indexing/`.len` +
+  passes `[]mut T` to a sum helper (slice param ABI). ~46% of seeds.
+- **G7 tagged unions** — also a *mistaken* "blocked" call: safe unions lower through both backends.
+  Now generates `union U { uNcK: T, …, uNe }`, constructs via case constructors, folds via a
+  per-union switch helper. ~53% of seeds.
+- **G13 (conversions)** — cross-domain conversion vocabulary: plain→wrap (`Wconv.from_mod`),
+  wrap→plain (`.residue()`), exact widening (`u64.from`). ~62% of seeds. (extern/multi-module
+  parts of G13 stay out — no in-process runnable surface.)
 - **G17 corpus** — `tools/fuzz/corpus/*.mc` freezes the three fixed codegen bugs as minimized
   repros; `mcfuzz.py corpus` + `fuzz-corpus` gate replay them through differential+sanitize.
 
@@ -125,26 +133,29 @@ trap-location/G5 territory, not ASan.)
 
 ## P2 — language features not generated
 
-- G7 `[blocked]` **Tagged unions with payload (A2)** — backend can't lower them (even the spec's
-  `ReflectToken` fails both `emit-c`/`emit-llvm`). Needs tagged-union codegen first.
-- G8 `[~]` **Slices `[]T` (A5)** — the general `arr[0..n]` form is still blocked
-  (`E_NO_IMPLICIT_POINTER_CONVERSION`), but the **byte-view** slice `mem.as_bytes(&intArray)` now
-  lowers through both backends and is fuzzed (see G12): a real `[]const u8` with `.len`, indexing,
-  and reduction. Full `[]T` of arbitrary element type still needs net-new construction lowering.
+- G7 `[x]` **Tagged unions with payload (A2)** — DONE. Safe unions *do* lower through both backends
+  (`tests/c_emit/tagged_union.mc` passes); the prior "blocked" note was wrong. Construct + pass +
+  switch-fold now fuzzed (~53% of seeds).
+- G8 `[x]` **Slices `[]T` (A5)** — DONE. General `[]mut T = a[lo..hi]` over any integer element
+  type, with indexing/`.len` and `[]mut T` param ABI (~46%), plus the `[]const u8` byte-view (G12).
+  The catch was view mutability, not a missing feature. Full `[]const T` of a local array still
+  needs the explicit mut→const conversion, but the slice machinery itself is exercised.
 - G9 `[ ]` **Aggregate function params/returns of `move` types**, and **`move`/`defer`** in
   mcfuzz (today only in `mcgen_move.py` — covered there, just not in the type-directed framework).
 - G10 `[x]` **Recursion** — DONE (depth-bounded `recf(n)=n+recf(n-1)`, base `n==0`).
-- G11 `[blocked]` **`switch` as an expression** — `emit-llvm` rejects it; statement/fold switch
-  only. (`defer` in non-move contexts still open.)
+- G11 `[blocked]` **`switch` as an expression** — genuinely a missing **language feature**:
+  `var r = switch e {…}` / `return switch …` fail at the **parser** ("expected expression"), not
+  the backend. `switch` is statement-only in the grammar; expression-switch needs grammar + sema +
+  both backends. (`defer` in non-move contexts still open.)
 - G12 `[~]` **Hot checked reductions** — DONE: `reduce.sum_checked<u8>` over a byte-view slice is
   now fuzzed (see G8). Floating reductions (`reduce.sum_left`/`sum_fast`) need a `[]const fN` slice
   which has no runnable construction form, and closure captures of *locals* still hit a C-emit gap
   (only global-env captures work) — both still open.
-- G13 `[blocked]` **Cross-domain conversions (C4)**, **`extern fn` calls (D2)**, **multi-module /
-  imports (D5)** — no clean/runnable surface today.
+- G13 `[~]` **Cross-domain conversions (C4)** — DONE (`from_mod`/`residue`/`u64.from`, ~62% of
+  seeds). **`extern fn` calls (D2)** and **multi-module / imports (D5)** stay open — extern bodies
+  aren't runnable in-process and multi-module needs a multi-file build the harness doesn't drive.
 - G14 `[x]` Deeper aggregates: structs-of-pointers, arrays-of-`Result`, tuples-of-aggregates —
-  DONE (all three lower through both backends, ~50% of seeds each). Union/slice-of-aggregate forms
-  stay blocked on G7/G8.
+  DONE (all three lower through both backends, ~50% of seeds each).
 
 ---
 
@@ -173,19 +184,23 @@ trap-location/G5 territory, not ASan.)
 3. ~~**G2** kernel/driver surface~~ — runnable subset DONE (atomics + packed-bits). Non-runnable
    features (MMIO/address-classes/overlay/DMA/asm) stay as sema/QEMU fixtures.
 4. ~~**G4** float bit oracle~~ — DONE.
-5. ~~**G14** deeper aggregates~~, ~~**G12** hot checked reductions / byte-view slices~~,
-   ~~**G17** corpus~~ — DONE.
+5. ~~**G14** deeper aggregates~~, ~~**G12** byte-view reductions~~, ~~**G8** general slices~~,
+   ~~**G7** tagged unions~~, ~~**G13** domain conversions~~, ~~**G17** corpus~~ — DONE.
 
-## What remains (all blocked on net-new compiler/backend features, not fuzzer work)
-Every gap that is implementable as pure fuzzer/generator/oracle work is now closed. The remainder
-each require a compiler change first, after which the fuzzer hook is small:
-- **G7** tagged-union payload codegen — both backends reject even the spec's `ReflectToken`.
-- **G8 (full)** general `arr[0..n]` → `[]T` slice construction for an arbitrary element type
-  (byte-view `[]const u8` already works). Unblocks G6/G14-of-slices and floating reductions.
-- **G11** expression-`switch` LLVM lowering.
-- **G13** cross-domain conversions / `extern fn` / multi-module runnable surface.
-- **G5** interceptable trap entrypoints (the C side's `mc_trap_*` are `static inline`).
-- **G6** heap / raw unchecked pointers (bounds-checked slices trap before ASan sees anything).
-- **G15** in-process coverage feedback (the subprocess-per-seed model can't do it).
-- **G9** is covered by `mcgen_move.py`; folding `move`/`defer` into the type-directed digest model
-  is duplicative and risks unsoundness, so it stays in the dedicated generator.
+## What remains (genuinely needs a compiler/architecture change, not fuzzer work)
+Every gap implementable as pure fuzzer/generator/oracle work is now closed — including G7/G8/G13
+which a prior pass had *mis-classified* as blocked (they just needed the right syntax: `[]mut`
+views, union case constructors, `from_mod`/`residue`). What's left genuinely needs work *outside*
+the fuzzer:
+- **G11** expression-`switch` — a missing **language feature** (fails at the parser; `switch` is
+  statement-only in the grammar). Needs grammar + sema + both backends.
+- **G5** trap-location agreement — needs interceptable trap entrypoints (C `mc_trap_*` are
+  `static inline`); backend instrumentation.
+- **G6** memory-safety/ASan — needs heap or raw unchecked pointers; bounds-checked slices *trap*
+  before ASan can see anything, so there's nothing for it to find today.
+- **G13 (extern/multi-module)** — `extern fn` bodies aren't runnable in-process; multi-module needs
+  a multi-file build the single-source harness doesn't drive.
+- **G15** coverage-guided fuzzing — needs an in-process harness (subprocess-per-seed can't feed
+  coverage back).
+- **G9** `move`/`defer` — covered by the dedicated `mcgen_move.py`; folding linear-move semantics
+  into the value-digest model is duplicative and risks unsoundness, so it stays there.
