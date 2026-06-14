@@ -1696,6 +1696,22 @@ machine contract, not memory safety*: `move` enforces **hardware ownership
 protocols** for resource handles, and is deliberately *not* a whole-program
 borrow/lifetime system.
 
+**Control-flow model.** The liveness pass tracks each binding through the function's
+control-flow graph with four states — **Live**, **Moved**, **Deferred** (reserved by a
+`defer`, §21), and **Unreachable** — and leak-checks the live set at every edge that
+*exits the function normally*: a `return`, and the error branch of `?` (which returns
+`err(e)`, §21). At a branch join the per-binding states must agree, otherwise the value
+is consumed on one path but not another (E_MOVE_BRANCH_MISMATCH).
+
+A path that ends by **aborting or being unreachable** — `trap(...)` (§20), `unreachable`,
+or a call to a `-> never` function — is *not* a normal exit. It transfers control out of
+the function without running cleanup and reaches no successor, so it is the **Unreachable**
+state: it carries **no leak obligation** (a live resource there is not E_RESOURCE_LEAK —
+the program halts, or the path is provably impossible), and it is dropped from the join
+rather than merged. Consuming a resource and then aborting on one branch, while another
+branch consumes and falls through, is therefore well-formed. Only `trap`/`unreachable`/
+`never` edges are exempt; an ordinary early `return` still leak-checks the whole live set.
+
 ---
 
 ## 18.2 DMA Ownership Library

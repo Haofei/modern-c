@@ -815,6 +815,17 @@ pub const Checker = struct {
             .expr => |e| {
                 self.moveConsume(e, state, aliases);
                 self.checkUnusedMoveResult(e, aliases);
+                // An expression statement that unconditionally aborts or is unreachable
+                // (`unreachable`, `trap(...)`, or a call to a `-> never` function) ends
+                // this control-flow path. Unlike `return`/`?` it performs no normal exit
+                // and reaches no successor, so live resources here do not leak — the
+                // program halts or the path is impossible. This is the `Unreachable`
+                // lattice state: diverge with no exit-edge leak check, so the post-branch
+                // join drops this path instead of merging a stale live set (which would
+                // otherwise raise a spurious E_MOVE_BRANCH_MISMATCH / E_RESOURCE_LEAK).
+                if (self.move_ctx) |mctx| {
+                    if (!exprMayFallThrough(e, mctx.*)) return true;
+                }
                 return false;
             },
             .assignment => |a| {
@@ -6465,6 +6476,16 @@ fn directCallFunction(callee: ast.Expr, ctx: Context) ?FunctionInfo {
     return functions.get(ident.text);
 }
 
+// A direct call to a function declared `-> never` diverges: control never returns
+// to the call site (the callee panics/loops/traps). Used by the control-flow
+// fall-through and linear-`move` analyses so a `panic()`-style helper ends a path
+// exactly like an inline `trap(...)`/`unreachable` does.
+fn callReturnsNever(call: anytype, ctx: Context) bool {
+    const info = directCallFunction(call.callee.*, ctx) orelse return false;
+    const ty = info.return_ty orelse return false;
+    return isTypeName(ty, "never");
+}
+
 // The type name of a type-parameter argument: either a bare type-name ident or
 // the named field type from `field_type(T, .field)`.
 fn typeArgName(arg: ast.Expr, ctx: Context) ?[]const u8 {
@@ -7606,7 +7627,7 @@ fn exprMayFallThrough(expr: ast.Expr, ctx: Context) bool {
     return switch (expr.kind) {
         .unreachable_expr => false,
         .grouped => |inner| exprMayFallThrough(inner.*, ctx),
-        .call => |node| !isTrapCall(node.callee.*),
+        .call => |node| !isTrapCall(node.callee.*) and !callReturnsNever(node, ctx),
         .block => |block| fallthroughSpan(block, ctx) != null,
         else => true,
     };
