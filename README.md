@@ -247,11 +247,17 @@ zig build wrap-test      # long-running ring-index / pool-generation wrap and po
 scalar system plus structs and enums, a generator that produces well-typed programs by
 construction, and pluggable oracles:
 
+It covers ints (every width, signed/unsigned), f64, bool, structs, enums, fixed arrays, and a DAG
+of helper functions with calls. Oracles (all in `m0`):
+
 ```sh
-zig build fuzz           # differential: C vs LLVM agree (status + stdout) over the full type system
-zig build fuzz-trap      # trap-consistency: programs that may overflow/divide-by-zero must trap on BOTH backends together
-zig build fuzz-sanitize  # emitted C is UBSan-clean
-zig build fuzz-robust    # robustness: `mcc check` never crashes/hangs on mutated (malformed) input
+zig build fuzz             # differential: C vs LLVM agree (status + stdout) over the full type system
+zig build fuzz-trap        # trap-consistency: programs that may overflow/divide-by-zero must trap on BOTH backends together
+zig build fuzz-sanitize    # emitted C is UBSan-clean
+zig build fuzz-robust      # robustness: `mcc check` never crashes/hangs on mutated (malformed) input
+zig build fuzz-failclosed  # soundness: `mcc check` must reject deliberately ill-typed programs
+zig build fuzz-determinism # emit-c / emit-llvm are byte-deterministic for the same input
+zig build fuzz-pipeline    # every lowering/verify stage succeeds on a check-accepted program
 ```
 
 A fuzzer failure prints the seed; reproduce with `tools/fuzz/mcfuzz.py gen <seed>` and minimize

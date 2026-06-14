@@ -144,6 +144,27 @@ pub fn build(b: *std.Build) void {
     const fuzz_robust_step = b.step("fuzz-robust", "mcfuzz: robustness — mcc check must never crash/hang on mutated input");
     fuzz_robust_step.dependOn(&fuzz_robust_cmd.step);
 
+    const fuzz_failclosed_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "failclosed", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_failclosed_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_failclosed_step = b.step("fuzz-failclosed", "mcfuzz: fail-closed soundness — mcc check must reject ill-typed programs");
+    fuzz_failclosed_step.dependOn(&fuzz_failclosed_cmd.step);
+
+    const fuzz_determinism_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "determinism", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_determinism_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_determinism_step = b.step("fuzz-determinism", "mcfuzz: emit-c/emit-llvm must be byte-deterministic");
+    fuzz_determinism_step.dependOn(&fuzz_determinism_cmd.step);
+
+    const fuzz_pipeline_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "pipeline", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_pipeline_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_pipeline_step = b.step("fuzz-pipeline", "mcfuzz: every lowering/verify stage must succeed on a check-accepted program");
+    fuzz_pipeline_step.dependOn(&fuzz_pipeline_cmd.step);
+
     const llvm_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-llvm-sweep.py",
@@ -2061,6 +2082,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&fuzz_sanitize_cmd.step);
     m0_step.dependOn(&fuzz_trap_cmd.step);
     m0_step.dependOn(&fuzz_robust_cmd.step);
+    m0_step.dependOn(&fuzz_failclosed_cmd.step);
+    m0_step.dependOn(&fuzz_determinism_cmd.step);
+    m0_step.dependOn(&fuzz_pipeline_cmd.step);
     // LLVM backend gates: IR assembly, object lowering, spec sweep, broad
     // c_emit fixture sweeps, and host link/run smoke tests.
     m0_step.dependOn(&llvm_test_cmd.step);
