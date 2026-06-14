@@ -827,6 +827,7 @@ pub const Parser = struct {
                 const ty_val = ty orelse return self.fail("expression-switch initializer requires a type annotation");
                 const only = names.items[0];
                 names.deinit(self.allocator);
+                names = .empty;  // neutralize the errdefer: desugarSwitchInit may fail on malformed input
                 return self.desugarSwitchInit(is_let, start, only, ty_val);
             }
             initializer = try self.parseExpr(0);
