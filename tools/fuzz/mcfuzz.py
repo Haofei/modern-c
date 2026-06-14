@@ -128,13 +128,12 @@ class Gen:
         ty = TYPES[tyname]
         kind = ty["kind"]
         if kind == "float":
-            # Division is excluded: `x / 0.0` yields inf/NaN, and a NaN's sign/payload bits are
-            # IEEE-unspecified, so the bit-exact digest would flag a permitted (non-bug)
-            # difference. `+ - *` over bounded literals stay finite, so the result is exact and
-            # comparable across backends.
+            # Floats are observed by comparison (see program()), so `/` is fine now: `x / 0.0`
+            # yields inf/NaN whose *ordering* is IEEE-defined and backend-stable (NaN compares
+            # false to everything but `!=`), unlike its bit pattern.
             if d >= 3 or self.rng.random() < 0.4:
                 return self.gen_leaf(tyname)
-            op = self.rng.choice(("+", "-", "*"))
+            op = self.rng.choice(("+", "-", "*", "/"))
             return "(%s %s %s)" % (self.gen_value(tyname, d + 1), op, self.gen_value(tyname, d + 1))
         if self.rng.random() < 0.35:
             return self.gen_leaf(tyname)
@@ -269,11 +268,23 @@ class Gen:
             self.env.setdefault(ty, []).append(name)
         for _ in range(self.rng.randrange(5, 12)):
             self.stmt(out, 1)
-        # fold every live value local into the digest
+        # Observe floats through comparisons, not bits: a float's bit pattern (NaN sign/payload,
+        # and f32 rounding) is not a stable cross-backend observable, but its ordering is. Fold
+        # each float local through threshold comparisons into an integer accumulator; integers
+        # fold by value. (rss-testgen observes Float via comparisons for the same reason.)
         terms = []
-        for ty in VALUE_TYPES:
+        for ty in INTS:
             for name in self.env.get(ty, []):
                 terms.append(TYPES[ty]["fold"](name))
+        has_float = any(self.env.get(ty) for ty in FLOATS)
+        if has_float:
+            out.append("    var fobs: u64 = 0;")
+            for ty in FLOATS:
+                for name in self.env.get(ty, []):
+                    for k in range(3):
+                        cmp = self.rng.choice(("<", "<=", ">", ">=", "==", "!="))
+                        out.append("    if %s %s %s { fobs = fobs + %d; }" % (name, cmp, TYPES[ty]["lit"](self.rng), 1 << k))
+            terms.append("fobs")
         acc = terms[0] if terms else "0"
         for t in terms[1:]:
             acc = "(%s ^ %s)" % (acc, t)
