@@ -97,6 +97,7 @@ class Gen:
         self.structs = {}    # struct name -> [(field, scalar type name)]
         self.enums = {}      # enum name -> [variant names]
         self.functions = []  # [(name, [(param, type)], ret type)] — call only earlier ones (a DAG)
+        self.arrays = {}     # "[N]T" -> (element type, length)
         # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
         # so a program may trap (overflow / divide-by-zero). Under the differential's status
         # contract, both backends must then trap together — this exercises the trap-lowering
@@ -128,13 +129,16 @@ class Gen:
     # comparison — fails to lower while the LLVM backend lowers it fine). Floats nest freely,
     # since float ops carry no such target requirement.
     def local_types(self):
-        return VALUE_TYPES + list(self.structs) + list(self.enums)
+        return VALUE_TYPES + list(self.structs) + list(self.enums) + list(self.arrays)
 
     def gen_value(self, tyname, d=0):
         if tyname in self.structs:  # construct: `.{ .f = <field value>, … }`
             return ".{ %s }" % ", ".join(".%s = %s" % (f, self.gen_value(t)) for f, t in self.structs[tyname])
         if tyname in self.enums:    # an enum literal: `.Variant`
             return ".%s" % self.rng.choice(self.enums[tyname])
+        if tyname in self.arrays:   # an array literal `.{ e0, …, e{N-1} }`
+            elem, length = self.arrays[tyname]
+            return ".{ %s }" % ", ".join(self.gen_leaf(elem) for _ in range(length))
         # Sometimes call a (earlier-declared) function returning this type. Args are leaves so
         # the call is type-clean; the DAG of functions guarantees termination.
         if d < 2 and self.functions and self.rng.random() < 0.3:
@@ -307,6 +311,10 @@ class Gen:
             name = "E%d" % i
             self.enums[name] = variants
             decls.append("enum %s { %s }" % (name, ", ".join(variants)))
+        for _ in range(self.rng.randrange(1, 3)):  # array types (structural; no declaration)
+            elem = self.rng.choice(INTS)
+            length = self.rng.randrange(2, 6)
+            self.arrays["[%d]%s" % (length, elem)] = (elem, length)
         self.gen_functions(decls)
 
         out = []
@@ -330,6 +338,10 @@ class Gen:
             for name in self.env.get(sname, []):
                 for f, t in fields:
                     terms.append(TYPES[t]["fold"]("%s.%s" % (name, f)))
+        for aname, (elem, length) in self.arrays.items():
+            for name in self.env.get(aname, []):
+                for k in range(length):
+                    terms.append(TYPES[elem]["fold"]("%s[%d]" % (name, k)))
         if any(self.env.get(ty) for ty in FLOATS):
             out.append("    var fobs: u64 = 0;")
             for ty in FLOATS:
