@@ -458,7 +458,45 @@ def oracle_robust(env, seed, src_path, work):
     return None
 
 
-ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize, "robust": oracle_robust}
+# Statements that are *definitely* ill-typed: the checker must reject every one. (Each is
+# inert if it somehow type-checked — it only reads/declares — so a false-accept is a pure
+# soundness hole, not a crash.)
+INVALIDATIONS = [
+    ("    var mcfuzz_bad: bool = 12345;", "int literal assigned to bool"),
+    ("    var mcfuzz_bad: u32 = 1.5;", "float literal assigned to int"),
+    ("    var mcfuzz_bad: u32 = mcfuzz_undeclared_zzz;", "use of an undeclared identifier"),
+    ("    var mcfuzz_bad: bool = true; var mcfuzz_bad: bool = false;", "duplicate local declaration"),
+    ("    var mcfuzz_bad: u32 = (true + 1);", "arithmetic on a bool operand"),
+    ("    mcfuzz_undeclared_fn(1, 2, 3);", "call of an undeclared function"),
+]
+
+
+def oracle_failclosed(env, seed, src_path, work):
+    """Fail-closed soundness: inject a definitely-invalid statement into a valid program and
+    assert `mcc check` REJECTS it. A clean rejection is correct; *accepting* an ill-typed program
+    is a soundness hole; a crash is a robustness bug. (rss-testgen's fail-closed driver.)"""
+    rng = random.Random((seed * 40503) & 0xFFFFFFFF)
+    inj, desc = rng.choice(INVALIDATIONS)
+    source = open(src_path).read()
+    marker = "export fn harness() -> u64 {\n"
+    if marker not in source:
+        return None
+    bad = source.replace(marker, marker + inj + "\n", 1)
+    bpath = os.path.join(work, "bad.mc")
+    open(bpath, "w").write(bad)
+    try:
+        r = subprocess.run([env["mcc"], "check", bpath], capture_output=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return "mcc check HANGS on an invalid program (%s)" % desc
+    if r.returncode < 0:
+        return "mcc check CRASHED (signal %d) on an invalid program (%s)" % (-r.returncode, desc)
+    if r.returncode == 0:
+        return "SOUNDNESS: mcc check ACCEPTED an ill-typed program (%s)" % desc
+    return None
+
+
+ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize,
+           "robust": oracle_robust, "failclosed": oracle_failclosed}
 
 
 def oracle_on_source(env, oracle, source):
@@ -570,6 +608,7 @@ def main():
         "differential": "C and LLVM agree",
         "sanitize": "emitted C is UBSan-clean",
         "robust": "mcc check never crashed/hung on mutated input",
+        "failclosed": "mcc check rejected every ill-typed program (no soundness hole)",
     }.get(args.oracle, "no findings")
     mode = " (trapping)" if args.trapping else ""
     print("PASS: mcfuzz/%s%s — %s over %d programs (seeds %d..%d)"
