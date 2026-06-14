@@ -111,8 +111,12 @@ VALUE_TYPES = [t for t in (INTS + FLOATS) if t not in GEN_SKIP]  # foldable into
 
 
 class Gen:
-    def __init__(self, seed, trapping=False):
+    def __init__(self, seed, trapping=False, float_bits=False):
         self.rng = random.Random(seed)
+        # float_bits mode (G4): restrict float ops to + - * (no `/`, so no inf/NaN from div) and
+        # fold floats by *bitcast* instead of comparison, so the digest observes the exact float
+        # bits — catching ~1-ULP cross-backend divergences the comparison fold hides.
+        self.float_bits = float_bits
         self.env = {}        # type name -> [var names in scope at top level]
         self.nvars = 0
         self.depth = 0       # block nesting (new vars only at depth 0)
@@ -186,7 +190,10 @@ class Gen:
             # false to everything but `!=`), unlike its bit pattern.
             if d >= 3 or self.rng.random() < 0.4:
                 return self.gen_leaf(tyname)
-            op = self.rng.choice(("+", "-", "*", "/"))
+            # `/` can yield inf/NaN; exclude it in float_bits mode so results stay finite and
+            # their exact bits are a stable cross-backend observable.
+            ops = ("+", "-", "*") if self.float_bits else ("+", "-", "*", "/")
+            op = self.rng.choice(ops)
             return "(%s %s %s)" % (self.gen_value(tyname, d + 1), op, self.gen_value(tyname, d + 1))
         if kind == "sat" or kind == "wrap":
             # `sat<uN>` clamps and `wrap<uN>` wraps; both are trap-free unsigned domains. Operands
@@ -670,13 +677,20 @@ class Gen:
                 out.append("    }")
             terms.append("robs")
         if any(self.env.get(ty) for ty in FLOATS):
-            out.append("    var fobs: u64 = 0;")
-            for ty in FLOATS:
-                for name in self.env.get(ty, []):
-                    for k in range(3):
-                        cmp = self.rng.choice(("<", "<=", ">", ">=", "==", "!="))
-                        out.append("    if %s %s %s { fobs = fobs + %d; }" % (name, cmp, TYPES[ty]["lit"](self.rng), 1 << k))
-            terms.append("fobs")
+            if self.float_bits:
+                # G4: observe exact float bits (results are finite — no `/`), catching ~1-ULP
+                # cross-backend divergences the comparison fold hides.
+                for ty in FLOATS:
+                    for name in self.env.get(ty, []):
+                        terms.append(TYPES[ty]["fold"](name))
+            else:
+                out.append("    var fobs: u64 = 0;")
+                for ty in FLOATS:
+                    for name in self.env.get(ty, []):
+                        for k in range(3):
+                            cmp = self.rng.choice(("<", "<=", ">", ">=", "==", "!="))
+                            out.append("    if %s %s %s { fobs = fobs + %d; }" % (name, cmp, TYPES[ty]["lit"](self.rng), 1 << k))
+                terms.append("fobs")
         if any(self.env.get(e) for e in self.enums):
             out.append("    var eobs: u64 = 0;")
             for ename, variants in self.enums.items():
@@ -720,6 +734,10 @@ def _emit_c_obj(mcc, clang, src_path, obj, extra=()):
 
 def oracle_differential(env, seed, src_path, work):
     """Compile through both backends, run, assert identical output."""
+    return _differential_compare(env, src_path, work)
+
+
+def _differential_compare(env, src_path, work):
     c_obj, l_obj = os.path.join(work, "c.o"), os.path.join(work, "l.o")
     err = _emit_c_obj(env["mcc"], env["clang"], src_path, c_obj)
     if err is not None:
@@ -930,10 +948,23 @@ def oracle_optlevel(env, seed, src_path, work):
     return None
 
 
+def oracle_floatbits(env, seed, src_path, work):
+    """Float bit-level differential (G4): regenerate the program in float_bits mode — floats use
+    only + - * (finite results) and are folded by *bitcast* — and compare backends. Catches
+    ~1-ULP f32/f64 divergences the comparison-based float fold hides (it's how the f32
+    double-rounding bug manifested)."""
+    src = os.path.join(work, "fb.mc")
+    open(src, "w").write(Gen(seed, trapping=env.get("trapping", False), float_bits=True).program())
+    if subprocess.run([env["mcc"], "check", src], capture_output=True).returncode != 0:
+        return None  # generator soundness is the failclosed oracle's concern
+    return _differential_compare(env, src, work)
+
+
 ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize,
            "robust": oracle_robust, "failclosed": oracle_failclosed,
            "determinism": oracle_determinism, "pipeline": oracle_pipeline,
-           "metamorphic": oracle_metamorphic, "optlevel": oracle_optlevel}
+           "metamorphic": oracle_metamorphic, "optlevel": oracle_optlevel,
+           "floatbits": oracle_floatbits}
 
 
 def oracle_on_source(env, oracle, source):

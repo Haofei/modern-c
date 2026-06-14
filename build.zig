@@ -179,6 +179,13 @@ pub fn build(b: *std.Build) void {
     const fuzz_optlevel_step = b.step("fuzz-optlevel", "mcfuzz: emitted C must give the same result at -O0 and -O2 (no optimization-sensitive UB)");
     fuzz_optlevel_step.dependOn(&fuzz_optlevel_cmd.step);
 
+    const fuzz_floatbits_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "floatbits", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_floatbits_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_floatbits_step = b.step("fuzz-floatbits", "mcfuzz: f32/f64 results must match bit-for-bit across backends (finite-only)");
+    fuzz_floatbits_step.dependOn(&fuzz_floatbits_cmd.step);
+
     const llvm_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-llvm-sweep.py",
