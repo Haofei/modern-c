@@ -21,6 +21,10 @@ pub const Parser = struct {
     // bindings); the extra statements wait here and are drained into the enclosing block.
     pending_stmts: std.ArrayList(ast.Stmt) = .empty,
     destr_counter: usize = 0,
+    // G11: `return switch …` and `var/let x: T = switch …` are desugared at parse time into the
+    // existing statement-`switch` (return/assign arms), so the rest of the compiler only ever sees
+    // ordinary statement switches. `swexpr_counter` mints the temp for the initializer form.
+    swexpr_counter: usize = 0,
     // `impl Type { fn m(…) }` associated functions are desugared to free functions `Type__m`;
     // `impl_methods` maps the call form `Type.m` to the mangled free-function name so that
     // `Type.m(args)` call sites can be rewritten (impl block must precede the call).
@@ -615,6 +619,12 @@ pub const Parser = struct {
         }
         if (self.match(.kw_return)) {
             const start = self.lxTokenBeforeCurrent();
+            if (self.current.kind == .kw_switch) {  // G11: `return switch e {…}` -> switch with return arms
+                const sw = try self.parseSwitchNode();
+                try self.rewriteSwitchArms(sw.node.arms, .ret);
+                _ = self.match(.semicolon);
+                return .{ .span = joinSpan(start, sw.span), .kind = .{ .@"switch" = sw.node } };
+            }
             const value = if (self.current.kind != .semicolon) try self.parseExpr(0) else null;
             const end = try self.expectTok(.semicolon, "expected ';' after return");
             return .{ .span = joinSpan(start, end.span), .kind = .{ .@"return" = value } };
@@ -810,7 +820,17 @@ pub const Parser = struct {
             try names.append(self.allocator, try self.expectName("expected local name"));
         }
         const ty = if (self.match(.colon)) try self.parseType() else null;
-        const initializer = if (self.match(.equal)) try self.parseExpr(0) else null;
+        var initializer: ?ast.Expr = null;
+        if (self.match(.equal)) {
+            if (self.current.kind == .kw_switch) {  // G11: `var/let x: T = switch e {…}`
+                if (names.items.len != 1) return self.fail("expression-switch initializer requires a single binding");
+                const ty_val = ty orelse return self.fail("expression-switch initializer requires a type annotation");
+                const only = names.items[0];
+                names.deinit(self.allocator);
+                return self.desugarSwitchInit(is_let, start, only, ty_val);
+            }
+            initializer = try self.parseExpr(0);
+        }
         const end = try self.expectTok(.semicolon, "expected ';' after local declaration");
         const local = ast.LocalDecl{ .names = try names.toOwnedSlice(self.allocator), .ty = ty, .init = initializer };
         return .{ .span = joinSpan(start, end.span), .kind = if (is_let) .{ .let_decl = local } else .{ .var_decl = local } };
@@ -864,7 +884,9 @@ pub const Parser = struct {
         return .{ .span = span, .kind = .{ .@"switch" = .{ .subject = cond, .arms = arms } } };
     }
 
-    fn parseSwitch(self: *Parser) anyerror!ast.Stmt {
+    const SwitchParse = struct { node: ast.Switch, span: ast.Span };
+
+    fn parseSwitchNode(self: *Parser) anyerror!SwitchParse {
         const start = try self.expectTok(.kw_switch, "expected switch");
         const subject = try self.parseExpr(0);
         try self.expect(.l_brace, "expected '{' after switch subject");
@@ -883,7 +905,58 @@ pub const Parser = struct {
             try arms.append(self.allocator, .{ .patterns = try patterns.toOwnedSlice(self.allocator), .body = body });
         }
         const end = try self.expectTok(.r_brace, "expected '}' after switch");
-        return .{ .span = joinSpan(start.span, end.span), .kind = .{ .@"switch" = .{ .subject = subject, .arms = try arms.toOwnedSlice(self.allocator) } } };
+        return .{ .node = .{ .subject = subject, .arms = try arms.toOwnedSlice(self.allocator) }, .span = joinSpan(start.span, end.span) };
+    }
+
+    fn parseSwitch(self: *Parser) anyerror!ast.Stmt {
+        const sw = try self.parseSwitchNode();
+        return .{ .span = sw.span, .kind = .{ .@"switch" = sw.node } };
+    }
+
+    // G11 expression-switch sugar: rewrite each arm's value expression into a one-statement block
+    // — `return <expr>;` (return form) or `<target> = <expr>;` (initializer form) — so the result
+    // is an ordinary statement-`switch`. Arms must be value expressions, not blocks.
+    const ArmRewrite = union(enum) { ret, assign: ast.Ident };
+
+    fn rewriteSwitchArms(self: *Parser, arms: []ast.SwitchArm, mode: ArmRewrite) anyerror!void {
+        for (arms) |*arm| {
+            const e = switch (arm.body) {
+                .expr => |ex| ex,
+                .block => return self.fail("expression-switch arms must be value expressions, not blocks"),
+            };
+            const items = try self.allocator.alloc(ast.Stmt, 1);
+            items[0] = switch (mode) {
+                .ret => .{ .span = e.span, .kind = .{ .@"return" = e } },
+                .assign => |target| .{ .span = e.span, .kind = .{ .assignment = .{
+                    .target = .{ .span = target.span, .kind = .{ .ident = target } },
+                    .value = e,
+                } } },
+            };
+            arm.body = .{ .block = .{ .span = e.span, .items = items } };
+        }
+    }
+
+    // G11: `var/let x: T = switch e {…}` -> `var __swvalN: T = uninit; switch e { … __swvalN = v; }
+    // let/var x: T = __swvalN;`. The temp decl is returned; the switch and the user binding are
+    // queued in pending_stmts (drained right after by parseBlock), preserving evaluation order and
+    // the original binding's mutability.
+    fn desugarSwitchInit(self: *Parser, is_let: bool, start: ast.Span, name: ast.Ident, ty: ast.TypeExpr) anyerror!ast.Stmt {
+        const sw = try self.parseSwitchNode();
+        _ = self.match(.semicolon);
+        const span = joinSpan(start, sw.span);
+        const tmp_text = try std.fmt.allocPrint(self.allocator, "__swval{d}", .{self.swexpr_counter});
+        self.swexpr_counter += 1;
+        const tmp_ident = ast.Ident{ .text = tmp_text, .span = span };
+        try self.rewriteSwitchArms(sw.node.arms, .{ .assign = tmp_ident });
+        try self.pending_stmts.append(self.allocator, .{ .span = span, .kind = .{ .@"switch" = sw.node } });
+        const name_slice = try self.allocator.alloc(ast.Ident, 1);
+        name_slice[0] = name;
+        const bind_local = ast.LocalDecl{ .names = name_slice, .ty = ty, .init = ast.Expr{ .span = span, .kind = .{ .ident = tmp_ident } } };
+        try self.pending_stmts.append(self.allocator, .{ .span = span, .kind = if (is_let) .{ .let_decl = bind_local } else .{ .var_decl = bind_local } });
+        const tmp_slice = try self.allocator.alloc(ast.Ident, 1);
+        tmp_slice[0] = tmp_ident;
+        const tmp_local = ast.LocalDecl{ .names = tmp_slice, .ty = ty, .init = ast.Expr{ .span = span, .kind = .uninit_literal } };
+        return .{ .span = span, .kind = .{ .var_decl = tmp_local } };
     }
 
     fn parsePattern(self: *Parser) anyerror!ast.Pattern {
