@@ -501,6 +501,16 @@ class Gen:
             decls.append("enum %s { %s }" % (name, ", ".join(variants)))
         self.gen_functions(decls)
 
+        # D1: module-level globals — read/written/folded by the harness like locals, but they
+        # lower through the race-tolerant load/store helpers (mc_race_load/store), a distinct path
+        # from stack locals (and a historical source of C-backend bugs).
+        for _ in range(self.rng.randrange(0, 3)):
+            ty = self.rng.choice(INTS)
+            name = "g%d" % self.nvars
+            self.nvars += 1
+            decls.append("global %s: %s = %s;" % (name, ty, TYPES[ty]["lit"](self.rng)))
+            self.env.setdefault(ty, []).append(name)
+
         out = []
         types = self.local_types()
         for ty in self.rng.sample(types, k=min(4, len(types))):
