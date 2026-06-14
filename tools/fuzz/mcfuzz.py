@@ -495,8 +495,42 @@ def oracle_failclosed(env, seed, src_path, work):
     return None
 
 
+def oracle_determinism(env, seed, src_path, work):
+    """Metamorphic: a deterministic compiler emits byte-identical output for the same input.
+    Non-determinism (e.g. hashmap iteration order leaking into codegen) is a real compiler bug."""
+    for stage in ("emit-c", "emit-llvm"):
+        first = None
+        for _ in range(3):
+            r = subprocess.run([env["mcc"], stage, src_path], capture_output=True)
+            if r.returncode != 0:
+                break  # an emit failure is a different oracle's concern
+            if first is None:
+                first = r.stdout
+            elif r.stdout != first:
+                return "NON-DETERMINISTIC %s: same input, different bytes across runs" % stage
+    return None
+
+
+def oracle_pipeline(env, seed, src_path, work):
+    """Internal consistency: every lowering/verification stage must succeed on a program `mcc
+    check` accepted. A stage that errors (or crashes) on accepted source is an internal
+    inconsistency — the exact class where the checker accepts a program a backend can't lower."""
+    for stage in ("verify-hir", "verify", "emit-c", "emit-llvm"):
+        try:
+            r = subprocess.run([env["mcc"], stage, src_path], capture_output=True, timeout=20)
+        except subprocess.TimeoutExpired:
+            return "mcc %s HANGS on a check-accepted program" % stage
+        if r.returncode < 0:
+            return "mcc %s CRASHED (signal %d) on a check-accepted program" % (stage, -r.returncode)
+        if r.returncode != 0:
+            err = next((l for l in r.stderr.decode("utf-8", "replace").splitlines() if "error" in l.lower()), "")
+            return "INTERNAL INCONSISTENCY: mcc %s rejected a check-accepted program: %s" % (stage, err.strip())
+    return None
+
+
 ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize,
-           "robust": oracle_robust, "failclosed": oracle_failclosed}
+           "robust": oracle_robust, "failclosed": oracle_failclosed,
+           "determinism": oracle_determinism, "pipeline": oracle_pipeline}
 
 
 def oracle_on_source(env, oracle, source):
@@ -609,6 +643,8 @@ def main():
         "sanitize": "emitted C is UBSan-clean",
         "robust": "mcc check never crashed/hung on mutated input",
         "failclosed": "mcc check rejected every ill-typed program (no soundness hole)",
+        "determinism": "emit-c/emit-llvm are byte-deterministic",
+        "pipeline": "every lowering/verify stage succeeds on check-accepted programs",
     }.get(args.oracle, "no findings")
     mode = " (trapping)" if args.trapping else ""
     print("PASS: mcfuzz/%s%s — %s over %d programs (seeds %d..%d)"
