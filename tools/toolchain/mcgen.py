@@ -34,6 +34,10 @@ fn nu8(x: W) -> W { return W.from(u8.wrap_from(x as u64) as u64); }
 fn nu16(x: W) -> W { return W.from(u16.wrap_from(x as u64) as u64); }
 fn nu32(x: W) -> W { return W.from(u32.wrap_from(x as u64) as u64); }
 fn dig(x: W) -> u64 { return x as u64; }
+global g_arr: [16]u64;
+// bounds-checked global-array read/write at a side-effecting index (exercises index lowering).
+fn aget(e: W) -> W { return W.from(g_arr[(dig(e) % 16) as usize]); }
+fn aset(e: W, v: W) -> void { g_arr[(dig(e) % 16) as usize] = dig(v); }
 """
 
 
@@ -59,10 +63,12 @@ class Gen:
                 return "tick()"                        # side effect: order-sensitive
             return "w(%d)" % self.rng.randrange(0, 1000)
         r = self.rng.random()
-        if r < 0.20:
+        if r < 0.18:
             return "%s(%s)" % (self.rng.choice(self.UNOPS), self.wexpr(d + 1))
-        if r < 0.35:
+        if r < 0.30:
             return "%s(%s, %d)" % (self.rng.choice(("shl", "shr")), self.wexpr(d + 1), self.rng.randrange(0, 64))
+        if r < 0.42:
+            return "aget(%s)" % self.wexpr(d + 1)   # bounds-checked array read at a live index
         op = self.rng.choice(self.BINOPS)
         return "%s(%s, %s)" % (op, self.wexpr(d + 1), self.wexpr(d + 1))
 
@@ -84,13 +90,16 @@ class Gen:
         if can_decl and r < 0.40:
             out.append("%svar v%d: W = %s;" % (pad, self.nvars, self.wexpr()))
             self.nvars += 1
-        elif r < 0.62:
+        elif r < 0.55:
             # mutate an existing local (avoid a trivial `vN = vN` self-assignment)
             t = self.rng.randrange(self.nvars)
             rhs = self.wexpr()
             if rhs == "v%d" % t:
                 rhs = "add(%s, tick())" % rhs
             out.append("%sv%d = %s;" % (pad, t, rhs))
+        elif r < 0.62:
+            # array write at a (possibly side-effecting) index — a later aget can read it back
+            out.append("%saset(%s, %s);" % (pad, self.wexpr(), self.wexpr()))
         elif r < 0.76 and self.depth < 3:
             # if / else
             k = self.rng.choice((2, 3, 4))
