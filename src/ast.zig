@@ -30,6 +30,9 @@ pub const Attr = struct {
         // `#[backend_name("Y")]` — override the object/backend symbol of a declaration
         // (RSS namespace isolation: source symbol X lowers as backend symbol Y).
         backend_name: []const u8,
+        // `#[origin("generated"|"copied"|...)]` — FFI/autogen boundary classification so
+        // tooling can tell ported source from bound/generated/copied-runtime declarations.
+        origin: []const u8,
         named: Ident,
     };
 };

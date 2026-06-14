@@ -348,7 +348,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
     defer line_index.deinit(allocator);
 
     try out.appendSlice(allocator, "# mcmap v1\n");
-    try out.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol source_module source_qualname symbol_kind visibility backend_name\n");
+    try out.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol source_module source_qualname symbol_kind visibility backend_name origin\n");
     var mapper = SourceMapEmitter{
         .allocator = allocator,
         .out = out,
@@ -386,6 +386,16 @@ fn declTypeName(kind: ast.Decl.Kind) ?ast.Ident {
         .type_alias => |d| d.name,
         else => null,
     };
+}
+
+// FFI/autogen boundary classification for an inventory row: an explicit `#[origin("...")]`
+// override, else `external` for an extern declaration, else `source`.
+fn declOrigin(decl: ast.Decl) []const u8 {
+    for (decl.attrs) |attr| switch (attr.kind) {
+        .origin => |o| return o,
+        else => {},
+    };
+    return if (std.meta.activeTag(decl.kind) == .extern_fn) "external" else "source";
 }
 
 // The `#[backend_name("Y")]` override string for a declaration, if present.
@@ -461,9 +471,11 @@ const SourceMapEmitter = struct {
     // rows inherit the owning declaration's identity/provenance.
     symbol_kind: []const u8 = "value",
     visibility: []const u8 = "internal",
+    origin: []const u8 = "source",
 
     fn emitModule(self: *SourceMapEmitter, module: ast.Module) !void {
         for (module.decls) |decl| {
+            self.origin = declOrigin(decl);
             switch (decl.kind) {
                 .global_decl => |global| {
                     self.symbol_kind = if (global.is_const) "assoc_const" else "value";
@@ -654,6 +666,8 @@ const SourceMapEmitter = struct {
         try appendMapString(self.out, self.allocator, self.visibility);
         try self.out.appendSlice(self.allocator, " backend_name=");
         try appendMapString(self.out, self.allocator, object_symbol);
+        try self.out.appendSlice(self.allocator, " origin=");
+        try appendMapString(self.out, self.allocator, self.origin);
         try self.out.appendSlice(self.allocator, "\n");
     }
 
@@ -12349,7 +12363,7 @@ fn bitcastReturnTypeForCall(call: anytype) ?ast.TypeExpr {
 fn contractName(attr: ast.Attr) []const u8 {
     return switch (attr.kind) {
         .unsafe_contract => |contract| contract.name.text,
-        .no_lang_trap, .named, .backend_name => "unknown",
+        .no_lang_trap, .named, .backend_name, .origin => "unknown",
     };
 }
 
@@ -12557,6 +12571,7 @@ test "C source map records source spans and generated C lines" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "symbol_kind=\"free_fn\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "source_qualname=\"add_one\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "backend_name=\"add_one\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "origin=\"source\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "symbol_kind=\"assoc_const\"") == null); // count is a `global`, not `const`
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"global\" symbol=\"count\" source_line=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "entry kind=\"global_initializer_expr\" symbol=\"count\" source_line=1") != null);

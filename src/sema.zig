@@ -4660,7 +4660,7 @@ const UnsafeContracts = struct {
                 if (std.mem.eql(u8, contract.name.text, "noalias")) next.noalias_contract = true;
                 if (std.mem.eql(u8, contract.name.text, "precise_asm")) next.precise_asm = true;
             },
-            .no_lang_trap, .named, .backend_name => {},
+            .no_lang_trap, .named, .backend_name, .origin => {},
         }
         return next;
     }

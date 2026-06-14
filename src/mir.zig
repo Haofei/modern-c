@@ -3413,7 +3413,7 @@ fn hasAttr(attrs: []const ast.Attr, name: []const u8) bool {
     for (attrs) |attr| switch (attr.kind) {
         .no_lang_trap => if (std.mem.eql(u8, name, "no_lang_trap")) return true,
         .named => |ident| if (std.mem.eql(u8, ident.text, name)) return true,
-        .unsafe_contract, .backend_name => {},
+        .unsafe_contract, .backend_name, .origin => {},
     };
     return false;
 }
@@ -5657,7 +5657,7 @@ fn isKnownDirectPrimitive(name: []const u8) bool {
 fn contractName(attr: ast.Attr) []const u8 {
     return switch (attr.kind) {
         .unsafe_contract => |contract| contract.name.text,
-        .no_lang_trap, .named, .backend_name => "unknown",
+        .no_lang_trap, .named, .backend_name, .origin => "unknown",
     };
 }
 

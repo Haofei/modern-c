@@ -327,16 +327,18 @@ pub const Parser = struct {
                 .kind = .{ .unsafe_contract = .{ .name = contract_name, .args = try args.toOwnedSlice(self.allocator) } },
             };
         }
-        if (std.mem.eql(u8, name.text, "backend_name")) {
-            try self.expect(.l_paren, "expected '(' after backend_name");
-            if (self.current.kind != .string_literal) return self.fail("expected a string in backend_name(\"...\")");
+        if (std.mem.eql(u8, name.text, "backend_name") or std.mem.eql(u8, name.text, "origin")) {
+            const is_origin = std.mem.eql(u8, name.text, "origin");
+            try self.expect(.l_paren, "expected '(' after attribute name");
+            if (self.current.kind != .string_literal) return self.fail("expected a string argument");
             const raw = self.current.lexeme;
             self.advance();
-            try self.expect(.r_paren, "expected ')' after backend_name argument");
+            try self.expect(.r_paren, "expected ')' after attribute argument");
             const end = try self.expectTok(.r_bracket, "expected ']' after attribute");
+            const value = stripStringQuotes(raw);
             return .{
                 .span = joinSpan(start, end.span),
-                .kind = .{ .backend_name = stripStringQuotes(raw) },
+                .kind = if (is_origin) .{ .origin = value } else .{ .backend_name = value },
             };
         }
         const end = try self.expectTok(.r_bracket, "expected ']' after attribute");
