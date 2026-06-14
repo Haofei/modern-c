@@ -1026,6 +1026,8 @@ def main():
     r.add_argument("--trapping", action="store_true", help="emit checked arithmetic that may trap (differential only)")
     r.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", os.cpu_count() or 4)))
     r.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
+    rp = sub.add_parser("report", help="construct-coverage statistics over generated programs")
+    rp.add_argument("--count", type=int, default=int(os.environ.get("COUNT", "300")))
     sh = sub.add_parser("shrink", help="minimize a failing seed to a small repro")
     sh.add_argument("--seed", type=int, required=True)
     sh.add_argument("--oracle", choices=list(ORACLES), default="differential")
@@ -1035,6 +1037,32 @@ def main():
 
     if args.cmd == "gen":
         sys.stdout.write(Gen(args.seed, trapping=args.trapping).program())
+        return 0
+
+    if args.cmd == "report":  # G17: what fraction of seeds exercise each construct
+        markers = [
+            ("wrap domain", r"wrap<u"), ("sat domain", r"sat<u"),
+            ("f32", r": f32"), ("f64", r": f64"),
+            ("struct", r"^struct "), ("array", r"\[\d+\]"), ("nested array", r"\[\d+\]\[\d+\]"),
+            ("closed enum", r"^enum "), ("open enum", r"open enum"), ("enum discriminant", r"^enum \w+: u8"),
+            ("switch stmt", r"^\s+switch "), ("for-in", r"for \w+ in"),
+            ("break", r"break;"), ("continue", r"continue;"), ("early return", r"if .* \{ return"),
+            ("global", r"^global "), ("const global", r"^const "), ("type alias", r"^type "),
+            ("Result/?", r"Result<"), ("? propagate", r"\)\?;"),
+            ("nullable ptr", r"\?\*"), ("pointer", r"var \w+: \*"),
+            ("generic fn", r"comptime T: type"), ("closure", r"bind\("),
+            ("aggregate ABI", r"fn agg(id|get)"), ("&&/||", r"&&|\|\|"),
+        ]
+        counts = {name: 0 for name, _ in markers}
+        for s in range(1, args.count + 1):
+            prog = Gen(s).program()
+            for name, pat in markers:
+                if re.search(pat, prog, re.M):
+                    counts[name] += 1
+        print("mcfuzz construct coverage over %d seeds:" % args.count)
+        for name, _ in markers:
+            c = counts[name]
+            print("  %-18s %4d  (%3d%%)" % (name, c, 100 * c // args.count))
         return 0
 
     import shutil
