@@ -1176,6 +1176,29 @@ if x == 0 { return 10; }
 if !ready { return 20; } else if x > 100 { return 30; }
 ```
 
+## 11.1 Expression `switch`
+
+A `switch` may also appear as a value in two positions: directly after `return`, and as the
+initializer of a typed local. Each arm is then a value expression (not a block), and the switch
+yields that value:
+
+```mc
+return switch color { .Red => 1, .Green => 2, .Blue => 3 };
+
+let rank: u64 = switch token {
+    num(n) => (n as u64),
+    wide(w) => w,
+    .end    => 0,
+};
+```
+
+This is **sugar**: `return switch …` desugars to a statement `switch` whose arms `return` their
+value, and `let/var x: T = switch …` desugars to a fresh temporary assigned once on every arm,
+then bound to `x` with its declared mutability. So the same rules apply unchanged — exhaustiveness
+is required, payload bindings (`ok(v)`, `num(n)`) work, there is no fallthrough, and a `let`
+binding stays immutable. The initializer form requires the type annotation `T`. A `switch` nested
+inside an arbitrary larger expression (e.g. `f(switch …)` or `a + switch …`) is not accepted.
+
 ---
 
 # 12. Representation and Initialization

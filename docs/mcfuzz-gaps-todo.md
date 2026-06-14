@@ -39,12 +39,16 @@ now; all green at the gate.
 fuzzed by all 11 oracles. The non-runnable kernel features (MMIO/address-classes/overlay/DMA/asm)
 are left to the sema + QEMU fixtures (they have no in-process digest-foldable observable).
 
-**Genuinely remaining (NOT fuzzer work — see footer):** every gap closeable by
-generator/oracle work is done. The leftovers are a missing language feature (G11
-expression-`switch`, fails at the *parser* — not the backend), a safety property with no bug to
-find (G6 — bounds-checked slices trap before ASan sees anything), an optional oracle-observability
-hook (G5 interceptable traps), out-of-process surface (G13 extern/multi-module), a fuzzer-infra
-change (G15 in-process coverage harness), and G9 (already covered by `mcgen_move.py`).
+**G11 expression-`switch` — IMPLEMENTED this pass** as a language feature (spec §11.1), after
+checking it against MC's principles (§25 removes switch *fallthrough*, not value producers — so an
+exhaustive, no-fallthrough expression-switch is principle-consistent). Done via parse-time sugar;
+the fuzzer now generates it and immediately found a parser double-free (fixed).
+
+**Genuinely remaining (NOT fuzzer work):** a safety property with no bug to find (G6 —
+bounds-checked slices trap before ASan sees anything), an optional oracle-observability hook (G5
+interceptable traps; note the spec says trap *sites* may differ, only the *kind* is semantic),
+out-of-process surface (G13 extern/multi-module), a fuzzer-infra change (G15 in-process coverage
+harness), and G9 (already covered by `mcgen_move.py`).
 
 **Bonus bug found + fixed this pass:** probing slice construction surfaced a real sema hole —
 `as_slice`/`dma_addr` on a *non-DmaBuf* value (e.g. `someArray.as_slice()`) passed `check` (typed
@@ -141,10 +145,13 @@ trap-location/G5 territory, not ASan.)
 - G9 `[ ]` **Aggregate function params/returns of `move` types**, and **`move`/`defer`** in
   mcfuzz (today only in `mcgen_move.py` — covered there, just not in the type-directed framework).
 - G10 `[x]` **Recursion** — DONE (depth-bounded `recf(n)=n+recf(n-1)`, base `n==0`).
-- G11 `[blocked]` **`switch` as an expression** — genuinely a missing **language feature**:
-  `var r = switch e {…}` / `return switch …` fail at the **parser** ("expected expression"), not
-  the backend. `switch` is statement-only in the grammar; expression-switch needs grammar + sema +
-  both backends. (`defer` in non-move contexts still open.)
+- G11 `[x]` **`switch` as an expression** — DONE as a *language feature* (spec §11.1). `return
+  switch e {…}` and `var/let x: T = switch e {…}` are accepted via parse-time sugar into the
+  existing statement-switch (so exhaustiveness, payload bindings, `let`-immutability are reused).
+  The fuzzer now generates both forms (return-switch 100% of seeds, init-switch ~32%); doing so
+  immediately surfaced a real parser double-free (robust oracle, seed 49), now fixed. Switch nested
+  in an arbitrary larger expression (`f(switch …)`) is intentionally out of scope. (`defer` in
+  non-move contexts still open.)
 - G12 `[~]` **Hot checked reductions** — DONE: `reduce.sum_checked<u8>` over a byte-view slice is
   now fuzzed (see G8). Floating reductions (`reduce.sum_left`/`sum_fast`) need a `[]const fN` slice
   which has no runnable construction form, and closure captures of *locals* still hit a C-emit gap
@@ -190,8 +197,6 @@ Every gap implementable as pure fuzzer/generator/oracle work is now closed — i
 which a prior pass had *mis-classified* as blocked (they just needed the right syntax: `[]mut`
 views, union case constructors, `from_mod`/`residue`). What's left genuinely needs work *outside*
 the fuzzer:
-- **G11** expression-`switch` — a missing **language feature** (fails at the parser; `switch` is
-  statement-only in the grammar). Needs grammar + sema + both backends.
 - **G5** trap-location agreement — needs interceptable trap entrypoints (C `mc_trap_*` are
   `static inline`); backend instrumentation.
 - **G6** memory-safety/ASan — needs heap or raw unchecked pointers; bounds-checked slices *trap*
