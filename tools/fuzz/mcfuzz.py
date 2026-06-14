@@ -555,6 +555,13 @@ class Gen:
             decls.append("const %s: %s = %s;" % (name, ty, TYPES[ty]["lit"](self.rng)))
             self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
             self.immutable.add(name)  # a const is read-only
+        opt_targets = []  # A3: globals to take `?*T` pointers to (stable storage, not stack locals)
+        for _ in range(self.rng.randrange(0, 2)):
+            ty = self.rng.choice(INTS)
+            gname = "gp%d" % self.nvars
+            self.nvars += 1
+            decls.append("global %s: %s = %s;" % (gname, ty, TYPES[ty]["lit"](self.rng)))
+            opt_targets.append((gname, ty))
 
         out = []
         types = self.local_types()
@@ -563,6 +570,13 @@ class Gen:
             self.nvars += 1
             out.append("    var %s: %s = %s;" % (name, ty, self.gen_value(ty)))
             self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
+        optionals = []  # A3: nullable pointers, read via `if let` narrowing
+        for gname, ty in opt_targets:
+            pname = "p%d" % self.nvars
+            self.nvars += 1
+            init = "&%s" % gname if self.rng.random() < 0.6 else "null"
+            out.append("    var %s: ?*%s = %s;" % (pname, ty, init))
+            optionals.append((pname, ty))
         for _ in range(self.rng.randrange(5, 12)):
             self.stmt(out, 1)
 
@@ -579,6 +593,15 @@ class Gen:
         for ename in self.open_enums:  # standalone open-enum vars fold inline via `.raw()`
             for name in self.env.get(ename, []):
                 terms.append("(%s.raw() as u64)" % name)
+        if optionals:  # A3: fold nullable pointers via if-let narrowing (deref reads the pointee)
+            out.append("    var pobs: u64 = 0;")
+            for pname, ty in optionals:
+                out.append("    if let q = %s {" % pname)
+                out.append("        pobs = (pobs ^ %s);" % TYPES[ty]["fold"]("q.*"))
+                out.append("    } else {")
+                out.append("        pobs = (pobs ^ 12345);")
+                out.append("    }")
+            terms.append("pobs")
         if self.result_fns:  # A1: fold each Result helper by matching ok/err
             out.append("    var robs: u64 = 0;")
             for name, pt, ot in self.result_fns:
