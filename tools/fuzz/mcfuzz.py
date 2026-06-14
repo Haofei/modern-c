@@ -397,6 +397,38 @@ def oracle_robust(env, seed, src_path, work):
 ORACLES = {"differential": oracle_differential, "sanitize": oracle_sanitize, "robust": oracle_robust}
 
 
+def oracle_on_source(env, oracle, source):
+    """Run an oracle on a raw source string; returns the finding message or None."""
+    work = tempfile.mkdtemp()
+    try:
+        src = os.path.join(work, "p.mc")
+        open(src, "w").write(source)
+        return oracle(env, 0, src, work)
+    finally:
+        subprocess.run(["rm", "-rf", work])
+
+
+def shrink_source(env, oracle, source, signature):
+    """Delta-debug `source` to a minimal program that still fails the oracle with the same kind
+    of finding (`signature` must stay in the message — so a divergence stays a divergence, not a
+    reduction that merely fails to compile). Line-greedy: keep removing lines while the failure
+    holds; repeat to fixpoint."""
+    lines = source.split("\n")
+    changed = True
+    while changed:
+        changed = False
+        i = 0
+        while i < len(lines):
+            trial = lines[:i] + lines[i + 1:]
+            res = oracle_on_source(env, oracle, "\n".join(trial))
+            if res is not None and signature in res:
+                lines = trial
+                changed = True
+            else:
+                i += 1
+    return "\n".join(lines)
+
+
 def run_one(env, oracle, seed):
     work = tempfile.mkdtemp()
     try:
@@ -424,6 +456,11 @@ def main():
     r.add_argument("--trapping", action="store_true", help="emit checked arithmetic that may trap (differential only)")
     r.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", os.cpu_count() or 4)))
     r.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
+    sh = sub.add_parser("shrink", help="minimize a failing seed to a small repro")
+    sh.add_argument("--seed", type=int, required=True)
+    sh.add_argument("--oracle", choices=list(ORACLES), default="differential")
+    sh.add_argument("--trapping", action="store_true")
+    sh.add_argument("--mcc", default=os.environ.get("MCC", "zig-out/bin/mcc"))
     args = ap.parse_args()
 
     if args.cmd == "gen":
@@ -440,6 +477,21 @@ def main():
         "link_flags": ["-no-pie"] if sys.platform.startswith("linux") else [],
         "trapping": args.trapping,
     }
+
+    if args.cmd == "shrink":
+        oracle = ORACLES[args.oracle]
+        source = Gen(args.seed, trapping=args.trapping).program()
+        res = oracle_on_source(env, oracle, source)
+        if res is None:
+            print("seed %d does not fail mcfuzz/%s — nothing to shrink" % (args.seed, args.oracle))
+            return 0
+        sig = next((s for s in ("DIVERGENCE", "CRASHED", "HANGS", "UBSan", "runtime error",
+                                "emit/compile failed", "link failed") if s in res), res[:24])
+        sys.stderr.write("original finding: %s\nshrinking (signature %r)...\n" % (res.splitlines()[0], sig))
+        minimal = shrink_source(env, oracle, source, sig)
+        print("// minimal repro for seed %d (mcfuzz/%s, signature %r):\n%s" % (args.seed, args.oracle, sig, minimal))
+        return 0
+
     oracle = ORACLES[args.oracle]
     seeds = range(args.start, args.start + args.count)
     fails = []
