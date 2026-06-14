@@ -39,7 +39,7 @@ Important design points include:
   `nonnull`, `noalias`, `noundef`, `poison`, `inbounds`, and `undef`
 
 The full language design lives in
-[`docs/spec/MC_0.6.1_Final_Design.md`](docs/spec/MC_0.6.1_Final_Design.md).
+[`docs/spec/MC_0.7_Final_Design.md`](docs/spec/MC_0.7_Final_Design.md).
 
 ## Current Status
 

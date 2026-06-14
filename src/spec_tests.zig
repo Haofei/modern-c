@@ -1558,7 +1558,7 @@ test "spec section coverage: every normative section has a tests/spec fixture" {
     }
 
     // Walk the spec's section headers and require coverage of each non-exempt section.
-    const spec = try std.Io.Dir.cwd().readFileAlloc(io, "docs/spec/MC_0.6.1_Final_Design.md", a, .limited(2 * 1024 * 1024));
+    const spec = try std.Io.Dir.cwd().readFileAlloc(io, "docs/spec/MC_0.7_Final_Design.md", a, .limited(2 * 1024 * 1024));
     var seen = std.StringHashMap(void).init(a);
     var missing: std.ArrayList([]const u8) = .empty;
     var required: usize = 0;

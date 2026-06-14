@@ -1,9 +1,9 @@
-# MC 0.6.1 Final Design
+# MC 0.7 Final Design
 
 ## A kernel-profile, Zig-like Modern C
 
 **Status:** implementation-aligned design draft
-**Version:** 0.6.1  
+**Version:** 0.7  
 **Scope:** kernels, drivers, allocators, runtimes, freestanding systems code, boot code, and low-level libraries. The current implementation target is the verified C backend plus the LLVM backend for the implemented spec surface. C remains the historical conformance baseline; LLVM follows the same semantic and MIR verification contract.
 
 ---
@@ -1176,7 +1176,7 @@ if x == 0 { return 10; }
 if !ready { return 20; } else if x > 100 { return 30; }
 ```
 
-## 11.1 Expression `switch`
+## 11.3 Expression `switch`
 
 A `switch` may also appear as a value in two positions: directly after `return`, and as the
 initializer of a typed local. Each arm is then a value expression (not a block), and the switch
