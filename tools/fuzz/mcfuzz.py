@@ -669,6 +669,26 @@ class Gen:
         out.append("    var %s: u64 = u64.from(%s);" % (wide, cp))
         terms.append(wide)
 
+    def gen_exprswitch_decls(self, decls):
+        # G11: expression-`switch` in *return* position — `fn eswf_E(e: E) -> u64 { return switch e
+        # { .V => k, … }; }`, exhaustive over the closed enum's variants.
+        for name, variants in self.enums.items():
+            arms = ", ".join(".%s => %d" % (v, (k + 1) * 7) for k, v in enumerate(variants))
+            decls.append("fn eswf_%s(e: %s) -> u64 {\n    return switch e { %s };\n}" % (name, name, arms))
+
+    def gen_exprswitch_body(self, out, terms):
+        # G11: exercise both supported positions on each live closed-enum var — call the
+        # return-form helper, and an initializer-form `var x: u64 = switch e { … }`.
+        for name, variants in self.enums.items():
+            for ev in self.env.get(name, []):
+                cv = "eswc%d" % self.nvars; self.nvars += 1
+                out.append("    var %s: u64 = eswf_%s(%s);" % (cv, name, ev))
+                terms.append(cv)
+                iv = "eswi%d" % self.nvars; self.nvars += 1
+                arms = ", ".join(".%s => %d" % (v, (k + 1) * 13) for k, v in enumerate(variants))
+                out.append("    var %s: u64 = switch %s { %s };" % (iv, ev, arms))
+                terms.append(iv)
+
     def gen_slice_body(self, decls, out, terms):
         # G8 (full slices): a `[]mut T` view over a live integer array for a *general* element type
         # T (not just the byte-view u8 of G12). Array-slicing yields a mutable view because the
@@ -758,6 +778,7 @@ class Gen:
             decls.append("type %s = %s;" % (name, u))
         self.gen_kernel_decls(decls)
         self.gen_unions(decls)  # G7: tagged unions + per-union fold helpers
+        self.gen_exprswitch_decls(decls)  # G11: return-form expression-switch helpers
         if self.rng.random() < 0.6:  # G13: a wrap-domain alias for from_mod/residue conversions
             self._conv_w = self.rng.choice(UINTS)
             decls.append("type Wconv = wrap<%s>;" % self._conv_w)
@@ -914,6 +935,7 @@ class Gen:
         self.gen_slice_body(decls, out, terms)  # G8: general `[]mut T` slice construction + ABI
         self.gen_union_body(out, terms)  # G7: construct + switch-fold tagged union values
         self.gen_conv_body(out, terms)  # G13: cross-domain conversions (from_mod/residue/widening)
+        self.gen_exprswitch_body(out, terms)  # G11: expression-switch (return + initializer forms)
         if self._spk is not None:  # G14: construct the struct-of-pointers and fold via field deref
             _, spty = self._spk
             out.append("    var spv: SPk = .{ .p = &gspk };")
@@ -1333,6 +1355,7 @@ def main():
             ("[]mut slice", r"\]mut \w+ = \w+\["), ("slice fn param", r"fn slcsum_"),
             ("tagged union", r"^union "), ("union switch-fold", r"fn ufold_"),
             ("domain conv", r"Wconv\.from_mod"), ("residue", r"\.residue\(\)"), ("widening from", r"u64\.from\("),
+            ("expr-switch", r"= switch "), ("return-switch", r"return switch "),
         ]
         counts = {name: 0 for name, _ in markers}
         for s in range(1, args.count + 1):
