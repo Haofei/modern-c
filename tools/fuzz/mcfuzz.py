@@ -568,6 +568,11 @@ class Gen:
         self.gen_result_functions(decls)
         self.gen_aggregate_abi(decls)
 
+        recf_ty = None  # G10: a depth-bounded self-recursive function (sum 1..n)
+        if self.rng.random() < 0.4:
+            recf_ty = self.rng.choice(UINTS)
+            decls.append("fn recf(n: %s) -> %s {\n    if n == 0 { return 0; }\n    return wrapping.add(n, recf(n - 1));\n}" % (recf_ty, recf_ty))
+
         use_generic = self.rng.random() < 0.5  # A8: comptime-generic identity fn (monomorphized per call type)
         if use_generic:
             decls.append("fn gid(comptime T: type, x: T) -> T {\n    return x;\n}")
@@ -616,6 +621,11 @@ class Gen:
                 self.nvars += 1
                 out.append("    var %s: %s = gid(%s, %s);" % (name, ty, ty, self.gen_value(ty)))
                 self.env.setdefault(self.aliases.get(ty, ty), []).append(name)
+        if recf_ty:  # G10: call the recursive fn with a small bound, fold the result
+            name = "rv%d" % self.nvars
+            self.nvars += 1
+            out.append("    var %s: %s = recf(%d);" % (name, recf_ty, self.rng.randrange(0, 7)))
+            self.env.setdefault(recf_ty, []).append(name)
         for name, pt, rt in self.agg_fns:  # G3: call aggregate-by-value helpers, fold the result
             vn = "av%d" % self.nvars
             self.nvars += 1
