@@ -22,8 +22,17 @@ fails `emit-llvm`; statement/fold switch only.
 fuzzed by all 11 oracles. The non-runnable kernel features (MMIO/address-classes/overlay/DMA/asm)
 are left to the sema + QEMU fixtures (they have no in-process digest-foldable observable).
 
-**Still blocked/covered:** G5–G9, G12–G15 (blocked on backend features — tagged-union codegen,
-slice construction, domain conversions — or covered elsewhere, or architecture-bound).
+**Still blocked/covered:** G5–G9, G12–G15. These need net-new **compiler/backend features**, not
+fuzzer work: array→slice construction with bounds-checked dual-backend lowering (unblocks
+G6/G8/G12/G14 at once), tagged-union codegen (G7), expression-`switch` LLVM lowering (G11),
+cross-domain conversion runnable surface (G13), interceptable trap entrypoints (G5), and an
+in-process coverage harness (G15). G9 is covered by `mcgen_move.py`.
+
+**Bonus bug found + fixed this pass:** probing slice construction surfaced a real sema hole —
+`as_slice`/`dma_addr` on a *non-DmaBuf* value (e.g. `someArray.as_slice()`) passed `check` (typed
+as a slice) but failed only at LLVM lowering (`UnsupportedLlvmEmission`), a check-vs-backend
+inconsistency. Fixed in `src/sema.zig` (emits `E_DMA_OPERATION`); regression cases in
+`tests/spec/dma_cache.mc`.
 
 ---
 
@@ -83,10 +92,14 @@ double-rounding bug needed a separate bit-level check). A bitcast fold would fla
 - **Do:** a dedicated f32/f64 oracle that bitcast-compares **finite** results only (skip NaN/inf
   via an `is_finite` guard), so it observes the bits without flaking.
 
-### G5 `[ ]` Trap-location agreement (E8)
-The trapping differential only checks "both backends trap," not "at the same logical site."
-- **Do:** compare the trap kind/site (the C inlines traps; LLVM links stubs — needs a shared
-  trap-tag channel).
+### G5 `[blocked-on-backend]` Trap-location agreement (E8)
+The trapping differential only checks "both backends trap," not "at the same logical site/kind."
+- **Analysis:** both backends *do* route through per-kind `mc_trap_<Kind>` symbols (C emits them
+  `static inline __builtin_trap()`; LLVM links the test's extern stubs). So trap-kind agreement is
+  observable in principle — but only by making **both** builds report the kind. The C side's trap
+  functions are `static inline`, so this needs a small backend change to emit traps *interceptably*
+  (e.g. a weak/extern trap entrypoint a test can define), not fragile string-surgery on generated
+  C. That is net-new backend instrumentation, deferred.
 
 ### G6 `[blocked]` Memory-safety oracle (E5)
 Pointers only target globals (no heap), so ASan finds little. Unblocks once slices/heap exist.
