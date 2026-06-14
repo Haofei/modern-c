@@ -59,28 +59,28 @@ fn accept_consume_then_unreachable(cond: bool) -> u32 {
     return release(h);
 }
 
-// --- accepted: a live resource on a path that aborts via `trap(...)` carries no
-//     leak obligation — the program halts before any cleanup could run ---
-fn accept_abort_carries_no_leak() -> u32 {
+// --- accepted: a live resource on a branch that aborts via `trap(...)` carries no
+//     leak obligation — the program halts before any cleanup could run — while the
+//     fall-through consumes it normally ---
+fn accept_abort_carries_no_leak(cond: bool) -> u32 {
     let h: Handle = acquire();
-    trap(.Assert);
+    if cond {
+        trap(.Assert); // h still live here; the aborting branch has no leak obligation
+    }
+    return release(h);
 }
 
-// --- accepted: a live resource on a path ending in a `-> never` call carries no
-//     leak obligation, and the never-call also satisfies the return requirement ---
-fn accept_never_call_terminates(cond: bool) -> u32 {
-    let h: Handle = acquire();
-    if cond { return release(h); }
-    panicf();
-}
-
-// --- accepted: `defer` cleanup covers every exit, including the aborting one ---
-fn accept_defer_covers_abort() -> u32 {
+// --- accepted: `defer` cleanup reserves both resources, so neither leaks on the
+//     aborting branch nor on the normal exit ---
+fn accept_defer_covers_abort(cond: bool) -> u32 {
     let h1: Handle = acquire();
     defer release(h1);
     let h2: Handle = acquire();
     defer release(h2);
-    panicf();
+    if cond {
+        trap(.Assert);
+    }
+    return 0;
 }
 
 // --- rejected: a deeply nested `return` that leaks h on one path (the abort edges

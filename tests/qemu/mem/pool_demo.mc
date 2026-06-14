@@ -11,7 +11,7 @@ export fn pool_demo_run() -> u32 {
     pool_init(Cell, 16, &g_pool);
     var pass: u32 = 1;
 
-    var r1: PoolRef<Cell> = .{ .index = 0, .gen = 0 };
+    var r1: PoolRef<Cell> = uninit;
     switch pool_alloc(Cell, 16, &g_pool) {
         ok(r) => { r1 = r; }
         err(e) => { pass = 0; }
@@ -45,7 +45,7 @@ export fn pool_demo_run() -> u32 {
         err(e) => {}
     }
     // reuse the slot; the old handle must remain stale (new generation)
-    var r2: PoolRef<Cell> = .{ .index = 0, .gen = 0 };
+    var r2: PoolRef<Cell> = uninit;
     switch pool_alloc(Cell, 16, &g_pool) {
         ok(r) => { r2 = r; }
         err(e) => { pass = 0; }

@@ -39,7 +39,7 @@ export fn wrap_run() -> u32 {
     // advanced many times by alloc/free reuse. Make a genuinely stale handle: alloc a slot and
     // free it, so the slot's generation has moved past the handle we keep.
     pool_init(u32, 4, &g_pool);
-    var stale: PoolRef<u32> = .{ .index = 0, .gen = 0 };
+    var stale: PoolRef<u32> = uninit;
     switch pool_alloc(u32, 4, &g_pool) {
         ok(r) => {
             stale = r; // capture the handle (its generation is current)...

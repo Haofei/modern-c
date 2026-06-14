@@ -14,6 +14,11 @@ pub const Checker = struct {
     // one, or `Owner.member` access would silently bind to the qualified symbol instead of the
     // local. Set for the duration of checkModule.
     qualified_owners: [][]const u8 = &.{},
+    // The (possibly mangled) name of the function currently being checked, used to
+    // decide whether code may name an `opaque struct`'s private fields: only the
+    // struct's own associated functions (`Struct__member`, from `impl Struct`) may.
+    // Null at module scope (globals/initializers), where no private field is in reach.
+    current_fn_name: ?[]const u8 = null,
     // Registry of `const fn` declarations, populated for the duration of
     // checkModule so comptime folding can evaluate const-fn calls (section 22).
     const_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
@@ -299,7 +304,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields }) catch {
+        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .is_opaque = struct_decl.is_opaque }) catch {
             fields.deinit();
         };
     }
@@ -823,8 +828,11 @@ pub const Checker = struct {
                 // lattice state: diverge with no exit-edge leak check, so the post-branch
                 // join drops this path instead of merging a stale live set (which would
                 // otherwise raise a spurious E_MOVE_BRANCH_MISMATCH / E_RESOURCE_LEAK).
+                // (The `-> never` call is recognized here for the move join even though
+                // the function-level return-path checker still requires an explicit
+                // `return`/`trap`/`unreachable` terminator — both backends need one.)
                 if (self.move_ctx) |mctx| {
-                    if (!exprMayFallThrough(e, mctx.*)) return true;
+                    if (!exprMayFallThrough(e, mctx.*) or exprIsNeverCall(e, mctx.*)) return true;
                 }
                 return false;
             },
@@ -1554,6 +1562,8 @@ pub const Checker = struct {
     }
 
     fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+        self.current_fn_name = fn_decl.name.text;
+        defer self.current_fn_name = null;
         var scope = Scope.init(self.reporter.allocator);
         defer scope.deinit();
         var mmio_params = std.StringHashMap([]const u8).init(self.reporter.allocator);
@@ -3722,6 +3732,19 @@ pub const Checker = struct {
     fn checkStructLiteralInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
         const literal_fields = structLiteralFields(expr) orelse return false;
         const resolved_target_ty = resolveAliasType(target_ty, ctx);
+        // An `opaque struct` (including a generic one, e.g. `GenRef<T>`, whose name the
+        // plain `structTypeName` below does not resolve) may only be constructed by its
+        // own associated functions — a struct literal names every field, so building one
+        // outside `impl Name { … }` would forge a handle.
+        if (opacityStructName(resolved_target_ty)) |sname| {
+            if (ctx.structs) |structs| {
+                if (structs.get(sname)) |info| {
+                    if (info.is_opaque and !self.opaqueAccessAllowed(sname)) {
+                        self.errorCode(expr.span, "E_PRIVATE_FIELD", "cannot construct an `opaque struct` outside its associated functions (`impl` block); its fields are private");
+                    }
+                }
+            }
+        }
         if (packedBitsInfoForType(resolved_target_ty, ctx) != null) return false;
         const struct_name = structTypeName(resolved_target_ty) orelse {
             self.errorCode(expr.span, code, message);
@@ -4240,11 +4263,60 @@ pub const Checker = struct {
 
     fn checkKnownStructField(self: *Checker, span: diagnostics.Span, base: ast.Expr, field_name: []const u8, ctx: Context) void {
         const base_ty = exprResultType(base, ctx) orelse return;
+        // Field of an `opaque struct` (including a generic one) is private outside its
+        // associated functions: outside code may hold and pass the value but not read or
+        // write its fields. Checked ahead of the plain-struct field-existence path below,
+        // which `structTypeName` skips for a generic base.
+        if (opacityStructName(base_ty)) |sname| {
+            if (ctx.structs) |structs| {
+                if (structs.get(sname)) |info| {
+                    if (info.is_opaque and !self.opaqueAccessAllowed(sname)) {
+                        self.errorCode(span, "E_PRIVATE_FIELD", "field of an `opaque struct` is private to its associated functions (`impl` block)");
+                    }
+                }
+            }
+        }
         const layout_name = structTypeName(base_ty) orelse return;
         const layout_info = layoutFieldInfo(layout_name, ctx) orelse return;
         if (!layout_info.fields.contains(field_name)) {
             self.errorCode(span, "E_UNKNOWN_STRUCT_FIELD", "struct has no field with this name");
         }
+    }
+
+    // An `opaque struct`'s private fields may be named only by the struct's own associated
+    // functions — those declared in `impl Name { … }`, which the parser mangles to the free
+    // symbol `Name__member`. Membership is decided on the leading owner segment (the text
+    // before the first `__`): an associated function `GenRef__resolve` and the struct
+    // `GenRef` share owner `GenRef`. This also survives monomorphization, which appends a
+    // `__<args>` specialization suffix to both — the specialized struct `GenRef__u32` and the
+    // specialized accessor `GenRef__resolve__u32` still share the owner `GenRef`. The check
+    // is purely on (mangled) names, so it also survives the loader's textual-inclusion
+    // flattening of imported modules.
+    fn opaqueAccessAllowed(self: *Checker, struct_name: []const u8) bool {
+        const fname = self.current_fn_name orelse return false;
+        return std.mem.eql(u8, ownerSegment(fname), ownerSegment(struct_name));
+    }
+
+    // The declared struct name a (possibly generic / pointer / qualified) type names, for
+    // opacity lookups. Unlike `structTypeName`, this also resolves a generic application
+    // `GenRef<T>` to its base name `GenRef`.
+    fn opacityStructName(ty: ast.TypeExpr) ?[]const u8 {
+        return switch (ty.kind) {
+            .name => |n| n.text,
+            .generic => |g| g.base.text,
+            .qualified => |q| opacityStructName(q.child.*),
+            .pointer => |p| opacityStructName(p.child.*),
+            else => null,
+        };
+    }
+
+    // The leading owner segment of a (possibly mangled) symbol: the text before the first
+    // `__`. `impl`/`module` members and monomorphization specializations are all named
+    // `Owner__…`, so two symbols belong to the same owner namespace iff their owner segments
+    // are equal. A plain symbol with no `__` is its own owner.
+    fn ownerSegment(name: []const u8) []const u8 {
+        if (std.mem.indexOf(u8, name, "__")) |idx| return name[0..idx];
+        return name;
     }
 
     fn checkIfLetPattern(self: *Checker, pattern: ast.Pattern, value_class: TypeClass) void {
@@ -4657,6 +4729,8 @@ const MmioRegisterAccess = enum {
 const StructInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
     ordered: []const ast.Field,
+    // `opaque struct` — fields are private to the struct's associated functions.
+    is_opaque: bool = false,
 };
 
 // Liveness slot for a linear `move` binding (section 18.1 / annex D.7).
@@ -6486,6 +6560,17 @@ fn callReturnsNever(call: anytype, ctx: Context) bool {
     return isTypeName(ty, "never");
 }
 
+// Whether an expression statement is a direct call to a `-> never` function. The linear
+// `move` join treats such a statement as a diverging (Unreachable) path so a resource
+// consumed before it is not spuriously re-merged as live on the falling-through arm.
+fn exprIsNeverCall(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .call => |node| callReturnsNever(node, ctx),
+        .grouped => |inner| exprIsNeverCall(inner.*, ctx),
+        else => false,
+    };
+}
+
 // The type name of a type-parameter argument: either a bare type-name ident or
 // the named field type from `field_type(T, .field)`.
 fn typeArgName(arg: ast.Expr, ctx: Context) ?[]const u8 {
@@ -7627,7 +7712,7 @@ fn exprMayFallThrough(expr: ast.Expr, ctx: Context) bool {
     return switch (expr.kind) {
         .unreachable_expr => false,
         .grouped => |inner| exprMayFallThrough(inner.*, ctx),
-        .call => |node| !isTrapCall(node.callee.*) and !callReturnsNever(node, ctx),
+        .call => |node| !isTrapCall(node.callee.*),
         .block => |block| fallthroughSpan(block, ctx) != null,
         else => true,
     };

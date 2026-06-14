@@ -259,9 +259,16 @@ pub const Parser = struct {
         // `move` is a contextual qualifier (section 18.1) on a struct declaration
         // making it a linear resource type. At top level a leading `move` is
         // unambiguous — declarations otherwise start with a keyword.
+        // `opaque` is a contextual qualifier on a (non-extern) struct declaration
+        // (field privacy): `opaque struct …` / `opaque move struct …`. Like `move`
+        // it is unambiguous at top level.
+        const is_opaque = self.matchIdentifierText("opaque");
         const is_move = self.matchIdentifierText("move");
         if (is_move and self.current.kind != .kw_extern and self.current.kind != .kw_struct) {
             return self.fail("'move' applies only to struct declarations");
+        }
+        if (is_opaque and self.current.kind != .kw_struct) {
+            return self.fail("'opaque' applies only to a (non-extern) struct declaration");
         }
 
         if (self.match(.kw_extern)) {
@@ -339,6 +346,7 @@ pub const Parser = struct {
         if (self.match(.kw_struct)) {
             var struct_decl = try self.finishStructDecl(null);
             struct_decl.is_move = is_move;
+            struct_decl.is_opaque = is_opaque;
             return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
         }
 

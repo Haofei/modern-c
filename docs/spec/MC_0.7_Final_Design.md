@@ -42,6 +42,7 @@
   - [28. Driver Library Profile (Network-Card Target)](#28-driver-library-profile-network-card-target)
   - [29. Tuples](#29-tuples)
   - [30. Modules and Associated Functions](#30-modules-and-associated-functions)
+  - [31. Opaque Structs](#31-opaque-structs)
 - [Part II — Implementation and Conformance Annex](#part-ii--implementation-and-conformance-annex)
   - [A. Spec Layering](#a-spec-layering)
   - [B. Recommended Compilation Pipeline](#b-recommended-compilation-pipeline)
@@ -1711,6 +1712,10 @@ the program halts, or the path is provably impossible), and it is dropped from t
 rather than merged. Consuming a resource and then aborting on one branch, while another
 branch consumes and falls through, is therefore well-formed. Only `trap`/`unreachable`/
 `never` edges are exempt; an ordinary early `return` still leak-checks the whole live set.
+(A `-> never` call is recognized for this leak/join analysis, but it does not by itself
+satisfy the function's return-path requirement: a value-returning function whose last
+statement is a `-> never` call must still close the path with an explicit `trap`,
+`unreachable`, or `return`, so the obligation is uniform across both backends.)
 
 ---
 
@@ -2704,6 +2709,54 @@ symbol in place of an intended value's member access. Type declarations are exem
 
 A qualified `Owner.member` use must follow the `module`/`impl` block that declares it
 (declaration before use).
+
+---
+
+# 31. Opaque Structs
+
+A struct may be declared **`opaque`**:
+
+```mc
+opaque struct GenRef<T> { addr: PAddr, gen: u32 }
+```
+
+An `opaque struct`'s fields are **private to the struct's associated functions** — the
+functions declared in its `impl Name { … }` block. Code anywhere may *hold, pass, return,
+and store* a value of the type (it is opaque, not unusable), but only an associated function
+may **name a field**: in a struct literal (construction) or in a `.field` read or write.
+Naming a private field anywhere else is `E_PRIVATE_FIELD`.
+
+```mc
+impl GenRef {
+    fn from(a: *mut Arena) -> GenRef<u8> { return .{ .addr = a.next, .gen = a.gen }; } // ok
+    fn generation(g: GenRef<u8>) -> u32 { return g.gen; }                              // ok
+}
+
+fn caller(g: GenRef<u8>) -> GenRef<u8> { return g; }   // ok — holds/returns the value
+fn forge() -> GenRef<u8> { return .{ .addr = …, .gen = 1 }; } // E_PRIVATE_FIELD (construct)
+fn peek(g: GenRef<u8>) -> u32 { return g.gen; }              // E_PRIVATE_FIELD (read)
+```
+
+This gives **constructor-only handle capabilities**: a generational handle (`GenRef`,
+`PoolRef`, slot handles) becomes unforgeable — outside code cannot fabricate a handle with
+a chosen generation/index by raw field construction, nor inspect one, so the only handles in
+circulation are those the library minted. It closes the gap that a structurally-public
+handle leaves in the use-after-free / use-after-reset protection those handles advertise
+(§18.1 gives compile-time single-ownership for `move`; generational handles give run-time
+fail-closed reuse detection; opacity makes the handle itself trustworthy).
+
+Membership is purely lexical and decided on the **owner segment** — the symbol text before
+the first `__`. Associated functions are mangled `Owner__member`, and monomorphization
+appends a `__<args>` specialization suffix to both the struct and its functions, so a
+specialized accessor `GenRef__resolve__u8` and the specialized struct `GenRef__u8` still
+share the owner `GenRef`. The rule therefore survives both generic specialization and the
+loader's textual-inclusion flattening of imported modules. `opaque` is orthogonal to `move`
+(`opaque move struct` is allowed) and is a compile-time contract only — it lowers to the
+ordinary struct representation with no runtime cost.
+
+Opacity is an encapsulation boundary for *accidental* forgery, consistent with MC's stance
+(*explicit machine contract, not a capability kernel*): it is not a defense against code that
+deliberately writes in the owner's `Owner__…` namespace or uses `unsafe`.
 
 ---
 

@@ -167,7 +167,7 @@ fn run_workload(heap: *mut Heap) -> bool {
     pool_init(Session, 16, &g_sessions);
     var pass: bool = true;
 
-    var s0: PoolRef<Session> = .{ .index = 0, .gen = 0 };
+    var s0: PoolRef<Session> = uninit;
     switch pool_alloc(Session, 16, &g_sessions) {
         ok(r) => {
             s0 = r;

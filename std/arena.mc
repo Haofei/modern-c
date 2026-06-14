@@ -89,9 +89,25 @@ export fn arena_allocator(a: *mut Arena) -> Allocator {
 // for use-after-reset that MC's move/linear pass (no lifetimes) can't provide. Hold a
 // GenRef, not a raw PAddr, and resolve at each use.
 
-struct GenRef<T> {
+// Opaque (section 31): a GenRef can only be minted and inspected by its own associated
+// functions, so outside code cannot forge one with a chosen address/generation by raw
+// field construction — the use-after-reset protection rests on that. The in-bounds check
+// in `arena_resolve` is kept as belt-and-braces defence in depth.
+opaque struct GenRef<T> {
     addr: PAddr,
     gen: u32,
+}
+
+impl GenRef {
+    fn mk(comptime T: type, addr: PAddr, gen: u32) -> GenRef<T> {
+        return .{ .addr = addr, .gen = gen };
+    }
+    fn address(comptime T: type, h: GenRef<T>) -> PAddr {
+        return h.addr;
+    }
+    fn generation(comptime T: type, h: GenRef<T>) -> u32 {
+        return h.gen;
+    }
 }
 
 enum ArenaError {
@@ -112,33 +128,35 @@ export fn arena_alloc_gen(comptime T: type, a: *mut Arena, size: usize, align: u
     if align < alignof(T) {
         unreachable; // allocation under-aligned for the typed object
     }
-    return .{ .addr = arena_alloc(a, size, align), .gen = a.gen };
+    return GenRef.mk(T, arena_alloc(a, size, align), a.gen);
 }
 
 // Resolve a handle to its address iff it belongs to the arena's current generation.
 export fn arena_resolve(comptime T: type, a: *mut Arena, h: GenRef<T>) -> Result<PAddr, ArenaError> {
-    if h.gen != a.gen {
+    let gen: u32 = GenRef.generation(T, h);
+    let addr: PAddr = GenRef.address(T, h);
+    if gen != a.gen {
         return err(.StaleHandle); // used after a reset — memory may have been reused
     }
     // Defence in depth: a resolved address must point into allocated space [base, next).
-    // Without strict module privacy a GenRef is structurally forgeable, so a matching
-    // generation alone is not enough — a forged handle with the current generation but a
-    // bogus address must not resolve to memory outside the arena.
-    if pa_lt(h.addr, a.base) {
+    // Opacity makes a GenRef unforgeable by outside code, but a stale handle held across a
+    // reset can still name an address the arena has since rewound, so the in-bounds checks
+    // below remain a belt-and-braces guard.
+    if pa_lt(addr, a.base) {
         return err(.ForgedHandle); // below the arena base
     }
-    if !pa_lt(h.addr, a.next) {
+    if !pa_lt(addr, a.next) {
         return err(.ForgedHandle); // at or past the bump frontier — never allocated
     }
     // The typed object must fit entirely within the allocated region and be aligned for T:
     // `sizeof(T)` bytes from `addr` must not run past the bump frontier, and `addr` must
     // satisfy `alignof(T)`. Catches a handle whose address is in-bounds but whose typed
     // extent (or alignment) is not — e.g. a `GenRef<u64>` minted over a 1-byte allocation.
-    if sizeof(T) > pa_diff(h.addr, a.next) {
+    if sizeof(T) > pa_diff(addr, a.next) {
         return err(.ForgedHandle); // sizeof(T) would read past the bump frontier
     }
-    if !pa_is_aligned(h.addr, alignof(T)) {
+    if !pa_is_aligned(addr, alignof(T)) {
         return err(.ForgedHandle); // misaligned for T
     }
-    return ok(h.addr);
+    return ok(addr);
 }

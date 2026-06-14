@@ -99,6 +99,11 @@ pub const StructDecl = struct {
     // `move struct …` — a linear resource type (section 18.1): its values are
     // used linearly (moved/consumed exactly once), not copied.
     is_move: bool = false,
+    // `opaque struct …` — the fields are private to the struct's associated
+    // functions (`impl Name { … }`). Outside code may hold and pass a value but
+    // may not name its fields in a struct literal or `.field` access, so the
+    // value cannot be forged or inspected — constructor-only handle capabilities.
+    is_opaque: bool = false,
 };
 
 pub const PackedBitsDecl = struct {
