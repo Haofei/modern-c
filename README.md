@@ -243,8 +243,21 @@ zig build vqfault-test   # virtqueue completion fault injection (bad id / not-in
 zig build wrap-test      # long-running ring-index / pool-generation wrap and pool-exhaustion invariants
 ```
 
-A `diff-fuzz`/`move-fuzz` failure prints the seed; reproduce the exact program with
-`tools/toolchain/mcgen.py <seed>` (or `mcgen_move.py <seed>`). Raise `COUNT=` to explore further.
+`mcfuzz` (`tools/fuzz/mcfuzz.py`) is the type-directed framework — a type model over the whole
+scalar system plus structs and enums, a generator that produces well-typed programs by
+construction, and pluggable oracles:
+
+```sh
+zig build fuzz           # differential: C vs LLVM agree (status + stdout) over the full type system
+zig build fuzz-trap      # trap-consistency: programs that may overflow/divide-by-zero must trap on BOTH backends together
+zig build fuzz-sanitize  # emitted C is UBSan-clean
+zig build fuzz-robust    # robustness: `mcc check` never crashes/hangs on mutated (malformed) input
+```
+
+A fuzzer failure prints the seed; reproduce with `tools/fuzz/mcfuzz.py gen <seed>` and minimize
+with `tools/fuzz/mcfuzz.py shrink --seed <seed> --oracle <name>`. The older one-shape generators
+(`diff-fuzz`/`move-fuzz`) reproduce via `tools/toolchain/mcgen.py <seed>` / `mcgen_move.py <seed>`.
+Raise `COUNT=` on any of them to explore further.
 
 ## Compiler CLI
 

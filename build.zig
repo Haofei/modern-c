@@ -130,6 +130,20 @@ pub fn build(b: *std.Build) void {
     const fuzz_sanitize_step = b.step("fuzz-sanitize", "mcfuzz: run generated full-type-system programs' emitted C under UBSan");
     fuzz_sanitize_step.dependOn(&fuzz_sanitize_cmd.step);
 
+    const fuzz_trap_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--trapping", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_trap_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_trap_step = b.step("fuzz-trap", "mcfuzz: trap-consistency — generated programs that may trap must trap on both backends together");
+    fuzz_trap_step.dependOn(&fuzz_trap_cmd.step);
+
+    const fuzz_robust_cmd = b.addSystemCommand(&.{
+        "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "robust", "--mcc", "zig-out/bin/mcc",
+    });
+    fuzz_robust_cmd.step.dependOn(b.getInstallStep());
+    const fuzz_robust_step = b.step("fuzz-robust", "mcfuzz: robustness — mcc check must never crash/hang on mutated input");
+    fuzz_robust_step.dependOn(&fuzz_robust_cmd.step);
+
     const llvm_sweep_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/toolchain/spec-llvm-sweep.py",
@@ -2045,6 +2059,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&move_fuzz_cmd.step);
     m0_step.dependOn(&fuzz_cmd.step);
     m0_step.dependOn(&fuzz_sanitize_cmd.step);
+    m0_step.dependOn(&fuzz_trap_cmd.step);
+    m0_step.dependOn(&fuzz_robust_cmd.step);
     // LLVM backend gates: IR assembly, object lowering, spec sweep, broad
     // c_emit fixture sweeps, and host link/run smoke tests.
     m0_step.dependOn(&llvm_test_cmd.step);
