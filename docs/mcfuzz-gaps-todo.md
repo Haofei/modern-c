@@ -18,8 +18,12 @@ now; all green at the gate.
 **Backend-limited (discovered this pass):** G11 expression-`switch` — `var r = switch e {…}`
 fails `emit-llvm`; statement/fold switch only.
 
-**Still large/blocked:** G2 (kernel/driver surface) — the remaining big P0 item; plus G5–G9,
-G12–G15 (blocked on backend features, covered elsewhere, or architecture).
+**Done this pass too:** G2 kernel surface (runnable subset) — atomics + packed-bits registers now
+fuzzed by all 11 oracles. The non-runnable kernel features (MMIO/address-classes/overlay/DMA/asm)
+are left to the sema + QEMU fixtures (they have no in-process digest-foldable observable).
+
+**Still blocked/covered:** G5–G9, G12–G15 (blocked on backend features — tagged-union codegen,
+slice construction, domain conversions — or covered elsewhere, or architecture-bound).
 
 ---
 
@@ -41,19 +45,27 @@ because `pipeline` is a status oracle.)
   comparison semantics), structs/enums/Result/pointers/closures. These can be added to `mcref`
   incrementally once each one's exact semantics is pinned down.
 
-### G2 `[ ]` Kernel / driver surface (MC's actual target domain)
-mcfuzz generates portable compute and touches **none** of the features the spec exists for
-(sections 16–20, 28). A type-directed fuzzer here tests the safety guarantees that matter most.
-- **MMIO** typed registers (`Reg<T,.read/.write>`, `@offset` layouts) — read/write lowering,
-  width/ordering preservation.
-- **Address-space types** (`PAddr`/`VAddr`/user/dma pointers) — class-mismatch + deref rules.
-- **Packed-bits** and **overlay unions** — byte-storage layout, no C bitfields.
-- **Atomics / concurrency**, **DMA / cache** ops, **memory barriers** — race-helper + ordering
-  lowering.
-- **Inline assembly** (opaque / precise), `#[unsafe_contract]` / `#[no_lang_trap]` paths.
-- **Note:** some of these are exercised by the QEMU/driver fixtures and `mcgen`, but not by the
-  type-directed generator. Decide per-feature: extend mcfuzz vs keep as fixtures.
-- **Effort:** medium per feature; large in aggregate.
+### G2 `[~]` Kernel / driver surface (MC's actual target domain) — runnable subset DONE
+mcfuzz generates portable compute and touched **none** of the features the spec exists for
+(sections 16–20, 28). The features split by whether the in-process digest model can *run* them:
+- **DONE (runnable, now fuzzed by all 11 oracles):**
+  - **Atomics** — single-threaded `atomic<uN>` (init/store/fetch_add/fetch_sub/load) with
+    spec-correct orderings; loaded/returned values fold into the digest. (~41% of seeds.)
+  - **Packed-bits** registers — struct of bool fields over u8/u16/u32 storage, no C bitfields;
+    fields set and read into the digest. (~51% of seeds.)
+- **Not cleanly fuzzable by the in-process value oracles (deliberately left to sema/QEMU
+  fixtures):**
+  - **MMIO** typed registers (`Reg<T,.read/.write>`) — need real memory-mapped addresses; not
+    runnable in a hosted process.
+  - **Address-space types** (`PAddr`/`VAddr`/user/dma) — can't be dereferenced, so nothing folds;
+    they are typing rules, already covered by `tests/spec/address_classes.mc` (a fail-closed
+    surface) — could be added to the `failclosed` oracle but not the value oracles.
+  - **Overlay unions** — runtime construction needs an explicit conversion and the spec exercises
+    them reflection-only (`field_offset`), so there is no runnable construct/read pattern (blocked
+    like slices, G8).
+  - **DMA/cache, memory barriers, concurrency** — ordering/ownership semantics with no
+    digest-foldable single-threaded observable.
+  - **Inline assembly** — opaque / target-specific, not portable to host execution.
 
 ### G3 `[x]` Aggregate ABI (cheapest concrete win) — DONE
 Helper functions only take and return **scalars**. The by-value ABI for aggregates is unfuzzed.
@@ -122,6 +134,7 @@ Pointers only target globals (no heap), so ASan finds little. Unblocks once slic
 1. ~~**G1** reference interpreter~~ — DONE (unsigned-int core). Extend `mcref` to signed/floats
    /aggregates next, once each one's exact `as u64`/fold semantics is pinned down.
 2. ~~**G3** aggregate ABI~~ — DONE.
-3. **G2** kernel/driver surface — where MC's safety guarantees actually live (the big remaining item).
+3. ~~**G2** kernel/driver surface~~ — runnable subset DONE (atomics + packed-bits). Non-runnable
+   features (MMIO/address-classes/overlay/DMA/asm) stay as sema/QEMU fixtures.
 4. ~~**G4** float bit oracle~~ — DONE.
 5. Then unblock G7/G8 (tagged-union codegen, slice construction), which also unblock G6/G14.
