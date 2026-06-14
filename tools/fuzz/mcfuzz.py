@@ -96,6 +96,7 @@ class Gen:
         self.depth = 0       # block nesting (new vars only at depth 0)
         self.structs = {}    # struct name -> [(field, scalar type name)]
         self.enums = {}      # enum name -> [variant names]
+        self.functions = []  # [(name, [(param, type)], ret type)] — call only earlier ones (a DAG)
         # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
         # so a program may trap (overflow / divide-by-zero). Under the differential's status
         # contract, both backends must then trap together — this exercises the trap-lowering
@@ -134,6 +135,13 @@ class Gen:
             return ".{ %s }" % ", ".join(".%s = %s" % (f, self.gen_value(t)) for f, t in self.structs[tyname])
         if tyname in self.enums:    # an enum literal: `.Variant`
             return ".%s" % self.rng.choice(self.enums[tyname])
+        # Sometimes call a (earlier-declared) function returning this type. Args are leaves so
+        # the call is type-clean; the DAG of functions guarantees termination.
+        if d < 2 and self.functions and self.rng.random() < 0.3:
+            cands = [fn for fn in self.functions if fn[2] == tyname]
+            if cands:
+                name, params, _ = self.rng.choice(cands)
+                return "%s(%s)" % (name, ", ".join(self.gen_leaf(pt) for _, pt in params))
         ty = TYPES[tyname]
         kind = ty["kind"]
         if kind == "float":
@@ -267,6 +275,25 @@ class Gen:
         ty = self.rng.choice([t for t in VALUE_TYPES if self.env.get(t)])
         return ty, self.rng.choice(self.env[ty])
 
+    def gen_functions(self, decls):
+        # A DAG of helper functions: each takes scalar params and returns a scalar, may call
+        # *earlier* functions (no recursion → terminates), and harness then calls them. Exercises
+        # parameter passing / calling convention / by-value ABI — the single-function shape missed.
+        callable_types = [t for t in (INTS + FLOATS) if t not in GEN_SKIP]
+        for i in range(self.rng.randrange(2, 5)):
+            name = "fn%d" % i
+            params = [("p%d" % j, self.rng.choice(callable_types)) for j in range(self.rng.randrange(1, 4))]
+            ret = self.rng.choice(callable_types)
+            saved_env, saved_depth = self.env, self.depth
+            self.env, self.depth = {}, 1  # params visible; depth 1 suppresses new top-level decls
+            for pn, pt in params:
+                self.env.setdefault(pt, []).append(pn)
+            ret_expr = self.gen_value(ret)
+            self.env, self.depth = saved_env, saved_depth
+            params_src = ", ".join("%s: %s" % (pn, pt) for pn, pt in params)
+            decls.append("fn %s(%s) -> %s {\n    return %s;\n}" % (name, params_src, ret, ret_expr))
+            self.functions.append((name, params, ret))
+
     def program(self):
         # Declare a couple of user types the generator can construct, read, and match.
         decls = []
@@ -280,6 +307,7 @@ class Gen:
             name = "E%d" % i
             self.enums[name] = variants
             decls.append("enum %s { %s }" % (name, ", ".join(variants)))
+        self.gen_functions(decls)
 
         out = []
         types = self.local_types()
