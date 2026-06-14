@@ -131,6 +131,7 @@ class Gen:
         self.agg_fns = []    # [(name, param type, return type)] — aggregate-by-value helpers (G3)
         self.arrays = {}     # "[N]T" -> (element type, length)
         self.aliases = {}    # alias name -> underlying int type (A11); transparent in use
+        self.packed = {}     # packed-bits type name -> [bool field names] (G2 kernel surface)
         self.immutable = set()  # binding names that are read-only (e.g. a `for x in …` element)
         # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
         # so a program may trap (overflow / divide-by-zero). Under the differential's status
@@ -519,9 +520,62 @@ class Gen:
             decls.append("fn %s(p: %s) -> %s {\n    return p.%s;\n}" % (name, s, ft, f))
             self.agg_fns.append((name, s, ft))
 
+    def gen_kernel_decls(self, decls):
+        # G2 (kernel/driver surface): packed-bits register types — a struct of bool fields over an
+        # integer storage word (no C bitfields; byte/bit storage lowering). Runnable and
+        # deterministic, so the differential/sanitize/optlevel oracles all apply.
+        for i in range(self.rng.randrange(0, 2)):
+            store_w = self.rng.choice((8, 16, 32))
+            nfields = self.rng.randrange(1, min(store_w, 5) + 1)
+            fields = ["pf%d" % j for j in range(nfields)]
+            name = "PB%d" % i
+            self.packed[name] = (fields, store_w)
+            decls.append("packed bits %s: u%d { %s }" % (name, store_w, ", ".join("%s: bool" % f for f in fields)))
+
+    def gen_kernel_body(self, out):
+        # Atomics (G2): single-threaded `atomic<uN>` with init/store/fetch_add/fetch_sub/load.
+        # Single-threaded so fully deterministic; the loaded values fold into the digest. Orderings
+        # respect the spec (load: relaxed/acquire/seq_cst; store: relaxed/release/seq_cst; RMW:
+        # acq_rel/seq_cst/relaxed). Deltas are kept small so fetch_add/sub stay finite.
+        for _ in range(self.rng.randrange(0, 2)):
+            w = self.rng.choice((32, 64))
+            an = "at%d" % self.nvars
+            self.nvars += 1
+            out.append("    var %s: atomic<u%d> = atomic.init(%d);" % (an, w, self.rng.randrange(0, 1000)))
+            if self.rng.random() < 0.6:
+                out.append("    %s.store(%d, .%s);" % (an, self.rng.randrange(0, 1000),
+                                                       self.rng.choice(("relaxed", "release", "seq_cst"))))
+            if self.rng.random() < 0.7:
+                op = self.rng.choice(("fetch_add", "fetch_sub"))
+                ov = "ato%d" % self.nvars
+                self.nvars += 1
+                out.append("    var %s: u%d = %s.%s(%d, .%s);" % (ov, w, an, op, self.rng.randrange(0, 100),
+                                                                  self.rng.choice(("acq_rel", "seq_cst", "relaxed"))))
+                self.env.setdefault("u%d" % w, []).append(ov)
+            lv = "atl%d" % self.nvars
+            self.nvars += 1
+            out.append("    var %s: u%d = %s.load(.%s);" % (lv, w, an, self.rng.choice(("relaxed", "acquire", "seq_cst"))))
+            self.env.setdefault("u%d" % w, []).append(lv)
+        # Packed-bits register vars: construct, optionally store a field, read fields into the digest.
+        for pname, (fields, _w) in self.packed.items():
+            if self.rng.random() < 0.5:
+                continue
+            vn = "pbv%d" % self.nvars
+            self.nvars += 1
+            ctor = ", ".join(".%s = %s" % (f, self.rng.choice(("true", "false"))) for f in fields)
+            out.append("    var %s: %s = .{ %s };" % (vn, pname, ctor))
+            if self.rng.random() < 0.5:
+                f = self.rng.choice(fields)
+                out.append("    %s.%s = %s;" % (vn, f, self.rng.choice(("true", "false"))))
+            out.append("    var pbo_%s: u64 = 0;" % vn)
+            for k, f in enumerate(fields):
+                out.append("    if %s.%s { pbo_%s = (pbo_%s ^ %d); }" % (vn, f, vn, vn, 1 << k))
+            self._kernel_terms.append("pbo_%s" % vn)
+
     def program(self, metamorph=False):
         # Declare a couple of user types the generator can construct, read, and match.
         decls = []
+        self._kernel_terms = []
         int_arrays = []
         for _ in range(self.rng.randrange(1, 3)):  # array types (int elements; structural, no decl)
             elem = self.rng.choice(INTS)
@@ -567,6 +621,7 @@ class Gen:
             name = "Alias%d" % i
             self.aliases[name] = u
             decls.append("type %s = %s;" % (name, u))
+        self.gen_kernel_decls(decls)
         self.gen_functions(decls)
         self.gen_result_functions(decls)
         self.gen_aggregate_abi(decls)
@@ -652,6 +707,7 @@ class Gen:
             else:
                 out.append("    var %s: *%s = &%s;" % (pname, ty, gname))
                 plainptrs.append((pname, ty))
+        self.gen_kernel_body(out)  # G2: atomics + packed-bits register vars
         for _ in range(self.rng.randrange(5, 12)):
             self.stmt(out, 1)
 
@@ -668,6 +724,7 @@ class Gen:
         for ename in self.open_enums:  # standalone open-enum vars fold inline via `.raw()`
             for name in self.env.get(ename, []):
                 terms.append("(%s.raw() as u64)" % name)
+        terms.extend(self._kernel_terms)  # G2: packed-bits field observations
         if optionals or plainptrs:  # A3/A4: fold pointer reads into the digest
             out.append("    var pobs: u64 = 0;")
             for pname, ty in optionals:  # A3: if-let narrowing
@@ -1096,6 +1153,7 @@ def main():
             ("nullable ptr", r"\?\*"), ("pointer", r"var \w+: \*"),
             ("generic fn", r"comptime T: type"), ("closure", r"bind\("),
             ("aggregate ABI", r"fn agg(id|get)"), ("&&/||", r"&&|\|\|"),
+            ("atomic", r"atomic<u"), ("packed bits", r"^packed bits "),
         ]
         counts = {name: 0 for name, _ in markers}
         for s in range(1, args.count + 1):
