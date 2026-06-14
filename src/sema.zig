@@ -67,6 +67,7 @@ pub const Checker = struct {
         var type_aliases = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
         defer type_aliases.deinit();
         self.checkTopLevelNames(module);
+        self.checkBackendNameUniqueness(module);
         self.collectTypeAliases(module, &type_aliases);
         self.checkTypeAliasCycles(module, &type_aliases);
         self.collectMmioStructs(module, &mmio_structs);
@@ -3425,6 +3426,26 @@ pub const Checker = struct {
         self.reporter.err(span, "{s}: {s}", .{ code, message });
     }
 
+    // `#[backend_name("Y")]` overrides the object symbol; two declarations may not map to the
+    // same backend symbol, or one would silently shadow the other at link time.
+    fn checkBackendNameUniqueness(self: *Checker, module: ast.Module) void {
+        var seen = std.StringHashMap(ast.Ident).init(self.reporter.allocator);
+        defer seen.deinit();
+        for (module.decls) |decl| {
+            const name_ident: ast.Ident = switch (decl.kind) {
+                .fn_decl => |f| f.name,
+                .extern_fn => |f| f.name,
+                else => continue,
+            };
+            const override = backendNameAttr(decl.attrs) orelse continue;
+            if (seen.get(override)) |prev| {
+                self.reporter.err(name_ident.span, "E_DUPLICATE_BACKEND_NAME: backend symbol \"{s}\" is assigned to both `{s}` and `{s}`", .{ override, prev.text, name_ident.text });
+            } else {
+                seen.put(override, name_ident) catch {};
+            }
+        }
+    }
+
     fn checkTrapKind(self: *Checker, span: diagnostics.Span, args: []ast.Expr) void {
         if (args.len != 1) {
             self.errorCode(span, "E_INVALID_TRAP_KIND", "trap expects exactly one language TrapKind");
@@ -4639,7 +4660,7 @@ const UnsafeContracts = struct {
                 if (std.mem.eql(u8, contract.name.text, "noalias")) next.noalias_contract = true;
                 if (std.mem.eql(u8, contract.name.text, "precise_asm")) next.precise_asm = true;
             },
-            .no_lang_trap, .named => {},
+            .no_lang_trap, .named, .backend_name => {},
         }
         return next;
     }
@@ -4757,6 +4778,14 @@ fn hasNoLangTrap(attrs: []ast.Attr) bool {
         if (std.meta.activeTag(attr.kind) == .no_lang_trap) return true;
     }
     return false;
+}
+
+fn backendNameAttr(attrs: []ast.Attr) ?[]const u8 {
+    for (attrs) |attr| switch (attr.kind) {
+        .backend_name => |name| return name,
+        else => {},
+    };
+    return null;
 }
 
 fn isTrapBinary(op: ast.BinaryOp) bool {

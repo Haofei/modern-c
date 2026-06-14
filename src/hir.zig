@@ -707,7 +707,7 @@ fn directCalleeName(callee: ast.Expr) ?[]const u8 {
 fn contractName(attr: ast.Attr) []const u8 {
     return switch (attr.kind) {
         .unsafe_contract => |contract| contract.name.text,
-        .no_lang_trap, .named => "unknown",
+        .no_lang_trap, .named, .backend_name => "unknown",
     };
 }
 

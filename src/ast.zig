@@ -27,6 +27,9 @@ pub const Attr = struct {
     pub const Kind = union(enum) {
         unsafe_contract: UnsafeContract,
         no_lang_trap,
+        // `#[backend_name("Y")]` — override the object/backend symbol of a declaration
+        // (RSS namespace isolation: source symbol X lowers as backend symbol Y).
+        backend_name: []const u8,
         named: Ident,
     };
 };

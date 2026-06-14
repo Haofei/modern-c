@@ -388,6 +388,17 @@ fn declTypeName(kind: ast.Decl.Kind) ?ast.Ident {
     };
 }
 
+// The `#[backend_name("Y")]` override string for a declaration, if present.
+fn backendNameOverride(attrs: []const ast.Attr) ?[]const u8 {
+    for (attrs) |attr| {
+        switch (attr.kind) {
+            .backend_name => |name| return name,
+            else => {},
+        }
+    }
+    return null;
+}
+
 fn declKindName(kind: ast.Decl.Kind) []const u8 {
     return switch (kind) {
         .struct_decl => "struct",
@@ -463,7 +474,8 @@ const SourceMapEmitter = struct {
                 .fn_decl => |fn_decl| if (fn_decl.body) |body| {
                     self.symbol_kind = "free_fn";
                     self.visibility = if (fn_decl.exported) "exported" else "internal";
-                    try self.emitEntry("function", fn_decl.name.text, fn_decl.name.span, fn_decl.name.text, "mir:function:entry");
+                    const obj = backendNameOverride(decl.attrs) orelse fn_decl.name.text;
+                    try self.emitEntry("function", fn_decl.name.text, fn_decl.name.span, obj, "mir:function:entry");
                     const previous_function = self.current_function;
                     self.current_function = fn_decl.name.text;
                     try self.emitBlock(body);
@@ -703,6 +715,10 @@ const CEmitter = struct {
     static_initializers: std.StringHashMap(ast.Expr),
     type_aliases: std.StringHashMap(ast.TypeExpr),
     functions: std.StringHashMap(FnInfo),
+    // Source function name -> overridden object/backend symbol (`#[backend_name("Y")]`).
+    // Emitted as a C `__asm__("Y")` label so the object symbol is renamed without touching
+    // any C-level call site.
+    backend_names: std.StringHashMap([]const u8),
     // `const fn` bodies and folded `const` global values, for folding comptime
     // const-fn calls / named constants in fixed-array lengths (section 22
     // comptime↔type feedback).
@@ -751,6 +767,7 @@ const CEmitter = struct {
             .static_initializers = std.StringHashMap(ast.Expr).init(allocator),
             .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
+            .backend_names = std.StringHashMap([]const u8).init(allocator),
             .const_fns = std.StringHashMap(ast.FnDecl).init(allocator),
             .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
             .const_global_widths = std.StringHashMap(u16).init(allocator),
@@ -794,6 +811,7 @@ const CEmitter = struct {
         self.const_fns.deinit();
         eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.functions.deinit();
+        self.backend_names.deinit();
         self.type_aliases.deinit();
         self.static_initializers.deinit();
         self.globals.deinit();
@@ -871,6 +889,7 @@ const CEmitter = struct {
                 .fn_decl => |fn_decl| {
                     try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = false });
                     if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+                    if (backendNameOverride(decl.attrs)) |name| try self.backend_names.put(fn_decl.name.text, name);
                     try self.collectFunctionSliceTypes(fn_decl);
                 },
                 .extern_fn => |fn_decl| {
@@ -1620,7 +1639,7 @@ const CEmitter = struct {
     }
 
     fn emitFunctionPrototype(self: *CEmitter, fn_decl: ast.FnDecl) !void {
-        try self.emitFunctionSignature(fn_decl, false);
+        try self.emitFunctionSignature(fn_decl, false, true);
         try self.out.appendSlice(self.allocator, ";\n\n");
     }
 
@@ -1628,7 +1647,7 @@ const CEmitter = struct {
     // storage class (non-exported functions are `static`) so the prototype and
     // body agree.
     fn emitFunctionForwardDecl(self: *CEmitter, fn_decl: ast.FnDecl) !void {
-        try self.emitFunctionSignature(fn_decl, !fn_decl.exported);
+        try self.emitFunctionSignature(fn_decl, !fn_decl.exported, true);
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
@@ -1638,7 +1657,7 @@ const CEmitter = struct {
 
     fn emitFunction(self: *CEmitter, fn_decl: ast.FnDecl, body: ast.Block) anyerror!void {
         try self.writeLineDirective(fn_decl.name.span);
-        try self.emitFunctionSignature(fn_decl, !fn_decl.exported);
+        try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
 
         const previous_function = self.current_function;
@@ -1655,7 +1674,7 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn emitFunctionSignature(self: *CEmitter, fn_decl: ast.FnDecl, is_static: bool) !void {
+    fn emitFunctionSignature(self: *CEmitter, fn_decl: ast.FnDecl, is_static: bool, with_asm_label: bool) !void {
         const ret = if (fn_decl.return_type) |ret_ty| try self.cTypeFor(ret_ty, .typedef_name) else "void";
         const cname = try self.cIdent(fn_decl.name.text);
         if (is_static) {
@@ -1672,6 +1691,17 @@ const CEmitter = struct {
             }
         }
         try self.out.appendSlice(self.allocator, ")");
+        // `#[backend_name("Y")]`: rename the object symbol via a C asm label. C-level calls
+        // still use the source name, so no call site changes; only the emitted symbol differs.
+        // The label is legal on a *declaration* only (not a definition), and must precede first
+        // use — so it rides the forward declaration, which is always emitted before the body.
+        if (with_asm_label) {
+            if (self.backend_names.get(fn_decl.name.text)) |backend| {
+                try self.out.appendSlice(self.allocator, " __asm__(\"");
+                try self.out.appendSlice(self.allocator, backend);
+                try self.out.appendSlice(self.allocator, "\")");
+            }
+        }
     }
 
     fn emitParamDecl(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
@@ -12319,7 +12349,7 @@ fn bitcastReturnTypeForCall(call: anytype) ?ast.TypeExpr {
 fn contractName(attr: ast.Attr) []const u8 {
     return switch (attr.kind) {
         .unsafe_contract => |contract| contract.name.text,
-        .no_lang_trap, .named => "unknown",
+        .no_lang_trap, .named, .backend_name => "unknown",
     };
 }
 
@@ -12593,6 +12623,35 @@ test "C source map records defer cleanup spans" {
         try std.testing.expect(std.mem.indexOf(u8, line, "symbol_kind=\"extern_fn\"") != null or
             std.mem.indexOf(u8, line, "symbol_kind=\"type\"") != null);
     }
+}
+
+test "backend_name attribute renames the object symbol via an asm label" {
+    const source =
+        \\#[backend_name("rss_helper_x")]
+        \\fn helper(x: u64) -> u64 { return x + 1; }
+        \\export fn harness() -> u64 { return helper(7); }
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bn.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    // The asm label appears exactly once (on the forward declaration, not the definition),
+    // and the definition keeps the source name so C-level calls are unchanged.
+    try std.testing.expect(std.mem.count(u8, output.items, "__asm__(\"rss_helper_x\")") == 1);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "helper(uint64_t x) __asm__(\"rss_helper_x\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "helper(uint64_t x) {") != null);
 }
 
 test "C emission materializes closure callees once" {

@@ -327,11 +327,30 @@ pub const Parser = struct {
                 .kind = .{ .unsafe_contract = .{ .name = contract_name, .args = try args.toOwnedSlice(self.allocator) } },
             };
         }
+        if (std.mem.eql(u8, name.text, "backend_name")) {
+            try self.expect(.l_paren, "expected '(' after backend_name");
+            if (self.current.kind != .string_literal) return self.fail("expected a string in backend_name(\"...\")");
+            const raw = self.current.lexeme;
+            self.advance();
+            try self.expect(.r_paren, "expected ')' after backend_name argument");
+            const end = try self.expectTok(.r_bracket, "expected ']' after attribute");
+            return .{
+                .span = joinSpan(start, end.span),
+                .kind = .{ .backend_name = stripStringQuotes(raw) },
+            };
+        }
         const end = try self.expectTok(.r_bracket, "expected ']' after attribute");
         return .{
             .span = joinSpan(start, end.span),
             .kind = if (std.mem.eql(u8, name.text, "no_lang_trap")) .no_lang_trap else .{ .named = name },
         };
+    }
+
+    fn stripStringQuotes(lexeme: []const u8) []const u8 {
+        if (lexeme.len >= 2 and lexeme[0] == '"' and lexeme[lexeme.len - 1] == '"') {
+            return lexeme[1 .. lexeme.len - 1];
+        }
+        return lexeme;
     }
 
     fn parseBlock(self: *Parser) anyerror!ast.Block {
