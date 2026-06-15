@@ -15,6 +15,7 @@ const scalarLayout = type_layout.scalarLayout;
 // `isIdentNamed` is grouping-transparent (was not, here, before consolidation).
 const isIdentNamed = ast_query.isIdentNamed;
 const MmioRegisterAccess = ast_query.MmioRegisterAccess;
+const mmioRegisterAccessFromModeType = ast_query.mmioRegisterAccessFromModeType;
 const isMmioMapCallName = ast_query.isMmioMapCallName;
 const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const exprIsIdentNamed = ast_query.exprIsIdentNamed;
@@ -7058,22 +7059,9 @@ fn mmioFieldInfoFromType(ty: ast.TypeExpr) ?MmioFieldInfo {
         generic.args[2]
     else
         return null;
-    const access = mmioRegisterAccessFromType(access_arg) orelse return null;
+    const access = mmioRegisterAccessFromModeType(access_arg) orelse return null;
     return .{ .access = access };
 }
-
-fn mmioRegisterAccessFromType(ty: ast.TypeExpr) ?MmioRegisterAccess {
-    const name = switch (ty.kind) {
-        .enum_literal => |literal| literal.text,
-        else => return null,
-    };
-    if (std.mem.eql(u8, name, "read")) return .read;
-    if (std.mem.eql(u8, name, "write")) return .write;
-    if (std.mem.eql(u8, name, "read_write")) return .read_write;
-    return null;
-}
-
-
 
 fn simpleNameType(name: []const u8, span: diagnostics.Span) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .text = name, .span = span } } };

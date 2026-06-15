@@ -391,6 +391,19 @@ pub const MmioRegisterAccess = enum {
     }
 };
 
+/// Maps an `.enum_literal` access-mode type (`read`/`write`/`read_write`) to its
+/// `MmioRegisterAccess`, or null for any other type shape or unknown literal.
+pub fn mmioRegisterAccessFromModeType(ty: ast.TypeExpr) ?MmioRegisterAccess {
+    const name = switch (ty.kind) {
+        .enum_literal => |literal| literal.text,
+        else => return null,
+    };
+    if (std.mem.eql(u8, name, "read")) return .read;
+    if (std.mem.eql(u8, name, "write")) return .write;
+    if (std.mem.eql(u8, name, "read_write")) return .read_write;
+    return null;
+}
+
 /// The `reduce.*` sum intrinsics.
 pub const ReduceCallKind = enum { sum_checked, sum_left, sum_fast };
 

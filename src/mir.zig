@@ -13,6 +13,7 @@ const mirScalarLayout = type_layout.scalarLayout;
 
 // Pure AST-shape queries shared with `sema.zig`/`lower_c.zig` (see `ast_query.zig`).
 const MmioRegisterAccess = ast_query.MmioRegisterAccess;
+const mmioRegisterAccessFromModeType = ast_query.mmioRegisterAccessFromModeType;
 const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const exprIsIdentNamed = ast_query.exprIsIdentNamed;
 const isResultNarrowingTag = ast_query.isResultNarrowingTag;
@@ -5432,17 +5433,6 @@ fn mmioRegisterAccessFromTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const st
         .qualified => |node| mmioRegisterAccessFromTypeExprAliasDepth(node.child.*, aliases, depth + 1),
         else => null,
     };
-}
-
-fn mmioRegisterAccessFromModeType(ty: ast.TypeExpr) ?MmioRegisterAccess {
-    const name = switch (ty.kind) {
-        .enum_literal => |literal| literal.text,
-        else => return null,
-    };
-    if (std.mem.eql(u8, name, "read")) return .read;
-    if (std.mem.eql(u8, name, "write")) return .write;
-    if (std.mem.eql(u8, name, "read_write")) return .read_write;
-    return null;
 }
 
 fn mmioPtrTargetTypeNameAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
