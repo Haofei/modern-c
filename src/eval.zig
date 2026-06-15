@@ -368,12 +368,16 @@ pub const ComptimeScope = struct {
     // model otherwise works in untyped i128, where `~0` is -1 rather than the
     // width-bounded `0xFFFFFFFF` a u32 would produce at runtime.
     widths: std.StringHashMap(u16),
+    // Arithmetic domain + width per binding (section 5), so the folder can wrap/saturate/
+    // trap a `wrap<uN>`/`sat<uN>`/checked `uN` operation as the runtime would.
+    domains: std.StringHashMap(DomainWidth),
 
     pub fn init(allocator: std.mem.Allocator) ComptimeScope {
         return .{
             .bindings = std.StringHashMap(ComptimeValue).init(allocator),
             .type_bindings = std.StringHashMap(ast.TypeExpr).init(allocator),
             .widths = std.StringHashMap(u16).init(allocator),
+            .domains = std.StringHashMap(DomainWidth).init(allocator),
         };
     }
 
@@ -381,6 +385,7 @@ pub const ComptimeScope = struct {
         self.bindings.deinit();
         self.type_bindings.deinit();
         self.widths.deinit();
+        self.domains.deinit();
     }
 
     pub fn bind(self: *ComptimeScope, name: []const u8, value: ComptimeValue) !void {
@@ -394,10 +399,70 @@ pub const ComptimeScope = struct {
     pub fn bindWidth(self: *ComptimeScope, name: []const u8, bits: u16) void {
         self.widths.put(name, bits) catch {};
     }
+
+    // Bind a name's full domain+width from its declared type (covers `wrap`/`sat`/checked);
+    // also records the bit width so width-sensitive bitwise ops keep working.
+    pub fn bindTypeInfo(self: *ComptimeScope, name: []const u8, ty: ast.TypeExpr) void {
+        if (comptimeTypeBitWidth(ty)) |bits| self.widths.put(name, bits) catch {};
+        if (comptimeTypeDomainWidth(ty)) |dw| {
+            self.domains.put(name, dw) catch {};
+            self.widths.put(name, dw.bits) catch {};
+        }
+    }
 };
 
 // The declared bit-width of an integer type expression, or null for non-integer
 // (or width-unknown) types. usize/isize follow the 64-bit C ABI this backend targets.
+// The arithmetic domain + width of a comptime integer binding (section 5): a plain `uN`/`iN`
+// is `checked`, `wrap<uN>`/`sat<uN>` carry their domain. Drives overflow handling in the
+// const folder (checked → trap, wrap → mask mod 2^N, sat → clamp).
+pub const ComptimeDomain = enum { checked, wrap, sat };
+pub const DomainWidth = struct { domain: ComptimeDomain, bits: u16, signed: bool };
+
+pub fn comptimeTypeDomainWidth(ty: ast.TypeExpr) ?DomainWidth {
+    switch (ty.kind) {
+        .name => |n| {
+            const w = comptimeTypeBitWidth(ty) orelse return null;
+            return .{ .domain = .checked, .bits = w, .signed = n.text.len > 0 and n.text[0] == 'i' };
+        },
+        .generic => |g| {
+            const domain: ComptimeDomain = if (std.mem.eql(u8, g.base.text, "wrap"))
+                .wrap
+            else if (std.mem.eql(u8, g.base.text, "sat"))
+                .sat
+            else
+                return null;
+            if (g.args.len != 1) return null;
+            const w = comptimeTypeBitWidth(g.args[0]) orelse return null;
+            const signed = switch (g.args[0].kind) {
+                .name => |nn| nn.text.len > 0 and nn.text[0] == 'i',
+                else => false,
+            };
+            return .{ .domain = domain, .bits = w, .signed = signed };
+        },
+        .qualified => |q| return comptimeTypeDomainWidth(q.child.*),
+        else => return null,
+    }
+}
+
+// Apply a domain's overflow rule to a raw i128 arithmetic result.
+fn applyDomain(dw: DomainWidth, raw: i128) ComptimeFold {
+    const bits = dw.bits;
+    if (bits >= 128) return .{ .value = .{ .int = raw } };
+    const max: i128 = if (dw.signed) (@as(i128, 1) << @intCast(bits - 1)) - 1 else (@as(i128, 1) << @intCast(bits)) - 1;
+    const min: i128 = if (dw.signed) -(@as(i128, 1) << @intCast(bits - 1)) else 0;
+    switch (dw.domain) {
+        .checked => return if (raw < min or raw > max) .trap else .{ .value = .{ .int = raw } },
+        .sat => return .{ .value = .{ .int = if (raw < min) min else if (raw > max) max else raw } },
+        .wrap => {
+            const mask: u128 = (@as(u128, 1) << @intCast(bits)) - 1;
+            const m: u128 = @as(u128, @bitCast(raw)) & mask;
+            if (dw.signed and (m >> @intCast(bits - 1)) & 1 == 1) return .{ .value = .{ .int = @bitCast(m | ~mask) } };
+            return .{ .value = .{ .int = @intCast(m) } };
+        },
+    }
+}
+
 pub fn comptimeTypeBitWidth(ty: ast.TypeExpr) ?u16 {
     const name = switch (ty.kind) {
         .name => |n| n.text,
@@ -488,6 +553,27 @@ fn comptimeExprWidth(scope: *const ComptimeScope, expr: ast.Expr) ?u16 {
     };
 }
 
+// The arithmetic domain+width an expression evaluates in, resolved through bound names and
+// width/domain-preserving operators (mirrors comptimeExprWidth). Drives wrap/sat/checked
+// overflow folding.
+fn comptimeExprDomainWidth(scope: *const ComptimeScope, expr: ast.Expr) ?DomainWidth {
+    return switch (expr.kind) {
+        .ident => |id| scope.domains.get(id.text),
+        .grouped => |inner| comptimeExprDomainWidth(scope, inner.*),
+        .unary => |node| comptimeExprDomainWidth(scope, node.expr.*),
+        .binary => |node| comptimeExprDomainWidth(scope, node.left.*) orelse comptimeExprDomainWidth(scope, node.right.*),
+        .cast => |node| comptimeTypeDomainWidth(node.ty.*),
+        else => null,
+    };
+}
+
+// Apply the domain rule to an arithmetic result, or pass it through untyped when no domain
+// is known (preserving the prior untyped-i128 behavior for plain literals).
+fn domainArith(dw: ?DomainWidth, raw: i128) ComptimeFold {
+    if (dw) |d| return applyDomain(d, raw);
+    return .{ .value = .{ .int = raw } };
+}
+
 // Fold every `const NAME: T = …` global to a comptime value, populating `out`
 // (keyed by name). Earlier const globals are visible to later ones. Globals
 // whose initializer is not a foldable comptime constant are simply omitted.
@@ -534,7 +620,7 @@ pub fn collectConstGlobalsWithOptions(
                 const cloned = try cloneComptimeValue(allocator, v);
                 errdefer freeComptimeValue(allocator, cloned);
                 try out.put(global.name.text, cloned);
-                if (global.ty) |ty| if (comptimeTypeBitWidth(ty)) |bits| scope.bindWidth(global.name.text, bits);
+                if (global.ty) |ty| scope.bindTypeInfo(global.name.text, ty);
             },
             else => {},
         }
@@ -942,7 +1028,7 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
             .unknown => return .unknown,
         };
         callee_scope.bind(param.name.text, value) catch return .unknown;
-        if (comptimeTypeBitWidth(param.ty)) |bits| callee_scope.bindWidth(param.name.text, bits);
+        callee_scope.bindTypeInfo(param.name.text, param.ty);
     }
     return foldComptimeFnBody(&callee_scope, body);
 }
@@ -993,13 +1079,13 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                 // folds to .unknown, which is conservative.
                 if (init_expr.kind == .uninit_literal) {
                     scope.bind(local.names[0].text, .void) catch return .unknown;
-                    if (local.ty) |lty| if (comptimeTypeBitWidth(lty)) |bits| scope.bindWidth(local.names[0].text, bits);
+                    if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty);
                     continue;
                 }
                 switch (foldComptimeExpr(scope, init_expr)) {
                     .value => |value| {
                         scope.bind(local.names[0].text, value) catch return .unknown;
-                        if (local.ty) |lty| if (comptimeTypeBitWidth(lty)) |bits| scope.bindWidth(local.names[0].text, bits);
+                        if (local.ty) |lty| scope.bindTypeInfo(local.names[0].text, lty);
                     },
                     .trap => return .trap,
                     .unknown => return .unknown,
@@ -1513,6 +1599,12 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         else => return .unknown,
     };
 
+    // The arithmetic domain (checked/wrap/sat) + width the operation evaluates in, when the
+    // operands' declared types make it known. `add`/`sub`/`mul`/`div`/`mod` then trap on a
+    // checked overflow, mask for `wrap<uN>`, or clamp for `sat<uN>` — as the runtime would.
+    // Plain literals (no domain) keep the prior untyped-i128 behavior.
+    const dw = comptimeExprDomainWidth(scope, left_expr) orelse comptimeExprDomainWidth(scope, right_expr);
+
     return switch (op) {
         .lt => .{ .value = .{ .boolean = l < r } },
         .le => .{ .value = .{ .boolean = l <= r } },
@@ -1521,11 +1613,11 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         // i128 is only the evaluation domain — overflowing it (as opposed to a
         // declared target type) is outside the scalar model, so fold to unknown
         // rather than risk a false trap or a compiler panic.
-        .add => .{ .value = .{ .int = std.math.add(i128, l, r) catch return .unknown } },
-        .sub => .{ .value = .{ .int = std.math.sub(i128, l, r) catch return .unknown } },
-        .mul => .{ .value = .{ .int = std.math.mul(i128, l, r) catch return .unknown } },
-        .div => if (r == 0) .trap else .{ .value = .{ .int = std.math.divTrunc(i128, l, r) catch return .unknown } },
-        .mod => if (r == 0) .trap else .{ .value = .{ .int = @rem(l, r) } },
+        .add => domainArith(dw, std.math.add(i128, l, r) catch return .unknown),
+        .sub => domainArith(dw, std.math.sub(i128, l, r) catch return .unknown),
+        .mul => domainArith(dw, std.math.mul(i128, l, r) catch return .unknown),
+        .div => if (r == 0) .trap else domainArith(dw, std.math.divTrunc(i128, l, r) catch return .unknown),
+        .mod => if (r == 0) .trap else domainArith(dw, @rem(l, r)),
         .bit_and => .{ .value = .{ .int = l & r } },
         .bit_or => .{ .value = .{ .int = l | r } },
         .bit_xor => .{ .value = .{ .int = l ^ r } },
