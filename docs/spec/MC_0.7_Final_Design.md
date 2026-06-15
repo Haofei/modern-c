@@ -1430,14 +1430,16 @@ MC’s kernel profile treats address spaces as core types.
 ```mc
 type VAddr;
 type PAddr;
-type UserAddr;
-type MmioAddr;
 type DmaAddr;
 
 type UserPtr<T>;
 type MmioPtr<T>;
 type PhysPtr<T>;     // not directly dereferenceable
 ```
+
+The opaque address classes are `VAddr`, `PAddr`, and `DmaAddr`. User-space and MMIO
+addressing are expressed through the pointer generics `UserPtr<T>` and `MmioPtr<T>`
+(the latter obtained from `mmio.map(paddr)`), not through standalone address types.
 
 Ordinary pointers:
 
