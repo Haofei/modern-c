@@ -8,6 +8,10 @@ to pick up later. See also memory `differential-testing.md`.
 
 The single biggest blind spot: **every value-oracle compares the two backends against
 each other** (differential, pipeline, sanitize, determinism all assume C≡LLVM ⇒ correct).
+(**Update:** the two independent oracles below — E1 reference interpreter and E2 metamorphic
+— are now **implemented** and wired into `m0` as `fuzz-reference` / `fuzz-metamorphic`. The
+remaining backlog is generator surface, where the differential oracles still apply.)
+
 They share the entire frontend, MIR verifier, and constant-folder, so a bug *there* is
 invisible to all of them. The >512-block verifier bug was only caught because `pipeline`
 is a *status* oracle. ⇒ The highest-leverage additions are **independent** checks (E1, E2).
@@ -19,8 +23,11 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 3. **C3, C8** sat in comparisons; richer boolean nesting.
 4. **B3, B1, B2** early return; `for`; `break`/`continue`.
 5. **D1** globals — high value (mc_race_load helpers; 2 past C bugs lived here).
-6. **E2** metamorphic oracle — catches codegen bugs with no 2nd backend.
-7. **E1** reference interpreter — *the* structural win; sees the shared-frontend bug class.
+6. ~~**E2** metamorphic oracle~~ — **DONE** (`oracle_metamorphic`, build step
+   `fuzz-metamorphic`): a semantics-preserving source transform must not change the result.
+7. ~~**E1** reference interpreter~~ — **DONE** (`tools/fuzz/mcref.py` + `oracle_reference`,
+   build step `fuzz-reference`): an independent Python interpreter evaluates the same AST and
+   the compiled output must match it — sees the shared-frontend bug class.
 8. **A1** `Result<T,E>` + `?` propagation.
 9. **A2** tagged unions with payload.
 10. **A6** fold `move`/`defer` into mcfuzz (today only in `mcgen_move`).
