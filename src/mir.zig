@@ -11,6 +11,15 @@ const parser = @import("parser.zig");
 const isIdentNamed = ast_query.isIdentNamed;
 const isMmioMapCallName = ast_query.isMmioMapCallName;
 const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
+const exprIsIdentNamed = ast_query.exprIsIdentNamed;
+const isResultNarrowingTag = ast_query.isResultNarrowingTag;
+const localDeclaresName = ast_query.localDeclaresName;
+const resultIfLetHandlesLocal = ast_query.resultIfLetHandlesLocal;
+const resultSwitchHandlesLocal = ast_query.resultSwitchHandlesLocal;
+const contractName = ast_query.contractName;
+const isSatPreservingBinary = ast_query.isSatPreservingBinary;
+const isSatType = ast_query.isSatType;
+const isWrapType = ast_query.isWrapType;
 
 // Numeric-literal and integer-bounds primitives shared with `sema.zig` and `lower_c.zig`
 // (see `numeric.zig`); aliased here so the existing call sites read unchanged.
@@ -4337,53 +4346,6 @@ fn directIdentName(expr: ast.Expr) ?[]const u8 {
     };
 }
 
-fn exprIsIdentNamed(expr: ast.Expr, name: []const u8) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, name),
-        .grouped => |inner| exprIsIdentNamed(inner.*, name),
-        else => false,
-    };
-}
-
-fn localDeclaresName(local: ast.LocalDecl, name: []const u8) bool {
-    for (local.names) |ident| {
-        if (std.mem.eql(u8, ident.text, name)) return true;
-    }
-    return false;
-}
-
-fn resultIfLetHandlesLocal(name: []const u8, node: ast.IfLet) bool {
-    if (node.else_block == null or !exprIsIdentNamed(node.value, name)) return false;
-    return switch (node.pattern.kind) {
-        .tag_bind => |tag_bind| isResultNarrowingTag(tag_bind.tag.text),
-        else => false,
-    };
-}
-
-fn resultSwitchHandlesLocal(name: []const u8, node: ast.Switch) bool {
-    if (!exprIsIdentNamed(node.subject, name)) return false;
-    var has_wildcard = false;
-    var has_ok = false;
-    var has_err = false;
-    for (node.arms) |arm| {
-        for (arm.patterns) |pattern| {
-            switch (pattern.kind) {
-                .wildcard => has_wildcard = true,
-                .tag => |tag| {
-                    if (std.mem.eql(u8, tag.text, "ok")) has_ok = true;
-                    if (std.mem.eql(u8, tag.text, "err")) has_err = true;
-                },
-                .tag_bind => |tag_bind| {
-                    if (std.mem.eql(u8, tag_bind.tag.text, "ok")) has_ok = true;
-                    if (std.mem.eql(u8, tag_bind.tag.text, "err")) has_err = true;
-                },
-                .literal, .bind => {},
-            }
-        }
-    }
-    return has_wildcard or (has_ok and has_err);
-}
-
 fn switchArmBodiesHandleResultLocal(self: *FunctionBuilder, name: []const u8, node: ast.Switch) bool {
     for (node.arms) |arm| {
         switch (arm.body) {
@@ -4464,9 +4426,6 @@ fn callHandlesAnyResult(node: anytype) bool {
     return false;
 }
 
-fn isResultNarrowingTag(name: []const u8) bool {
-    return std.mem.eql(u8, name, "ok") or std.mem.eql(u8, name, "err");
-}
 
 fn valueTypeFromExpr(expr: ast.Expr) ValueType {
     return switch (expr.kind) {
@@ -4906,13 +4865,6 @@ fn binaryChecksAddressClass(op: ast.BinaryOp) bool {
     };
 }
 
-fn isWrapType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .generic => |node| std.mem.eql(u8, node.base.text, "wrap"),
-        .qualified => |node| isWrapType(node.child.*),
-        else => false,
-    };
-}
 
 fn isWrapTypeAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     return isWrapTypeAliasDepth(ty, aliases, 0);
@@ -4928,13 +4880,6 @@ fn isWrapTypeAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.
     };
 }
 
-fn isSatType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .generic => |node| std.mem.eql(u8, node.base.text, "sat"),
-        .qualified => |node| isSatType(node.child.*),
-        else => false,
-    };
-}
 
 fn isSatTypeAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     return isSatTypeAliasDepth(ty, aliases, 0);
@@ -4979,12 +4924,6 @@ fn isWrapPreservingBinary(op: ast.BinaryOp) bool {
     };
 }
 
-fn isSatPreservingBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .add, .sub, .mul => true,
-        else => false,
-    };
-}
 
 fn mirIsArithmeticBinary(op: ast.BinaryOp) bool {
     return switch (op) {
@@ -5705,12 +5644,6 @@ fn isKnownDirectPrimitive(name: []const u8) bool {
         std.mem.eql(u8, name, "assume_noalias_unchecked");
 }
 
-fn contractName(attr: ast.Attr) []const u8 {
-    return switch (attr.kind) {
-        .unsafe_contract => |contract| contract.name.text,
-        .no_lang_trap, .named, .backend_name, .origin => "unknown",
-    };
-}
 
 fn contractBlockEndLine(block: ast.Block) usize {
     if (block.items.len == 0) return block.span.line;

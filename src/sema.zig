@@ -12,6 +12,18 @@ const eval = @import("eval.zig");
 const isIdentNamed = ast_query.isIdentNamed;
 const isMmioMapCallName = ast_query.isMmioMapCallName;
 const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
+const exprIsIdentNamed = ast_query.exprIsIdentNamed;
+const isResultNarrowingTag = ast_query.isResultNarrowingTag;
+const localDeclaresName = ast_query.localDeclaresName;
+const resultIfLetHandlesLocal = ast_query.resultIfLetHandlesLocal;
+const resultSwitchHandlesLocal = ast_query.resultSwitchHandlesLocal;
+const boolLiteralValue = ast_query.boolLiteralValue;
+const isUninitLiteral = ast_query.isUninitLiteral;
+const typeName = ast_query.typeName;
+const isRawManyPointerType = ast_query.isRawManyPointerType;
+const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
+const isArithmeticLayoutGeneric = ast_query.isArithmeticLayoutGeneric;
+const mmioPointee = ast_query.mmioPointee;
 
 // Numeric-literal and integer-bounds primitives shared with `mir.zig` and `lower_c.zig`
 // (see `numeric.zig`); aliased here so the existing call sites read unchanged.
@@ -6015,13 +6027,6 @@ fn isNullLiteral(expr: ast.Expr) bool {
     };
 }
 
-fn isUninitLiteral(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .uninit_literal => true,
-        .grouped => |inner| isUninitLiteral(inner.*),
-        else => false,
-    };
-}
 
 fn isStaticGlobalInitializer(expr: ast.Expr, ctx: Context) bool {
     return switch (expr.kind) {
@@ -6263,9 +6268,6 @@ fn addressDerefMessage(kind: TypeClass) []const u8 {
     };
 }
 
-fn isResultNarrowingTag(name: []const u8) bool {
-    return std.mem.eql(u8, name, "ok") or std.mem.eql(u8, name, "err");
-}
 
 fn deinitMmioStructs(mmio_structs: *std.StringHashMap(MmioStruct)) void {
     var structs = mmio_structs.valueIterator();
@@ -6598,13 +6600,6 @@ fn rawManyOffsetReturnType(call: anytype, ctx: Context) ?ast.TypeExpr {
     return if (isRawManyPointerTypeCtx(base_ty, ctx)) base_ty else null;
 }
 
-fn isRawManyPointerType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .raw_many_pointer => true,
-        .qualified => |node| isRawManyPointerType(node.child.*),
-        else => false,
-    };
-}
 
 fn isRawManyPointerTypeCtx(ty: ast.TypeExpr, ctx: Context) bool {
     return isRawManyPointerType(resolveAliasType(ty, ctx));
@@ -7182,22 +7177,7 @@ fn mmioRegisterAccessFromType(ty: ast.TypeExpr) ?MmioRegisterAccess {
     return null;
 }
 
-fn mmioPointee(ty: ast.TypeExpr) ?[]const u8 {
-    const generic = switch (ty.kind) {
-        .generic => |node| node,
-        else => return null,
-    };
-    if (!std.mem.eql(u8, generic.base.text, "MmioPtr") or generic.args.len != 1) return null;
-    return typeName(generic.args[0]);
-}
 
-fn typeName(ty: ast.TypeExpr) ?[]const u8 {
-    return switch (ty.kind) {
-        .name => |name| name.text,
-        .qualified => |node| typeName(node.child.*),
-        else => null,
-    };
-}
 
 fn simpleNameType(name: []const u8, span: diagnostics.Span) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .text = name, .span = span } } };
@@ -7400,18 +7380,6 @@ fn scalarLayout(name: []const u8) ?ScalarLayout {
         if (std.mem.eql(u8, name, e.n)) return .{ .size = e.s, .alignment = e.s };
     }
     return null;
-}
-
-fn isPointerLikeGeneric(name: []const u8) bool {
-    return std.mem.eql(u8, name, "MmioPtr") or std.mem.eql(u8, name, "UserPtr");
-}
-
-fn isArithmeticLayoutGeneric(name: []const u8) bool {
-    return std.mem.eql(u8, name, "wrap") or
-        std.mem.eql(u8, name, "sat") or
-        std.mem.eql(u8, name, "serial") or
-        std.mem.eql(u8, name, "counter") or
-        std.mem.eql(u8, name, "Duration");
 }
 
 // Extract the reflected type from a reflection call's `type_args` or first arg.
@@ -7791,13 +7759,6 @@ fn switchBoolLiteralValue(pattern: ast.Pattern) ?bool {
     };
 }
 
-fn boolLiteralValue(expr: ast.Expr) ?bool {
-    return switch (expr.kind) {
-        .bool_literal => |value| value,
-        .grouped => |inner| boolLiteralValue(inner.*),
-        else => null,
-    };
-}
 
 fn switchCoversAllEnumCases(node: ast.Switch, enum_info: EnumInfo) bool {
     var cases = enum_info.cases.keyIterator();
@@ -7957,12 +7918,6 @@ fn assignmentResultLocalName(target: ast.Expr, ctx: Context) ?ast.Ident {
     };
 }
 
-fn localDeclaresName(local: ast.LocalDecl, name: []const u8) bool {
-    for (local.names) |ident| {
-        if (std.mem.eql(u8, ident.text, name)) return true;
-    }
-    return false;
-}
 
 fn stmtHandlesResultLocal(name: []const u8, stmt: ast.Stmt) bool {
     return switch (stmt.kind) {
@@ -8032,37 +7987,7 @@ fn exprTerminatesNormally(expr: ast.Expr) bool {
     };
 }
 
-fn resultIfLetHandlesLocal(name: []const u8, node: ast.IfLet) bool {
-    if (node.else_block == null or !exprIsIdentNamed(node.value, name)) return false;
-    return switch (node.pattern.kind) {
-        .tag_bind => |tag_bind| isResultNarrowingTag(tag_bind.tag.text),
-        else => false,
-    };
-}
 
-fn resultSwitchHandlesLocal(name: []const u8, node: ast.Switch) bool {
-    if (!exprIsIdentNamed(node.subject, name)) return false;
-    var has_wildcard = false;
-    var has_ok = false;
-    var has_err = false;
-    for (node.arms) |arm| {
-        for (arm.patterns) |pattern| {
-            switch (pattern.kind) {
-                .wildcard => has_wildcard = true,
-                .tag => |tag| {
-                    if (std.mem.eql(u8, tag.text, "ok")) has_ok = true;
-                    if (std.mem.eql(u8, tag.text, "err")) has_err = true;
-                },
-                .tag_bind => |tag_bind| {
-                    if (std.mem.eql(u8, tag_bind.tag.text, "ok")) has_ok = true;
-                    if (std.mem.eql(u8, tag_bind.tag.text, "err")) has_err = true;
-                },
-                .literal, .bind => {},
-            }
-        }
-    }
-    return has_wildcard or (has_ok and has_err);
-}
 
 fn exprHandlesResultLocal(name: []const u8, expr: ast.Expr) bool {
     return switch (expr.kind) {
@@ -8087,13 +8012,6 @@ fn callHandlesResultLocal(name: []const u8, node: anytype) bool {
     return false;
 }
 
-fn exprIsIdentNamed(expr: ast.Expr, name: []const u8) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, name),
-        .grouped => |inner| exprIsIdentNamed(inner.*, name),
-        else => false,
-    };
-}
 
 fn callContainsTry(node: anytype) bool {
     if (exprContainsTry(node.callee.*)) return true;

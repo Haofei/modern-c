@@ -16,6 +16,17 @@ const alignForward = numeric.alignForward;
 const isIdentNamed = ast_query.isIdentNamed;
 const isMmioMapCallName = ast_query.isMmioMapCallName;
 const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
+const boolLiteralValue = ast_query.boolLiteralValue;
+const isUninitLiteral = ast_query.isUninitLiteral;
+const typeName = ast_query.typeName;
+const isRawManyPointerType = ast_query.isRawManyPointerType;
+const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
+const isArithmeticLayoutGeneric = ast_query.isArithmeticLayoutGeneric;
+const mmioPointee = ast_query.mmioPointee;
+const contractName = ast_query.contractName;
+const isSatPreservingBinary = ast_query.isSatPreservingBinary;
+const isSatType = ast_query.isSatType;
+const isWrapType = ast_query.isWrapType;
 
 pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);
@@ -9958,13 +9969,6 @@ fn sameCStorageType(left: ast.TypeExpr, right: ast.TypeExpr) bool {
     };
 }
 
-fn isRawManyPointerType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .raw_many_pointer => true,
-        .qualified => |node| isRawManyPointerType(node.child.*),
-        else => false,
-    };
-}
 
 fn isNonNullPointerType(ty: ast.TypeExpr) bool {
     return switch (ty.kind) {
@@ -10942,14 +10946,6 @@ fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {
     return null;
 }
 
-fn mmioPointee(ty: ast.TypeExpr) ?[]const u8 {
-    const generic = switch (ty.kind) {
-        .generic => |node| node,
-        else => return null,
-    };
-    if (!std.mem.eql(u8, generic.base.text, "MmioPtr") or generic.args.len != 1) return null;
-    return typeName(generic.args[0]);
-}
 
 fn resultPayloadTypeForTag(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
     return switch (ty.kind) {
@@ -10968,13 +10964,6 @@ fn isMmioStructAbi(struct_decl: ast.StructDecl) bool {
     return if (struct_decl.abi) |abi| std.mem.eql(u8, abi, "mmio") else false;
 }
 
-fn typeName(ty: ast.TypeExpr) ?[]const u8 {
-    return switch (ty.kind) {
-        .name => |name| name.text,
-        .qualified => |node| typeName(node.child.*),
-        else => null,
-    };
-}
 
 // A string literal lowers to a C string literal cast to a `u8` pointer target
 // (`*const u8` or `[*]const u8`), the FFI-facing string shape MC's grammar can
@@ -11004,21 +10993,7 @@ fn structFieldType(struct_decl: ast.StructDecl, field_name: []const u8) ?ast.Typ
     return null;
 }
 
-fn isWrapType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .generic => |node| std.mem.eql(u8, node.base.text, "wrap"),
-        .qualified => |node| isWrapType(node.child.*),
-        else => false,
-    };
-}
 
-fn isSatType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .generic => |node| std.mem.eql(u8, node.base.text, "sat"),
-        .qualified => |node| isSatType(node.child.*),
-        else => false,
-    };
-}
 
 fn genericChildType(ty: ast.TypeExpr, base_name: []const u8) ?ast.TypeExpr {
     return switch (ty.kind) {
@@ -11093,17 +11068,6 @@ fn scalarLayout(name: []const u8) ?ScalarLayout {
     return null;
 }
 
-fn isPointerLikeGeneric(name: []const u8) bool {
-    return std.mem.eql(u8, name, "MmioPtr") or std.mem.eql(u8, name, "UserPtr");
-}
-
-fn isArithmeticLayoutGeneric(name: []const u8) bool {
-    return std.mem.eql(u8, name, "wrap") or
-        std.mem.eql(u8, name, "sat") or
-        std.mem.eql(u8, name, "serial") or
-        std.mem.eql(u8, name, "counter") or
-        std.mem.eql(u8, name, "Duration");
-}
 
 fn isCKeyword(name: []const u8) bool {
     const keywords = [_][]const u8{
@@ -11354,13 +11318,6 @@ fn isStructLiteralExpr(expr: ast.Expr) bool {
     };
 }
 
-fn boolLiteralValue(expr: ast.Expr) ?bool {
-    return switch (expr.kind) {
-        .bool_literal => |value| value,
-        .grouped => |inner| boolLiteralValue(inner.*),
-        else => null,
-    };
-}
 
 fn isDirectStaticCInitializer(expr: ast.Expr) bool {
     return switch (expr.kind) {
@@ -11378,13 +11335,6 @@ fn isNegativeStaticCOperand(expr: ast.Expr) bool {
     };
 }
 
-fn isUninitLiteral(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .uninit_literal => true,
-        .grouped => |inner| isUninitLiteral(inner.*),
-        else => false,
-    };
-}
 
 fn sequencedConditionCandidate(expr: ast.Expr) bool {
     return switch (expr.kind) {
@@ -11880,12 +11830,6 @@ fn isWrapPreservingBinary(op: ast.BinaryOp) bool {
     };
 }
 
-fn isSatPreservingBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .add, .sub, .mul => true,
-        else => false,
-    };
-}
 
 fn arithmeticDomainOpName(op: ast.BinaryOp) []const u8 {
     return switch (op) {
@@ -12491,12 +12435,6 @@ fn bitcastReturnTypeForCall(call: anytype) ?ast.TypeExpr {
     return call.type_args[0];
 }
 
-fn contractName(attr: ast.Attr) []const u8 {
-    return switch (attr.kind) {
-        .unsafe_contract => |contract| contract.name.text,
-        .no_lang_trap, .named, .backend_name, .origin => "unknown",
-    };
-}
 
 fn appendCPreprocessorString(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
     for (text) |ch| switch (ch) {
