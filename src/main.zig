@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
+const fmt = @import("fmt.zig");
 const hir = @import("hir.zig");
 const ir = @import("ir.zig");
 const lexer = @import("lexer.zig");
@@ -30,6 +31,7 @@ const usage =
     \\  mcc emit-c <file.mc> [--profile=kernel|hosted]
     \\  mcc emit-map <file.mc> [--profile=kernel|hosted]
     \\  mcc emit-llvm <file.mc>
+    \\  mcc fmt <file.mc> [--check]
     \\
 ;
 
@@ -59,6 +61,7 @@ pub fn main(init: std.process.Init) !void {
     var profile: lower_c.Profile = .kernel;
     var saw_profile_flag = false;
     var optimize = false;
+    var check_fmt = false;
     while (args.next()) |flag| {
         if (std.mem.startsWith(u8, flag, "--profile=")) {
             saw_profile_flag = true;
@@ -72,21 +75,31 @@ pub fn main(init: std.process.Init) !void {
             }
         } else if (std.mem.eql(u8, flag, "--optimize")) {
             optimize = true;
+        } else if (std.mem.eql(u8, flag, "--check")) {
+            check_fmt = true;
         } else {
             return failUsage();
         }
     }
     // `--profile` is consumed only by the C artifact commands; `--optimize` (the fact-gated
-    // MIR optimizer, annex E) by the MIR-level and code-emitting commands. A flag on any
-    // other command is an error.
+    // MIR optimizer, annex E) by the MIR-level and code-emitting commands; `--check` only by
+    // `fmt`. A flag on any other command is an error.
     const is_c_artifact_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map");
     const accepts_optimize = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir") or
         std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
     if (saw_profile_flag and !is_c_artifact_command) return failUsage();
     if (optimize and !accepts_optimize) return failUsage();
+    if (check_fmt and !std.mem.eql(u8, command, "fmt")) return failUsage();
 
     const root_source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(root_source);
+
+    // `fmt` operates on the raw file (not the import-flattened source) and is token-preserving;
+    // it bypasses the parse/sema pipeline entirely.
+    if (std.mem.eql(u8, command, "fmt")) {
+        try runFmt(allocator, path, root_source, check_fmt);
+        return;
+    }
 
     // Resolve `import "path";` declarations by textual inclusion (section 22 /
     // module system). With no imports this is the original source plus a
@@ -225,6 +238,21 @@ fn runVerify(allocator: std.mem.Allocator, path: []const u8, source: []const u8,
 fn failUsage() !void {
     std.debug.print("{s}", .{usage});
     return error.InvalidArgs;
+}
+
+// `mcc fmt <file>` prints the canonically-formatted source to stdout. `mcc fmt --check <file>`
+// prints nothing and exits nonzero if the file is not already formatted (for CI / editors).
+fn runFmt(allocator: std.mem.Allocator, path: []const u8, source: []const u8, check: bool) !void {
+    const formatted = try fmt.format(allocator, source);
+    defer allocator.free(formatted);
+    if (check) {
+        if (!std.mem.eql(u8, formatted, source)) {
+            std.debug.print("{s}: not formatted (run `mcc fmt` to fix)\n", .{path});
+            return error.FmtCheckFailed;
+        }
+        return;
+    }
+    try writeStdout(formatted);
 }
 
 fn runLex(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {

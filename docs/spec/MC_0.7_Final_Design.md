@@ -4700,6 +4700,25 @@ qemu traces
 
 Long-term, native debug info may map directly from object code back to MC source and MIR.
 
+## N.1 Editor Tooling — Formatter and Language Server
+
+Two editor-facing tools reuse the compiler front end rather than re-implementing it:
+
+- **`mcc fmt <file> [--check]`** — a *token-preserving* canonical formatter. It only rewrites
+  leading indentation (four spaces per bracket-nesting level, derived from the token stream so
+  a `{`/`(`/`[` inside a string or comment never shifts it; a line whose first token closes a
+  bracket dedents one level), strips trailing whitespace, and collapses blank-line runs. It
+  never edits a line's interior, so the formatted output lexes to exactly the same token
+  sequence — formatting cannot drop or reorder code. `--check` exits nonzero on an unformatted
+  file (for CI / editor format-on-save). It is idempotent. (`fmt-test` proves token-preservation
+  and idempotence across the whole `std`/`tests` corpus.)
+
+- **`tools/lsp/mc-lsp.py`** — a stdio JSON-RPC language server that surfaces the compiler's own
+  diagnostics. On `didOpen`/`didChange`/`didSave` it runs `mcc check` and publishes
+  `textDocument/publishDiagnostics` carrying the **same `E_` codes** the CLI reports, so an
+  editor squiggle and a CI failure name the identical rule. The compiler is the single source
+  of truth; the server only translates. (`lsp-test` drives a live session end-to-end.)
+
 ---
 
 # O. Final Implementation Contract

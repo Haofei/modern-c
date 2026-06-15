@@ -60,6 +60,8 @@ Implemented today:
 - local package manifests through `tools/toolchain/mcc-pkg.sh`, and an offline
   registry with semver-ish version resolution, `publish`/`install`, and a
   reproducible lockfile through `tools/toolchain/mcc-registry.sh`
+- a token-preserving source formatter (`mcc fmt [--check]`) and a diagnostics
+  language server (`tools/lsp/mc-lsp.py`) that reuses the compiler's own `E_` codes
 - a small standard library under `std/`
 
 The milestone gate is:
@@ -365,12 +367,14 @@ The current backend milestone is complete for the implemented spec surface, but
 the project as a whole is still not production-grade. Several areas remain
 prototype work:
 
-- full arbitrary comptime execution
-- production MIR optimization passes
-- source/MIR-quality debugger mapping
-- package registry, publishing, and lockfile workflow
-- LSP and formatter
-- `std/mmio` convenience layer
+- full arbitrary comptime *type* computation (deliberately out of scope — MC
+  evaluates values, not types; see spec §22)
+- a broader MIR optimization pass set (the fact-gated optimizer currently has
+  three transforms)
+- a networked package registry with signing (the current registry, version
+  resolution, lockfile, and publish/install flow are offline/filesystem-local)
+- a full pretty-printing formatter (`mcc fmt` is currently a token-preserving
+  reindenter) and a richer LSP (the server currently surfaces diagnostics)
 - complete DMA/cache-coherence simulation
 - broader per-architecture production kernel hardening
 - full VFS/POSIX/network service completeness
