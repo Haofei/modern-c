@@ -28,9 +28,17 @@ export fn diskfs_run() -> u32 {
     if !diskfs_mounted(disk, cap) {
         pass = 0;
     }
-    let found: u32 = diskfs_lookup(disk, cap, 0x666F6F); // resolve "foo" -> inode
-    if found != ino {
-        pass = 0;
+    var found: u32 = 0;
+    switch diskfs_lookup(disk, cap, 0x666F6F) { // resolve "foo" -> inode
+        ok(v) => {
+            found = v;
+            if found != ino {
+                pass = 0;
+            }
+        }
+        err(e) => {
+            pass = 0;
+        }
     }
     let n: usize = diskfs_read(disk, cap, found, pa((&g_dst[0]) as usize), 8);
     if n != 8 {

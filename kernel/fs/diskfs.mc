@@ -17,7 +17,11 @@ const DATA_OFF: usize = 1024;  // data region @ block 2+
 const INODE_SZ: usize = 8;     // per inode: size:u32 + data_offset:u32
 const DIR_OFF: usize = 576;    // root directory (after the 64-byte inode table, same block)
 const DIR_SZ: usize = 8;       // per entry: name_key:u32 + inode:u32
-const NOT_FOUND: u32 = 0xFFFF_FFFF;
+
+// Typed lookup error — NO sentinels: a caller can never confuse a real inode with a "missing".
+enum DiskfsError {
+    NotFound, // no directory entry matches the name
+}
 
 // Format the device: write the superblock magic + zero the inode table.
 export fn diskfs_format(disk: PAddr, capacity: usize) -> void {
@@ -57,19 +61,19 @@ export fn diskfs_create_named(disk: PAddr, capacity: usize, name_key: u32) -> u3
     return ino;
 }
 
-// Resolve a name to its inode by scanning the root directory; NOT_FOUND if absent.
-export fn diskfs_lookup(disk: PAddr, capacity: usize, name_key: u32) -> u32 {
+// Resolve a name to its inode by scanning the root directory; NotFound if absent.
+export fn diskfs_lookup(disk: PAddr, capacity: usize, name_key: u32) -> Result<u32, DiskfsError> {
     var r: ByteReader = byte_reader(disk, capacity);
     let n: u32 = br_be32(&r, SB_OFF + 4);
     var i: u32 = 0;
     while i < n {
         let k: u32 = br_be32(&r, DIR_OFF + (i as usize) * DIR_SZ + 0);
         if k == name_key {
-            return br_be32(&r, DIR_OFF + (i as usize) * DIR_SZ + 4);
+            return ok(br_be32(&r, DIR_OFF + (i as usize) * DIR_SZ + 4));
         }
         i = i + 1;
     }
-    return NOT_FOUND;
+    return err(.NotFound);
 }
 
 // Write `len` bytes from `src` into file `ino`'s data block; record the size on disk.
