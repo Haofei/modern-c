@@ -15,6 +15,7 @@ const monomorphize = @import("monomorphize.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 const spec_tests = @import("spec_tests.zig");
+const symbols = @import("symbols.zig");
 
 const usage =
     \\usage:
@@ -32,6 +33,7 @@ const usage =
     \\  mcc emit-map <file.mc> [--profile=kernel|hosted]
     \\  mcc emit-llvm <file.mc>
     \\  mcc fmt <file.mc> [--check]
+    \\  mcc symbols <file.mc>
     \\
 ;
 
@@ -109,6 +111,8 @@ pub fn main(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, command, "lex")) {
         try runLex(allocator, path, source);
+    } else if (std.mem.eql(u8, command, "symbols")) {
+        try runSymbols(allocator, path, source);
     } else if (std.mem.eql(u8, command, "check")) {
         try runCheck(allocator, path, source);
     } else if (std.mem.eql(u8, command, "run-trap")) {
@@ -253,6 +257,29 @@ fn runFmt(allocator: std.mem.Allocator, path: []const u8, source: []const u8, ch
         return;
     }
     try writeStdout(formatted);
+}
+
+// `mcc symbols <file>` prints a JSON symbol index (defs + refs with spans) for the language
+// server. Best-effort: it needs only a parse (not sema), and on a hard parse failure it still
+// prints a valid empty index so the client always gets parseable JSON.
+fn runSymbols(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = parseModuleOrReport(source, parse_allocator, &diag) catch {
+        try writeStdout("{\"defs\":[],\"refs\":[]}\n");
+        return;
+    };
+    defer module.deinit(parse_allocator);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    try symbols.emitJson(allocator, module, &output);
+    try writeStdout(output.items);
 }
 
 fn runLex(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {

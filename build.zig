@@ -411,6 +411,15 @@ pub fn build(b: *std.Build) void {
     const fmt_test_step = b.step("fmt-test", "Validate `mcc fmt` is token-preserving + idempotent across the corpus, and --check semantics");
     fmt_test_step.dependOn(&fmt_test_cmd.step);
 
+    const mcc_symbols_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/mcc-symbols-test.sh",
+        "zig-out/bin/mcc",
+    });
+    mcc_symbols_test_cmd.step.dependOn(b.getInstallStep());
+    const mcc_symbols_test_step = b.step("mcc-symbols-test", "Validate the `mcc symbols` index: refs resolve to their declarations");
+    mcc_symbols_test_step.dependOn(&mcc_symbols_test_cmd.step);
+
     const lsp_test_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/lsp/lsp-test.py",
@@ -2314,8 +2323,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&asm_targets_test_cmd.step);
     // mcmap-test validates .mcmap stable IDs + object-symbol correlation on both backends.
     m0_step.dependOn(&mcmap_test_cmd.step);
-    // fmt-test validates the formatter; lsp-test drives the language server's diagnostics.
+    // fmt-test validates the formatter; mcc-symbols-test the symbol index; lsp-test the server.
     m0_step.dependOn(&fmt_test_cmd.step);
+    m0_step.dependOn(&mcc_symbols_test_cmd.step);
     m0_step.dependOn(&lsp_test_cmd.step);
     // pkg-test exercises the mcc-pkg manifest build (needs clang).
     m0_step.dependOn(&pkg_test_cmd.step);
