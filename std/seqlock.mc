@@ -51,6 +51,5 @@ export fn seq_read_begin(s: *mut SeqLock) -> u32 {
 
 // True if a write started/finished since `start` was taken — the read must be retried.
 export fn seq_read_retry(s: *mut SeqLock, start: u32) -> bool {
-    let cur: u32 = s.seq.load(.acquire);
-    return cur != start;
+    return s.seq.load(.acquire) != start;
 }

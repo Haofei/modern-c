@@ -1335,7 +1335,7 @@ const LlvmEmitter = struct {
             if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
             const ordering = atomicOrderingArg(call.args, 1) orelse return error.UnsupportedLlvmEmission;
             const llvm_order = atomicLlvmOrdering(ordering, .store) orelse return error.UnsupportedLlvmEmission;
-            const ptr = try self.atomicBaseAddress(info.base);
+            const ptr = try self.atomicAddress(info);
             const value = try self.emitAtomicValueForStorage(call.args[0], info.payload_ty);
             try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}{s}\n", .{ try self.atomicStorageLlvmType(info.payload_ty), value, ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
             return true;
@@ -2462,7 +2462,7 @@ const LlvmEmitter = struct {
                 if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
                 const ordering = atomicOrderingArg(call.args, 0) orelse return error.UnsupportedLlvmEmission;
                 const llvm_order = atomicLlvmOrdering(ordering, .load) orelse return error.UnsupportedLlvmEmission;
-                const ptr = try self.atomicBaseAddress(info.base);
+                const ptr = try self.atomicAddress(info);
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = load atomic {s}, ptr {s} {s}, align {d}{s}\n", .{ result, try self.atomicStorageLlvmType(info.payload_ty), ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
                 if (typeNameEql(info.payload_ty, "bool")) {
@@ -2477,7 +2477,7 @@ const LlvmEmitter = struct {
                 const ordering = atomicOrderingArg(call.args, 1) orelse return error.UnsupportedLlvmEmission;
                 const llvm_order = atomicLlvmOrdering(ordering, .rmw) orelse return error.UnsupportedLlvmEmission;
                 if (self.integerBitsOf(info.payload_ty) == null) return error.UnsupportedLlvmEmission;
-                const ptr = try self.atomicBaseAddress(info.base);
+                const ptr = try self.atomicAddress(info);
                 const delta = try self.emitExpr(call.args[0], info.payload_ty);
                 const result = try self.nextTemp();
                 const op: []const u8 = if (std.mem.eql(u8, info.op, "fetch_sub")) "sub" else "add";
@@ -4445,8 +4445,26 @@ const LlvmEmitter = struct {
             return null;
         }
         const base_ty = self.exprType(member.base.*) orelse return null;
-        const payload_ty = self.atomicPayloadType(base_ty) orelse return null;
-        return .{ .base = member.base.*, .op = member.name.text, .payload_ty = payload_ty };
+        if (self.atomicPayloadType(base_ty)) |payload_ty| {
+            return .{ .base = member.base.*, .op = member.name.text, .payload_ty = payload_ty };
+        }
+        // A `*atomic<T>` base: the pointer is the atomic's address.
+        const child = switch (self.resolveAliasType(base_ty).kind) {
+            .pointer => |p| p.child.*,
+            else => return null,
+        };
+        const payload_ty = self.atomicPayloadType(child) orelse return null;
+        return .{ .base = member.base.*, .op = member.name.text, .payload_ty = payload_ty, .base_is_pointer = true };
+    }
+
+    // The address the atomic lives at: for a `*atomic<T>` base the pointer value already IS the
+    // address; otherwise it is the storage address of the by-value atomic (local/global/field).
+    fn atomicAddress(self: *LlvmEmitter, info: AtomicCallInfo) ![]const u8 {
+        if (info.base_is_pointer) {
+            const base_ty = self.exprType(info.base) orelse return error.UnsupportedLlvmEmission;
+            return try self.emitExpr(info.base, base_ty);
+        }
+        return self.atomicBaseAddress(info.base);
     }
 
     fn maybeUninitCallInfo(self: *LlvmEmitter, call: anytype) ?MaybeUninitCallInfo {
@@ -5044,6 +5062,9 @@ const AtomicCallInfo = struct {
     base: ast.Expr,
     op: []const u8,
     payload_ty: ast.TypeExpr,
+    // True when the base is a `*atomic<T>` (the atomic accessed by pointer): the pointer value
+    // is the atomic's address, rather than the base needing `&place`.
+    base_is_pointer: bool = false,
 };
 
 const MaybeUninitCallInfo = struct {

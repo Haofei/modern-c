@@ -5152,18 +5152,18 @@ const CEmitter = struct {
             },
             else => return null,
         };
-        // A local atomic variable...
+        // A local atomic variable, or a `*atomic<T>` parameter (the atomic accessed by pointer)...
         if (locals) |local_set| {
             if (local_set.get(name)) |info| {
                 if (info.source_ty) |source_ty| {
-                    if (genericChildType(source_ty, "atomic")) |child| return typeName(child);
+                    if (atomicPayloadOfType(source_ty)) |child| return typeName(child);
                 }
             }
         }
         // ...or a global atomic (e.g. an interrupt-shared counter).
         if (self.globals.get(name)) |global| {
             if (global.source_ty) |source_ty| {
-                if (genericChildType(source_ty, "atomic")) |child| return typeName(child);
+                if (atomicPayloadOfType(source_ty)) |child| return typeName(child);
             }
         }
         return null;
@@ -5212,6 +5212,17 @@ const CEmitter = struct {
     // `obj.load/store/fetch_add(..., .ordering)` on an `atomic<T>` local lower to
     // the matching `__atomic_*` builtin on `&obj`, mirroring the inspector's
     // `atomics-lowering` facts (load_n / store_n / fetch_add).
+    // Emit the address of the atomic operand. A `*atomic<T>` base already IS the address, so it
+    // is emitted as-is; a by-value atomic (local / global / struct field) needs `&place`.
+    fn emitAtomicAddr(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        if (self.exprIsPointer(base, locals)) {
+            try self.emitExpr(base, locals);
+        } else {
+            try self.out.append(self.allocator, '&');
+            try self.emitAtomicBaseAddr(base, locals);
+        }
+    }
+
     fn emitAtomicCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const member = switch (call.callee.kind) {
             .member => |node| node,
@@ -5227,8 +5238,8 @@ const CEmitter = struct {
             const ordering = atomicOrderingArg(call.args, 0);
             if (!isAtomicLoadOrdering(ordering)) return false;
             const order_c = atomicOrderCConstant(ordering) orelse return false;
-            try self.out.appendSlice(self.allocator, "__atomic_load_n(&");
-            try self.emitAtomicBaseAddr(member.base.*, locals);
+            try self.out.appendSlice(self.allocator, "__atomic_load_n(");
+            try self.emitAtomicAddr(member.base.*, locals);
             try self.out.print(self.allocator, ", {s})", .{order_c});
             return true;
         }
@@ -5237,8 +5248,8 @@ const CEmitter = struct {
             const ordering = atomicOrderingArg(call.args, 1);
             if (!isAtomicStoreOrdering(ordering)) return false;
             const order_c = atomicOrderCConstant(ordering) orelse return false;
-            try self.out.appendSlice(self.allocator, "__atomic_store_n(&");
-            try self.emitAtomicBaseAddr(member.base.*, locals);
+            try self.out.appendSlice(self.allocator, "__atomic_store_n(");
+            try self.emitAtomicAddr(member.base.*, locals);
             try self.out.appendSlice(self.allocator, ", ");
             try self.emitExpr(call.args[0], locals);
             try self.out.print(self.allocator, ", {s})", .{order_c});
@@ -5249,9 +5260,9 @@ const CEmitter = struct {
             if (!isAtomicIntegerPayload(payload)) return false;
             const ordering = atomicOrderingArg(call.args, 1);
             const order_c = atomicOrderCConstant(ordering) orelse return false;
-            const builtin = if (std.mem.eql(u8, op, "fetch_sub")) "__atomic_fetch_sub(&" else "__atomic_fetch_add(&";
+            const builtin = if (std.mem.eql(u8, op, "fetch_sub")) "__atomic_fetch_sub(" else "__atomic_fetch_add(";
             try self.out.appendSlice(self.allocator, builtin);
-            try self.emitAtomicBaseAddr(member.base.*, locals);
+            try self.emitAtomicAddr(member.base.*, locals);
             try self.out.appendSlice(self.allocator, ", ");
             try self.emitExpr(call.args[0], locals);
             try self.out.print(self.allocator, ", {s})", .{order_c});
@@ -9268,6 +9279,7 @@ const CEmitter = struct {
                 if (self.assumeNoaliasReturnTypeForCall(node, locals)) |ty| break :blk ty;
                 if (self.rawManyOffsetReturnTypeForCall(node, locals)) |ty| break :blk ty;
                 if (byteViewCallReturnTypeForCall(node)) |ty| break :blk ty;
+                if (self.atomicLoadReturnTypeForCall(node, locals)) |ty| break :blk ty;
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
                 break :blk info.return_type;
@@ -9275,6 +9287,19 @@ const CEmitter = struct {
             .grouped => |inner| self.callReturnTypeForExpr(inner.*, locals),
             else => null,
         };
+    }
+
+    // `<atomic expr>.load(order)` returns the atomic's payload type (`atomic<u32>.load` -> `u32`),
+    // so a comparison/return whose operand is an atomic load — `flag.load(.acquire) != x` — can be
+    // typed for emission instead of failing UnsupportedCEmission.
+    fn atomicLoadReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const member = switch (call.callee.*.kind) {
+            .member => |m| m,
+            else => return null,
+        };
+        if (!std.mem.eql(u8, member.name.text, "load")) return null;
+        const payload = self.atomicLocalPayload(member.base.*, locals) orelse return null;
+        return simpleNameType(payload, member.name.span);
     }
 
     fn assumeNoaliasReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -9296,6 +9321,7 @@ const CEmitter = struct {
                 if (self.assumeNoaliasReturnTypeForCall(node, locals)) |ty| break :blk ty;
                 if (self.rawManyOffsetReturnTypeForCall(node, locals)) |ty| break :blk ty;
                 if (byteViewCallReturnTypeForCall(node)) |ty| break :blk ty;
+                if (self.atomicLoadReturnTypeForCall(node, locals)) |ty| break :blk ty;
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
                 break :blk info.return_type;
@@ -10985,6 +11011,16 @@ fn genericChildType(ty: ast.TypeExpr, base_name: []const u8) ?ast.TypeExpr {
         },
         .qualified => |node| genericChildType(node.child.*, base_name),
         else => null,
+    };
+}
+
+// The payload `T` of an `atomic<T>`, seeing through a pointer/qualifier (`*atomic<T>`,
+// `*mut atomic<T>`) — for an atomic accessed by pointer parameter, not only a by-value field.
+fn atomicPayloadOfType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .pointer => |node| atomicPayloadOfType(node.child.*),
+        .qualified => |node| atomicPayloadOfType(node.child.*),
+        else => genericChildType(ty, "atomic"),
     };
 }
 
