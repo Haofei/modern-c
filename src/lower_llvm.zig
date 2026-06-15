@@ -1038,6 +1038,14 @@ const LlvmEmitter = struct {
         }
     }
 
+    /// Emit the common "allocate a slot then store a value into it" idiom:
+    ///   {ptr} = alloca {ty}
+    ///   store {ty} {value}, ptr {ptr}{dbg}
+    fn emitAllocaStore(self: *LlvmEmitter, ptr: []const u8, ty: []const u8, value: []const u8) !void {
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, ty });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ ty, value, ptr, try self.debugCallSuffix() });
+    }
+
     /// Emit a conditional branch where one side leads to a trap-and-unreachable block.
     /// `label1`/`label2` are the true/false branch targets; `block_label` is the label
     /// whose block contains the trap call (followed by `unreachable`), and `after_label`
@@ -1147,8 +1155,7 @@ const LlvmEmitter = struct {
         defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
 
         const binding_ptr = try self.nextBindingPtr(binding.text);
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(inner_ty) });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(inner_ty), subject, binding_ptr, try self.debugCallSuffix() });
+        try self.emitAllocaStore(binding_ptr, try self.llvmType(inner_ty), subject);
         try self.local_types.put(binding.text, inner_ty);
         try self.local_slots.put(binding.text, .{ .ty = inner_ty, .ptr = binding_ptr });
 
@@ -1203,8 +1210,7 @@ const LlvmEmitter = struct {
         const binding_ptr = try self.nextBindingPtr(tag_bind.binding.text);
         const payload = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, try self.llvmType(subject_ty), subject, payload_index });
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.resultPayloadLlvmType(binding_ty) });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.resultPayloadLlvmType(binding_ty), payload, binding_ptr, try self.debugCallSuffix() });
+        try self.emitAllocaStore(binding_ptr, try self.resultPayloadLlvmType(binding_ty), payload);
         try self.local_types.put(tag_bind.binding.text, binding_ty);
         try self.local_slots.put(tag_bind.binding.text, .{ .ty = binding_ty, .ptr = binding_ptr });
 
@@ -1626,8 +1632,7 @@ const LlvmEmitter = struct {
         defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
 
         const binding_ptr = try self.nextBindingPtr(bind.text);
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(inner_ty) });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(inner_ty), subject, binding_ptr, try self.debugCallSuffix() });
+        try self.emitAllocaStore(binding_ptr, try self.llvmType(inner_ty), subject);
         try self.local_types.put(bind.text, inner_ty);
         try self.local_slots.put(bind.text, .{ .ty = inner_ty, .ptr = binding_ptr });
         const some_terminated = try self.emitSwitchBody(node.arms[some_i].body, ret_ty);
@@ -1721,8 +1726,7 @@ const LlvmEmitter = struct {
             const binding_ptr = try self.nextBindingPtr(bind.text);
             const payload = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}\n", .{ payload, try self.llvmType(subject_ty), subject, payload_index });
-            try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.resultPayloadLlvmType(payload_ty) });
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.resultPayloadLlvmType(payload_ty), payload, binding_ptr, try self.debugCallSuffix() });
+            try self.emitAllocaStore(binding_ptr, try self.resultPayloadLlvmType(payload_ty), payload);
             try self.local_types.put(bind.text, payload_ty);
             try self.local_slots.put(bind.text, .{ .ty = payload_ty, .ptr = binding_ptr });
             return try self.emitSwitchBody(arm.body, ret_ty);
@@ -1738,8 +1742,7 @@ const LlvmEmitter = struct {
         const tag_ptr = try self.nextTemp();
         const tag = try self.nextTemp();
         const union_llvm = try self.llvmType(subject_ty);
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ subject_ptr, union_llvm });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ union_llvm, subject, subject_ptr, try self.debugCallSuffix() });
+        try self.emitAllocaStore(subject_ptr, union_llvm, subject);
         try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, subject_ptr });
         try self.out.print(self.allocator, "  {s} = load i32, ptr {s}{s}\n", .{ tag, tag_ptr, try self.debugCallSuffix() });
 
@@ -1815,8 +1818,7 @@ const LlvmEmitter = struct {
 
             const binding_ptr = try self.nextBindingPtr(binding.binding.text);
             const payload = try self.taggedUnionLoadPayload(subject_ptr, subject_ty, payload_ty);
-            try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, try self.llvmType(payload_ty) });
-            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(payload_ty), payload, binding_ptr, try self.debugCallSuffix() });
+            try self.emitAllocaStore(binding_ptr, try self.llvmType(payload_ty), payload);
             try self.local_types.put(binding.binding.text, payload_ty);
             try self.local_slots.put(binding.binding.text, .{ .ty = payload_ty, .ptr = binding_ptr });
             return try self.emitSwitchBody(arm.body, ret_ty);
@@ -2114,8 +2116,7 @@ const LlvmEmitter = struct {
         const value = try self.emitExpr(expr, ty);
         const ptr = try self.nextTemp();
         const llvm_ty = try self.llvmType(ty);
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, llvm_ty });
-        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+        try self.emitAllocaStore(ptr, llvm_ty, value);
         return ptr;
     }
 
