@@ -81,6 +81,21 @@ export fn mmio_run() -> u32 {
     if reg_field_get(after, enable) != 0 { pass = 0; }      // bit 0 of 0x...5678 is 0
     if (after & 0xFFFF_F00F) != (0x1234_5678 & 0xFFFF_F00F) { pass = 0; }  // other bits unchanged
 
+    // ----- whole-mask set/clear (pure + ordered RMW) -----
+    let mask_ab: u32 = reg_bit(0) | reg_bit(1);            // 0b11
+    if reg_set_bits(0x10, mask_ab) != 0x13 { pass = 0; }
+    if reg_clear_bits(0x13, mask_ab) != 0x10 { pass = 0; }
+    if !reg_test_all(0x13, mask_ab) { pass = 0; }
+    if reg_test_all(0x11, mask_ab) { pass = 0; }           // only bit 0 set
+    if !reg_test_any(0x11, mask_ab) { pass = 0; }
+    if reg_test_any(0x10, mask_ab) { pass = 0; }
+
+    mmio_write32(r0, 0x0000_0000);
+    mmio_set_bits(r0, 0x0000_00F0);
+    if mmio_read32(r0) != 0x0000_00F0 { pass = 0; }
+    mmio_clear_bits(r0, 0x0000_0050);
+    if mmio_read32(r0) != 0x0000_00A0 { pass = 0; }
+
     // ----- comptime fold: a field built from constants verifies at compile time -----
     comptime {
         assert(reg_field_mask(reg_field(4, 8)) == 0x0000_0FF0);

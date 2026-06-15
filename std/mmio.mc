@@ -94,6 +94,25 @@ export const fn reg_bit_test(reg: u32, n: u32) -> bool {
     return (reg & reg_bit(n)) != 0;
 }
 
+// ----- whole-mask set/clear/test (a mask names one or more bits at once) -----
+
+export const fn reg_set_bits(reg: u32, mask: u32) -> u32 {
+    return reg | mask;
+}
+
+export const fn reg_clear_bits(reg: u32, mask: u32) -> u32 {
+    return reg & (~mask);
+}
+
+// True iff every bit in `mask` is set; `reg_test_any` is true iff at least one is.
+export const fn reg_test_all(reg: u32, mask: u32) -> bool {
+    return (reg & mask) == mask;
+}
+
+export const fn reg_test_any(reg: u32, mask: u32) -> bool {
+    return (reg & mask) != 0;
+}
+
 // ===== IO-memory copy (ordered; runtime) ====================================
 //
 // `dst`/`src` are physical addresses; the raw load/store is the single `unsafe`
@@ -151,4 +170,16 @@ export fn mmio_read32(reg: PAddr) -> u32 {
 export fn mmio_modify_field(reg: PAddr, f: RegField, value: u32) -> void {
     let current: u32 = mmio_read32(reg);
     mmio_write32(reg, reg_field_set(current, f, value));
+}
+
+// Ordered read-modify-write that sets (OR-in) the bits named by `mask`.
+export fn mmio_set_bits(reg: PAddr, mask: u32) -> void {
+    let current: u32 = mmio_read32(reg);
+    mmio_write32(reg, reg_set_bits(current, mask));
+}
+
+// Ordered read-modify-write that clears (AND-out) the bits named by `mask`.
+export fn mmio_clear_bits(reg: PAddr, mask: u32) -> void {
+    let current: u32 = mmio_read32(reg);
+    mmio_write32(reg, reg_clear_bits(current, mask));
 }

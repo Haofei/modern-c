@@ -2657,9 +2657,11 @@ and the `fence`/`cpu` intrinsics:
 or replace it with the mask built — and the geometry bounds-checked — in exactly one
 place, so a driver stops open-coding `(v & ~(MASK << SHIFT)) | (x << SHIFT)`. The
 inserted value is masked to the field width, so an over-wide value cannot bleed into
-a neighbouring field. Single-bit `reg_bit_set/_clear/_toggle/_test` cover the common
-flag case. All are `const fn`s, so a field built from constant `(shift, width)` folds
-and is verified at comptime.
+a neighbouring field. Single-bit `reg_bit_set/_clear/_toggle/_test` and whole-mask
+`reg_set_bits/_clear_bits/_test_all/_test_any` cover the common flag cases (with
+ordered `mmio_set_bits`/`mmio_clear_bits` read-modify-write variants at a `PAddr`).
+All the pure helpers are `const fn`s, so a field built from constant `(shift, width)`
+folds and is verified at comptime.
 
 ```mc
 let mode: RegField = reg_field(1, 3);            // bits [1,4)
