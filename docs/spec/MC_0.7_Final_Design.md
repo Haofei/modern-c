@@ -4780,8 +4780,8 @@ Two editor-facing tools reuse the compiler front end rather than re-implementing
   editor squiggle and a CI failure name the identical rule — plus **formatting** (`mcc fmt`),
   **document symbols** (`mcc emit-map`), and a full navigation set driven by **`mcc symbols`** (a
   JSON index of definitions + references with spans): **hover, go-to-definition, find-references,
-  document-highlight, rename, semantic tokens, signature help, workspace symbols, and call
-  hierarchy**. Positions are converted from `mcc`'s byte columns to LSP UTF-16 offsets, so ranges
+  document-highlight, rename, semantic tokens, completion, signature help, workspace symbols, and
+  call hierarchy**. Positions are converted from `mcc`'s byte columns to LSP UTF-16 offsets, so ranges
   are correct on non-ASCII source. A VS Code client lives in `editors/vscode/`. (`mcc-symbols-test`,
   `lsp-test`, and `editor-client-test` cover the index, a live LSP session over every feature, and
   the editor manifest/grammar.)

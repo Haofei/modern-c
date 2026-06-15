@@ -282,6 +282,21 @@ def main():
         if not any(c["to"]["name"] == "target" for c in (out_calls or [])):
             raise SystemExit(f"FAIL: lsp-test — outgoingCalls from caller should include target: {out_calls}")
 
+        # completion inside target()'s body: offers the param `x`, the functions, a primitive,
+        # and a keyword.
+        comp = request(proc, 33, "textDocument/completion", {**td, "position": pos_of(NAV, 1, "return")})
+        labels = {i["label"] for i in (comp or {}).get("items", [])}
+        for want in ("x", "target", "caller", "u32", "return"):
+            if want not in labels:
+                raise SystemExit(f"FAIL: lsp-test — completion missing '{want}': {sorted(labels)[:20]}")
+        # in caller()'s body, target's param `x` is out of scope.
+        comp2 = request(proc, 34, "textDocument/completion", {**td, "position": pos_of(NAV, 5, "return")})
+        labels2 = {i["label"] for i in (comp2 or {}).get("items", [])}
+        if "x" in labels2:
+            raise SystemExit("FAIL: lsp-test — completion leaked another function's param 'x' into caller()")
+        if "caller" not in labels2:
+            raise SystemExit(f"FAIL: lsp-test — completion in caller() missing 'caller': {sorted(labels2)[:20]}")
+
         proc.stdin.write(frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": {}}))
         proc.stdin.flush()
         shut = read_message(proc.stdout)
@@ -295,7 +310,7 @@ def main():
 
     print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, didChange, pull), documentSymbol "
           "outline, `mcc fmt` formatting, UTF-16 positions, hover/definition/references/highlight/"
-          "rename/semantic-tokens, signature help, workspace symbols, and call hierarchy all verified")
+          "rename/semantic-tokens, completion, signature help, workspace symbols, and call hierarchy all verified")
 
 
 if __name__ == "__main__":

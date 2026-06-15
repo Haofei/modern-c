@@ -12,9 +12,9 @@ is the single source of truth; the server only drives `mcc` subcommands and tran
   - Document symbols — `textDocument/documentSymbol` reuses `mcc emit-map`'s per-declaration
                    rows as a file outline.
   - Navigation    — hover (type + kind), go-to-definition, find-references, document-highlight,
-                   rename, semantic tokens, signature help, workspace symbols, and call
-                   hierarchy, all driven by `mcc symbols` (a JSON index of definitions +
-                   references with spans).
+                   rename, semantic tokens, completion (identifiers in scope + keywords/types),
+                   signature help, workspace symbols, and call hierarchy, all driven by
+                   `mcc symbols` (a JSON index of definitions + references with spans).
   - Pull diagnostics — answers the LSP 3.17 `textDocument/diagnostic` request in addition to
                    pushing `publishDiagnostics`.
 
@@ -606,6 +606,66 @@ def outgoing_calls(uri, text, item):
     return [{"to": function_item(uri, lines, c), "fromRanges": rngs} for c, rngs in callees.values()]
 
 
+# ---- completion (textDocument/completion) --------------------------------------------------
+# Offers the identifiers visible at the cursor — every top-level declaration, plus the params
+# and locals of the enclosing function declared at or before the cursor — together with the MC
+# keywords and primitive types. Scope is approximated from the symbol index's declaration lines
+# (functions do not nest); over-inclusion is harmless for completion.
+MC_KEYWORDS = [
+    "fn", "let", "var", "const", "struct", "enum", "union", "type", "closure", "return", "if",
+    "else", "switch", "match", "for", "while", "break", "continue", "defer", "unsafe", "comptime",
+    "import", "export", "extern", "move", "opaque", "packed", "overlay", "asm", "assert",
+    "sizeof", "alignof", "true", "false", "null", "ok", "err", "mut", "unreachable",
+]
+MC_PRIMITIVES = [
+    "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "bool", "void",
+    "f32", "f64",
+]
+COMPLETION_KIND = {  # LSP CompletionItemKind
+    "function": 3, "global": 6, "constant": 21, "local": 6, "local_mut": 6, "param": 6,
+    "struct": 22, "enum": 13, "type_alias": 7,
+}
+
+
+def completion(uri, text, position):
+    index = get_index(uri, text)
+    items = []
+    seen = set()
+
+    def add(label, kind, detail=None):
+        if label in seen:
+            return
+        seen.add(label)
+        it = {"label": label, "kind": kind}
+        if detail:
+            it["detail"] = detail
+        items.append(it)
+
+    # Top-level declarations are always in scope.
+    for d in index.get("defs", []):
+        if d["kind"] in ("function", "global", "constant", "struct", "enum", "type_alias"):
+            add(d["name"], COMPLETION_KIND[d["kind"]], d["type"])
+
+    # Params/locals of the enclosing function, declared at or before the cursor line.
+    enc = enclosing_function(index, position["line"] + 1)
+    if enc:
+        func_line = enc["span"]["line"]
+        next_line = min([d["span"]["line"] for d in _function_defs(index)
+                         if d["span"]["line"] > func_line], default=10 ** 9)
+        cursor_line = position["line"] + 1
+        for d in index.get("defs", []):
+            if (d["kind"] in ("param", "local", "local_mut")
+                    and func_line <= d["span"]["line"] <= cursor_line
+                    and d["span"]["line"] < next_line):
+                add(d["name"], 6, d["type"])
+
+    for kw in MC_KEYWORDS:
+        add(kw, 14)  # Keyword
+    for ty in MC_PRIMITIVES:
+        add(ty, 7)   # Class (closest for a type)
+    return {"isIncomplete": False, "items": items}
+
+
 def publish(out, uri, text):
     write_message(out, {
         "jsonrpc": "2.0",
@@ -653,13 +713,14 @@ def main():
                         },
                         "workspaceSymbolProvider": True,
                         "callHierarchyProvider": True,
+                        "completionProvider": {"triggerCharacters": []},
                         "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
                         "diagnosticProvider": {  # LSP 3.17 pull model (in addition to push)
                             "interFileDependencies": False,
                             "workspaceDiagnostics": False,
                         },
                     },
-                    "serverInfo": {"name": "mc-lsp", "version": "0.5.0"},
+                    "serverInfo": {"name": "mc-lsp", "version": "0.6.0"},
                 },
             })
         elif method == "initialized":
@@ -717,6 +778,11 @@ def main():
             uri = msg["params"]["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
                                    "result": semantic_tokens(uri, docs.get(uri, ""))})
+        elif method == "textDocument/completion":
+            p = msg["params"]
+            uri = p["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": completion(uri, docs.get(uri, ""), p["position"])})
         elif method == "textDocument/signatureHelp":
             p = msg["params"]
             uri = p["textDocument"]["uri"]
