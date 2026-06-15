@@ -252,6 +252,24 @@ def main():
         if data[:5] != [0, 3, 6, 0, 0]:  # deltaLine, deltaChar, length, tokenType(function=0), mods
             raise SystemExit(f"FAIL: lsp-test — first semantic token should be the function def: {data[:5]}")
 
+        # signature help inside the `target(5)` call -> the function signature, active param 0.
+        sig = request(proc, 26, "textDocument/signatureHelp", {**td, "position": pos_of(NAV, 5, "5")})
+        sigs = (sig or {}).get("signatures", [])
+        if not sigs or "target(u32) -> u32" not in sigs[0]["label"]:
+            raise SystemExit(f"FAIL: lsp-test — signature help wrong: {sig}")
+        if sig.get("activeParameter") != 0:
+            raise SystemExit(f"FAIL: lsp-test — signature help active param should be 0: {sig}")
+
+        # pull diagnostics (LSP 3.17) on the broken doc -> full report carrying the same code.
+        rep = request(proc, 27, "textDocument/diagnostic", {"textDocument": {"uri": bad_uri}})
+        if (rep or {}).get("kind") != "full" or EXPECTED_CODE not in [d.get("code") for d in rep.get("items", [])]:
+            raise SystemExit(f"FAIL: lsp-test — pull diagnostics did not report {EXPECTED_CODE}: {rep}")
+
+        # workspace symbols across open documents -> the `caller` function from nav.mc.
+        ws = request(proc, 28, "workspace/symbol", {"query": "caller"})
+        if not any(s["name"] == "caller" and s["kind"] == 12 for s in (ws or [])):
+            raise SystemExit(f"FAIL: lsp-test — workspace/symbol did not find function 'caller': {ws}")
+
         proc.stdin.write(frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": {}}))
         proc.stdin.flush()
         shut = read_message(proc.stdout)
@@ -263,9 +281,9 @@ def main():
         if proc.poll() is None:
             proc.kill()
 
-    print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, didChange), documentSymbol outline, "
-          "`mcc fmt` formatting, UTF-16 positions, and hover/definition/references/highlight/rename/"
-          "semantic-tokens (via `mcc symbols`) all verified")
+    print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, didChange, pull), documentSymbol "
+          "outline, `mcc fmt` formatting, UTF-16 positions, hover/definition/references/highlight/"
+          "rename/semantic-tokens, signature help, and workspace symbols all verified")
 
 
 if __name__ == "__main__":

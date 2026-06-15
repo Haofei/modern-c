@@ -12,8 +12,10 @@ is the single source of truth; the server only drives `mcc` subcommands and tran
   - Document symbols — `textDocument/documentSymbol` reuses `mcc emit-map`'s per-declaration
                    rows as a file outline.
   - Navigation    — hover (type + kind), go-to-definition, find-references, document-highlight,
-                   rename, and semantic tokens, all driven by `mcc symbols` (a JSON index of
-                   definitions + references with spans).
+                   rename, semantic tokens, signature help, and workspace symbols, all driven by
+                   `mcc symbols` (a JSON index of definitions + references with spans).
+  - Pull diagnostics — answers the LSP 3.17 `textDocument/diagnostic` request in addition to
+                   pushing `publishDiagnostics`.
 
 Positions are converted from `mcc`'s 1-based byte columns to LSP UTF-16 code-unit offsets, so
 ranges are correct on non-ASCII source.
@@ -368,6 +370,150 @@ def semantic_tokens(uri, text):
     return {"data": data}
 
 
+# ---- workspace symbols (workspace/symbol) --------------------------------------------------
+def workspace_symbols(docs, query):
+    q = query.lower()
+    results = []
+    for uri, text in docs.items():
+        index = get_index(uri, text)
+        lines = text.split("\n")
+        for d in index.get("defs", []):
+            if d["kind"] in ("param", "local", "local_mut"):
+                continue  # workspace symbols are top-level only
+            if q and q not in d["name"].lower():
+                continue
+            results.append({
+                "name": d["name"],
+                "kind": KIND_TO_SYMBOLKIND.get(d["kind"], 13),
+                "location": {"uri": uri, "range": span_to_range(lines, d["span"])},
+            })
+    return results
+
+
+KIND_TO_SYMBOLKIND = {
+    "function": 12, "global": 13, "constant": 14,
+    "struct": 23, "union": 23, "packed_bits": 23, "overlay_union": 23, "opaque": 23,
+    "enum": 10, "type_alias": 5,
+}
+
+
+# ---- signature help (textDocument/signatureHelp) -------------------------------------------
+def utf16_to_strindex(line, u16col):
+    u = 0
+    for i, c in enumerate(line):
+        if u >= u16col:
+            return i
+        u += 2 if ord(c) > 0xFFFF else 1
+    return len(line)
+
+
+def _split_top_level(s):
+    parts, depth, cur = [], 0, ""
+    for c in s:
+        if c in "(<[":
+            depth += 1
+        elif c in ")>]":
+            depth -= 1
+        if c == "," and depth == 0:
+            parts.append(cur.strip())
+            cur = ""
+        else:
+            cur += c
+    if cur.strip():
+        parts.append(cur.strip())
+    return parts
+
+
+def parse_fn_type(t):
+    """`fn(P0, P1) -> R` -> (["P0", "P1"], "R"). Returns None if not a function type."""
+    if not t.startswith("fn(") and not t.startswith("closure("):
+        return None
+    open_paren = t.index("(")
+    depth, close = 0, -1
+    for i in range(open_paren, len(t)):
+        if t[i] == "(":
+            depth += 1
+        elif t[i] == ")":
+            depth -= 1
+            if depth == 0:
+                close = i
+                break
+    if close < 0:
+        return None
+    params = _split_top_level(t[open_paren + 1:close])
+    rest = t[close + 1:].strip()
+    ret = rest[len("->"):].strip() if rest.startswith("->") else ""
+    return params, ret
+
+
+def signature_help(uri, text, position):
+    lines = text.split("\n")
+    ln = position["line"]
+    if ln >= len(lines):
+        return None
+    line = lines[ln]
+    prefix = line[:utf16_to_strindex(line, position["character"])]
+
+    # Find the innermost unmatched '(' to the left of the cursor.
+    depth, open_idx = 0, -1
+    for i in range(len(prefix) - 1, -1, -1):
+        c = prefix[i]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            if depth == 0:
+                open_idx = i
+                break
+            depth -= 1
+    if open_idx < 0:
+        return None
+
+    # The callee is the identifier immediately before that '('.
+    k = open_idx
+    while k > 0 and (prefix[k - 1].isalnum() or prefix[k - 1] == "_"):
+        k -= 1
+    callee = prefix[k:open_idx]
+    if not callee:
+        return None
+
+    # Active parameter = number of top-level commas between the '(' and the cursor.
+    depth, active = 0, 0
+    for c in prefix[open_idx + 1:]:
+        if c in "(<[":
+            depth += 1
+        elif c in ")>]":
+            depth -= 1
+        elif c == "," and depth == 0:
+            active += 1
+
+    fn = next((d for d in get_index(uri, text).get("defs", [])
+               if d["name"] == callee and d["kind"] == "function"), None)
+    if not fn:
+        return None
+    parsed = parse_fn_type(fn["type"])
+    if parsed is None:
+        return None
+    params, ret = parsed
+
+    # Build "name(P0, P1) -> R" and the [start,end] label offsets for each parameter.
+    label = callee + "("
+    param_info = []
+    for i, p in enumerate(params):
+        if i > 0:
+            label += ", "
+        start = len(label)
+        label += p
+        param_info.append({"label": [start, len(label)]})
+    label += ")"
+    if ret:
+        label += " -> " + ret
+    return {
+        "signatures": [{"label": label, "parameters": param_info}],
+        "activeSignature": 0,
+        "activeParameter": min(active, max(len(params) - 1, 0)),
+    }
+
+
 def publish(out, uri, text):
     write_message(out, {
         "jsonrpc": "2.0",
@@ -413,8 +559,14 @@ def main():
                             "legend": {"tokenTypes": TOKEN_TYPES, "tokenModifiers": []},
                             "full": True,
                         },
+                        "workspaceSymbolProvider": True,
+                        "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
+                        "diagnosticProvider": {  # LSP 3.17 pull model (in addition to push)
+                            "interFileDependencies": False,
+                            "workspaceDiagnostics": False,
+                        },
                     },
-                    "serverInfo": {"name": "mc-lsp", "version": "0.3.0"},
+                    "serverInfo": {"name": "mc-lsp", "version": "0.4.0"},
                 },
             })
         elif method == "initialized":
@@ -472,6 +624,19 @@ def main():
             uri = msg["params"]["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
                                    "result": semantic_tokens(uri, docs.get(uri, ""))})
+        elif method == "textDocument/signatureHelp":
+            p = msg["params"]
+            uri = p["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": signature_help(uri, docs.get(uri, ""), p["position"])})
+        elif method == "textDocument/diagnostic":
+            uri = msg["params"]["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": {"kind": "full",
+                                              "items": run_diagnostics(uri, docs.get(uri, ""))}})
+        elif method == "workspace/symbol":
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": workspace_symbols(docs, msg["params"].get("query", ""))})
         elif method == "shutdown":
             write_message(stdout, {"jsonrpc": "2.0", "id": mid, "result": None})
         elif method == "exit":
