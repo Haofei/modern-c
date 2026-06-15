@@ -50,6 +50,14 @@ enum EpError {
     DeadEndpoint, // the slot is free, or now holds a different generation
 }
 
+// Typed outcome of a bounded blocking send: a permission denial, a dead destination, and a
+// timeout are distinct failures the caller (or its logs) can act on differently.
+enum SendError {
+    Denied,     // the sender's allow_mask does not permit this destination
+    DeadTarget, // the destination never existed, or has exited/died
+    Timeout,    // the destination's mailbox stayed full for the whole yield budget
+}
+
 // Block reasons (bits in Process.block_reasons). A process is runnable only when its block
 // set is empty — runnable state is *derived* from these flags, not set ad hoc, so a missed
 // state transition can't leave a blocked process on the run queue (MINIX RTS_* pattern).
@@ -934,6 +942,33 @@ export fn ipc_send_timeout(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a
         tries = tries + 1;
     }
     return false;
+}
+
+// Bounded blocking send with a TYPED outcome — the Result form of ipc_try_send/ipc_send_timeout.
+// It distinguishes the three failure modes the bool variants conflate: a permission denial
+// (allow_mask), a dead destination (never existed / exited), and a timeout (mailbox stayed full
+// for the whole `max_yields` budget). `ok(true)` means delivered.
+export fn ipc_send_result(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, max_yields: u32) -> Result<bool, SendError> {
+    let cur: usize = t.current;
+    if !mask32_contains(&t.procs[cur].allow_mask, dst_pid) {
+        return err(.Denied);
+    }
+    let dst: usize = dst_pid as usize;
+    var tries: u32 = 0;
+    while tries <= max_yields {
+        if !proc_is_live(t, dst) {
+            return err(.DeadTarget); // re-checked each attempt: the slot can die while we wait
+        }
+        if ipc_send_try(t, dst_pid, tag, a0, a1, a2) {
+            return ok(true);
+        }
+        if tries == max_yields {
+            return err(.Timeout);
+        }
+        proc_yield(t);
+        tries = tries + 1;
+    }
+    return err(.Timeout);
 }
 
 // Send `tag`/payload to `dst_pid`. Blocks (yields) only while the mailbox is full. This is
