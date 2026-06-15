@@ -94,6 +94,15 @@ pub fn parseCharLiteral(literal: []const u8) ?u128 {
     };
 }
 
+/// Round `value` up to the next multiple of `alignment` (returning `value` when already
+/// aligned), or null on a non-positive alignment or `i128` overflow.
+pub fn alignForward(value: i128, alignment: i128) ?i128 {
+    if (alignment <= 0) return null;
+    const rem = @rem(value, alignment);
+    if (rem == 0) return value;
+    return std.math.add(i128, value, alignment - rem) catch null;
+}
+
 /// The signed-magnitude value of a constant integer expression — an integer or char literal,
 /// possibly grouped or negated — or null if it is not a compile-time integer constant.
 pub fn integerLiteralValue(expr: ast.Expr) ?LiteralValue {

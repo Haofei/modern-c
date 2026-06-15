@@ -12,6 +12,7 @@ const sema = @import("sema.zig");
 // Shared with `sema.zig`/`mir.zig` (see `numeric.zig`/`ast_query.zig`); aliased so call sites
 // read unchanged.
 const parseUsizeLiteral = numeric.parseUsizeLiteral;
+const alignForward = numeric.alignForward;
 const isIdentNamed = ast_query.isIdentNamed;
 const isMmioMapCallName = ast_query.isMmioMapCallName;
 const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
@@ -11102,13 +11103,6 @@ fn isArithmeticLayoutGeneric(name: []const u8) bool {
         std.mem.eql(u8, name, "serial") or
         std.mem.eql(u8, name, "counter") or
         std.mem.eql(u8, name, "Duration");
-}
-
-fn alignForward(value: i128, alignment: i128) ?i128 {
-    if (alignment <= 0) return null;
-    const rem = @rem(value, alignment);
-    if (rem == 0) return value;
-    return std.math.add(i128, value, alignment - rem) catch null;
 }
 
 fn isCKeyword(name: []const u8) bool {

@@ -24,6 +24,7 @@ const parseIntegerLiteral = numeric.parseIntegerLiteral;
 const parseUsizeLiteral = numeric.parseUsizeLiteral;
 const parseCharLiteral = numeric.parseCharLiteral;
 const integerLiteralValue = numeric.integerLiteralValue;
+const alignForward = numeric.alignForward;
 
 pub const Checker = struct {
     reporter: *diagnostics.Reporter,
@@ -7411,13 +7412,6 @@ fn isArithmeticLayoutGeneric(name: []const u8) bool {
         std.mem.eql(u8, name, "serial") or
         std.mem.eql(u8, name, "counter") or
         std.mem.eql(u8, name, "Duration");
-}
-
-fn alignForward(value: i128, alignment: i128) ?i128 {
-    if (alignment <= 0) return null;
-    const rem = @rem(value, alignment);
-    if (rem == 0) return value;
-    return std.math.add(i128, value, alignment - rem) catch null;
 }
 
 // Extract the reflected type from a reflection call's `type_args` or first arg.
