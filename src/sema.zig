@@ -6532,6 +6532,16 @@ fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         },
         .call => |node| rawManyOffsetReturnType(node, ctx),
         .grouped => |inner| exprStorageType(inner.*, ctx),
+        // A struct-field array base (`x.field[k]`): the field's declared type, so a constant
+        // index into a fixed-size struct field is provably in bounds too. Mirrors the MIR
+        // builder's `baseTypeExpr` member case.
+        .member => |node| blk: {
+            const base_ty = exprStorageType(node.base.*, ctx) orelse break :blk null;
+            const struct_name = structTypeName(base_ty) orelse break :blk null;
+            const structs = ctx.structs orelse break :blk null;
+            const info = structs.get(struct_name) orelse break :blk null;
+            break :blk info.fields.get(node.name.text);
+        },
         else => null,
     };
 }

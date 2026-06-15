@@ -12,6 +12,15 @@ fn signed_div_demo(x: i32) -> i32 {
     return x / 2;   // signed div by the literal 2: both checks provably dead under --optimize
 }
 
+// A struct-field array, indexed at a constant — exercises the member-base bounds elision.
+struct Pair {
+    vals: [2]u32,
+}
+
+fn pair_second(p: Pair) -> u32 {
+    return p.vals[1];   // constant index into the struct field: bounds check elided under --optimize
+}
+
 export fn opt_index_demo() -> u32 {
     let a: [5]u32 = .{2, 3, 5, 7, 11};
     var acc: u32 = a[0];   // 2
@@ -19,5 +28,7 @@ export fn opt_index_demo() -> u32 {
     acc = a[4];            // 11
     let base: u32 = acc / 2;                                  // 11 / 2 = 5 (unsigned div by literal)
     let signed_val: i32 = signed_div_demo((a[1] as i32) - 10); // (3 - 10) / 2 = -7 / 2 = -3 (trunc)
-    return base + ((signed_val + 10) as u32);                // 5 + (-3 + 10) = 12
+    let p: Pair = .{ .vals = .{40, 50} };
+    let m: u32 = pair_second(p);                             // 50 (member-base const index)
+    return base + ((signed_val + 10) as u32) + m;            // 5 + 7 + 50 = 62
 }

@@ -20,3 +20,14 @@ fn variable_divisor(x: u32, d: u32) -> u32 {
 fn signed_div_neg_one(x: i32) -> i32 {
     return x / -1;
 }
+
+// An out-of-range constant index into a struct-field array is NOT in bounds, so the member-base
+// elision must not fire — the Bounds check (and rejection) must remain.
+struct OobFrame {
+    slots: [4]u32,
+}
+
+#[no_lang_trap]
+fn member_oob(f: OobFrame) -> u32 {
+    return f.slots[9];
+}

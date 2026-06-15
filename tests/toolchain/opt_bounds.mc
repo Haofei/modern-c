@@ -22,6 +22,16 @@ fn local_const_index() -> u32 {
     return xs[2];
 }
 
+// A constant index into a fixed-size array that is a STRUCT FIELD (member base).
+struct Frame {
+    slots: [4]u32,
+}
+
+#[no_lang_trap]
+fn member_const_index(f: Frame) -> u32 {
+    return f.slots[2];
+}
+
 // Unsigned division by a non-zero literal: no DivideByZero, no overflow case.
 #[no_lang_trap]
 fn unsigned_div_const(x: u32) -> u32 {

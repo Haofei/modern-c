@@ -2709,6 +2709,14 @@ const FunctionBuilder = struct {
         return switch (base.kind) {
             .ident => |id| self.local_type_exprs.get(id.text) orelse self.global_type_exprs.get(id.text),
             .grouped => |inner| self.baseTypeExpr(inner.*),
+            // A struct-field array base (`x.field[k]`): resolve the base's struct type (through
+            // a pointer/alias) and look up the field's declared type, so a constant index into
+            // a fixed-size struct field elides its bounds check too.
+            .member => |m| {
+                const base_ty = self.baseTypeExpr(m.base.*) orelse return null;
+                const struct_name = structTypeNameAlias(base_ty, self.aliases) orelse return null;
+                return self.structFieldTypeExpr(struct_name, m.name.text);
+            },
             else => null,
         };
     }

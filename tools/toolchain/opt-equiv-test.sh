@@ -22,7 +22,7 @@ command -v "$LLC"   >/dev/null 2>&1 || { echo "SKIP: opt-equiv-test (llc not fou
 
 SRC="$HERE/tests/toolchain/opt_index_demo.mc"
 ENTRY="opt_index_demo"
-EXPECT=12
+EXPECT=62
 
 LINK_FLAGS=()
 [ "$(uname -s)" = "Linux" ] && LINK_FLAGS=(-no-pie)

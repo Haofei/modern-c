@@ -3605,9 +3605,11 @@ or unsound transform can never silently affect a normal build.
 
 **Transform 1 — const-index bounds-check elision.**
 
-> *Proof obligation:* the index is a non-negative integer literal `k`, the base names a fixed
-> array of statically-known length `N`, and `k < N`. All three are compile-time constants, so
-> the `Bounds` check provably never traps.
+> *Proof obligation:* the index is a non-negative integer literal `k`, the base resolves to a
+> fixed array of statically-known length `N` (a local, parameter, or global array, **or a
+> fixed-size array that is a struct field** — `x.field[k]`, the field type resolved through a
+> pointer/alias), and `k < N`. All are compile-time constants, so the `Bounds` check provably
+> never traps. This covers read, write-target (`a[k] = v`), and struct-field-array sites.
 >
 > *Transform:* omit the `cmp_bounds` instruction and its `Bounds` trap edge; the access is
 > marked `const_in_bounds`. A trap-free MIR means a `#[no_lang_trap]` function may now index a
