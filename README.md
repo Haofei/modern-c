@@ -60,8 +60,11 @@ Implemented today:
 - local package manifests through `tools/toolchain/mcc-pkg.sh`, and an offline
   registry with semver-ish version resolution, `publish`/`install`, and a
   reproducible lockfile through `tools/toolchain/mcc-registry.sh`
-- a token-preserving source formatter (`mcc fmt [--check]`) and a diagnostics
-  language server (`tools/lsp/mc-lsp.py`) that reuses the compiler's own `E_` codes
+- a token-preserving source formatter (`mcc fmt [--check]`), a JSON symbol index
+  (`mcc symbols`), and a full language server (`tools/lsp/mc-lsp.py`, with a VS Code
+  client in `editors/vscode/`) providing diagnostics (the compiler's own `E_` codes),
+  hover, go-to-definition, find-references, rename, document/workspace symbols,
+  semantic tokens, signature help, call hierarchy, and formatting
 - a small standard library under `std/`
 
 The milestone gate is:
@@ -375,7 +378,8 @@ prototype work:
 - a networked package registry with signing (the current registry, version
   resolution, lockfile, and publish/install flow are offline/filesystem-local)
 - a full pretty-printing formatter (`mcc fmt` is currently a token-preserving
-  reindenter) and a richer LSP (the server currently surfaces diagnostics)
+  reindenter) and completion in the LSP (the one common feature not yet provided;
+  it needs type-directed candidates from the compiler)
 - complete DMA/cache-coherence simulation
 - broader per-architecture production kernel hardening
 - full VFS/POSIX/network service completeness

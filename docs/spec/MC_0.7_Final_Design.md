@@ -4762,11 +4762,23 @@ Two editor-facing tools reuse the compiler front end rather than re-implementing
   file (for CI / editor format-on-save). It is idempotent. (`fmt-test` proves token-preservation
   and idempotence across the whole `std`/`tests` corpus.)
 
-- **`tools/lsp/mc-lsp.py`** — a stdio JSON-RPC language server that surfaces the compiler's own
-  diagnostics. On `didOpen`/`didChange`/`didSave` it runs `mcc check` and publishes
-  `textDocument/publishDiagnostics` carrying the **same `E_` codes** the CLI reports, so an
-  editor squiggle and a CI failure name the identical rule. The compiler is the single source
-  of truth; the server only translates. (`lsp-test` drives a live session end-to-end.)
+- **`tools/lsp/mc-lsp.py`** — a stdio JSON-RPC language server. The compiler is the single
+  source of truth; the server only drives `mcc` subcommands and translates output. It provides
+  **diagnostics** (push + LSP 3.17 pull) carrying the **same `E_` codes** the CLI reports — so an
+  editor squiggle and a CI failure name the identical rule — plus **formatting** (`mcc fmt`),
+  **document symbols** (`mcc emit-map`), and a full navigation set driven by **`mcc symbols`** (a
+  JSON index of definitions + references with spans): **hover, go-to-definition, find-references,
+  document-highlight, rename, semantic tokens, signature help, workspace symbols, and call
+  hierarchy**. Positions are converted from `mcc`'s byte columns to LSP UTF-16 offsets, so ranges
+  are correct on non-ASCII source. A VS Code client lives in `editors/vscode/`. (`mcc-symbols-test`,
+  `lsp-test`, and `editor-client-test` cover the index, a live LSP session over every feature, and
+  the editor manifest/grammar.)
+
+  `mcc symbols <file>` is the enabling subcommand: it walks the parsed AST and emits, as JSON,
+  every declaration (`defs`, with a stringified type) and every identifier use (`refs`, each
+  carrying the span of the declaration it resolves to by lexical scope). It needs only a parse,
+  is best-effort (an unresolved name is simply omitted, never mis-resolved), and is the single
+  data source the navigation features share.
 
 ---
 
