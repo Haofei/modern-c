@@ -64,5 +64,33 @@ export fn fdspace_run() -> u32 {
         ok(b) => { pass = 0; }
         err(e) => {}
     }
+
+    // dup: fd 0 (pipe, handle 10) -> a fresh fd (lowest free = 2) onto the SAME (kind, handle),
+    // an independent slot (the fd-inheritance / dup primitive).
+    var dup_fd: usize = 0;
+    switch fd_dup(&g_fds, 0) {
+        ok(fd) => { dup_fd = fd; if fd != 2 { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
+    switch fd_kind(&g_fds, dup_fd) {
+        ok(k) => { if k != FD_PIPE { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
+    switch fd_handle(&g_fds, dup_fd) {
+        ok(h) => { if h != 10 { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
+    // closing the dup leaves the original fd 0 open — independent descriptors
+    switch fd_close(&g_fds, dup_fd) { ok(b) => {} err(e) => { pass = 0; } }
+    switch fd_kind(&g_fds, 0) {
+        ok(k) => { if k != FD_PIPE { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
+    // dup of a never-opened fd is BadFd, not a silent slot
+    switch fd_dup(&g_fds, 6) {
+        ok(fd) => { pass = 0; }
+        err(e) => {}
+    }
+
     return pass;
 }

@@ -115,6 +115,21 @@ export fn fd_close(s: *mut FdSpace, fd: usize) -> Result<bool, FdError> {
     }
 }
 
+// Duplicate an fd: a fresh (lowest free) descriptor referring to the same (kind, handle). The
+// two descriptors share the underlying resource (the same socket/pipe/file handle) but are
+// independent fd slots — the primitive fd inheritance across fork builds on. The dup starts
+// not-ready (its readiness is recomputed by the next poll). BadFd if `fd` is not open.
+export fn fd_dup(s: *mut FdSpace, fd: usize) -> Result<usize, FdError> {
+    switch slotmap_get(FdEntry, FD_MAX, &s.slots, fd) {
+        ok(e) => {
+            return fd_alloc(s, e.kind, e.handle);
+        }
+        err(x) => {
+            return err(.BadFd);
+        }
+    }
+}
+
 // select/poll: the lowest open fd that is ready, or NoneReady.
 export fn fd_select(s: *mut FdSpace) -> Result<usize, FdError> {
     var i: usize = 0;
