@@ -52,5 +52,40 @@ export fn forkfd_run() -> u32 {
     switch fd_close(proc_fds(&g_t, cs), 0) { ok(b) => {} err(e) => { pass = 0; } }
     switch fd_kind(proc_fds(&g_t, 0), 0) { ok(k) => { if k != FD_PIPE { pass = 0; } } err(e) => { pass = 0; } }
 
+    // --- exit releases the descriptors: a zombie holds only its exit status, not resources ---
+    // The child still holds its inherited socket (fd 1). Simulate the scheduler dispatching the
+    // child, which exits. (On the host the context switch is a no-op stub, so proc_exit returns
+    // here; we set `current` by hand to stand in for the scheduler having run the child.)
+    if fd_count(proc_fds(&g_t, cs)) != 1 { pass = 0; }   // child still has its inherited fd 1
+    g_t.current = cs;
+    proc_exit(&g_t, 7);                                   // child exits 7 -> Zombie, fds released
+    if fd_count(proc_fds(&g_t, cs)) != 0 { pass = 0; }    // ... the dead child's descriptors are gone
+
+    // --- wait/reap collects the child's exit status and frees the slot (one lifecycle path) ---
+    switch proc_reap(&g_t, 0) {
+        ok(info) => {
+            if info.pid != cs as u32 { pass = 0; }
+            if info.code != 7 { pass = 0; }
+        }
+        err(e) => { pass = 0; }
+    }
+
+    // --- a fresh spawn that REUSES the reaped slot inherits no ghost descriptors ---
+    // The bootstrap closes its own socket (fd 1) so its live set differs, then forks again into
+    // the just-freed slot; the new child must reflect the parent's CURRENT fds, not the prior
+    // occupant's.
+    switch fd_close(proc_fds(&g_t, 0), 1) { ok(b) => {} err(e) => { pass = 0; } }
+    let child2: u32 = proc_spawn(&g_t, 0x1000, worker2);
+    let cs2: usize = child2 as usize;
+    if cs2 != cs { pass = 0; }                            // the reaped slot was reused
+    // parent now has fd 0 (PIPE,10) and fd 2 (FILE,30), with fd 1 free -> child2 mirrors exactly
+    if fd_count(proc_fds(&g_t, cs2)) != 2 { pass = 0; }
+    switch fd_kind(proc_fds(&g_t, cs2), 0) { ok(k) => { if k != FD_PIPE { pass = 0; } } err(e) => { pass = 0; } }
+    switch fd_kind(proc_fds(&g_t, cs2), 2) { ok(k) => { if k != FD_FILE { pass = 0; } } err(e) => { pass = 0; } }
+    switch fd_kind(proc_fds(&g_t, cs2), 1) {             // the gap (no ghost socket from the old child)
+        ok(k) => { pass = 0; }
+        err(e) => {}
+    }
+
     return pass;
 }

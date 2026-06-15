@@ -627,8 +627,11 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     // whatever the subsystem owner registered (a no-op if none).
     let death_hook: closure(u32, u32) -> void = t.death_hook;
     death_hook(dead_pid, dead_gen);
-    // Drop the dead process's own pending IPC + signals + wait state.
+    // Drop the dead process's own pending IPC + signals + wait state, and close its open file
+    // descriptors — a zombie holds only its exit status, never live resources, so a later
+    // spawn that reuses this slot can never inherit a ghost descriptor.
     mailbox_init(Message, IPC_SLOTS, &t.procs[dead].inbox);
+    fd_init(&t.procs[dead].fds);
     t.procs[dead].pending_sig = mask32_zero();
     t.procs[dead].wait_slot = MAX_PROCS;
     // Wake anyone blocked receiving-from this exact incarnation. We do NOT post a DEAD message
