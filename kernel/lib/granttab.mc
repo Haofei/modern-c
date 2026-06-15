@@ -131,46 +131,6 @@ export fn grant_table_copy_out(tab: *mut GrantTable, id: usize, r: GrantRef, off
     }
 }
 
-// Copy `n` bytes from `src` into grant `id`'s region (at offset `off`), validated against the
-// live grant exactly as `grant_table_copy_out`.
-export fn grant_table_copy_in(tab: *mut GrantTable, id: usize, r: GrantRef, off: usize, src: PAddr, n: usize) -> Result<bool, GrantTabError> {
-    if id >= GRANTTAB_MAX {
-        return err(.BadId);
-    }
-    if !tab.slots[id].present {
-        return err(.BadId);
-    }
-    let p: *GrantSlot = &tab.slots[id];
-    if r.gen != p.grant.gen {
-        return err(.Revoked); // grant revoked (e.g. owner died) since the ref was issued
-    }
-    switch grant_copy_in(&p.grant, r, off, src, n) {
-        ok(b) => {
-            return ok(true);
-        }
-        err(e) => {
-            return err(.OutOfBounds); // forged/widened ref or out-of-range copy
-        }
-    }
-}
-
-// Revoke one grant (outstanding refs become stale) and reclaim its slot, or BadId. The
-// generation bump invalidates any outstanding ref before the slot is freed; clearing
-// `present` and decrementing `count` return the slot to the free pool so a long-lived
-// table is not exhausted by a sequence of make/revoke cycles.
-export fn grant_table_revoke(tab: *mut GrantTable, id: usize) -> Result<bool, GrantTabError> {
-    if id >= GRANTTAB_MAX {
-        return err(.BadId);
-    }
-    if !tab.slots[id].present {
-        return err(.BadId);
-    }
-    grant_revoke(&tab.slots[id].grant); // bump gen first: outstanding refs fail closed
-    tab.slots[id].present = false;       // then reclaim the slot
-    tab.count = tab.count - 1;
-    return ok(true);
-}
-
 // Revoke every grant owned by the endpoint (owner_slot, owner_gen) — the process-death
 // hook. Returns how many were revoked. Each revoked grant's slot is reclaimed (gen bumped,
 // `present` cleared, `count` decremented), so a dead owner's grants do not occupy table

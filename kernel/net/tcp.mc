@@ -66,10 +66,6 @@ export fn tcp_checksum_valid(r: *ByteReader, off: usize, src_ip: u32, dst_ip: u3
     return inet_fold(sum) == 0xFFFF;
 }
 
-export fn tcp_has_flag(h: *TcpHeader, flag: u16) -> bool {
-    return (h.flags & flag) != 0;
-}
-
 // Is `flag` set in a raw flags word (for the connection state machine)?
 export fn tcp_flag_set(flags: u16, flag: u16) -> bool {
     return (flags & flag) != 0;

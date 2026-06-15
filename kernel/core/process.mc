@@ -961,25 +961,7 @@ export fn ipc_send_ep(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u6
     return ipc_send_ep_id(t, ep, tag, a0, a1, a2, 0);
 }
 
-// Bounded blocking send: retry up to `max_yields` times (yielding so the receiver can
-// drain), returning false on timeout instead of spinning forever. Symmetric with
-// ipc_receive_timeout — the timeout variant the blocking policy is layered over.
-export fn ipc_send_timeout(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, max_yields: u32) -> bool {
-    var tries: u32 = 0;
-    while tries <= max_yields {
-        if ipc_send_try(t, dst_pid, tag, a0, a1, a2) {
-            return true;
-        }
-        if tries == max_yields {
-            return false; // timed out: mailbox stayed full
-        }
-        proc_yield(t);
-        tries = tries + 1;
-    }
-    return false;
-}
-
-// Bounded blocking send with a TYPED outcome — the Result form of ipc_try_send/ipc_send_timeout.
+// Bounded blocking send with a TYPED outcome — the Result form of ipc_try_send.
 // It distinguishes the three failure modes the bool variants conflate: a permission denial
 // (allow_mask), a dead destination (never existed / exited), and a timeout (mailbox stayed full
 // for the whole `max_yields` budget). `ok(true)` means delivered.
@@ -1008,7 +990,7 @@ export fn ipc_send_result(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1
 
 // Send `tag`/payload to `dst_pid`. Blocks (yields) only while the mailbox is full. This is
 // the unbounded blocking *policy*; callers that must not spin forever use ipc_send_try
-// (non-blocking) or ipc_send_timeout (bounded) instead.
+// (non-blocking) or ipc_send_result (bounded, typed) instead.
 export fn ipc_send(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> void {
     let dst: usize = dst_pid as usize;
     var sending: bool = true;
