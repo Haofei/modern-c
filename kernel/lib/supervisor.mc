@@ -24,7 +24,8 @@ enum SvcState {
 enum SvcError {
     Full,
     NotFound,
-    Fatal,      // a core (Never) service failed; not restartable
+    Fatal,          // a core (Never) service failed; not restartable
+    DepUnsatisfied, // a service's declared dependency is missing or forms a cycle
 }
 
 // Declarative service manifest: identity, endpoint, privileges, and policy as data.
@@ -47,6 +48,9 @@ struct ServiceEntry {
 
 struct Supervisor {
     services: [SVC_MAX]ServiceEntry,
+    // Per-service dependency: the name_key of a service that must be Running first (0 = none).
+    // Kept parallel to `services` so the manifest stays unchanged.
+    deps: [SVC_MAX]u32,
     count: usize,
 }
 
@@ -54,9 +58,72 @@ export fn supervisor_init(sup: *mut Supervisor) -> void {
     var i: usize = 0;
     while i < SVC_MAX {
         sup.services[i].present = false;
+        sup.deps[i] = 0;
         i = i + 1;
     }
     sup.count = 0;
+}
+
+// Declare that the service at `idx` depends on the service named `dep_name_key` — it will not be
+// started until that dependency is Running. `dep_name_key == 0` clears the dependency.
+export fn supervisor_set_dep(sup: *mut Supervisor, idx: usize, dep_name_key: u32) -> Result<bool, SvcError> {
+    if idx >= sup.count {
+        return err(.NotFound);
+    }
+    sup.deps[idx] = dep_name_key;
+    return ok(true);
+}
+
+// Start all registered services in dependency order: a service is spawned (its closure invoked
+// for a fresh endpoint) and marked Running only once its declared dependency is Running. Repeats
+// until no further progress; any service still Registered then has a missing or cyclic
+// dependency (`DepUnsatisfied`). Returns the number of services started.
+export fn supervisor_start_ordered(sup: *mut Supervisor) -> Result<usize, SvcError> {
+    var started: usize = 0;
+    var progress: bool = true;
+    while progress {
+        progress = false;
+        var i: usize = 0;
+        while i < sup.count {
+            if sup.services[i].present {
+                if sup.services[i].state == .Registered {
+                    let dep: u32 = sup.deps[i];
+                    var ready: bool = dep == 0;
+                    if !ready {
+                        switch supervisor_find(sup, dep) {
+                            ok(di) => {
+                                if sup.services[di].state == .Running {
+                                    ready = true;
+                                }
+                            }
+                            err(e) => {
+                                return err(.DepUnsatisfied); // depends on an unregistered service
+                            }
+                        }
+                    }
+                    if ready {
+                        let sp: closure() -> u32 = sup.services[i].spawn;
+                        sup.services[i].manifest.endpoint = sp();
+                        sup.services[i].state = .Running;
+                        started = started + 1;
+                        progress = true;
+                    }
+                }
+            }
+            i = i + 1;
+        }
+    }
+    // Anything still Registered could not be ordered: a dependency cycle (or an unstartable dep).
+    var j: usize = 0;
+    while j < sup.count {
+        if sup.services[j].present {
+            if sup.services[j].state == .Registered {
+                return err(.DepUnsatisfied);
+            }
+        }
+        j = j + 1;
+    }
+    return ok(started);
 }
 
 export fn supervisor_count(sup: *mut Supervisor) -> usize {

@@ -55,5 +55,54 @@ export fn supervisor_run() -> u32 {
         ok(b) => { pass = 0; }
         err(e) => {}
     }
+
+    // ----- dependency-ordered start -----
+    // Register C, B, A out of order with C->B->A dependencies. `start_ordered` must spawn in
+    // dependency order A, B, C; the spawner hands out increasing pids, so
+    // endpoint(A) < endpoint(B) < endpoint(C) proves the order.
+    supervisor_init(&g_sup);
+    g_spawner.next_pid = 100;
+    let ma: ServiceManifest = dep_manifest(0xA);
+    let mb: ServiceManifest = dep_manifest(0xB);
+    let mc: ServiceManifest = dep_manifest(0xC);
+    var ia: usize = 0;
+    var ib: usize = 0;
+    var ic: usize = 0;
+    switch supervisor_register(&g_sup, mc, bind(&g_spawner, spawn_service)) { ok(i) => { ic = i; } err(e) => { pass = 0; } }
+    switch supervisor_register(&g_sup, mb, bind(&g_spawner, spawn_service)) { ok(i) => { ib = i; } err(e) => { pass = 0; } }
+    switch supervisor_register(&g_sup, ma, bind(&g_spawner, spawn_service)) { ok(i) => { ia = i; } err(e) => { pass = 0; } }
+    switch supervisor_set_dep(&g_sup, ic, 0xB) { ok(b) => {} err(e) => { pass = 0; } } // C depends on B
+    switch supervisor_set_dep(&g_sup, ib, 0xA) { ok(b) => {} err(e) => { pass = 0; } } // B depends on A
+    switch supervisor_start_ordered(&g_sup) {
+        ok(n) => { if n != 3 { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
+    let ea: u32 = supervisor_endpoint(&g_sup, ia);
+    let eb: u32 = supervisor_endpoint(&g_sup, ib);
+    let ec: u32 = supervisor_endpoint(&g_sup, ic);
+    if ea >= eb { pass = 0; } // A spawned before B
+    if eb >= ec { pass = 0; } // B spawned before C
+
+    // ----- a dependency cycle is rejected (not partially started) -----
+    supervisor_init(&g_sup);
+    g_spawner.next_pid = 200;
+    var ix: usize = 0;
+    var iy: usize = 0;
+    switch supervisor_register(&g_sup, dep_manifest(0xD), bind(&g_spawner, spawn_service)) { ok(i) => { ix = i; } err(e) => { pass = 0; } }
+    switch supervisor_register(&g_sup, dep_manifest(0xE), bind(&g_spawner, spawn_service)) { ok(i) => { iy = i; } err(e) => { pass = 0; } }
+    switch supervisor_set_dep(&g_sup, ix, 0xE) { ok(b) => {} err(e) => { pass = 0; } } // D -> E
+    switch supervisor_set_dep(&g_sup, iy, 0xD) { ok(b) => {} err(e) => { pass = 0; } } // E -> D (cycle)
+    switch supervisor_start_ordered(&g_sup) {
+        ok(n) => { pass = 0; }  // a cycle must not start
+        err(e) => {}            // DepUnsatisfied — correctly rejected
+    }
+
     return pass;
+}
+
+// A minimal manifest (no privileges, restartable) for the dependency-ordering tests.
+fn dep_manifest(key: u32) -> ServiceManifest {
+    return .{ .name_key = key, .endpoint = 0,
+        .allowed_ipc = mask32_from(0), .allowed_kcalls = mask32_from(0),
+        .restart = .OnFailure, .priority = 1 };
 }
