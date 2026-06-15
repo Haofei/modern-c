@@ -1093,6 +1093,14 @@ pub fn build(b: *std.Build) void {
     arp_cache_test_step.dependOn(&arp_cache_test_cmd.step);
 
 
+    const tlb_shootdown_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tlb-shootdown-test",
+    });
+    tlb_shootdown_test_cmd.step.dependOn(b.getInstallStep());
+    const tlb_shootdown_test_step = b.step("tlb-shootdown-test", "TLB shootdown bookkeeping: target/ack core masks + completion");
+    tlb_shootdown_test_step.dependOn(&tlb_shootdown_test_cmd.step);
+
+
     slotmap_test_cmd.step.dependOn(b.getInstallStep());
     const slotmap_test_step = b.step("slotmap-test", "SlotMap<T,N> index handle table");
     slotmap_test_step.dependOn(&slotmap_test_cmd.step);
@@ -2462,6 +2470,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&synclock_test_cmd.step);
     m0_step.dependOn(&ipc_result_test_cmd.step);
     m0_step.dependOn(&arp_cache_test_cmd.step);
+    m0_step.dependOn(&tlb_shootdown_test_cmd.step);
     m0_step.dependOn(&mailbox_test_cmd.step);
     m0_step.dependOn(&tryelse_test_cmd.step);
     m0_step.dependOn(&byteview_test_cmd.step);
