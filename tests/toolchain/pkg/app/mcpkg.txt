@@ -1,0 +1,9 @@
+name = app
+version = 0.1.0
+entry = app.mc
+output = app.o
+
+# Registry dependency: the highest published mathlib 1.x.y that is >= 1.0.0.
+# (`install` resolves this against the registry and pins it in mcpkg.lock.)
+[registry-deps]
+mathlib = ^1.0.0

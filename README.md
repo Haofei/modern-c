@@ -57,7 +57,9 @@ Implemented today:
 - kernel, driver, filesystem, IPC, process, memory-management, networking, SMP,
   and architecture tests under QEMU
 - data-driven host-driver tests for kernel libraries in `tools/lib/host-tests.tsv`
-- local package manifests through `tools/toolchain/mcc-pkg.sh`
+- local package manifests through `tools/toolchain/mcc-pkg.sh`, and an offline
+  registry with semver-ish version resolution, `publish`/`install`, and a
+  reproducible lockfile through `tools/toolchain/mcc-registry.sh`
 - a small standard library under `std/`
 
 The milestone gate is:

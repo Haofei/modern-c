@@ -428,6 +428,15 @@ pub fn build(b: *std.Build) void {
     const llvm_pkg_test_step = b.step("llvm-pkg-test", "Build a package from its manifest through LLVM, link, and run it");
     llvm_pkg_test_step.dependOn(&llvm_pkg_test_cmd.step);
 
+    const pkg_registry_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/pkg-registry-test.sh",
+        "zig-out/bin/mcc",
+    });
+    pkg_registry_test_cmd.step.dependOn(b.getInstallStep());
+    const pkg_registry_test_step = b.step("pkg-registry-test", "Registry publish/resolve/install + lockfile reproducibility for the package manager");
+    pkg_registry_test_step.dependOn(&pkg_registry_test_cmd.step);
+
     const llvm_demo_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/llvm-demo-test.sh",
@@ -2288,6 +2297,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&mcmap_test_cmd.step);
     // pkg-test exercises the mcc-pkg manifest build (needs clang).
     m0_step.dependOn(&pkg_test_cmd.step);
+    // pkg-registry-test exercises registry publish/resolve/install + lockfile reproducibility.
+    m0_step.dependOn(&pkg_registry_test_cmd.step);
     // stack-test exercises the generic std/stack collection (needs clang).
     m0_step.dependOn(&stack_test_cmd.step);
     // move-test exercises linear `move` handle erasure (needs clang).

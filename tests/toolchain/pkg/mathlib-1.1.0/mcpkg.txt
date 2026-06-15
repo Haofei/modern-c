@@ -1,0 +1,4 @@
+name = mathlib
+version = 1.1.0
+entry = mathlib.mc
+output = mathlib.o
