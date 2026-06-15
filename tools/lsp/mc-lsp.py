@@ -12,8 +12,9 @@ is the single source of truth; the server only drives `mcc` subcommands and tran
   - Document symbols — `textDocument/documentSymbol` reuses `mcc emit-map`'s per-declaration
                    rows as a file outline.
   - Navigation    — hover (type + kind), go-to-definition, find-references, document-highlight,
-                   rename, semantic tokens, signature help, and workspace symbols, all driven by
-                   `mcc symbols` (a JSON index of definitions + references with spans).
+                   rename, semantic tokens, signature help, workspace symbols, and call
+                   hierarchy, all driven by `mcc symbols` (a JSON index of definitions +
+                   references with spans).
   - Pull diagnostics — answers the LSP 3.17 `textDocument/diagnostic` request in addition to
                    pushing `publishDiagnostics`.
 
@@ -514,6 +515,97 @@ def signature_help(uri, text, position):
     }
 
 
+# ---- call hierarchy (textDocument/prepareCallHierarchy + callHierarchy/*) -------------------
+# MC functions do not nest, so the function enclosing a call is simply the last function
+# declared at or before that line — no body-range tracking needed.
+def _function_defs(index):
+    return [d for d in index.get("defs", []) if d["kind"] == "function"]
+
+
+def enclosing_function(index, line):
+    best = None
+    for d in _function_defs(index):
+        if d["span"]["line"] <= line and (best is None or d["span"]["line"] > best["span"]["line"]):
+            best = d
+    return best
+
+
+def function_def_by_pos(index, line, col):
+    for d in _function_defs(index):
+        if d["span"]["line"] == line and d["span"]["col"] == col:
+            return d
+    return None
+
+
+def function_item(uri, lines, d):
+    rng = span_to_range(lines, d["span"])
+    return {"name": d["name"], "kind": 12, "uri": uri, "detail": d["type"],
+            "range": rng, "selectionRange": rng}
+
+
+def prepare_call_hierarchy(uri, text, position):
+    index = get_index(uri, text)
+    lines = text.split("\n")
+    kind, sym = covering(index, lines, position)
+    f = None
+    if kind == "def" and sym["kind"] == "function":
+        f = sym
+    elif kind == "ref" and sym["kind"] == "function":
+        f = function_def_by_pos(index, sym["def"]["line"], sym["def"]["col"])
+    if f is None:
+        f = enclosing_function(index, position["line"] + 1)
+    return [function_item(uri, lines, f)] if f else None
+
+
+def _function_from_item(index, lines, item):
+    start = item["selectionRange"]["start"]
+    for d in _function_defs(index):
+        if span_to_range(lines, d["span"])["start"] == start:
+            return d
+    return None
+
+
+def incoming_calls(uri, text, item):
+    index = get_index(uri, text)
+    lines = text.split("\n")
+    target = _function_from_item(index, lines, item)
+    if not target:
+        return []
+    tl, tc = target["span"]["line"], target["span"]["col"]
+    callers = {}  # caller (line,col) -> (def, [ranges])
+    for r in index.get("refs", []):
+        if r["kind"] != "function" or r["def"]["line"] != tl or r["def"]["col"] != tc:
+            continue
+        caller = enclosing_function(index, r["span"]["line"])
+        if not caller:
+            continue
+        key = (caller["span"]["line"], caller["span"]["col"])
+        callers.setdefault(key, (caller, []))[1].append(span_to_range(lines, r["span"]))
+    return [{"from": function_item(uri, lines, c), "fromRanges": rngs} for c, rngs in callers.values()]
+
+
+def outgoing_calls(uri, text, item):
+    index = get_index(uri, text)
+    lines = text.split("\n")
+    src = _function_from_item(index, lines, item)
+    if not src:
+        return []
+    sl, sc = src["span"]["line"], src["span"]["col"]
+    callees = {}
+    for r in index.get("refs", []):
+        if r["kind"] != "function":
+            continue
+        enc = enclosing_function(index, r["span"]["line"])
+        if not enc or enc["span"]["line"] != sl or enc["span"]["col"] != sc:
+            continue
+        callee = function_def_by_pos(index, r["def"]["line"], r["def"]["col"])
+        if not callee:
+            continue
+        key = (callee["span"]["line"], callee["span"]["col"])
+        callees.setdefault(key, (callee, []))[1].append(span_to_range(lines, r["span"]))
+    return [{"to": function_item(uri, lines, c), "fromRanges": rngs} for c, rngs in callees.values()]
+
+
 def publish(out, uri, text):
     write_message(out, {
         "jsonrpc": "2.0",
@@ -560,13 +652,14 @@ def main():
                             "full": True,
                         },
                         "workspaceSymbolProvider": True,
+                        "callHierarchyProvider": True,
                         "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
                         "diagnosticProvider": {  # LSP 3.17 pull model (in addition to push)
                             "interFileDependencies": False,
                             "workspaceDiagnostics": False,
                         },
                     },
-                    "serverInfo": {"name": "mc-lsp", "version": "0.4.0"},
+                    "serverInfo": {"name": "mc-lsp", "version": "0.5.0"},
                 },
             })
         elif method == "initialized":
@@ -637,6 +730,21 @@ def main():
         elif method == "workspace/symbol":
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
                                    "result": workspace_symbols(docs, msg["params"].get("query", ""))})
+        elif method == "textDocument/prepareCallHierarchy":
+            p = msg["params"]
+            uri = p["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": prepare_call_hierarchy(uri, docs.get(uri, ""), p["position"])})
+        elif method == "callHierarchy/incomingCalls":
+            item = msg["params"]["item"]
+            uri = item["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": incoming_calls(uri, docs.get(uri, ""), item)})
+        elif method == "callHierarchy/outgoingCalls":
+            item = msg["params"]["item"]
+            uri = item["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": outgoing_calls(uri, docs.get(uri, ""), item)})
         elif method == "shutdown":
             write_message(stdout, {"jsonrpc": "2.0", "id": mid, "result": None})
         elif method == "exit":

@@ -270,6 +270,18 @@ def main():
         if not any(s["name"] == "caller" and s["kind"] == 12 for s in (ws or [])):
             raise SystemExit(f"FAIL: lsp-test — workspace/symbol did not find function 'caller': {ws}")
 
+        # call hierarchy: caller() -> target(). Incoming to target = caller; outgoing from caller = target.
+        prep_t = request(proc, 29, "textDocument/prepareCallHierarchy", {**td, "position": pos_of(NAV, 0, "target")})
+        if not prep_t or prep_t[0]["name"] != "target":
+            raise SystemExit(f"FAIL: lsp-test — prepareCallHierarchy on target wrong: {prep_t}")
+        inc = request(proc, 30, "callHierarchy/incomingCalls", {"item": prep_t[0]})
+        if not any(c["from"]["name"] == "caller" for c in (inc or [])):
+            raise SystemExit(f"FAIL: lsp-test — incomingCalls to target should include caller: {inc}")
+        prep_c = request(proc, 31, "textDocument/prepareCallHierarchy", {**td, "position": pos_of(NAV, 4, "caller")})
+        out_calls = request(proc, 32, "callHierarchy/outgoingCalls", {"item": prep_c[0]})
+        if not any(c["to"]["name"] == "target" for c in (out_calls or [])):
+            raise SystemExit(f"FAIL: lsp-test — outgoingCalls from caller should include target: {out_calls}")
+
         proc.stdin.write(frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": {}}))
         proc.stdin.flush()
         shut = read_message(proc.stdout)
@@ -283,7 +295,7 @@ def main():
 
     print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, didChange, pull), documentSymbol "
           "outline, `mcc fmt` formatting, UTF-16 positions, hover/definition/references/highlight/"
-          "rename/semantic-tokens, signature help, and workspace symbols all verified")
+          "rename/semantic-tokens, signature help, workspace symbols, and call hierarchy all verified")
 
 
 if __name__ == "__main__":
