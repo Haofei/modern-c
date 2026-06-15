@@ -1048,8 +1048,9 @@ const CEmitter = struct {
                 else
                     try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
                 .boolean => |b| if (b) "1" else "0",
-                // Aggregate const globals are not lowered to a C scalar here.
-                .void, .tag, .array, .@"struct" => null,
+                .float => |f| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{f}),
+                // Aggregate / byte-string const globals are not lowered to a C scalar here.
+                .void, .tag, .bytes, .array, .@"struct" => null,
             },
             else => null,
         };
@@ -1281,7 +1282,9 @@ const CEmitter = struct {
                 }
                 try self.out.appendSlice(self.allocator, " }");
             },
-            .void => return error.UnsupportedCEmission,
+            .float => |f| try self.out.print(self.allocator, "{d}", .{f}),
+            // A byte-string ComptimeValue baked as a C initializer is not yet supported.
+            .void, .bytes => return error.UnsupportedCEmission,
         }
     }
 
@@ -11568,7 +11571,7 @@ fn comptimeUsizeArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.Fn
     return switch (eval.foldComptimeExpr(&scope, expr)) {
         .value => |v| switch (v) {
             .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
-            .void, .boolean, .tag, .array, .@"struct" => null,
+            .void, .boolean, .float, .tag, .bytes, .array, .@"struct" => null,
         },
         else => null,
     };

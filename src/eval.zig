@@ -259,8 +259,14 @@ pub const ComptimeStructField = struct {
 pub const ComptimeValue = union(enum) {
     void,
     int: i128,
+    // A comptime floating-point value (section 22). Folded in f64 regardless of the
+    // declared f32/f64 width; a narrowing to f32 is applied by an explicit `as f32`.
+    float: f64,
     boolean: bool,
     tag: []const u8,
+    // A comptime byte string — the decoded bytes of a string literal. Backed by the
+    // fold scope's allocator (escape decoding allocates), so it is cloned/freed.
+    bytes: []const u8,
     // A fixed comptime array value (section 22). Element storage is owned by the
     // evaluation scope's allocator and lives for the duration of the fold.
     array: []const ComptimeValue,
@@ -270,7 +276,8 @@ pub const ComptimeValue = union(enum) {
 
 pub fn cloneComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) !ComptimeValue {
     return switch (value) {
-        .void, .int, .boolean, .tag => value,
+        .void, .int, .float, .boolean, .tag => value,
+        .bytes => |b| .{ .bytes = try allocator.dupe(u8, b) },
         .array => |items| blk: {
             const copy = try allocator.alloc(ComptimeValue, items.len);
             var initialized: usize = 0;
@@ -305,7 +312,8 @@ pub fn cloneComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) !C
 
 pub fn freeComptimeValue(allocator: std.mem.Allocator, value: ComptimeValue) void {
     switch (value) {
-        .void, .int, .boolean, .tag => {},
+        .void, .int, .float, .boolean, .tag => {},
+        .bytes => |b| allocator.free(b),
         .array => |items| {
             for (items) |item| freeComptimeValue(allocator, item);
             allocator.free(items);
@@ -427,8 +435,28 @@ pub fn parseCharLiteral(literal: []const u8) ?u128 {
 // for non-integer values or non-integer (width-unknown) targets, so those casts
 // simply stay unfolded rather than producing a wrong constant.
 fn comptimeCastValue(value: ComptimeValue, ty: ast.TypeExpr) ?ComptimeValue {
+    const tname = switch (ty.kind) {
+        .name => |n| n.text,
+        else => return null,
+    };
+    // Float targets: int→float widening, float→f32 narrowing, float→f64 identity.
+    if (std.mem.eql(u8, tname, "f64") or std.mem.eql(u8, tname, "f32")) {
+        const f: f64 = switch (value) {
+            .int => |n| @floatFromInt(n),
+            .float => |x| x,
+            else => return null,
+        };
+        if (std.mem.eql(u8, tname, "f32")) return .{ .float = @floatCast(@as(f32, @floatCast(f))) };
+        return .{ .float = f };
+    }
+    // Integer target: a float source truncates toward zero (C `(int)f` semantics).
     const v = switch (value) {
         .int => |n| n,
+        .float => |x| blk: {
+            const t = @trunc(x);
+            if (!std.math.isFinite(t) or t >= 1.7e38 or t <= -1.7e38) return null;
+            break :blk @as(i128, @intFromFloat(t));
+        },
         else => return null,
     };
     const bits = comptimeTypeBitWidth(ty) orelse return null;
@@ -629,16 +657,21 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
     return switch (expr.kind) {
         .void_literal => .{ .value = .void },
         .int_literal => |literal| .{ .value = .{ .int = parseInt(literal) catch return .unknown } },
+        .float_literal => |literal| .{ .value = .{ .float = parseFloat(literal) catch return .unknown } },
         .char_literal => |literal| .{ .value = .{ .int = @intCast(parseCharLiteral(literal) orelse return .unknown) } },
+        .string_literal => |literal| if (decodeStringLiteral(scope.bindings.allocator, literal)) |b| .{ .value = .{ .bytes = b } } else .unknown,
         .bool_literal => |value| .{ .value = .{ .boolean = value } },
         .enum_literal => |literal| .{ .value = .{ .tag = literal.text } },
         .ident => |ident| if (comptimeIdentValue(scope, ident.text)) |value| .{ .value = value } else .unknown,
         .grouped => |inner| foldComptimeExpr(scope, inner.*),
         .unary => |node| foldComptimeUnary(scope, node.op, node.expr.*),
         .binary => |node| foldComptimeBinary(scope, node.op, node.left.*, node.right.*),
-        .call => |call| switch (foldComptimeCall(scope, call)) {
-            .unknown => foldComptimeReflection(scope, expr),
-            else => |f| f,
+        .call => |call| blk: {
+            if (isComptimeBitcastName(call.callee.*)) break :blk foldComptimeBitcast(scope, call);
+            break :blk switch (foldComptimeCall(scope, call)) {
+                .unknown => foldComptimeReflection(scope, expr),
+                else => |f| f,
+            };
         },
         // An explicit integer conversion (`v as T`): fold the operand, then apply T's
         // width as C would (truncate, sign-extend for signed). Non-integer targets
@@ -672,6 +705,67 @@ fn foldComptimeStructLiteral(scope: *const ComptimeScope, fields: []const ast.St
     return .{ .value = .{ .@"struct" = out } };
 }
 
+fn isComptimeBitcastName(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, "bitcast"),
+        .grouped => |inner| isComptimeBitcastName(inner.*),
+        else => false,
+    };
+}
+
+// Fold `bitcast<T>(v)` (section 22): a pure bit-reinterpretation between same-width scalar
+// types. The target width fixes how the operand is read — f32↔i32/u32 and f64↔i64/u64,
+// plus integer↔integer truncation/widening of the low bits. Conservative (`.unknown`) when
+// the widths/types are not a known scalar pair.
+fn foldComptimeBitcast(scope: *const ComptimeScope, call: anytype) ComptimeFold {
+    if (call.type_args.len != 1 or call.args.len != 1) return .unknown;
+    const target = call.type_args[0];
+    const tname = switch (target.kind) {
+        .name => |n| n.text,
+        else => return .unknown,
+    };
+    const operand = switch (foldComptimeExpr(scope, call.args[0])) {
+        .value => |v| v,
+        .trap => return .trap,
+        .unknown => return .unknown,
+    };
+    if (std.mem.eql(u8, tname, "f64")) {
+        const bits: u64 = switch (operand) {
+            .int => |n| @truncate(@as(u128, @bitCast(n))),
+            .float => |f| return .{ .value = .{ .float = f } },
+            else => return .unknown,
+        };
+        return .{ .value = .{ .float = @bitCast(bits) } };
+    }
+    if (std.mem.eql(u8, tname, "f32")) {
+        switch (operand) {
+            .int => |n| {
+                const bits: u32 = @truncate(@as(u128, @bitCast(n)));
+                const f32v: f32 = @bitCast(bits);
+                return .{ .value = .{ .float = @floatCast(f32v) } };
+            },
+            .float => |f| return .{ .value = .{ .float = @floatCast(@as(f32, @floatCast(f))) } },
+            else => return .unknown,
+        }
+    }
+    const bits = comptimeTypeBitWidth(target) orelse return .unknown;
+    switch (operand) {
+        .int => |n| {
+            const mask: u128 = if (bits >= 128) ~@as(u128, 0) else (@as(u128, 1) << @intCast(bits)) - 1;
+            return .{ .value = .{ .int = @intCast(@as(u128, @bitCast(n)) & mask) } };
+        },
+        .float => |f| {
+            if (bits == 64) return .{ .value = .{ .int = @as(i128, @as(u64, @bitCast(f))) } };
+            if (bits == 32) {
+                const f32v: f32 = @floatCast(f);
+                return .{ .value = .{ .int = @as(i128, @as(u32, @bitCast(f32v))) } };
+            }
+            return .unknown;
+        },
+        else => return .unknown,
+    }
+}
+
 // Fold `base.field` over a comptime struct (section 22).
 fn foldComptimeMember(scope: *const ComptimeScope, base_expr: ast.Expr, field_name: []const u8) ComptimeFold {
     const base = switch (foldComptimeExpr(scope, base_expr)) {
@@ -679,6 +773,14 @@ fn foldComptimeMember(scope: *const ComptimeScope, base_expr: ast.Expr, field_na
         .trap => return .trap,
         .unknown => return .unknown,
     };
+    // `.len` of a fixed array or a byte string is a comptime constant.
+    if (std.mem.eql(u8, field_name, "len")) {
+        switch (base) {
+            .array => |a| return .{ .value = .{ .int = @intCast(a.len) } },
+            .bytes => |b| return .{ .value = .{ .int = @intCast(b.len) } },
+            else => {},
+        }
+    }
     const fields = switch (base) {
         .@"struct" => |f| f,
         else => return .unknown,
@@ -711,10 +813,6 @@ fn foldComptimeIndex(scope: *const ComptimeScope, base_expr: ast.Expr, index_exp
         .trap => return .trap,
         .unknown => return .unknown,
     };
-    const arr = switch (base) {
-        .array => |a| a,
-        else => return .unknown,
-    };
     const index = switch (foldComptimeExpr(scope, index_expr)) {
         .value => |v| switch (v) {
             .int => |n| n,
@@ -723,8 +821,18 @@ fn foldComptimeIndex(scope: *const ComptimeScope, base_expr: ast.Expr, index_exp
         .trap => return .trap,
         .unknown => return .unknown,
     };
-    if (index < 0 or index >= arr.len) return .trap;
-    return .{ .value = arr[@intCast(index)] };
+    switch (base) {
+        .array => |arr| {
+            if (index < 0 or index >= arr.len) return .trap;
+            return .{ .value = arr[@intCast(index)] };
+        },
+        // Indexing a byte string yields the byte as a comptime integer.
+        .bytes => |b| {
+            if (index < 0 or index >= b.len) return .trap;
+            return .{ .value = .{ .int = b[@intCast(index)] } };
+        },
+        else => return .unknown,
+    }
 }
 
 // Evaluate a call to a `const fn` with constant arguments (section 22). Returns
@@ -832,7 +940,7 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                 switch (foldComptimeExpr(scope, expr)) {
                     .value => |value| switch (value) {
                         .boolean => |ok| if (!ok) return .trap,
-                        .void, .int, .tag, .array, .@"struct" => return .unknown,
+                        .void, .int, .float, .tag, .bytes, .array, .@"struct" => return .unknown,
                     },
                     .trap => return .trap,
                     .unknown => return .unknown,
@@ -929,6 +1037,14 @@ fn comptimeValueEql(a: ComptimeValue, b: ComptimeValue) bool {
         },
         .int => |av| switch (b) {
             .int => |bv| av == bv,
+            else => false,
+        },
+        .float => |av| switch (b) {
+            .float => |bv| av == bv,
+            else => false,
+        },
+        .bytes => |av| switch (b) {
+            .bytes => |bv| std.mem.eql(u8, av, bv),
             else => false,
         },
         .boolean => |av| switch (b) {
@@ -1086,7 +1202,7 @@ fn foldComptimeWhile(scope: *ComptimeScope, loop: ast.Loop) BodyFlow {
         const keep_going = switch (foldComptimeExpr(scope, cond)) {
             .value => |v| switch (v) {
                 .boolean => |b| b,
-                .void, .int, .tag, .array, .@"struct" => return .unknown,
+                .void, .int, .float, .tag, .bytes, .array, .@"struct" => return .unknown,
             },
             .trap => return .trap,
             .unknown => return .unknown,
@@ -1138,7 +1254,8 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
     return switch (op) {
         .neg => switch (operand) {
             .int => |v| .{ .value = .{ .int = std.math.negate(v) catch return .unknown } },
-            .void, .boolean, .tag, .array, .@"struct" => .unknown,
+            .float => |v| .{ .value = .{ .float = -v } },
+            .void, .boolean, .tag, .bytes, .array, .@"struct" => .unknown,
         },
         .bit_not => switch (operand) {
             // Mask the complement to the operand's declared width. Without a known
@@ -1150,11 +1267,11 @@ fn foldComptimeUnary(scope: *const ComptimeScope, op: ast.UnaryOp, operand_expr:
                 const masked: u128 = (~@as(u128, @bitCast(v))) & mask;
                 break :blk .{ .value = .{ .int = @intCast(masked) } };
             } else .unknown,
-            .void, .boolean, .tag, .array, .@"struct" => .unknown,
+            .void, .float, .boolean, .tag, .bytes, .array, .@"struct" => .unknown,
         },
         .logical_not => switch (operand) {
             .boolean => |v| .{ .value = .{ .boolean = !v } },
-            .void, .int, .tag, .array, .@"struct" => .unknown,
+            .void, .int, .float, .tag, .bytes, .array, .@"struct" => .unknown,
         },
     };
 }
@@ -1171,14 +1288,14 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
                     if (op == .logical_and and !b) return .{ .value = .{ .boolean = false } };
                     if (op == .logical_or and b) return .{ .value = .{ .boolean = true } };
                 },
-                .void, .int, .tag, .array, .@"struct" => return .unknown,
+                .void, .int, .float, .tag, .bytes, .array, .@"struct" => return .unknown,
             },
             .unknown => return .unknown,
         }
         return switch (foldComptimeExpr(scope, right_expr)) {
             .value => |v| switch (v) {
                 .boolean => |b| .{ .value = .{ .boolean = b } },
-                .void, .int, .tag, .array, .@"struct" => .unknown,
+                .void, .int, .float, .tag, .bytes, .array, .@"struct" => .unknown,
             },
             .trap => .trap,
             .unknown => .unknown,
@@ -1202,39 +1319,72 @@ fn foldComptimeBinary(scope: *const ComptimeScope, op: ast.BinaryOp, left_expr: 
         const equal = switch (left) {
             .int => |l| switch (right) {
                 .int => |r| l == r,
-                .void, .boolean, .tag, .array, .@"struct" => return .unknown,
+                else => return .unknown,
+            },
+            .float => |l| switch (right) {
+                .float => |r| l == r,
+                else => return .unknown,
             },
             .boolean => |l| switch (right) {
                 .boolean => |r| l == r,
-                .void, .int, .tag, .array, .@"struct" => return .unknown,
+                else => return .unknown,
             },
             .void => switch (right) {
                 .void => true,
-                .int, .boolean, .tag, .array, .@"struct" => return .unknown,
+                else => return .unknown,
             },
             .tag => |l| switch (right) {
                 .tag => |r| std.mem.eql(u8, l, r),
-                .void, .int, .boolean, .array, .@"struct" => return .unknown,
+                else => return .unknown,
+            },
+            .bytes => |l| switch (right) {
+                .bytes => |r| std.mem.eql(u8, l, r),
+                else => return .unknown,
             },
             .array => switch (right) {
                 .array => comptimeValueEql(left, right),
-                .void, .int, .boolean, .tag, .@"struct" => return .unknown,
+                else => return .unknown,
             },
             .@"struct" => switch (right) {
                 .@"struct" => comptimeValueEql(left, right),
-                .void, .int, .boolean, .tag, .array => return .unknown,
+                else => return .unknown,
             },
         };
         return .{ .value = .{ .boolean = if (op == .eq) equal else !equal } };
     }
 
+    // Floating-point ordering/arithmetic (both operands float). Folded in f64;
+    // section 22 forbids overflow/divide traps in comptime floats (IEEE inf/NaN
+    // would never occur for the constant subset programs use here).
+    if (left == .float or right == .float) {
+        const lf = switch (left) {
+            .float => |v| v,
+            else => return .unknown,
+        };
+        const rf = switch (right) {
+            .float => |v| v,
+            else => return .unknown,
+        };
+        return switch (op) {
+            .lt => .{ .value = .{ .boolean = lf < rf } },
+            .le => .{ .value = .{ .boolean = lf <= rf } },
+            .gt => .{ .value = .{ .boolean = lf > rf } },
+            .ge => .{ .value = .{ .boolean = lf >= rf } },
+            .add => .{ .value = .{ .float = lf + rf } },
+            .sub => .{ .value = .{ .float = lf - rf } },
+            .mul => .{ .value = .{ .float = lf * rf } },
+            .div => if (rf == 0) .trap else .{ .value = .{ .float = lf / rf } },
+            else => .unknown, // mod/bitwise/shift not defined on floats
+        };
+    }
+
     const l = switch (left) {
         .int => |v| v,
-        .void, .boolean, .tag, .array, .@"struct" => return .unknown,
+        else => return .unknown,
     };
     const r = switch (right) {
         .int => |v| v,
-        .void, .boolean, .tag, .array, .@"struct" => return .unknown,
+        else => return .unknown,
     };
 
     return switch (op) {
@@ -1294,6 +1444,50 @@ fn parseInt(raw: []const u8) EvalError!i128 {
         len += 1;
     }
     return std.fmt.parseInt(i128, cleaned[0..len], 0) catch error.InvalidIntegerLiteral;
+}
+
+fn parseFloat(raw: []const u8) EvalError!f64 {
+    var cleaned: [128]u8 = undefined;
+    if (raw.len > cleaned.len) return error.InvalidIntegerLiteral;
+    var len: usize = 0;
+    for (raw) |ch| {
+        // `_` digit separators and a trailing `f` float suffix are not part of the value.
+        if (ch == '_' or ch == 'f' or ch == 'F') continue;
+        cleaned[len] = ch;
+        len += 1;
+    }
+    return std.fmt.parseFloat(f64, cleaned[0..len]) catch error.InvalidIntegerLiteral;
+}
+
+// Decode a string-literal lexeme (with surrounding quotes and escape sequences) into its
+// raw bytes, allocated in `allocator`. Returns null on a malformed/unsupported escape.
+fn decodeStringLiteral(allocator: std.mem.Allocator, literal: []const u8) ?[]const u8 {
+    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
+    const body = literal[1 .. literal.len - 1];
+    var out = allocator.alloc(u8, body.len) catch return null;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < body.len) : (i += 1) {
+        if (body[i] != '\\') {
+            out[n] = body[i];
+            n += 1;
+            continue;
+        }
+        i += 1;
+        if (i >= body.len) return null;
+        out[n] = switch (body[i]) {
+            '\\' => '\\',
+            '\'' => '\'',
+            '"' => '"',
+            '0' => 0,
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            else => return null,
+        };
+        n += 1;
+    }
+    return out[0..n];
 }
 
 fn parseRunTrapArgs(allocator: std.mem.Allocator, raw_args: []const u8) EvalError![]i128 {

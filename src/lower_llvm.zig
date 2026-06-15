@@ -582,7 +582,10 @@ const LlvmEmitter = struct {
                 try text.appendSlice(self.scratch.allocator(), " }");
                 break :blk try text.toOwnedSlice(self.scratch.allocator());
             },
-            .void => error.UnsupportedLlvmEmission,
+            // A *computed* float/byte const global baked from a ComptimeValue is not yet
+            // lowered here (LLVM float constants need exact-representability handling); a
+            // simple `const PI: f32 = 3.14` emits via the ordinary literal path instead.
+            .void, .float, .bytes => error.UnsupportedLlvmEmission,
         };
     }
 
