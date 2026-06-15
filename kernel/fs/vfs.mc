@@ -109,3 +109,30 @@ export fn vfs_close(v: *mut Vfs, fd: usize) -> Result<bool, VfsError> {
     v.fds[fd].active = false;
     return ok(true);
 }
+
+// Inode + descriptor metadata for an fd (the `stat` surface).
+struct Stat {
+    size: usize,      // bytes written to the backing file
+    capacity: usize,  // reserved capacity of the backing file
+    position: usize,  // this descriptor's current read/write offset
+}
+
+// Report metadata for an open fd: the backing file's size/capacity and this fd's position.
+export fn vfs_stat(v: *mut Vfs, fd: usize) -> Result<Stat, VfsError> {
+    let file_idx: usize = fd_file(v, fd)?;
+    return ok(.{
+        .size = ramfs_size((&v.fs) as *mut Ramfs, file_idx),
+        .capacity = ramfs_capacity((&v.fs) as *mut Ramfs, file_idx),
+        .position = v.fds[fd].pos,
+    });
+}
+
+// Duplicate an open fd: a fresh descriptor onto the SAME backing file, with the position copied
+// at dup time (the two descriptors then advance independently — a descriptor copy, not a shared
+// open-file-description offset). The lowest free fd is returned.
+export fn vfs_dup(v: *mut Vfs, fd: usize) -> Result<usize, VfsError> {
+    let file_idx: usize = fd_file(v, fd)?;
+    let new_fd: usize = alloc_fd(v, file_idx)?;
+    v.fds[new_fd].pos = v.fds[fd].pos;
+    return ok(new_fd);
+}

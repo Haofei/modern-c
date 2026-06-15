@@ -215,3 +215,11 @@ export fn ramfs_size(fs: *mut Ramfs, idx: usize) -> usize {
     }
     return fs.files[idx].size;
 }
+
+// Reserved capacity (max bytes) of a file, or 0 for an invalid index.
+export fn ramfs_capacity(fs: *mut Ramfs, idx: usize) -> usize {
+    if !ramfs_valid(fs, idx) {
+        return 0;
+    }
+    return fs.files[idx].capacity;
+}

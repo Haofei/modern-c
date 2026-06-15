@@ -55,3 +55,32 @@ export fn v_close(fd: usize) -> u64 {
         }
     }
 }
+
+// stat fields exposed individually so the C driver can assert without decoding the struct ABI.
+export fn v_stat_size(fd: usize) -> u64 {
+    switch vfs_stat(&g_vfs, fd) {
+        ok(s) => { return s.size as u64; }
+        err(e) => { return VFS_ERR; }
+    }
+}
+
+export fn v_stat_position(fd: usize) -> u64 {
+    switch vfs_stat(&g_vfs, fd) {
+        ok(s) => { return s.position as u64; }
+        err(e) => { return VFS_ERR; }
+    }
+}
+
+export fn v_stat_capacity(fd: usize) -> u64 {
+    switch vfs_stat(&g_vfs, fd) {
+        ok(s) => { return s.capacity as u64; }
+        err(e) => { return VFS_ERR; }
+    }
+}
+
+export fn v_dup(fd: usize) -> u64 {
+    switch vfs_dup(&g_vfs, fd) {
+        ok(nfd) => { return nfd as u64; }
+        err(e) => { return VFS_ERR; }
+    }
+}
