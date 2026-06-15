@@ -1,0 +1,71 @@
+{
+  "name": "mc",
+  "displayName": "MC",
+  "description": "Syntax highlighting and language server for the MC systems language (.mc)",
+  "version": "0.1.0",
+  "publisher": "modern-c",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:mc"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "mc",
+        "aliases": [
+          "MC",
+          "modern-c"
+        ],
+        "extensions": [
+          ".mc"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "mc",
+        "scopeName": "source.mc",
+        "path": "./syntaxes/mc.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "MC",
+      "properties": {
+        "mc.server.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the MC language server (diagnostics, hover, go-to-definition, references, rename, formatting, semantic tokens)."
+        },
+        "mc.server.path": {
+          "type": "string",
+          "default": "${workspaceFolder}/tools/lsp/mc-lsp.py",
+          "description": "Path to the mc-lsp.py language server script."
+        },
+        "mc.mcc.path": {
+          "type": "string",
+          "default": "${workspaceFolder}/zig-out/bin/mcc",
+          "description": "Path to the `mcc` compiler binary the server drives (passed as the MCC environment variable)."
+        },
+        "mc.python.path": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python 3 interpreter used to run the language server."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.70.0"
+  }
+}

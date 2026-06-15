@@ -420,6 +420,13 @@ pub fn build(b: *std.Build) void {
     const mcc_symbols_test_step = b.step("mcc-symbols-test", "Validate the `mcc symbols` index: refs resolve to their declarations");
     mcc_symbols_test_step.dependOn(&mcc_symbols_test_cmd.step);
 
+    const editor_client_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/editor-client-test.sh",
+    });
+    const editor_client_test_step = b.step("editor-client-test", "Validate the VS Code editor client manifest/grammar/extension");
+    editor_client_test_step.dependOn(&editor_client_test_cmd.step);
+
     const lsp_test_cmd = b.addSystemCommand(&.{
         "python3",
         "tools/lsp/lsp-test.py",
@@ -2323,10 +2330,12 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&asm_targets_test_cmd.step);
     // mcmap-test validates .mcmap stable IDs + object-symbol correlation on both backends.
     m0_step.dependOn(&mcmap_test_cmd.step);
-    // fmt-test validates the formatter; mcc-symbols-test the symbol index; lsp-test the server.
+    // fmt-test validates the formatter; mcc-symbols-test the symbol index; lsp-test the server;
+    // editor-client-test the VS Code client.
     m0_step.dependOn(&fmt_test_cmd.step);
     m0_step.dependOn(&mcc_symbols_test_cmd.step);
     m0_step.dependOn(&lsp_test_cmd.step);
+    m0_step.dependOn(&editor_client_test_cmd.step);
     // pkg-test exercises the mcc-pkg manifest build (needs clang).
     m0_step.dependOn(&pkg_test_cmd.step);
     // pkg-registry-test exercises registry publish/resolve/install + lockfile reproducibility.

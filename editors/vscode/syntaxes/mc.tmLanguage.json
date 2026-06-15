@@ -1,0 +1,111 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "MC",
+  "scopeName": "source.mc",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#attributes" },
+    { "include": "#strings" },
+    { "include": "#chars" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#functions" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.mc", "match": "//.*$" },
+        { "name": "comment.block.mc", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "attributes": {
+      "name": "meta.attribute.mc",
+      "begin": "#\\[",
+      "end": "\\]",
+      "patterns": [
+        { "name": "entity.name.tag.mc", "match": "[A-Za-z_][A-Za-z0-9_]*" },
+        { "include": "#strings" }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.mc",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.mc", "match": "\\\\(x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\}|[nrt0\\\\\"'])" }
+      ]
+    },
+    "chars": {
+      "name": "string.quoted.single.mc",
+      "match": "'(\\\\(x[0-9A-Fa-f]{2}|[nrt0\\\\\"'])|[^'\\\\])'"
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.hex.mc", "match": "\\b0x[0-9A-Fa-f_]+\\b" },
+        { "name": "constant.numeric.binary.mc", "match": "\\b0b[01_]+\\b" },
+        { "name": "constant.numeric.float.mc", "match": "\\b[0-9][0-9_]*\\.[0-9_]+([eE][-+]?[0-9_]+)?\\b" },
+        { "name": "constant.numeric.decimal.mc", "match": "\\b[0-9][0-9_]*\\b" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.mc",
+          "match": "\\b(if|else|switch|match|for|while|break|continue|return|defer)\\b"
+        },
+        {
+          "name": "keyword.other.mc",
+          "match": "\\b(fn|let|var|const|struct|enum|union|type|closure|comptime|unsafe|asm|assert|export|extern|pub|use|import|open|packed|overlay|bits|move|opaque|impl|module|global|mmio|sizeof|alignof|uninit|unreachable)\\b"
+        },
+        {
+          "name": "storage.modifier.mc",
+          "match": "\\b(mut|wrap|sat|atomic|serial|volatile|never)\\b"
+        },
+        {
+          "name": "constant.language.mc",
+          "match": "\\b(true|false|null)\\b"
+        },
+        {
+          "name": "keyword.operator.result.mc",
+          "match": "\\b(ok|err)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.mc",
+          "match": "\\b(u8|u16|u32|u64|usize|i8|i16|i32|i64|isize|bool|void|f32|f64|c_void)\\b"
+        },
+        {
+          "name": "support.type.mmio.mc",
+          "match": "\\b(Reg|RegBits|MmioPtr|UserPtr|PAddr|VAddr|DmaAddr|DmaBuf|Result|Option)\\b"
+        },
+        {
+          "name": "entity.name.type.mc",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "meta.function.definition.mc",
+          "match": "\\b(fn)\\s+([a-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.mc" },
+            "2": { "name": "entity.name.function.mc" }
+          }
+        },
+        {
+          "name": "meta.function-call.mc",
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.call.mc" }
+          }
+        }
+      ]
+    }
+  }
+}
