@@ -1085,6 +1085,14 @@ pub fn build(b: *std.Build) void {
     ipc_result_test_step.dependOn(&ipc_result_test_cmd.step);
 
 
+    const arp_cache_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arp-cache-test",
+    });
+    arp_cache_test_cmd.step.dependOn(b.getInstallStep());
+    const arp_cache_test_step = b.step("arp-cache-test", "ARP IP->MAC cache: insert/lookup/refresh/invalidate/eviction");
+    arp_cache_test_step.dependOn(&arp_cache_test_cmd.step);
+
+
     slotmap_test_cmd.step.dependOn(b.getInstallStep());
     const slotmap_test_step = b.step("slotmap-test", "SlotMap<T,N> index handle table");
     slotmap_test_step.dependOn(&slotmap_test_cmd.step);
@@ -2453,6 +2461,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&mmio_test_cmd.step);
     m0_step.dependOn(&synclock_test_cmd.step);
     m0_step.dependOn(&ipc_result_test_cmd.step);
+    m0_step.dependOn(&arp_cache_test_cmd.step);
     m0_step.dependOn(&mailbox_test_cmd.step);
     m0_step.dependOn(&tryelse_test_cmd.step);
     m0_step.dependOn(&byteview_test_cmd.step);

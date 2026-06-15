@@ -71,3 +71,4 @@ wrap-test	tests/qemu/mem/wrap_demo.mc	entry	wrap_run	-Wno-unused-variable -Wno-u
 mmio-test	tests/qemu/mem/mmio_demo.mc	entry	mmio_run	-Wno-switch-bool	std/mmio: RegField get/set/mask + single-bit ops (masked, neighbour-safe) and ordered IO-memory block/word copy with the fence on the correct edge
 synclock-test	tests/qemu/mem/synclock_demo.mc	entry	synclock_run	-Wno-switch-bool	std/rwlock + std/seqlock: reader-count transitions, uncontended writer acquire, and seqlock read-snapshot retry detection
 ipc-result-test	tests/qemu/ipc/ipc_result_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter -Wno-unused-variable	ipc_send_result: typed bounded send distinguishes delivered / Denied (allow_mask) / DeadTarget / Timeout (full mailbox)
+arp-cache-test	tests/qemu/net/arp_cache_demo.mc	driver		-Wno-switch-bool -Wno-incompatible-library-redeclaration	ARP cache (kernel/net): IP->MAC insert/lookup/miss, in-place refresh, invalidate, round-robin eviction when full
