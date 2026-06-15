@@ -27,6 +27,11 @@ const contractName = ast_query.contractName;
 const isSatPreservingBinary = ast_query.isSatPreservingBinary;
 const isSatType = ast_query.isSatType;
 const isWrapType = ast_query.isWrapType;
+const constU8SliceType = ast_query.constU8SliceType;
+const ByteViewCallKind = ast_query.ByteViewCallKind;
+const byteViewCallKind = ast_query.byteViewCallKind;
+const DmaBufInfo = ast_query.DmaBufInfo;
+const dmaBufInfo = ast_query.dmaBufInfo;
 
 pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);
@@ -11968,25 +11973,6 @@ fn atomicOrderingArg(args: []const ast.Expr, index: usize) []const u8 {
     };
 }
 
-const DmaBufInfo = struct {
-    payload: ast.TypeExpr,
-    mode: []const u8,
-};
-
-fn dmaBufInfo(ty: ast.TypeExpr) ?DmaBufInfo {
-    return switch (ty.kind) {
-        .generic => |node| {
-            if (!std.mem.eql(u8, node.base.text, "DmaBuf") or node.args.len != 2) return null;
-            const mode = switch (node.args[1].kind) {
-                .enum_literal => |literal| literal.text,
-                else => return null,
-            };
-            return .{ .payload = node.args[0], .mode = mode };
-        },
-        .qualified => |node| dmaBufInfo(node.child.*),
-        else => null,
-    };
-}
 
 fn asmHasMemoryClobber(asm_stmt: ast.AsmStmt) bool {
     if (asm_stmt.clobbers.len == 0) return true;
@@ -12284,23 +12270,6 @@ fn isRawPtrCall(callee: ast.Expr) bool {
     };
 }
 
-const ByteViewCallKind = enum {
-    as_bytes,
-    bytes_equal,
-};
-
-fn byteViewCallKind(callee: ast.Expr) ?ByteViewCallKind {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return byteViewCallKind(inner.*),
-        else => return null,
-    };
-    if (!isIdentNamed(member.base.*, "mem")) return null;
-    if (std.mem.eql(u8, member.name.text, "as_bytes")) return .as_bytes;
-    if (std.mem.eql(u8, member.name.text, "bytes_equal")) return .bytes_equal;
-    return null;
-}
-
 fn byteViewAddressTarget(expr: ast.Expr) ?ast.Expr {
     return switch (expr.kind) {
         .address_of => |target| target.*,
@@ -12309,12 +12278,6 @@ fn byteViewAddressTarget(expr: ast.Expr) ?ast.Expr {
     };
 }
 
-const builtin_zero_span = diagnostics.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
-const builtin_u8_type = ast.TypeExpr{ .span = builtin_zero_span, .kind = .{ .name = .{ .text = "u8", .span = builtin_zero_span } } };
-
-fn constU8SliceType(span: diagnostics.Span) ast.TypeExpr {
-    return .{ .span = span, .kind = .{ .slice = .{ .mutability = .@"const", .child = @constCast(&builtin_u8_type) } } };
-}
 
 fn byteViewCallReturnTypeForCall(call: anytype) ?ast.TypeExpr {
     const kind = byteViewCallKind(call.callee.*) orelse return null;

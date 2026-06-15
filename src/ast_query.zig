@@ -13,6 +13,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const diagnostics = @import("diagnostics.zig");
 
 /// True when `expr` is (transparently through grouping parens) the identifier `name`.
 /// Grouping is semantically invisible — `(x)` is `x` — so `(mmio).map(...)` must read the
@@ -203,5 +204,55 @@ pub fn isSatPreservingBinary(op: ast.BinaryOp) bool {
     return switch (op) {
         .add, .sub, .mul => true,
         else => false,
+    };
+}
+
+// ── Intrinsic-call recognition with their result shapes ───────────────────────────────────
+
+const builtin_zero_span = diagnostics.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
+const builtin_u8_type = ast.TypeExpr{ .span = builtin_zero_span, .kind = .{ .name = .{ .text = "u8", .span = builtin_zero_span } } };
+
+/// The `[]const u8` slice type, synthesized at `span` (the result of `mem.as_bytes`).
+pub fn constU8SliceType(span: diagnostics.Span) ast.TypeExpr {
+    return .{ .span = span, .kind = .{ .slice = .{ .mutability = .@"const", .child = @constCast(&builtin_u8_type) } } };
+}
+
+/// The `mem.*` byte-view intrinsics.
+pub const ByteViewCallKind = enum {
+    as_bytes,
+    bytes_equal,
+};
+
+/// Classify a `mem.as_bytes` / `mem.bytes_equal` call (through grouping), or null.
+pub fn byteViewCallKind(callee: ast.Expr) ?ByteViewCallKind {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return byteViewCallKind(inner.*),
+        else => return null,
+    };
+    if (!isIdentNamed(member.base.*, "mem")) return null;
+    if (std.mem.eql(u8, member.name.text, "as_bytes")) return .as_bytes;
+    if (std.mem.eql(u8, member.name.text, "bytes_equal")) return .bytes_equal;
+    return null;
+}
+
+/// The payload type and mode tag of a `DmaBuf<T, .mode>` type, or null.
+pub const DmaBufInfo = struct {
+    payload: ast.TypeExpr,
+    mode: []const u8,
+};
+
+pub fn dmaBufInfo(ty: ast.TypeExpr) ?DmaBufInfo {
+    return switch (ty.kind) {
+        .generic => |node| {
+            if (!std.mem.eql(u8, node.base.text, "DmaBuf") or node.args.len != 2) return null;
+            const mode = switch (node.args[1].kind) {
+                .enum_literal => |literal| literal.text,
+                else => return null,
+            };
+            return .{ .payload = node.args[0], .mode = mode };
+        },
+        .qualified => |node| dmaBufInfo(node.child.*),
+        else => null,
     };
 }

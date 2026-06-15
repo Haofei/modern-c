@@ -24,6 +24,11 @@ const isRawManyPointerType = ast_query.isRawManyPointerType;
 const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
 const isArithmeticLayoutGeneric = ast_query.isArithmeticLayoutGeneric;
 const mmioPointee = ast_query.mmioPointee;
+const constU8SliceType = ast_query.constU8SliceType;
+const ByteViewCallKind = ast_query.ByteViewCallKind;
+const byteViewCallKind = ast_query.byteViewCallKind;
+const DmaBufInfo = ast_query.DmaBufInfo;
+const dmaBufInfo = ast_query.dmaBufInfo;
 
 // Numeric-literal and integer-bounds primitives shared with `mir.zig` and `lower_c.zig`
 // (see `numeric.zig`); aliased here so the existing call sites read unchanged.
@@ -5483,25 +5488,6 @@ fn maybeUninitPayloadTypeForValue(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return maybeUninitPayloadType(resolveAliasType(ty, ctx));
 }
 
-const DmaBufInfo = struct {
-    payload: ast.TypeExpr,
-    mode: []const u8,
-};
-
-fn dmaBufInfo(ty: ast.TypeExpr) ?DmaBufInfo {
-    return switch (ty.kind) {
-        .generic => |node| {
-            if (!std.mem.eql(u8, node.base.text, "DmaBuf") or node.args.len != 2) return null;
-            const mode = switch (node.args[1].kind) {
-                .enum_literal => |literal| literal.text,
-                else => return null,
-            };
-            return .{ .payload = node.args[0], .mode = mode };
-        },
-        .qualified => |node| dmaBufInfo(node.child.*),
-        else => null,
-    };
-}
 
 fn dmaBufInfoForValue(expr: ast.Expr, ctx: Context) ?DmaBufInfo {
     const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
@@ -5601,22 +5587,6 @@ fn reduceCallReturnClass(call: anytype, ctx: Context) ?TypeClass {
     };
 }
 
-const ByteViewCallKind = enum {
-    as_bytes,
-    bytes_equal,
-};
-
-fn byteViewCallKind(callee: ast.Expr) ?ByteViewCallKind {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return byteViewCallKind(inner.*),
-        else => return null,
-    };
-    if (!isIdentNamed(member.base.*, "mem")) return null;
-    if (std.mem.eql(u8, member.name.text, "as_bytes")) return .as_bytes;
-    if (std.mem.eql(u8, member.name.text, "bytes_equal")) return .bytes_equal;
-    return null;
-}
 
 fn byteViewCallReturnClass(call: anytype) ?TypeClass {
     const kind = byteViewCallKind(call.callee.*) orelse return null;
@@ -6510,12 +6480,6 @@ fn boolTypeExpr(span: diagnostics.Span) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .text = "bool", .span = span } } };
 }
 
-const builtin_zero_span = diagnostics.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
-const builtin_u8_type = ast.TypeExpr{ .span = builtin_zero_span, .kind = .{ .name = .{ .text = "u8", .span = builtin_zero_span } } };
-
-fn constU8SliceType(span: diagnostics.Span) ast.TypeExpr {
-    return .{ .span = span, .kind = .{ .slice = .{ .mutability = .@"const", .child = @constCast(&builtin_u8_type) } } };
-}
 
 fn byteViewCallReturnType(call: anytype) ?ast.TypeExpr {
     const kind = byteViewCallKind(call.callee.*) orelse return null;
