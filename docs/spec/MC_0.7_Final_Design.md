@@ -2580,9 +2580,14 @@ reader/writer lock: many concurrent readers or one exclusive writer) and
 `std/seqlock` (a sequence lock for read-mostly data: lock-free readers that retry on
 an overlapping write). Both are built on the fair ticket `Spinlock` + an atomic
 counter, so they need no compare-exchange primitive; their state-machine transitions
-are covered by `synclock-test` (C and LLVM host-suite). A sleeping `Mutex` remains a
-planned extension. A NIC driver holds a `SpinLock` (via `lock_irqsave`) around TX/RX
-ring updates shared between the transmit path and the completion ISR.
+are covered by `synclock-test` (C and LLVM host-suite). A **sleeping `Mutex`**
+(`kernel/lib/mutex`) completes the set: unlike the busy-waiting SpinLock, a contended
+mutex enqueues the caller as a FIFO waiter (`mutex_lock` returns `Blocked`, the
+scheduler then parks it) and on `mutex_unlock` hands the lock *directly* to the
+next waiter — fair, no thundering herd, no starvation; the park/wake are the kernel's
+scheduler hooks. Its lock/owner/waiter state machine is covered by `mutex-test`. A NIC
+driver holds a `SpinLock` (via `lock_irqsave`) around TX/RX ring updates shared between
+the transmit path and the completion ISR.
 
 ## 28.2 `std/ring` — Generic Descriptor Ring
 

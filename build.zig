@@ -1101,6 +1101,14 @@ pub fn build(b: *std.Build) void {
     tlb_shootdown_test_step.dependOn(&tlb_shootdown_test_cmd.step);
 
 
+    const mutex_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mutex-test",
+    });
+    mutex_test_cmd.step.dependOn(b.getInstallStep());
+    const mutex_test_step = b.step("mutex-test", "sleeping Mutex: try_lock, blocking enqueue, FIFO hand-off on unlock");
+    mutex_test_step.dependOn(&mutex_test_cmd.step);
+
+
     slotmap_test_cmd.step.dependOn(b.getInstallStep());
     const slotmap_test_step = b.step("slotmap-test", "SlotMap<T,N> index handle table");
     slotmap_test_step.dependOn(&slotmap_test_cmd.step);
@@ -2471,6 +2479,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&ipc_result_test_cmd.step);
     m0_step.dependOn(&arp_cache_test_cmd.step);
     m0_step.dependOn(&tlb_shootdown_test_cmd.step);
+    m0_step.dependOn(&mutex_test_cmd.step);
     m0_step.dependOn(&mailbox_test_cmd.step);
     m0_step.dependOn(&tryelse_test_cmd.step);
     m0_step.dependOn(&byteview_test_cmd.step);
