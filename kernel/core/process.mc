@@ -11,6 +11,7 @@ import "kernel/core/ipc.mc";
 import "std/math.mc";
 import "std/mask.mc";
 import "kernel/lib/mailbox.mc";
+import "kernel/lib/fdspace.mc";
 
 const MAX_PROCS: usize = 8;
 const IPC_SLOTS: usize = 4; // mailbox depth per process
@@ -86,6 +87,7 @@ struct Process {
     quantum: u32,                // remaining scheduling quantum in ticks (0 = expired)
     ticks: u32,                  // accounting: total ticks this incarnation has consumed
     sched_endpoint: u32,         // the scheduler service to notify on quantum expiry (0 = none)
+    fds: FdSpace,                // open file descriptors; copied to a child on spawn (fork), kept across exec
 }
 
 const QUANTUM_DEFAULT: u32 = 10;
@@ -202,6 +204,7 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].quantum = QUANTUM_DEFAULT;
         t.procs[i].ticks = 0;
         t.procs[i].sched_endpoint = 0;
+        fd_init(&t.procs[i].fds);
         i = i + 1;
     }
     // Slot 0 is the running bootstrap context (filled on first switch out).
@@ -280,7 +283,21 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     t.procs[slot].quantum = QUANTUM_DEFAULT;
     t.procs[slot].ticks = 0;
     t.procs[slot].sched_endpoint = 0;
+    // fork fd semantics: the child inherits a COPY of the spawner's open descriptors at the
+    // same fd numbers, sharing the underlying resources. Clear any stale fds from a reaped
+    // slot first. (Empty child + equal capacity ⇒ inherit can never overflow.)
+    fd_init(&t.procs[slot].fds);
+    switch fd_inherit(&t.procs[t.current].fds, &t.procs[slot].fds) {
+        ok(n) => {}
+        err(e) => {}
+    }
     return slot as u32;
+}
+
+// A mutable handle to a process's open-file-descriptor space — for the syscall surface and
+// fork/exec wiring to populate, inherit, and inspect a process's fds.
+export fn proc_fds(t: *mut ProcTable, slot: usize) -> *mut FdSpace {
+    return &t.procs[slot].fds;
 }
 
 enum SchedError {
