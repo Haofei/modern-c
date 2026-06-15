@@ -4,8 +4,12 @@ const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const mir = @import("mir.zig");
+const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
+
+// Shared with `sema.zig`/`mir.zig` (see `numeric.zig`); aliased so call sites read unchanged.
+const parseUsizeLiteral = numeric.parseUsizeLiteral;
 
 pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);
@@ -11555,19 +11559,6 @@ fn constBinaryProvenNoOverflow(node: anytype, target_name: []const u8, locals: ?
         else => unreachable,
     };
     return result >= @as(i256, range.min) and result <= @as(i256, range.max);
-}
-
-fn parseUsizeLiteral(raw: []const u8) ?usize {
-    var cleaned: [128]u8 = undefined;
-    if (raw.len > cleaned.len) return null;
-    var len: usize = 0;
-    for (raw) |ch| {
-        if (ch != '_') {
-            cleaned[len] = ch;
-            len += 1;
-        }
-    }
-    return std.fmt.parseInt(usize, cleaned[0..len], 0) catch null;
 }
 
 fn constArrayLenValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {

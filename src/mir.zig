@@ -3,7 +3,20 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
+const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
+
+// Numeric-literal and integer-bounds primitives shared with `sema.zig` and `lower_c.zig`
+// (see `numeric.zig`); aliased here so the existing call sites read unchanged.
+const LiteralValue = numeric.LiteralValue;
+const IntBounds = numeric.IntBounds;
+const maxUnsigned = numeric.maxUnsigned;
+const maxSigned = numeric.maxSigned;
+const signedBounds = numeric.signedBounds;
+const parseIntegerLiteral = numeric.parseIntegerLiteral;
+const parseUsizeLiteral = numeric.parseUsizeLiteral;
+const parseCharLiteral = numeric.parseCharLiteral;
+const integerLiteralValue = numeric.integerLiteralValue;
 
 pub const TrapKind = enum {
     IntegerOverflow,
@@ -3689,16 +3702,6 @@ fn operatorFindingDiagnostic(finding: []const u8) []const u8 {
     return "E_OPERATOR_OPERAND";
 }
 
-const IntBounds = struct {
-    signed: bool,
-    max: u128,
-    min_abs: u128 = 0,
-};
-
-const LiteralValue = struct {
-    negative: bool,
-    magnitude: u128,
-};
 
 fn integerLiteralRangeFinding(target_ty: ValueType, expr: ast.Expr) ?[]const u8 {
     const value = integerLiteralValue(expr) orelse return null;
@@ -3714,44 +3717,6 @@ fn integerLiteralRangeFinding(target_ty: ValueType, expr: ast.Expr) ?[]const u8 
 fn integerLiteralFitsTarget(target_ty: ValueType, expr: ast.Expr) bool {
     if (integerLiteralValue(expr) == null) return false;
     return mirCheckedIntBounds(target_ty) != null and integerLiteralRangeFinding(target_ty, expr) == null;
-}
-
-fn integerLiteralValue(expr: ast.Expr) ?LiteralValue {
-    return switch (expr.kind) {
-        .int_literal => |literal| if (parseIntegerLiteral(literal)) |magnitude| .{
-            .negative = false,
-            .magnitude = magnitude,
-        } else null,
-        .char_literal => |literal| if (parseCharLiteral(literal)) |value| .{
-            .negative = false,
-            .magnitude = value,
-        } else null,
-        .grouped => |inner| integerLiteralValue(inner.*),
-        .unary => |node| {
-            if (node.op != .neg) return null;
-            const literal = integerLiteralValue(node.expr.*) orelse return null;
-            if (literal.negative) return null;
-            return .{ .negative = true, .magnitude = literal.magnitude };
-        },
-        else => null,
-    };
-}
-
-fn parseCharLiteral(literal: []const u8) ?u128 {
-    if (literal.len < 3 or literal[0] != '\'' or literal[literal.len - 1] != '\'') return null;
-    const body = literal[1 .. literal.len - 1];
-    if (body.len == 1) return body[0];
-    if (body.len != 2 or body[0] != '\\') return null;
-    return switch (body[1]) {
-        '\\' => '\\',
-        '\'' => '\'',
-        '"' => '"',
-        '0' => 0,
-        'n' => '\n',
-        'r' => '\r',
-        't' => '\t',
-        else => null,
-    };
 }
 
 fn switchBoolLiteralValue(expr: ast.Expr) ?bool {
@@ -4147,36 +4112,6 @@ fn comptimeUsizeArrayLen(expr: ast.Expr, const_fns: *const std.StringHashMap(ast
     };
 }
 
-fn parseUsizeLiteral(literal: []const u8) ?usize {
-    var cleaned: [128]u8 = undefined;
-    if (literal.len > cleaned.len) return null;
-    var len: usize = 0;
-    for (literal) |ch| {
-        if (ch != '_') {
-            cleaned[len] = ch;
-            len += 1;
-        }
-    }
-    return std.fmt.parseInt(usize, cleaned[0..len], 0) catch null;
-}
-
-fn parseIntegerLiteral(raw: []const u8) ?u128 {
-    var cleaned: [128]u8 = undefined;
-    if (raw.len > cleaned.len) return null;
-    var len: usize = 0;
-    // Strip every `_` digit-group separator and parse the full magnitude, matching the C
-    // backend (appendCIntLiteral / parseI128Literal) and eval.zig. Do NOT break at `_<letter>`:
-    // in a hex literal the letter can be a hex digit (`0xAB_C` == 0xABC), and treating it as a
-    // type-suffix boundary truncated the value, letting an out-of-range literal slip past the
-    // range check into a narrower, truncating C emission.
-    for (raw) |ch| {
-        if (ch == '_') continue;
-        cleaned[len] = ch;
-        len += 1;
-    }
-    return std.fmt.parseInt(u128, cleaned[0..len], 0) catch null;
-}
-
 fn mirCheckedIntBounds(ty: ValueType) ?IntBounds {
     return switch (ty) {
         .integer => |name| checkedIntBoundsByName(name),
@@ -4196,22 +4131,6 @@ fn checkedIntBoundsByName(name: []const u8) ?IntBounds {
     if (std.mem.eql(u8, name, "i64")) return signedBounds(64);
     if (std.mem.eql(u8, name, "isize")) return signedBounds(64);
     return null;
-}
-
-fn maxUnsigned(bits: u7) u128 {
-    return (@as(u128, 1) << bits) - 1;
-}
-
-fn maxSigned(bits: u7) u128 {
-    return (@as(u128, 1) << (bits - 1)) - 1;
-}
-
-fn signedBounds(bits: u7) IntBounds {
-    return .{
-        .signed = true,
-        .max = maxSigned(bits),
-        .min_abs = @as(u128, 1) << (bits - 1),
-    };
 }
 
 fn isTryCapableType(ty: ValueType) bool {
