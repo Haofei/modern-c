@@ -14,9 +14,19 @@ export fn pipe_run() -> u32 {
     if pipe_len(&g_pipe) != 2 { pass = 0; }
 
     // FIFO read order
-    if pipe_read(&g_pipe) != 0x48 { pass = 0; }
-    if pipe_read(&g_pipe) != 0x49 { pass = 0; }
-    if pipe_read(&g_pipe) != 0x100 { pass = 0; } // empty sentinel
+    switch pipe_read(&g_pipe) {
+        ok(b) => { if b != 0x48 { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
+    switch pipe_read(&g_pipe) {
+        ok(b) => { if b != 0x49 { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
+    // empty pipe -> typed Empty error (no sentinel)
+    switch pipe_read(&g_pipe) {
+        ok(b) => { pass = 0; }
+        err(e) => {}
+    }
 
     // fill to capacity, then overflow rejected
     var i: u32 = 0;
@@ -25,6 +35,9 @@ export fn pipe_run() -> u32 {
         i = i + 1;
     }
     if pipe_write(&g_pipe, 0xFF) { pass = 0; } // full -> rejected
-    if pipe_read(&g_pipe) != 0 { pass = 0; }    // FIFO: first byte written was 0
+    switch pipe_read(&g_pipe) {                 // FIFO: first byte written was 0
+        ok(b) => { if b != 0 { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
     return pass;
 }
