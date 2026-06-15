@@ -2159,6 +2159,11 @@ pub const Checker = struct {
                         _ = self.checkExpr(input.value, ctx);
                     }
                 }
+                // Verify the register/clobber facts the precise-asm contract would
+                // otherwise only trust: real registers, one architecture per block,
+                // and no register named by two operands or by both an operand and a
+                // clobber (an unsupported constraint combination).
+                self.checkAsmConstraints(asm_stmt, stmt.span);
             },
             .contract_block => |contract| {
                 var next = ctx;
@@ -3513,6 +3518,109 @@ pub const Checker = struct {
 
     fn errorCode(self: *Checker, span: diagnostics.Span, code: []const u8, message: []const u8) void {
         self.reporter.err(span, "{s}: {s}", .{ code, message });
+    }
+
+    // ----- inline-asm register/constraint verification (§23.2) ------------------
+    //
+    // The backends lower precise-asm operands with generic `"r"` constraints and
+    // keep the requested registers only as a provenance comment — the contract
+    // *trusts* the register facts. These checks *verify* them so a per-architecture
+    // precise-asm block is portable-by-construction: each named register is real,
+    // the block names registers of a single architecture, and no register is bound
+    // to two operands or clobbered while also holding an operand.
+
+    const AsmArch = enum { x86_64, riscv64, aarch64 };
+
+    // Strip the lexeme's surrounding quotes (registers/clobbers are stored as
+    // `"rax"`, including the quotes — matching how the lowering emits them).
+    fn asmUnquote(reg: []const u8) []const u8 {
+        if (reg.len >= 2 and reg[0] == '"' and reg[reg.len - 1] == '"') return reg[1 .. reg.len - 1];
+        return reg;
+    }
+
+    // `memory` / `cc` are architecture-neutral pseudo-clobbers, valid everywhere.
+    fn asmIsPseudoClobber(name: []const u8) bool {
+        return std.mem.eql(u8, name, "memory") or std.mem.eql(u8, name, "cc");
+    }
+
+    // The architecture a register name unambiguously belongs to, or null when the
+    // name is shared across architectures (`x0..x30`, `sp`) — those are accepted
+    // but do not pin the block's architecture, so they never cause a false mismatch.
+    // Returns error.Unknown for a name that is not a register on any supported arch.
+    fn asmRegisterArch(name: []const u8) error{Unknown}!?AsmArch {
+        const x86 = [_][]const u8{ "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15" };
+        for (x86) |r| if (std.mem.eql(u8, name, r)) return .x86_64;
+        // RISC-V ABI names that are unambiguous (excludes `sp`, shared with aarch64).
+        const rv = [_][]const u8{ "zero", "ra", "gp", "tp", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7" };
+        for (rv) |r| if (std.mem.eql(u8, name, r)) return .riscv64;
+        // AArch64 names that are unambiguous (`w0..w30`, `xzr`, `wzr`, `lr`).
+        if (std.mem.eql(u8, name, "xzr") or std.mem.eql(u8, name, "wzr") or std.mem.eql(u8, name, "lr")) return .aarch64;
+        if (asmNumberedReg(name, "w", 0, 30)) return .aarch64;
+        // Shared / ambiguous: `x0..x31` (riscv x-regs ∩ aarch64 x-regs) and `sp`.
+        if (std.mem.eql(u8, name, "sp")) return null;
+        if (asmNumberedReg(name, "x", 0, 31)) return null;
+        return error.Unknown;
+    }
+
+    // True when `name` is `prefix` followed by a decimal in [lo, hi] (no leading zeros).
+    fn asmNumberedReg(name: []const u8, prefix: []const u8, lo: u32, hi: u32) bool {
+        if (!std.mem.startsWith(u8, name, prefix)) return false;
+        const digits = name[prefix.len..];
+        if (digits.len == 0 or digits.len > 2) return false;
+        if (digits.len == 2 and digits[0] == '0') return false;
+        const n = std.fmt.parseInt(u32, digits, 10) catch return false;
+        return n >= lo and n <= hi;
+    }
+
+    fn checkAsmConstraints(self: *Checker, asm_stmt: ast.AsmStmt, span: diagnostics.Span) void {
+        var block_arch: ?AsmArch = null;
+
+        // Unify a named register into the block's architecture (or flag a mismatch),
+        // reporting an unknown register. Pseudo-clobbers are skipped by the caller.
+        const unify = struct {
+            fn call(checker: *Checker, sp: diagnostics.Span, arch: *?AsmArch, raw: []const u8) void {
+                const name = asmUnquote(raw);
+                const reg_arch = asmRegisterArch(name) catch {
+                    checker.errorCode(sp, "E_ASM_UNKNOWN_REGISTER", "inline-asm names a register that is not valid on any supported architecture");
+                    return;
+                };
+                if (reg_arch) |a| {
+                    if (arch.* == null) {
+                        arch.* = a;
+                    } else if (arch.* != a) {
+                        checker.errorCode(sp, "E_ASM_ARCH_MIXED", "inline-asm block mixes registers from more than one architecture");
+                    }
+                }
+            }
+        }.call;
+
+        // Operand registers must be unique across outputs+inputs.
+        var used = std.StringHashMap(void).init(self.reporter.allocator);
+        defer used.deinit();
+        for (asm_stmt.outputs) |output| {
+            const name = asmUnquote(output.reg);
+            unify(self, span, &block_arch, output.reg);
+            if (used.contains(name)) {
+                self.errorCode(span, "E_ASM_REGISTER_CONFLICT", "inline-asm binds the same register to more than one operand");
+            } else used.put(name, {}) catch {};
+        }
+        for (asm_stmt.inputs) |input| {
+            const name = asmUnquote(input.reg);
+            unify(self, span, &block_arch, input.reg);
+            if (used.contains(name)) {
+                self.errorCode(span, "E_ASM_REGISTER_CONFLICT", "inline-asm binds the same register to more than one operand");
+            } else used.put(name, {}) catch {};
+        }
+        // A clobber may not name a register an operand already holds, and a
+        // non-pseudo clobber participates in architecture unification too.
+        for (asm_stmt.clobbers) |clobber| {
+            const name = asmUnquote(clobber);
+            if (asmIsPseudoClobber(name)) continue;
+            unify(self, span, &block_arch, clobber);
+            if (used.contains(name)) {
+                self.errorCode(span, "E_ASM_CLOBBER_CONFLICT", "inline-asm clobbers a register it also binds to an operand");
+            }
+        }
     }
 
     // `#[backend_name("Y")]` overrides the object symbol; two declarations may not map to the

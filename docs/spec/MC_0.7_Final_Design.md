@@ -2211,10 +2211,33 @@ Belongs to strict unsafe MC.
 Properties:
 
 ```txt
-Compiler trusts the declared inputs, outputs, and clobbers.
+Compiler trusts the declared inputs, outputs, and clobbers (data-flow facts).
 Incorrect constraints violate the unsafe contract.
 Violation has region-scoped unspecified behavior.
 ```
+
+**Register/constraint verification (per architecture).** The backends lower
+operands with generic `"r"` constraints and keep the *named* registers only as a
+provenance comment — the contract trusts that data flow. The compiler nonetheless
+**verifies the register facts themselves**, so a precise-asm block is portable-by-
+construction within its target ISA:
+
+```txt
+E_ASM_UNKNOWN_REGISTER  — a register not valid on any supported architecture.
+E_ASM_ARCH_MIXED        — one block names registers of more than one ISA
+                          (e.g. x86-64 `rax` with RISC-V `a0`).
+E_ASM_REGISTER_CONFLICT — the same register bound to two operands.
+E_ASM_CLOBBER_CONFLICT  — a clobber names a register also held by an operand.
+```
+
+Recognized vocabularies: x86-64 (`rax`…`r15`), RISC-V 64 ABI names (`a0`…`a7`,
+`t0`…`t6`, `s1`…`s11`, `ra`, `gp`, `tp`, `zero`), and AArch64 (`w0`…`w30`, `xzr`,
+`wzr`, `lr`). The shared 64-bit names `x0`…`x31` and `sp` are accepted on either
+ISA and do not pin the block's architecture (they unify with any arch-specific
+register). `memory` and `cc` are architecture-neutral pseudo-clobbers. Per-target
+register vocabularies are covered by `asm-targets-test` (check-only, since foreign
+mnemonics cannot be host-assembled); the four negative cases live in
+`tests/spec/inline_asm.mc`.
 
 ---
 

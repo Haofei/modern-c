@@ -381,6 +381,16 @@ pub fn build(b: *std.Build) void {
     const comptime_fold_test_step = b.step("comptime-fold-test", "Validate comptime-only folds (byte strings, wrap/sat arithmetic domains) evaluate correctly");
     comptime_fold_test_step.dependOn(&comptime_fold_test_cmd.step);
 
+
+    const asm_targets_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/asm-targets-test.sh",
+        "zig-out/bin/mcc",
+    });
+    asm_targets_test_cmd.step.dependOn(b.getInstallStep());
+    const asm_targets_test_step = b.step("asm-targets-test", "Validate per-architecture precise-asm register vocabularies (x86-64/RISC-V/AArch64)");
+    asm_targets_test_step.dependOn(&asm_targets_test_cmd.step);
+
     const stack_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/stack-test.sh",
@@ -2262,6 +2272,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&opt_equiv_test_cmd.step);
     // comptime-fold-test validates comptime-only folds (byte strings, wrap/sat domains).
     m0_step.dependOn(&comptime_fold_test_cmd.step);
+    // asm-targets-test validates per-architecture precise-asm register vocabularies.
+    m0_step.dependOn(&asm_targets_test_cmd.step);
     // pkg-test exercises the mcc-pkg manifest build (needs clang).
     m0_step.dependOn(&pkg_test_cmd.step);
     // stack-test exercises the generic std/stack collection (needs clang).

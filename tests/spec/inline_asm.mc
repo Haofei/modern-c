@@ -2,7 +2,7 @@
 // SPEC: milestone=inline-assembly
 // SPEC: phase=sema,lower-c
 // SPEC: expect=pass,compile_error,inspect
-// SPEC: check=E_UNSAFE_REQUIRED,E_PRECISE_ASM_CONTRACT,opaque-asm-lowering
+// SPEC: check=E_UNSAFE_REQUIRED,E_PRECISE_ASM_CONTRACT,E_ASM_UNKNOWN_REGISTER,E_ASM_ARCH_MIXED,E_ASM_REGISTER_CONFLICT,E_ASM_CLOBBER_CONFLICT,opaque-asm-lowering
 
 fn accept_opaque_asm() -> void {
     unsafe {
@@ -75,4 +75,76 @@ fn accept_precise_asm_multi(a: u64, b: u64) -> u64 {
         }
     }
     return result;
+}
+
+// ===== precise-asm register/constraint verification (§23.2) =================
+// The backends lower operands with generic `"r"` constraints and keep the named
+// registers only as provenance — so the contract must *verify* the register facts:
+// real registers, one architecture per block, and no register bound twice or
+// clobbered while held by an operand (an unsupported constraint combination).
+
+// Rejected: a register name that is not valid on any supported architecture.
+fn reject_asm_unknown_register(x: u64) -> u64 {
+    var out_val: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            // EXPECT_ERROR: E_ASM_UNKNOWN_REGISTER
+            asm precise volatile {
+                "nop"
+                out("rax") out_val: u64,
+                in("zmm99") x: u64
+            }
+        }
+    }
+    return out_val;
+}
+
+// Rejected: one block names registers from two different architectures
+// (`rax` is x86-64, `a0` is RISC-V) — a precise-asm block targets one ISA.
+fn reject_asm_arch_mixed(x: u64) -> u64 {
+    var out_val: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            // EXPECT_ERROR: E_ASM_ARCH_MIXED
+            asm precise volatile {
+                "nop"
+                out("rax") out_val: u64,
+                in("a0") x: u64
+            }
+        }
+    }
+    return out_val;
+}
+
+// Rejected: the same register bound to two operands (output and input both `rax`).
+fn reject_asm_register_conflict(x: u64) -> u64 {
+    var out_val: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            // EXPECT_ERROR: E_ASM_REGISTER_CONFLICT
+            asm precise volatile {
+                "nop"
+                out("rax") out_val: u64,
+                in("rax") x: u64
+            }
+        }
+    }
+    return out_val;
+}
+
+// Rejected: a clobber names a register that is also an operand (`rax`).
+fn reject_asm_clobber_conflict(x: u64) -> u64 {
+    var out_val: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            // EXPECT_ERROR: E_ASM_CLOBBER_CONFLICT
+            asm precise volatile {
+                "nop"
+                out("rax") out_val: u64,
+                in("rbx") x: u64,
+                clobber("rax")
+            }
+        }
+    }
+    return out_val;
 }
