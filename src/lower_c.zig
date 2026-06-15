@@ -28,9 +28,7 @@ const isSatPreservingBinary = ast_query.isSatPreservingBinary;
 const isSatType = ast_query.isSatType;
 const isWrapType = ast_query.isWrapType;
 const constU8SliceType = ast_query.constU8SliceType;
-const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
-const DmaBufInfo = ast_query.DmaBufInfo;
 const dmaBufInfo = ast_query.dmaBufInfo;
 
 pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {

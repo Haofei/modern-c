@@ -9,7 +9,6 @@ const parser = @import("parser.zig");
 
 // Pure AST-shape queries shared with `sema.zig`/`lower_c.zig` (see `ast_query.zig`).
 const isIdentNamed = ast_query.isIdentNamed;
-const isMmioMapCallName = ast_query.isMmioMapCallName;
 const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const exprIsIdentNamed = ast_query.exprIsIdentNamed;
 const isResultNarrowingTag = ast_query.isResultNarrowingTag;
@@ -18,17 +17,13 @@ const resultIfLetHandlesLocal = ast_query.resultIfLetHandlesLocal;
 const resultSwitchHandlesLocal = ast_query.resultSwitchHandlesLocal;
 const contractName = ast_query.contractName;
 const isSatPreservingBinary = ast_query.isSatPreservingBinary;
-const isSatType = ast_query.isSatType;
-const isWrapType = ast_query.isWrapType;
 
 // Numeric-literal and integer-bounds primitives shared with `sema.zig` and `lower_c.zig`
 // (see `numeric.zig`); aliased here so the existing call sites read unchanged.
 const LiteralValue = numeric.LiteralValue;
 const IntBounds = numeric.IntBounds;
 const maxUnsigned = numeric.maxUnsigned;
-const maxSigned = numeric.maxSigned;
 const signedBounds = numeric.signedBounds;
-const parseIntegerLiteral = numeric.parseIntegerLiteral;
 const parseUsizeLiteral = numeric.parseUsizeLiteral;
 const parseCharLiteral = numeric.parseCharLiteral;
 const integerLiteralValue = numeric.integerLiteralValue;
