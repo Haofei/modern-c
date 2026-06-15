@@ -2601,10 +2601,6 @@ const FunctionBuilder = struct {
         try self.addInstrWithValue(.representation_check, representationTypeName(target_ty), target_ty, span, exprText(expr));
     }
 
-    fn addRepresentationUse(self: *FunctionBuilder, target_ty: ValueType, detail: []const u8, span: ast.Span) !void {
-        if (representationCheckKind(target_ty) == null) return;
-        try self.addInstr(.representation_use, detail, target_ty, span);
-    }
 
     fn addRepresentationUseForValue(self: *FunctionBuilder, target_ty: ValueType, detail: []const u8, span: ast.Span, value_id: []const u8) !void {
         if (representationCheckKind(target_ty) == null) return;

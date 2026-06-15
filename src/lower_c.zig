@@ -1403,14 +1403,6 @@ const CEmitter = struct {
         }
     }
 
-    fn emitTaggedUnionTypes(self: *CEmitter, module: ast.Module) !void {
-        for (module.decls) |decl| {
-            if (decl.kind != .union_decl) continue;
-            const union_decl = decl.kind.union_decl;
-            if (!self.tagged_unions.contains(union_decl.name.text)) continue;
-            try self.emitTaggedUnionType(union_decl);
-        }
-    }
 
     fn emitTaggedUnionType(self: *CEmitter, union_decl: ast.UnionDecl) !void {
         try self.out.print(self.allocator, "typedef enum {s}Tag {{\n", .{union_decl.name.text});
@@ -1648,10 +1640,6 @@ const CEmitter = struct {
         }
     }
 
-    fn emitResultTypes(self: *CEmitter) !void {
-        var it = self.result_types.valueIterator();
-        while (it.next()) |result| try self.emitResultType(result.*);
-    }
 
     // C has no `void` struct member, so a `Result<void, E>` (or `Result<T, void>`)
     // payload uses a 1-byte placeholder. The unit value `()` lowers to `0`, so
@@ -1680,10 +1668,6 @@ const CEmitter = struct {
         try self.out.print(self.allocator, "}} {s};\n\n", .{result.name});
     }
 
-    fn emitArrayTypes(self: *CEmitter) !void {
-        var it = self.array_types.valueIterator();
-        while (it.next()) |array| try self.emitArrayType(array.*);
-    }
 
     fn emitArrayType(self: *CEmitter, array: ArrayInfo) !void {
         try self.out.print(self.allocator, "typedef struct {s} {{\n", .{array.name});
@@ -2359,9 +2343,6 @@ const CEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "mc_result_{s}_{s}", .{ try self.typeSuffix(ok_ty), try self.typeSuffix(err_ty) });
     }
 
-    fn emitArrayLen(self: *CEmitter, expr: ast.Expr) !void {
-        try self.out.appendSlice(self.allocator, try self.arrayLenTextForExpr(expr));
-    }
 
     fn emitStmt(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         try self.writeLineDirective(stmt.span);
@@ -7495,9 +7476,6 @@ const CEmitter = struct {
         return true;
     }
 
-    fn emitResultTryCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
-        return try self.emitResultTryCallArgTempWithMode(arg, locals, target_ty, null, .stmt);
-    }
 
     fn emitResultTryCallArgTemps(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!std.ArrayList(SequencedArgTemp) {
         var temps: std.ArrayList(SequencedArgTemp) = .empty;
