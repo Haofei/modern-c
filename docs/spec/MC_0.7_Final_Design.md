@@ -4668,6 +4668,18 @@ origin        source | external | a #[origin("…")] classification (§24.1)
 In addition to executable code, the map emits one inventory row per type-level and
 `extern` declaration, so it is a complete declared-symbol inventory.
 
+**Stable identifiers and object-symbol correlation.** `typed_ast_node` and `mir_block`
+are stable, deterministic IDs: `emit-map` is byte-identical across runs, every entry row
+carries both, and the typed-AST IDs are distinct per source node. `object_symbol` is the
+*genuine emitted* linker symbol — it follows a `#[backend_name]` rename rather than the
+source name. The `mcmap-test` gate (in `m0`) verifies all of this against the **real**
+objects: it builds the fixture through both backends (C via `mcc-cc`, LLVM via
+`emit-llvm | llc`), and asserts every exported function row's `object_symbol` — including a
+renamed one — is a symbol actually defined in *both* the C and the LLVM object. (The C
+backend renames the symbol outright via a C asm label; the LLVM backend keeps the original
+define and adds the renamed symbol as an alias — both define the renamed symbol the map
+reports.)
+
 Generated C should include source-line hints:
 
 ```c

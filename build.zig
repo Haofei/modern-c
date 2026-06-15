@@ -391,6 +391,16 @@ pub fn build(b: *std.Build) void {
     const asm_targets_test_step = b.step("asm-targets-test", "Validate per-architecture precise-asm register vocabularies (x86-64/RISC-V/AArch64)");
     asm_targets_test_step.dependOn(&asm_targets_test_cmd.step);
 
+
+    const mcmap_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/mcmap-test.sh",
+        "zig-out/bin/mcc",
+    });
+    mcmap_test_cmd.step.dependOn(b.getInstallStep());
+    const mcmap_test_step = b.step("mcmap-test", "Validate .mcmap stable typed-AST/MIR IDs and object-symbol correlation (C + LLVM)");
+    mcmap_test_step.dependOn(&mcmap_test_cmd.step);
+
     const stack_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/stack-test.sh",
@@ -2274,6 +2284,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&comptime_fold_test_cmd.step);
     // asm-targets-test validates per-architecture precise-asm register vocabularies.
     m0_step.dependOn(&asm_targets_test_cmd.step);
+    // mcmap-test validates .mcmap stable IDs + object-symbol correlation on both backends.
+    m0_step.dependOn(&mcmap_test_cmd.step);
     // pkg-test exercises the mcc-pkg manifest build (needs clang).
     m0_step.dependOn(&pkg_test_cmd.step);
     // stack-test exercises the generic std/stack collection (needs clang).
