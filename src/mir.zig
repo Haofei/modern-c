@@ -218,6 +218,12 @@ pub const Function = struct {
     trap_edges: []TrapEdge,
     contract_regions: []ContractRegion,
     range_facts: []RangeFact,
+    // OPT (annex E): operand source points of checks the optimizer proved dead and elided
+    // (`--optimize`) — a constant in-range array index's `Bounds` check, or an unsigned
+    // division by a non-zero literal's `DivideByZero` check. Source points are unique per
+    // location, so each backend site matches only its own kind. The backends key off these to
+    // skip the emitted runtime check. Empty unless optimization is on, so the MIR is unchanged.
+    elided_bounds: []SourcePoint,
 };
 
 pub const Module = struct {
@@ -234,6 +240,7 @@ pub const Module = struct {
             self.allocator.free(function.trap_edges);
             self.allocator.free(function.contract_regions);
             self.allocator.free(function.range_facts);
+            self.allocator.free(function.elided_bounds);
         }
         self.allocator.free(self.functions);
     }
@@ -390,6 +397,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                         .trap_edges = try allocator.alloc(TrapEdge, 0),
                         .contract_regions = try allocator.alloc(ContractRegion, 0),
                         .range_facts = try allocator.alloc(RangeFact, 0),
+                        .elided_bounds = try allocator.alloc(SourcePoint, 0),
                     });
                 }
             },
@@ -843,7 +851,7 @@ const MutableBlock = struct {
     terminator: Terminator = .fallthrough,
 };
 
-const SourcePoint = struct {
+pub const SourcePoint = struct {
     line: usize,
     column: usize,
 };
@@ -913,6 +921,7 @@ const FunctionBuilder = struct {
     trap_edges: std.ArrayList(TrapEdge),
     contract_regions: std.ArrayList(ContractRegion),
     range_facts: std.ArrayList(RangeFact),
+    elided_bounds: std.ArrayList(SourcePoint),
     local_types: std.StringHashMap(ValueType),
     local_type_exprs: std.StringHashMap(ast.TypeExpr),
     local_mutability: std.StringHashMap(bool),
@@ -963,6 +972,7 @@ const FunctionBuilder = struct {
             .trap_edges = .empty,
             .contract_regions = .empty,
             .range_facts = .empty,
+            .elided_bounds = .empty,
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
@@ -1012,6 +1022,7 @@ const FunctionBuilder = struct {
             .trap_edges = .empty,
             .contract_regions = .empty,
             .range_facts = .empty,
+            .elided_bounds = .empty,
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
@@ -1042,6 +1053,7 @@ const FunctionBuilder = struct {
         self.trap_edges.deinit(self.allocator);
         self.contract_regions.deinit(self.allocator);
         self.range_facts.deinit(self.allocator);
+        self.elided_bounds.deinit(self.allocator);
         self.local_types.deinit();
         self.local_type_exprs.deinit();
         self.local_mutability.deinit();
@@ -1079,6 +1091,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(contract_regions);
         const range_facts = try self.range_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(range_facts);
+        const elided_bounds = try self.elided_bounds.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(elided_bounds);
 
         self.blocks.deinit(self.allocator);
         self.blocks = .empty;
@@ -1110,6 +1124,7 @@ const FunctionBuilder = struct {
             .trap_edges = trap_edges,
             .contract_regions = contract_regions,
             .range_facts = range_facts,
+            .elided_bounds = elided_bounds,
         };
     }
 
@@ -2219,7 +2234,12 @@ const FunctionBuilder = struct {
                 // airtight, so the result is identical and a `#[no_lang_trap]` function may
                 // now contain the access. Off by default, so the standard MIR is unchanged.
                 const elide_bounds = self.optimize and self.indexProvablyInBounds(node.base.*, node.index.*);
-                if (!elide_bounds) {
+                if (elide_bounds) {
+                    // Record the operand source point so both backends can skip the emitted
+                    // runtime bounds check for exactly this access (they consume the optimized
+                    // MIR rather than re-deriving the proof).
+                    try self.elided_bounds.append(self.allocator, .{ .line = node.index.span.line, .column = node.index.span.column });
+                } else {
                     try self.addInstr(.cmp_bounds, "i < len", .bool, expr.span);
                     try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
                 }
@@ -2374,9 +2394,17 @@ const FunctionBuilder = struct {
     fn addBinaryTrapEdges(self: *FunctionBuilder, node: anytype, span: ast.Span) !void {
         switch (node.op) {
             .div, .mod => {
-                try self.addTrapEdge(.DivideByZero, .checked_arithmetic, span);
-                if (isCheckedSignedType(self.exprType(node.left.*))) {
-                    try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, span);
+                // OPT (annex E): an unsigned division/modulo by a non-zero integer literal can
+                // never divide by zero (and unsigned has no INT_MIN/-1 overflow case), so the
+                // `DivideByZero` check is provably dead. Drop its trap edge and record the
+                // divisor source point for the backends to skip the emitted check.
+                if (self.optimize and self.divByZeroProvablySafe(node)) {
+                    try self.elided_bounds.append(self.allocator, .{ .line = node.right.span.line, .column = node.right.span.column });
+                } else {
+                    try self.addTrapEdge(.DivideByZero, .checked_arithmetic, span);
+                    if (isCheckedSignedType(self.exprType(node.left.*))) {
+                        try self.addTrapEdge(.IntegerOverflow, .checked_arithmetic, span);
+                    }
                 }
             },
             .shl => {
@@ -2639,6 +2667,16 @@ const FunctionBuilder = struct {
         if (k.negative) return false;
         const n = self.baseArrayLen(base) orelse return false;
         return k.magnitude < n;
+    }
+
+    // OPT (annex E) proof obligation for divide-by-zero elision: the division is on an
+    // unsigned checked integer (no signed INT_MIN/-1 overflow case) and the divisor is a
+    // non-zero integer literal — so it can never trap. Conservative: false for a signed
+    // operand or any non-literal/zero divisor, keeping the check.
+    fn divByZeroProvablySafe(self: *FunctionBuilder, node: anytype) bool {
+        if (isCheckedSignedType(self.exprType(node.left.*))) return false;
+        const d = integerLiteralValue(node.right.*) orelse return false;
+        return !d.negative and d.magnitude != 0;
     }
 
     fn baseArrayLen(self: *FunctionBuilder, base: ast.Expr) ?usize {
@@ -3207,6 +3245,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     allocator.free(function.trap_edges);
     allocator.free(function.contract_regions);
     allocator.free(function.range_facts);
+    allocator.free(function.elided_bounds);
 }
 
 fn functionFallsThrough(function: Function) ?SourcePoint {
@@ -5815,6 +5854,12 @@ test "OPT const-index bounds-check elision drops only provably-dead Bounds trap 
         \\fn var_index(a: [4]u32, i: usize) -> u32 {
         \\    return a[i];
         \\}
+        \\fn const_div(x: u32) -> u32 {
+        \\    return x / 7;
+        \\}
+        \\fn var_div(x: u32, y: u32) -> u32 {
+        \\    return x / y;
+        \\}
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_opt_bounds.mc", source);
     defer reporter.deinit();
@@ -5826,18 +5871,24 @@ test "OPT const-index bounds-check elision drops only provably-dead Bounds trap 
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    // Default build keeps the bounds check and its Bounds trap edge for both indices.
+    // Default build keeps each check and its trap edge (Bounds for the indices, DivideByZero
+    // for the divisions).
     var base = try build(std.testing.allocator, module);
     defer base.deinit();
     try std.testing.expectEqual(@as(usize, 1), functionByName(base, "const_index").?.trap_edges.len);
     try std.testing.expectEqual(@as(usize, 1), functionByName(base, "var_index").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(base, "const_div").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(base, "var_div").?.trap_edges.len);
 
-    // Optimized build elides the provably-in-range constant index's trap edge (2 < 4) but
-    // must keep the variable index's check — the proof is conservative.
+    // Optimized build elides the provably-dead checks — the in-range constant index (2 < 4)
+    // and the unsigned division by a non-zero literal (/ 7) — but keeps the variable index's
+    // and variable divisor's checks; the proofs are conservative.
     var opt = try buildOpt(std.testing.allocator, module, .{ .optimize = true });
     defer opt.deinit();
     try std.testing.expectEqual(@as(usize, 0), functionByName(opt, "const_index").?.trap_edges.len);
     try std.testing.expectEqual(@as(usize, 1), functionByName(opt, "var_index").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 0), functionByName(opt, "const_div").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(opt, "var_div").?.trap_edges.len);
 }
 
 test "MIR verifier reports arithmetic-domain misuse" {
@@ -6631,6 +6682,7 @@ test "MIR verifier rejects malformed CFG structure" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -6668,6 +6720,7 @@ test "MIR verifier rejects block id mismatch in CFG" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -6720,6 +6773,7 @@ test "MIR verifier rejects fallthrough successors and trap kind mismatch" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -7455,6 +7509,7 @@ test "MIR verifier rejects missing representation check" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -7487,6 +7542,7 @@ test "MIR verifier rejects missing representation check on indirect call" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -7519,6 +7575,7 @@ test "MIR verifier rejects missing representation check on typed load" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -7565,6 +7622,7 @@ test "MIR verifier requires representation checks to dominate sensitive returns"
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -7608,6 +7666,7 @@ test "MIR verifier rejects representation return when one predecessor lacks chec
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -7654,6 +7713,7 @@ test "MIR verifier matches representation identity across predecessor paths" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -7699,6 +7759,7 @@ test "MIR verifier rejects predecessor representation check for wrong identity" 
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -7734,6 +7795,7 @@ test "MIR verifier requires representation checks to dominate non-return typed u
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -7766,6 +7828,7 @@ test "MIR verifier rejects missing representation check on non-return typed use"
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
@@ -7801,6 +7864,7 @@ test "MIR verifier rejects representation check for the wrong value identity" {
             .trap_edges = trap_edges[0..],
             .contract_regions = contract_regions[0..],
             .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
         },
     };
     const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };

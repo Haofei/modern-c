@@ -25,10 +25,10 @@ pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.Array
 }
 
 pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
-    return appendCProfileWithSourcePath(allocator, module, out, profile, null);
+    return appendCProfileWithSourcePath(allocator, module, out, profile, null, false);
 }
 
-pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8) anyerror!void {
+pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, optimize: bool) anyerror!void {
     switch (profile) {
         .kernel => try out.appendSlice(allocator, "/* mc-profile: kernel (freestanding) */\n"),
         .hosted => try out.appendSlice(allocator, "/* mc-profile: hosted (links libc + -lm) */\n"),
@@ -329,7 +329,7 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         \\
     );
 
-    var typed_mir = try mir.build(allocator, module);
+    var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
     defer typed_mir.deinit();
 
     var emitter = CEmitter.init(allocator, out, &typed_mir, source_path);
@@ -339,7 +339,7 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
 pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: []const u8, generated_c_path: ?[]const u8) anyerror!void {
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path);
+    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path, false);
 
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
@@ -4421,12 +4421,21 @@ const CEmitter = struct {
                 } else if (self.arrayTypeForExpr(node.base.*, locals)) |base_arr| {
                     // Array (possibly the element of an outer array, e.g.
                     // `m[i][j]` over `[N][M]T`): index the `.elems` member with a
-                    // bounds check against this dimension's length.
-                    try self.emitExpr(node.base.*, locals);
-                    try self.out.appendSlice(self.allocator, ".elems[mc_check_index_usize(");
-                    try self.emitExpr(node.index.*, locals);
-                    const len = try self.arrayLenTextForExpr(base_arr.kind.array.len);
-                    try self.out.print(self.allocator, ", {s})]", .{len});
+                    // bounds check against this dimension's length. OPT (annex E): when the
+                    // optimized MIR proved this constant index in range, it is marked
+                    // `const_in_bounds` and we emit the access unchecked.
+                    if (self.mirCheckElided(node.index.span)) {
+                        try self.emitExpr(node.base.*, locals);
+                        try self.out.appendSlice(self.allocator, ".elems[");
+                        try self.emitExpr(node.index.*, locals);
+                        try self.out.appendSlice(self.allocator, "]");
+                    } else {
+                        try self.emitExpr(node.base.*, locals);
+                        try self.out.appendSlice(self.allocator, ".elems[mc_check_index_usize(");
+                        try self.emitExpr(node.index.*, locals);
+                        const len = try self.arrayLenTextForExpr(base_arr.kind.array.len);
+                        try self.out.print(self.allocator, ", {s})]", .{len});
+                    }
                 } else {
                     try self.emitExpr(node.base.*, locals);
                     try self.out.appendSlice(self.allocator, "[");
@@ -5527,6 +5536,15 @@ const CEmitter = struct {
                 return true;
             },
             .div, .mod => {
+                // OPT (annex E): elide a proven-dead DivideByZero check (non-zero literal divisor).
+                if (self.mirCheckElided(node.right.span)) {
+                    try self.out.appendSlice(self.allocator, "(");
+                    try self.emitExprWithTarget(node.left.*, locals, target);
+                    try self.out.appendSlice(self.allocator, if (node.op == .div) " / " else " % ");
+                    try self.emitExprWithTarget(node.right.*, locals, target);
+                    try self.out.appendSlice(self.allocator, ")");
+                    return true;
+                }
                 const helper = checkedHelperParts(node.op, inner_name) orelse return error.UnsupportedCEmission;
                 try self.out.print(self.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
                 try self.emitExprWithTarget(node.left.*, locals, target);
@@ -5575,6 +5593,17 @@ const CEmitter = struct {
         }
 
         const helper = checkedHelperParts(node.op, target_name) orelse return false;
+
+        // OPT (annex E): when the optimizer proved this unsigned div/mod's DivideByZero check
+        // dead (non-zero literal divisor), emit the plain operator instead of the helper.
+        if ((node.op == .div or node.op == .mod) and self.mirCheckElided(node.right.span)) {
+            try self.out.appendSlice(self.allocator, "(");
+            try self.emitExprWithTarget(node.left.*, locals, target);
+            try self.out.appendSlice(self.allocator, if (node.op == .div) " / " else " % ");
+            try self.emitExprWithTarget(node.right.*, locals, target);
+            try self.out.appendSlice(self.allocator, ")");
+            return true;
+        }
 
         try self.out.print(self.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
         try self.emitExprWithTarget(node.left.*, locals, target);
@@ -8172,6 +8201,22 @@ const CEmitter = struct {
         return false;
     }
 
+    // OPT (annex E): true when the optimizer proved the check at this operand source point
+    // dead (a constant in-range index's Bounds check, or an unsigned div-by-literal's
+    // DivideByZero check) and recorded it in the optimized MIR's `elided_bounds`. Without
+    // `--optimize` the list is empty, so this is always false and the check is emitted — the
+    // backend consumes the optimized MIR rather than re-deriving the proof.
+    fn mirCheckElided(self: *CEmitter, span: ast.Span) bool {
+        const function_name = self.current_function orelse return false;
+        for (self.mir_module.functions) |function| {
+            if (!std.mem.eql(u8, function.name, function_name)) continue;
+            for (function.elided_bounds) |pt| {
+                if (pt.line == span.line and pt.column == span.column) return true;
+            }
+        }
+        return false;
+    }
+
     fn emitSequencedComparisonReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
         const target_ty = return_ty orelse return false;
         if (!isBoolType(target_ty)) return false;
@@ -8309,6 +8354,9 @@ const CEmitter = struct {
         // Value-range proof: constant operands that cannot overflow lower to a
         // plain infix operator instead of the checked-overflow helper.
         if (constBinaryProvenNoOverflow(node, target_name, locals)) return .{ .infix = binaryCOp(op) };
+        // OPT (annex E): the optimizer proved this unsigned div/mod's DivideByZero check dead
+        // (non-zero literal divisor) — emit the plain operator instead of the checked helper.
+        if ((op == .div or op == .mod) and self.mirCheckElided(node.right.span)) return .{ .infix = binaryCOp(op) };
         return if (checkedHelperParts(op, target_name)) |helper| .{ .helper = helper } else null;
     }
 
@@ -12605,7 +12653,7 @@ test "path-aware C emission writes source line hints" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc");
+    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc", false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 1 \"debug\\\"map\\\\case.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 3 \"debug\\\"map\\\\case.mc\"") != null);

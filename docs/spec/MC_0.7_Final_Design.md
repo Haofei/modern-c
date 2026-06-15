@@ -3471,9 +3471,11 @@ unchecked_add_assume_no_overflow may appear only inside no_overflow contract reg
 MIR carries the facts a safe optimizer needs: each checked operation records a **trap edge**
 (`Bounds`, `IntegerOverflow`, `DivideByZero`, …), and `no_overflow` contracts record
 **range facts**. The optimizer is the pass that turns a *provably-dead* trap edge into a
-removed check. It is **off by default** (`mcc verify|lower-mir <file> --optimize`); the
-standard pipeline emits identical MIR, so an unfinished or unsound transform can never
-silently affect a normal build.
+removed check, and both backends **consume the optimized MIR to elide the emitted runtime
+check** (each elided check's operand source point is recorded so the C and LLVM emitters skip
+exactly it). It is **off by default** (`mcc verify|lower-mir|emit-c|emit-llvm <file>
+--optimize`); the standard pipeline emits identical MIR and identical code, so an unfinished
+or unsound transform can never silently affect a normal build.
 
 **Discipline — every transform must state, and a test must enforce:**
 
@@ -3488,7 +3490,7 @@ silently affect a normal build.
 3. **One at a time.** Transforms land individually, each with its proof and test, so a
    regression localizes to one rule.
 
-**Implemented — const-index bounds-check elision.**
+**Transform 1 — const-index bounds-check elision.**
 
 > *Proof obligation:* the index is a non-negative integer literal `k`, the base names a fixed
 > array of statically-known length `N`, and `k < N`. All three are compile-time constants, so
@@ -3497,16 +3499,25 @@ silently affect a normal build.
 > *Transform:* omit the `cmp_bounds` instruction and its `Bounds` trap edge; the access is
 > marked `const_in_bounds`. A trap-free MIR means a `#[no_lang_trap]` function may now index a
 > fixed array at a constant position (§20.1). The frontend `no_lang_trap` check applies the
-> same proof, so sema and MIR agree.
->
-> *Tests:* a MIR unit test asserts the `Bounds` edge is dropped for `a[2]` on `[4]u32` and
-> **kept** for a variable index `a[i]`; `opt-test` (annex test) asserts `verify` rejects and
-> `verify --optimize` accepts the contract, the optimized MIR has no `Bounds` edge, and a
-> variable index stays rejected.
+> same proof, so sema and MIR agree, and both backends drop the emitted bounds check.
 
-The next increment is to have the backends consume the optimized MIR — actually eliding the
-emitted runtime check — gated by the same flag and the C-vs-LLVM equivalence obligation
-above. Until then the transform refines verification precision at zero codegen risk.
+**Transform 2 — divide-by-zero elision.**
+
+> *Proof obligation:* an **unsigned** checked `/` or `%` whose divisor is a non-zero integer
+> literal — so it can never divide by zero, and unsigned has no `INT_MIN / -1` overflow case.
+>
+> *Transform:* drop the `DivideByZero` trap edge; the C backend emits the plain `/`/`%`
+> operator instead of the `mc_checked_div_*` helper, and the LLVM backend omits the
+> zero-compare branch.
+
+*Tests.* A MIR unit test asserts each check's trap edge is dropped for the provable case
+(`a[2]` on `[4]u32`; `x / 7`) and **kept** for the unprovable one (`a[i]`; `x / y`). `opt-test`
+asserts `verify --optimize` accepts a `#[no_lang_trap]` const-index that `verify` rejects, and
+that a variable index stays rejected. `opt-equiv-test` compiles a fixture exercising both
+transforms through the C and LLVM backends, default and `--optimize`, runs all four, and
+asserts identical results — and that each optimized build actually dropped the check while the
+default kept it. So eliding the provably-dead checks is verified behavior-preserving across
+both backends, not merely a verification-precision change.
 
 ---
 

@@ -77,12 +77,13 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     // `--profile` is consumed only by the C artifact commands; `--optimize` (the fact-gated
-    // MIR optimizer, annex E) only by the MIR-level commands. A flag on any other command
-    // is an error.
+    // MIR optimizer, annex E) by the MIR-level and code-emitting commands. A flag on any
+    // other command is an error.
     const is_c_artifact_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map");
-    const is_mir_command = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir");
+    const accepts_optimize = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir") or
+        std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
     if (saw_profile_flag and !is_c_artifact_command) return failUsage();
-    if (optimize and !is_mir_command) return failUsage();
+    if (optimize and !accepts_optimize) return failUsage();
 
     const root_source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(root_source);
@@ -114,11 +115,11 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        try runEmitC(allocator, path, source, profile);
+        try runEmitC(allocator, path, source, profile, optimize);
     } else if (std.mem.eql(u8, command, "emit-map")) {
         try runEmitMap(allocator, path, source, profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source);
+        try runEmitLlvm(allocator, path, source, optimize);
     } else {
         return failUsage();
     }
@@ -383,7 +384,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     try writeStdout(output.items);
 }
 
-fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile) !void {
+fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, optimize: bool) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -400,13 +401,14 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     }
 
     var checker = sema.Checker.init(&diag);
+    checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();
         return error.EmitCFailed;
     }
 
-    try mir.verify(allocator, module, &diag);
+    try mir.verifyOpt(allocator, module, &diag, .{ .optimize = optimize });
     if (diag.has_errors) {
         diag.render();
         return error.EmitCFailed;
@@ -414,7 +416,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_c.appendCProfileWithSourcePath(allocator, module, &output, profile, path);
+    try lower_c.appendCProfileWithSourcePath(allocator, module, &output, profile, path, optimize);
     try writeStdout(output.items);
 }
 
@@ -453,7 +455,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     try writeStdout(output.items);
 }
 
-fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -470,13 +472,14 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     }
 
     var checker = sema.Checker.init(&diag);
+    checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();
         return error.EmitLlvmFailed;
     }
 
-    try mir.verify(allocator, module, &diag);
+    try mir.verifyOpt(allocator, module, &diag, .{ .optimize = optimize });
     if (diag.has_errors) {
         diag.render();
         return error.EmitLlvmFailed;
@@ -484,7 +487,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_llvm.appendLlvmWithSourcePath(allocator, module, &output, path);
+    try lower_llvm.appendLlvmWithSourcePath(allocator, module, &output, path, optimize);
     try writeStdout(output.items);
 }
 

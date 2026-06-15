@@ -5,11 +5,11 @@ const eval = @import("eval.zig");
 const mir = @import("mir.zig");
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    try appendLlvmWithSourcePath(allocator, module, out, "input.mc");
+    try appendLlvmWithSourcePath(allocator, module, out, "input.mc", false);
 }
 
-pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8) !void {
-    var module_mir = try mir.build(allocator, module);
+pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool) !void {
+    var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
     defer module_mir.deinit();
 
     const escaped_source_path = try escapedLlvmString(allocator, source_path);
@@ -1987,7 +1987,11 @@ const LlvmEmitter = struct {
             .array => |array| blk: {
                 const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 const base_ptr = try self.arrayBasePointer(node.base.*);
-                try self.emitBoundsCheck(index, len);
+                // OPT (annex E): skip the bounds check when the optimized MIR proved this
+                // constant index in range (consumes the optimizer's `elided_bounds`).
+                if (!self.mirCheckElided((node.index.*).span)) {
+                    try self.emitBoundsCheck(index, len);
+                }
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {s}\n", .{ result, try self.llvmType(resolved_base_ty), base_ptr, index });
                 break :blk result;
@@ -2046,6 +2050,20 @@ const LlvmEmitter = struct {
             .member => |node| self.isStableAggregateAddress(node.base.*),
             else => false,
         };
+    }
+
+    // OPT (annex E): true when the optimizer recorded this operand's source point in
+    // `elided_bounds` (only under `--optimize`) — a proven-in-range constant index's Bounds
+    // check, or an unsigned div-by-literal's DivideByZero check. Source points are unique per
+    // location, so a module-wide match is unambiguous. Without the flag the list is empty and
+    // the check is emitted — the backend consumes the optimized MIR, not re-derived proof.
+    fn mirCheckElided(self: *LlvmEmitter, span: ast.Span) bool {
+        for (self.mir_module.functions) |function| {
+            for (function.elided_bounds) |pt| {
+                if (pt.line == span.line and pt.column == span.column) return true;
+            }
+        }
+        return false;
     }
 
     fn emitBoundsCheck(self: *LlvmEmitter, index: []const u8, len: u64) !void {
@@ -2939,11 +2957,16 @@ const LlvmEmitter = struct {
         if (self.integerBitsOf(ty) == null) return error.UnsupportedLlvmEmission;
         const left = try self.emitBinaryOperand(node.left.*, ty);
         const right = try self.emitBinaryOperand(node.right.*, ty);
-        const zero_cmp = try self.nextTemp();
-        const zero_trap = try self.nextLabel("trap_div_zero");
-        const nonzero = try self.nextLabel("div_nonzero");
-        try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, 0\n", .{ zero_cmp, llvm_ty, right });
-        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n  call void @mc_trap_DivideByZero(){s}\n  unreachable\n{s}:\n", .{ zero_cmp, zero_trap, nonzero, try self.debugCallSuffix(), zero_trap, try self.debugCallSuffix(), nonzero });
+        // OPT (annex E): when the optimizer proved this unsigned div/mod's DivideByZero check
+        // dead (non-zero literal divisor), skip the zero-check branch. Only fires for unsigned
+        // operands, so there is no signed INT_MIN/-1 overflow block to consider.
+        if (!self.mirCheckElided((node.right.*).span)) {
+            const zero_cmp = try self.nextTemp();
+            const zero_trap = try self.nextLabel("trap_div_zero");
+            const nonzero = try self.nextLabel("div_nonzero");
+            try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, 0\n", .{ zero_cmp, llvm_ty, right });
+            try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n  call void @mc_trap_DivideByZero(){s}\n  unreachable\n{s}:\n", .{ zero_cmp, zero_trap, nonzero, try self.debugCallSuffix(), zero_trap, try self.debugCallSuffix(), nonzero });
+        }
 
         if (self.isSignedIntegerType(ty)) {
             const min_literal = self.signedMinLiteralOf(ty) orelse return error.UnsupportedLlvmEmission;
