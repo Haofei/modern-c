@@ -3555,20 +3555,28 @@ or unsound transform can never silently affect a normal build.
 > fixed array at a constant position (§20.1). The frontend `no_lang_trap` check applies the
 > same proof, so sema and MIR agree, and both backends drop the emitted bounds check.
 
-**Transform 2 — divide-by-zero elision.**
+**Transform 2 — divide / modulo by-constant elision.**
 
-> *Proof obligation:* an **unsigned** checked `/` or `%` whose divisor is a non-zero integer
-> literal — so it can never divide by zero, and unsigned has no `INT_MIN / -1` overflow case.
+> *Proof obligation:* a checked `/` or `%` whose divisor is a non-zero integer literal. For an
+> **unsigned** dividend that is the whole proof — there is no `INT_MIN / -1` overflow case. For
+> a **signed** dividend the only checked overflow is `INT_MIN / -1`, so the divisor must
+> additionally not be `-1`; every other non-zero literal divisor is safe.
 >
-> *Transform:* drop the `DivideByZero` trap edge; the C backend emits the plain `/`/`%`
-> operator instead of the `mc_checked_div_*` helper, and the LLVM backend omits the
-> zero-compare branch.
+> *Transform:* drop the `DivideByZero` trap edge (and, for a signed dividend, the
+> `IntegerOverflow` edge too); the C backend emits the plain `/`/`%` operator instead of the
+> `mc_checked_div_*` helper, and the LLVM backend omits both the zero-compare branch and the
+> signed `INT_MIN / -1` overflow branch. A trap-free MIR means a `#[no_lang_trap]` function may
+> divide by a constant; the frontend `no_lang_trap` check applies the same proof so sema and
+> MIR agree.
 
 *Tests.* A MIR unit test asserts each check's trap edge is dropped for the provable case
 (`a[2]` on `[4]u32`; `x / 7`) and **kept** for the unprovable one (`a[i]`; `x / y`). `opt-test`
-asserts `verify --optimize` accepts a `#[no_lang_trap]` const-index that `verify` rejects, and
-that a variable index stays rejected. `opt-equiv-test` compiles a fixture exercising both
-transforms through the C and LLVM backends, default and `--optimize`, runs all four, and
+asserts `verify --optimize` accepts `#[no_lang_trap]` const-index and divide-by-constant
+operations (signed and unsigned) that `verify` rejects, and that a variable index, a variable
+divisor, and a signed `/ -1` stay rejected. `opt-equiv-test` compiles a fixture exercising all
+transforms — including a signed division of a runtime-negative value, pinning that truncation
+toward zero is identical between the checked helper and a plain `sdiv` — through the C and LLVM
+backends, default and `--optimize`, runs all four, and
 asserts identical results — and that each optimized build actually dropped the check while the
 default kept it. So eliding the provably-dead checks is verified behavior-preserving across
 both backends, not merely a verification-precision change.

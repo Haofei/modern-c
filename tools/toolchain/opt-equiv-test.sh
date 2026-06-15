@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# C-vs-LLVM equivalence test for the fact-gated MIR optimizer (annex E), const-index
-# bounds-check elision. Compiles tests/toolchain/opt_index_demo.mc through BOTH backends in
-# four configurations — C/LLVM × default/--optimize — links each into the same entry driver,
-# runs them, and asserts all four print the same value. Eliding a provably-dead bounds check
-# must be behavior-preserving, so the optimized builds must equal the unoptimized ones AND
-# each other. It also asserts the optimized output actually dropped the check (C:
-# mc_check_index_usize, LLVM: the `icmp ult` bounds compare) and the unoptimized kept it.
+# C-vs-LLVM equivalence test for the fact-gated MIR optimizer (annex E): const-index
+# bounds-check elision and divide-by-constant check elision (unsigned DivideByZero, and the
+# signed INT_MIN/-1 overflow on a runtime-negative dividend). Compiles
+# tests/toolchain/opt_index_demo.mc through BOTH backends in four configurations — C/LLVM ×
+# default/--optimize — links each into the same entry driver, runs them, and asserts all four
+# print the same value. Eliding a provably-dead check must be behavior-preserving, so the
+# optimized builds must equal the unoptimized ones AND each other (the signed case pins that
+# truncation toward zero is identical between the checked helper and a plain sdiv). It also
+# asserts the optimized output actually dropped the checks (C: mc_check_index_usize /
+# mc_checked_div_, LLVM: mc_trap_Bounds / mc_trap_DivideByZero) and the unoptimized kept them.
 #
 # Needs clang + llc; self-skips (not fails) when either is absent — same policy as diff-backend.
 set -euo pipefail
@@ -19,7 +22,7 @@ command -v "$LLC"   >/dev/null 2>&1 || { echo "SKIP: opt-equiv-test (llc not fou
 
 SRC="$HERE/tests/toolchain/opt_index_demo.mc"
 ENTRY="opt_index_demo"
-EXPECT=5
+EXPECT=12
 
 LINK_FLAGS=()
 [ "$(uname -s)" = "Linux" ] && LINK_FLAGS=(-no-pie)

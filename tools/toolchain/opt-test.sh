@@ -35,9 +35,22 @@ if ! "$MCC" lower-mir "$SRC" --optimize 2>/dev/null | grep -q 'detail=const_in_b
     echo "FAIL: opt-test — elided index not marked const_in_bounds under --optimize"; exit 1
 fi
 
-# 3. A variable index is not provably in range, so the check (and rejection) must remain.
-if "$MCC" verify "$NEG" --optimize >/dev/null 2>&1; then
-    echo "FAIL: opt-test — variable index #[no_lang_trap] was accepted under --optimize"; exit 1
+# 2b. Divide-by-constant elision: the DivideByZero (and the signed INT_MIN/-1 overflow) edge
+#     is present unoptimized and gone under --optimize.
+if ! "$MCC" lower-mir "$SRC" 2>/dev/null | grep -q 'kind=DivideByZero'; then
+    echo "FAIL: opt-test — expected a DivideByZero trap edge in the unoptimized MIR"; exit 1
+fi
+if "$MCC" lower-mir "$SRC" --optimize 2>/dev/null | grep -qE 'kind=(DivideByZero|IntegerOverflow)'; then
+    echo "FAIL: opt-test — a DivideByZero/IntegerOverflow trap edge survived div-by-constant elision under --optimize"; exit 1
 fi
 
-echo "PASS: opt-test — const-index bounds-check elision proven, gated by --optimize, sound on variable indices"
+# 3. Operations not provably safe — a variable index, a variable divisor, and signed `/ -1`
+#    (the INT_MIN/-1 overflow case) — keep their checks, so the contract stays rejected.
+if "$MCC" verify "$NEG" --optimize >/dev/null 2>&1; then
+    echo "FAIL: opt-test — a non-provable #[no_lang_trap] op (variable index/divisor or signed / -1) was accepted under --optimize"; exit 1
+fi
+if ! "$MCC" lower-mir "$NEG" --optimize 2>/dev/null | grep -q 'kind=IntegerOverflow'; then
+    echo "FAIL: opt-test — signed / -1 lost its IntegerOverflow trap edge under --optimize"; exit 1
+fi
+
+echo "PASS: opt-test — const-index bounds and divide-by-constant check elision proven, gated by --optimize, sound on variable/-1 operands"

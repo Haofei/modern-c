@@ -2967,10 +2967,13 @@ const LlvmEmitter = struct {
         if (self.integerBitsOf(ty) == null) return error.UnsupportedLlvmEmission;
         const left = try self.emitBinaryOperand(node.left.*, ty);
         const right = try self.emitBinaryOperand(node.right.*, ty);
-        // OPT (annex E): when the optimizer proved this unsigned div/mod's DivideByZero check
-        // dead (non-zero literal divisor), skip the zero-check branch. Only fires for unsigned
-        // operands, so there is no signed INT_MIN/-1 overflow block to consider.
-        if (!self.mirCheckElided((node.right.*).span)) {
+        // OPT (annex E): when the optimizer proved this div/mod's check dead (a non-zero
+        // literal divisor, and for a signed dividend a divisor that is also not -1), skip
+        // BOTH the zero-check branch and the signed INT_MIN/-1 overflow branch below — the
+        // same elision source point covers both, since the proof requires the divisor be
+        // neither 0 nor -1.
+        const div_elided = self.mirCheckElided((node.right.*).span);
+        if (!div_elided) {
             const zero_cmp = try self.nextTemp();
             const zero_trap = try self.nextLabel("trap_div_zero");
             const nonzero = try self.nextLabel("div_nonzero");
@@ -2978,7 +2981,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n  call void @mc_trap_DivideByZero(){s}\n  unreachable\n{s}:\n", .{ zero_cmp, zero_trap, nonzero, try self.debugCallSuffix(), zero_trap, try self.debugCallSuffix(), nonzero });
         }
 
-        if (self.isSignedIntegerType(ty)) {
+        if (self.isSignedIntegerType(ty) and !div_elided) {
             const min_literal = self.signedMinLiteralOf(ty) orelse return error.UnsupportedLlvmEmission;
             const min_cmp = try self.nextTemp();
             const neg_one_cmp = try self.nextTemp();

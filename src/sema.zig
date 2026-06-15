@@ -2480,7 +2480,7 @@ pub const Checker = struct {
             .binary => |node| {
                 const left = self.checkExpr(node.left.*, ctx);
                 const right = self.checkExpr(node.right.*, ctx);
-                if (ctx.no_lang_trap and isTrapBinary(node.op) and !isNoTrapArithmeticDomainOp(node.op, left, right) and !isNonTrappingFloatOp(node.op, left, right)) {
+                if (ctx.no_lang_trap and isTrapBinary(node.op) and !isNoTrapArithmeticDomainOp(node.op, left, right) and !isNonTrappingFloatOp(node.op, left, right) and !(self.optimize and divModProvablySafe(node.op, left, node.right.*))) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "checked operation may trap in #[no_lang_trap]");
                 }
                 if (isArithmeticBinary(node.op) and arithmeticDomainsImplicitlyMix(left, right)) {
@@ -5139,6 +5139,19 @@ fn isCheckedInt(kind: TypeClass) bool {
 
 fn isIntegerLike(kind: TypeClass) bool {
     return isCheckedInt(kind) or kind == .int_literal;
+}
+
+// Sema mirror of the MIR builder's `divModProvablySafe` (annex E): a `div`/`mod` by a
+// non-zero integer-literal divisor cannot divide by zero, and for a signed dividend it
+// cannot hit the only checked overflow (`INT_MIN / -1`) unless the divisor is `-1`. So
+// under `--optimize` such an operation is non-trapping and allowed in `#[no_lang_trap]`.
+// Conservative (false unless provable), so it can never admit a real trap.
+fn divModProvablySafe(op: ast.BinaryOp, left: TypeClass, divisor: ast.Expr) bool {
+    if (op != .div and op != .mod) return false;
+    const d = integerLiteralValue(divisor) orelse return false;
+    if (d.magnitude == 0) return false;
+    if (isCheckedSigned(left)) return !(d.negative and d.magnitude == 1);
+    return !d.negative;
 }
 
 fn isCheckedUnsigned(kind: TypeClass) bool {

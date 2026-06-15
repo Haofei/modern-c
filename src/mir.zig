@@ -2394,11 +2394,13 @@ const FunctionBuilder = struct {
     fn addBinaryTrapEdges(self: *FunctionBuilder, node: anytype, span: ast.Span) !void {
         switch (node.op) {
             .div, .mod => {
-                // OPT (annex E): an unsigned division/modulo by a non-zero integer literal can
-                // never divide by zero (and unsigned has no INT_MIN/-1 overflow case), so the
-                // `DivideByZero` check is provably dead. Drop its trap edge and record the
-                // divisor source point for the backends to skip the emitted check.
-                if (self.optimize and self.divByZeroProvablySafe(node)) {
+                // OPT (annex E): a division/modulo by a non-zero integer literal can never
+                // divide by zero; for a signed dividend it also cannot hit the only checked
+                // overflow (`INT_MIN / -1`) unless the divisor is `-1`. When the divisor is
+                // proven safe both the `DivideByZero` and the signed `IntegerOverflow` checks
+                // are dead, so the trap edges are dropped and the divisor source point recorded
+                // for the backends to skip the emitted check(s).
+                if (self.optimize and self.divModProvablySafe(node)) {
                     try self.elided_bounds.append(self.allocator, .{ .line = node.right.span.line, .column = node.right.span.column });
                 } else {
                     try self.addTrapEdge(.DivideByZero, .checked_arithmetic, span);
@@ -2673,10 +2675,21 @@ const FunctionBuilder = struct {
     // unsigned checked integer (no signed INT_MIN/-1 overflow case) and the divisor is a
     // non-zero integer literal — so it can never trap. Conservative: false for a signed
     // operand or any non-literal/zero divisor, keeping the check.
-    fn divByZeroProvablySafe(self: *FunctionBuilder, node: anytype) bool {
-        if (isCheckedSignedType(self.exprType(node.left.*))) return false;
+    // OPT (annex E) proof obligation for divide/modulo check elision: the divisor is
+    // a non-zero integer literal. For an unsigned dividend that is the whole proof —
+    // there is no INT_MIN/-1 overflow case. For a signed dividend the only checked
+    // overflow is `INT_MIN / -1`, so the divisor must additionally not be `-1`; every
+    // other non-zero literal divisor is safe. Conservative: false for any non-literal
+    // or zero divisor (keeping both checks).
+    fn divModProvablySafe(self: *FunctionBuilder, node: anytype) bool {
         const d = integerLiteralValue(node.right.*) orelse return false;
-        return !d.negative and d.magnitude != 0;
+        if (d.magnitude == 0) return false;
+        if (isCheckedSignedType(self.exprType(node.left.*))) {
+            // Signed: safe for any non-zero divisor except `-1` (the INT_MIN overflow).
+            return !(d.negative and d.magnitude == 1);
+        }
+        // Unsigned: any non-zero, non-negative literal divisor is safe.
+        return !d.negative;
     }
 
     fn baseArrayLen(self: *FunctionBuilder, base: ast.Expr) ?usize {
