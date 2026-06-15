@@ -31,7 +31,6 @@ const IntBounds = numeric.IntBounds;
 const maxUnsigned = numeric.maxUnsigned;
 const signedBounds = numeric.signedBounds;
 const parseUsizeLiteral = numeric.parseUsizeLiteral;
-const parseCharLiteral = numeric.parseCharLiteral;
 const integerLiteralValue = numeric.integerLiteralValue;
 
 pub const TrapKind = enum {
