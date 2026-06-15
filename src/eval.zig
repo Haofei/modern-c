@@ -667,6 +667,10 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
         .unary => |node| foldComptimeUnary(scope, node.op, node.expr.*),
         .binary => |node| foldComptimeBinary(scope, node.op, node.left.*, node.right.*),
         .call => |call| blk: {
+            // `comptime_error("msg")` (section 22): a reached comptime diagnostic is a trap.
+            // The custom message is surfaced by sema for a top-level block statement; a
+            // conditionally-reached one still fires here as a generic const-eval trap.
+            if (isComptimeErrorName(call.callee.*)) break :blk .trap;
             if (isComptimeBitcastName(call.callee.*)) break :blk foldComptimeBitcast(scope, call);
             break :blk switch (foldComptimeCall(scope, call)) {
                 .unknown => foldComptimeReflection(scope, expr),
@@ -709,6 +713,14 @@ fn isComptimeBitcastName(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, "bitcast"),
         .grouped => |inner| isComptimeBitcastName(inner.*),
+        else => false,
+    };
+}
+
+fn isComptimeErrorName(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, "comptime_error"),
+        .grouped => |inner| isComptimeErrorName(inner.*),
         else => false,
     };
 }
@@ -916,6 +928,15 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
             .let_decl, .var_decl => |local| {
                 if (local.names.len != 1) return .unknown;
                 const init_expr = local.init orelse return .unknown;
+                // `var x: T = uninit;` — e.g. the temporary an expression-`switch` desugars to
+                // (`var __sw: T = uninit; switch … { __sw = v; } let r = __sw;`). Bind a void
+                // placeholder so the following assignment fills it; a read before assignment
+                // folds to .unknown, which is conservative.
+                if (init_expr.kind == .uninit_literal) {
+                    scope.bind(local.names[0].text, .void) catch return .unknown;
+                    if (local.ty) |lty| if (comptimeTypeBitWidth(lty)) |bits| scope.bindWidth(local.names[0].text, bits);
+                    continue;
+                }
                 switch (foldComptimeExpr(scope, init_expr)) {
                     .value => |value| {
                         scope.bind(local.names[0].text, value) catch return .unknown;

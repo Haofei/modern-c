@@ -1667,6 +1667,13 @@ pub const Checker = struct {
                 .let_decl, .var_decl => |local| {
                     if (local.names.len != 1) continue;
                     const init_expr = local.init orelse continue;
+                    // `var x: T = uninit;` (e.g. an expression-`switch` desugar temp): bind a
+                    // void placeholder so a following assignment can fill it.
+                    if (init_expr.kind == .uninit_literal) {
+                        scope.bind(local.names[0].text, .void) catch {};
+                        if (local.ty) |lty| if (eval.comptimeTypeBitWidth(lty)) |bits| scope.bindWidth(local.names[0].text, bits);
+                        continue;
+                    }
                     switch (eval.foldComptimeExpr(scope, init_expr)) {
                         .value => |value| {
                             scope.bind(local.names[0].text, value) catch {};
@@ -1687,7 +1694,21 @@ pub const Checker = struct {
                         .unknown => {},
                     }
                 },
-                .assignment, .expr, .loop, .@"switch" => {
+                .expr => |expr| {
+                    // `comptime_error("message")` as a block statement: a custom compile-time
+                    // diagnostic (section 22), better than the generic trap for documenting a
+                    // failed generic constraint.
+                    if (comptimeErrorMessage(expr)) |msg| {
+                        self.errorCode(span, "E_COMPTIME_ERROR", msg);
+                        continue;
+                    }
+                    var single = [_]ast.Stmt{stmt};
+                    switch (eval.foldComptimeBlock(scope, .{ .span = stmt.span, .items = &single })) {
+                        .ok, .unknown => {},
+                        .trap => self.errorCode(span, "E_COMPTIME_TRAP", "trap during const eval is a compile error"),
+                    }
+                },
+                .assignment, .loop, .@"switch" => {
                     var single = [_]ast.Stmt{stmt};
                     switch (eval.foldComptimeBlock(scope, .{ .span = stmt.span, .items = &single })) {
                         .ok, .unknown => {},
@@ -7156,8 +7177,24 @@ fn isUncheckedNoOverflowMember(name: []const u8) bool {
         std.mem.eql(u8, name, "mul");
 }
 
+// The message text of a `comptime_error("…")` call (quotes stripped), or null if `expr` is
+// not that form. Used to surface a custom comptime diagnostic.
+fn comptimeErrorMessage(expr: ast.Expr) ?[]const u8 {
+    const call = switch (expr.kind) {
+        .call => |node| node,
+        .grouped => |inner| return comptimeErrorMessage(inner.*),
+        else => return null,
+    };
+    if (!isIdentNamed(call.callee.*, "comptime_error") or call.args.len != 1) return null;
+    return switch (call.args[0].kind) {
+        .string_literal => |lit| if (lit.len >= 2) lit[1 .. lit.len - 1] else lit,
+        else => null,
+    };
+}
+
 fn isBuiltinFunctionName(name: []const u8) bool {
     if (std.mem.eql(u8, name, "trap")) return true;
+    if (std.mem.eql(u8, name, "comptime_error")) return true; // section 22: comptime diagnostic
     if (std.mem.eql(u8, name, "drop")) return true;
     if (std.mem.eql(u8, name, "forget_unchecked")) return true;
     if (std.mem.eql(u8, name, "bind")) return true; // closure construction
