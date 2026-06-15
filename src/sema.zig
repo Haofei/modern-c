@@ -28,6 +28,7 @@ const isRawManyPointerType = ast_query.isRawManyPointerType;
 const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
 const isArithmeticLayoutGeneric = ast_query.isArithmeticLayoutGeneric;
 const mmioPointee = ast_query.mmioPointee;
+const reduceCallKind = ast_query.reduceCallKind;
 const constU8SliceType = ast_query.constU8SliceType;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const DmaBufInfo = ast_query.DmaBufInfo;
@@ -5563,21 +5564,6 @@ fn isIntegerScalarName(name: []const u8) bool {
 
 fn isFloatScalarName(name: []const u8) bool {
     return std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64");
-}
-
-const ReduceCallKind = enum { sum_checked, sum_left, sum_fast };
-
-fn reduceCallKind(callee: ast.Expr) ?ReduceCallKind {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return reduceCallKind(inner.*),
-        else => return null,
-    };
-    if (!isIdentNamed(member.base.*, "reduce")) return null;
-    if (std.mem.eql(u8, member.name.text, "sum_checked")) return .sum_checked;
-    if (std.mem.eql(u8, member.name.text, "sum_left")) return .sum_left;
-    if (std.mem.eql(u8, member.name.text, "sum_fast")) return .sum_fast;
-    return null;
 }
 
 fn reduceCallReturnClass(call: anytype, ctx: Context) ?TypeClass {

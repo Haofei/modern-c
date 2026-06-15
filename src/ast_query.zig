@@ -374,3 +374,21 @@ pub fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCa
     }
     return null;
 }
+
+/// The `reduce.*` sum intrinsics.
+pub const ReduceCallKind = enum { sum_checked, sum_left, sum_fast };
+
+/// Classify a `reduce.sum_checked` / `reduce.sum_left` / `reduce.sum_fast` call (through
+/// grouping), or null.
+pub fn reduceCallKind(callee: ast.Expr) ?ReduceCallKind {
+    const member = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return reduceCallKind(inner.*),
+        else => return null,
+    };
+    if (!isIdentNamed(member.base.*, "reduce")) return null;
+    if (std.mem.eql(u8, member.name.text, "sum_checked")) return .sum_checked;
+    if (std.mem.eql(u8, member.name.text, "sum_left")) return .sum_left;
+    if (std.mem.eql(u8, member.name.text, "sum_fast")) return .sum_fast;
+    return null;
+}

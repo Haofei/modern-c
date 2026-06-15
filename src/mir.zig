@@ -21,6 +21,7 @@ const resultIfLetHandlesLocal = ast_query.resultIfLetHandlesLocal;
 const resultSwitchHandlesLocal = ast_query.resultSwitchHandlesLocal;
 const contractName = ast_query.contractName;
 const isSatPreservingBinary = ast_query.isSatPreservingBinary;
+const reduceCallKind = ast_query.reduceCallKind;
 
 // Numeric-literal and integer-bounds primitives shared with `sema.zig` and `lower_c.zig`
 // (see `numeric.zig`); aliased here so the existing call sites read unchanged.
@@ -4588,20 +4589,6 @@ fn mmioMapPayloadTypeForExpr(expr: ast.Expr) ?ast.TypeExpr {
     };
 }
 
-const ReduceCallKind = enum { sum_checked, sum_left, sum_fast };
-
-fn reduceCallKind(callee: ast.Expr) ?ReduceCallKind {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return reduceCallKind(inner.*),
-        else => return null,
-    };
-    if (!isIdentNamed(member.base.*, "reduce")) return null;
-    if (std.mem.eql(u8, member.name.text, "sum_checked")) return .sum_checked;
-    if (std.mem.eql(u8, member.name.text, "sum_left")) return .sum_left;
-    if (std.mem.eql(u8, member.name.text, "sum_fast")) return .sum_fast;
-    return null;
-}
 
 fn reduceCallReturnTypeExpr(call: anytype) ?ast.TypeExpr {
     const kind = reduceCallKind(call.callee.*) orelse return null;
