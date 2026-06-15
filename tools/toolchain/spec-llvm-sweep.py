@@ -23,11 +23,9 @@ import sys
 import tempfile
 
 OUT_OF_SCOPE = {
-    # A sema-phase move-checker fixture (§18.1 control-flow model): its accept cases use
-    # `trap(...)` / `unreachable` / `-> never` abort *statements* inside value-returning
-    # functions, which the LLVM backend slice does not yet lower as statements. The C backend
-    # (spec emit-C sweep) and the sema move pass (spec_tests) fully cover it.
-    "move_diverge.mc": "trap()/abort statements in value-returning functions not lowered by the LLVM slice",
+    # (Empty — every in-scope spec fixture now emits assemblable LLVM IR. `move_diverge.mc`'s
+    # `trap(...)`/`unreachable` abort statements in value-returning functions are now lowered by
+    # the LLVM backend.)
 }
 FORBIDDEN_ASSUMPTIONS = ("nuw", "nsw", "nonnull", "noalias", "noundef", "poison", "inbounds", "undef", "fast", "nnan", "ninf", "nsz", "arcp", "contract", "afn")
 FORBIDDEN_RE = re.compile(r"(^|[ ,(])(" + "|".join(FORBIDDEN_ASSUMPTIONS) + r")([ ,)]|$)")

@@ -862,7 +862,13 @@ const LlvmEmitter = struct {
                     try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.continue_label, try self.debugCallSuffix() });
                     return true;
                 },
-                .expr => |expr| try self.emitExprStatement(expr),
+                .expr => |expr| {
+                    try self.emitExprStatement(expr);
+                    // A diverging statement (`trap(...)`, `unreachable`, a `-> never` call) emits
+                    // its own `unreachable` terminator, so the block ends here — even if the
+                    // function returns a value, this path does not fall through.
+                    if (self.exprStatementDiverges(expr)) return true;
+                },
                 .asm_stmt => |asm_stmt| try self.emitAsmStmt(asm_stmt),
             }
         }
@@ -976,6 +982,10 @@ const LlvmEmitter = struct {
                 return;
             },
             .call => |call| {
+                // A diverging call statement — `trap(.Assert);` or a `-> never` function — halts
+                // the program; emit the trap/call followed by `unreachable` (no value needed even
+                // in a value-returning function, since this path does not fall through).
+                if (try self.emitNeverExpr(expr)) return;
                 if (isDropCall(call.callee.*)) {
                     if (call.args.len != 1) return error.UnsupportedLlvmEmission;
                     const arg_ty = self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission;
@@ -984,7 +994,9 @@ const LlvmEmitter = struct {
                 }
                 if (try self.emitBuiltinVoidCall(call)) return;
                 if (self.callReturnType(call)) |ret_ty| {
-                    if (typeNameEql(ret_ty, "void")) {
+                    // A `void` or `-> never` call statement produces no value, so it is emitted
+                    // without a result name (a named void instruction is invalid LLVM).
+                    if (typeNameEql(ret_ty, "void") or typeNameEql(ret_ty, "never")) {
                         try self.emitVoidStatementCall(call);
                         return;
                     }
@@ -1182,6 +1194,19 @@ const LlvmEmitter = struct {
             else => return false,
         }
         return false;
+    }
+
+    // True when an expression *statement* emits its own `unreachable` terminator: `unreachable`
+    // or a `trap(...)`. Such a statement terminates its block, so even in a value-returning
+    // function the block ends there with no fall-through. (A `-> never` call is NOT included: it
+    // lowers as an ordinary call and the enclosing block falls through to its normal terminator.)
+    fn exprStatementDiverges(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .unreachable_expr => true,
+            .call => |call| trapHelperForCall(call) != null,
+            .grouped => |inner| self.exprStatementDiverges(inner.*),
+            else => false,
+        };
     }
 
     fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl) !void {
@@ -2498,7 +2523,9 @@ const LlvmEmitter = struct {
 
     fn emitVoidCall(self: *LlvmEmitter, callee: []const u8, call: anytype) !void {
         const sig = self.fn_sigs.get(callee) orelse return error.UnsupportedLlvmEmission;
-        if (!typeNameEql(sig.ret, "void")) return error.UnsupportedLlvmEmission;
+        // A `-> never` function lowers to a `void` LLVM declaration, so its call statement is a
+        // plain `call void @fn(args)` (no result name) — handled here alongside `-> void`.
+        if (!typeNameEql(sig.ret, "void") and !typeNameEql(sig.ret, "never")) return error.UnsupportedLlvmEmission;
         var args: std.ArrayList(ArgValue) = .empty;
         defer args.deinit(self.allocator);
         for (call.args, 0..) |arg, i| {
