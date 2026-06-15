@@ -2462,7 +2462,7 @@ NIC driver  ──uses──▶  std/sync     locking + linear guards          (
             ──uses──▶  std/endian   network/device byte order         (pure const fn)
             ──uses──▶  std/time     reset/link-up waits, timeouts      (on counter/serial domains)
             ──uses──▶  std/barrier  descriptor-vs-doorbell ordering    (on §17/§19 ordering)
-            ──uses──▶  std/mmio     planned register-field RMW helpers  (on §17 MMIO)
+            ──uses──▶  std/mmio     register-field helpers + ordered IO-memory copy  (on §17 MMIO)
             ──uses──▶  (core)       typed MMIO §17, IrqOff §19.1, irq_context
 ```
 
@@ -2571,22 +2571,43 @@ fn wmb() -> void;       // store barrier (descriptor writes before doorbell)
 fn dma_wmb() -> void;   // DMA-visible store barrier
 ```
 
-## 28.6 Planned `std/mmio` — Register-Field Helpers and IO-Memory Copy
+## 28.6 `std/mmio` — Register-Field Helpers and IO-Memory Copy
 
-The current prototype uses typed MMIO directly. A separate `std/mmio.mc` module
-is not present yet. The planned helper layer is:
+`std/mmio.mc` layers two things on top of the language's typed MMIO (section 17)
+and the `fence`/`cpu` intrinsics:
 
-Thin helpers over typed MMIO (section 17): atomic read-modify-write of register
-fields, and width-correct volatile copies to/from device memory (which a plain
-`memcpy` would illegally coalesce or elide):
+**Register bit-fields (pure, fold at comptime).** A `RegField` names a
+`(shift, width)` slice of a 32-bit register; `reg_field_get`/`reg_field_set` extract
+or replace it with the mask built — and the geometry bounds-checked — in exactly one
+place, so a driver stops open-coding `(v & ~(MASK << SHIFT)) | (x << SHIFT)`. The
+inserted value is masked to the field width, so an over-wide value cannot bleed into
+a neighbouring field. Single-bit `reg_bit_set/_clear/_toggle/_test` cover the common
+flag case. All are `const fn`s, so a field built from constant `(shift, width)` folds
+and is verified at comptime.
 
 ```mc
-fn set_bits<R>(reg: MmioPtr<R>, mask: R) -> void;     // reg |= mask, RMW
-fn clear_bits<R>(reg: MmioPtr<R>, mask: R) -> void;   // reg &= ~mask, RMW
-fn modify_field<R>(reg: MmioPtr<R>, mask: R, value: R) -> void;
-fn memcpy_toio(dst: MmioPtr<u8>, src: []u8) -> void;
-fn memcpy_fromio(dst: []mut u8, src: MmioPtr<u8>) -> void;
+let mode: RegField = reg_field(1, 3);            // bits [1,4)
+ctrl = reg_field_set(ctrl, mode, 5);             // replace, neighbours intact
+let m: u32 = reg_field_get(ctrl, mode);          // extract, right-justified
 ```
+
+**IO-memory copy (ordered).** `mmio_write_block`/`mmio_read_block` move a byte burst
+between CPU memory and a device window, and `mmio_write32`/`mmio_read32`/
+`mmio_modify_field` do a single ordered 32-bit access at a computed address (a
+register bank reached by offset). Each places the fence on the correct edge — a
+*release* before device writes become visible, an *acquire* after device reads
+complete — so the raw load/store loop is never paired with a forgotten barrier. The
+raw access is the single `unsafe` site; callers pass typed `PAddr`s.
+
+```mc
+mmio_write_block(dev_window, cpu_buf, len);      // CPU -> device, release-fenced
+mmio_modify_field(reg_addr, divisor, 0x42);      // ordered read-modify-write of a field
+```
+
+Because MC's typed MMIO is reached through a concrete `MmioPtr<Device>` (not a
+type-generic register), these helpers operate on the register *value* and on raw
+`PAddr` windows rather than being generic over an arbitrary device struct. Covered
+by `mmio-test` (C and LLVM host-suite).
 
 ## 28.7 Composition — the NIC Driver Shape
 

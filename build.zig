@@ -997,6 +997,14 @@ pub fn build(b: *std.Build) void {
     mask_test_step.dependOn(&mask_test_cmd.step);
 
 
+    const mmio_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mmio-test",
+    });
+    mmio_test_cmd.step.dependOn(b.getInstallStep());
+    const mmio_test_step = b.step("mmio-test", "std/mmio register-field helpers + ordered IO-memory copy");
+    mmio_test_step.dependOn(&mmio_test_cmd.step);
+
+
     slotmap_test_cmd.step.dependOn(b.getInstallStep());
     const slotmap_test_step = b.step("slotmap-test", "SlotMap<T,N> index handle table");
     slotmap_test_step.dependOn(&slotmap_test_cmd.step);
@@ -2350,6 +2358,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_x86_qemu_test_cmd.step);
     m0_step.dependOn(&slotmap_test_cmd.step);
     m0_step.dependOn(&mask_test_cmd.step);
+    m0_step.dependOn(&mmio_test_cmd.step);
     m0_step.dependOn(&mailbox_test_cmd.step);
     m0_step.dependOn(&tryelse_test_cmd.step);
     m0_step.dependOn(&byteview_test_cmd.step);
