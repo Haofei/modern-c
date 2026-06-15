@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""mc-lsp — a minimal Language Server for MC.
+"""mc-lsp — a Language Server for MC built on the `mcc` CLI.
 
-Speaks the Language Server Protocol over stdio (Content-Length-framed JSON-RPC) and surfaces
-the compiler's own diagnostics to any LSP-capable editor. On `didOpen` / `didChange` /
-`didSave` it runs `mcc check` on the document's current text and publishes the results as LSP
-diagnostics — using the SAME diagnostic codes the CLI reports (`E_...`), so a squiggle in the
-editor and a `mcc check` failure in CI name the identical rule.
+Speaks the Language Server Protocol over stdio (Content-Length-framed JSON-RPC). The compiler
+is the single source of truth; the server only drives `mcc` subcommands and translates output:
 
-It deliberately implements only the diagnostics slice (textDocumentSync = Full); hovers,
-completion, and go-to-definition can layer on later without changing this transport. The
-compiler is the single source of truth for diagnostics — the server only translates.
+  - Diagnostics  — on didOpen/didChange/didSave runs `mcc check` and publishes diagnostics with
+                   the SAME codes the CLI reports (`E_...`), so an editor squiggle and a CI
+                   `mcc check` failure name the identical rule.
+  - Formatting   — `textDocument/formatting` runs `mcc fmt` (token-preserving, so it works even
+                   while the buffer has type errors).
+  - Document symbols — `textDocument/documentSymbol` reuses `mcc emit-map`'s per-declaration
+                   rows as a file outline.
+
+Positions are converted from `mcc`'s 1-based byte columns to LSP UTF-16 code-unit offsets, so
+ranges are correct on non-ASCII source. Features that need a symbol/type index the CLI does not
+yet expose (hover types, go-to-definition, references, rename, semantic tokens) would require a
+new `mcc` subcommand and can layer on without changing this transport.
 
 Usage (configured as the language server for `.mc` files in an editor):
-    mcc=/path/to/mcc python3 tools/lsp/mc-lsp.py
+    MCC=/path/to/mcc python3 tools/lsp/mc-lsp.py
 The `MCC` environment variable (or --mcc) selects the compiler binary; default `mcc` on PATH.
 """
 import json
@@ -22,9 +28,14 @@ import subprocess
 import sys
 import tempfile
 
-# `path:line:col: error: E_CODE: message` — the CLI diagnostic format. The code is optional
-# (a few wrapper errors like `CheckFailed` carry none); those are skipped.
-DIAG_RE = re.compile(r"^.*?:(\d+):(\d+):\s*error:\s*(E_[A-Z0-9_]+):\s*(.*)$")
+# `path:line:col: error: rest` — the CLI diagnostic format, where `rest` is either
+# `E_CODE: message` (a checked diagnostic) or a bare message (e.g. a parse error like
+# `expected function name`). We capture the path so we can keep only the document's own
+# diagnostics and drop the compiler's internal Zig stack-trace frames (which use src/*.zig
+# paths). A bare `error: ParseFailed`/`CheckFailed` summary line has no path:line:col and so
+# never matches.
+DIAG_RE = re.compile(r"^(?P<path>.+?):(?P<line>\d+):(?P<col>\d+):\s*error:\s*(?P<rest>.*)$")
+CODE_RE = re.compile(r"^(E_[A-Z0-9_]+):\s*(.*)$")
 
 MCC = os.environ.get("MCC", "mcc")
 
@@ -64,51 +75,151 @@ def uri_to_path(uri):
     return uri
 
 
-# ---- diagnostics ---------------------------------------------------------------------------
-def run_diagnostics(uri, text):
-    """Run `mcc check` on `text` and return a list of LSP Diagnostic objects.
+# ---- positions -----------------------------------------------------------------------------
+# LSP `character` is a UTF-16 code-unit offset, but `mcc` reports a 1-based *byte* column (its
+# lexer advances one column per UTF-8 byte). Converting byte→UTF-16 against the document text is
+# required for correct ranges on any non-ASCII source (accents, CJK, emoji) — without it the
+# squiggle/cursor drifts on every multi-byte character.
+def utf16_len(s):
+    return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
 
-    The text is written to a sibling temp file of the real document so that `import "..."`
-    statements (resolved relative to the file's directory) still find their targets, then the
-    compiler is run on that temp file."""
-    path = uri_to_path(uri)
+
+def byte_col_to_utf16(line_text, byte_col):
+    nbytes = max(byte_col - 1, 0)  # 1-based byte column -> 0-based byte offset
+    prefix = line_text.encode("utf-8")[:nbytes].decode("utf-8", "ignore")
+    return utf16_len(prefix)
+
+
+def line_of(text_lines, one_based_line):
+    idx = one_based_line - 1
+    return text_lines[idx] if 0 <= idx < len(text_lines) else ""
+
+
+# ---- run the compiler on the in-memory document --------------------------------------------
+# The text is written to a sibling temp file of the real document so that `import "..."`
+# (resolved relative to the file's directory) still finds its targets, then `mcc <args> <tmp>`
+# runs on that temp. Returns (returncode, stdout, stderr, tmp_path); tmp_path is the (now
+# deleted) name the compiler used, so callers can match it against `source_path` in the output.
+def run_on_temp(path, text, args):
     directory = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(prefix=".mclsp_", suffix=".mc", dir=directory)
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
-        proc = subprocess.run([MCC, "check", tmp], capture_output=True, text=True)
-        output = proc.stdout + "\n" + proc.stderr
+        proc = subprocess.run([MCC] + args + [tmp], capture_output=True, text=True)
+        return proc.returncode, proc.stdout, proc.stderr, tmp
     except FileNotFoundError:
         log(f"compiler '{MCC}' not found")
-        return []
+        return 127, "", "", tmp
     finally:
         try:
             os.unlink(tmp)
         except OSError:
             pass
 
+
+# ---- diagnostics ---------------------------------------------------------------------------
+def run_diagnostics(uri, text):
+    """Run `mcc check` on `text` and return a list of LSP Diagnostic objects."""
+    rc, out, err, tmp = run_on_temp(uri_to_path(uri), text, ["check"])
+    if rc == 127:
+        return []
+    text_lines = text.split("\n")
     diags = []
     seen = set()
-    for line in output.splitlines():
+    for line in (out + "\n" + err).splitlines():
         m = DIAG_RE.match(line)
-        if not m:
+        if not m or m.group("path") != tmp:  # skip the compiler's internal stack-trace frames
             continue
-        ln, col, code, msg = int(m.group(1)), int(m.group(2)), m.group(3), m.group(4)
-        key = (ln, col, code)
+        ln, col, rest = int(m.group("line")), int(m.group("col")), m.group("rest")
+        cm = CODE_RE.match(rest)
+        code, msg = (cm.group(1), cm.group(2)) if cm else (None, rest)
+        # Dedup on the full identity so two distinct diagnostics sharing a position are both kept.
+        key = (ln, col, code, msg)
         if key in seen:
             continue
         seen.add(key)
-        # LSP positions are 0-based; the compiler reports 1-based line/column.
-        start = {"line": max(ln - 1, 0), "character": max(col - 1, 0)}
-        diags.append({
-            "range": {"start": start, "end": {"line": start["line"], "character": start["character"] + 1}},
+        char = byte_col_to_utf16(line_of(text_lines, ln), col)
+        start = {"line": max(ln - 1, 0), "character": char}
+        diag = {
+            "range": {"start": start, "end": {"line": start["line"], "character": char + 1}},
             "severity": 1,  # Error
-            "code": code,
             "source": "mcc",
-            "message": f"{code}: {msg}",
-        })
+            "message": f"{code}: {msg}" if code else msg,
+        }
+        if code:
+            diag["code"] = code
+        diags.append(diag)
     return diags
+
+
+# ---- formatting (textDocument/formatting via `mcc fmt`) ------------------------------------
+def format_document(uri, text):
+    """Format the document with `mcc fmt` and return a single whole-document TextEdit.
+
+    `mcc fmt` only lexes (it is token-preserving), so it works even while the document has type
+    errors. On any failure we return no edits rather than risk mangling the buffer."""
+    rc, out, err, _ = run_on_temp(uri_to_path(uri), text, ["fmt"])
+    if rc != 0 or out == "":
+        return []
+    if out == text:
+        return []  # already formatted
+    lines = text.split("\n")
+    end = {"line": len(lines) - 1, "character": utf16_len(lines[-1])}
+    return [{"range": {"start": {"line": 0, "character": 0}, "end": end}, "newText": out}]
+
+
+# ---- document symbols (textDocument/documentSymbol via `mcc emit-map`) ----------------------
+# The .mcmap already records one row per declaration with kind/symbol/source_line/source_column;
+# we reuse it as a file outline. emit-map requires a successful compile (it runs the full
+# pipeline), so a file with errors yields no outline — acceptable LSP behaviour.
+SYMBOL_KIND = {
+    "function": 12,      # Function
+    "struct": 23, "union": 23, "packed_bits": 23, "overlay_union": 23, "opaque": 23,  # Struct
+    "enum": 10,          # Enum
+    "type_alias": 5,     # Class (closest for an alias)
+}
+ROW_KIND_RE = re.compile(r'kind="([^"]*)"')
+ROW_SYM_RE = re.compile(r'symbol="([^"]*)"')
+ROW_PATH_RE = re.compile(r'source_path="([^"]*)"')
+ROW_LINE_RE = re.compile(r"source_line=(\d+)")
+ROW_COL_RE = re.compile(r"source_column=(\d+)")
+
+
+def document_symbols(uri, text):
+    rc, out, err, tmp = run_on_temp(uri_to_path(uri), text, ["emit-map"])
+    if rc != 0:
+        return []
+    text_lines = text.split("\n")
+    syms = []
+    seen = set()
+    for row in out.splitlines():
+        if not row.startswith("entry "):
+            continue
+        km = ROW_KIND_RE.search(row)
+        if not km or km.group(1) not in SYMBOL_KIND:
+            continue
+        pm = ROW_PATH_RE.search(row)
+        if not pm or pm.group(1) != tmp:  # skip declarations pulled in from imports
+            continue
+        sm, lm, cm = ROW_SYM_RE.search(row), ROW_LINE_RE.search(row), ROW_COL_RE.search(row)
+        if not (sm and lm and cm):
+            continue
+        name, ln, col = sm.group(1), int(lm.group(1)), int(cm.group(1))
+        dedup = (name, ln)
+        if dedup in seen:
+            continue
+        seen.add(dedup)
+        char = byte_col_to_utf16(line_of(text_lines, ln), col)
+        pos = {"line": max(ln - 1, 0), "character": char}
+        rng = {"start": pos, "end": {"line": pos["line"], "character": char + utf16_len(name)}}
+        syms.append({
+            "name": name,
+            "kind": SYMBOL_KIND[km.group(1)],
+            "range": rng,
+            "selectionRange": rng,
+        })
+    return syms
 
 
 def publish(out, uri, text):
@@ -144,8 +255,10 @@ def main():
                 "result": {
                     "capabilities": {
                         "textDocumentSync": 1,  # Full
+                        "documentFormattingProvider": True,  # via `mcc fmt`
+                        "documentSymbolProvider": True,       # via `mcc emit-map`
                     },
-                    "serverInfo": {"name": "mc-lsp", "version": "0.1.0"},
+                    "serverInfo": {"name": "mc-lsp", "version": "0.2.0"},
                 },
             })
         elif method == "initialized":
@@ -165,6 +278,14 @@ def main():
             publish(stdout, uri, docs.get(uri, ""))
         elif method == "textDocument/didClose":
             docs.pop(msg["params"]["textDocument"]["uri"], None)
+        elif method == "textDocument/formatting":
+            uri = msg["params"]["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": format_document(uri, docs.get(uri, ""))})
+        elif method == "textDocument/documentSymbol":
+            uri = msg["params"]["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": document_symbols(uri, docs.get(uri, ""))})
         elif method == "shutdown":
             write_message(stdout, {"jsonrpc": "2.0", "id": mid, "result": None})
         elif method == "exit":

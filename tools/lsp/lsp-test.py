@@ -21,7 +21,16 @@ BAD = (
     "}\n"
 )
 EXPECTED_CODE = "E_NO_LANG_TRAP_EDGE"
-GOOD = "fn ok(a: u32, b: u32) -> u32 {\n    return a + b;\n}\n"
+GOOD = "fn add_nums(a: u32, b: u32) -> u32 {\n    return a + b;\n}\n"
+MESSY = "fn   f( )->u32{\n        return 7;\n}\n"  # misindented -> formatting changes it
+# A multi-byte string literal before an undefined-identifier error on the same line: the LSP
+# `character` must be the UTF-16 offset of `missing_id`, not its byte offset.
+UTF16 = 'fn g() -> u32 { let s: u32 = 1; return missing_id; }\n'
+UTF16_EMOJI = 'fn g() -> u32 { let s = "\U0001F389\U0001F389"; return missing_id; }\n'
+
+
+def utf16_len(s):
+    return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
 
 
 def frame(payload):
@@ -55,6 +64,25 @@ def diagnostics_for(proc, uri):
             return msg["params"]["diagnostics"]
 
 
+def request(proc, rid, method, params):
+    """Send a request and return its result, skipping any interleaved notifications."""
+    proc.stdin.write(frame({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
+    proc.stdin.flush()
+    while True:
+        msg = read_message(proc.stdout)
+        if msg is None:
+            raise SystemExit(f"FAIL: lsp-test — server closed before answering {method}")
+        if msg.get("id") == rid:
+            return msg.get("result")
+
+
+def did_open(proc, uri, text):
+    proc.stdin.write(frame({"jsonrpc": "2.0", "method": "textDocument/didOpen",
+                            "params": {"textDocument": {"uri": uri, "languageId": "mc",
+                                                        "version": 1, "text": text}}}))
+    proc.stdin.flush()
+
+
 def main():
     mcc = sys.argv[1] if len(sys.argv) > 1 else "mcc"
     mcc = os.path.abspath(mcc)
@@ -80,6 +108,8 @@ def main():
         assert init.get("id") == 1 and "result" in init, f"bad initialize result: {init}"
         caps = init["result"]["capabilities"]
         assert caps.get("textDocumentSync") == 1, f"expected Full textDocumentSync, got {caps}"
+        assert caps.get("documentFormattingProvider"), f"expected formatting capability, got {caps}"
+        assert caps.get("documentSymbolProvider"), f"expected documentSymbol capability, got {caps}"
 
         proc.stdin.write(frame({"jsonrpc": "2.0", "method": "initialized", "params": {}}))
 
@@ -114,6 +144,51 @@ def main():
         if EXPECTED_CODE not in [d.get("code") for d in changed]:
             raise SystemExit(f"FAIL: lsp-test — didChange did not re-diagnose: {[d.get('code') for d in changed]}")
 
+        # --- document symbols (via `mcc emit-map`) -------------------------------------------
+        sym_path = os.path.join(workdir, "sym.mc")
+        with open(sym_path, "w") as f:
+            f.write(GOOD)
+        sym_uri = "file://" + sym_path
+        did_open(proc, sym_uri, GOOD)
+        diagnostics_for(proc, sym_uri)
+        symbols = request(proc, 10, "textDocument/documentSymbol", {"textDocument": {"uri": sym_uri}})
+        names = [s.get("name") for s in (symbols or [])]
+        if "add_nums" not in names:
+            raise SystemExit(f"FAIL: lsp-test — documentSymbol did not list function add_nums: {names}")
+        ok_sym = next(s for s in symbols if s["name"] == "add_nums")
+        if ok_sym.get("kind") != 12:  # SymbolKind.Function
+            raise SystemExit(f"FAIL: lsp-test — 'add_nums' symbol kind should be Function(12): {ok_sym}")
+
+        # --- formatting (via `mcc fmt`) ------------------------------------------------------
+        fmt_path = os.path.join(workdir, "fmt.mc")
+        with open(fmt_path, "w") as f:
+            f.write(MESSY)
+        fmt_uri = "file://" + fmt_path
+        did_open(proc, fmt_uri, MESSY)
+        diagnostics_for(proc, fmt_uri)
+        edits = request(proc, 11, "textDocument/formatting", {"textDocument": {"uri": fmt_uri},
+                                                              "options": {"tabSize": 4, "insertSpaces": True}})
+        if not edits or "    return 7;" not in edits[0]["newText"]:
+            raise SystemExit(f"FAIL: lsp-test — formatting did not reindent the body: {edits}")
+
+        # --- UTF-16 position encoding --------------------------------------------------------
+        # The error column must be the UTF-16 offset of `missing_id` — which differs from its
+        # byte offset because of the leading multi-byte emoji string.
+        u_path = os.path.join(workdir, "utf16.mc")
+        with open(u_path, "w") as f:
+            f.write(UTF16_EMOJI)
+        u_uri = "file://" + u_path
+        did_open(proc, u_uri, UTF16_EMOJI)
+        udiags = diagnostics_for(proc, u_uri)
+        line0 = UTF16_EMOJI.split("\n")[0]
+        want_char = utf16_len(line0[:line0.index("missing_id")])
+        want_byte = len(line0[:line0.index("missing_id")].encode("utf-8"))
+        chars = [d["range"]["start"]["character"] for d in udiags]
+        if want_char not in chars:
+            raise SystemExit(f"FAIL: lsp-test — expected UTF-16 column {want_char} for missing_id, got {chars}")
+        if want_byte in chars and want_byte != want_char:
+            raise SystemExit(f"FAIL: lsp-test — reported a byte column {want_byte} instead of UTF-16 {want_char}")
+
         proc.stdin.write(frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": {}}))
         proc.stdin.flush()
         shut = read_message(proc.stdout)
@@ -125,8 +200,8 @@ def main():
         if proc.poll() is None:
             proc.kill()
 
-    print(f"PASS: lsp-test — server published {EXPECTED_CODE} for the broken doc (matching mcc check), "
-          "none for the clean doc, and re-diagnosed on didChange")
+    print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, didChange), documentSymbol outline, "
+          "`mcc fmt` formatting, and UTF-16 position encoding all verified")
 
 
 if __name__ == "__main__":
