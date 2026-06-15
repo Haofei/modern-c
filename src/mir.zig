@@ -12,7 +12,6 @@ const parser = @import("parser.zig");
 const mirScalarLayout = type_layout.scalarLayout;
 
 // Pure AST-shape queries shared with `sema.zig`/`lower_c.zig` (see `ast_query.zig`).
-const isIdentNamed = ast_query.isIdentNamed;
 const MmioRegisterAccess = ast_query.MmioRegisterAccess;
 const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const exprIsIdentNamed = ast_query.exprIsIdentNamed;
