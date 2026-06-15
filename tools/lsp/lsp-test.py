@@ -27,10 +27,28 @@ MESSY = "fn   f( )->u32{\n        return 7;\n}\n"  # misindented -> formatting c
 # `character` must be the UTF-16 offset of `missing_id`, not its byte offset.
 UTF16 = 'fn g() -> u32 { let s: u32 = 1; return missing_id; }\n'
 UTF16_EMOJI = 'fn g() -> u32 { let s = "\U0001F389\U0001F389"; return missing_id; }\n'
+NAV = (
+    "fn target(x: u32) -> u32 {\n"   # target def (0,3); param x def (0,10)
+    "    return x + x;\n"            # x refs (1,11),(1,15)
+    "}\n"
+    "\n"
+    "fn caller() -> u32 {\n"
+    "    return target(5);\n"        # target ref (5,11)
+    "}\n"
+)
 
 
 def utf16_len(s):
     return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
+
+
+def pos_of(text, line_idx, substr, occurrence=0):
+    """LSP position of the `occurrence`-th `substr` on a (0-based) line (NAV is ASCII)."""
+    line = text.split("\n")[line_idx]
+    col = -1
+    for _ in range(occurrence + 1):
+        col = line.index(substr, col + 1)
+    return {"line": line_idx, "character": col}
 
 
 def frame(payload):
@@ -189,6 +207,51 @@ def main():
         if want_byte in chars and want_byte != want_char:
             raise SystemExit(f"FAIL: lsp-test — reported a byte column {want_byte} instead of UTF-16 {want_char}")
 
+        # --- navigation features (via `mcc symbols`) -----------------------------------------
+        nav_path = os.path.join(workdir, "nav.mc")
+        with open(nav_path, "w") as f:
+            f.write(NAV)
+        nav_uri = "file://" + nav_path
+        did_open(proc, nav_uri, NAV)
+        diagnostics_for(proc, nav_uri)
+        td = {"textDocument": {"uri": nav_uri}}
+
+        # hover on the `target` definition -> its function signature + kind.
+        hov = request(proc, 20, "textDocument/hover", {**td, "position": pos_of(NAV, 0, "target")})
+        val = (hov or {}).get("contents", {}).get("value", "")
+        if "fn(u32) -> u32" not in val or "function" not in val:
+            raise SystemExit(f"FAIL: lsp-test — hover missing signature/kind: {hov}")
+
+        # go-to-definition from the `target` call (line 5) -> the def on line 0.
+        defn = request(proc, 21, "textDocument/definition", {**td, "position": pos_of(NAV, 5, "target")})
+        if not defn or defn["range"]["start"]["line"] != 0:
+            raise SystemExit(f"FAIL: lsp-test — definition did not jump to line 0: {defn}")
+
+        # references to `target` (declaration + the one call).
+        refs = request(proc, 22, "textDocument/references",
+                       {**td, "position": pos_of(NAV, 0, "target"), "context": {"includeDeclaration": True}})
+        ref_lines = sorted(r["range"]["start"]["line"] for r in (refs or []))
+        if ref_lines != [0, 5]:
+            raise SystemExit(f"FAIL: lsp-test — references to target should be lines [0,5], got {ref_lines}")
+
+        # document highlight for `x` -> the two uses + the param declaration (3, all line 0/1).
+        hl = request(proc, 23, "textDocument/documentHighlight", {**td, "position": pos_of(NAV, 1, "x")})
+        if len(hl or []) != 3:
+            raise SystemExit(f"FAIL: lsp-test — expected 3 highlights for x, got {hl}")
+
+        # rename `x` -> `y`: edits for the param decl + both uses (3 edits, all in this file).
+        ren = request(proc, 24, "textDocument/rename",
+                      {**td, "position": pos_of(NAV, 0, "x"), "newName": "y"})
+        edits = (ren or {}).get("changes", {}).get(nav_uri, [])
+        if len(edits) != 3 or any(e["newText"] != "y" for e in edits):
+            raise SystemExit(f"FAIL: lsp-test — rename should produce 3 edits to 'y', got {ren}")
+
+        # semantic tokens: first token is the `target` function def at (line 0, char 3, len 6).
+        sem = request(proc, 25, "textDocument/semanticTokens/full", td)
+        data = (sem or {}).get("data", [])
+        if data[:5] != [0, 3, 6, 0, 0]:  # deltaLine, deltaChar, length, tokenType(function=0), mods
+            raise SystemExit(f"FAIL: lsp-test — first semantic token should be the function def: {data[:5]}")
+
         proc.stdin.write(frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": {}}))
         proc.stdin.flush()
         shut = read_message(proc.stdout)
@@ -201,7 +264,8 @@ def main():
             proc.kill()
 
     print(f"PASS: lsp-test — diagnostics ({EXPECTED_CODE}, clean, didChange), documentSymbol outline, "
-          "`mcc fmt` formatting, and UTF-16 position encoding all verified")
+          "`mcc fmt` formatting, UTF-16 positions, and hover/definition/references/highlight/rename/"
+          "semantic-tokens (via `mcc symbols`) all verified")
 
 
 if __name__ == "__main__":

@@ -11,11 +11,12 @@ is the single source of truth; the server only drives `mcc` subcommands and tran
                    while the buffer has type errors).
   - Document symbols — `textDocument/documentSymbol` reuses `mcc emit-map`'s per-declaration
                    rows as a file outline.
+  - Navigation    — hover (type + kind), go-to-definition, find-references, document-highlight,
+                   rename, and semantic tokens, all driven by `mcc symbols` (a JSON index of
+                   definitions + references with spans).
 
 Positions are converted from `mcc`'s 1-based byte columns to LSP UTF-16 code-unit offsets, so
-ranges are correct on non-ASCII source. Features that need a symbol/type index the CLI does not
-yet expose (hover types, go-to-definition, references, rename, semantic tokens) would require a
-new `mcc` subcommand and can layer on without changing this transport.
+ranges are correct on non-ASCII source.
 
 Usage (configured as the language server for `.mc` files in an editor):
     MCC=/path/to/mcc python3 tools/lsp/mc-lsp.py
@@ -222,6 +223,151 @@ def document_symbols(uri, text):
     return syms
 
 
+# ---- symbol index (the `mcc symbols` JSON) -------------------------------------------------
+# Cached per-document so a hover/definition/reference burst reuses one compiler call.
+_index_cache = {}  # uri -> (text, index)
+
+
+def get_index(uri, text):
+    cached = _index_cache.get(uri)
+    if cached and cached[0] == text:
+        return cached[1]
+    rc, out, err, _ = run_on_temp(uri_to_path(uri), text, ["symbols"])
+    try:
+        index = json.loads(out) if rc != 127 and out else {"defs": [], "refs": []}
+    except (json.JSONDecodeError, ValueError):
+        index = {"defs": [], "refs": []}
+    _index_cache[uri] = (text, index)
+    return index
+
+
+# An index span is {line (1-based), col (1-based byte), len (bytes)}; convert to an LSP range
+# (0-based line, UTF-16 character offsets).
+def span_to_range(lines, span):
+    ln = span["line"] - 1
+    line_text = lines[ln] if 0 <= ln < len(lines) else ""
+    start = byte_col_to_utf16(line_text, span["col"])
+    end = byte_col_to_utf16(line_text, span["col"] + span["len"])
+    ln = max(ln, 0)
+    return {"start": {"line": ln, "character": start}, "end": {"line": ln, "character": end}}
+
+
+def _le(a, b):
+    return (a["line"], a["character"]) <= (b["line"], b["character"])
+
+
+def in_range(pos, rng):
+    return _le(rng["start"], pos) and _le(pos, rng["end"])
+
+
+# Find the def or ref whose span covers `position`: returns ("ref"|"def", entry) or (None, None).
+def covering(index, lines, position):
+    for r in index.get("refs", []):
+        if in_range(position, span_to_range(lines, r["span"])):
+            return "ref", r
+    for d in index.get("defs", []):
+        if in_range(position, span_to_range(lines, d["span"])):
+            return "def", d
+    return None, None
+
+
+# The declaration span (with len) the symbol under `position` belongs to, or None.
+def target_def(index, lines, position):
+    kind, sym = covering(index, lines, position)
+    if kind == "ref":
+        return sym["def"]      # {line, col, len}
+    if kind == "def":
+        return sym["span"]
+    return None
+
+
+def hover(uri, text, position):
+    index = get_index(uri, text)
+    lines = text.split("\n")
+    kind, sym = covering(index, lines, position)
+    if not sym:
+        return None
+    md = f"```mc\n{sym['name']}: {sym['type']}\n```\n*{sym['kind']}*"
+    return {"contents": {"kind": "markdown", "value": md}, "range": span_to_range(lines, sym["span"])}
+
+
+def goto_definition(uri, text, position):
+    index = get_index(uri, text)
+    lines = text.split("\n")
+    d = target_def(index, lines, position)
+    if not d:
+        return None
+    return {"uri": uri, "range": span_to_range(lines, d)}
+
+
+def _occurrences(index, lines, position, include_decl):
+    d = target_def(index, lines, position)
+    if not d:
+        return []
+    tl, tc = d["line"], d["col"]
+    ranges = [span_to_range(lines, r["span"]) for r in index.get("refs", [])
+              if r["def"]["line"] == tl and r["def"]["col"] == tc]
+    if include_decl:
+        ranges.append(span_to_range(lines, d))
+    return ranges
+
+
+def find_references(uri, text, position, include_decl):
+    return [{"uri": uri, "range": r}
+            for r in _occurrences(get_index(uri, text), text.split("\n"), position, include_decl)]
+
+
+def document_highlight(uri, text, position):
+    return [{"range": r, "kind": 2}  # DocumentHighlightKind.Read
+            for r in _occurrences(get_index(uri, text), text.split("\n"), position, True)]
+
+
+def do_rename(uri, text, position, new_name):
+    edits = [{"range": r, "newText": new_name}
+             for r in _occurrences(get_index(uri, text), text.split("\n"), position, True)]
+    if not edits:
+        return None
+    return {"changes": {uri: edits}}
+
+
+# Semantic tokens: classify every identifier occurrence (defs + refs) by its symbol kind, then
+# delta-encode per the LSP spec (relative line/char, length, tokenType, modifiers).
+TOKEN_TYPES = ["function", "variable", "parameter", "type"]
+KIND_TO_TOKEN = {
+    "function": 0,
+    "global": 1, "constant": 1, "local": 1, "local_mut": 1,
+    "param": 2,
+    "struct": 3, "enum": 3, "union": 3, "packed_bits": 3, "overlay_union": 3,
+    "opaque": 3, "type_alias": 3,
+}
+
+
+def semantic_tokens(uri, text):
+    index = get_index(uri, text)
+    lines = text.split("\n")
+    toks = []
+    for entry in index.get("defs", []) + index.get("refs", []):
+        ttype = KIND_TO_TOKEN.get(entry["kind"])
+        if ttype is None:
+            continue
+        rng = span_to_range(lines, entry["span"])
+        if rng["start"]["line"] != rng["end"]["line"]:
+            continue
+        length = rng["end"]["character"] - rng["start"]["character"]
+        if length <= 0:
+            continue
+        toks.append((rng["start"]["line"], rng["start"]["character"], length, ttype))
+    toks.sort()
+    data = []
+    prev_line, prev_char = 0, 0
+    for line, char, length, ttype in toks:
+        d_line = line - prev_line
+        d_char = char - prev_char if d_line == 0 else char
+        data += [d_line, d_char, length, ttype, 0]
+        prev_line, prev_char = line, char
+    return {"data": data}
+
+
 def publish(out, uri, text):
     write_message(out, {
         "jsonrpc": "2.0",
@@ -257,8 +403,18 @@ def main():
                         "textDocumentSync": 1,  # Full
                         "documentFormattingProvider": True,  # via `mcc fmt`
                         "documentSymbolProvider": True,       # via `mcc emit-map`
+                        # the following are powered by `mcc symbols`
+                        "hoverProvider": True,
+                        "definitionProvider": True,
+                        "referencesProvider": True,
+                        "documentHighlightProvider": True,
+                        "renameProvider": True,
+                        "semanticTokensProvider": {
+                            "legend": {"tokenTypes": TOKEN_TYPES, "tokenModifiers": []},
+                            "full": True,
+                        },
                     },
-                    "serverInfo": {"name": "mc-lsp", "version": "0.2.0"},
+                    "serverInfo": {"name": "mc-lsp", "version": "0.3.0"},
                 },
             })
         elif method == "initialized":
@@ -286,6 +442,36 @@ def main():
             uri = msg["params"]["textDocument"]["uri"]
             write_message(stdout, {"jsonrpc": "2.0", "id": mid,
                                    "result": document_symbols(uri, docs.get(uri, ""))})
+        elif method == "textDocument/hover":
+            p = msg["params"]
+            uri = p["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": hover(uri, docs.get(uri, ""), p["position"])})
+        elif method == "textDocument/definition":
+            p = msg["params"]
+            uri = p["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": goto_definition(uri, docs.get(uri, ""), p["position"])})
+        elif method == "textDocument/references":
+            p = msg["params"]
+            uri = p["textDocument"]["uri"]
+            include = p.get("context", {}).get("includeDeclaration", True)
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": find_references(uri, docs.get(uri, ""), p["position"], include)})
+        elif method == "textDocument/documentHighlight":
+            p = msg["params"]
+            uri = p["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": document_highlight(uri, docs.get(uri, ""), p["position"])})
+        elif method == "textDocument/rename":
+            p = msg["params"]
+            uri = p["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": do_rename(uri, docs.get(uri, ""), p["position"], p["newName"])})
+        elif method == "textDocument/semanticTokens/full":
+            uri = msg["params"]["textDocument"]["uri"]
+            write_message(stdout, {"jsonrpc": "2.0", "id": mid,
+                                   "result": semantic_tokens(uri, docs.get(uri, ""))})
         elif method == "shutdown":
             write_message(stdout, {"jsonrpc": "2.0", "id": mid, "result": None})
         elif method == "exit":
