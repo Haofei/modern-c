@@ -369,11 +369,6 @@ fn patternTypeMentions(pattern: ast.Pattern, name: []const u8) bool {
 
 // --- the substituting / rewriting clone ------------------------------------
 
-pub fn cloneFnDecl(arena: std.mem.Allocator, fn_decl: ast.FnDecl, subst: *const Subst) !ast.FnDecl {
-    var ctx = CloneCtx{ .arena = arena, .subst = subst };
-    return cloneFnDeclCtx(&ctx, fn_decl);
-}
-
 fn cloneFnDeclCtx(ctx: *const CloneCtx, fn_decl: ast.FnDecl) !ast.FnDecl {
     var params = try ctx.arena.alloc(ast.Param, fn_decl.params.len);
     for (fn_decl.params, 0..) |param, i| {

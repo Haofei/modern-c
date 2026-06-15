@@ -577,15 +577,6 @@ fn domainArith(dw: ?DomainWidth, raw: i128) ComptimeFold {
 // Fold every `const NAME: T = …` global to a comptime value, populating `out`
 // (keyed by name). Earlier const globals are visible to later ones. Globals
 // whose initializer is not a foldable comptime constant are simply omitted.
-pub fn collectConstGlobals(
-    allocator: std.mem.Allocator,
-    module: ast.Module,
-    funcs: *const std.StringHashMap(ast.FnDecl),
-    out: *std.StringHashMap(ComptimeValue),
-) !void {
-    try collectConstGlobalsWithOptions(allocator, module, funcs, out, .{});
-}
-
 pub const CollectConstGlobalsOptions = struct {
     reflect: ?ReflectFn = null,
     reflect_ctx: ?*anyopaque = null,
