@@ -21,6 +21,17 @@ fn pair_second(p: Pair) -> u32 {
     return p.vals[1];   // constant index into the struct field: bounds check elided under --optimize
 }
 
+// A constant range into a fixed array — exercises the const-slice construction bounds-check
+// elision (`start <= end <= len`). Reads `.len` rather than indexing, so the only bounds check
+// in play is the slice construction itself (a per-element index into the runtime-length slice
+// would keep its own, non-elidable, check).
+global slice_src: [6]u32;
+
+fn slice_len_demo() -> u32 {
+    let s: []mut u32 = slice_src[2..5];   // {.., .., ..}: construction bounds check elided under --optimize
+    return s.len as u32;                  // 3
+}
+
 export fn opt_index_demo() -> u32 {
     let a: [5]u32 = .{2, 3, 5, 7, 11};
     var acc: u32 = a[0];   // 2
@@ -30,5 +41,6 @@ export fn opt_index_demo() -> u32 {
     let signed_val: i32 = signed_div_demo((a[1] as i32) - 10); // (3 - 10) / 2 = -7 / 2 = -3 (trunc)
     let p: Pair = .{ .vals = .{40, 50} };
     let m: u32 = pair_second(p);                             // 50 (member-base const index)
-    return base + ((signed_val + 10) as u32) + m;            // 5 + 7 + 50 = 62
+    let sl: u32 = slice_len_demo();                          // 3 (const-slice construction)
+    return base + ((signed_val + 10) as u32) + m + sl;      // 5 + 7 + 50 + 3 = 65
 }

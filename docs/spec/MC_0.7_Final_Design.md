@@ -2022,6 +2022,12 @@ Fixed compile-time access uses explicit const operations:
 let x = arr.const_get<0>();     // OK if 0 < len(arr)
 ```
 
+Under `--optimize` the fact-gated MIR optimizer (annex E.4) additionally admits operations whose
+language trap it can prove dead — a constant in-range array index, a divide/modulo by a non-zero
+(non-`-1`, when signed) literal, and a constant in-bounds range slice — so those need no explicit
+const form. The default pipeline still rejects them; the guarantee is identical either way (no
+trap edge is emitted), only the proof precision differs.
+
 Boot entry:
 
 ```mc
@@ -3635,17 +3641,32 @@ or unsound transform can never silently affect a normal build.
 > divide by a constant; the frontend `no_lang_trap` check applies the same proof so sema and
 > MIR agree.
 
+**Transform 3 — const-slice bounds-check elision.**
+
+> *Proof obligation:* a range slice `base[start..end]` whose `start` and `end` are both
+> non-negative integer literals `k0`, `k1`, with the base a fixed array of statically-known
+> length `N` (the same bases Transform 1 admits), and `k0 <= k1 <= N`. All three comparisons of
+> the runtime `start <= end <= len` guard are then compile-time constants that hold, so the
+> `Bounds` check provably never traps. (This is the slice-construction check only; indexing the
+> resulting view still carries its own check against the view's runtime length.)
+>
+> *Transform:* omit the `cmp_bounds` instruction and its `Bounds` trap edge; the slice is
+> marked `range_slice_const_in_bounds`. A trap-free MIR means a `#[no_lang_trap]` function may
+> take a constant sub-range of a fixed array; the frontend `no_lang_trap` check applies the same
+> proof so sema and MIR agree, and both backends drop the emitted `start <= end <= len` guard.
+
 *Tests.* A MIR unit test asserts each check's trap edge is dropped for the provable case
-(`a[2]` on `[4]u32`; `x / 7`) and **kept** for the unprovable one (`a[i]`; `x / y`). `opt-test`
-asserts `verify --optimize` accepts `#[no_lang_trap]` const-index and divide-by-constant
-operations (signed and unsigned) that `verify` rejects, and that a variable index, a variable
-divisor, and a signed `/ -1` stay rejected. `opt-equiv-test` compiles a fixture exercising all
+(`a[2]` on `[4]u32`; `x / 7`; `g[1..3]` on `[8]u32`) and **kept** for the unprovable one (`a[i]`;
+`x / y`; `g[1..9]`/`g[1..i]`). `opt-test` asserts `verify --optimize` accepts `#[no_lang_trap]`
+const-index, divide-by-constant (signed and unsigned), and const-slice operations that `verify`
+rejects, and that a variable index, a variable divisor, a signed `/ -1`, and an out-of-range or
+variable-bound slice stay rejected. `opt-equiv-test` compiles a fixture exercising all
 transforms — including a signed division of a runtime-negative value, pinning that truncation
-toward zero is identical between the checked helper and a plain `sdiv` — through the C and LLVM
-backends, default and `--optimize`, runs all four, and
-asserts identical results — and that each optimized build actually dropped the check while the
-default kept it. So eliding the provably-dead checks is verified behavior-preserving across
-both backends, not merely a verification-precision change.
+toward zero is identical between the checked helper and a plain `sdiv`, and a const-slice whose
+construction guard is elided — through the C and LLVM backends, default and `--optimize`, runs
+all four, and asserts identical results — and that each optimized build actually dropped the
+check while the default kept it. So eliding the provably-dead checks is verified
+behavior-preserving across both backends, not merely a verification-precision change.
 
 ---
 

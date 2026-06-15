@@ -2740,7 +2740,9 @@ pub const Checker = struct {
                 return .unknown;
             },
             .slice => |node| {
-                if (ctx.no_lang_trap) {
+                // A constant range into a fixed array provably never traps, so under `--optimize`
+                // it is allowed in `#[no_lang_trap]` — mirroring the const-index elision (annex E).
+                if (ctx.no_lang_trap and !(self.optimize and self.sliceProvablyInBounds(node.base.*, node.start.*, node.end.*, ctx))) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "range slicing may trap in #[no_lang_trap]");
                 }
                 const base_class = self.checkExpr(node.base.*, ctx);
@@ -4462,6 +4464,23 @@ pub const Checker = struct {
         };
         const n = parseArrayLen(arr.len, ctx.const_fns, ctx.const_globals) orelse return false;
         return k < n;
+    }
+
+    // Const-slice analogue of `indexProvablyInBounds`: both ends are non-negative integer literals
+    // into a fixed array of known length, with `start <= end <= len`. Conservative — false on any
+    // non-literal bound or unknown base length, so an out-of-range slice is never proven safe.
+    fn sliceProvablyInBounds(self: *Checker, base: ast.Expr, start: ast.Expr, end: ast.Expr, ctx: Context) bool {
+        _ = self;
+        const lo = constIndexLiteral(start) orelse return false;
+        const hi = constIndexLiteral(end) orelse return false;
+        if (lo > hi) return false; // start <= end
+        const base_ty = exprStorageType(base, ctx) orelse return false;
+        const arr = switch (resolveAliasType(base_ty, ctx).kind) {
+            .array => |node| node,
+            else => return false,
+        };
+        const n = parseArrayLen(arr.len, ctx.const_fns, ctx.const_globals) orelse return false;
+        return hi <= n; // end <= len
     }
 
     // An `opaque struct`'s private fields may be named only by the struct's own associated

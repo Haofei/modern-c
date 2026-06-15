@@ -31,3 +31,18 @@ struct OobFrame {
 fn member_oob(f: OobFrame) -> u32 {
     return f.slots[9];
 }
+
+// An out-of-range constant slice (`end = 9 > len = 8`) is NOT in bounds, so the const-slice
+// elision must not fire — the Bounds check (and rejection) must remain.
+global gbuf: [8]u32;
+
+#[no_lang_trap]
+fn slice_oob() -> []mut u32 {
+    return gbuf[1..9];
+}
+
+// A variable slice bound could be out of range — the construction Bounds check must stay.
+#[no_lang_trap]
+fn slice_var(i: usize) -> []mut u32 {
+    return gbuf[1..i];
+}

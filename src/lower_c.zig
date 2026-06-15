@@ -4446,7 +4446,7 @@ const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, "]");
                 }
             },
-            .slice => |node| try self.emitSliceExpr(node, locals),
+            .slice => |node| try self.emitSliceExpr(node, expr.span, locals),
             .address_of => |inner| {
                 try self.out.appendSlice(self.allocator, "&");
                 try self.emitAddressOperand(inner.*, locals);
@@ -6653,7 +6653,7 @@ const CEmitter = struct {
         return null;
     }
 
-    fn emitSliceExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) !void {
+    fn emitSliceExpr(self: *CEmitter, node: anytype, slice_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !void {
         const base_ty = self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
         const slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedCEmission;
         const slice_name = try self.sliceTypeName(slice_ty.kind.slice.child.*, slice_ty.kind.slice.mutability);
@@ -6677,7 +6677,14 @@ const CEmitter = struct {
             else => return error.UnsupportedCEmission,
         }
 
-        try self.out.print(self.allocator, "; if (mc_start{d} > mc_end{d} || mc_end{d} > mc_len{d}) mc_trap_Bounds(); ({s}){{ .ptr = ", .{ n, n, n, n, slice_name });
+        // OPT (annex E): when the optimized MIR proved this constant range in bounds, the
+        // `start <= end <= len` guard is elided (the `mc_len` binding above is still emitted but
+        // unused, which is harmless).
+        if (self.mirCheckElided(slice_span)) {
+            try self.out.print(self.allocator, "; (void)mc_len{d}; ({s}){{ .ptr = ", .{ n, slice_name });
+        } else {
+            try self.out.print(self.allocator, "; if (mc_start{d} > mc_end{d} || mc_end{d} > mc_len{d}) mc_trap_Bounds(); ({s}){{ .ptr = ", .{ n, n, n, n, slice_name });
+        }
         switch (resolved.kind) {
             .slice => {
                 try self.out.appendSlice(self.allocator, "(");

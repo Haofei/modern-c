@@ -35,6 +35,16 @@ if ! "$MCC" lower-mir "$SRC" --optimize 2>/dev/null | grep -q 'detail=const_in_b
     echo "FAIL: opt-test — elided index not marked const_in_bounds under --optimize"; exit 1
 fi
 
+# 2c. Const-slice elision: the `const_slice` range provably can't trap, so under --optimize the
+#     slice is marked range_slice_const_in_bounds (unoptimized it is a plain range_slice and the
+#     Bounds edge above covers its trap edge).
+if ! "$MCC" lower-mir "$SRC" 2>/dev/null | grep -q 'detail=range_slice '; then
+    echo "FAIL: opt-test — expected a plain range_slice in the unoptimized MIR"; exit 1
+fi
+if ! "$MCC" lower-mir "$SRC" --optimize 2>/dev/null | grep -q 'detail=range_slice_const_in_bounds'; then
+    echo "FAIL: opt-test — const-slice not marked range_slice_const_in_bounds under --optimize"; exit 1
+fi
+
 # 2b. Divide-by-constant elision: the DivideByZero (and the signed INT_MIN/-1 overflow) edge
 #     is present unoptimized and gone under --optimize.
 if ! "$MCC" lower-mir "$SRC" 2>/dev/null | grep -q 'kind=DivideByZero'; then
@@ -52,5 +62,10 @@ fi
 if ! "$MCC" lower-mir "$NEG" --optimize 2>/dev/null | grep -q 'kind=IntegerOverflow'; then
     echo "FAIL: opt-test — signed / -1 lost its IntegerOverflow trap edge under --optimize"; exit 1
 fi
+# The out-of-range constant slice (`gbuf[1..9]`, end 9 > len 8) must keep its Bounds edge — the
+# const-slice elision must never prove an out-of-bounds range safe.
+if ! "$MCC" lower-mir "$NEG" --optimize 2>/dev/null | grep -q 'kind=Bounds'; then
+    echo "FAIL: opt-test — an out-of-range const slice lost its Bounds trap edge under --optimize"; exit 1
+fi
 
-echo "PASS: opt-test — const-index bounds and divide-by-constant check elision proven, gated by --optimize, sound on variable/-1 operands"
+echo "PASS: opt-test — const-index/const-slice bounds and divide-by-constant check elision proven, gated by --optimize, sound on variable/out-of-range/-1 operands"

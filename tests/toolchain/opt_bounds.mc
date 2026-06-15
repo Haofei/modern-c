@@ -49,3 +49,13 @@ fn signed_div_const(x: i32) -> i32 {
 fn signed_mod_const(x: i32) -> i32 {
     return x % 7;
 }
+
+// A constant range `[1, 3)` into a fixed-size array: `0 <= 1 <= 3 <= 8`, so the slice
+// construction's `start <= end <= len` check provably never traps and is elided under
+// `--optimize` (the Bounds trap edge dropped, the contract satisfied).
+global gbuf: [8]u32;
+
+#[no_lang_trap]
+fn const_slice() -> []mut u32 {
+    return gbuf[1..3];
+}

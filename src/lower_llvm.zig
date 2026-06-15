@@ -738,7 +738,7 @@ const LlvmEmitter = struct {
             .address_of => |inner| try self.emitAddressOf(inner.*),
             .deref => |inner| try self.emitDeref(inner.*, expected_ty),
             .index => |node| try self.emitIndexLoad(node),
-            .slice => |node| try self.emitSlice(node),
+            .slice => |node| try self.emitSlice(node, expr.span),
             .member => |node| try self.emitMemberLoad(node),
             .try_expr => |node| try self.emitTryExpr(node.operand.*, expected_ty),
             else => error.UnsupportedLlvmEmission,
@@ -2129,13 +2129,16 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n  call void @mc_trap_Bounds(){s}\n  unreachable\n{s}:\n", .{ ok, cont, trap, try self.debugCallSuffix(), trap, try self.debugCallSuffix(), cont });
     }
 
-    fn emitSlice(self: *LlvmEmitter, node: anytype) ![]const u8 {
+    fn emitSlice(self: *LlvmEmitter, node: anytype, slice_span: ast.Span) ![]const u8 {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedLlvmEmission;
         const slice = switch (slice_ty.kind) {
             .slice => |slice| slice,
             else => return error.UnsupportedLlvmEmission,
         };
+        // OPT (annex E): the optimized MIR proves a constant range in bounds and elides the
+        // `start <= end <= len` guard — parity with the C backend and the index elision.
+        const elide = self.mirCheckElided(slice_span);
         const start = try self.emitExpr(node.start.*, simpleType((node.start.*).span, "usize"));
         const end = try self.emitExpr(node.end.*, simpleType((node.end.*).span, "usize"));
         const base_ptr = switch (base_ty.kind) {
@@ -2143,7 +2146,7 @@ const LlvmEmitter = struct {
                 const array_ptr = try self.arrayBasePointer(node.base.*);
                 const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
                 const elem_ptr = try self.nextTemp();
-                try self.emitSliceBoundsCheck(start, end, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{len}));
+                if (!elide) try self.emitSliceBoundsCheck(start, end, try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{len}));
                 try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i64 {s}\n", .{ elem_ptr, try self.llvmType(base_ty), array_ptr, start });
                 break :blk elem_ptr;
             },
@@ -2155,7 +2158,7 @@ const LlvmEmitter = struct {
                 const elem_ptr = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ ptr, base_llvm, base });
                 try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ len, base_llvm, base });
-                try self.emitSliceBoundsCheck(start, end, len);
+                if (!elide) try self.emitSliceBoundsCheck(start, end, len);
                 try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ elem_ptr, try self.llvmType(slice.child.*), ptr, start });
                 break :blk elem_ptr;
             },

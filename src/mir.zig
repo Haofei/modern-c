@@ -2256,9 +2256,21 @@ const FunctionBuilder = struct {
                 try self.addIndexBaseCheck(node.base.*, node.base.span);
                 try self.addIndexOperandCheck(node.start.*, node.start.span);
                 try self.addIndexOperandCheck(node.end.*, node.end.span);
-                try self.addInstr(.cmp_bounds, "start <= end <= len", .bool, expr.span);
-                try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
-                try self.addInstr(.index, "range_slice", self.exprType(expr), expr.span);
+                // OPT (annex E) — const-slice bounds-check elision. When optimization is on and
+                // the range `[k0, k1)` is two non-negative integer literals into a fixed array of
+                // statically-known length `N` with `k0 <= k1 <= N`, the `start <= end <= len`
+                // check provably never traps, so the `cmp_bounds` instruction and its `Bounds`
+                // trap edge are omitted and the slice operand source point is recorded for the
+                // backends to skip the emitted check. Off by default; the standard MIR is
+                // unchanged.
+                const elide_slice = self.optimize and self.sliceProvablyInBounds(node.base.*, node.start.*, node.end.*);
+                if (elide_slice) {
+                    try self.elided_bounds.append(self.allocator, .{ .line = expr.span.line, .column = expr.span.column });
+                } else {
+                    try self.addInstr(.cmp_bounds, "start <= end <= len", .bool, expr.span);
+                    try self.addTrapEdge(.Bounds, .bounds_check, expr.span);
+                }
+                try self.addInstr(.index, if (elide_slice) "range_slice_const_in_bounds" else "range_slice", self.exprType(expr), expr.span);
                 try self.buildExpr(node.base.*);
                 try self.buildExpr(node.start.*);
                 try self.buildExpr(node.end.*);
@@ -2669,6 +2681,20 @@ const FunctionBuilder = struct {
         if (k.negative) return false;
         const n = self.baseArrayLen(base) orelse return false;
         return k.magnitude < n;
+    }
+
+    // OPT (annex E) proof obligation for const-slice bounds elision: the range `[start, end)` is
+    // two non-negative integer literals into a fixed array of statically-known length `N`, with
+    // `start <= end <= N`. Conservative: false for any non-literal/negative bound or an unknown
+    // base length, so it can never prove an out-of-range slice in-bounds.
+    fn sliceProvablyInBounds(self: *FunctionBuilder, base: ast.Expr, start: ast.Expr, end: ast.Expr) bool {
+        const lo = integerLiteralValue(start) orelse return false;
+        if (lo.negative) return false;
+        const hi = integerLiteralValue(end) orelse return false;
+        if (hi.negative) return false;
+        if (lo.magnitude > hi.magnitude) return false; // start <= end
+        const n = self.baseArrayLen(base) orelse return false;
+        return hi.magnitude <= n; // end <= len
     }
 
     // OPT (annex E) proof obligation for divide-by-zero elision: the division is on an
