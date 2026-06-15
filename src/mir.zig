@@ -4601,14 +4601,6 @@ fn resultPayloadTypeExprAliasDepth(ty: ast.TypeExpr, tag: []const u8, aliases: *
     };
 }
 
-fn structTypeName(ty: ast.TypeExpr) ?[]const u8 {
-    return switch (ty.kind) {
-        .name => |name| name.text,
-        .qualified => |node| structTypeName(node.child.*),
-        else => null,
-    };
-}
-
 fn structTypeNameAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
     return structTypeNameAliasDepth(ty, aliases, 0);
 }

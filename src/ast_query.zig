@@ -8,7 +8,8 @@
 // pass but not another. One definition keeps the passes agreeing on what a given form *is*.
 //
 // Only forms that are byte-identical across the passes live here; deliberately per-pass queries
-// (e.g. `structTypeName`, whose sema copy alone sees through a pointer) stay in their file.
+// (e.g. sema's `structTypeName`, whose copy alone sees through a pointer) stay in their file. The
+// non-pointer-aware struct-name lookup used by the MIR builder and C backend is just `typeName`.
 
 const std = @import("std");
 

@@ -5499,7 +5499,7 @@ const CEmitter = struct {
     }
 
     fn structDeclForResolvedTarget(self: *CEmitter, target_ty: ast.TypeExpr) ?ast.StructDecl {
-        const struct_name = structTypeName(target_ty) orelse return null;
+        const struct_name = typeName(target_ty) orelse return null;
         return self.structs.get(struct_name);
     }
 
@@ -10963,13 +10963,6 @@ fn resultPayloadTypeForTag(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
 // (`*const u8` or `[*]const u8`), the FFI-facing string shape MC's grammar can
 // express. Other targets are left unsupported (loud failure by design).
 
-fn structTypeName(ty: ast.TypeExpr) ?[]const u8 {
-    return switch (ty.kind) {
-        .name => |name| name.text,
-        .qualified => |node| structTypeName(node.child.*),
-        else => null,
-    };
-}
 
 fn structFieldType(struct_decl: ast.StructDecl, field_name: []const u8) ?ast.TypeExpr {
     for (struct_decl.fields) |field| {
