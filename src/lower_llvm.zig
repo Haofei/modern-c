@@ -65,6 +65,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         .tagged_unions = std.StringHashMap(ast.UnionDecl).init(allocator),
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
+        .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .global_initializers = std.StringHashMap(ast.Expr).init(allocator),
@@ -141,6 +142,10 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
             else => {},
         }
     }
+    // Scalar-env closure thunks discovered while emitting bodies. LLVM IR allows
+    // forward references to these `@mc_envthunk_*` symbols, so emitting them after
+    // the function bodies is fine.
+    try ctx.emitBindThunks();
     try ctx.emitBackendNameAliases(module);
     try ctx.emitStringLiteralGlobals();
     try ctx.emitIntrinsicDecls();
@@ -181,6 +186,11 @@ const LlvmEmitter = struct {
     tagged_unions: std.StringHashMap(ast.UnionDecl) = undefined,
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
+    // `bind(scalar, f)` closures whose env is a non-pointer integer scalar. The
+    // closure's env slot is `ptr`, so the scalar is widened via `inttoptr` and the
+    // code pointer points at a generated thunk that narrows it back with `ptrtoint`
+    // before calling `f`. Keyed by target function name.
+    bind_thunks: std.StringHashMap(BindThunk) = undefined,
     // Source function name -> `#[backend_name("Y")]` override; emitted as a module-level
     // alias `@Y = alias <fnty>, ptr @name` so the override symbol is linkable (the C backend
     // achieves the same via an asm label).
@@ -217,6 +227,7 @@ const LlvmEmitter = struct {
         self.tagged_unions.deinit();
         self.struct_types.deinit();
         self.fn_sigs.deinit();
+        self.bind_thunks.deinit();
         self.backend_names.deinit();
         self.global_types.deinit();
         self.global_initializers.deinit();
@@ -2282,13 +2293,75 @@ const LlvmEmitter = struct {
         const closure_ty = self.resolveAliasType(expected_ty);
         if (closure_ty.kind != .closure_type) return error.UnsupportedLlvmEmission;
         const fname = calleeIdentName(call.args[1]) orelse return error.UnsupportedLlvmEmission;
-        if (!self.fn_sigs.contains(fname)) return error.UnsupportedLlvmEmission;
-        const env = try self.emitExpr(call.args[0], self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission);
+        const sig = self.fn_sigs.get(fname) orelse return error.UnsupportedLlvmEmission;
+        if (sig.params.len == 0) return error.UnsupportedLlvmEmission;
+        // The function's first parameter type is the env type. Use it as the
+        // expected type so address-of-param / scalar envs (whose `exprType` may be
+        // null) still resolve, instead of the previous `exprType(...) orelse fail`.
+        const env_ty = sig.params[0].ty;
+        const env_llvm = try self.llvmType(env_ty);
+
+        const code_ptr: []const u8 = blk: {
+            if (std.mem.eql(u8, env_llvm, "ptr")) break :blk fname;
+            // Scalar env: must be an integer type to widen into the `ptr` slot. A
+            // generated thunk narrows it back before calling the real function.
+            if (self.integerBitsOf(env_ty) == null) return error.UnsupportedLlvmEmission;
+            const thunk_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_envthunk_{s}", .{fname});
+            if (!self.bind_thunks.contains(thunk_name)) try self.bind_thunks.put(thunk_name, .{ .fname = fname, .sig = sig });
+            break :blk thunk_name;
+        };
+
+        const env_value = try self.emitExpr(call.args[0], env_ty);
+        // Widen an integer scalar env into the closure's `ptr` env slot.
+        const env_ptr: []const u8 = if (std.mem.eql(u8, env_llvm, "ptr")) env_value else widen: {
+            const p = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = inttoptr {s} {s} to ptr\n", .{ p, env_llvm, env_value });
+            break :widen p;
+        };
+
         const with_code = try self.nextTemp();
         const result = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr @{s}, 0\n", .{ with_code, try self.llvmType(closure_ty), fname });
-        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, ptr {s}, 1\n", .{ result, try self.llvmType(closure_ty), with_code, env });
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr @{s}, 0\n", .{ with_code, try self.llvmType(closure_ty), code_ptr });
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, ptr {s}, 1\n", .{ result, try self.llvmType(closure_ty), with_code, env_ptr });
         return result;
+    }
+
+    // Emit a `define` for each collected scalar-env thunk:
+    //   define RET @mc_envthunk_f(ptr %env, P...) { %i = ptrtoint ptr %env to <iN>; ... call @f(<iN> %i, P...) ... }
+    // The first parameter is genuinely `ptr`, matching the closure's code-pointer slot.
+    fn emitBindThunks(self: *LlvmEmitter) !void {
+        var it = self.bind_thunks.iterator();
+        while (it.next()) |entry| {
+            const thunk = entry.value_ptr.*;
+            const sig = thunk.sig;
+            const ret_llvm = try self.llvmType(sig.ret);
+            const env_llvm = try self.llvmType(sig.params[0].ty);
+            self.temp_index = 0;
+            try self.out.print(self.allocator, "define {s} @{s}(ptr %env", .{ ret_llvm, entry.key_ptr.* });
+            for (sig.params[1..], 0..) |param, i| {
+                try self.out.print(self.allocator, ", {s} %a{d}", .{ try self.llvmType(param.ty), i });
+            }
+            try self.out.appendSlice(self.allocator, ") {\nbb_entry:\n");
+            const narrowed = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = ptrtoint ptr %env to {s}\n", .{ narrowed, env_llvm });
+            const returns_void = typeNameEql(sig.ret, "void");
+            const result = if (returns_void) "" else try self.nextTemp();
+            if (returns_void) {
+                try self.out.print(self.allocator, "  call void @{s}({s} {s}", .{ thunk.fname, env_llvm, narrowed });
+            } else {
+                try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}", .{ result, ret_llvm, thunk.fname, env_llvm, narrowed });
+            }
+            for (sig.params[1..], 0..) |param, i| {
+                try self.out.print(self.allocator, ", {s} %a{d}", .{ try self.llvmType(param.ty), i });
+            }
+            try self.out.appendSlice(self.allocator, ")\n");
+            if (returns_void) {
+                try self.out.appendSlice(self.allocator, "  ret void\n");
+            } else {
+                try self.out.print(self.allocator, "  ret {s} {s}\n", .{ ret_llvm, result });
+            }
+            try self.out.appendSlice(self.allocator, "}\n\n");
+        }
     }
 
     fn emitDirectCall(self: *LlvmEmitter, callee: []const u8, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
@@ -4983,6 +5056,14 @@ const FnSig = struct {
     ret: ast.TypeExpr,
     params: []const ast.Param,
     debug_id: ?usize = null,
+};
+
+// A generated env-widening thunk for a scalar-env `bind`. `fname` is the real
+// target; the thunk takes the env as `ptr`, narrows it back to the scalar env
+// type via `ptrtoint`, and forwards the remaining arguments.
+const BindThunk = struct {
+    fname: []const u8,
+    sig: FnSig,
 };
 
 const PackedBitsInfo = struct {

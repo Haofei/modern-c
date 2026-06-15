@@ -794,6 +794,13 @@ const CEmitter = struct {
     // plain type name does.
     fn_ptr_types: std.StringHashMap(ast.TypeExpr),
     closure_types: std.StringHashMap(ast.TypeExpr),
+    // `bind(scalar, f)` closures: the env is a non-pointer scalar that must be
+    // widened through `uintptr_t` to fit the closure's `void *` env slot. Calling
+    // `f` directly through the `(void *, ...)` code-pointer cast would be an ABI
+    // mismatch (and a narrowing int-to-pointer warning), so each such `f` gets a
+    // generated thunk `RET f__envthunk(void *env, P...){ return f((T)(uintptr_t)env, P...); }`
+    // whose signature genuinely matches the slot. Keyed by thunk name.
+    bind_thunks: std.StringHashMap(BindThunk),
     mir_module: *const mir.Module,
     source_path: ?[]const u8,
     current_function: ?[]const u8 = null,
@@ -837,6 +844,7 @@ const CEmitter = struct {
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
             .fn_ptr_types = std.StringHashMap(ast.TypeExpr).init(allocator),
             .closure_types = std.StringHashMap(ast.TypeExpr).init(allocator),
+            .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
             .mir_module = mir_module,
             .source_path = source_path,
             .temp_index = 0,
@@ -847,6 +855,7 @@ const CEmitter = struct {
     fn deinit(self: *CEmitter) void {
         self.fn_ptr_types.deinit();
         self.closure_types.deinit();
+        self.bind_thunks.deinit();
         self.result_types.deinit();
         self.slice_types.deinit();
         self.array_types.deinit();
@@ -954,6 +963,13 @@ const CEmitter = struct {
                 else => {},
             }
         }
+        // Now that every function signature is known, scan all bodies for
+        // `bind(scalar, f)` closures that need an env-widening thunk.
+        for (module.decls) |decl| {
+            if (decl.kind == .fn_decl) {
+                if (decl.kind.fn_decl.body) |body| try self.collectBlockBindThunks(body);
+            }
+        }
         try self.emitEnums();
         try self.emitPackedBitsTypes();
         try self.emitOverlayUnionTypes();
@@ -987,6 +1003,10 @@ const CEmitter = struct {
                 else => {},
             }
         }
+        // Env-widening thunks for scalar-env closures: emit after the function
+        // forward declarations (the thunks call those functions) and before any
+        // body that might `bind` through one.
+        try self.emitBindThunks();
         // Emit every global before any function body. MC resolves names
         // module-wide regardless of declaration order, and import-merged sources
         // can place a function ahead of a global it reads (e.g. a `const` defined
@@ -2171,6 +2191,130 @@ const CEmitter = struct {
         };
     }
 
+    // Whether a bind env of this (resolved) type passes through the closure's
+    // `void *` env slot without conversion. Pointer-shaped envs (the common
+    // `bind(&obj, f)` form) are ABI-identical to `void *`; everything else (a
+    // `u32`, an enum, …) is a scalar that must be widened through `uintptr_t`
+    // and routed via a generated thunk.
+    fn bindEnvIsPointerLike(self: *CEmitter, ty: ast.TypeExpr) bool {
+        return switch (self.resolveAliasType(ty).kind) {
+            .pointer, .raw_many_pointer, .fn_pointer, .slice => true,
+            .nullable => |child| self.bindEnvIsPointerLike(child.*),
+            .qualified => |q| self.bindEnvIsPointerLike(q.child.*),
+            else => false,
+        };
+    }
+
+    // The generated thunk name for a scalar-env `bind` targeting `fname`. One thunk
+    // per target function suffices: the env's scalar type is the function's first
+    // parameter type, so the name need only key on the function.
+    fn bindThunkName(self: *CEmitter, fname: []const u8) ![]const u8 {
+        return std.fmt.allocPrint(self.scratch.allocator(), "mc_envthunk_{s}", .{fname});
+    }
+
+    // Register an env-widening thunk for a scalar-env `bind(node)`, if needed.
+    fn collectBindThunk(self: *CEmitter, node: anytype) !void {
+        const fname = calleeIdentName(node.args[1]) orelse return;
+        const info = self.functions.get(fname) orelse return;
+        if (info.params.len == 0 or info.is_extern) return;
+        if (self.bindEnvIsPointerLike(info.params[0].ty)) return;
+        const name = try self.bindThunkName(fname);
+        if (!self.bind_thunks.contains(name)) try self.bind_thunks.put(name, .{ .fname = fname, .info = info });
+    }
+
+    fn collectBlockBindThunks(self: *CEmitter, block: ast.Block) anyerror!void {
+        for (block.items) |stmt| switch (stmt.kind) {
+            .let_decl, .var_decl => |local| {
+                if (local.init) |initializer| try self.collectExprBindThunks(initializer);
+            },
+            .loop => |node| {
+                if (node.iterable) |expr| try self.collectExprBindThunks(expr);
+                try self.collectBlockBindThunks(node.body);
+            },
+            .if_let => |node| {
+                try self.collectExprBindThunks(node.value);
+                try self.collectBlockBindThunks(node.then_block);
+                if (node.else_block) |else_block| try self.collectBlockBindThunks(else_block);
+            },
+            .@"switch" => |node| {
+                try self.collectExprBindThunks(node.subject);
+                for (node.arms) |arm| switch (arm.body) {
+                    .block => |arm_block| try self.collectBlockBindThunks(arm_block),
+                    .expr => |expr| try self.collectExprBindThunks(expr),
+                };
+            },
+            .unsafe_block, .comptime_block, .block => |nested| try self.collectBlockBindThunks(nested),
+            .contract_block => |contract| try self.collectBlockBindThunks(contract.block),
+            .@"return" => |maybe| if (maybe) |expr| try self.collectExprBindThunks(expr),
+            .@"defer", .expr, .assert => |expr| try self.collectExprBindThunks(expr),
+            .assignment => |node| {
+                try self.collectExprBindThunks(node.target);
+                try self.collectExprBindThunks(node.value);
+            },
+            else => {},
+        };
+    }
+
+    fn collectExprBindThunks(self: *CEmitter, expr: ast.Expr) anyerror!void {
+        switch (expr.kind) {
+            .call => |node| {
+                if (calleeIdentName(node.callee.*)) |name| {
+                    if (std.mem.eql(u8, name, "bind") and node.args.len == 2) try self.collectBindThunk(node);
+                }
+                try self.collectExprBindThunks(node.callee.*);
+                for (node.args) |arg| try self.collectExprBindThunks(arg);
+            },
+            .grouped, .address_of, .deref => |inner| try self.collectExprBindThunks(inner.*),
+            .try_expr => |inner| try self.collectExprBindThunks(inner.operand.*),
+            .unary => |node| try self.collectExprBindThunks(node.expr.*),
+            .binary => |node| {
+                try self.collectExprBindThunks(node.left.*);
+                try self.collectExprBindThunks(node.right.*);
+            },
+            .index => |node| {
+                try self.collectExprBindThunks(node.base.*);
+                try self.collectExprBindThunks(node.index.*);
+            },
+            .member => |node| try self.collectExprBindThunks(node.base.*),
+            .cast => |node| try self.collectExprBindThunks(node.value.*),
+            .array_literal => |items| for (items) |item| try self.collectExprBindThunks(item),
+            .struct_literal => |fields| for (fields) |field| try self.collectExprBindThunks(field.value),
+            .block => |block| try self.collectBlockBindThunks(block),
+            else => {},
+        }
+    }
+
+    // Emit each collected scalar-env thunk: `static RET mc_envthunk_f(void *env, P...){
+    // return f((T)(uintptr_t)env, P...); }`. The first param is genuinely `void *`,
+    // matching the closure's code-pointer signature exactly (no UB, no narrowing cast).
+    fn emitBindThunks(self: *CEmitter) !void {
+        var it = self.bind_thunks.iterator();
+        while (it.next()) |entry| {
+            const thunk = entry.value_ptr.*;
+            const info = thunk.info;
+            const returns_void = if (info.return_type) |rt| isVoidType(self.resolveAliasType(rt)) else true;
+            try self.out.appendSlice(self.allocator, "static MC_UNUSED ");
+            if (info.return_type) |rt| {
+                try self.out.appendSlice(self.allocator, try self.cTypeFor(rt, .typedef_name));
+            } else {
+                try self.out.appendSlice(self.allocator, "void");
+            }
+            try self.out.print(self.allocator, " {s}(void *mc_env", .{entry.key_ptr.*});
+            for (info.params[1..], 0..) |param, i| {
+                try self.out.print(self.allocator, ", {s} mc_a{d}", .{ try self.cTypeFor(param.ty, .typedef_name), i });
+            }
+            try self.out.appendSlice(self.allocator, ") {\n    ");
+            if (!returns_void) try self.out.appendSlice(self.allocator, "return ");
+            try self.out.print(self.allocator, "{s}((", .{thunk.fname});
+            try self.out.appendSlice(self.allocator, try self.cTypeFor(info.params[0].ty, .typedef_name));
+            try self.out.appendSlice(self.allocator, ")(uintptr_t)mc_env");
+            for (info.params[1..], 0..) |_, i| {
+                try self.out.print(self.allocator, ", mc_a{d}", .{i});
+            }
+            try self.out.appendSlice(self.allocator, ");\n}\n\n");
+        }
+    }
+
     // Emit `bind(&env, f)` as a closure compound literal. `f` names a function whose
     // first parameter is the (typed) env; the closure drops it to void*.
     fn emitBind(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) !void {
@@ -2187,6 +2331,19 @@ const CEmitter = struct {
             try buf.appendSlice(self.scratch.allocator(), try self.typeSuffix(param.ty));
         }
         const cname = try buf.toOwnedSlice(self.scratch.allocator());
+        // Scalar env: route through a generated thunk that narrows the widened
+        // `void *` env back to the scalar type. The env value is widened through
+        // `uintptr_t` so there is no narrowing int-to-pointer cast.
+        // (cname){ .code = mc_envthunk_f, .env = (void *)(uintptr_t)(env) }
+        if (!self.bindEnvIsPointerLike(info.params[0].ty)) {
+            const thunk = try self.bindThunkName(fname);
+            try self.out.print(self.allocator, "({s}){{ .code = {s}, .env = (void *)(uintptr_t)(", .{ cname, thunk });
+            try self.emitExpr(node.args[0], locals);
+            try self.out.appendSlice(self.allocator, ") }");
+            return;
+        }
+        // Pointer-shaped env: the function pointer (whose first param is the typed
+        // env) and the env are both cast to the ABI-identical `void *` boundary.
         // (cname){ .code = (RET (*)(void *, P...)) fname, .env = (void *)(env) }
         try self.out.print(self.allocator, "({s}){{ .code = (", .{cname});
         try self.out.appendSlice(self.allocator, try self.cTypeFor(ret_ty, .typedef_name));
@@ -9988,6 +10145,14 @@ const FnInfo = struct {
     params: []const ast.Param,
     return_type: ?ast.TypeExpr,
     is_extern: bool,
+};
+
+// A generated env-widening thunk for a `bind(scalar, f)` closure. `fname` is the
+// real target function; the thunk receives the env as `void *`, narrows it back
+// to the scalar env type via `uintptr_t`, and forwards the remaining arguments.
+const BindThunk = struct {
+    fname: []const u8,
+    info: FnInfo,
 };
 
 const TryReplacement = struct {
