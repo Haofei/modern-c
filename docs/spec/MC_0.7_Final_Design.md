@@ -2571,10 +2571,14 @@ fn lock_irqsave(l: *SpinLock) -> IrqGuard;
 fn unlock_irqrestore(g: IrqGuard) -> void;
 ```
 
-The current prototype provides the `SpinLock` API above. Sleeping `Mutex`,
-`RwLock`, and `seqlock` are planned library extensions. A NIC driver holds a
-`SpinLock` (via `lock_irqsave`) around TX/RX ring updates shared between the
-transmit path and the completion ISR.
+The current prototype provides the `SpinLock` API above, plus `std/rwlock` (a
+reader/writer lock: many concurrent readers or one exclusive writer) and
+`std/seqlock` (a sequence lock for read-mostly data: lock-free readers that retry on
+an overlapping write). Both are built on the fair ticket `Spinlock` + an atomic
+counter, so they need no compare-exchange primitive; their state-machine transitions
+are covered by `synclock-test` (C and LLVM host-suite). A sleeping `Mutex` remains a
+planned extension. A NIC driver holds a `SpinLock` (via `lock_irqsave`) around TX/RX
+ring updates shared between the transmit path and the completion ISR.
 
 ## 28.2 `std/ring` — Generic Descriptor Ring
 

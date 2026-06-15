@@ -1069,6 +1069,14 @@ pub fn build(b: *std.Build) void {
     mmio_test_step.dependOn(&mmio_test_cmd.step);
 
 
+    const synclock_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "synclock-test",
+    });
+    synclock_test_cmd.step.dependOn(b.getInstallStep());
+    const synclock_test_step = b.step("synclock-test", "std/rwlock + std/seqlock reader-writer and sequence locks");
+    synclock_test_step.dependOn(&synclock_test_cmd.step);
+
+
     slotmap_test_cmd.step.dependOn(b.getInstallStep());
     const slotmap_test_step = b.step("slotmap-test", "SlotMap<T,N> index handle table");
     slotmap_test_step.dependOn(&slotmap_test_cmd.step);
@@ -2435,6 +2443,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&slotmap_test_cmd.step);
     m0_step.dependOn(&mask_test_cmd.step);
     m0_step.dependOn(&mmio_test_cmd.step);
+    m0_step.dependOn(&synclock_test_cmd.step);
     m0_step.dependOn(&mailbox_test_cmd.step);
     m0_step.dependOn(&tryelse_test_cmd.step);
     m0_step.dependOn(&byteview_test_cmd.step);
