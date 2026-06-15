@@ -1,8 +1,30 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const ast_query = @import("ast_query.zig");
 const eval = @import("eval.zig");
 const mir = @import("mir.zig");
+
+// Pure AST-shape queries shared with sema/mir/lower_c (see `ast_query.zig`); aliased so the
+// existing call sites read unchanged.
+const isIdentNamed = ast_query.isIdentNamed;
+const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
+const typeName = ast_query.typeName;
+const ByteViewCallKind = ast_query.ByteViewCallKind;
+const byteViewCallKind = ast_query.byteViewCallKind;
+const byteViewAddressTarget = ast_query.byteViewAddressTarget;
+const calleeIdentName = ast_query.calleeIdentName;
+const isCpuPauseCall = ast_query.isCpuPauseCall;
+const isRawLoadCall = ast_query.isRawLoadCall;
+const isRawPtrCall = ast_query.isRawPtrCall;
+const isRawStoreCall = ast_query.isRawStoreCall;
+const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
+const isStringLiteralTarget = ast_query.isStringLiteralTarget;
+const isMmioStructAbi = ast_query.isMmioStructAbi;
+const reflectionFieldName = ast_query.reflectionFieldName;
+const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
+const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
+const taggedUnionCase = ast_query.taggedUnionCase;
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     try appendLlvmWithSourcePath(allocator, module, out, "input.mc", false);
@@ -5162,25 +5184,6 @@ fn structLiteralField(fields: []const ast.StructLiteralField, field_name: []cons
     return null;
 }
 
-fn overlayByteArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .array => |node| {
-            const child_name = typeName(node.child.*) orelse return null;
-            if (!std.mem.eql(u8, child_name, "u8")) return null;
-            return node.child.*;
-        },
-        .qualified => |node| overlayByteArrayElementType(node.child.*),
-        else => null,
-    };
-}
-
-fn overlayMemberFromIndexBase(expr: ast.Expr) ?@TypeOf(expr.kind.member) {
-    return switch (expr.kind) {
-        .member => |member| member,
-        .grouped => |inner| overlayMemberFromIndexBase(inner.*),
-        else => null,
-    };
-}
 
 fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .span = span, .text = name } } };
@@ -5366,39 +5369,7 @@ fn typeNameEql(ty: ast.TypeExpr, expected: []const u8) bool {
     };
 }
 
-fn isStringLiteralTarget(ty: ast.TypeExpr) bool {
-    const child = switch (ty.kind) {
-        .pointer => |node| node.child.*,
-        .raw_many_pointer => |node| node.child.*,
-        else => return false,
-    };
-    const name = typeName(child) orelse return false;
-    return std.mem.eql(u8, name, "u8");
-}
 
-fn isRawStoreCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "store") and isIdentNamed(member.base.*, "raw"),
-        .grouped => |inner| isRawStoreCall(inner.*),
-        else => false,
-    };
-}
-
-fn isRawLoadCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "load") and isIdentNamed(member.base.*, "raw"),
-        .grouped => |inner| isRawLoadCall(inner.*),
-        else => false,
-    };
-}
-
-fn isRawPtrCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "ptr") and isIdentNamed(member.base.*, "raw"),
-        .grouped => |inner| isRawPtrCall(inner.*),
-        else => false,
-    };
-}
 
 fn isAssumeNoaliasCall(call: anytype) bool {
     return switch (call.callee.kind) {
@@ -5412,38 +5383,8 @@ fn isAssumeNoaliasCall(call: anytype) bool {
     };
 }
 
-const ByteViewCallKind = enum {
-    as_bytes,
-    bytes_equal,
-};
 
-fn byteViewCallKind(callee: ast.Expr) ?ByteViewCallKind {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return byteViewCallKind(inner.*),
-        else => return null,
-    };
-    if (!isIdentNamed(member.base.*, "mem")) return null;
-    if (std.mem.eql(u8, member.name.text, "as_bytes")) return .as_bytes;
-    if (std.mem.eql(u8, member.name.text, "bytes_equal")) return .bytes_equal;
-    return null;
-}
 
-fn byteViewAddressTarget(expr: ast.Expr) ?ast.Expr {
-    return switch (expr.kind) {
-        .address_of => |target| target.*,
-        .grouped => |inner| byteViewAddressTarget(inner.*),
-        else => null,
-    };
-}
-
-fn isCpuPauseCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "pause") and isIdentNamed(member.base.*, "cpu"),
-        .grouped => |inner| isCpuPauseCall(inner.*),
-        else => false,
-    };
-}
 
 fn fenceOrderingForCall(callee: ast.Expr) ?[]const u8 {
     return switch (callee.kind) {
@@ -5474,24 +5415,6 @@ fn isDropCall(callee: ast.Expr) bool {
     return isIdentNamed(callee, "drop") or isIdentNamed(callee, "forget_unchecked");
 }
 
-fn isMmioMapCallName(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "map") and isIdentNamed(member.base.*, "mmio"),
-        .grouped => |inner| isMmioMapCallName(inner.*),
-        else => false,
-    };
-}
-
-fn mmioMapCallPayloadType(call: anytype) ?ast.TypeExpr {
-    if (!isMmioMapCallName(call.callee.*) or call.type_args.len != 1) return null;
-    return .{
-        .span = call.type_args[0].span,
-        .kind = .{ .generic = .{
-            .base = .{ .text = "MmioPtr", .span = call.type_args[0].span },
-            .args = call.type_args[0..1],
-        } },
-    };
-}
 
 fn isAtomicInitCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
@@ -5589,13 +5512,6 @@ fn constGetIndexArg(ty: ast.TypeExpr) ?u64 {
     };
 }
 
-fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, name),
-        .grouped => |inner| isIdentNamed(inner.*, name),
-        else => false,
-    };
-}
 
 fn rawScalarTypeName(ty: ast.TypeExpr) ?[]const u8 {
     const name = typeName(ty) orelse return null;
@@ -5631,9 +5547,6 @@ fn orderingArg(expr: ast.Expr) ?[]const u8 {
     return atomicOrderingExpr(expr);
 }
 
-fn isMmioStructAbi(struct_decl: ast.StructDecl) bool {
-    return if (struct_decl.abi) |abi| std.mem.eql(u8, abi, "mmio") else false;
-}
 
 fn atomicLlvmOrdering(ordering: []const u8, context: AtomicOrderContext) ?[]const u8 {
     if (std.mem.eql(u8, ordering, "relaxed")) return "monotonic";
@@ -5658,13 +5571,6 @@ fn atomicLlvmOrdering(ordering: []const u8, context: AtomicOrderContext) ?[]cons
     };
 }
 
-fn typeName(ty: ast.TypeExpr) ?[]const u8 {
-    return switch (ty.kind) {
-        .name => |name| name.text,
-        .qualified => |node| typeName(node.child.*),
-        else => null,
-    };
-}
 
 fn llvmComptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
     const self: *LlvmEmitter = @ptrCast(@alignCast(ctx orelse return null));
@@ -5694,13 +5600,6 @@ fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
     };
 }
 
-fn reflectionFieldName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .enum_literal => |literal| literal.text,
-        .grouped => |inner| reflectionFieldName(inner.*),
-        else => null,
-    };
-}
 
 fn exprAsType(expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
@@ -5742,11 +5641,6 @@ fn alignForward(value: i128, alignment: i128) ?i128 {
     return std.math.add(i128, value, alignment - rem) catch null;
 }
 
-fn isOpaqueAddressTypeName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "PAddr") or
-        std.mem.eql(u8, name, "VAddr") or
-        std.mem.eql(u8, name, "DmaAddr");
-}
 
 fn isPointerWidthIntegerTypeName(name: []const u8) bool {
     return std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize");
@@ -5876,12 +5770,6 @@ fn taggedUnionBindingPattern(arm: ast.SwitchArm) ?TaggedUnionBinding {
     };
 }
 
-fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCase {
-    for (union_decl.cases) |case| {
-        if (std.mem.eql(u8, case.name.text, name)) return case;
-    }
-    return null;
-}
 
 fn binaryIsComparison(op: ast.BinaryOp) bool {
     return switch (op) {
@@ -5974,13 +5862,6 @@ fn integerBits(ty: ast.TypeExpr) ?u16 {
     return null;
 }
 
-fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| calleeIdentName(inner.*),
-        else => null,
-    };
-}
 
 fn isBindCall(expr: ast.Expr) bool {
     return switch (expr.kind) {

@@ -256,3 +256,121 @@ pub fn dmaBufInfo(ty: ast.TypeExpr) ?DmaBufInfo {
         else => null,
     };
 }
+
+// ── Backend-shared queries (C and LLVM lowering) ──────────────────────────────────────────
+
+/// The address operand of `&x` (through grouping), or null — the target of a byte-view.
+pub fn byteViewAddressTarget(expr: ast.Expr) ?ast.Expr {
+    return switch (expr.kind) {
+        .address_of => |target| target.*,
+        .grouped => |inner| byteViewAddressTarget(inner.*),
+        else => null,
+    };
+}
+
+/// The identifier text of a callee expression (through grouping), or null.
+pub fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| calleeIdentName(inner.*),
+        else => null,
+    };
+}
+
+/// True when `callee` names the `cpu.pause` intrinsic (through grouping).
+pub fn isCpuPauseCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "pause") and isIdentNamed(member.base.*, "cpu"),
+        .grouped => |inner| isCpuPauseCall(inner.*),
+        else => false,
+    };
+}
+
+/// True when `callee` names the `raw.load` intrinsic (through grouping).
+pub fn isRawLoadCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "load") and isIdentNamed(member.base.*, "raw"),
+        .grouped => |inner| isRawLoadCall(inner.*),
+        else => false,
+    };
+}
+
+/// True when `callee` names the `raw.ptr` intrinsic (through grouping).
+pub fn isRawPtrCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "ptr") and isIdentNamed(member.base.*, "raw"),
+        .grouped => |inner| isRawPtrCall(inner.*),
+        else => false,
+    };
+}
+
+/// True when `callee` names the `raw.store` intrinsic (through grouping).
+pub fn isRawStoreCall(callee: ast.Expr) bool {
+    return switch (callee.kind) {
+        .member => |member| std.mem.eql(u8, member.name.text, "store") and isIdentNamed(member.base.*, "raw"),
+        .grouped => |inner| isRawStoreCall(inner.*),
+        else => false,
+    };
+}
+
+/// True for the opaque address type names (`PAddr`, `VAddr`, `DmaAddr`).
+pub fn isOpaqueAddressTypeName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "PAddr") or
+        std.mem.eql(u8, name, "VAddr") or
+        std.mem.eql(u8, name, "DmaAddr");
+}
+
+/// True for a pointer (or raw many-pointer) to `u8` — the string-literal target shape.
+pub fn isStringLiteralTarget(ty: ast.TypeExpr) bool {
+    const child = switch (ty.kind) {
+        .pointer => |node| node.child.*,
+        .raw_many_pointer => |node| node.child.*,
+        else => return false,
+    };
+    const name = typeName(child) orelse return false;
+    return std.mem.eql(u8, name, "u8");
+}
+
+/// True for a struct declared with `abi("mmio")`.
+pub fn isMmioStructAbi(struct_decl: ast.StructDecl) bool {
+    return if (struct_decl.abi) |abi| std.mem.eql(u8, abi, "mmio") else false;
+}
+
+/// The field name an `.enum_literal` reflection argument names (through grouping), or null.
+pub fn reflectionFieldName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .enum_literal => |literal| literal.text,
+        .grouped => |inner| reflectionFieldName(inner.*),
+        else => null,
+    };
+}
+
+/// The element type of a `[N]u8` byte-array overlay (through a qualifier), or null.
+pub fn overlayByteArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .array => |node| {
+            const child_name = typeName(node.child.*) orelse return null;
+            if (!std.mem.eql(u8, child_name, "u8")) return null;
+            return node.child.*;
+        },
+        .qualified => |node| overlayByteArrayElementType(node.child.*),
+        else => null,
+    };
+}
+
+/// The member node of a `base.field` overlay index base (through grouping), or null.
+pub fn overlayMemberFromIndexBase(expr: ast.Expr) ?@TypeOf(expr.kind.member) {
+    return switch (expr.kind) {
+        .member => |member| member,
+        .grouped => |inner| overlayMemberFromIndexBase(inner.*),
+        else => null,
+    };
+}
+
+/// The union case named `name`, or null.
+pub fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCase {
+    for (union_decl.cases) |case| {
+        if (std.mem.eql(u8, case.name.text, name)) return case;
+    }
+    return null;
+}
