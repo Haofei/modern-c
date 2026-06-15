@@ -656,6 +656,7 @@ fn rewriteReflectionExpr(scope: *const ComptimeScope, expr: ast.Expr) ?ast.Expr 
 pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFold {
     return switch (expr.kind) {
         .void_literal => .{ .value = .void },
+        .null_literal => if (comptimeNull(scope.bindings.allocator)) |v| .{ .value = v } else .unknown,
         .int_literal => |literal| .{ .value = .{ .int = parseInt(literal) catch return .unknown } },
         .float_literal => |literal| .{ .value = .{ .float = parseFloat(literal) catch return .unknown } },
         .char_literal => |literal| .{ .value = .{ .int = @intCast(parseCharLiteral(literal) orelse return .unknown) } },
@@ -672,6 +673,16 @@ pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFol
             // conditionally-reached one still fires here as a generic const-eval trap.
             if (isComptimeErrorName(call.callee.*)) break :blk .trap;
             if (isComptimeBitcastName(call.callee.*)) break :blk foldComptimeBitcast(scope, call);
+            // `ok(v)` / `err(e)` construct a comptime Result value.
+            if ((isOkErrName(call.callee.*, "ok") or isOkErrName(call.callee.*, "err")) and call.args.len == 1) {
+                const payload = switch (foldComptimeExpr(scope, call.args[0])) {
+                    .value => |v| v,
+                    .trap => break :blk .trap,
+                    .unknown => break :blk .unknown,
+                };
+                const is_ok = isOkErrName(call.callee.*, "ok");
+                break :blk if (comptimeResult(scope.bindings.allocator, is_ok, payload)) |v| .{ .value = v } else .unknown;
+            }
             break :blk switch (foldComptimeCall(scope, call)) {
                 .unknown => foldComptimeReflection(scope, expr),
                 else => |f| f,
@@ -713,6 +724,54 @@ fn isComptimeBitcastName(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, "bitcast"),
         .grouped => |inner| isComptimeBitcastName(inner.*),
+        else => false,
+    };
+}
+
+// Optionals and Results at comptime (section 22) are represented as sentinel structs over
+// the existing `.@"struct"` value, so no new ComptimeValue arm (and no churn to every
+// consumer) is needed. `?T` none is a `{ __null }` struct; `ok(v)`/`err(e)` is a
+// `{ __result_tag: "ok"|"err", __result_payload: v }` struct. The double-underscore field
+// names are reserved like the desugar temporaries.
+fn comptimeNull(allocator: std.mem.Allocator) ?ComptimeValue {
+    const fields = allocator.alloc(ComptimeStructField, 1) catch return null;
+    fields[0] = .{ .name = "__null", .value = .void };
+    return .{ .@"struct" = fields };
+}
+
+fn comptimeResult(allocator: std.mem.Allocator, is_ok: bool, payload: ComptimeValue) ?ComptimeValue {
+    const fields = allocator.alloc(ComptimeStructField, 2) catch return null;
+    fields[0] = .{ .name = "__result_tag", .value = .{ .tag = if (is_ok) "ok" else "err" } };
+    fields[1] = .{ .name = "__result_payload", .value = payload };
+    return .{ .@"struct" = fields };
+}
+
+fn comptimeStructFieldVal(v: ComptimeValue, name: []const u8) ?ComptimeValue {
+    const fields = switch (v) {
+        .@"struct" => |f| f,
+        else => return null,
+    };
+    for (fields) |f| if (std.mem.eql(u8, f.name, name)) return f.value;
+    return null;
+}
+
+fn isComptimeNull(v: ComptimeValue) bool {
+    return comptimeStructFieldVal(v, "__null") != null;
+}
+
+// The tag ("ok"/"err") of a comptime Result value, or null if `v` is not one.
+fn comptimeResultTag(v: ComptimeValue) ?[]const u8 {
+    const t = comptimeStructFieldVal(v, "__result_tag") orelse return null;
+    return switch (t) {
+        .tag => |s| s,
+        else => null,
+    };
+}
+
+fn isOkErrName(expr: ast.Expr, name: []const u8) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, name),
+        .grouped => |inner| isOkErrName(inner.*, name),
         else => false,
     };
 }
@@ -1000,9 +1059,47 @@ fn foldComptimeStmtSeq(scope: *ComptimeScope, items: []const ast.Stmt) BodyFlow 
                     else => return flow,
                 }
             },
+            .if_let => |node| {
+                const flow = foldComptimeIfLet(scope, node);
+                switch (flow) {
+                    .fallthrough => {},
+                    else => return flow,
+                }
+            },
             else => return .unknown,
         }
     }
+    return .fallthrough;
+}
+
+// Fold an `if let` over a comptime optional (`if let x = opt`) or Result
+// (`if let ok(v) = r` / `if let err(e) = r`), section 22 narrowing.
+fn foldComptimeIfLet(scope: *ComptimeScope, node: ast.IfLet) BodyFlow {
+    const value = switch (foldComptimeExpr(scope, node.value)) {
+        .value => |v| v,
+        .trap => return .trap,
+        .unknown => return .unknown,
+    };
+    const take_then = switch (node.pattern.kind) {
+        // `if let x = opt`: a non-null optional binds x to its value; `null` takes else.
+        .bind => |name| blk: {
+            if (isComptimeNull(value)) break :blk false;
+            scope.bind(name.text, value) catch return .unknown;
+            break :blk true;
+        },
+        // `if let ok(v) = r` / `if let err(e) = r`: bind the payload on a tag match.
+        .tag_bind => |tb| blk: {
+            const tag = comptimeResultTag(value) orelse return .unknown;
+            if (!std.mem.eql(u8, tag, tb.tag.text)) break :blk false;
+            const payload = comptimeStructFieldVal(value, "__result_payload") orelse return .unknown;
+            scope.bind(tb.binding.text, payload) catch return .unknown;
+            break :blk true;
+        },
+        .tag => |t| std.mem.eql(u8, comptimeResultTag(value) orelse return .unknown, t.text),
+        else => return .unknown,
+    };
+    if (take_then) return foldComptimeStmtSeq(scope, node.then_block.items);
+    if (node.else_block) |eb| return foldComptimeStmtSeq(scope, eb.items);
     return .fallthrough;
 }
 
@@ -1030,9 +1127,17 @@ fn foldComptimeSwitch(scope: *ComptimeScope, sw: ast.Switch) BodyFlow {
                 },
                 .tag => |tag| switch (subject) {
                     .tag => |subject_tag| std.mem.eql(u8, subject_tag, tag.text),
-                    else => return .unknown,
+                    // A Result subject matched against a bare `.ok`/`.err` tag.
+                    else => if (comptimeResultTag(subject)) |rt| std.mem.eql(u8, rt, tag.text) else return .unknown,
                 },
-                .tag_bind => return .unknown,
+                // `.ok(v)` / `.err(e)`: match a comptime Result's tag and bind its payload.
+                .tag_bind => |tb| blk: {
+                    const rt = comptimeResultTag(subject) orelse return .unknown;
+                    if (!std.mem.eql(u8, rt, tb.tag.text)) break :blk false;
+                    const payload = comptimeStructFieldVal(subject, "__result_payload") orelse return .unknown;
+                    scope.bind(tb.binding.text, payload) catch return .unknown;
+                    break :blk true;
+                },
             };
             if (matched) {
                 return switch (arm.body) {
