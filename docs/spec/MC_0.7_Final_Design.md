@@ -2279,13 +2279,17 @@ E_ASM_REGISTER_CONFLICT — the same register bound to two operands.
 E_ASM_CLOBBER_CONFLICT  — a clobber names a register also held by an operand.
 ```
 
-Recognized vocabularies: x86-64 (`rax`…`r15`), RISC-V 64 ABI names (`a0`…`a7`,
-`t0`…`t6`, `s1`…`s11`, `ra`, `gp`, `tp`, `zero`), and AArch64 (`w0`…`w30`, `xzr`,
-`wzr`, `lr`). The shared 64-bit names `x0`…`x31` and `sp` are accepted on either
-ISA and do not pin the block's architecture (they unify with any arch-specific
-register). `memory` and `cc` are architecture-neutral pseudo-clobbers. Per-target
-register vocabularies are covered by `asm-targets-test` (check-only, since foreign
-mnemonics cannot be host-assembled); the four negative cases live in
+Recognized vocabularies — **general-purpose**: x86-64 (`rax`…`r15`), RISC-V 64 ABI names
+(`a0`…`a7`, `t0`…`t6`, `s1`…`s11`, `ra`, `gp`, `tp`, `zero`), AArch64 (`w0`…`w30`, `xzr`,
+`wzr`, `lr`); **vector / floating-point**: x86-64 SSE/AVX (`xmm`/`ymm`/`zmm` `0..31`), RISC-V
+FP (`f0`…`f31`, `ft`/`fs`/`fa`), AArch64 SIMD views (`q`/`d`/`h`/`b` `0..31`). The shared
+64-bit GPR names `x0`…`x31` and `sp`, and the shared vector file `v0..v31` (RISC-V vector ∩
+AArch64 SIMD), are accepted on either ISA and do not pin the block's architecture (they unify
+with any arch-specific register). The AArch64 `s` (32-bit FP) view is omitted because it would
+collide with the RISC-V saved-GPR names. `memory` and `cc` are architecture-neutral
+pseudo-clobbers, and a single-letter token is a generic constraint code (`"r"`, `"m"`, …) — not
+a physical register. Per-target vocabularies are covered by `asm-targets-test` (check-only,
+since foreign mnemonics cannot be host-assembled); the four negative cases live in
 `tests/spec/inline_asm.mc`.
 
 ---

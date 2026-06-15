@@ -121,3 +121,51 @@ fn generic_r_constraints(a: u64, b: u64) -> u64 {
     }
     return result;
 }
+
+// ----- vector / floating-point register files (recognized per ISA) -----
+
+// x86-64 SSE/AVX: the xmm/ymm/zmm files.
+fn x86_vector(x: u64) -> u64 {
+    var result: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm precise volatile {
+                "movq %1, %0"
+                out("xmm0") result: u64,
+                in("rax") x: u64
+            }
+        }
+    }
+    return result;
+}
+
+// RISC-V floating-point: the f / ft / fa ABI names.
+fn riscv_fp(x: u64) -> u64 {
+    var result: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm precise volatile {
+                "fmv.d %0, %1"
+                out("fa0") result: u64,
+                in("ft1") x: u64
+            }
+        }
+    }
+    return result;
+}
+
+// AArch64 SIMD/FP views (q/d/h/b); `v0..v31` is the shared vector file (arch-neutral).
+fn aarch64_simd(x: u64) -> u64 {
+    var result: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm precise volatile {
+                "fadd %d0, %d1, %d2"
+                out("d0") result: u64,
+                in("q1") x: u64,
+                in("v2") x: u64
+            }
+        }
+    }
+    return result;
+}

@@ -3571,6 +3571,17 @@ pub const Checker = struct {
         // Shared / ambiguous: `x0..x31` (riscv x-regs ∩ aarch64 x-regs) and `sp`.
         if (std.mem.eql(u8, name, "sp")) return null;
         if (asmNumberedReg(name, "x", 0, 31)) return null;
+        // ----- vector / floating-point register files -----
+        // x86-64 SSE/AVX/AVX-512: xmm/ymm/zmm 0..31.
+        if (asmNumberedReg(name, "xmm", 0, 31) or asmNumberedReg(name, "ymm", 0, 31) or asmNumberedReg(name, "zmm", 0, 31)) return .x86_64;
+        // RISC-V floating-point: `f0..f31` plus the ABI names `ft`/`fs`/`fa`.
+        if (asmNumberedReg(name, "ft", 0, 11) or asmNumberedReg(name, "fs", 0, 11) or asmNumberedReg(name, "fa", 0, 7) or asmNumberedReg(name, "f", 0, 31)) return .riscv64;
+        // AArch64 SIMD/FP register views: q (128b), d (64b), h (16b), b (8b). The `s` (32b)
+        // view is intentionally omitted — it collides with the RISC-V saved-GPR ABI names
+        // `s1..s11`, so it would be ambiguous.
+        if (asmNumberedReg(name, "q", 0, 31) or asmNumberedReg(name, "d", 0, 31) or asmNumberedReg(name, "h", 0, 31) or asmNumberedReg(name, "b", 0, 31)) return .aarch64;
+        // The vector register file `v0..v31` is shared (RISC-V vector ∩ AArch64 SIMD) — neutral.
+        if (asmNumberedReg(name, "v", 0, 31)) return null;
         return error.Unknown;
     }
 
