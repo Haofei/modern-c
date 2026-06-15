@@ -375,6 +375,22 @@ pub fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCa
     return null;
 }
 
+/// The access mode of an MMIO register: which of read/write the hardware permits. The
+/// checker and the MIR optimizer both reason about this identically.
+pub const MmioRegisterAccess = enum {
+    read,
+    write,
+    read_write,
+
+    pub fn allowsRead(self: MmioRegisterAccess) bool {
+        return self == .read or self == .read_write;
+    }
+
+    pub fn allowsWrite(self: MmioRegisterAccess) bool {
+        return self == .write or self == .read_write;
+    }
+};
+
 /// The `reduce.*` sum intrinsics.
 pub const ReduceCallKind = enum { sum_checked, sum_left, sum_fast };
 

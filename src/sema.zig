@@ -14,6 +14,7 @@ const scalarLayout = type_layout.scalarLayout;
 // Pure AST-shape queries shared with `mir.zig`/`lower_c.zig` (see `ast_query.zig`). The shared
 // `isIdentNamed` is grouping-transparent (was not, here, before consolidation).
 const isIdentNamed = ast_query.isIdentNamed;
+const MmioRegisterAccess = ast_query.MmioRegisterAccess;
 const isMmioMapCallName = ast_query.isMmioMapCallName;
 const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const exprIsIdentNamed = ast_query.exprIsIdentNamed;
@@ -4952,19 +4953,6 @@ const MmioFieldInfo = struct {
     access: MmioRegisterAccess,
 };
 
-const MmioRegisterAccess = enum {
-    read,
-    write,
-    read_write,
-
-    fn allowsRead(self: MmioRegisterAccess) bool {
-        return self == .read or self == .read_write;
-    }
-
-    fn allowsWrite(self: MmioRegisterAccess) bool {
-        return self == .write or self == .read_write;
-    }
-};
 
 const StructInfo = struct {
     fields: std.StringHashMap(ast.TypeExpr),
