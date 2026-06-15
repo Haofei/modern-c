@@ -130,6 +130,42 @@ export fn fd_dup(s: *mut FdSpace, fd: usize) -> Result<usize, FdError> {
     }
 }
 
+// Inherit a parent's whole descriptor space into a fresh child space — fork() fd semantics.
+// Every live parent descriptor is copied to the SAME fd number in the child (numbers preserved,
+// including gaps), referring to the same (kind, handle) backing resource: independent child
+// slots that share the underlying socket/pipe/file, exactly like `fd_dup` applied across the
+// table. `child` must be freshly `fd_init`'d (empty); inherited descriptors start not-ready
+// (readiness is recomputed by the next poll). Returns the count inherited, or `Full` if the
+// child could not hold a descriptor (only possible when `child` was not empty).
+export fn fd_inherit(parent: *mut FdSpace, child: *mut FdSpace) -> Result<usize, FdError> {
+    var i: usize = 0;
+    var inherited: usize = 0;
+    while i < FD_MAX {
+        if slotmap_live(FdEntry, FD_MAX, &parent.slots, i) {
+            switch slotmap_get(FdEntry, FD_MAX, &parent.slots, i) {
+                ok(e) => {
+                    switch slotmap_alloc_at(FdEntry, FD_MAX, &child.slots, i) {
+                        ok(fd) => {
+                            let ne: FdEntry = .{ .kind = e.kind, .handle = e.handle, .ready = false };
+                            switch slotmap_set(FdEntry, FD_MAX, &child.slots, fd, ne) {
+                                ok(b) => {}
+                                err(x) => {}
+                            }
+                            inherited = inherited + 1;
+                        }
+                        err(x) => {
+                            return err(.Full);
+                        }
+                    }
+                }
+                err(x) => {}
+            }
+        }
+        i = i + 1;
+    }
+    return ok(inherited);
+}
+
 // select/poll: the lowest open fd that is ready, or NoneReady.
 export fn fd_select(s: *mut FdSpace) -> Result<usize, FdError> {
     var i: usize = 0;

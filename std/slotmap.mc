@@ -46,6 +46,21 @@ export fn slotmap_alloc(comptime T: type, comptime N: usize, m: *mut SlotMap<T, 
     return err(.Full);
 }
 
+// Reserve a SPECIFIC slot by index — for rebuilding a table at fixed handles, e.g. fork fd
+// inheritance, where the child must keep the parent's exact fd numbers (including gaps).
+// BadHandle if the index is out of range; Full if that slot is already in use.
+export fn slotmap_alloc_at(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize) -> Result<usize, SlotError> {
+    if h >= N {
+        return err(.BadHandle);
+    }
+    if m.used[h] {
+        return err(.Full);
+    }
+    m.used[h] = true;
+    m.count = m.count + 1;
+    return ok(h);
+}
+
 export fn slotmap_live(comptime T: type, comptime N: usize, m: *mut SlotMap<T, N>, h: usize) -> bool {
     if h >= N {
         return false;
