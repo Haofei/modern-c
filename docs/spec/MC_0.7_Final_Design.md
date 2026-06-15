@@ -2087,24 +2087,34 @@ Allowed:
 
 ```txt
 integer/bool/unit/enum compile-time values
+float compile-time values (f32/f64 literals, arithmetic, comparison, int↔float casts)
+byte-string reads (a string literal's .len, byte indexing, byte comparison)
+bitcast<T>(v) — a same-width bit reinterpretation (f32↔i32/u32, f64↔i64/u64, integer)
 array/struct compile-time values
+optional (`null`) and Result (`ok`/`err`) values: switch and `if let` narrowing
+arithmetic-domain folding: wrap<uN> wraps, sat<uN> saturates, checked uN traps on overflow
+expression-`switch` (`let x: T = switch …`)
 loops with compiler fuel limit
 type parameters
 layout reflection
 ```
 
-Forbidden:
+Forbidden — and the line that keeps this a value evaluator, not a metaprogramming language:
 
 ```txt
-runtime pointer dereference
-MMIO access
-DMA allocation
-I/O
-inline asm
-runtime heap allocation
+type computation (no `fn(…) -> type`, no constructing/transforming types)
+@typeInfo-style field iteration / loop unrolling over a type
+runtime pointer dereference / comptime pointers / heap
+MMIO access · DMA allocation · I/O · inline asm
 ```
 
-Trap during const eval is a compile error.
+`comptime { comptime_error("message"); }` is a named compile-time diagnostic
+(E_COMPTIME_ERROR). Any trap during const eval — including a checked-arithmetic overflow at
+the declared width — is a compile error (E_COMPTIME_TRAP).
+
+Comptime evaluates **values** in MC's own type and arithmetic-domain system; it never
+computes **types** or generates code. So `const` tables (e.g. a CRC table built by a
+`const fn` loop) bake into the binary, but there is no `@Type`/`inline for`.
 
 Reflection:
 

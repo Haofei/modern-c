@@ -582,10 +582,17 @@ const LlvmEmitter = struct {
                 try text.appendSlice(self.scratch.allocator(), " }");
                 break :blk try text.toOwnedSlice(self.scratch.allocator());
             },
-            // A *computed* float/byte const global baked from a ComptimeValue is not yet
-            // lowered here (LLVM float constants need exact-representability handling); a
-            // simple `const PI: f32 = 3.14` emits via the ordinary literal path instead.
-            .void, .float, .bytes => error.UnsupportedLlvmEmission,
+            // LLVM float/double constants accept the exact f64 bit pattern in hex. For an
+            // f32 target, round to f32 first (then widen) so the value is representable.
+            .float => |f| blk: {
+                const tname = switch (resolved.kind) {
+                    .name => |n| n.text,
+                    else => "",
+                };
+                const fv: f64 = if (std.mem.eql(u8, tname, "f32")) @floatCast(@as(f32, @floatCast(f))) else f;
+                break :blk try std.fmt.allocPrint(self.scratch.allocator(), "0x{X:0>16}", .{@as(u64, @bitCast(fv))});
+            },
+            .void, .bytes => error.UnsupportedLlvmEmission,
         };
     }
 

@@ -372,6 +372,15 @@ pub fn build(b: *std.Build) void {
     const opt_equiv_test_step = b.step("opt-equiv-test", "Validate the optimizer's elided bounds check is behavior-preserving: C vs LLVM, default vs --optimize");
     opt_equiv_test_step.dependOn(&opt_equiv_test_cmd.step);
 
+    const comptime_fold_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/comptime-fold-test.sh",
+        "zig-out/bin/mcc",
+    });
+    comptime_fold_test_cmd.step.dependOn(b.getInstallStep());
+    const comptime_fold_test_step = b.step("comptime-fold-test", "Validate comptime-only folds (byte strings, wrap/sat arithmetic domains) evaluate correctly");
+    comptime_fold_test_step.dependOn(&comptime_fold_test_cmd.step);
+
     const stack_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/stack-test.sh",
@@ -2243,6 +2252,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&opt_test_cmd.step);
     // opt-equiv-test validates the elided bounds check is behavior-preserving (C vs LLVM).
     m0_step.dependOn(&opt_equiv_test_cmd.step);
+    // comptime-fold-test validates comptime-only folds (byte strings, wrap/sat domains).
+    m0_step.dependOn(&comptime_fold_test_cmd.step);
     // pkg-test exercises the mcc-pkg manifest build (needs clang).
     m0_step.dependOn(&pkg_test_cmd.step);
     // stack-test exercises the generic std/stack collection (needs clang).

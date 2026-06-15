@@ -742,11 +742,15 @@ fn rewriteReflectionExpr(scope: *const ComptimeScope, expr: ast.Expr) ?ast.Expr 
 pub fn foldComptimeExpr(scope: *const ComptimeScope, expr: ast.Expr) ComptimeFold {
     return switch (expr.kind) {
         .void_literal => .{ .value = .void },
-        .null_literal => if (comptimeNull(scope.bindings.allocator)) |v| .{ .value = v } else .unknown,
+        // `null` is intentionally NOT folded: MC optionals are pointer-only (`?*T`), which
+        // have no comptime value, and folding `null` to a sentinel would mis-bake a
+        // `const p: ?*T = null` global. A comptime `?T` is therefore out of scope (§22).
         .int_literal => |literal| .{ .value = .{ .int = parseInt(literal) catch return .unknown } },
         .float_literal => |literal| .{ .value = .{ .float = parseFloat(literal) catch return .unknown } },
         .char_literal => |literal| .{ .value = .{ .int = @intCast(parseCharLiteral(literal) orelse return .unknown) } },
-        .string_literal => |literal| if (decodeStringLiteral(scope.bindings.allocator, literal)) |b| .{ .value = .{ .bytes = b } } else .unknown,
+        // A bare string literal is NOT folded to a value: it is a `*const u8`/`[]const u8`
+        // pointer that must bake as a pointer (not a byte value) in a global initializer.
+        // `.len` / indexing on a string literal are handled where they are consumed (below).
         .bool_literal => |value| .{ .value = .{ .boolean = value } },
         .enum_literal => |literal| .{ .value = .{ .tag = literal.text } },
         .ident => |ident| if (comptimeIdentValue(scope, ident.text)) |value| .{ .value = value } else .unknown,
@@ -819,12 +823,6 @@ fn isComptimeBitcastName(expr: ast.Expr) bool {
 // consumer) is needed. `?T` none is a `{ __null }` struct; `ok(v)`/`err(e)` is a
 // `{ __result_tag: "ok"|"err", __result_payload: v }` struct. The double-underscore field
 // names are reserved like the desugar temporaries.
-fn comptimeNull(allocator: std.mem.Allocator) ?ComptimeValue {
-    const fields = allocator.alloc(ComptimeStructField, 1) catch return null;
-    fields[0] = .{ .name = "__null", .value = .void };
-    return .{ .@"struct" = fields };
-}
-
 fn comptimeResult(allocator: std.mem.Allocator, is_ok: bool, payload: ComptimeValue) ?ComptimeValue {
     const fields = allocator.alloc(ComptimeStructField, 2) catch return null;
     fields[0] = .{ .name = "__result_tag", .value = .{ .tag = if (is_ok) "ok" else "err" } };
@@ -925,6 +923,15 @@ fn foldComptimeBitcast(scope: *const ComptimeScope, call: anytype) ComptimeFold 
 
 // Fold `base.field` over a comptime struct (section 22).
 fn foldComptimeMember(scope: *const ComptimeScope, base_expr: ast.Expr, field_name: []const u8) ComptimeFold {
+    // `"abc".len` — a string literal's length is a comptime constant (the literal is decoded
+    // here, where it is consumed as a value rather than a pointer).
+    if (std.mem.eql(u8, field_name, "len")) {
+        if (base_expr.kind == .string_literal) {
+            if (decodeStringLiteral(scope.bindings.allocator, base_expr.kind.string_literal)) |b| {
+                return .{ .value = .{ .int = @intCast(b.len) } };
+            }
+        }
+    }
     const base = switch (foldComptimeExpr(scope, base_expr)) {
         .value => |v| v,
         .trap => return .trap,
@@ -965,11 +972,16 @@ fn foldComptimeArrayLiteral(scope: *const ComptimeScope, items: []const ast.Expr
 // Fold `base[index]` over a comptime array (section 22). An out-of-bounds index
 // is a const-eval trap.
 fn foldComptimeIndex(scope: *const ComptimeScope, base_expr: ast.Expr, index_expr: ast.Expr) ComptimeFold {
-    const base = switch (foldComptimeExpr(scope, base_expr)) {
+    // `"abc"[i]` — index a string literal's bytes (decoded here, as a value).
+    const literal_bytes: ?[]const u8 = if (base_expr.kind == .string_literal)
+        decodeStringLiteral(scope.bindings.allocator, base_expr.kind.string_literal)
+    else
+        null;
+    const base: ?ComptimeValue = if (literal_bytes == null) switch (foldComptimeExpr(scope, base_expr)) {
         .value => |v| v,
         .trap => return .trap,
         .unknown => return .unknown,
-    };
+    } else null;
     const index = switch (foldComptimeExpr(scope, index_expr)) {
         .value => |v| switch (v) {
             .int => |n| n,
@@ -978,7 +990,11 @@ fn foldComptimeIndex(scope: *const ComptimeScope, base_expr: ast.Expr, index_exp
         .trap => return .trap,
         .unknown => return .unknown,
     };
-    switch (base) {
+    if (literal_bytes) |b| {
+        if (index < 0 or index >= b.len) return .trap;
+        return .{ .value = .{ .int = b[@intCast(index)] } };
+    }
+    switch (base.?) {
         .array => |arr| {
             if (index < 0 or index >= arr.len) return .trap;
             return .{ .value = arr[@intCast(index)] };
