@@ -1064,6 +1064,41 @@ let p: [*]mut u32 = s.ptr;
 unsafe { p.offset(i).* = 123; }
 ```
 
+## 9.1 Closures
+
+A **closure** is a callable value that pairs a captured environment with a function. Its type
+is written `closure(ArgTypes…) -> Ret`:
+
+```mc
+struct Allocator {
+    alloc: closure(usize, usize) -> PAddr,   // (size, align) -> address
+    free:  closure(PAddr, usize) -> void,
+}
+```
+
+A closure is constructed with the `bind` builtin from an environment value and a free function
+whose **first parameter is the environment**; calling the closure invokes that function with the
+captured environment prepended:
+
+```mc
+fn arena_alloc(a: *mut Arena, size: usize, align: usize) -> PAddr { … }
+
+// capture the arena; the resulting value has type closure(usize, usize) -> PAddr
+let alloc: closure(usize, usize) -> PAddr = bind(a, arena_alloc);
+let p = alloc(64, 8);        // calls arena_alloc(a, 64, 8)
+```
+
+This is MC's type-erased-handle pattern (the std `Allocator` above): generic code holds a
+`closure`/`*Allocator` and calls through it without naming the concrete backend, and **without
+an implicit global heap** — the environment is passed in, not assumed. A closure carries no
+ownership of its environment (the environment must outlive the closure, like a borrow); MC has
+no closure heap-capture.
+
+Representation is a fixed two-word value — an environment pointer and a function pointer — so a
+`closure` field has a known layout and ABI. The backends lower a closure call to an indirect
+call through a `Ret (*)(void*, …)` function pointer with the environment passed as the leading
+`void*` argument; the representation is identical on the C and LLVM backends.
+
 ---
 
 # 10. Nullability
@@ -1805,6 +1840,20 @@ Memory orders:
 .acq_rel
 .seq_cst
 ```
+
+A standalone memory fence (not tied to a particular object) is the `fence` intrinsic. It
+orders surrounding ordinary and atomic accesses without itself loading or storing:
+
+```mc
+fence.acquire();   // no later access is reordered before this point
+fence.release();   // no earlier access is reordered after this point
+fence.full();      // full (sequentially-consistent) barrier
+```
+
+`fence.*` is the primitive the driver-profile barriers (`std/barrier` — §28.5) and the
+ordered IO-memory copies (`std/mmio` — §28.6) are built on; the backends lower it to the
+target's thread-fence builtin (`__atomic_thread_fence` in C; the matching `fence`/`dmb`/`mfence`
+in LLVM).
 
 Data races on ordinary memory are bugs, but not optimizer-license UB.
 

@@ -370,7 +370,8 @@ prototype work:
 - full arbitrary comptime *type* computation (deliberately out of scope — MC
   evaluates values, not types; see spec §22)
 - a broader MIR optimization pass set (the fact-gated optimizer currently has
-  three transforms)
+  two transforms: const-index bounds-check elision and divide/modulo
+  by-constant check elision)
 - a networked package registry with signing (the current registry, version
   resolution, lockfile, and publish/install flow are offline/filesystem-local)
 - a full pretty-printing formatter (`mcc fmt` is currently a token-preserving

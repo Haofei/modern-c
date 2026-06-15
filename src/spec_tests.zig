@@ -1454,6 +1454,9 @@ fn hasLowerCEvidenceForCheck(output: []const u8, check: []const u8) bool {
 const coverage_exempt = [_][]const u8{
     // Umbrella parent (its normative children 1.1/1.2/1.3 carry the fixtures).
     "1",
+    // §9.1 closures (`closure(...)` type + `bind`) are exercised by the runtime/LLVM suites
+    // (tests/llvm/void_indirect_calls.mc, the std alloc/arena tests), not a semantic fixture.
+    "9.1",
     // Rationale / final-contract prose — nothing to execute.
     "26", "26.1", "26.2", "26.3", "27",
     // §29 tuples — desugar to structs; the type/literal/access/destructure/lowering rules are
