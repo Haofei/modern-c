@@ -3543,6 +3543,18 @@ pub const Checker = struct {
         return std.mem.eql(u8, name, "memory") or std.mem.eql(u8, name, "cc");
     }
 
+    // A generic (machine-independent or register-class) constraint code — a single
+    // letter such as `r` (any register), `m` (memory), `i`/`n` (immediate), `f`
+    // (float register), or the x86 class letters `a`/`b`/`c`/`d`. These are not
+    // physical registers: they are architecture-neutral and may be repeated across
+    // operands (two `"r"` operands are two distinct registers), so they are exempt
+    // from the per-architecture and register-conflict checks. Named physical
+    // registers are always longer than one character (`rax`, `a0`, `x0`, …), so a
+    // single alphabetic token is unambiguously a constraint code.
+    fn asmIsGenericConstraint(name: []const u8) bool {
+        return name.len == 1 and std.ascii.isAlphabetic(name[0]);
+    }
+
     // The architecture a register name unambiguously belongs to, or null when the
     // name is shared across architectures (`x0..x30`, `sp`) — those are accepted
     // but do not pin the block's architecture, so they never cause a false mismatch.
@@ -3580,6 +3592,7 @@ pub const Checker = struct {
         const unify = struct {
             fn call(checker: *Checker, sp: diagnostics.Span, arch: *?AsmArch, raw: []const u8) void {
                 const name = asmUnquote(raw);
+                if (asmIsGenericConstraint(name)) return; // arch-neutral; not a physical register
                 const reg_arch = asmRegisterArch(name) catch {
                     checker.errorCode(sp, "E_ASM_UNKNOWN_REGISTER", "inline-asm names a register that is not valid on any supported architecture");
                     return;
@@ -3594,12 +3607,15 @@ pub const Checker = struct {
             }
         }.call;
 
-        // Operand registers must be unique across outputs+inputs.
+        // Named operand registers must be unique across outputs+inputs. A generic
+        // constraint code (`"r"`, `"m"`, …) is not a physical register and may repeat,
+        // so it is exempt from both the conflict and the architecture checks.
         var used = std.StringHashMap(void).init(self.reporter.allocator);
         defer used.deinit();
         for (asm_stmt.outputs) |output| {
             const name = asmUnquote(output.reg);
             unify(self, span, &block_arch, output.reg);
+            if (asmIsGenericConstraint(name)) continue;
             if (used.contains(name)) {
                 self.errorCode(span, "E_ASM_REGISTER_CONFLICT", "inline-asm binds the same register to more than one operand");
             } else used.put(name, {}) catch {};
@@ -3607,15 +3623,16 @@ pub const Checker = struct {
         for (asm_stmt.inputs) |input| {
             const name = asmUnquote(input.reg);
             unify(self, span, &block_arch, input.reg);
+            if (asmIsGenericConstraint(name)) continue;
             if (used.contains(name)) {
                 self.errorCode(span, "E_ASM_REGISTER_CONFLICT", "inline-asm binds the same register to more than one operand");
             } else used.put(name, {}) catch {};
         }
-        // A clobber may not name a register an operand already holds, and a
-        // non-pseudo clobber participates in architecture unification too.
+        // A clobber may not name a register an operand already holds, and a non-pseudo,
+        // non-generic clobber participates in architecture unification too.
         for (asm_stmt.clobbers) |clobber| {
             const name = asmUnquote(clobber);
-            if (asmIsPseudoClobber(name)) continue;
+            if (asmIsPseudoClobber(name) or asmIsGenericConstraint(name)) continue;
             unify(self, span, &block_arch, clobber);
             if (used.contains(name)) {
                 self.errorCode(span, "E_ASM_CLOBBER_CONFLICT", "inline-asm clobbers a register it also binds to an operand");

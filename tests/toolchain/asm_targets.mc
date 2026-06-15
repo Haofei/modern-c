@@ -102,3 +102,22 @@ fn shared_x_registers(a: u64, b: u64) -> u64 {
     }
     return result;
 }
+
+// Generic constraint codes (`"r"` = any register, repeatable) are architecture-neutral and
+// are NOT physical registers, so two `"r"` operands are not a conflict and pin no ISA. This
+// is the form real kernel asm uses (e.g. kernel/arch/riscv64 CSR access via `"r"`).
+fn generic_r_constraints(a: u64, b: u64) -> u64 {
+    var result: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm precise volatile {
+                "csrrw %0, sscratch, %1"
+                out("r") result: u64,
+                in("r") a: u64,
+                in("r") b: u64,
+                clobber("memory")
+            }
+        }
+    }
+    return result;
+}
