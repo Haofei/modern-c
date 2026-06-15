@@ -27,6 +27,7 @@ const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
 const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
 const scalarLayout = type_layout.scalarLayout;
+const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     try appendLlvmWithSourcePath(allocator, module, out, "input.mc", false);
@@ -5106,11 +5107,6 @@ const IntRange = struct {
     max: i128,
 };
 
-const ComptimeStructLayout = struct {
-    size: i128,
-    alignment: i128,
-    field_offset: ?i128,
-};
 
 const AtomicCallInfo = struct {
     base: ast.Expr,

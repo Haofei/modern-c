@@ -45,6 +45,7 @@ const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
 const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
 const scalarLayout = type_layout.scalarLayout;
+const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 
 pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);
@@ -11025,11 +11026,6 @@ fn simpleNameType(name: []const u8, span: diagnostics.Span) ast.TypeExpr {
     };
 }
 
-const ComptimeStructLayout = struct {
-    size: i128,
-    alignment: i128,
-    field_offset: ?i128,
-};
 
 fn cTaggedUnionTagSize() i128 {
     return 4;

@@ -10,6 +10,14 @@ const std = @import("std");
 /// Size and (natural) alignment in bytes. For the scalar builtins these are equal.
 pub const ScalarLayout = struct { size: u32, alignment: u32 };
 
+/// The comptime-computed layout of a struct: its total size and alignment, plus the byte
+/// offset of a particular field when one was requested. Both backends compute this identically.
+pub const ComptimeStructLayout = struct {
+    size: i128,
+    alignment: i128,
+    field_offset: ?i128,
+};
+
 /// The layout of a scalar builtin type named `name`, or null if `name` is not one. Opaque
 /// address classes (`PAddr`/`VAddr`/`DmaAddr`) lower to pointer-width integers.
 pub fn scalarLayout(name: []const u8) ?ScalarLayout {
