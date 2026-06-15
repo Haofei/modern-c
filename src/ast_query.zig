@@ -139,6 +139,11 @@ pub fn contractName(attr: ast.Attr) []const u8 {
 
 // ── Type-shape queries ────────────────────────────────────────────────────────────────────
 
+/// A synthetic plain named type (`.name`) carrying `name` at `span`.
+pub fn simpleNameType(name: []const u8, span: diagnostics.Span) ast.TypeExpr {
+    return .{ .span = span, .kind = .{ .name = .{ .text = name, .span = span } } };
+}
+
 /// The leading type name of a (possibly `qualified`) named type, or null.
 pub fn typeName(ty: ast.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {

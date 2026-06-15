@@ -16,6 +16,7 @@ const scalarLayout = type_layout.scalarLayout;
 const isIdentNamed = ast_query.isIdentNamed;
 const MmioRegisterAccess = ast_query.MmioRegisterAccess;
 const mmioRegisterAccessFromModeType = ast_query.mmioRegisterAccessFromModeType;
+const simpleNameType = ast_query.simpleNameType;
 const isMmioMapCallName = ast_query.isMmioMapCallName;
 const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const exprIsIdentNamed = ast_query.exprIsIdentNamed;
@@ -7061,10 +7062,6 @@ fn mmioFieldInfoFromType(ty: ast.TypeExpr) ?MmioFieldInfo {
         return null;
     const access = mmioRegisterAccessFromModeType(access_arg) orelse return null;
     return .{ .access = access };
-}
-
-fn simpleNameType(name: []const u8, span: diagnostics.Span) ast.TypeExpr {
-    return .{ .span = span, .kind = .{ .name = .{ .text = name, .span = span } } };
 }
 
 fn uncheckedRequirement(expr: ast.Expr) ?ContractKind {

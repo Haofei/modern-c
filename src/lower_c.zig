@@ -20,6 +20,7 @@ const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const boolLiteralValue = ast_query.boolLiteralValue;
 const isUninitLiteral = ast_query.isUninitLiteral;
 const typeName = ast_query.typeName;
+const simpleNameType = ast_query.simpleNameType;
 const isRawManyPointerType = ast_query.isRawManyPointerType;
 const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
 const isArithmeticLayoutGeneric = ast_query.isArithmeticLayoutGeneric;
@@ -11009,13 +11010,6 @@ fn isVoidLiteralExpr(expr: ast.Expr) bool {
         .void_literal => true,
         .grouped => |inner| isVoidLiteralExpr(inner.*),
         else => false,
-    };
-}
-
-fn simpleNameType(name: []const u8, span: diagnostics.Span) ast.TypeExpr {
-    return .{
-        .span = span,
-        .kind = .{ .name = .{ .text = name, .span = span } },
     };
 }
 
