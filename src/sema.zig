@@ -3,9 +3,13 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
+const type_layout = @import("layout.zig");
 const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
+
+// Scalar type layout shared across the passes (see `layout.zig`).
+const scalarLayout = type_layout.scalarLayout;
 
 // Pure AST-shape queries shared with `mir.zig`/`lower_c.zig` (see `ast_query.zig`). The shared
 // `isIdentNamed` is grouping-transparent (was not, here, before consolidation).
@@ -7316,32 +7320,11 @@ const ReflectEnv = struct {
     aliases: *const std.StringHashMap(ast.TypeExpr),
 };
 
-const ScalarLayout = struct { size: u32, alignment: u32 };
-
 // The C backend lowers tagged unions as a C enum tag followed by an optional
 // payload union. Clang/GCC use a 32-bit enum for this generated tag on the
 // supported LP64 targets.
 const c_tagged_union_tag_size: i128 = 4;
 const c_tagged_union_tag_align: i128 = 4;
-
-// Sizes/alignments that are identical across the supported LP64 C ABIs, so a
-// comptime fold agrees with clang's runtime `sizeof`/`alignof`.
-fn scalarLayout(name: []const u8) ?ScalarLayout {
-    const table = [_]struct { n: []const u8, s: u32 }{
-        .{ .n = "u8", .s = 1 },      .{ .n = "i8", .s = 1 },    .{ .n = "bool", .s = 1 },
-        .{ .n = "u16", .s = 2 },     .{ .n = "i16", .s = 2 },   .{ .n = "u32", .s = 4 },
-        .{ .n = "i32", .s = 4 },     .{ .n = "f32", .s = 4 },   .{ .n = "u64", .s = 8 },
-        .{ .n = "i64", .s = 8 },     .{ .n = "f64", .s = 8 },   .{ .n = "usize", .s = 8 },
-        .{ .n = "isize", .s = 8 },
-        // Opaque address classes lower to pointer-width integers.
-          .{ .n = "PAddr", .s = 8 }, .{ .n = "VAddr", .s = 8 },
-        .{ .n = "DmaAddr", .s = 8 },
-    };
-    for (table) |e| {
-        if (std.mem.eql(u8, name, e.n)) return .{ .size = e.s, .alignment = e.s };
-    }
-    return null;
-}
 
 // Extract the reflected type from a reflection call's `type_args` or first arg.
 fn reflectionTypeFromCall(node: anytype) ?ast.TypeExpr {

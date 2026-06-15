@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
+const type_layout = @import("layout.zig");
 const mir = @import("mir.zig");
 const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
@@ -43,6 +44,7 @@ const reflectionFieldName = ast_query.reflectionFieldName;
 const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
 const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
+const scalarLayout = type_layout.scalarLayout;
 
 pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);
@@ -11045,8 +11047,6 @@ fn simpleNameType(name: []const u8, span: diagnostics.Span) ast.TypeExpr {
     };
 }
 
-const ScalarLayout = struct { size: u32, alignment: u32 };
-
 const ComptimeStructLayout = struct {
     size: i128,
     alignment: i128,
@@ -11057,20 +11057,6 @@ fn cTaggedUnionTagSize() i128 {
     return 4;
 }
 
-fn scalarLayout(name: []const u8) ?ScalarLayout {
-    const table = [_]struct { n: []const u8, s: u32 }{
-        .{ .n = "u8", .s = 1 },      .{ .n = "i8", .s = 1 },    .{ .n = "bool", .s = 1 },
-        .{ .n = "u16", .s = 2 },     .{ .n = "i16", .s = 2 },   .{ .n = "u32", .s = 4 },
-        .{ .n = "i32", .s = 4 },     .{ .n = "f32", .s = 4 },   .{ .n = "u64", .s = 8 },
-        .{ .n = "i64", .s = 8 },     .{ .n = "f64", .s = 8 },   .{ .n = "usize", .s = 8 },
-        .{ .n = "isize", .s = 8 },   .{ .n = "PAddr", .s = 8 }, .{ .n = "VAddr", .s = 8 },
-        .{ .n = "DmaAddr", .s = 8 },
-    };
-    for (table) |entry| {
-        if (std.mem.eql(u8, name, entry.n)) return .{ .size = entry.s, .alignment = entry.s };
-    }
-    return null;
-}
 
 
 fn isCKeyword(name: []const u8) bool {
