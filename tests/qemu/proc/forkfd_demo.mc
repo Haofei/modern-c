@@ -87,5 +87,14 @@ export fn forkfd_run() -> u32 {
         err(e) => {}
     }
 
+    // --- exec replaces the image but KEEPS the descriptors (the fork/exec distinction) ---
+    // fork (above) gave the child a COPY of the parent's fds; exec now swaps child2's image for
+    // a new program and its fds carry straight through, unchanged.
+    proc_exec(&g_t, cs2, 0x2000, worker2);
+    if fd_count(proc_fds(&g_t, cs2)) != 2 { pass = 0; }   // fds survive the image swap
+    switch fd_kind(proc_fds(&g_t, cs2), 0) { ok(k) => { if k != FD_PIPE { pass = 0; } } err(e) => { pass = 0; } }
+    switch fd_handle(proc_fds(&g_t, cs2), 0) { ok(h) => { if h != 10 { pass = 0; } } err(e) => { pass = 0; } }
+    switch fd_kind(proc_fds(&g_t, cs2), 2) { ok(k) => { if k != FD_FILE { pass = 0; } } err(e) => { pass = 0; } }
+
     return pass;
 }

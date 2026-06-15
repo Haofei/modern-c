@@ -300,6 +300,21 @@ export fn proc_fds(t: *mut ProcTable, slot: usize) -> *mut FdSpace {
     return &t.procs[slot].fds;
 }
 
+// Replace a process's executable image in place — exec() semantics. The saved context is reset
+// to start `entry` on a fresh stack, but the process KEEPS its identity (same pid and
+// generation, so existing endpoints stay valid) and, crucially, its open file descriptors:
+// fork COPIES a process's fds to the child (proc_spawn), exec PRESERVES them across the image
+// swap. Run accounting is reset for the new image; privileges and scheduling policy are kept.
+// The slot must hold a live (non-Unused) process. In the integrated boot path `entry` is the
+// ELF entry point from elf_parse_header (kernel/core/elf) once its LOAD segments are mapped.
+export fn proc_exec(t: *mut ProcTable, slot: usize, stack_top: usize, entry: fn() -> void) -> void {
+    mc_thread_init(&t.procs[slot].context, stack_top, entry);
+    t.procs[slot].exit_code = 0;
+    t.procs[slot].ticks = 0;
+    t.procs[slot].quantum = QUANTUM_DEFAULT;
+    // fds are deliberately untouched — preserved across exec (the fork/exec distinction).
+}
+
 enum SchedError {
     NoRunnable, // no process other than `from` is runnable
 }
