@@ -1247,12 +1247,6 @@ fn parseExpectedErrors(allocator: std.mem.Allocator, source: []const u8) !std.Ar
     return out;
 }
 
-fn expectedErrorCode(trimmed_line: []const u8) ?[]const u8 {
-    if (!std.mem.startsWith(u8, trimmed_line, "//")) return null;
-    const comment = std.mem.trim(u8, trimmed_line[2..], " \t");
-    return expectedErrorCodeFromComment(comment);
-}
-
 fn expectedErrorCodeFromComment(comment: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, comment, "EXPECT_ERROR:")) return null;
     const code = std.mem.trim(u8, comment["EXPECT_ERROR:".len..], " \t\r");

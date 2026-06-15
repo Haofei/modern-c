@@ -5411,20 +5411,6 @@ fn isAtomicTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMa
     };
 }
 
-fn isMmioRegisterTypeExprAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
-    return isMmioRegisterTypeExprAliasDepth(ty, aliases, 0);
-}
-
-fn isMmioRegisterTypeExprAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
-    if (depth > 64) return false;
-    return switch (ty.kind) {
-        .name => |name| if (aliases.get(name.text)) |resolved| isMmioRegisterTypeExprAliasDepth(resolved, aliases, depth + 1) else false,
-        .generic => |node| std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits"),
-        .qualified => |node| isMmioRegisterTypeExprAliasDepth(node.child.*, aliases, depth + 1),
-        else => false,
-    };
-}
-
 fn mmioRegisterAccessFromTypeExprAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?MmioRegisterAccess {
     return mmioRegisterAccessFromTypeExprAliasDepth(ty, aliases, 0);
 }

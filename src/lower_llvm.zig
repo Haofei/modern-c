@@ -5699,30 +5699,6 @@ fn trapHelperForKind(kind: []const u8) ?[]const u8 {
     return null;
 }
 
-fn findBoolSwitchArm(arms: []const ast.SwitchArm, value: bool) ?ast.SwitchArm {
-    for (arms) |arm| {
-        for (arm.patterns) |pattern| {
-            switch (pattern.kind) {
-                .literal => |expr| switch (expr.kind) {
-                    .bool_literal => |literal| if (literal == value) return arm,
-                    else => {},
-                },
-                else => {},
-            }
-        }
-    }
-    return null;
-}
-
-fn findWildcardSwitchArm(arms: []const ast.SwitchArm) ?ast.SwitchArm {
-    for (arms) |arm| {
-        for (arm.patterns) |pattern| {
-            if (pattern.kind == .wildcard) return arm;
-        }
-    }
-    return null;
-}
-
 fn resultSwitchPattern(pattern: ast.Pattern) ?ResultSwitchPattern {
     return switch (pattern.kind) {
         .tag => |tag| .{ .tag = tag.text },

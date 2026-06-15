@@ -6865,15 +6865,6 @@ fn viewType(ty: ast.TypeExpr) ?ViewType {
     };
 }
 
-fn pointerComparableTypes(left: ast.TypeExpr, right: ast.TypeExpr) bool {
-    const left_view = viewType(left) orelse return false;
-    const right_view = viewType(right) orelse return false;
-    if (left_view.kind != right_view.kind) return false;
-    const left_child = viewElementType(left) orelse return false;
-    const right_child = viewElementType(right) orelse return false;
-    return sameTypeSyntax(left_child, right_child);
-}
-
 fn pointerComparableTypesCtx(left: ast.TypeExpr, right: ast.TypeExpr, ctx: Context) bool {
     const resolved_left = resolveAliasType(left, ctx);
     const resolved_right = resolveAliasType(right, ctx);
@@ -6896,16 +6887,6 @@ fn viewElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
-fn implicitPointerViewConversion(target: ast.TypeExpr, source: ast.TypeExpr) bool {
-    _ = viewType(target) orelse return false;
-    _ = viewType(source) orelse return false;
-    if (nullablePointerWidening(target, source)) return false;
-    const target_is_c_void = isCVoidPointerClass(classifyType(target));
-    const source_is_c_void = isCVoidPointerClass(classifyType(source));
-    if (target_is_c_void != source_is_c_void) return false;
-    return !sameTypeSyntax(target, source);
-}
-
 fn implicitPointerViewConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {
     const resolved_target = resolveAliasType(target, ctx);
     const resolved_source = resolveAliasType(source, ctx);
@@ -6918,15 +6899,6 @@ fn implicitPointerViewConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, 
     return !sameTypeSyntaxCtx(resolved_target, resolved_source, ctx);
 }
 
-fn nullablePointerWidening(target: ast.TypeExpr, source: ast.TypeExpr) bool {
-    const target_view = viewType(target) orelse return false;
-    const source_view = viewType(source) orelse return false;
-    if (!target_view.nullable or source_view.nullable) return false;
-    if (target_view.kind != source_view.kind or target_view.mutability != source_view.mutability) return false;
-    const target_child = nullableInnerType(target) orelse return false;
-    return sameTypeSyntax(target_child, source);
-}
-
 fn nullablePointerWideningCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {
     const resolved_target = resolveAliasType(target, ctx);
     const resolved_source = resolveAliasType(source, ctx);
@@ -6936,14 +6908,6 @@ fn nullablePointerWideningCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: C
     if (target_view.kind != source_view.kind or target_view.mutability != source_view.mutability) return false;
     const target_child = nullableInnerType(resolved_target) orelse return false;
     return sameTypeSyntaxCtx(target_child, resolved_source, ctx);
-}
-
-fn implicitCVoidPointerConversion(target: ast.TypeExpr, source: ast.TypeExpr) bool {
-    _ = viewType(target) orelse return false;
-    _ = viewType(source) orelse return false;
-    const target_is_c_void = isCVoidPointerClass(classifyType(target));
-    const source_is_c_void = isCVoidPointerClass(classifyType(source));
-    return target_is_c_void != source_is_c_void;
 }
 
 fn implicitCVoidPointerConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {
@@ -7091,13 +7055,6 @@ fn sameExprSyntax(left: ast.Expr, right: ast.Expr) bool {
             .grouped => |right_inner| right_inner.*,
             else => unreachable,
         }),
-        else => false,
-    };
-}
-
-fn isMmioRegisterType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .generic => |node| std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits"),
         else => false,
     };
 }
