@@ -1,10 +1,17 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
 const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
+
+// Pure AST-shape queries shared with `mir.zig`/`lower_c.zig` (see `ast_query.zig`). The shared
+// `isIdentNamed` is grouping-transparent (was not, here, before consolidation).
+const isIdentNamed = ast_query.isIdentNamed;
+const isMmioMapCallName = ast_query.isMmioMapCallName;
+const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 
 // Numeric-literal and integer-bounds primitives shared with `mir.zig` and `lower_c.zig`
 // (see `numeric.zig`); aliased here so the existing call sites read unchanged.
@@ -5699,25 +5706,6 @@ fn rawLoadCallReturnType(call: anytype) ?ast.TypeExpr {
     return call.type_args[0];
 }
 
-fn isMmioMapCallName(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |m| isIdentNamed(m.base.*, "mmio") and std.mem.eql(u8, m.name.text, "map"),
-        .grouped => |inner| isMmioMapCallName(inner.*),
-        else => false,
-    };
-}
-
-fn mmioMapCallPayloadType(call: anytype) ?ast.TypeExpr {
-    if (!isMmioMapCallName(call.callee.*) or call.type_args.len != 1) return null;
-    return .{
-        .span = call.type_args[0].span,
-        .kind = .{ .generic = .{
-            .base = .{ .text = "MmioPtr", .span = call.type_args[0].span },
-            .args = call.type_args[0..1],
-        } },
-    };
-}
-
 // `raw.ptr<T>(addr)` mints a `*mut T` from a raw address — the typed-pointer companion
 // of raw.load/store (used to view an allocation as a typed object: Arc blocks, etc.).
 fn isRawPtrCall(callee: ast.Expr) bool {
@@ -7728,13 +7716,6 @@ fn enumLiteralName(expr: ast.Expr) ?ast.Ident {
         .enum_literal => |literal| literal,
         .grouped => |inner| enumLiteralName(inner.*),
         else => null,
-    };
-}
-
-fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, name),
-        else => false,
     };
 }
 

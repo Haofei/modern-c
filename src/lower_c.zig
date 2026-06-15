@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const mir = @import("mir.zig");
@@ -8,8 +9,12 @@ const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
-// Shared with `sema.zig`/`mir.zig` (see `numeric.zig`); aliased so call sites read unchanged.
+// Shared with `sema.zig`/`mir.zig` (see `numeric.zig`/`ast_query.zig`); aliased so call sites
+// read unchanged.
 const parseUsizeLiteral = numeric.parseUsizeLiteral;
+const isIdentNamed = ast_query.isIdentNamed;
+const isMmioMapCallName = ast_query.isMmioMapCallName;
+const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 
 pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);
@@ -12381,25 +12386,6 @@ fn byteViewCallReturnTypeForCall(call: anytype) ?ast.TypeExpr {
     };
 }
 
-fn isMmioMapCallName(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "map") and isIdentNamed(member.base.*, "mmio"),
-        .grouped => |inner| isMmioMapCallName(inner.*),
-        else => false,
-    };
-}
-
-fn mmioMapCallPayloadType(call: anytype) ?ast.TypeExpr {
-    if (!isMmioMapCallName(call.callee.*) or call.type_args.len != 1) return null;
-    return .{
-        .span = call.type_args[0].span,
-        .kind = .{ .generic = .{
-            .base = .{ .text = "MmioPtr", .span = call.type_args[0].span },
-            .args = call.type_args[0..1],
-        } },
-    };
-}
-
 fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
     return switch (callee.kind) {
         .ident => |ident| {
@@ -12491,13 +12477,6 @@ fn isCpuPauseCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "pause") and isIdentNamed(member.base.*, "cpu"),
         .grouped => |inner| isCpuPauseCall(inner.*),
-        else => false,
-    };
-}
-
-fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, name),
         else => false,
     };
 }

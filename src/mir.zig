@@ -1,10 +1,16 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
+
+// Pure AST-shape queries shared with `sema.zig`/`lower_c.zig` (see `ast_query.zig`).
+const isIdentNamed = ast_query.isIdentNamed;
+const isMmioMapCallName = ast_query.isMmioMapCallName;
+const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 
 // Numeric-literal and integer-bounds primitives shared with `sema.zig` and `lower_c.zig`
 // (see `numeric.zig`); aliased here so the existing call sites read unchanged.
@@ -4638,33 +4644,6 @@ fn mmioMapPayloadTypeForExpr(expr: ast.Expr) ?ast.TypeExpr {
         .call => |call| mmioMapCallPayloadType(call),
         .grouped => |inner| mmioMapPayloadTypeForExpr(inner.*),
         else => null,
-    };
-}
-
-fn mmioMapCallPayloadType(call: anytype) ?ast.TypeExpr {
-    if (!isMmioMapCallName(call.callee.*) or call.type_args.len != 1) return null;
-    return .{
-        .span = call.type_args[0].span,
-        .kind = .{ .generic = .{
-            .base = .{ .text = "MmioPtr", .span = call.type_args[0].span },
-            .args = call.type_args[0..1],
-        } },
-    };
-}
-
-fn isMmioMapCallName(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "map") and isIdentNamed(member.base.*, "mmio"),
-        .grouped => |inner| isMmioMapCallName(inner.*),
-        else => false,
-    };
-}
-
-fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, name),
-        .grouped => |inner| isIdentNamed(inner.*, name),
-        else => false,
     };
 }
 
