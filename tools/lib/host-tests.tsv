@@ -82,3 +82,4 @@ procmem-test	tests/qemu/proc/procmem_demo.mc	driver		-Wno-switch-bool -Wno-unuse
 ipcprov-test	tests/qemu/ipc/ipcprov_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	IPC provenance emission (kernel/core/proc_ipc): records from/to/tag on send, monotonic seq, hot-channel opt-out suppresses
 blobstore-test	tests/qemu/fs/blobstore_demo.mc	driver		-Wno-switch-bool	durable blob sink (kernel/fs): put/get/len by id, typed Full/NotFound/TooLarge, blob survives reopen (checkpoint prerequisite)
 attenuate-test	tests/qemu/proc/attenuate_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	capability attenuation (kernel/core/process): a child's authority is the intersection of the parent's mask and the requested subset (never exceeds parent)
+checkpoint-test	tests/qemu/proc/checkpoint_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	agent checkpoint/restore (kernel/core): save fd-space + mem account to a durable blob, restore into a fresh slot with state intact
