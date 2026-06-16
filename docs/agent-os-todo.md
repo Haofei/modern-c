@@ -8,6 +8,13 @@ in `tools/lib/host-tests.tsv`, validated via `host-harness.sh` (C) and
 **Start here:** `P0.1`. **The safety milestone is `P0.5` (live reclaim) — not the
 groundwork before it.**
 
+> **STATUS: COMPLETE.** All 24 items are implemented and validated on **both backends**
+> (C + LLVM), and the governance keystone boots and runs under **real QEMU emulation**
+> (`agentos-test`, see the closing section). `P0.6` is deferred per decision D.2. Each
+> item keeps its original **State today / Where / Test** wording as the *plan of record* —
+> so a "State today: Absent" line describes the pre-work starting point, not the current
+> tree; the `DONE — <hash>` tag is the landed commit on `master`.
+
 ---
 
 ## D — Decisions that gate scope (do first, they're cheap)
@@ -96,7 +103,7 @@ groundwork before it.**
 - [x] **P1.2 — Emit IPC provenance** (DONE — 0a60f2b) at the mediation points (from, to, tag, size,
   causality id). **Where:** `kernel/core/proc_ipc.mc`. **Test:** a 3-agent message chain
   produces the expected provenance graph; **hot-channel opt-out** flag suppresses it.
-- [x] **P1.3 — Emit capability-use events** (DONE — 43862cb) (grant / revoke / cap invocation) so the
+- [x] **P1.3 — Emit capability-use events** (DONE — c55067c) (grant / revoke / cap invocation) so the
   audit covers *authority*, not just messages. **Where:** grant path + `kcall`.
 - [x] **P1.4 — Sampling + opt-out policy** (DONE — fe0da04) — the lever that keeps P1.* from invalidating
   the P2.1 fast path. Co-decide the mechanism **before** building P2.1.
@@ -130,9 +137,9 @@ groundwork before it.**
 
 - [x] **P2.1 — IPC fast path** (DONE — 451f300) (zero-copy / batched for hot channels) — **co-designed
   with P1.1/P1.4**; do not build until the observability mechanism is fixed.
-- [x] **P2.2 — Rich agent memory store** (DONE — a2de19f) (content-addressed / KV) — beyond P1.7's
+- [x] **P2.2 — Rich agent memory store** (DONE — e471966) (content-addressed / KV) — beyond P1.7's
   checkpoint sink.
-- [x] **P2.3 — Fair-share scheduling + throttle** (DONE — b61af75) — bound CPU per agent; deprioritize
+- [x] **P2.3 — Fair-share scheduling + throttle** (DONE — 737028e) — bound CPU per agent; deprioritize
   misbehaving agents (extends the P0.5 throttle path).
 - [x] **P2.4 — Migrate** (DONE — 781893d) — checkpoint on A, restore on B (builds on P1.8/P1.9).
 
@@ -141,7 +148,7 @@ groundwork before it.**
 ## P3 — Debuggability
 
 - [x] **P3.1 — Deterministic record** (first cut DONE — 960618f; full re-exec future) (leverages P1.2 provenance).
-- [x] **P3.2 — Replay.** (first cut DONE — 5e84da6; full re-exec future)
+- [x] **P3.2 — Replay.** (first cut DONE — c0de395; full re-exec future)
 
 ---
 
@@ -158,3 +165,34 @@ groundwork before it.**
 
 `D.1/D.2` → `P0.1` → `P0.2`+`P0.3` → `P0.4` → **`P0.5` (milestone)** → `P1.1`/`P1.2`
 (co-designed w/ `P2.1`) → `P1.5` → `P1.7`→`P1.8`/`P1.9`. Everything else trails.
+
+---
+
+## Proven under QEMU (not just host tests)
+
+The keystone runs on the real kernel booted under emulation, both backends:
+`tests/qemu/proc/agentos_demo.mc` + `tools/proc/agentos-test.sh` (`agentos-test` /
+`llvm-agentos-test`, wired into `m0`). It boots a bare-metal riscv64 image (heap +
+console) and runs the governance scenario inline — three agents charged, an over-quota
+charge fails closed, the live runaway is OOM-killed and its **memory + fds reclaimed
+while the others survive**, then reaped — printing `1ABC2 → AGENTOS-OK` over UART on
+**C and LLVM** (commit `8afc53c`).
+
+## Integration regressions the per-module gates missed (and the lesson)
+
+Per-module compile (`kernel-test`) + host tests are **not** the integrated QEMU boot.
+Wiring everything into one bootable image surfaced two real bugs the host suite passed
+over — both now fixed:
+
+- **`TraceEvent` / `TRACE_CAP` collision** — `P1.1`'s `ipc_trace.mc` reused names from
+  the logger's `trace.mc`. Each host fixture imports only one, so none caught it; `kmain`
+  imports both → duplicate-declaration broke the integrated boot. Renamed to
+  `IpcEvent` / `IPC_TRACE_CAP` (`10cc2ec`). Also pre-empted a latent `STORE_BYTES`
+  collision between `blobstore`/`kvstore` (`012b49d`).
+- **Bare-metal `memset` link failure** — the grown `Heap`/`Process` structs pushed the C
+  backend over its `memset`-emit threshold; 24 bare-metal demo runtimes lacked a
+  freestanding `memset`/`memcpy`, so process/sched/ipc QEMU boots failed to link. Added
+  the freestanding trio to those runtimes (`dff8074`).
+
+**Process fix:** keep `kmain-test`/`agentos-test` and the `m0` QEMU gates in the standard
+validation loop — `kernel-test` (per-module) alone is not sufficient.

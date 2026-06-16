@@ -15,6 +15,14 @@ and linear-move type safety. What it lacks is the layer that turns "we can *isol
 agents" into "we can *safely host* agents": **resource governance, observability, and
 agent lifecycle.** That layer is the work.
 
+> **Implementation status:** that layer now exists. The full backlog in
+> [agent-os-todo.md](agent-os-todo.md) (resource governance incl. the live-reclaim
+> milestone, observability/provenance, capability attenuation, checkpoint/restore/migrate,
+> pause, fair-share, record/replay) is **implemented and validated on both backends**, and
+> the governance keystone **boots and runs under real QEMU emulation** (`agentos-test`).
+> The "State today" notes in the table below describe the *original* starting point (the
+> design rationale), not the current tree — see the backlog for what landed.
+
 ---
 
 ## Threat model — what "semi-trusted" means
