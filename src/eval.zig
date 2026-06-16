@@ -1672,6 +1672,10 @@ fn parseInt(raw: []const u8) EvalError!i128 {
 }
 
 fn parseFloat(raw: []const u8) EvalError!f64 {
+    // IEEE special-constant lexemes (`inf`/`nan`) are float literals; parse them directly
+    // so the generic `f`-suffix stripping below does not mangle "inf" into "in".
+    if (std.mem.eql(u8, raw, "inf")) return std.math.inf(f64);
+    if (std.mem.eql(u8, raw, "nan")) return std.math.nan(f64);
     var cleaned: [128]u8 = undefined;
     if (raw.len > cleaned.len) return error.InvalidIntegerLiteral;
     var len: usize = 0;

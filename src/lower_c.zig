@@ -4428,7 +4428,7 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, try self.cIdent(ident.text));
             },
             .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
-            .float_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+            .float_literal => |literal| try appendCFloatLiteral(self.allocator, self.out, literal, false),
             .char_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
             .null_literal => try self.out.appendSlice(self.allocator, "NULL"),
@@ -5549,10 +5549,7 @@ const CEmitter = struct {
     // C) fall back to the normal emit.
     fn emitF32Expr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         switch (expr.kind) {
-            .float_literal => |lit| {
-                try self.out.appendSlice(self.allocator, lit);
-                try self.out.appendSlice(self.allocator, "f");
-            },
+            .float_literal => |lit| try appendCFloatLiteral(self.allocator, self.out, lit, true),
             .grouped => |inner| {
                 try self.out.appendSlice(self.allocator, "(");
                 try self.emitF32Expr(inner.*, locals);
@@ -6270,7 +6267,7 @@ const CEmitter = struct {
                 return true;
             },
             .float_literal => |literal| {
-                try self.out.appendSlice(self.allocator, literal);
+                try appendCFloatLiteral(self.allocator, self.out, literal, false);
                 return true;
             },
             .grouped => |inner| {
@@ -9513,6 +9510,15 @@ const CEmitter = struct {
             .index => |node| if (locals) |local_set| CEmitter.localIndexElementType(node.base.*, local_set) else null,
             .slice => |node| if (self.exprSourceTypeForEmission(node.base.*, locals)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
             .grouped => |inner| self.exprSourceTypeForEmission(inner.*, locals),
+            // An arithmetic/bitwise binary takes the type of whichever operand carries one (a
+            // shift keeps its left operand's type) — so `bitcast<T>((a + b) << c)` can resolve
+            // its source's integer width for the memcpy reinterpret.
+            .binary => |node| switch (node.op) {
+                .shl, .shr => self.exprSourceTypeForEmission(node.left.*, locals),
+                .eq, .ne, .lt, .le, .gt, .ge, .logical_and, .logical_or => null,
+                else => self.exprSourceTypeForEmission(node.left.*, locals) orelse self.exprSourceTypeForEmission(node.right.*, locals),
+            },
+            .unary => |node| if (node.op == .neg) self.exprSourceTypeForEmission(node.expr.*, locals) else null,
             else => null,
         };
     }
@@ -11509,6 +11515,26 @@ fn appendCIntLiteral(allocator: std.mem.Allocator, out: *std.ArrayList(u8), lite
     for (literal) |ch| {
         if (ch != '_') try out.append(allocator, ch);
     }
+}
+
+// The C text for an IEEE special-constant float lexeme (`inf`/`nan`), or null for an ordinary
+// numeric literal. `as_f32` picks the single-precision clang builtins so the value's width
+// matches the surrounding f32 computation (the f64 forms otherwise round-trip through double).
+fn cFloatSpecialText(literal: []const u8, as_f32: bool) ?[]const u8 {
+    if (std.mem.eql(u8, literal, "inf")) return if (as_f32) "__builtin_inff()" else "__builtin_inf()";
+    if (std.mem.eql(u8, literal, "nan")) return if (as_f32) "__builtin_nanf(\"\")" else "__builtin_nan(\"\")";
+    return null;
+}
+
+// Emit a float literal as C: special IEEE constants (`inf`/`nan`) become clang builtins,
+// everything else is the lexeme verbatim with an optional `f` single-precision suffix.
+fn appendCFloatLiteral(allocator: std.mem.Allocator, out: *std.ArrayList(u8), literal: []const u8, as_f32: bool) !void {
+    if (cFloatSpecialText(literal, as_f32)) |text| {
+        try out.appendSlice(allocator, text);
+        return;
+    }
+    try out.appendSlice(allocator, literal);
+    if (as_f32) try out.appendSlice(allocator, "f");
 }
 
 // True when `expr` is the integer literal 2^63 (the magnitude of INT64_MIN) — the one value
