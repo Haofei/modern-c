@@ -35,6 +35,8 @@ typedef struct Virtq {
 typedef struct CpuBuffer { uintptr_t dev_addr; uintptr_t cpu_addr; uintptr_t len; } CpuBuffer;
 typedef struct DeviceBuffer { uintptr_t dev_addr; uintptr_t len; } DeviceBuffer;
 typedef struct VirtioMmio VirtioMmio;
+// Authoritative MC layout checks (generated). Fails to compile on any MC<->C struct drift.
+#include "virtq_layout_assert.h"
 
 // The typed kernel entry (tests/qemu/proc/agent_net_real_demo.mc).
 uint32_t agent_net_real_main(volatile VirtioMmio *regs, Virtq *rxq, Virtq *txq, uint16_t dst_port);

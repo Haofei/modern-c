@@ -39,6 +39,9 @@ typedef struct CpuBuffer { uintptr_t dev_addr; uintptr_t cpu_addr; uintptr_t len
 typedef struct DeviceBuffer { uintptr_t dev_addr; uintptr_t len; } DeviceBuffer;
 typedef struct VirtioMmio VirtioMmio;
 
+// Authoritative MC layout checks (generated). Fails to compile on any MC<->C struct drift.
+#include "virtq_layout_assert.h"
+
 // The typed kernel entry (kernel/main.mc).
 uintptr_t rx_live_get_frame(volatile VirtioMmio *regs, Virtq *rxq, Virtq *txq, uintptr_t buf, uintptr_t max);
 void rx_route_init(uint16_t port);

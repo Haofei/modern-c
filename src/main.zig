@@ -33,6 +33,7 @@ const usage =
     \\  mcc emit-c <file.mc> [--profile=kernel|hosted]
     \\  mcc emit-map <file.mc> [--profile=kernel|hosted]
     \\  mcc emit-llvm <file.mc>
+    \\  mcc emit-layout <file.mc> --structs=A,B,C
     \\  mcc fmt <file.mc> [--check]
     \\  mcc symbols <file.mc>
     \\
@@ -65,8 +66,12 @@ pub fn main(init: std.process.Init) !void {
     var saw_profile_flag = false;
     var optimize = false;
     var check_fmt = false;
+    // `emit-layout --structs=A,B,C`: the comma-separated structs whose MC layout is asserted.
+    var structs_flag: ?[]const u8 = null;
     while (args.next()) |flag| {
-        if (std.mem.startsWith(u8, flag, "--profile=")) {
+        if (std.mem.startsWith(u8, flag, "--structs=")) {
+            structs_flag = flag["--structs=".len..];
+        } else if (std.mem.startsWith(u8, flag, "--profile=")) {
             saw_profile_flag = true;
             const value = flag["--profile=".len..];
             if (std.mem.eql(u8, value, "kernel")) {
@@ -90,9 +95,13 @@ pub fn main(init: std.process.Init) !void {
     const is_c_artifact_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map");
     const accepts_optimize = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir") or
         std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
+    const is_emit_layout = std.mem.eql(u8, command, "emit-layout");
     if (saw_profile_flag and !is_c_artifact_command) return failUsage();
     if (optimize and !accepts_optimize) return failUsage();
     if (check_fmt and !std.mem.eql(u8, command, "fmt")) return failUsage();
+    // `--structs=` is consumed only by `emit-layout`, and `emit-layout` requires it.
+    if (structs_flag != null and !is_emit_layout) return failUsage();
+    if (is_emit_layout and structs_flag == null) return failUsage();
 
     const root_source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(root_source);
@@ -138,6 +147,8 @@ pub fn main(init: std.process.Init) !void {
         try runEmitMap(allocator, path, source, profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
         try runEmitLlvm(allocator, path, source, optimize);
+    } else if (is_emit_layout) {
+        try runEmitLayout(allocator, path, source, structs_flag.?);
     } else {
         return failUsage();
     }
@@ -547,6 +558,58 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     try be.lower(allocator, module, &output, .{ .profile = .kernel, .optimize = optimize, .source_path = path });
+    try writeStdout(output.items);
+}
+
+// `emit-layout`: emit a generated C header asserting MC's authoritative layout (sizeof + each
+// field offset) for the comma-separated structs in `--structs=`. A C runtime that hand-mirrors
+// one of these structs includes the header, so any MC↔C layout drift becomes a compile error.
+fn runEmitLayout(allocator: std.mem.Allocator, path: []const u8, source: []const u8, structs_csv: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitLayoutFailed;
+    }
+
+    var checker = sema.Checker.init(&diag);
+    checker.checkModule(module);
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitLayoutFailed;
+    }
+
+    // Split `A,B,C` into struct names (arena-allocated so they outlive the loop).
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(allocator);
+    var it = std.mem.splitScalar(u8, structs_csv, ',');
+    while (it.next()) |name| {
+        if (name.len == 0) continue;
+        try names.append(allocator, name);
+    }
+    if (names.items.len == 0) return failUsage();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    lower_c.appendLayoutAsserts(allocator, module, &output, names.items) catch |err| switch (err) {
+        error.LayoutStructNotFound => {
+            std.debug.print("emit-layout: a struct named in --structs= was not found in {s}\n", .{path});
+            return error.EmitLayoutFailed;
+        },
+        error.LayoutUnresolved => {
+            std.debug.print("emit-layout: could not resolve a struct's layout in {s}\n", .{path});
+            return error.EmitLayoutFailed;
+        },
+        else => return err,
+    };
     try writeStdout(output.items);
 }
 

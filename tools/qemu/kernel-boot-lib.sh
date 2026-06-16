@@ -54,10 +54,29 @@ kernel_boot_compile_mc_object() {
     esac
 }
 
+# Generate the authoritative MC virtqueue layout-assert header (sizeof/offsetof for every shared
+# struct) into $1. C runtimes that hand-mirror std/virtqueue.mc's structs `#include
+# "virtq_layout_assert.h"`; compiling them with $1 on the include path turns any MC<->C layout
+# drift into a _Static_assert compile error. Idempotent — safe to call repeatedly per build.
+kernel_boot_emit_virtq_layout_header() {
+    local dir="$1"
+    local root
+    root="$(kernel_boot_repo_root)"
+    "$MCC" emit-layout "$root/std/virtqueue.mc" \
+        --structs=VringDesc,DescTable,VringAvail,UsedElem,VringUsed,Virtq \
+        >"$dir/virtq_layout_assert.h"
+}
+
 kernel_boot_compile_c_object() {
     local src="$1"
     local out="$2"
-    "$CLANG" "${CFLAGS[@]}" -c "$src" -o "$out"
+    local dir
+    dir="$(dirname "$out")"
+    # Make the generated virtq layout-assert header available to any runtime that includes it.
+    # Generated next to the output object and added to the include path; harmless for runtimes
+    # that don't include it.
+    kernel_boot_emit_virtq_layout_header "$dir"
+    "$CLANG" "${CFLAGS[@]}" -I"$dir" -c "$src" -o "$out"
 }
 
 kernel_boot_compile_llvm_support() {

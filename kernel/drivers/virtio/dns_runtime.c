@@ -48,6 +48,8 @@ typedef struct Virtq {
 typedef struct CpuBuffer { uintptr_t dev_addr; uintptr_t cpu_addr; uintptr_t len; } CpuBuffer;
 typedef struct DeviceBuffer { uintptr_t dev_addr; uintptr_t len; } DeviceBuffer;
 typedef struct VirtioMmio VirtioMmio;
+// Authoritative MC layout checks (generated). Fails to compile on any MC<->C struct drift.
+#include "virtq_layout_assert.h"
 
 // The typed kernel entry points (tests/qemu/net/dns_http_demo.mc).
 uint32_t dns_http_drive(volatile VirtioMmio *regs, Virtq *rxq, Virtq *txq,
