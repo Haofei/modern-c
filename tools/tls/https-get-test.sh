@@ -131,7 +131,10 @@ kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/tls.o" "$WORK"
 # The real wall-clock seam (goldfish-RTC) — provides time_now_epoch() for X.509 validity.
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/core/time.mc" "$WORK/time.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
-"$CLANG" "${RUNTIME_FLAGS[@]}" -c "$RUNTIME" -o "$WORK/runtime.o"
+# A2: the runtime #includes the generated virtq_structs.h (single source of truth);
+# this script direct-compiles the runtime (custom BearSSL flags), so generate it here.
+kernel_boot_emit_virtq_structs_header "$WORK"
+"$CLANG" "${RUNTIME_FLAGS[@]}" -I"$WORK" -c "$RUNTIME" -o "$WORK/runtime.o"
 # Shared virtio-rng entropy driver (single source of truth, also used by the smoke test).
 "$CLANG" "${RUNTIME_FLAGS[@]}" -c "$HERE/kernel/drivers/virtio/virtio_rng.c" -o "$WORK/virtio_rng.o"
 
