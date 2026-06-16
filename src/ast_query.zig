@@ -364,6 +364,17 @@ pub fn overlayByteArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
+/// The element type of an overlay array view of ANY element type (e.g. `[N]u16`),
+/// or null if `ty` is not an array. Unlike `overlayByteArrayElementType`, this is
+/// not restricted to `u8` — it backs the non-byte array-view read/write lowering.
+pub fn overlayArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .array => |node| node.child.*,
+        .qualified => |node| overlayArrayElementType(node.child.*),
+        else => null,
+    };
+}
+
 /// The member node of a `base.field` overlay index base (through grouping), or null.
 pub fn overlayMemberFromIndexBase(expr: ast.Expr) ?@TypeOf(expr.kind.member) {
     return switch (expr.kind) {

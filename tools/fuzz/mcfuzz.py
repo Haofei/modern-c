@@ -596,26 +596,25 @@ class Gen:
         #     scalar member, read the aliased members back into the digest. Both backends must agree
         #     on the storage size and member aliasing.
         #
-        #     IMPORTANT (read form): a bare overlay-member read (`w.bytes[0]`, `w.u`) only lowers
-        #     correctly in *direct return position* of a same-typed accessor fn — the existing
-        #     `tests/c_emit/packed_overlay.mc::first_byte` shows this. Reading a member inside any
-        #     other context (an `as` cast, an initializer, an arbitrary expression) is NOT lowered
-        #     by either backend today — it emits a raw `w.<member>` access against the `storage`-only
-        #     C struct, which fails to compile (and emit-llvm fails too). Likewise a *non-byte* array
-        #     view (`[2]u16`, `[2]u32`) is not lowered at all. See the bug note in the report. To stay
-        #     valid we therefore (i) restrict views to the scalar member + the `[N]u8` byte view, and
-        #     (ii) read ONLY through generated accessor helpers, then fold the returned scalars.
+        #     READ FORMS (all now lowered on both backends — the prior limitation is removed): the
+        #     overlay-member-read lowering was generalized so a bare read (`w.u`, `w.bytes[i]`,
+        #     `w.halves[i]`) lowers wherever it appears — direct return AND any expression position
+        #     (cast operand, initializer, arithmetic subexpression) — and a *non-byte* array view
+        #     (`[N/2]u16`) now lowers for both read and write. We therefore read members DIRECTLY in
+        #     expression position (no accessor-fn indirection) and exercise the non-byte u16 view,
+        #     including a write-then-readback, so the generated surface pins the fixed path.
+        HALF = {32: 2, 64: 4}
         for i in range(self.rng.randrange(0, 2)):
             name = "OV%d" % i
             w = self.rng.choice((32, 64))
             nbytes = w // 8
-            members = [("u", "u%d" % w, False), ("bytes", "[%d]u8" % nbytes, True)]
+            nhalves = HALF[w]
+            members = [("u", "u%d" % w, False),
+                       ("bytes", "[%d]u8" % nbytes, True),
+                       ("halves", "[%d]u16" % nhalves, True)]
             self.overlays[name] = (w, members)
             decls.append("overlay union %s {\n%s\n}" % (
                 name, "\n".join("    %s: %s," % (m, t) for m, t, _a in members)))
-            # Accessor helpers — bare member read in return position (the supported lowering form).
-            decls.append("fn ovget_u_%s(w: %s) -> u%d {\n    return w.u;\n}" % (name, name, w))
-            decls.append("fn ovget_b_%s(w: %s, i: usize) -> u8 {\n    return w.bytes[i];\n}" % (name, name))
 
     def gen_offset_overlay_body(self, out):
         # G15: fold the @offset struct layouts (comptime) and the overlay-union reads (runtime).
@@ -624,21 +623,32 @@ class Gen:
             self.nvars += 1
             out.append("    var %s: u64 = offobs_%s();" % (ov, name))
             self._kernel_terms.append(ov)
+        HALF = {32: 2, 64: 4}
         for name, (w, members) in self.overlays.items():
             nbytes = w // 8
+            nhalves = HALF[w]
             vn = "ovv%d" % self.nvars
             self.nvars += 1
             out.append("    var %s: %s = uninit;" % (vn, name))
             out.append("    %s.u = %d;" % (vn, self.rng.randrange(1, 1 << min(w, 32))))
             acc = "ovo%d" % self.nvars
             self.nvars += 1
-            # Read scalar + each byte of the aliasing byte view through the accessor helpers (the
-            # supported overlay-read lowering); the returned scalars then fold/cast freely. The byte
-            # reads are a sound cross-backend observable: same target, fully-written storage.
-            out.append("    var %s: u64 = (ovget_u_%s(%s) as u64);" % (acc, name, vn))
+            # Read members DIRECTLY in expression position (cast operand inside an initializer /
+            # xor) — the generalized overlay-read lowering. Same target, fully-written storage, so
+            # the aliased reads are a sound cross-backend observable.
+            out.append("    var %s: u64 = (%s.u as u64);" % (acc, vn))
             for k in range(nbytes):
-                out.append("    %s = (%s ^ ((ovget_b_%s(%s, %d) as u64) << %d));"
-                           % (acc, acc, name, vn, k, (k % 8) * 8))
+                out.append("    %s = (%s ^ ((%s.bytes[%d] as u64) << %d));"
+                           % (acc, acc, vn, k, (k % 8) * 8))
+            # Non-byte (`[N]u16`) view read in expression position.
+            for k in range(nhalves):
+                out.append("    %s = (%s ^ ((%s.halves[%d] as u64) << %d));"
+                           % (acc, acc, vn, k, (k % 4) * 16))
+            # Non-byte view write, then read back: overwrite one half and re-observe it.
+            hidx = self.rng.randrange(0, nhalves)
+            hval = self.rng.randrange(1, 1 << 16)
+            out.append("    %s.halves[%d] = %d;" % (vn, hidx, hval))
+            out.append("    %s = (%s ^ ((%s.halves[%d] as u64) << 3));" % (acc, acc, vn, hidx))
             out.append("    %s = (%s ^ ((sizeof(%s) as u64) << 4));" % (acc, acc, name))
             self._kernel_terms.append(acc)
 

@@ -44,6 +44,7 @@ const isStringLiteralTarget = ast_query.isStringLiteralTarget;
 const isMmioStructAbi = ast_query.isMmioStructAbi;
 const reflectionFieldName = ast_query.reflectionFieldName;
 const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
+const overlayArrayElementType = ast_query.overlayArrayElementType;
 const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
 const scalarLayout = type_layout.scalarLayout;
@@ -4589,6 +4590,9 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .index => |node| {
+                if (locals) |local_set| {
+                    if (try self.emitOverlayIndexReadExpr(node, local_set)) return;
+                }
                 if (self.globalArrayElementAccess(node, locals)) |access| {
                     try self.emitGlobalArrayElementLoadExpr(access, locals);
                 } else if (sliceAccessForExpr(node.base.*, locals)) |slice| {
@@ -4634,6 +4638,9 @@ const CEmitter = struct {
             },
             .member => |node| {
                 if (try self.emitPackedBitsMember(node, locals)) return;
+                if (locals) |local_set| {
+                    if (try self.emitOverlayMemberReadExpr(node, local_set)) return;
+                }
                 if (try self.emitGlobalArrayElementMemberLoadExpr(node, locals)) return;
                 if (self.globalMemberAccess(node, locals)) |access| {
                     try self.emitGlobalLoadExpr(access.name, access.info);
@@ -6464,20 +6471,112 @@ const CEmitter = struct {
             .index => |node| {
                 const member = overlayMemberFromIndexBase(node.base.*) orelse return false;
                 const access = self.overlayFieldAccess(member, locals) orelse return false;
-                const len = access.field.byte_array_len orelse return false;
-                const element_ty = overlayByteArrayElementType(access.field.ty) orelse return false;
+
+                if (access.field.byte_array_len) |len| {
+                    // Byte view: storage byte == view element.
+                    try self.writeIndent();
+                    try self.emitExpr(access.base, locals);
+                    try self.out.appendSlice(self.allocator, ".storage[mc_check_index_usize(");
+                    try self.emitExpr(node.index.*, locals);
+                    try self.out.print(self.allocator, ", {s})] = ", .{len});
+                    const byte_ty = overlayByteArrayElementType(access.field.ty) orelse return false;
+                    try self.emitExprWithTarget(assignment.value, locals, byte_ty);
+                    try self.out.appendSlice(self.allocator, ";\n");
+                    return true;
+                }
+
+                // Non-byte view (`[N]uW`): write one element at its byte offset in storage
+                // via the same memcpy-reinterpret idiom the read path uses.
+                const element_ty = overlayArrayElementType(access.field.ty) orelse return false;
+                const elem_count = access.field.layout.size / self.overlayFieldLayoutSize(element_ty);
+                const element_c = try self.cTypeFor(element_ty, .typedef_name);
+                const val_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ov{d}", .{self.temp_index});
+                self.temp_index += 1;
+                const idx_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ovi{d}", .{self.temp_index});
+                self.temp_index += 1;
 
                 try self.writeIndent();
-                try self.emitExpr(access.base, locals);
-                try self.out.appendSlice(self.allocator, ".storage[mc_check_index_usize(");
-                try self.emitExpr(node.index.*, locals);
-                try self.out.print(self.allocator, ", {s})] = ", .{len});
+                try self.out.print(self.allocator, "{s} {s} = ", .{ element_c, val_name });
                 try self.emitExprWithTarget(assignment.value, locals, element_ty);
                 try self.out.appendSlice(self.allocator, ";\n");
+                try self.writeIndent();
+                try self.out.print(self.allocator, "size_t {s} = mc_check_index_usize(", .{idx_name});
+                try self.emitExpr(node.index.*, locals);
+                try self.out.print(self.allocator, ", {d});\n", .{elem_count});
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "__builtin_memcpy(&");
+                try self.emitExpr(access.base, locals);
+                try self.out.print(self.allocator, ".storage[{s} * sizeof({s})], &{s}, sizeof({s}));\n", .{ idx_name, element_c, val_name, element_c });
                 return true;
             },
             else => return false,
         }
+    }
+
+    /// General-position READ of a scalar overlay member (`w.u`). Overlay unions are
+    /// lowered to a storage-only C struct (`unsigned char storage[N]`), so the named
+    /// member does not exist on the C type — it must be reconstituted by copying the
+    /// member-sized prefix of `storage` into a temp. This used to be handled only in
+    /// direct-return position (`emitOverlayFieldReadReturn`), so the same read inside a
+    /// cast/initializer/arithmetic subexpression emitted a raw `w.member` that fails to
+    /// compile. We use a statement-expression (the same `({ ... })` + `__builtin_memcpy`
+    /// reinterpret idiom the codebase already uses) so the read is valid mid-expression.
+    fn emitOverlayMemberReadExpr(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const access = self.overlayFieldAccess(node, locals) orelse return false;
+        // Array views are read element-wise via `emitOverlayIndexReadExpr`; a bare
+        // member read of an array view is not a supported scalar load.
+        if (access.field.byte_array_len != null) return false;
+        if (overlayArrayElementType(access.field.ty) != null) return false;
+
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ov{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        try self.out.appendSlice(self.allocator, "({ ");
+        try self.out.print(self.allocator, "{s} {s}; __builtin_memcpy(&{s}, ", .{ try self.cTypeFor(access.field.ty, .typedef_name), temp_name, temp_name });
+        try self.emitExpr(access.base, locals);
+        try self.out.print(self.allocator, ".storage, {d}); {s}; }})", .{ access.field.layout.size, temp_name });
+        return true;
+    }
+
+    /// General-position READ of an overlay array-view element (`w.bytes[i]`,
+    /// `w.halves[i]`). A byte view (`[N]u8`) aligns 1:1 with `storage`, so it indexes
+    /// `storage[i]` directly. A non-byte view (`[N]uW`) — previously NEVER lowered in any
+    /// position — reads `sizeof(elem)` bytes from `&storage[i*sizeof(elem)]` into a temp
+    /// via the same memcpy-reinterpret idiom (well-defined; no aliasing UB). The bounds
+    /// check is against the element count, then scaled to a byte offset.
+    fn emitOverlayIndexReadExpr(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+        const member = overlayMemberFromIndexBase(node.base.*) orelse return false;
+        const access = self.overlayFieldAccess(member, locals) orelse return false;
+
+        if (access.field.byte_array_len) |len| {
+            // Byte view: storage byte == view element.
+            try self.emitExpr(access.base, locals);
+            try self.out.appendSlice(self.allocator, ".storage[mc_check_index_usize(");
+            try self.emitExpr(node.index.*, locals);
+            try self.out.print(self.allocator, ", {s})]", .{len});
+            return true;
+        }
+
+        const element_ty = overlayArrayElementType(access.field.ty) orelse return false;
+        const elem_count = access.field.layout.size / self.overlayFieldLayoutSize(element_ty);
+        const element_c = try self.cTypeFor(element_ty, .typedef_name);
+        const idx_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ovi{d}", .{self.temp_index});
+        self.temp_index += 1;
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ov{d}", .{self.temp_index});
+        self.temp_index += 1;
+
+        // Non-byte view: copy one element from its byte offset within storage.
+        try self.out.appendSlice(self.allocator, "({ size_t ");
+        try self.out.print(self.allocator, "{s} = mc_check_index_usize(", .{idx_name});
+        try self.emitExpr(node.index.*, locals);
+        try self.out.print(self.allocator, ", {d}); {s} {s}; __builtin_memcpy(&{s}, &", .{ elem_count, element_c, temp_name, temp_name });
+        try self.emitExpr(access.base, locals);
+        try self.out.print(self.allocator, ".storage[{s} * sizeof({s})], sizeof({s})); {s}; }})", .{ idx_name, element_c, element_c, temp_name });
+        return true;
+    }
+
+    fn overlayFieldLayoutSize(self: *CEmitter, ty: ast.TypeExpr) usize {
+        return (self.overlayFieldLayout(ty) orelse OverlayLayout{ .size = 1, .alignment = 1 }).size;
     }
 
     fn emitDirectCallSliceIndexReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {

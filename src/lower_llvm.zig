@@ -25,6 +25,7 @@ const isStringLiteralTarget = ast_query.isStringLiteralTarget;
 const isMmioStructAbi = ast_query.isMmioStructAbi;
 const reflectionFieldName = ast_query.reflectionFieldName;
 const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
+const overlayArrayElementType = ast_query.overlayArrayElementType;
 const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
 const scalarLayout = type_layout.scalarLayout;
@@ -1365,7 +1366,7 @@ const LlvmEmitter = struct {
             .index => |node| blk: {
                 if (overlayMemberFromIndexBase(node.base.*)) |member| {
                     if (self.overlayField(member.base.*, member.name.text)) |field| {
-                        const element_ty = overlayByteArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
+                        const element_ty = overlayArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
                         const ptr = try self.emitIndexAddress(node);
                         const value = try self.emitExpr(value_expr, element_ty);
                         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(element_ty), value, ptr, try self.debugCallSuffix() });
@@ -1474,7 +1475,9 @@ const LlvmEmitter = struct {
                     break :blk true;
                 }
                 if (self.overlayField(node.base.*, node.name.text)) |field| {
-                    if (overlayByteArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
+                    // Array views (byte or non-byte) are written element-wise via the
+                    // index path; a bare member store only applies to scalar members.
+                    if (overlayArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
                     const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
                     const value = try self.emitExpr(value_expr, field.ty);
                     try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, ptr, try self.debugCallSuffix() });
@@ -2015,7 +2018,9 @@ const LlvmEmitter = struct {
             return result;
         }
         if (self.overlayField(node.base.*, node.name.text)) |field| {
-            if (overlayByteArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
+            // Array views (byte or non-byte) are read element-wise via the index path;
+            // a bare member load only applies to scalar members.
+            if (overlayArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
             const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(field.ty), ptr, try self.debugCallSuffix() });
@@ -2053,7 +2058,10 @@ const LlvmEmitter = struct {
     fn emitIndexLoad(self: *LlvmEmitter, node: anytype) ![]const u8 {
         if (overlayMemberFromIndexBase(node.base.*)) |member| {
             if (self.overlayField(member.base.*, member.name.text)) |field| {
-                const element_ty = overlayByteArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
+                // Any array-view element (byte or non-byte): the byte offset is
+                // `index * sizeof(elem)`, computed by `emitIndexAddress` via a typed GEP
+                // over the storage base, so the load just uses the element type.
+                const element_ty = overlayArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitIndexAddress(node);
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(element_ty), ptr, try self.debugCallSuffix() });
@@ -2073,7 +2081,10 @@ const LlvmEmitter = struct {
         const index = try self.emitExpr(node.index.*, simpleType((node.index.*).span, "usize"));
         if (overlayMemberFromIndexBase(node.base.*)) |member| {
             if (self.overlayField(member.base.*, member.name.text)) |field| {
-                const element_ty = overlayByteArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
+                // Non-byte views (`[N]uW`) lower identically to byte views: the storage
+                // base is byte 0, and a typed GEP scales the (bounds-checked) element
+                // index by `sizeof(elem)`, landing on the element's byte offset.
+                const element_ty = overlayArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
                 const array = switch (field.ty.kind) {
                     .array => |array| array,
                     else => return error.UnsupportedLlvmEmission,
