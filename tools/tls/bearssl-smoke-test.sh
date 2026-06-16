@@ -64,8 +64,11 @@ echo "Compiled $NBEAR BearSSL .c files."
 # clock seam; pass the build epoch in.
 "$CLANG" "${CFLAGS[@]}" -DMC_BUILD_EPOCH="$EPOCH" -c "$RUNTIME" -o "$WORK/runtime.o"
 
+# Shared virtio-rng entropy driver (single source of truth, also used by https-get).
+"$CLANG" "${CFLAGS[@]}" -c "$HERE/kernel/drivers/virtio/virtio_rng.c" -o "$WORK/virtio_rng.o"
+
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "${BEARSSL_OBJS[@]}" -o "$WORK/smoke.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/virtio_rng.o" "${BEARSSL_OBJS[@]}" -o "$WORK/smoke.elf"
 
 # Rough .text size added by BearSSL (for the report).
 TEXT_SIZE="$("$CLANG" -print-prog-name=llvm-size >/dev/null 2>&1; command -v llvm-size >/dev/null 2>&1 && llvm-size "$WORK/smoke.elf" 2>/dev/null | tail -1 | awk '{print $1}' || echo '?')"

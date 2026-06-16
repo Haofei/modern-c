@@ -130,9 +130,11 @@ CFLAGS=("${MCFLAGS[@]}")
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/tls.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 "$CLANG" "${RUNTIME_FLAGS[@]}" -c "$RUNTIME" -o "$WORK/runtime.o"
+# Shared virtio-rng entropy driver (single source of truth, also used by the smoke test).
+"$CLANG" "${RUNTIME_FLAGS[@]}" -c "$HERE/kernel/drivers/virtio/virtio_rng.c" -o "$WORK/virtio_rng.o"
 
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/tls.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/https.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/virtio_rng.o" "$WORK/tls.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/https.elf"
 
 # 5. Boot under QEMU with virtio-net (slirp) + virtio-rng + pcap.
 OUT="$(timeout 90 "$QEMU" -machine virt -bios none -nographic \

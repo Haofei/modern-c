@@ -55,166 +55,12 @@ static void putdec(uint64_t v) {
 
 #define FINISHER ((volatile uint32_t *)0x00100000UL)
 
-// -------------------------------------------------------- virtio-mmio transport
-// virtio-mmio register offsets (virtio 1.x, 4.2.2) -- same map as std/virtio.mc.
-#define VIRTIO_MMIO_BASE   0x10001000UL
-#define VIRTIO_MMIO_STRIDE 0x1000UL
-#define VIRTIO_MMIO_COUNT  8
-
-#define VMR_MAGIC            0x000
-#define VMR_VERSION          0x004
-#define VMR_DEVICE_ID        0x008
-#define VMR_DEVICE_FEATURES  0x010
-#define VMR_DEVICE_FEAT_SEL  0x014
-#define VMR_DRIVER_FEATURES  0x020
-#define VMR_DRIVER_FEAT_SEL  0x024
-#define VMR_QUEUE_SEL        0x030
-#define VMR_QUEUE_NUM_MAX    0x034
-#define VMR_QUEUE_NUM        0x038
-#define VMR_QUEUE_READY      0x044
-#define VMR_QUEUE_NOTIFY     0x050
-#define VMR_INTERRUPT_STATUS 0x060
-#define VMR_INTERRUPT_ACK    0x064
-#define VMR_STATUS           0x070
-#define VMR_QUEUE_DESC_LOW   0x080
-#define VMR_QUEUE_DESC_HIGH  0x084
-#define VMR_QUEUE_DRV_LOW    0x090
-#define VMR_QUEUE_DRV_HIGH   0x094
-#define VMR_QUEUE_DEV_LOW    0x0a0
-#define VMR_QUEUE_DEV_HIGH   0x0a4
-
-#define VIRTIO_MAGIC          0x74726976u
-#define VIRTIO_VERSION_MODERN 2u
-#define VIRTIO_DEVICE_ID_RNG  4u   // entropy device
-
-#define STATUS_ACKNOWLEDGE 1u
-#define STATUS_DRIVER      2u
-#define STATUS_DRIVER_OK   4u
-#define STATUS_FEATURES_OK 8u
-#define STATUS_FAILED      128u
-
-static inline uint32_t mmio_rd(volatile uint8_t *base, uint32_t off) {
-    return *(volatile uint32_t *)(base + off);
-}
-static inline void mmio_wr(volatile uint8_t *base, uint32_t off, uint32_t val) {
-    *(volatile uint32_t *)(base + off) = val;
-}
-
-// --------------------------------------------------------- split-virtqueue ring
-// Single device-writable queue, size 8. Same on-wire layout as std/virtqueue.mc.
-#define VQ_SIZE 8
-#define VRING_DESC_F_WRITE 2  // device writes into this buffer (device-writable)
-
-typedef struct { uint64_t addr; uint32_t len; uint16_t flags; uint16_t next; } VringDesc;
-typedef struct { uint16_t flags; uint16_t idx; uint16_t ring[VQ_SIZE]; uint16_t used_event; } VringAvail;
-typedef struct { uint32_t id; uint32_t len; } VringUsedElem;
-typedef struct { uint16_t flags; uint16_t idx; VringUsedElem ring[VQ_SIZE]; uint16_t avail_event; } VringUsed;
-
-static VringDesc  g_rng_desc[VQ_SIZE] __attribute__((aligned(16)));
-static VringAvail g_rng_avail         __attribute__((aligned(2)));
-static VringUsed  g_rng_used          __attribute__((aligned(4)));
-static uint16_t   g_rng_last_used = 0;
-
-// Scan the virtio-mmio slots for an entropy device (device-id 4).
-static volatile uint8_t *find_rng_device(void) {
-    for (int i = 0; i < VIRTIO_MMIO_COUNT; ++i) {
-        volatile uint8_t *base =
-            (volatile uint8_t *)(VIRTIO_MMIO_BASE + (uintptr_t)i * VIRTIO_MMIO_STRIDE);
-        if (mmio_rd(base, VMR_MAGIC) == VIRTIO_MAGIC &&
-            mmio_rd(base, VMR_DEVICE_ID) == VIRTIO_DEVICE_ID_RNG) {
-            return base;
-        }
-    }
-    return 0;
-}
-
-// virtio-rng has no required feature bits; we accept the intersection (= 0 wanted).
-// Returns 1 on success.
-static int rng_init(volatile uint8_t *regs) {
-    if (mmio_rd(regs, VMR_VERSION) != VIRTIO_VERSION_MODERN) return 0;
-
-    // Reset, then handshake (3.1.1).
-    mmio_wr(regs, VMR_STATUS, 0);
-    for (int s = 0; s < 100000 && mmio_rd(regs, VMR_STATUS) != 0; ++s) { }
-    mmio_wr(regs, VMR_STATUS, STATUS_ACKNOWLEDGE);
-    mmio_wr(regs, VMR_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
-
-    // We require no features; accept none.
-    mmio_wr(regs, VMR_DRIVER_FEAT_SEL, 0);
-    mmio_wr(regs, VMR_DRIVER_FEATURES, 0);
-    mmio_wr(regs, VMR_DRIVER_FEAT_SEL, 1);
-    mmio_wr(regs, VMR_DRIVER_FEATURES, 0);
-    mmio_wr(regs, VMR_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
-    if ((mmio_rd(regs, VMR_STATUS) & STATUS_FEATURES_OK) != STATUS_FEATURES_OK) return 0;
-
-    // Set up the single requestq (queue 0).
-    mmio_wr(regs, VMR_QUEUE_SEL, 0);
-    uint32_t max = mmio_rd(regs, VMR_QUEUE_NUM_MAX);
-    if (max == 0) return 0;
-    uint32_t size = max < VQ_SIZE ? max : VQ_SIZE;
-    mmio_wr(regs, VMR_QUEUE_NUM, size);
-
-    g_rng_avail.idx = 0; g_rng_avail.flags = 0;
-    g_rng_used.idx = 0;  g_rng_used.flags = 0;
-    g_rng_last_used = 0;
-
-    uint64_t desc_a  = (uint64_t)(uintptr_t)&g_rng_desc[0];
-    uint64_t avail_a = (uint64_t)(uintptr_t)&g_rng_avail;
-    uint64_t used_a  = (uint64_t)(uintptr_t)&g_rng_used;
-    mmio_wr(regs, VMR_QUEUE_DESC_LOW,  (uint32_t)desc_a);
-    mmio_wr(regs, VMR_QUEUE_DESC_HIGH, (uint32_t)(desc_a >> 32));
-    mmio_wr(regs, VMR_QUEUE_DRV_LOW,   (uint32_t)avail_a);
-    mmio_wr(regs, VMR_QUEUE_DRV_HIGH,  (uint32_t)(avail_a >> 32));
-    mmio_wr(regs, VMR_QUEUE_DEV_LOW,   (uint32_t)used_a);
-    mmio_wr(regs, VMR_QUEUE_DEV_HIGH,  (uint32_t)(used_a >> 32));
-    __sync_synchronize();
-    mmio_wr(regs, VMR_QUEUE_READY, 1);
-
-    mmio_wr(regs, VMR_STATUS,
-            STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
-    return 1;
-}
-
-// A DMA-visible scratch buffer for the device to fill (BSS, identity-mapped).
-static uint8_t g_rng_dma[256] __attribute__((aligned(16)));
-
-// Post `len` bytes of g_rng_dma as a device-writable buffer, kick, and spin until
-// the device returns a used-ring entry. Returns the number of bytes the device
-// wrote (0 on timeout / error). Bytes land in g_rng_dma.
-static uint32_t rng_fill(volatile uint8_t *regs, uint32_t len) {
-    if (len > sizeof(g_rng_dma)) len = sizeof(g_rng_dma);
-    for (uint32_t i = 0; i < len; ++i) g_rng_dma[i] = 0; // prove the device wrote
-
-    // Descriptor 0: one device-writable buffer.
-    g_rng_desc[0].addr  = (uint64_t)(uintptr_t)&g_rng_dma[0];
-    g_rng_desc[0].len   = len;
-    g_rng_desc[0].flags = VRING_DESC_F_WRITE;
-    g_rng_desc[0].next  = 0;
-
-    uint16_t avail_slot = (uint16_t)(g_rng_avail.idx % VQ_SIZE);
-    g_rng_avail.ring[avail_slot] = 0; // descriptor index 0
-    __sync_synchronize();
-    g_rng_avail.idx = (uint16_t)(g_rng_avail.idx + 1);
-    __sync_synchronize();
-
-    mmio_wr(regs, VMR_QUEUE_NOTIFY, 0); // kick queue 0
-
-    // Spin (real-time bounded) for the completion.
-    uint64_t start = mc_read_ticks();
-    while ((mc_read_ticks() - start) < 50000000ULL) { // ~5s at 10 MHz
-        __sync_synchronize();
-        if (g_rng_used.idx != g_rng_last_used) {
-            VringUsedElem *e = &g_rng_used.ring[g_rng_last_used % VQ_SIZE];
-            uint32_t wrote = e->len;
-            g_rng_last_used = (uint16_t)(g_rng_last_used + 1);
-            // Ack any pending interrupt (we poll, but keep the device happy).
-            uint32_t is = mmio_rd(regs, VMR_INTERRUPT_STATUS);
-            if (is) mmio_wr(regs, VMR_INTERRUPT_ACK, is);
-            return wrote;
-        }
-    }
-    return 0;
-}
+// -------------------------------------------------------- virtio-rng entropy
+// The device-id-4 probe + handshake + random read now live in the shared driver
+// kernel/drivers/virtio/virtio_rng.c (linked in by the test script). It depends
+// on mc_read_ticks() above. vrng_fill() copies the device bytes into the caller's
+// buffer (the inline copy used a shared global; behavior is otherwise identical).
+#include "virtio_rng.h"
 
 // -------------------------------------------------------------- the smoke checks
 // Known SHA-256 vector: SHA256("abc").
@@ -251,17 +97,15 @@ __attribute__((used)) void test_main(void) {
 
     // ---- (2) live entropy via the virtio-rng device, two differing reads ----
     {
-        volatile uint8_t *rng = find_rng_device();
+        volatile uint8_t *rng = vrng_find();
         if (!rng) {
             puts_("RNG-NODEV\n");
-        } else if (!rng_init(rng)) {
+        } else if (!vrng_init(rng)) {
             puts_("RNG-INIT-FAILED\n");
         } else {
             uint8_t a[16], b[16];
-            uint32_t na = rng_fill(rng, 16);
-            for (uint32_t i = 0; i < 16; ++i) a[i] = g_rng_dma[i];
-            uint32_t nb = rng_fill(rng, 16);
-            for (uint32_t i = 0; i < 16; ++i) b[i] = g_rng_dma[i];
+            uint32_t na = vrng_fill(rng, a, 16);
+            uint32_t nb = vrng_fill(rng, b, 16);
 
             puts_("RNG1="); print_hex_buf(a, 16); putc_('\n');
             puts_("RNG2="); print_hex_buf(b, 16); putc_('\n');

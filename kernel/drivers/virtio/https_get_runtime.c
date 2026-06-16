@@ -141,107 +141,11 @@ static void put_ip(uint32_t ip) {
 #define VIRTIO_MMIO_COUNT 8
 
 // ===================================================================== virtio-rng
-// A minimal virtio-rng (device-id 4) driver to seed BearSSL's PRNG. Same split-queue
-// layout as the Phase-1 smoke runtime.
-#define VMR_MAGIC 0x000
-#define VMR_VERSION 0x004
-#define VMR_DEVICE_ID 0x008
-#define VMR_DRIVER_FEATURES 0x020
-#define VMR_DRIVER_FEAT_SEL 0x024
-#define VMR_QUEUE_SEL 0x030
-#define VMR_QUEUE_NUM_MAX 0x034
-#define VMR_QUEUE_NUM 0x038
-#define VMR_QUEUE_READY 0x044
-#define VMR_QUEUE_NOTIFY 0x050
-#define VMR_INTERRUPT_STATUS 0x060
-#define VMR_INTERRUPT_ACK 0x064
-#define VMR_STATUS 0x070
-#define VMR_QUEUE_DESC_LOW 0x080
-#define VMR_QUEUE_DESC_HIGH 0x084
-#define VMR_QUEUE_DRV_LOW 0x090
-#define VMR_QUEUE_DRV_HIGH 0x094
-#define VMR_QUEUE_DEV_LOW 0x0a0
-#define VMR_QUEUE_DEV_HIGH 0x0a4
-#define VIRTIO_MAGIC 0x74726976u
-#define VIRTIO_VERSION_MODERN 2u
-#define VIRTIO_DEVICE_ID_RNG 4u
-#define ST_ACK 1u
-#define ST_DRV 2u
-#define ST_DRV_OK 4u
-#define ST_FEAT_OK 8u
-#define VQ_SIZE 8
-#define VRING_DESC_F_WRITE 2
-
-static inline uint32_t mmio_rd(volatile uint8_t *b, uint32_t o) { return *(volatile uint32_t *)(b + o); }
-static inline void mmio_wr(volatile uint8_t *b, uint32_t o, uint32_t v) { *(volatile uint32_t *)(b + o) = v; }
-
-static VringDesc  g_rng_desc[VQ_SIZE] __attribute__((aligned(16)));
-static VringAvail g_rng_avail         __attribute__((aligned(2)));
-static VringUsed  g_rng_used          __attribute__((aligned(4)));
-static uint16_t   g_rng_last_used = 0;
-static uint8_t    g_rng_dma[256] __attribute__((aligned(16)));
-
-static volatile uint8_t *find_rng_device(void) {
-    for (int i = 0; i < VIRTIO_MMIO_COUNT; ++i) {
-        volatile uint8_t *base = (volatile uint8_t *)(VIRTIO_MMIO_BASE + (uintptr_t)i * VIRTIO_MMIO_STRIDE);
-        if (mmio_rd(base, VMR_MAGIC) == VIRTIO_MAGIC && mmio_rd(base, VMR_DEVICE_ID) == VIRTIO_DEVICE_ID_RNG)
-            return base;
-    }
-    return 0;
-}
-static int rng_init(volatile uint8_t *regs) {
-    if (mmio_rd(regs, VMR_VERSION) != VIRTIO_VERSION_MODERN) return 0;
-    mmio_wr(regs, VMR_STATUS, 0);
-    for (int s = 0; s < 100000 && mmio_rd(regs, VMR_STATUS) != 0; ++s) { }
-    mmio_wr(regs, VMR_STATUS, ST_ACK);
-    mmio_wr(regs, VMR_STATUS, ST_ACK | ST_DRV);
-    mmio_wr(regs, VMR_DRIVER_FEAT_SEL, 0); mmio_wr(regs, VMR_DRIVER_FEATURES, 0);
-    mmio_wr(regs, VMR_DRIVER_FEAT_SEL, 1); mmio_wr(regs, VMR_DRIVER_FEATURES, 0);
-    mmio_wr(regs, VMR_STATUS, ST_ACK | ST_DRV | ST_FEAT_OK);
-    if ((mmio_rd(regs, VMR_STATUS) & ST_FEAT_OK) != ST_FEAT_OK) return 0;
-    mmio_wr(regs, VMR_QUEUE_SEL, 0);
-    uint32_t max = mmio_rd(regs, VMR_QUEUE_NUM_MAX);
-    if (max == 0) return 0;
-    uint32_t size = max < VQ_SIZE ? max : VQ_SIZE;
-    mmio_wr(regs, VMR_QUEUE_NUM, size);
-    g_rng_avail.idx = 0; g_rng_avail.flags = 0;
-    g_rng_used.idx = 0; g_rng_used.flags = 0; g_rng_last_used = 0;
-    uint64_t da = (uint64_t)(uintptr_t)&g_rng_desc[0];
-    uint64_t aa = (uint64_t)(uintptr_t)&g_rng_avail;
-    uint64_t ua = (uint64_t)(uintptr_t)&g_rng_used;
-    mmio_wr(regs, VMR_QUEUE_DESC_LOW, (uint32_t)da); mmio_wr(regs, VMR_QUEUE_DESC_HIGH, (uint32_t)(da >> 32));
-    mmio_wr(regs, VMR_QUEUE_DRV_LOW, (uint32_t)aa); mmio_wr(regs, VMR_QUEUE_DRV_HIGH, (uint32_t)(aa >> 32));
-    mmio_wr(regs, VMR_QUEUE_DEV_LOW, (uint32_t)ua); mmio_wr(regs, VMR_QUEUE_DEV_HIGH, (uint32_t)(ua >> 32));
-    __sync_synchronize();
-    mmio_wr(regs, VMR_QUEUE_READY, 1);
-    mmio_wr(regs, VMR_STATUS, ST_ACK | ST_DRV | ST_FEAT_OK | ST_DRV_OK);
-    return 1;
-}
-static uint32_t rng_fill(volatile uint8_t *regs, uint32_t len) {
-    if (len > sizeof(g_rng_dma)) len = sizeof(g_rng_dma);
-    for (uint32_t i = 0; i < len; ++i) g_rng_dma[i] = 0;
-    g_rng_desc[0].addr = (uint64_t)(uintptr_t)&g_rng_dma[0];
-    g_rng_desc[0].len = len; g_rng_desc[0].flags = VRING_DESC_F_WRITE; g_rng_desc[0].next = 0;
-    uint16_t slot = (uint16_t)(g_rng_avail.idx % VQ_SIZE);
-    g_rng_avail.ring[slot] = 0;
-    __sync_synchronize();
-    g_rng_avail.idx = (uint16_t)(g_rng_avail.idx + 1);
-    __sync_synchronize();
-    mmio_wr(regs, VMR_QUEUE_NOTIFY, 0);
-    uint64_t start = mc_read_ticks();
-    while ((mc_read_ticks() - start) < 50000000ULL) {
-        __sync_synchronize();
-        if (g_rng_used.idx != g_rng_last_used) {
-            UsedElem *e = &g_rng_used.ring[g_rng_last_used % VQ_SIZE];
-            uint32_t wrote = e->len;
-            g_rng_last_used = (uint16_t)(g_rng_last_used + 1);
-            uint32_t is = mmio_rd(regs, VMR_INTERRUPT_STATUS);
-            if (is) mmio_wr(regs, VMR_INTERRUPT_ACK, is);
-            return wrote;
-        }
-    }
-    return 0;
-}
+// The virtio-rng (device-id 4) driver used to seed BearSSL's PRNG now lives in the
+// shared kernel/drivers/virtio/virtio_rng.c (linked in by the test script), so the
+// two former inline copies (here + bearssl_smoke_runtime.c) are one. It depends on
+// mc_read_ticks() above; vrng_fill() copies device bytes into the caller's buffer.
+#include "virtio_rng.h"
 
 // ===================================================================== net device
 static DescTable  g_rx_desc  __attribute__((aligned(16)));
@@ -310,14 +214,15 @@ __attribute__((used)) void test_main(void) {
     if (!regs) { puts_("NODEV\n"); goto done; }
 
     // ---- entropy: pull >=32 bytes of real randomness from virtio-rng ----
-    volatile uint8_t *rng = find_rng_device();
-    if (!rng || !rng_init(rng)) { puts_("RNG-INIT-FAILED\n"); goto done; }
+    volatile uint8_t *rng = vrng_find();
+    if (!rng || !vrng_init(rng)) { puts_("RNG-INIT-FAILED\n"); goto done; }
     unsigned char seed[64];
     uint32_t got = 0;
     while (got < 32) {
-        uint32_t k = rng_fill(rng, 32);
+        uint8_t chunk[32];
+        uint32_t k = vrng_fill(rng, chunk, 32);
         if (k == 0) { puts_("RNG-EMPTY\n"); goto done; }
-        for (uint32_t i = 0; i < k && got < sizeof(seed); ++i) seed[got++] = g_rng_dma[i];
+        for (uint32_t i = 0; i < k && got < sizeof(seed); ++i) seed[got++] = chunk[i];
     }
     puts_("ENTROPY-OK len="); puthex(got); putc_('\n');
 
