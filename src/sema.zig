@@ -3232,6 +3232,7 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
                 }
                 self.checkEnumCast(expr.span, node.value.*, source, node.ty.*, target, ctx);
+                self.checkCastSafetyStrip(expr.span, source, target, ctx);
                 return target;
             },
             .call => |node| {
@@ -3296,6 +3297,16 @@ pub const Checker = struct {
                     const sig = fpty.kind.fn_pointer;
                     if (node.args.len != sig.params.len) {
                         self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match function-pointer signature");
+                    }
+                    // C2 (reconciled with the MIR verifier): in an #[irq_context] function
+                    // an INDIRECT/fn-pointer call may reach anything — including a
+                    // #[may_sleep] op — so the verifier rejects it with E_IRQ_CONTEXT_CALL.
+                    // The sema C2 check below lives inside `if (direct_function)`, so the
+                    // indirect path used to PASS `mcc check` but FAIL `mcc verify`. Reject
+                    // it here too (conservatively, since the target is unknown), so the two
+                    // passes agree.
+                    if (ctx.irq_context) {
+                        self.errorCode(expr.span, "E_IRQ_CONTEXT_CALL", "an #[irq_context] function may not make an indirect/fn-pointer call (the target may sleep or block)");
                     }
                 }
                 if (direct_function) |function| {
@@ -4150,8 +4161,9 @@ pub const Checker = struct {
             }
         }
 
+        var source_ty: ?ast.TypeExpr = null;
         if (call.args.len == 1) {
-            const source_ty = exprResultType(call.args[0], ctx) orelse exprStorageType(call.args[0], ctx);
+            source_ty = exprResultType(call.args[0], ctx) orelse exprStorageType(call.args[0], ctx);
             if (source_ty) |ty| {
                 const source = classifyTypeCtx(ty, ctx);
                 if (!isBitcastLayoutClass(source) or !isBitcastLayoutType(ty, ctx)) {
@@ -4159,6 +4171,22 @@ pub const Checker = struct {
                 }
             } else {
                 self.errorCode(call.args[0].span, "E_BITCAST_TYPE", "bitcast source type must be known");
+            }
+        }
+
+        // Pointer-reinterpret may not cross INTO or OUT OF an opaque/secret/userptr
+        // pointee. A value `bitcast` already rejects cross-class scalars with
+        // E_BITCAST_TYPE; the pointer case is the same hole one indirection deeper —
+        // `bitcast<*Shadow>(pt)` where `pt: *Tainted` would read the opaque struct's
+        // private scalar (or the lock-protected Guarded data) through a same-shape
+        // plain mirror, with no validator/guard and no `unsafe`. The guard is the
+        // POINTEE's privacy class crossing, so ordinary `*A -> *B` kernel-pointer
+        // reinterprets (neither side opaque) stay accepted.
+        if (target_ty) |tty| {
+            if (source_ty) |sty| {
+                if (pointeeIsOpaquePrivacy(tty, ctx) != pointeeIsOpaquePrivacy(sty, ctx)) {
+                    self.errorCode(span, "E_BITCAST_TYPE", "bitcast pointer-reinterpret may not cross into or out of an opaque/secret/userptr class");
+                }
             }
         }
 
@@ -5230,6 +5258,26 @@ pub const Checker = struct {
         }
     }
 
+    // An `as`-cast must not silently STRIP a safety class to a less-safe one — that
+    // would launder a Secret/UserPtr value out of its discipline with no `unsafe`
+    // gate, the same hole `reveal`/`declassify` plug for secrets. We gate only the
+    // class-stripping direction; numeric/enum/pointer-to-pointer casts and the
+    // legitimate `UserPtr <-> usize` round-trip (uaccess.mc) stay accepted.
+    fn checkCastSafetyStrip(self: *Checker, span: diagnostics.Span, source: TypeClass, target: TypeClass, ctx: Context) void {
+        // `Secret<T> as <non-secret>` declassifies a constant-time value; it is the
+        // `reveal` operation in cast clothing and is forbidden outside `unsafe`.
+        if (source == .secret and target != .secret and !ctx.in_unsafe) {
+            self.errorCode(span, "E_SECRET_DECLASSIFY", "casting a Secret<T> to a non-secret type declassifies it; use reveal/declassify inside unsafe");
+        }
+        // `UserPtr<T> as <derefable pointer>` turns an unvalidated user-controlled
+        // address into a kernel pointer the deref operator will trust. Only the
+        // `UserPtr <-> usize` round-trip (which uaccess.mc relies on, and which can
+        // never be dereferenced as-is) is allowed.
+        if (source == .user_ptr and isDerefablePointerClass(target)) {
+            self.errorCode(span, "E_USERPTR_CAST_DEREF", "casting a UserPtr<T> to a derefable kernel pointer bypasses uaccess validation; only UserPtr<->usize is permitted");
+        }
+    }
+
     fn checkEnumRawCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []const ast.Expr, ctx: Context) ?TypeClass {
         const member = switch (callee.kind) {
             .member => |node| node,
@@ -6261,6 +6309,61 @@ fn isCheckedSigned(kind: TypeClass) bool {
 }
 
 fn isPointerLike(kind: TypeClass) bool {
+    return switch (kind) {
+        .pointer, .raw_many_pointer, .slice, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer => true,
+        else => false,
+    };
+}
+
+// An ordinary kernel pointer the `*` operator will dereference into kernel memory.
+// Excludes the opaque address classes (`UserPtr`/`PAddr`/`VAddr`/…), which cannot be
+// dereferenced as-is — so casting INTO one of these is not a deref-strip.
+// True iff `ty` is a pointer whose POINTEE is a privacy-protected class: an
+// `opaque struct` (Tainted/Guarded/…), `Secret<T>`, or `UserPtr<T>`. Used to forbid
+// a pointer-`bitcast` from crossing into/out of such a class (which would expose the
+// pointee's private bytes through a same-shape plain mirror). Non-pointers and
+// pointers to ordinary types return false.
+fn pointeeIsOpaquePrivacy(ty: ast.TypeExpr, ctx: Context) bool {
+    const child = switch (resolveAliasType(ty, ctx).kind) {
+        .pointer => |node| node.child.*,
+        .raw_many_pointer => |node| node.child.*,
+        .nullable => |node| return pointeeIsOpaquePrivacy(node.*, ctx),
+        else => return false,
+    };
+    const resolved = resolveAliasType(child, ctx);
+    switch (classifyType(resolved)) {
+        // `Secret<T>` / `UserPtr<T>` pointees are privacy classes in their own right.
+        .secret, .user_ptr => return true,
+        else => {},
+    }
+    // An `opaque struct` pointee — fields are private to its `impl`; reinterpreting a
+    // pointer to it as a same-shape plain struct would read those private fields.
+    // Resolve a generic application (`Tainted<T>`) to its declared base name.
+    const sname = switch (resolved.kind) {
+        .name => |n| n.text,
+        .generic => |g| g.base.text,
+        .qualified => |q| opacityStructNameOf(q.child.*),
+        else => null,
+    };
+    if (sname) |name| {
+        if (ctx.structs) |structs| {
+            if (structs.get(name)) |info| return info.is_opaque;
+        }
+    }
+    return false;
+}
+
+fn opacityStructNameOf(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |n| n.text,
+        .generic => |g| g.base.text,
+        .qualified => |q| opacityStructNameOf(q.child.*),
+        .pointer => |p| opacityStructNameOf(p.child.*),
+        else => null,
+    };
+}
+
+fn isDerefablePointerClass(kind: TypeClass) bool {
     return switch (kind) {
         .pointer, .raw_many_pointer, .slice, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer => true,
         else => false,
