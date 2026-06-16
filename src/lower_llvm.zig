@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const eval = @import("eval.zig");
 const type_layout = @import("layout.zig");
+const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 
 // Pure AST-shape queries shared with sema/mir/lower_c (see `ast_query.zig`); aliased so the
@@ -1630,27 +1631,14 @@ const LlvmEmitter = struct {
         const inner_ty = self.nullableInnerType(subject_ty) orelse return null;
         if (node.arms.len == 0) return error.UnsupportedLlvmEmission;
 
-        var bind_index: ?usize = null;
-        var binding: ?ast.Ident = null;
-        var wildcard_index: ?usize = null;
-        for (node.arms, 0..) |arm, i| {
-            if (arm.patterns.len != 1) return null;
-            switch (arm.patterns[0].kind) {
-                .bind => |ident| {
-                    if (bind_index != null) return false;
-                    bind_index = i;
-                    binding = ident;
-                },
-                .wildcard => {
-                    if (wildcard_index != null) return false;
-                    wildcard_index = i;
-                },
-                else => return null,
-            }
-        }
-        const some_i = bind_index orelse return null;
-        const none_i = wildcard_index orelse return null;
-        const bind = binding orelse return null;
+        const arms = switch (switch_lower.classifyNullableArms(node.arms)) {
+            .ok => |a| a,
+            .duplicate => return false,
+            .missing_half, .not_nullable => return null,
+        };
+        const some_i = arms.some_index;
+        const none_i = arms.none_index;
+        const bind = arms.binding;
 
         const subject = try self.emitExpr(node.subject, subject_ty);
         const some_label = try self.nextLabel("nullable_some");
@@ -5229,15 +5217,10 @@ const ResultTypeInfo = struct {
     err_ty: ast.TypeExpr,
 };
 
-const ResultSwitchPattern = struct {
-    tag: []const u8,
-    binding: ?ast.Ident = null,
-};
-
-const TaggedUnionBinding = struct {
-    tag: []const u8,
-    binding: ast.Ident,
-};
+// Result/tagged-union arm-pattern shapes are classified by the shared, AST-only `switch_lower`
+// module; these aliases keep the existing call sites in this file reading unchanged.
+const ResultSwitchPattern = switch_lower.ResultArmPattern;
+const TaggedUnionBinding = switch_lower.TaggedUnionArmBinding;
 
 const AtomicOrderContext = enum {
     load,
@@ -5796,13 +5779,7 @@ fn trapHelperForKind(kind: []const u8) ?[]const u8 {
     return null;
 }
 
-fn resultSwitchPattern(pattern: ast.Pattern) ?ResultSwitchPattern {
-    return switch (pattern.kind) {
-        .tag => |tag| .{ .tag = tag.text },
-        .tag_bind => |tag_bind| .{ .tag = tag_bind.tag.text, .binding = tag_bind.binding },
-        else => null,
-    };
-}
+const resultSwitchPattern = switch_lower.resultArmPattern;
 
 fn taggedUnionConstructorName(callee: ast.Expr) ?[]const u8 {
     return switch (callee.kind) {
@@ -5812,21 +5789,8 @@ fn taggedUnionConstructorName(callee: ast.Expr) ?[]const u8 {
     };
 }
 
-fn taggedUnionPatternName(pattern: ast.Pattern) ?[]const u8 {
-    return switch (pattern.kind) {
-        .tag => |tag| tag.text,
-        .tag_bind => |tag_bind| tag_bind.tag.text,
-        else => null,
-    };
-}
-
-fn taggedUnionBindingPattern(arm: ast.SwitchArm) ?TaggedUnionBinding {
-    if (arm.patterns.len != 1) return null;
-    return switch (arm.patterns[0].kind) {
-        .tag_bind => |tag_bind| .{ .tag = tag_bind.tag.text, .binding = tag_bind.binding },
-        else => null,
-    };
-}
+const taggedUnionPatternName = switch_lower.taggedUnionPatternName;
+const taggedUnionBindingPattern = switch_lower.taggedUnionArmBinding;
 
 
 fn binaryIsComparison(op: ast.BinaryOp) bool {

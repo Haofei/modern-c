@@ -9,6 +9,7 @@ const mir = @import("mir.zig");
 const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
+const switch_lower = @import("switch_lower.zig");
 
 // Shared with `sema.zig`/`mir.zig` (see `numeric.zig`/`ast_query.zig`); aliased so call sites
 // read unchanged.
@@ -3620,38 +3621,24 @@ const CEmitter = struct {
     fn resultSwitchBranch(self: *CEmitter, patterns: []const ast.Pattern, subject: ResultSwitchSubject) !?ResultSwitchBranch {
         if (patterns.len == 0) return null;
         if (patterns.len == 1) {
-            return switch (patterns[0].kind) {
-                .tag => |tag| blk: {
-                    if (std.mem.eql(u8, tag.text, "ok")) break :blk .{
-                        .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name}),
-                        .tag = "ok",
-                    };
-                    if (std.mem.eql(u8, tag.text, "err")) break :blk .{
-                        .condition = try std.fmt.allocPrint(self.scratch.allocator(), "!{s}.is_ok", .{subject.name}),
-                        .tag = "err",
-                    };
-                    break :blk null;
-                },
-                .tag_bind => |tag_bind| blk: {
-                    if (std.mem.eql(u8, tag_bind.tag.text, "ok")) break :blk .{
-                        .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name}),
-                        .tag = "ok",
-                        .binding_name = tag_bind.binding.text,
-                        .binding_type = subject.ok_c_type,
-                        .payload_field = "ok",
-                    };
-                    if (std.mem.eql(u8, tag_bind.tag.text, "err")) break :blk .{
-                        .condition = try std.fmt.allocPrint(self.scratch.allocator(), "!{s}.is_ok", .{subject.name}),
-                        .tag = "err",
-                        .binding_name = tag_bind.binding.text,
-                        .binding_type = subject.err_c_type,
-                        .payload_field = "err",
-                    };
-                    break :blk null;
-                },
-                .wildcard => .{ .condition = null },
-                else => null,
-            };
+            if (patterns[0].kind == .wildcard) return .{ .condition = null };
+            const arm = switch_lower.resultArmPattern(patterns[0]) orelse return null;
+            const is_ok = std.mem.eql(u8, arm.tag, "ok");
+            if (!is_ok and !std.mem.eql(u8, arm.tag, "err")) return null;
+            const condition = if (is_ok)
+                try std.fmt.allocPrint(self.scratch.allocator(), "{s}.is_ok", .{subject.name})
+            else
+                try std.fmt.allocPrint(self.scratch.allocator(), "!{s}.is_ok", .{subject.name});
+            if (arm.binding) |binding| {
+                return .{
+                    .condition = condition,
+                    .tag = if (is_ok) "ok" else "err",
+                    .binding_name = binding.text,
+                    .binding_type = if (is_ok) subject.ok_c_type else subject.err_c_type,
+                    .payload_field = if (is_ok) "ok" else "err",
+                };
+            }
+            return .{ .condition = condition, .tag = if (is_ok) "ok" else "err" };
         }
 
         var condition: std.ArrayList(u8) = .empty;
@@ -3761,23 +3748,21 @@ const CEmitter = struct {
     fn taggedUnionSwitchBranch(self: *CEmitter, patterns: []const ast.Pattern, subject: TaggedUnionSwitchSubject) !?TaggedUnionSwitchBranch {
         if (patterns.len == 0) return null;
         if (patterns.len == 1) {
-            return switch (patterns[0].kind) {
-                .tag => |tag| .{
-                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.tag == {s}Tag_{s}", .{ subject.name, subject.type_name, tag.text }),
-                },
-                .tag_bind => |tag_bind| blk: {
-                    const case = taggedUnionCase(subject.decl, tag_bind.tag.text) orelse break :blk null;
-                    const payload_ty = case.ty orelse break :blk null;
-                    break :blk .{
-                        .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.tag == {s}Tag_{s}", .{ subject.name, subject.type_name, tag_bind.tag.text }),
-                        .binding_name = tag_bind.binding.text,
-                        .binding_type = try self.cTypeFor(payload_ty, .typedef_name),
-                        .payload_field = tag_bind.tag.text,
-                    };
-                },
-                .wildcard => .{ .condition = null, .is_wildcard = true },
-                else => null,
-            };
+            if (patterns[0].kind == .wildcard) return .{ .condition = null, .is_wildcard = true };
+            const case_name = switch_lower.taggedUnionPatternName(patterns[0]) orelse return null;
+            const condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.tag == {s}Tag_{s}", .{ subject.name, subject.type_name, case_name });
+            if (patterns[0].kind == .tag_bind) {
+                const tag_bind = patterns[0].kind.tag_bind;
+                const case = taggedUnionCase(subject.decl, tag_bind.tag.text) orelse return null;
+                const payload_ty = case.ty orelse return null;
+                return .{
+                    .condition = condition,
+                    .binding_name = tag_bind.binding.text,
+                    .binding_type = try self.cTypeFor(payload_ty, .typedef_name),
+                    .payload_field = tag_bind.tag.text,
+                };
+            }
+            return .{ .condition = condition };
         }
 
         var condition: std.ArrayList(u8) = .empty;
