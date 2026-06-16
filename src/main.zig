@@ -104,19 +104,22 @@ pub fn main(init: std.process.Init) !void {
     // KASAN profile (D2.1): when set (`--checks=ksan`), instrumented memory accesses
     // (raw.load/raw.store — the pointer-deref / raw-access path) emit a shadow-memory
     // check that traps on a poisoned (freed/redzone) access. Orthogonal to `optimize`;
-    // default builds leave it off, so the emitted code is byte-for-byte unchanged.
+    // default builds leave it off, so no instrumentation hook is CALLED (the inert weak
+    // stubs are always present, so the bytes differ from a no-hooks build).
     var ksan = false;
     // KMSAN profile (D2.2): when set (`--checks=msan`), builds on the ksan shadow to track
     // initialized-ness of heap bytes. It implies the ksan access instrumentation (so loads
     // still consult the shadow), and additionally wraps every raw.store with
     // `mc_ksan_store(addr, size)` which marks the written bytes initialized. The msan runtime
     // poisons fresh heap allocations as UNINIT; a load of still-uninit bytes traps. Default
-    // builds leave it off, so emitted code is byte-for-byte unchanged.
+    // builds leave it off, so no instrumentation hook is called (inert weak stubs persist).
     var msan = false;
     // KCSAN profile (D2.3): when set (`--checks=csan`), instruments the unsynchronized
     // raw.load/raw.store path with a data-race watchpoint (mc_csan_read/mc_csan_write) on the
-    // shadow. Orthogonal to ksan/msan; default builds leave it off (byte-for-byte unchanged).
+    // shadow. Mutually exclusive with ksan/msan; default builds leave it off (no hook called).
     var csan = false;
+    // True once any sanitizer profile token (ksan/msan/csan) is seen, so combination
+    // validity can be checked once after parsing all `--checks=` tokens.
     var saw_checks_flag = false;
     var check_fmt = false;
     // `emit-layout --structs=A,B,C`: the comma-separated structs whose MC layout is asserted.
@@ -181,6 +184,18 @@ pub fn main(init: std.process.Init) !void {
     const needs_structs = is_emit_layout or is_emit_c_struct;
     if (saw_profile_flag and !is_c_artifact_command) return failUsage();
     if (saw_checks_flag and !accepts_checks) return failUsage();
+    // The sanitizer profiles are not all independently combinable: a single raw.load/
+    // raw.store wraps exactly one shadow protocol. msan implies ksan (composable), but
+    // csan is mutually exclusive with ksan/msan — `--checks=ksan,csan` (or `msan,csan`)
+    // previously SILENTLY dropped csan (the C if-chain is exclusive; the LLVM path
+    // ignored csan entirely). Reject the combination loudly instead of no-opping.
+    if (csan and (ksan or msan)) {
+        std.debug.print("error: --checks=csan cannot be combined with ksan/msan (a single raw access wraps one shadow protocol)\n", .{});
+        return failUsage();
+    }
+    // Bundle the build-safety / sanitizer axis into one value (see backend.Checks); this is
+    // threaded as a unit so a positional drop (the original KCSAN-on-LLVM no-op) can't recur.
+    const checks: backend.Checks = .{ .optimize = optimize, .ksan = ksan, .msan = msan, .csan = csan };
     if (check_fmt and !std.mem.eql(u8, command, "fmt")) return failUsage();
     // `--structs=` is consumed only by the struct-from-MC commands, which both require it.
     if (structs_flag != null and !needs_structs) return failUsage();
@@ -225,11 +240,11 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        try runEmitC(allocator, path, source, profile, optimize, ksan, msan, csan);
+        try runEmitC(allocator, path, source, profile, checks);
     } else if (std.mem.eql(u8, command, "emit-map")) {
         try runEmitMap(allocator, path, source, profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source, optimize, ksan, msan, csan);
+        try runEmitLlvm(allocator, path, source, checks);
     } else if (is_emit_layout) {
         try runEmitLayout(allocator, path, source, structs_flag.?);
     } else if (is_emit_c_struct) {
@@ -536,7 +551,8 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     try writeStdout(output.items);
 }
 
-fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, optimize: bool, ksan: bool, msan: bool, csan: bool) !void {
+fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks) !void {
+    const optimize = checks.optimize;
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -569,7 +585,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = profile, .optimize = optimize, .source_path = path, .ksan = ksan, .msan = msan, .csan = csan });
+    try be.lower(allocator, module, &output, .{ .profile = profile, .source_path = path, .checks = checks });
     try writeStdout(output.items);
 }
 
@@ -609,7 +625,8 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     try writeStdout(output.items);
 }
 
-fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool, ksan: bool, msan: bool, csan: bool) !void {
+fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks) !void {
+    const optimize = checks.optimize;
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -642,7 +659,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     const be = backend.byName("llvm").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = .kernel, .optimize = optimize, .source_path = path, .ksan = ksan, .msan = msan, .csan = csan });
+    try be.lower(allocator, module, &output, .{ .profile = .kernel, .source_path = path, .checks = checks });
     try writeStdout(output.items);
 }
 

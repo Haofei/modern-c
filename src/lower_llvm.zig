@@ -53,7 +53,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    try appendLlvmWithSourcePathKsan(allocator, module, out, opts.source_path orelse "input.mc", opts.optimize, opts.ksan, opts.msan);
+    try appendLlvmChecked(allocator, module, out, opts.source_path orelse "input.mc", opts.checks);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -61,10 +61,14 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
 }
 
 pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool) !void {
-    try appendLlvmWithSourcePathKsan(allocator, module, out, source_path, optimize, false, false);
+    try appendLlvmChecked(allocator, module, out, source_path, .{ .optimize = optimize });
 }
 
-pub fn appendLlvmWithSourcePathKsan(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool, ksan: bool, msan: bool) !void {
+pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks) !void {
+    const optimize = checks.optimize;
+    const ksan = checks.ksan;
+    const msan = checks.msan;
+    const csan = checks.csan;
     var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
     defer module_mir.deinit();
 
@@ -73,7 +77,7 @@ pub fn appendLlvmWithSourcePathKsan(allocator: std.mem.Allocator, module: ast.Mo
     try out.print(allocator, "source_filename = \"{s}\"\n", .{escaped_source_path});
     try out.appendSlice(allocator, "; MC LLVM IR backend v0\n");
     try out.appendSlice(allocator, "; semantic source: verified MC MIR\n\n");
-    try emitTrapDecl(allocator, out, msan);
+    try emitTrapDecl(allocator, out);
 
     var ctx = LlvmEmitter{
         .allocator = allocator,
@@ -110,6 +114,7 @@ pub fn appendLlvmWithSourcePathKsan(allocator: std.mem.Allocator, module: ast.Mo
         .source_path = source_path,
         .ksan = ksan,
         .msan = msan,
+        .csan = csan,
     };
     defer ctx.deinit();
     for (module.decls) |decl| {
@@ -185,7 +190,22 @@ pub fn appendLlvmWithSourcePathKsan(allocator: std.mem.Allocator, module: ast.Mo
     try ctx.emitDebugMetadata();
 }
 
-fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), msan: bool) !void {
+// The sanitizer shadow-hook symbols. SINGLE source of truth: this one list drives both the
+// weak no-op `define`s in `emitTrapDecl` AND `isKsanHook` (which suppresses a redundant MC
+// `extern fn` `declare` of these), so the two can never drift — the original KCSAN bug was
+// partly that csan was absent from one such list. Names: the KASAN poison/unpoison/check hooks
+// (D2.1), the KMSAN init-tracking store hook (D2.2), and the KCSAN read/write watchpoint hooks
+// (D2.3). All get weak no-op defaults the linked runtime overrides with strong definitions.
+const sanitizer_hooks = [_][]const u8{
+    "mc_ksan_poison",
+    "mc_ksan_unpoison",
+    "mc_ksan_check",
+    "mc_ksan_store",
+    "mc_csan_read",
+    "mc_csan_write",
+};
+
+fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(allocator, "declare void @mc_trap_IntegerOverflow() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_DivideByZero() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_InvalidShift() noreturn\n\n");
@@ -194,29 +214,23 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), msan: boo
     try out.appendSlice(allocator, "declare void @mc_trap_Assert() noreturn\n\n");
     try out.appendSlice(allocator, "declare void @mc_trap_NullUnwrap() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_Unreachable() noreturn\n\n");
-    // KASAN shadow hooks (D2.1): weak no-op `define`s so EVERY build links and behaves
-    // identically when no KASAN runtime is present. A linked KASAN shadow runtime (the
-    // ksan profile) provides STRONG definitions that override these — poisoning/unpoisoning
-    // the shadow on heap free/alloc and trapping on a poisoned access. The heap calls these
-    // only on a `heap_new_ksan` heap, so default heaps never even reach the stubs.
-    try out.appendSlice(allocator, "define weak void @mc_ksan_poison(i64 %a, i64 %b) {\n  ret void\n}\n");
-    try out.appendSlice(allocator, "define weak void @mc_ksan_unpoison(i64 %a, i64 %b) {\n  ret void\n}\n");
-    try out.appendSlice(allocator, "define weak void @mc_ksan_check(i64 %a, i64 %b) {\n  ret void\n}\n\n");
-    // KMSAN init-tracking hook (D2.2): weak no-op default so KASAN/non-msan builds are
-    // unchanged. Under the msan profile, raw.store calls this (the linked msan runtime's
-    // STRONG definition marks the written bytes initialized in the shadow). Always emitted
-    // as a weak def so a non-msan build that never calls it still links cleanly.
-    _ = msan;
-    try out.appendSlice(allocator, "define weak void @mc_ksan_store(i64 %a, i64 %b) {\n  ret void\n}\n\n");
+    // Weak no-op `define`s for every sanitizer shadow hook so EVERY build links and behaves
+    // identically when no sanitizer runtime is present. A linked runtime (the ksan/msan/csan
+    // profiles) provides STRONG definitions that override these; a default build never calls
+    // them. See `sanitizer_hooks`.
+    for (sanitizer_hooks) |hook| {
+        try out.print(allocator, "define weak void @{s}(i64 %a, i64 %b) {{\n  ret void\n}}\n", .{hook});
+    }
+    try out.appendSlice(allocator, "\n");
 }
 
-// The KASAN shadow hook symbols (D2.1), which get weak no-op definitions and so must not
-// also be `declare`d from an MC `extern fn`.
+// A sanitizer shadow-hook symbol gets a weak no-op `define` above, so an MC `extern fn` of the
+// same name must NOT also be `declare`d (a `declare` + a `define` of one symbol is invalid IR).
 fn isKsanHook(name: []const u8) bool {
-    return std.mem.eql(u8, name, "mc_ksan_poison") or
-        std.mem.eql(u8, name, "mc_ksan_unpoison") or
-        std.mem.eql(u8, name, "mc_ksan_check") or
-        std.mem.eql(u8, name, "mc_ksan_store");
+    for (sanitizer_hooks) |hook| {
+        if (std.mem.eql(u8, name, hook)) return true;
+    }
+    return false;
 }
 
 const LlvmEmitter = struct {
@@ -267,9 +281,17 @@ const LlvmEmitter = struct {
     source_path: []const u8,
     // KASAN profile (D2.1): when true, each raw.load/raw.store emits a
     // `call void @mc_ksan_check(i64 addr, i64 size)` before the volatile access, so a
-    // poisoned (freed/redzone) access traps at access time. Default false = original IR.
+    // poisoned (freed/redzone) access traps at access time. Default false = no hook call.
     ksan: bool = false,
+    // KMSAN profile (D2.2, implies ksan): raw.store additionally calls @mc_ksan_store after
+    // the volatile store to mark the bytes initialized; raw.store then skips the pre-store
+    // check (writing uninit memory is how it gets initialized).
     msan: bool = false,
+    // KCSAN profile (D2.3): when true, each unsynchronized raw.store/raw.load brackets the
+    // volatile access with a `call void @mc_csan_write/@mc_csan_read(i64 addr, i64 size)`
+    // watchpoint hook. Mutually exclusive with ksan/msan (main.zig enforces this). The C
+    // backend's csan path is mirrored here so KCSAN is sound on the LLVM backend too.
+    csan: bool = false,
 
     fn deinit(self: *LlvmEmitter) void {
         self.need_uadd.deinit();
@@ -1445,6 +1467,9 @@ const LlvmEmitter = struct {
             // it gets initialized, so a pre-store uninit check would false-positive on the first
             // write. (Trade-off: a write through a freed pointer is not caught under msan.)
             if (self.ksan and !self.msan) try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
+            // KCSAN (D2.3): bracket the unsynchronized store with a write watchpoint hook so a
+            // concurrent access lands inside the watch window. Mirrors the C backend's csan path.
+            if (self.csan) try self.out.print(self.allocator, "  call void @mc_csan_write(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
             try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
             // KMSAN (D2.2): after the store, mark the written bytes initialized in the shadow,
@@ -2636,6 +2661,8 @@ const LlvmEmitter = struct {
             // KASAN (D2.1): consult the shadow before the load — a use-after-free read
             // of poisoned (freed) memory traps in mc_ksan_check before the deref.
             if (self.ksan) try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
+            // KCSAN (D2.3): bracket the unsynchronized load with a read watchpoint hook.
+            if (self.csan) try self.out.print(self.allocator, "  call void @mc_csan_read(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
             try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, llvm_ty, ptr, try self.debugCallSuffix() });
             return result;

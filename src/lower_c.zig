@@ -86,7 +86,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    return appendCProfileWithSourcePath(allocator, module, out, opts.profile, opts.source_path, opts.optimize, opts.ksan, opts.msan, opts.csan);
+    return appendCProfileWithSourcePath(allocator, module, out, opts.profile, opts.source_path, opts.checks);
 }
 
 fn backendEmitMap(
@@ -133,24 +133,7 @@ pub fn appendLayoutAsserts(allocator: std.mem.Allocator, module: ast.Module, out
         \\
     );
 
-    for (struct_names) |name| {
-        const struct_decl = emitter.structs.get(name) orelse return error.LayoutStructNotFound;
-        const total = emitter.comptimeStructSize(struct_decl, 0) orelse return error.LayoutUnresolved;
-        var line: std.ArrayList(u8) = .empty;
-        defer line.deinit(allocator);
-        try line.print(allocator,
-            "_Static_assert(sizeof({s}) == {d}, \"MC<->C layout drift: sizeof({s})\");\n",
-            .{ name, total, name },
-        );
-        for (struct_decl.fields) |field| {
-            const offset = emitter.comptimeFieldOffset(.{ .kind = .{ .name = struct_decl.name }, .span = struct_decl.name.span }, field.name.text, 0) orelse return error.LayoutUnresolved;
-            try line.print(allocator,
-                "_Static_assert(offsetof({s}, {s}) == {d}, \"MC<->C layout drift: offsetof({s}, {s})\");\n",
-                .{ name, field.name.text, offset, name, field.name.text },
-            );
-        }
-        try out.appendSlice(allocator, line.items);
-    }
+    try emitter.appendLayoutAssertsFor(struct_names);
 }
 
 /// Emit the GENERATED C struct *definitions* for the named structs (A2: single source of truth).
@@ -189,28 +172,18 @@ pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast.Module, out: 
 
     // Belt-and-suspenders: also assert the generated definitions against MC's computed layout.
     try out.appendSlice(allocator, "\n/* Layout cross-check (sizeof/offsetof) against MC's authoritative layout. */\n");
-    for (struct_names) |name| {
-        const struct_decl = emitter.structs.get(name) orelse return error.LayoutStructNotFound;
-        const total = emitter.comptimeStructSize(struct_decl, 0) orelse return error.LayoutUnresolved;
-        try out.print(allocator,
-            "_Static_assert(sizeof({s}) == {d}, \"MC<->C layout drift: sizeof({s})\");\n",
-            .{ name, total, name },
-        );
-        for (struct_decl.fields) |field| {
-            const offset = emitter.comptimeFieldOffset(.{ .kind = .{ .name = struct_decl.name }, .span = struct_decl.name.span }, field.name.text, 0) orelse return error.LayoutUnresolved;
-            try out.print(allocator,
-                "_Static_assert(offsetof({s}, {s}) == {d}, \"MC<->C layout drift: offsetof({s}, {s})\");\n",
-                .{ name, field.name.text, offset, name, field.name.text },
-            );
-        }
-    }
+    try emitter.appendLayoutAssertsFor(struct_names);
 }
 
 pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
-    return appendCProfileWithSourcePath(allocator, module, out, profile, null, false, false, false, false);
+    return appendCProfileWithSourcePath(allocator, module, out, profile, null, .{});
 }
 
-pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, optimize: bool, ksan: bool, msan: bool, csan: bool) anyerror!void {
+pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks) anyerror!void {
+    const optimize = checks.optimize;
+    const ksan = checks.ksan;
+    const msan = checks.msan;
+    const csan = checks.csan;
     switch (profile) {
         .kernel => try out.appendSlice(allocator, "/* mc-profile: kernel (freestanding) */\n"),
         .hosted => try out.appendSlice(allocator, "/* mc-profile: hosted (links libc + -lm) */\n"),
@@ -450,94 +423,77 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
     );
 
     // The raw scalar load/store macros (the pointer-deref / raw memory-access path).
-    // Default builds emit the plain volatile access — byte-for-byte the original code.
+    // Default builds emit the plain volatile access with NO instrumentation calls (the
+    // inert weak hook stubs above are always present, so the bytes are not identical to a
+    // build that never declared the hooks, but no hook is *called* without a sanitizer).
     // Under the KASAN profile (`--checks=ksan`, D2.1) every raw access first consults
     // the shadow map via `mc_ksan_check(addr, sizeof(T))`, which traps if the bytes are
     // poisoned (freed memory / a redzone) — catching use-after-free and out-of-bounds
     // at ACCESS time. `mc_ksan_check` is provided by the linked KASAN shadow runtime
     // (the MC `kernel/core/ksan.mc` shadow, exported to C); a non-ksan build never
     // references it. This is the ONLY codegen difference the profile makes.
-    if (ksan and msan) {
-        // KMSAN profile (D2.2): the load consults the shadow via mc_ksan_check (which the msan
-        // runtime makes trap on UNINIT bytes too, not just freed/redzone poison). The store does
-        // NOT pre-check — writing to uninitialized memory is exactly how it gets initialized, so
-        // a pre-store uninit check would false-positive on the very first write. The store calls
-        // mc_ksan_store to mark the written bytes initialized; bytes never stored to stay UNINIT
-        // and trap on a later load. (Trade-off: a write THROUGH a freed/poisoned pointer is not
-        // caught under msan — the orthogonal --checks=ksan profile keeps the store-side check.)
-        try out.appendSlice(allocator,
-            \\/* mc-checks: msan (KMSAN uninit-heap-use detection on the ksan shadow, D2.2).
-            \\   raw.store marks bytes initialized via mc_ksan_store; raw.load traps in
-            \\   mc_ksan_check if the bytes are still uninit (or freed/redzone-poisoned). */
-            \\#define MC_DEFINE_RAW_STORE(NAME, TYPE) \
-            \\MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) { \
-            \\    *((volatile TYPE *)(uintptr_t)addr) = value; \
-            \\    mc_ksan_store((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \
-            \\}
-            \\#define MC_DEFINE_RAW_LOAD(NAME, TYPE) \
-            \\MC_UNUSED static inline TYPE mc_raw_load_##NAME(uintptr_t addr) { \
-            \\    mc_ksan_check((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \
-            \\    return *((volatile TYPE *)(uintptr_t)addr); \
-            \\}
-            \\
-        );
-    } else if (ksan) {
-        try out.appendSlice(allocator,
-            \\/* mc-checks: ksan (KASAN shadow-memory access instrumentation, D2.1).
-            \\   mc_ksan_check is declared+weak-defined above; the linked ksan runtime
-            \\   provides the strong, shadow-consulting definition that overrides it. */
-            \\#define MC_DEFINE_RAW_STORE(NAME, TYPE) \
-            \\MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) { \
-            \\    mc_ksan_check((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \
-            \\    *((volatile TYPE *)(uintptr_t)addr) = value; \
-            \\}
-            \\#define MC_DEFINE_RAW_LOAD(NAME, TYPE) \
-            \\MC_UNUSED static inline TYPE mc_raw_load_##NAME(uintptr_t addr) { \
-            \\    mc_ksan_check((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \
-            \\    return *((volatile TYPE *)(uintptr_t)addr); \
-            \\}
-            \\
-        );
-    } else if (csan) {
-        // KCSAN profile (D2.3): the UNSYNCHRONIZED raw.load/raw.store path is the racy one.
-        // Each instrumented access tells the watchpoint runtime its [addr,size) and whether
-        // it is a write; the runtime sets a watchpoint, briefly watches the location (a soft
-        // window during which a concurrent context — here a preempting timer IRQ — may run),
-        // and on exit checks whether a conflicting concurrent access (one of which is a write)
-        // hit an overlapping watchpoint. Conflict -> trap -> CSAN-DETECTED. The synchronized
-        // `mc_race_*` accessors stay plain relaxed atomics and never set a watchpoint, so a
-        // race-accessor-vs-race-accessor pair is clean.
-        try out.appendSlice(allocator,
-            \\/* mc-checks: csan (KCSAN data-race watchpoint instrumentation, D2.3).
-            \\   mc_csan_write/mc_csan_read are declared+weak-defined above; the linked csan
-            \\   watchpoint runtime provides the strong, shadow-consulting definitions. The
-            \\   write hook brackets the store so a concurrent access lands inside the watch
-            \\   window; the read hook brackets the load. */
-            \\#define MC_DEFINE_RAW_STORE(NAME, TYPE) \
-            \\MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) { \
-            \\    mc_csan_write((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \
-            \\    *((volatile TYPE *)(uintptr_t)addr) = value; \
-            \\}
-            \\#define MC_DEFINE_RAW_LOAD(NAME, TYPE) \
-            \\MC_UNUSED static inline TYPE mc_raw_load_##NAME(uintptr_t addr) { \
-            \\    mc_csan_read((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \
-            \\    return *((volatile TYPE *)(uintptr_t)addr); \
-            \\}
-            \\
-        );
-    } else {
-        try out.appendSlice(allocator,
-            \\#define MC_DEFINE_RAW_STORE(NAME, TYPE) \
-            \\MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) { \
-            \\    *((volatile TYPE *)(uintptr_t)addr) = value; \
-            \\}
-            \\#define MC_DEFINE_RAW_LOAD(NAME, TYPE) \
-            \\MC_UNUSED static inline TYPE mc_raw_load_##NAME(uintptr_t addr) { \
-            \\    return *((volatile TYPE *)(uintptr_t)addr); \
-            \\}
-            \\
-        );
-    }
+    // The four profiles differ ONLY in which shadow hook (if any) brackets the volatile access,
+    // so the macro template is emitted once and the per-profile hook lines are spliced in. A
+    // macro-continuation line is `    <hook>(...); \` (trailing backslash continues the #define).
+    //   - default:  no hooks.
+    //   - ksan:     pre-store + pre-load mc_ksan_check (poisoned/freed/redzone access traps).
+    //   - msan:     pre-load mc_ksan_check (msan runtime also traps UNINIT) + POST-store
+    //               mc_ksan_store (mark bytes initialized). The store does NOT pre-check —
+    //               writing uninitialized memory is how it gets initialized. (Trade-off: a write
+    //               through a freed pointer is not caught under msan; --checks=ksan keeps it.)
+    //   - csan:     pre-store mc_csan_write + pre-load mc_csan_read watchpoint brackets.
+    // ksan/msan/csan are mutually constrained (msan implies ksan; csan excludes both) — see
+    // backend.Checks; main.zig rejects the illegal csan+ksan/msan combinations.
+    const store_pre: []const u8 = if (csan)
+        "    mc_csan_write((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \\\n"
+    else if (ksan and !msan)
+        "    mc_ksan_check((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \\\n"
+    else
+        "";
+    const store_post: []const u8 = if (msan)
+        "    mc_ksan_store((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \\\n"
+    else
+        "";
+    const load_pre: []const u8 = if (csan)
+        "    mc_csan_read((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \\\n"
+    else if (ksan)
+        "    mc_ksan_check((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \\\n"
+    else
+        "";
+    const profile_comment: []const u8 = if (msan)
+        \\/* mc-checks: msan (KMSAN uninit-heap-use detection on the ksan shadow, D2.2).
+        \\   raw.store marks bytes initialized via mc_ksan_store; raw.load traps in
+        \\   mc_ksan_check if the bytes are still uninit (or freed/redzone-poisoned). */
+        \\
+    else if (ksan)
+        \\/* mc-checks: ksan (KASAN shadow-memory access instrumentation, D2.1).
+        \\   mc_ksan_check is declared+weak-defined above; the linked ksan runtime
+        \\   provides the strong, shadow-consulting definition that overrides it. */
+        \\
+    else if (csan)
+        \\/* mc-checks: csan (KCSAN data-race watchpoint instrumentation, D2.3).
+        \\   mc_csan_write/mc_csan_read are declared+weak-defined above; the linked csan
+        \\   watchpoint runtime provides the strong, shadow-consulting definitions. The
+        \\   write hook brackets the store so a concurrent access lands inside the watch
+        \\   window; the read hook brackets the load. */
+        \\
+    else
+        "";
+    try out.appendSlice(allocator, profile_comment);
+    try out.print(allocator,
+        "#define MC_DEFINE_RAW_STORE(NAME, TYPE) \\\n" ++
+            "MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) {{ \\\n" ++
+            "{s}" ++
+            "    *((volatile TYPE *)(uintptr_t)addr) = value; \\\n" ++
+            "{s}" ++
+            "}}\n" ++
+            "#define MC_DEFINE_RAW_LOAD(NAME, TYPE) \\\n" ++
+            "MC_UNUSED static inline TYPE mc_raw_load_##NAME(uintptr_t addr) {{ \\\n" ++
+            "{s}" ++
+            "    return *((volatile TYPE *)(uintptr_t)addr); \\\n" ++
+            "}}\n\n",
+        .{ store_pre, store_post, load_pre },
+    );
 
     try out.appendSlice(allocator,
         \\
@@ -633,7 +589,7 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
 pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: []const u8, generated_c_path: ?[]const u8) anyerror!void {
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path, false, false, false, false);
+    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path, .{});
 
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
@@ -1618,24 +1574,26 @@ const CEmitter = struct {
 
     fn emitEnums(self: *CEmitter) !void {
         var it = self.enums.valueIterator();
-        while (it.next()) |enum_decl| {
-            try self.out.print(self.allocator, "typedef {s} {s};\n", .{ try self.enumReprCType(enum_decl.*), enum_decl.name.text });
-            try self.out.appendSlice(self.allocator, "enum {\n");
-            self.indent += 1;
-            for (enum_decl.cases, 0..) |case, i| {
-                try self.writeIndent();
-                try self.out.print(self.allocator, "{s}_{s}", .{ enum_decl.name.text, case.name.text });
-                if (case.value) |value| {
-                    try self.out.appendSlice(self.allocator, " = ");
-                    try self.emitEnumCaseValue(value);
-                } else {
-                    try self.out.print(self.allocator, " = {d}", .{i});
-                }
-                try self.out.appendSlice(self.allocator, ",\n");
+        while (it.next()) |enum_decl| try self.emitEnumType(enum_decl.*);
+    }
+
+    fn emitEnumType(self: *CEmitter, enum_decl: ast.EnumDecl) !void {
+        try self.out.print(self.allocator, "typedef {s} {s};\n", .{ try self.enumReprCType(enum_decl), enum_decl.name.text });
+        try self.out.appendSlice(self.allocator, "enum {\n");
+        self.indent += 1;
+        for (enum_decl.cases, 0..) |case, i| {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s}_{s}", .{ enum_decl.name.text, case.name.text });
+            if (case.value) |value| {
+                try self.out.appendSlice(self.allocator, " = ");
+                try self.emitEnumCaseValue(value);
+            } else {
+                try self.out.print(self.allocator, " = {d}", .{i});
             }
-            self.indent -= 1;
-            try self.out.appendSlice(self.allocator, "};\n\n");
+            try self.out.appendSlice(self.allocator, ",\n");
         }
+        self.indent -= 1;
+        try self.out.appendSlice(self.allocator, "};\n\n");
     }
 
     fn enumReprCType(self: *CEmitter, enum_decl: ast.EnumDecl) ![]const u8 {
@@ -1651,14 +1609,16 @@ const CEmitter = struct {
 
     fn emitOverlayUnionTypes(self: *CEmitter) !void {
         var it = self.overlay_unions.iterator();
-        while (it.next()) |entry| {
-            try self.out.print(self.allocator, "typedef struct {s} {{\n", .{entry.key_ptr.*});
-            self.indent += 1;
-            try self.writeIndent();
-            try self.out.print(self.allocator, "alignas({d}) unsigned char storage[{d}];\n", .{ entry.value_ptr.alignment, entry.value_ptr.size });
-            self.indent -= 1;
-            try self.out.print(self.allocator, "}} {s};\n\n", .{entry.key_ptr.*});
-        }
+        while (it.next()) |entry| try self.emitOverlayUnionType(entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    fn emitOverlayUnionType(self: *CEmitter, name: []const u8, info: OverlayUnionInfo) !void {
+        try self.out.print(self.allocator, "typedef struct {s} {{\n", .{name});
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "alignas({d}) unsigned char storage[{d}];\n", .{ info.alignment, info.size });
+        self.indent -= 1;
+        try self.out.print(self.allocator, "}} {s};\n\n", .{name});
     }
 
 
@@ -1763,6 +1723,28 @@ const CEmitter = struct {
         if (emitted) try self.out.appendSlice(self.allocator, "\n");
     }
 
+    // Emit `_Static_assert(sizeof/offsetof == ...)` lines for every named struct against MC's
+    // authoritative computed layout. Shared by `appendLayoutAsserts` (A1: assert a hand-written C
+    // mirror) and `appendStructDecls` (A2: belt-and-suspenders check of the generated definitions),
+    // which previously duplicated this loop verbatim. `collectModule` must have run first.
+    fn appendLayoutAssertsFor(self: *CEmitter, struct_names: []const []const u8) !void {
+        for (struct_names) |name| {
+            const struct_decl = self.structs.get(name) orelse return error.LayoutStructNotFound;
+            const total = self.comptimeStructSize(struct_decl, 0) orelse return error.LayoutUnresolved;
+            try self.out.print(self.allocator,
+                "_Static_assert(sizeof({s}) == {d}, \"MC<->C layout drift: sizeof({s})\");\n",
+                .{ name, total, name },
+            );
+            for (struct_decl.fields) |field| {
+                const offset = self.comptimeFieldOffset(.{ .kind = .{ .name = struct_decl.name }, .span = struct_decl.name.span }, field.name.text, 0) orelse return error.LayoutUnresolved;
+                try self.out.print(self.allocator,
+                    "_Static_assert(offsetof({s}, {s}) == {d}, \"MC<->C layout drift: offsetof({s}, {s})\");\n",
+                    .{ name, field.name.text, offset, name, field.name.text },
+                );
+            }
+        }
+    }
+
     // A2: emit the full C definitions of just the named structs and the by-value aggregates they
     // transitively embed (nested structs + the `mc_array_*` wrappers MC arrays lower to), in
     // dependency order. Used by the standalone `emit-c-struct` header so a runtime can include the
@@ -1780,17 +1762,39 @@ const CEmitter = struct {
         defer units.deinit(arena);
         var seen = std.StringHashMap(void).init(arena);
         defer seen.deinit();
+        // Non-aggregate named type definitions a field in the closure references (enums,
+        // packed-bits, overlay unions). `cTypeFor` emits these by NAME, so their `typedef`
+        // must precede the structs — otherwise the generated header references an undeclared
+        // type (e.g. an `enum Color` field → `unknown type name 'Color'`) and the
+        // belt-and-suspenders `_Static_assert`s then falsely fire. Scalar typedefs have no
+        // by-value ordering constraint, so they are emitted first, in discovery order.
+        var scalar_deps: std.ArrayList([]const u8) = .empty;
+        defer scalar_deps.deinit(arena);
 
         for (struct_names) |name| {
             const struct_decl = self.structs.get(name) orelse return error.LayoutStructNotFound;
-            try self.collectStructClosure(struct_decl, &units, &seen);
+            try self.collectStructClosure(struct_decl, &units, &seen, &scalar_deps);
         }
 
-        // Forward-declare every struct in the closure so pointer fields (and recursive references)
-        // resolve regardless of definition order.
+        // Emit the referenced scalar named-type definitions (enum / packed-bits / overlay union)
+        // up front: structs in the closure reference them by name.
+        for (scalar_deps.items) |name| {
+            if (self.enums.get(name)) |enum_decl| {
+                try self.emitEnumType(enum_decl);
+            } else if (self.packed_bits.getEntry(name)) |entry| {
+                try self.out.print(self.allocator, "typedef {s} {s};\n\n", .{ entry.value_ptr.repr_c_type, entry.key_ptr.* });
+            } else if (self.overlay_unions.getEntry(name)) |entry| {
+                try self.emitOverlayUnionType(entry.key_ptr.*, entry.value_ptr.*);
+            }
+        }
+
+        // Forward-declare every struct AND tagged union in the closure so pointer fields (and
+        // recursive references) resolve regardless of definition order.
         for (units.items) |unit| {
-            if (unit == .struct_decl) {
-                try self.out.print(self.allocator, "typedef struct {s} {s};\n", .{ unit.struct_decl.name.text, unit.struct_decl.name.text });
+            switch (unit) {
+                .struct_decl => |s| try self.out.print(self.allocator, "typedef struct {s} {s};\n", .{ s.name.text, s.name.text }),
+                .tagged_union => |u| try self.out.print(self.allocator, "typedef struct {s} {s};\n", .{ u.name.text, u.name.text }),
+                else => {},
             }
         }
         try self.out.appendSlice(self.allocator, "\n");
@@ -1822,33 +1826,50 @@ const CEmitter = struct {
         }
     }
 
-    // Append `struct_decl` and every by-value aggregate it transitively embeds (nested structs and
-    // `mc_array_*` wrappers) to `units`, deduplicated via `seen` (keyed by typedef name).
-    fn collectStructClosure(self: *CEmitter, struct_decl: ast.StructDecl, units: *std.ArrayList(AggregateEmitUnit), seen: *std.StringHashMap(void)) anyerror!void {
+    // Append `struct_decl` and every type it transitively embeds — nested structs, `mc_array_*`
+    // wrappers, tagged unions (all by-value `AggregateEmitUnit`s in `units`), plus the scalar
+    // named-type definitions it references (enums / packed-bits / overlay unions, in `scalar_deps`).
+    // All deduplicated via `seen` (keyed by the type's name, which is globally unique in MC).
+    fn collectStructClosure(self: *CEmitter, struct_decl: ast.StructDecl, units: *std.ArrayList(AggregateEmitUnit), seen: *std.StringHashMap(void), scalar_deps: *std.ArrayList([]const u8)) anyerror!void {
         if ((try seen.getOrPut(struct_decl.name.text)).found_existing) return;
-        for (struct_decl.fields) |field| try self.collectTypeClosure(field.ty, units, seen);
+        for (struct_decl.fields) |field| try self.collectTypeClosure(field.ty, units, seen, scalar_deps);
         try units.append(self.scratch.allocator(), .{ .struct_decl = struct_decl });
     }
 
-    // Pull in the by-value aggregate `ty` names (an array wrapper or a nested struct), and recurse
-    // into its element/field types. Pointer/slice references impose no by-value dependency, so they
-    // are not followed (their pointee is forward-declared if it is one of the named structs).
-    fn collectTypeClosure(self: *CEmitter, ty: ast.TypeExpr, units: *std.ArrayList(AggregateEmitUnit), seen: *std.StringHashMap(void)) anyerror!void {
+    // Pull in the aggregate `ty` names (an array wrapper, a nested struct, or a tagged union) and
+    // the scalar named-type definitions it references (enum / packed-bits / overlay union), recursing
+    // into element/field/case types. Pointer/slice fields lower to `void *` (see `ptrCType`), so they
+    // reference no named type and impose no dependency; only by-value / by-name references are followed
+    // (`?T` keeps the inner name via `appendType`, so nullable IS followed).
+    fn collectTypeClosure(self: *CEmitter, ty: ast.TypeExpr, units: *std.ArrayList(AggregateEmitUnit), seen: *std.StringHashMap(void), scalar_deps: *std.ArrayList([]const u8)) anyerror!void {
         const resolved = self.resolveAliasType(ty);
         switch (resolved.kind) {
             .array => {
                 const wrapper = try self.cTypeFor(resolved, .typedef_name);
                 if (self.array_types.get(wrapper)) |info| {
                     if (!(try seen.getOrPut(wrapper)).found_existing) {
-                        try self.collectTypeClosure(info.element_ty, units, seen);
+                        try self.collectTypeClosure(info.element_ty, units, seen, scalar_deps);
                         try units.append(self.scratch.allocator(), .{ .array = info });
                     }
                 }
             },
-            .name => |ident| if (self.structs.get(ident.text)) |nested| {
-                try self.collectStructClosure(nested, units, seen);
+            .name => |ident| {
+                if (self.structs.get(ident.text)) |nested| {
+                    try self.collectStructClosure(nested, units, seen, scalar_deps);
+                } else if (self.tagged_unions.get(ident.text)) |union_decl| {
+                    if (!(try seen.getOrPut(ident.text)).found_existing) {
+                        for (union_decl.cases) |case| {
+                            if (case.ty) |case_ty| try self.collectTypeClosure(case_ty, units, seen, scalar_deps);
+                        }
+                        try units.append(self.scratch.allocator(), .{ .tagged_union = union_decl });
+                    }
+                } else if (self.enums.contains(ident.text) or self.packed_bits.contains(ident.text) or self.overlay_unions.contains(ident.text)) {
+                    // A scalar named type emitted by `cTypeFor` as its name; its typedef must be present.
+                    if (!(try seen.getOrPut(ident.text)).found_existing) try scalar_deps.append(self.scratch.allocator(), ident.text);
+                }
             },
-            .qualified => |node| try self.collectTypeClosure(node.child.*, units, seen),
+            .nullable => |child| try self.collectTypeClosure(child.*, units, seen, scalar_deps),
+            .qualified => |node| try self.collectTypeClosure(node.child.*, units, seen, scalar_deps),
             else => {},
         }
     }
@@ -13061,7 +13082,7 @@ test "path-aware C emission writes source line hints" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc", false, false, false, false);
+    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc", .{});
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 1 \"debug\\\"map\\\\case.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 3 \"debug\\\"map\\\\case.mc\"") != null);

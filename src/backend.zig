@@ -9,34 +9,46 @@ const lower_llvm = @import("lower_llvm.zig");
 /// backend) act on it; profile-agnostic backends ignore it.
 pub const Profile = lower_c.Profile;
 
+/// The sanitizer/build-safety instrumentation axis (the `--checks=` profiles),
+/// bundled into one value so it can be threaded as a unit instead of as four
+/// loose, positionally-dropped bools. Backends that don't instrument ignore it.
+///
+/// `ksan`/`msan`/`csan` are NOT independently combinable: msan implies ksan
+/// (shares the shadow), and csan is mutually exclusive with ksan/msan (a single
+/// raw.load/raw.store wraps exactly one shadow protocol). `main.zig` enforces
+/// the legal combinations at flag-parse time; the emitters assume a legal value.
+pub const Checks = struct {
+    /// Whether optimization-dependent lowering is enabled (mir.buildOpt): the
+    /// RELEASE build (`--checks=elide-proven`) vs the SAFE default (`--checks=all`).
+    optimize: bool = false,
+    /// KASAN profile (D2.1): instrumented memory accesses (raw.load / raw.store)
+    /// emit a shadow-memory check (`mc_ksan_check`) that traps on a poisoned access.
+    ksan: bool = false,
+    /// KMSAN profile (D2.2, implies `ksan`): raw.store additionally calls
+    /// `mc_ksan_store` to mark the written bytes initialized in the shadow, and the
+    /// msan runtime makes `mc_ksan_check` trap on a load of still-uninitialized heap
+    /// bytes.
+    msan: bool = false,
+    /// KCSAN profile (D2.3): instrumented memory accesses emit a data-race watchpoint
+    /// hook (`mc_csan_read` / `mc_csan_write`) on the shadow that flags a conflicting
+    /// concurrent access (one a write) to the same location without synchronization.
+    /// The `mc_race_*` synchronized accessors stay plain relaxed atomics (no
+    /// watchpoint) — the properly-synchronized path is clean.
+    csan: bool = false,
+};
+
 /// Options threaded from the CLI into a backend's lowering entry point. This is
 /// the union of everything any built-in backend needs; a given backend reads
 /// only the subset it supports (e.g. the LLVM backend ignores `profile`).
 pub const LowerOptions = struct {
     /// Code-gen profile. Honored when `Backend.supports_profiles` is true.
     profile: Profile,
-    /// Whether optimization-dependent lowering is enabled (mir.buildOpt).
-    optimize: bool,
     /// Source path embedded in #line / !DILocation metadata; null means the
     /// backend picks its own default.
     source_path: ?[]const u8,
-    /// KASAN profile (D2.1): when true, instrumented memory accesses (raw.load /
-    /// raw.store) emit a shadow-memory check (`mc_ksan_check`) that traps on a
-    /// poisoned access. Default false leaves the emitted code byte-for-byte
-    /// unchanged. Backends that don't instrument simply ignore it.
-    ksan: bool = false,
-    /// KMSAN profile (D2.2): when true (implies `ksan`), raw.store additionally calls
-    /// `mc_ksan_store` to mark the written bytes initialized in the shadow, and the
-    /// msan runtime makes `mc_ksan_check` trap on a load of still-uninitialized heap
-    /// bytes. Default false leaves emitted code unchanged.
-    msan: bool = false,
-    /// KCSAN profile (D2.3): when true, instrumented memory accesses (raw.load /
-    /// raw.store) emit a data-race watchpoint hook (`mc_csan_read` / `mc_csan_write`)
-    /// on the shadow that flags a conflicting concurrent access (one a write) to the
-    /// same location without synchronization. The `mc_race_*` synchronized accessors
-    /// stay plain relaxed atomics (no watchpoint) — the properly-synchronized path is
-    /// clean. Default false leaves emitted code byte-for-byte unchanged.
-    csan: bool = false,
+    /// The `--checks=` instrumentation axis (optimize + the ksan/msan/csan
+    /// sanitizer profiles), threaded as one value rather than four loose bools.
+    checks: Checks = .{},
 };
 
 /// A code-generation backend: the seam at which `main.zig` selects a target and
