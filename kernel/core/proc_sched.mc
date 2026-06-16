@@ -117,6 +117,88 @@ export fn proc_tick_notify(t: *mut ProcTable) -> bool {
     return expired;
 }
 
+// ----- fair-share scheduling + throttle (alternative pick; purely additive) -----
+// Round-robin + static priority let a heavy agent monopolize the CPU. Fair-share picks the
+// *least-served* runnable slot — fewest ticks consumed this incarnation — so no agent runs
+// again until others catch up, bounding CPU per agent. The per-slot `ticks` accumulator and
+// `priority` already live on Process; the only extra state fair-share needs is a per-slot
+// throttle penalty. To stay disjoint from process.mc (no new Process fields), that penalty
+// lives in a module-global array here, indexed by slot, and is folded into the comparison.
+const NO_SLOT: usize = MAX_PROCS; // sentinel: "no candidate found yet"
+
+// Per-slot throttle penalty, added to a slot's effective tick count in proc_pick_fair. A
+// throttled agent compares as if it had consumed (ticks + penalty) ticks, so it is pushed to
+// the back of the fair queue without being blocked or killed. Zero-initialized (bss); reset by
+// proc_throttle_clear. Indexed by slot in 0..MAX_PROCS.
+global g_throttle: [MAX_PROCS]u32;
+
+// A slot's effective fair-share cost: real ticks consumed plus any throttle penalty, weighted
+// down by priority so a higher-priority agent is allowed a larger share before deprioritizing.
+// We compare ticks/max(priority,1): with equal priority this is pure least-served-first; a
+// priority-2 agent may consume twice the ticks of a priority-1 agent before losing its turn.
+// u64 math avoids overflow when penalty is large.
+fn fair_cost(t: *mut ProcTable, slot: usize) -> u64 {
+    let base: u64 = (t.procs[slot].ticks as u64) + (g_throttle[slot] as u64);
+    var w: u32 = t.procs[slot].priority;
+    if w == 0 {
+        w = 1; // priority 0 (default/unset) weights as 1, never divides by zero
+    }
+    return base / (w as u64);
+}
+
+// Fair-share pick: among the RUNNABLE slots, the one with the fewest effective ticks consumed
+// (least-served-first), weighted by priority and offset by any throttle penalty. Ties break to
+// the lower slot index. NoRunnable if nothing is runnable. Unlike next_runnable this is an
+// absolute pick (it may return the current slot) — it is an alternative selection policy, not a
+// round-robin successor, and leaves next_runnable / proc_yield untouched.
+export fn proc_pick_fair(t: *mut ProcTable) -> Result<usize, SchedError> {
+    var best: usize = NO_SLOT;
+    var best_cost: u64 = 0;
+    var i: usize = 0;
+    while i < t.count {
+        if is_runnable(t, i) {
+            let cost: u64 = fair_cost(t, i);
+            if best == NO_SLOT {
+                best = i;
+                best_cost = cost;
+            } else {
+                if cost < best_cost { // strict <: first (lowest) slot wins ties
+                    best = i;
+                    best_cost = cost;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if best == NO_SLOT {
+        return err(.NoRunnable);
+    }
+    return ok(best);
+}
+
+// Throttle a slot: add `penalty` to its effective tick count so fair-share pushes it to the
+// back of the queue. Saturates at u32 max rather than wrapping, so a heavy penalty cannot fold
+// a misbehaving agent back to the front. The agent stays runnable (not killed/blocked) — this
+// is a deprioritization knob, not a kill.
+export fn proc_throttle(t: *mut ProcTable, slot: usize, penalty: u32) -> void {
+    if slot < MAX_PROCS {
+        let cur: u32 = g_throttle[slot];
+        let room: u32 = 0xFFFFFFFF - cur;
+        if penalty > room {
+            g_throttle[slot] = 0xFFFFFFFF; // saturate
+        } else {
+            g_throttle[slot] = cur + penalty;
+        }
+    }
+}
+
+// Clear a slot's throttle penalty: it returns to competing on its real tick count.
+export fn proc_throttle_clear(t: *mut ProcTable, slot: usize) -> void {
+    if slot < MAX_PROCS {
+        g_throttle[slot] = 0;
+    }
+}
+
 // Policy: the highest-priority runnable process other than `from` (ties: lowest pid),
 // or `from` if no other is runnable.
 fn sched_next_priority(t: *mut ProcTable, from: usize) -> usize {
