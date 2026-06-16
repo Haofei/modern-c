@@ -257,12 +257,81 @@ class EarlyRet:
             raise RetSignal(self._v(env) & _mask(64))
 
 
+# ---------------------------------------------------------------------------
+# V3.1: memory-layout + switch-family constructs.
+#
+# These are the constructs with SEPARATE per-backend lower_c / lower_llvm code paths
+# (offset/overlay reads, the switch families) — the class where the overlay-read miscompile
+# hid because the C-vs-LLVM differential oracle was blind to it (both backends agreed and were
+# wrong). The reference oracle is the only one that sees a SHARED-frontend bug, so we model each
+# of these constructs in pure Python from an INDEPENDENT layout/semantics ground truth (not by
+# re-asking the compiler) and fold the result into the harness digest. A divergence between the
+# compiled output and this independent value is therefore a real miscompile.
+#
+# All modeled little-endian: the reference oracle compiles+runs through the C backend on the
+# little-endian host, matching mcfuzz's existing overlay folding (`u == sum(bytes[k] << 8*k)`).
+
+def _align_up(x, a):
+    return (x + a - 1) // a * a
+
+
+class OffsetStruct:
+    """An `extern mmio struct` with explicit `@offset(N)` fields. Observed PURELY through comptime
+    folding (`sizeof`, `field_offset`) — not host-runnable (volatile MMIO), but the layout the
+    comptime path computes is fully visible. Layout ground truth (verified empirically against the
+    compiler): field_offset(.f) == the pinned offset; sizeof == align_up(last_off + last_width_bytes,
+    max field alignment), where a Reg<uN,..> field has size and alignment N/8 bytes."""
+
+    def __init__(self, name, fields):
+        self.name = name
+        self.fields = fields  # [(fname, width_bits, offset_bytes, mode)]
+
+    def sizeof(self):
+        _lf, lastw, lastoff, _m = self.fields[-1]
+        align = max(w // 8 for _f, w, _o, _m in self.fields)
+        return _align_up(lastoff + lastw // 8, align)
+
+    def field_offset(self, fname):
+        for f, _w, o, _m in self.fields:
+            if f == fname:
+                return o
+        raise KeyError(fname)
+
+    def decl(self):
+        body = "\n".join("    %s: Reg<u%d, %s> @offset(%d)," % (f, w, m, o)
+                         for f, w, o, m in self.fields)
+        return "extern mmio struct %s {\n%s\n}" % (self.name, body)
+
+
+class OverlayUnion:
+    """An `overlay union` (byte-aliasing storage). Host-runnable: write the scalar member, read the
+    aliased byte-view (`bytes[i]`) and non-byte-view (`halves[i]`) members back. Reinterpret ground
+    truth (little-endian): bytes[k] = (u >> 8*k) & 0xff; halves[k] = (u >> 16*k) & 0xffff. Writing a
+    half overwrites the corresponding 16-bit lane of the backing storage. sizeof == widest member
+    == the scalar width in bytes."""
+
+    def __init__(self, name, width_bits):
+        self.name = name
+        self.width = width_bits
+        self.nbytes = width_bits // 8
+        self.nhalves = width_bits // 16
+
+    def decl(self):
+        body = ("    u: u%d,\n    bytes: [%d]u8,\n    halves: [%d]u16,"
+                % (self.width, self.nbytes, self.nhalves))
+        return "overlay union %s {\n%s\n}" % (self.name, body)
+
+
 class RefGen:
     def __init__(self, seed):
         self.rng = random.Random(seed)
         self.scope = {}   # name -> rt (declared top-level vars, in scope for the whole body)
         self.order = []   # declaration order of foldable vars
         self.n = 0
+        # V3.1: layout/switch-family constructs and the extra (decls, body, fold-terms) they emit.
+        self.pre_decls = []      # top-level decl source emitted before harness()
+        self.extra_body = []     # extra harness-body lines (rendered after the core stmts)
+        self.extra_terms = []    # (varname, expected_u64) folded into the digest
 
     def _lit_val(self, w):
         m = _mask(w)
@@ -395,11 +464,238 @@ class RefGen:
                 r2, v2 = self._u64_source()
                 stmts.append(EarlyRet(self.gen_cond(), r2, v2))
         self.stmts = stmts
+        self.gen_constructs()
         return self
+
+    # ---- V3.1: offset / overlay / switch-family constructs -------------------------------------
+    def gen_constructs(self):
+        """Generate the divergence-prone layout + switch-family constructs into a self-contained
+        helper `ref_extra() -> u64`. The helper has NO early returns and is always fully evaluated,
+        so its value is observed on every harness path (the core's early-return XORs it in too). For
+        each construct we compute the expected u64 from an INDEPENDENT Python model (layout/reinterpret/
+        switch semantics) — never by re-asking the compiler — and fold it into the digest."""
+        self.gen_offset_structs()
+        self.gen_overlays()
+        self.gen_switch_families()
+
+    def gen_offset_structs(self):
+        REGW = (8, 16, 32)
+        for i in range(self.rng.randrange(1, 3)):
+            name = "OFF%d" % self.n
+            self.n += 1
+            nf = self.rng.randrange(2, 5)
+            fields = []
+            off = 0
+            for j in range(nf):
+                w = self.rng.choice(REGW)
+                sz = w // 8
+                mode = self.rng.choice((".read", ".write", ".read_write"))
+                if j == 0:
+                    cur = 0
+                elif self.rng.random() < 0.5:
+                    cur = off                       # tightly packed: offset == running offset
+                else:
+                    cur = off + self.rng.choice((sz, 8, 16, 64, 0x100))  # large/odd gap
+                if cur % sz != 0:                   # respect the field's natural alignment
+                    cur += sz - (cur % sz)
+                fields.append(("of%d" % j, w, cur, mode))
+                off = cur + sz
+            s = OffsetStruct(name, fields)
+            self.pre_decls.append(s.decl())
+            # comptime observers: sizeof(S) and field_offset(S, .f) for every field, folded.
+            self.pre_decls.append(
+                "fn offobs_%s() -> u64 {\n    return %s;\n}"
+                % (name, self._offset_fold_expr(s)))
+            tn = "off_%s" % name
+            self.extra_body.append("    var %s: u64 = offobs_%s();" % (tn, name))
+            self.extra_terms.append((tn, self._offset_fold_val(s)))
+            # Layout identity (must hold): field_offset(.last) + last_width_bytes <= sizeof(S).
+            lastf, lastw, _lo, _m = fields[-1]
+            idn = "offid_%s" % name
+            self.extra_body.append("    var %s: u64 = 0;" % idn)
+            self.extra_body.append(
+                "    if ((field_offset(%s, .%s) as u64) + %d) <= (sizeof(%s) as u64) "
+                "{ %s = 1; }" % (name, lastf, lastw // 8, name, idn))
+            assert (s.field_offset(lastf) + lastw // 8) <= s.sizeof()
+            self.extra_terms.append((idn, 1))
+
+    def _offset_fold_expr(self, s):
+        parts = ["(sizeof(%s) as u64)" % s.name]
+        for k, (f, _w, _o, _m) in enumerate(s.fields):
+            parts.append("((field_offset(%s, .%s) as u64) << %d)" % (s.name, f, (k + 1) * 4))
+        return " ^ ".join(parts)
+
+    def _offset_fold_val(self, s):
+        v = s.sizeof() & _mask(64)
+        for k, (f, _w, _o, _m) in enumerate(s.fields):
+            v ^= (s.field_offset(f) << ((k + 1) * 4))
+        return v & _mask(64)
+
+    def gen_overlays(self):
+        for i in range(self.rng.randrange(1, 3)):
+            name = "OV%d" % self.n
+            self.n += 1
+            w = self.rng.choice((32, 64))
+            o = OverlayUnion(name, w)
+            self.pre_decls.append(o.decl())
+            # Independent reinterpret model (little-endian).
+            uval = self.rng.randrange(1, 1 << min(w, 32))
+            bytes_ = [(uval >> (8 * k)) & 0xff for k in range(o.nbytes)]
+            halves = [(uval >> (16 * k)) & 0xffff for k in range(o.nhalves)]
+            vn = "ovv_%s" % name
+            self.extra_body.append("    var %s: %s = uninit;" % (vn, name))
+            self.extra_body.append("    %s.u = %d;" % (vn, uval))
+            acc = "ovo_%s" % name
+            exp = uval & _mask(64)
+            # Scalar member read in expression position.
+            self.extra_body.append("    var %s: u64 = (%s.u as u64);" % (acc, vn))
+            # Byte-view reads (each lane shifted), exercising the byte-view lowering.
+            for k in range(o.nbytes):
+                self.extra_body.append("    %s = (%s ^ ((%s.bytes[%d] as u64) << %d));"
+                                       % (acc, acc, vn, k, (k % 8) * 8))
+                exp ^= (bytes_[k] << ((k % 8) * 8))
+            # Non-byte (`[N]u16`) view reads in expression position.
+            for k in range(o.nhalves):
+                self.extra_body.append("    %s = (%s ^ ((%s.halves[%d] as u64) << %d));"
+                                       % (acc, acc, vn, k, (k % 4) * 16))
+                exp ^= (halves[k] << ((k % 4) * 16))
+            # Non-byte view WRITE, then read back: overwrite one 16-bit lane, re-observe it.
+            hidx = self.rng.randrange(0, o.nhalves)
+            hval = self.rng.randrange(1, 1 << 16)
+            self.extra_body.append("    %s.halves[%d] = %d;" % (vn, hidx, hval))
+            self.extra_body.append("    %s = (%s ^ ((%s.halves[%d] as u64) << 3));"
+                                   % (acc, acc, vn, hidx))
+            exp ^= (hval << 3)
+            # sizeof of the overlay (storage size == widest member == the scalar width in bytes).
+            self.extra_body.append("    %s = (%s ^ ((sizeof(%s) as u64) << 4));" % (acc, acc, name))
+            exp ^= (o.nbytes << 4)
+            self.extra_terms.append((acc, exp & _mask(64)))
+
+    def gen_switch_families(self):
+        """The four switch families that have separate per-backend lowering: scalar (integer)
+        switch, closed-enum expression-switch, Result<T,E> ok/err switch, and tagged-union switch
+        (incl. a payloadless `nullable`-style empty arm). Each is exhaustive and folds to a u64 we
+        compute independently."""
+        self._gen_scalar_switch()
+        self._gen_enum_switch()
+        self._gen_result_switch()
+        self._gen_union_switch()
+
+    def _gen_scalar_switch(self):
+        # `switch <u32 literal>` over explicit integer patterns + `_` wildcard, in stmt position.
+        cases = sorted(self.rng.sample(range(0, 8), k=3))
+        subj = self.rng.choice(cases + [99])  # may hit the wildcard
+        vn = "scsw%d" % self.n
+        self.n += 1
+        self.extra_body.append("    var %s: u32 = %d;" % (vn, subj))
+        out = "scswr%d" % self.n
+        self.n += 1
+        self.extra_body.append("    var %s: u64 = 0;" % out)
+        self.extra_body.append("    switch %s {" % vn)
+        for k, c in enumerate(cases):
+            self.extra_body.append("        %d => { %s = %d; }" % (c, out, (k + 1) * 11))
+        self.extra_body.append("        _ => { %s = 7; }" % out)
+        self.extra_body.append("    }")
+        exp = 7
+        for k, c in enumerate(cases):
+            if subj == c:
+                exp = (k + 1) * 11
+        self.extra_terms.append((out, exp))
+
+    def _gen_enum_switch(self):
+        # A closed enum + expression-`switch` in return position (helper) AND initializer position.
+        ename = "RE%d" % self.n
+        self.n += 1
+        variants = ["V%d" % k for k in range(self.rng.randrange(2, 5))]
+        self.pre_decls.append("enum %s {\n%s\n}" % (ename, "\n".join("    %s," % v for v in variants)))
+        arms = ", ".join(".%s => %d" % (v, (k + 1) * 13) for k, v in enumerate(variants))
+        self.pre_decls.append("fn eswf_%s(e: %s) -> u64 {\n    return switch e { %s };\n}"
+                              % (ename, ename, arms))
+        pick = self.rng.randrange(0, len(variants))
+        ev = "esv%d" % self.n
+        self.n += 1
+        self.extra_body.append("    var %s: %s = .%s;" % (ev, ename, variants[pick]))
+        # return-position helper
+        rv = "esr%d" % self.n
+        self.n += 1
+        self.extra_body.append("    var %s: u64 = eswf_%s(%s);" % (rv, ename, ev))
+        self.extra_terms.append((rv, (pick + 1) * 13))
+        # initializer-position expression switch (different constants)
+        arms2 = ", ".join(".%s => %d" % (v, (k + 1) * 17) for k, v in enumerate(variants))
+        iv = "esi%d" % self.n
+        self.n += 1
+        self.extra_body.append("    var %s: u64 = switch %s { %s };" % (iv, ev, arms2))
+        self.extra_terms.append((iv, (pick + 1) * 17))
+
+    def _gen_result_switch(self):
+        # A `Result<u32, u32>` helper, switched ok(v)/err(e) — the Result switch family.
+        fn = "rfn%d" % self.n
+        self.n += 1
+        is_ok = self.rng.random() < 0.5
+        okv = self.rng.randrange(0, 1 << 20)
+        errv = self.rng.randrange(0, 1 << 20)
+        body = "    return ok(%d);" % okv if is_ok else "    return err(%d);" % errv
+        self.pre_decls.append("fn %s() -> Result<u32, u32> {\n%s\n}" % (fn, body))
+        out = "rsw%d" % self.n
+        self.n += 1
+        self.extra_body.append("    var %s: u64 = 0;" % out)
+        self.extra_body.append("    switch %s() {" % fn)
+        self.extra_body.append("        ok(v) => { %s = (v as u64); }" % out)
+        self.extra_body.append("        err(e) => { %s = ((e as u64) ^ 1000); }" % out)
+        self.extra_body.append("    }")
+        self.extra_terms.append((out, okv if is_ok else (errv ^ 1000)))
+
+    def _gen_union_switch(self):
+        # A tagged union with int-payload cases + a payloadless empty arm (the `nullable`-style
+        # no-payload tag), folded via a switch helper.
+        uname = "RU%d" % self.n
+        self.n += 1
+        ncases = self.rng.randrange(2, 4)
+        cases = [("uc%d_%d" % (self.n, j), self.rng.choice([8, 16, 32, 64]))
+                 for j in range(ncases)]
+        empty = "ue%d" % self.n if self.rng.random() < 0.5 else None
+        lines = ["    %s: u%d," % (cn, w) for cn, w in cases]
+        if empty:
+            lines.append("    %s," % empty)
+        self.pre_decls.append("union %s {\n%s\n}" % (uname, "\n".join(lines)))
+        arms = ["        %s(b) => { return (b as u64); }" % cn for cn, _w in cases]
+        if empty:
+            arms.append("        .%s => { return 7; }" % empty)
+        self.pre_decls.append("fn ufold_%s(s: %s) -> u64 {\n    switch s {\n%s\n    }\n}"
+                              % (uname, uname, "\n".join(arms)))
+        # construct one value (case or empty) and fold it
+        opts = list(cases) + ([(empty, None)] if empty else [])
+        cn, w = self.rng.choice(opts)
+        if w is None:
+            ctor = "%s()" % cn
+            exp = 7
+        else:
+            pv = self.rng.randrange(0, 1 << min(w, 32))
+            ctor = "%s(%d)" % (cn, pv)
+            exp = pv
+        uv = "uv%d" % self.n
+        self.n += 1
+        self.extra_body.append("    var %s: %s = %s;" % (uv, uname, ctor))
+        fv = "ufv%d" % self.n
+        self.n += 1
+        self.extra_body.append("    var %s: u64 = ufold_%s(%s);" % (fv, uname, uv))
+        self.extra_terms.append((fv, exp))
+
+    def _extra_value(self):
+        """Independent u64 value the `ref_extra()` helper must return (XOR of all extra terms)."""
+        acc = 0
+        for _name, val in self.extra_terms:
+            acc ^= (val & _mask(64))
+        return acc & _mask(64)
 
     def source(self):
         lines = ["// Generated by tools/fuzz/mcref.py — reference-interpreter oracle (G1)."]
-        lines.append("export fn harness() -> u64 {")
+        # V3.1: top-level decls for the offset/overlay/switch-family constructs.
+        for d in self.pre_decls:
+            lines.append(d)
+        # The unsigned-integer core, isolated in a helper so its early returns can't skip the
+        # extra-construct observations (the C-vs-LLVM-blind layout/switch lowering).
+        lines.append("fn ref_core() -> u64 {")
         for s in self.stmts:
             lines += s.render(1)
         terms = [_fold(n, self.scope[n]) for n in self.order]
@@ -408,20 +704,34 @@ class RefGen:
             acc = "(%s ^ %s)" % (acc, t)
         lines.append("    return %s;" % acc)
         lines.append("}")
+        # V3.1: the offset/overlay/switch-family observations, always fully evaluated.
+        lines.append("fn ref_extra() -> u64 {")
+        lines += self.extra_body
+        eterms = [n for n, _v in self.extra_terms]
+        eacc = eterms[0] if eterms else "0"
+        for t in eterms[1:]:
+            eacc = "(%s ^ %s)" % (eacc, t)
+        lines.append("    return %s;" % eacc)
+        lines.append("}")
+        lines.append("export fn harness() -> u64 {")
+        lines.append("    return (ref_core() ^ ref_extra());")
+        lines.append("}")
         return "\n".join(lines) + "\n"
 
     def evaluate(self):
         """The reference u64 the program must return. Returns an int in [0, 2^64)."""
         env = {}
+        core = None
         try:
             for s in self.stmts:
                 s.eval(env)
         except RetSignal as r:
-            return r.val & _mask(64)
-        acc = 0
-        for n in self.order:
-            acc ^= (env[n] & _mask(64))
-        return acc & _mask(64)
+            core = r.val & _mask(64)
+        if core is None:
+            core = 0
+            for n in self.order:
+                core ^= (env[n] & _mask(64))
+        return (core ^ self._extra_value()) & _mask(64)
 
 
 if __name__ == "__main__":
