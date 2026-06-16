@@ -80,3 +80,4 @@ heapfree-test	tests/qemu/mem/heapfree_demo.mc	driver		-Wno-switch-bool	heap recl
 ipctrace-test	tests/qemu/ipc/ipctrace_demo.mc	driver		-Wno-switch-bool	IPC provenance ring (kernel/core): non-blocking record (overwrite-oldest + dropped count), monotonic seq, oldest-first drain
 procmem-test	tests/qemu/proc/procmem_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	per-process memory account (kernel/core/process): independent per-process quota, charge fails closed, released on exit
 ipcprov-test	tests/qemu/ipc/ipcprov_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	IPC provenance emission (kernel/core/proc_ipc): records from/to/tag on send, monotonic seq, hot-channel opt-out suppresses
+blobstore-test	tests/qemu/fs/blobstore_demo.mc	driver		-Wno-switch-bool	durable blob sink (kernel/fs): put/get/len by id, typed Full/NotFound/TooLarge, blob survives reopen (checkpoint prerequisite)
