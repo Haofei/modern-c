@@ -164,6 +164,7 @@ pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast.Module, out: 
         \\#include <stdint.h>
         \\#include <stdbool.h>
         \\#include <stddef.h>
+        \\#include <stdalign.h>
         \\
         \\
     );
@@ -172,7 +173,10 @@ pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast.Module, out: 
 
     // Belt-and-suspenders: also assert the generated definitions against MC's computed layout.
     try out.appendSlice(allocator, "\n/* Layout cross-check (sizeof/offsetof) against MC's authoritative layout. */\n");
-    try emitter.appendLayoutAssertsFor(struct_names);
+    // Non-fatal: a struct with a tagged-union/nullable/overlay field whose lowered
+    // layout MC does not compute at comptime is skipped (with a comment) rather than
+    // aborting the whole header — the struct *definition* above is always emitted.
+    try emitter.appendLayoutAssertsForImpl(struct_names, false);
 }
 
 pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
@@ -496,7 +500,6 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
     );
 
     try out.appendSlice(allocator,
-        \\
         \\MC_DEFINE_RAW_STORE(bool, bool)
         \\MC_DEFINE_RAW_STORE(u8, uint8_t)
         \\MC_DEFINE_RAW_STORE(u16, uint16_t)
@@ -1728,15 +1731,51 @@ const CEmitter = struct {
     // mirror) and `appendStructDecls` (A2: belt-and-suspenders check of the generated definitions),
     // which previously duplicated this loop verbatim. `collectModule` must have run first.
     fn appendLayoutAssertsFor(self: *CEmitter, struct_names: []const []const u8) !void {
+        return self.appendLayoutAssertsForImpl(struct_names, true);
+    }
+
+    /// Same as `appendLayoutAssertsFor` but, when `fatal` is false, a struct whose
+    /// comptime layout cannot be resolved (e.g. it has a tagged-union, nullable `?T`,
+    /// or overlay-union field whose lowered layout MC does not compute at comptime) is
+    /// SKIPPED with an explanatory comment instead of aborting. The struct *definition*
+    /// is emitted regardless by `emitNamedStructDecls`; skipping only the belt-and-
+    /// suspenders `_Static_assert` keeps the header compiling rather than emitting no
+    /// header at all. The authoritative A1 `emit-layout` path keeps `fatal = true`, so
+    /// genuine drift on resolvable (e.g. virtqueue) structs is still a hard error.
+    fn appendLayoutAssertsForImpl(self: *CEmitter, struct_names: []const []const u8, fatal: bool) !void {
         for (struct_names) |name| {
             const struct_decl = self.structs.get(name) orelse return error.LayoutStructNotFound;
-            const total = self.comptimeStructSize(struct_decl, 0) orelse return error.LayoutUnresolved;
+            const total = self.comptimeStructSize(struct_decl, 0) orelse {
+                if (fatal) return error.LayoutUnresolved;
+                try self.out.print(self.allocator,
+                    "/* layout cross-check skipped for {s}: MC does not compute its comptime size (tagged-union/nullable/overlay field); the struct definition above is authoritative. */\n",
+                    .{name},
+                );
+                continue;
+            };
+            // Resolve every field offset first, so a struct is either fully asserted
+            // or fully skipped — never half-asserted.
+            var offsets_ok = true;
+            for (struct_decl.fields) |field| {
+                if (self.comptimeFieldOffset(.{ .kind = .{ .name = struct_decl.name }, .span = struct_decl.name.span }, field.name.text, 0) == null) {
+                    offsets_ok = false;
+                    break;
+                }
+            }
+            if (!offsets_ok) {
+                if (fatal) return error.LayoutUnresolved;
+                try self.out.print(self.allocator,
+                    "/* layout cross-check skipped for {s}: MC does not compute every field offset at comptime (tagged-union/nullable/overlay field); the struct definition above is authoritative. */\n",
+                    .{name},
+                );
+                continue;
+            }
             try self.out.print(self.allocator,
                 "_Static_assert(sizeof({s}) == {d}, \"MC<->C layout drift: sizeof({s})\");\n",
                 .{ name, total, name },
             );
             for (struct_decl.fields) |field| {
-                const offset = self.comptimeFieldOffset(.{ .kind = .{ .name = struct_decl.name }, .span = struct_decl.name.span }, field.name.text, 0) orelse return error.LayoutUnresolved;
+                const offset = self.comptimeFieldOffset(.{ .kind = .{ .name = struct_decl.name }, .span = struct_decl.name.span }, field.name.text, 0).?;
                 try self.out.print(self.allocator,
                     "_Static_assert(offsetof({s}, {s}) == {d}, \"MC<->C layout drift: offsetof({s}, {s})\");\n",
                     .{ name, field.name.text, offset, name, field.name.text },
