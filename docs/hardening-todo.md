@@ -35,7 +35,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   **compile error**, flow-sensitive. **Where:** sema (`src/hir.zig`). **Test:** `fuzz-failclosed`
   + fixtures; no false positives on the `var x:T=uninit; … x=v;` idiom. **Prior art:** Zig/Rust
   definite-assignment; KMSAN (dynamic counterpart, D2.2). **Depends:** none.
-- [ ] **S0.2 — Define & enforce the `unsafe` boundary** *(PR, then ongoing)* — enumerate every
+- [x] **S0.2 — Define & enforce the `unsafe` boundary** *(DONE `df72851`; MC already type-enforces `unsafe {}` + `#[unsafe_contract]` via sema `E_UNSAFE_REQUIRED` — added `unsafe-audit` lint + `docs/unsafe-boundary.md` inventory (146 sites, boundary clean). Follow-up: whole-function safe/unsafe effect typing)* — enumerate every
   UB-introducing construct (raw pointer arithmetic, `uninit`, `extern mmio`, memcpy-reinterpret,
   manual `move` overrides) behind an explicit greppable marker; the *safe* subset is provably free
   of them. **Where:** spec + sema. **Test:** safe code contains zero unsafe ops; an audited list of
@@ -141,7 +141,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## U — Trusted/untrusted boundary (the #1 attack surface)
 
-- [ ] **U1 — User-pointer type** *(multi-PR)* — a `UserPtr<T>` that **cannot be dereferenced**; only
+- [x] **U1 — User-pointer type** *(DONE `5072599`; `UserPtr<T>` opaque address class — deref/index/arithmetic already rejected, FOUND+FIXED a real hole: `.field` through a UserPtr was a kernel deref of user memory, now `E_USER_PTR_DEREF`. uaccess copy-in/out is the only path)* — a `UserPtr<T>` that **cannot be dereferenced**; only
   checked copy-in/out yields a value. **Where:** `kernel/core/uaccess.mc` + `kernel/core/syscall.mc`
   + the user_runtime path. **Test:** direct deref rejected (`fuzz-failclosed`); syscall paths adopt
   it. **Prior art:** Linux `__user`+sparse, Rust-for-Linux `UserSlice`/`UserPtr`. **Depends:** none.
@@ -161,7 +161,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   `kernel/core/elf.mc`, fs decode. **Where:** `std/bytes.mc` + the parsers. **Test:** a **parser fuzz
   oracle** — truncated/malformed input must reject cleanly, never OOB/hang. **Prior art:**
   **EverParse**, langsec, nom. **Depends:** none.
-- [ ] **P2 — Never trust a length field** *(PR)* — wire length/count fields validated against the
+- [x] **P2 — Never trust a length field** *(DONE `c25eb99`; `br_validate_len` gates rdlength (DNS), IP total-length, UDP length, ELF phnum×phentsize + filesz before they drive loops/copies; 196K hostile-length fuzz cases rejected, 0 over-reads)* — wire length/count fields validated against the
   remaining buffer before driving a copy/loop. **Where:** parser type + check. **Test:**
   unvalidated-length fixture rejected. **Prior art:** Heartbleed. **Depends:** P1.
 - [ ] **P3 — Verified parsers for the wire formats** *(research)* — generate TCP/IP/DNS/TLS-record
