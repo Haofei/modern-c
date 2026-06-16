@@ -2161,6 +2161,26 @@ pub fn build(b: *std.Build) void {
     const llvm_agentos_test_step = b.step("llvm-agentos-test", "Boot the LLVM-lowered agent-OS governance keystone under QEMU");
     llvm_agentos_test_step.dependOn(&llvm_agentos_test_cmd.step);
 
+    const agent_e2e_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/agent-e2e-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    agent_e2e_test_cmd.step.dependOn(b.getInstallStep());
+    const agent_e2e_test_step = b.step("agent-e2e-test", "Boot the end-to-end sandboxed-agent showcase (capability-checked/budgeted/audited tool calls) under QEMU");
+    agent_e2e_test_step.dependOn(&agent_e2e_test_cmd.step);
+
+    const llvm_agent_e2e_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/agent-e2e-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_agent_e2e_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_agent_e2e_test_step = b.step("llvm-agent-e2e-test", "Boot the LLVM-lowered end-to-end sandboxed-agent showcase under QEMU");
+    llvm_agent_e2e_test_step.dependOn(&llvm_agent_e2e_test_cmd.step);
+
     const kmain_net_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/net/kmain-net-test.sh",
@@ -2597,6 +2617,9 @@ pub fn build(b: *std.Build) void {
     // agentos-test boots the agent-OS governance keystone (OOM-kill + reclaim) under QEMU.
     m0_step.dependOn(&agentos_test_cmd.step);
     m0_step.dependOn(&llvm_agentos_test_cmd.step);
+    // agent-e2e-test boots the end-to-end sandboxed-agent showcase under QEMU.
+    m0_step.dependOn(&agent_e2e_test_cmd.step);
+    m0_step.dependOn(&llvm_agent_e2e_test_cmd.step);
     // vm-switch-test switches satp between two address spaces (per-process VM).
     m0_step.dependOn(&vm_switch_test_cmd.step);
     // vmspace-test switches satp per process slot (per-process page tables).
