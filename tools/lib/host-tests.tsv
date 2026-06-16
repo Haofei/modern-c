@@ -87,3 +87,4 @@ checkpoint-test	tests/qemu/proc/checkpoint_demo.mc	driver		-Wno-switch-bool -Wno
 pause-test	tests/qemu/proc/pause_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	pause/resume an agent (kernel/core/proc_sched): a paused process is non-runnable (derived block reason) and stays alive; resume restores runnability
 ipcsample-test	tests/qemu/ipc/ipcsample_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	IPC provenance sampling (kernel/core/proc_ipc): record 1-of-N, full at N=1, none at N=0 — the fast-path opt-out lever
 migrate-test	tests/qemu/proc/migrate_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	agent migration (kernel/core/checkpoint): checkpoint on source table, restore on destination with state intact, source vacated only on success
+record-test	tests/qemu/lang/record_demo.mc	driver		-Wno-switch-bool	IPC event recording (kernel/core): capture the ordered provenance stream into a durable log, read events back in order (replay foundation)
