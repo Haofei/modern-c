@@ -68,8 +68,18 @@ export fn elf_parse_header(r: *ByteReader) -> Result<ElfHeader, ElfError> {
     // The program-header table is sized by UNTRUSTED count/entsize fields (e_phnum,
     // e_phentsize) and located by an untrusted offset (e_phoff). P2: validate that the
     // whole claimed table lies within the buffer up front (named check) before any
-    // program header is read — a hostile phnum/phentsize/phoff is rejected cleanly here,
-    // so the per-PH reads below can never walk off the image.
+    // program header is read — a hostile phnum/phentsize/phoff is rejected cleanly here.
+    //
+    // The aggregate `phnum*phentsize` check ALONE is not enough: `elf_program_header`
+    // reads fixed Elf64 fields up to off+48 of each entry with TRAPPING br_le32/br_le64,
+    // so a hostile `phentsize < 56` (e.g. 8) would pass the aggregate check yet make the
+    // per-entry reads run past the validated region and trap on attacker input. Reject any
+    // `phentsize` smaller than the real Elf64 program-header size (PH_SIZE) so every entry
+    // is at least as large as the fields the parser reads — then the per-PH reads below
+    // can never walk off the validated table.
+    if (phentsize as usize) < PH_SIZE {
+        return err(.BadProgramHeaders);
+    }
     let table_bytes: usize = (phnum as usize) * (phentsize as usize);
     switch br_validate_len(r, phoff as usize, table_bytes) {
         ok(u) => {}

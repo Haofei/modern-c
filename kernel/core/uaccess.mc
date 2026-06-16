@@ -144,49 +144,74 @@ export fn fetch_user_pt(comptime T: type, uas: *UserAddrSpace, src: UserPtr<T>) 
 // discipline is structural, and the companion lint `tools/toolchain/taint-audit.sh`
 // independently flags any user-derived value used as a length/index/loop-bound without
 // passing one of these validators.
-struct Tainted<T> {
-    raw: T, // private-by-convention: read it ONLY through checked_len/checked_index/validate_bound
+// `opaque struct`: the `raw` field is private to this module, so only the associated
+// functions in `impl Tainted` below may name `.raw`. Outside code cannot read the raw
+// untrusted value with `t.raw` (that is `E_PRIVATE_FIELD`), nor construct one with a
+// struct literal `.{ .raw = X }` — so the taint discipline is structural, not a
+// convention the validators could be bypassed around.
+opaque struct Tainted<T> {
+    raw: T, // private: read it ONLY through checked_len/checked_index/validate_bound
 }
 
-// Mark a freshly-snapshotted user scalar as tainted. Taking a snapshot is the moment a
-// value crosses from user space into the kernel, so it is exactly where taint begins.
+impl Tainted {
+    // Mark a freshly-snapshotted user scalar as tainted. Taking a snapshot is the moment a
+    // value crosses from user space into the kernel, so it is exactly where taint begins.
+    fn of(comptime T: type, snap: UserSnapshot<T>) -> Tainted<T> {
+        return .{ .raw = snap.value };
+    }
+
+    // Validate a tainted value as a usable LENGTH: accept it only if it is <= `limit`
+    // (a length may equal the buffer size — it bounds a half-open copy of `v` bytes into
+    // a `limit`-byte buffer). Returns the now-trusted scalar, or `OutOfRange` if the
+    // attacker-supplied length would run past the buffer. Fail closed: on rejection no
+    // value is produced, so an over-long length can never drive a copy.
+    fn checked_len(comptime T: type, t: Tainted<T>, limit: T) -> Result<T, UaccessError> {
+        if t.raw > limit {
+            return err(.OutOfRange);
+        }
+        return ok(t.raw);
+    }
+
+    // Validate a tainted value as a usable INDEX: accept it only if it is < `limit`
+    // (an index into a `limit`-element array is in [0, limit)). Returns the trusted
+    // index, or `OutOfRange`. Fail closed: an out-of-bounds index never reaches the
+    // subscript.
+    fn checked_index(comptime T: type, t: Tainted<T>, limit: T) -> Result<T, UaccessError> {
+        if t.raw >= limit {
+            return err(.OutOfRange);
+        }
+        return ok(t.raw);
+    }
+
+    // Validate a tainted value against an explicit half-open bound `[lo, hi)`. The general
+    // form behind `checked_len`/`checked_index` for callers that need a non-zero floor.
+    fn validate_bound(comptime T: type, t: Tainted<T>, lo: T, hi: T) -> Result<T, UaccessError> {
+        if t.raw < lo {
+            return err(.OutOfRange);
+        }
+        if t.raw >= hi {
+            return err(.OutOfRange);
+        }
+        return ok(t.raw);
+    }
+}
+
+// Public wrappers: the names/call shapes stay `taint`/`checked_len`/… so existing callers
+// are unchanged, but the only code that can name `.raw` is the `impl Tainted` above.
 export fn taint(comptime T: type, snap: UserSnapshot<T>) -> Tainted<T> {
-    return .{ .raw = snap.value };
+    return Tainted.of(T, snap);
 }
 
-// Validate a tainted value as a usable LENGTH: accept it only if it is <= `limit`
-// (a length may equal the buffer size — it bounds a half-open copy of `v` bytes into
-// a `limit`-byte buffer). Returns the now-trusted scalar, or `OutOfRange` if the
-// attacker-supplied length would run past the buffer. Fail closed: on rejection no
-// value is produced, so an over-long length can never drive a copy.
 export fn checked_len(comptime T: type, t: Tainted<T>, limit: T) -> Result<T, UaccessError> {
-    if t.raw > limit {
-        return err(.OutOfRange);
-    }
-    return ok(t.raw);
+    return Tainted.checked_len(T, t, limit);
 }
 
-// Validate a tainted value as a usable INDEX: accept it only if it is < `limit`
-// (an index into a `limit`-element array is in [0, limit)). Returns the trusted
-// index, or `OutOfRange`. Fail closed: an out-of-bounds index never reaches the
-// subscript.
 export fn checked_index(comptime T: type, t: Tainted<T>, limit: T) -> Result<T, UaccessError> {
-    if t.raw >= limit {
-        return err(.OutOfRange);
-    }
-    return ok(t.raw);
+    return Tainted.checked_index(T, t, limit);
 }
 
-// Validate a tainted value against an explicit half-open bound `[lo, hi)`. The general
-// form behind `checked_len`/`checked_index` for callers that need a non-zero floor.
 export fn validate_bound(comptime T: type, t: Tainted<T>, lo: T, hi: T) -> Result<T, UaccessError> {
-    if t.raw < lo {
-        return err(.OutOfRange);
-    }
-    if t.raw >= hi {
-        return err(.OutOfRange);
-    }
-    return ok(t.raw);
+    return Tainted.validate_bound(T, t, lo, hi);
 }
 
 // ----- page-table-aware path -----

@@ -2,7 +2,7 @@
 // stronger by MC's linear types). A `Cap<R>` is an *unforgeable, linear* grant of
 // access to a resource R (e.g. a device's MMIO base, an IRQ line, a memory region):
 //
-//   - unforgeable: `Cap` is an `opaque struct` (section 31), so its `resource` field is
+//   - unforgeable: `Cap` is an `opaque move struct` (section 31), so its `resource` field is
 //     private to this module — outside code CANNOT construct one with a struct literal
 //     `.{ .resource = X }` (that is `E_PRIVATE_FIELD`). `cap_mint` is the only constructor,
 //     and it is the kernel's setup-time primitive, so possession is the audit point;
@@ -20,7 +20,7 @@
 
 import "std/rights.mc";
 
-opaque struct Cap<R> {
+opaque move struct Cap<R> {
     resource: R,
 }
 
@@ -66,7 +66,7 @@ export fn cap_revoke(comptime R: type, c: Cap<R>) -> void {
 // This is the attenuated-subgrant law made structural: a holder can delegate a strictly
 // weaker capability and the type system rejects any attempt to broaden one.
 
-opaque struct RCap<R> {
+opaque move struct RCap<R> {
     resource: R,
     rights: Rights,
 }
