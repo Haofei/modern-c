@@ -5,6 +5,7 @@
 // per policy. This is the foundation for pluggable user-space OS services.
 
 import "std/mask.mc";
+import "std/scan.mc";
 import "kernel/lib/registry.mc";
 
 const SVC_MAX: usize = 8;
@@ -149,16 +150,17 @@ export fn supervisor_register(sup: *mut Supervisor, m: ServiceManifest, spawn: c
     return err(.Full);
 }
 
+// Predicate: a present service entry whose manifest name key matches the captured target.
+fn svc_name_matches(name_key: u32, e: ServiceEntry) -> bool {
+    return e.present && e.manifest.name_key == name_key;
+}
+
 // Find a registered service's index by its name key.
 export fn supervisor_find(sup: *mut Supervisor, name_key: u32) -> Result<usize, SvcError> {
-    var i: usize = 0;
-    while i < SVC_MAX {
-        if sup.services[i].present {
-            if sup.services[i].manifest.name_key == name_key {
-                return ok(i);
-            }
-        }
-        i = i + 1;
+    let pred: closure(ServiceEntry) -> bool = bind(name_key, svc_name_matches);
+    let i: usize = find_index(ServiceEntry, SVC_MAX, sup.services, pred);
+    if i < SVC_MAX {
+        return ok(i);
     }
     return err(.NotFound);
 }

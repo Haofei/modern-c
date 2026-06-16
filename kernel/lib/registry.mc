@@ -7,6 +7,8 @@
 //   - a generation stored with each endpoint, so a client can detect a stale registration;
 //   - unregister-by-endpoint, so a process-death hook can drop everything a dead pid owned.
 
+import "std/scan.mc";
+
 const REG_MAX: usize = 16;
 
 enum RegError {
@@ -56,16 +58,17 @@ export fn registry_add(reg: *mut Registry, key: u32, endpoint: u32, gen: u32) ->
     return err(.Full);
 }
 
+// Predicate: a present entry whose key matches the captured search key.
+fn entry_key_matches(key: u32, e: RegEntry) -> bool {
+    return e.present && e.key == key;
+}
+
 // The first endpoint registered under `key`, or NotFound.
 export fn registry_find(reg: *mut Registry, key: u32) -> Result<u32, RegError> {
-    var i: usize = 0;
-    while i < REG_MAX {
-        if reg.entries[i].present {
-            if reg.entries[i].key == key {
-                return ok(reg.entries[i].endpoint);
-            }
-        }
-        i = i + 1;
+    let pred: closure(RegEntry) -> bool = bind(key, entry_key_matches);
+    let i: usize = find_index(RegEntry, REG_MAX, reg.entries, pred);
+    if i < REG_MAX {
+        return ok(reg.entries[i].endpoint);
     }
     return err(.NotFound);
 }
@@ -73,14 +76,10 @@ export fn registry_find(reg: *mut Registry, key: u32) -> Result<u32, RegError> {
 // The generation registered with the first endpoint for `key` (so a client can compare it to
 // the live process generation and detect a stale registration), or NotFound.
 export fn registry_find_gen(reg: *mut Registry, key: u32) -> Result<u32, RegError> {
-    var i: usize = 0;
-    while i < REG_MAX {
-        if reg.entries[i].present {
-            if reg.entries[i].key == key {
-                return ok(reg.entries[i].gen);
-            }
-        }
-        i = i + 1;
+    let pred: closure(RegEntry) -> bool = bind(key, entry_key_matches);
+    let i: usize = find_index(RegEntry, REG_MAX, reg.entries, pred);
+    if i < REG_MAX {
+        return ok(reg.entries[i].gen);
     }
     return err(.NotFound);
 }
