@@ -76,3 +76,4 @@ arp-cache-test	tests/qemu/net/arp_cache_demo.mc	driver		-Wno-switch-bool -Wno-in
 tlb-shootdown-test	tests/qemu/proc/tlb_shootdown_demo.mc	entry	tlb_shootdown_run	-Wno-switch-bool	TLB shootdown bookkeeping (kernel/core): initiator targets all other cores, ack tracking, completion, single-core trivial
 mutex-test	tests/qemu/proc/mutex_demo.mc	entry	mutex_run	-Wno-switch-bool -Wno-unused-variable	sleeping Mutex (kernel/lib): try_lock, blocking enqueue, FIFO direct hand-off on unlock, NotOwner rejection, re-acquire
 resacct-test	tests/qemu/mem/resacct_demo.mc	driver		-Wno-switch-bool	ResourceAccount (kernel/lib): charge fails closed at quota (no partial), uncharge no-underflow, available/reset
+heapfree-test	tests/qemu/mem/heapfree_demo.mc	driver		-Wno-switch-bool	heap reclamation (kernel/core): free returns blocks to the pool, alloc reuses freed holes, available recovers (no monotonic leak)
