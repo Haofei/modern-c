@@ -2760,6 +2760,14 @@ pub const Checker = struct {
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion") else false;
         const secret_checked = target_class == .secret and self.checkSecretWrapInitializer(target_ty, value, ctx);
+        // T1.1 lexical region/scope borrows: storing the address of local storage into a
+        // location that outlives that local (a `*out`/`out.field` written through a pointer
+        // parameter) makes the borrow dangle once the function returns. Reject it.
+        if ((isNonNullPointerLike(target_class) or isNullablePointerLike(target_class)) and
+            localAddressRoot(value, ctx) != null and assignmentTargetEscapesFunction(target, ctx))
+        {
+            self.errorCode(value.span, "E_BORROW_ESCAPES_SCOPE", "cannot store the address of local storage where it outlives the local's scope (the borrow would dangle)");
+        }
         if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
@@ -7546,6 +7554,51 @@ fn localStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
         .index => |node| indexedLocalArrayStorageRoot(node.base.*, ctx),
         .grouped => |inner| localStorageRoot(inner.*, ctx),
         else => null,
+    };
+}
+
+// T1.1 lexical region/scope borrows: does an assignment *target* write to storage
+// that OUTLIVES the current function's locals — i.e. it writes *through a pointer
+// parameter* (a deref of a param pointer, or a field reached through one)?
+//
+// This is the sound, no-false-positive slice. A bare-ident target (`p = ...`) is a
+// same-function local at the (flat) function scope, so it does NOT outlive a local
+// referent and is never reported here (that needs nested-scope/lifetime analysis,
+// T1.3). Only writes that reach OUT of the function via a `*out`/`out.field` pointer
+// parameter can make a stack borrow dangle, so only those escape.
+//
+// Passing `&local` DOWN to a callee is unaffected (that is a call argument, never an
+// assignment target), so the `init(&x); use(x)` idiom keeps compiling.
+fn assignmentTargetEscapesFunction(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        // `*p = ...` / `p.field = ...` escape when `p` resolves to a pointer parameter.
+        .deref => |inner| pointerParamRoot(inner.*, ctx),
+        .member => |node| pointerParamRoot(node.base.*, ctx),
+        .index => |node| pointerParamRoot(node.base.*, ctx),
+        .grouped => |inner| assignmentTargetEscapesFunction(inner.*, ctx),
+        else => false,
+    };
+}
+
+// Whether `expr` is (or transitively dereferences) a pointer *parameter* — storage the
+// caller owns, which outlives this function's stack frame. A local pointer is NOT a
+// param and does not qualify (it cannot outlive the function it lives in).
+fn pointerParamRoot(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            const binding = (if (ctx.scope) |scope| scope.get(ident.text) else null) orelse return false;
+            if (binding.origin != .param) return false;
+            const ty = binding.ty orelse return false;
+            const class = classifyTypeCtx(ty, ctx);
+            return isNonNullPointerLike(class) or isNullablePointerLike(class);
+        },
+        // Reaching further through a param pointer (`*out.next`, `out.buf[i]`) still
+        // bottoms out at the caller-owned storage.
+        .deref => |inner| pointerParamRoot(inner.*, ctx),
+        .member => |node| pointerParamRoot(node.base.*, ctx),
+        .index => |node| pointerParamRoot(node.base.*, ctx),
+        .grouped => |inner| pointerParamRoot(inner.*, ctx),
+        else => false,
     };
 }
 
