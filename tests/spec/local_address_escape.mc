@@ -2,7 +2,7 @@
 // SPEC: milestone=trivial-local-address-escape
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_LOCAL_ADDRESS_ESCAPE
+// SPEC: check=E_LOCAL_ADDRESS_ESCAPE,E_BORROW_ESCAPES_SCOPE
 
 global shared_counter: u32 = 0;
 
@@ -11,6 +11,18 @@ extern struct Packet {
 }
 
 extern fn make_array() -> [4]u32;
+
+struct Holder {
+    slot: *mut u32,
+}
+
+fn sink(p: *mut u32) -> void {
+    *p = 0;
+}
+
+fn sink_returns(p: *mut u32) -> *mut u32 {
+    return p;
+}
 
 fn accept_return_parameter_pointer(p: *mut u32) -> *mut u32 {
     return p;
@@ -223,4 +235,30 @@ fn reject_return_var_copied_after_assigned_local_pointer(fallback: *mut u32) -> 
     q = out;
     // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
     return q;
+}
+
+// T1.1 — storing a stack borrow OUT through a pointer parameter (the caller-owned
+// target outlives this frame): the borrow would dangle once `store` returns.
+
+fn reject_store_local_address_through_out_param(out: *mut *mut u32) -> void {
+    var x: u32 = 1;
+    // EXPECT_ERROR: E_BORROW_ESCAPES_SCOPE
+    *out = &x;
+}
+
+fn reject_store_local_address_through_param_field(b: *mut Holder) -> void {
+    var x: u32 = 1;
+    // EXPECT_ERROR: E_BORROW_ESCAPES_SCOPE
+    b.slot = &x;
+}
+
+// Passing `&local` DOWN to a callee (a call argument, not an assignment target) and
+// storing a local address into another *local* pointer stay accepted: neither outlives
+// the local's frame, so neither can dangle.
+
+fn accept_pass_local_address_down(out: *mut *mut u32) -> void {
+    var x: u32 = 1;
+    var p: *mut u32 = &x;
+    sink(p);
+    *out = sink_returns(p);
 }
