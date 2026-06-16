@@ -21,43 +21,6 @@
 
 #include "bearssl.h"
 
-// ------------------------------------------------------------------ libc shims
-// Freestanding libc primitives BearSSL and the compiler reference. BearSSL needs
-// memcpy/memmove/memset/strlen (declared via the freestanding string.h shim);
-// the compiler may also emit memcpy/memset for struct copies/zeroing.
-void *memset(void *d, int c, size_t n) {
-    uint8_t *p = (uint8_t *)d;
-    for (size_t i = 0; i < n; ++i) p[i] = (uint8_t)c;
-    return d;
-}
-void *memcpy(void *d, const void *s, size_t n) {
-    uint8_t *dp = (uint8_t *)d; const uint8_t *sp = (const uint8_t *)s;
-    for (size_t i = 0; i < n; ++i) dp[i] = sp[i];
-    return d;
-}
-void *memmove(void *d, const void *s, size_t n) {
-    uint8_t *dp = (uint8_t *)d; const uint8_t *sp = (const uint8_t *)s;
-    if (dp == sp || n == 0) return d;
-    if (dp < sp) {
-        for (size_t i = 0; i < n; ++i) dp[i] = sp[i];
-    } else {
-        for (size_t i = n; i != 0; --i) dp[i - 1] = sp[i - 1];
-    }
-    return d;
-}
-int memcmp(const void *a, const void *b, size_t n) {
-    const uint8_t *pa = (const uint8_t *)a, *pb = (const uint8_t *)b;
-    for (size_t i = 0; i < n; ++i) {
-        if (pa[i] != pb[i]) return (int)pa[i] - (int)pb[i];
-    }
-    return 0;
-}
-size_t strlen(const char *s) {
-    const char *p = s;
-    while (*p) ++p;
-    return (size_t)(p - s);
-}
-
 // ------------------------------------------------------------------- clock seam
 // The build epoch (unix seconds), threaded in at compile time so later X.509
 // validity checks have a "now". Just the seam for Phase 1: a constant the kernel

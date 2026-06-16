@@ -14,7 +14,8 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffree
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/tests/qemu/arch/arch_demo.mc" "$WORK/mc.o" "$WORK"
 kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/sbi_boot_runtime.c" "$WORK/boot.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
-"$LLD" -T "$HERE/tests/qemu/sbi.ld" "$WORK/boot.o" "$WORK/mc.o" $SUPPORT_OBJ -o "$WORK/k.elf"
+kernel_boot_compile_rt "$WORK/freestanding.o"
+"$LLD" -T "$HERE/tests/qemu/sbi.ld" "$WORK/freestanding.o" "$WORK/boot.o" "$WORK/mc.o" $SUPPORT_OBJ -o "$WORK/k.elf"
 # NOTE: no '-bios none' -> QEMU loads OpenSBI (the real firmware) which boots our kernel.
 OUT="$(timeout 30 "$QEMU" -machine virt -nographic -kernel "$WORK/k.elf" 2>/dev/null || true)"
 echo "--- OpenSBI + kernel output ---"; printf '%s\n' "$OUT" | tail -8; echo "-------------------------------"

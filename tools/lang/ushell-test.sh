@@ -16,7 +16,8 @@ kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/shell_user_runtime.c" "$
 kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/usermode_runtime.c" "$W/um.o"
 kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/context_runtime.c" "$W/ctx.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$W/llvm-support.o")"
-"$LLD" -T "$HERE/tests/qemu/virt.ld" "$W/ctx.o" "$W/um.o" "$W/rt.o" "$W/mc.o" $SUPPORT_OBJ -o "$W/shell.elf"
+kernel_boot_compile_rt "$W/freestanding.o"
+"$LLD" -T "$HERE/tests/qemu/virt.ld" "$W/freestanding.o" "$W/ctx.o" "$W/um.o" "$W/rt.o" "$W/mc.o" $SUPPORT_OBJ -o "$W/shell.elf"
 OUT="$(printf 'echo hi user\ntop\nexit\n' | timeout 25 "$QEMU" -machine virt -bios none -nographic -kernel "$W/shell.elf" 2>/dev/null || true)"
 echo "--- shell session ---"; printf '%s\n' "$OUT" | tail -8; echo "---------------------"
 if printf '%s' "$OUT" | grep -q "hi user" \

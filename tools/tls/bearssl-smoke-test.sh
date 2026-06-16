@@ -64,7 +64,8 @@ echo "Compiled $NBEAR BearSSL .c files."
 # clock seam; pass the build epoch in.
 "$CLANG" "${CFLAGS[@]}" -DMC_BUILD_EPOCH="$EPOCH" -c "$RUNTIME" -o "$WORK/runtime.o"
 
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "${BEARSSL_OBJS[@]}" -o "$WORK/smoke.elf"
+kernel_boot_compile_rt "$WORK/freestanding.o"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "${BEARSSL_OBJS[@]}" -o "$WORK/smoke.elf"
 
 # Rough .text size added by BearSSL (for the report).
 TEXT_SIZE="$("$CLANG" -print-prog-name=llvm-size >/dev/null 2>&1; command -v llvm-size >/dev/null 2>&1 && llvm-size "$WORK/smoke.elf" 2>/dev/null | tail -1 | awk '{print $1}' || echo '?')"

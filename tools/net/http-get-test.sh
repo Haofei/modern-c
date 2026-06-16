@@ -71,7 +71,8 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/http.o" "$WORK"
 kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/http.o" $SUPPORT_OBJ -o "$WORK/http.elf"
+kernel_boot_compile_rt "$WORK/freestanding.o"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/http.o" $SUPPORT_OBJ -o "$WORK/http.elf"
 
 # 4. Boot under QEMU with virtio-net user networking + pcap capture. The guest
 #    connects to the slirp gateway 10.0.2.2:PORT, redirected to the host loopback.

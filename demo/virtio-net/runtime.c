@@ -10,18 +10,6 @@ uint64_t mc_read_ticks(void) { return *(volatile uint64_t *)CLINT_MTIME; }
 void mc_udelay(uint32_t us) { uint64_t t = mc_read_ticks() + (uint64_t)us * 10u; while (mc_read_ticks() < t) {} }
 #include <stddef.h>
 
-// Freestanding libc primitives the compiler may emit (struct copies/zeroing).
-void *memset(void *d, int c, size_t n) {
-    uint8_t *p = (uint8_t *)d;
-    for (size_t i = 0; i < n; ++i) p[i] = (uint8_t)c;
-    return d;
-}
-void *memcpy(void *d, const void *s, size_t n) {
-    uint8_t *dp = (uint8_t *)d; const uint8_t *sp = (const uint8_t *)s;
-    for (size_t i = 0; i < n; ++i) dp[i] = sp[i];
-    return d;
-}
-
 // ----- virtqueue structs matching the MC layout (virtio_net.mc / virtio spec) -
 typedef struct VringDesc { uint64_t addr; uint32_t len; uint16_t flags; uint16_t next; } VringDesc;
 typedef struct DescTable { VringDesc d[8]; } DescTable;

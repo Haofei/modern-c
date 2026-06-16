@@ -6,18 +6,6 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// The process table copies aggregates, so the compiler may emit these.
-void *memset(void *d, int c, size_t n) {
-    uint8_t *p = (uint8_t *)d;
-    for (size_t i = 0; i < n; ++i) p[i] = (uint8_t)c;
-    return d;
-}
-void *memcpy(void *d, const void *s, size_t n) {
-    uint8_t *dp = (uint8_t *)d; const uint8_t *sp = (const uint8_t *)s;
-    for (size_t i = 0; i < n; ++i) dp[i] = sp[i];
-    return d;
-}
-
 void putc_(char c);
 void puts_(const char *s);
 void mc_halt(void);

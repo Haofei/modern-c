@@ -131,7 +131,8 @@ kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/tls.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 "$CLANG" "${RUNTIME_FLAGS[@]}" -c "$RUNTIME" -o "$WORK/runtime.o"
 
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/tls.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/https.elf"
+kernel_boot_compile_rt "$WORK/freestanding.o"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/tls.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/https.elf"
 
 # 5. Boot under QEMU with virtio-net (slirp) + virtio-rng + pcap.
 OUT="$(timeout 90 "$QEMU" -machine virt -bios none -nographic \

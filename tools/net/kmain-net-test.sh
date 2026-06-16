@@ -36,7 +36,8 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/virtio.o" "$WORK"
 kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/virtio.o" $SUPPORT_OBJ -o "$WORK/virtio.elf"
+kernel_boot_compile_rt "$WORK/freestanding.o"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/virtio.o" $SUPPORT_OBJ -o "$WORK/virtio.elf"
 
 OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
         -global virtio-mmio.force-legacy=false \

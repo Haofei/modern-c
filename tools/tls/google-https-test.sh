@@ -78,7 +78,8 @@ CFLAGS=("${MCFLAGS[@]}")
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/tls.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 "$CLANG" "${RUNTIME_FLAGS[@]}" -c "$RUNTIME" -o "$WORK/runtime.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/tls.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/google.elf"
+kernel_boot_compile_rt "$WORK/freestanding.o"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/tls.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/google.elf"
 
 # Boot with plain slirp user networking (real upstream DNS + internet egress, if the
 # sandbox permits it) + virtio-rng. Capture a pcap for the honest report.

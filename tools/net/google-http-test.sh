@@ -52,7 +52,8 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/dns.o" "$WORK"
 kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/dns.o" $SUPPORT_OBJ -o "$WORK/dns.elf"
+kernel_boot_compile_rt "$WORK/freestanding.o"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/dns.o" $SUPPORT_OBJ -o "$WORK/dns.elf"
 
 # Boot with plain slirp user networking (real upstream resolver + internet egress, if
 # the sandbox permits it). Capture a pcap for the honest report.

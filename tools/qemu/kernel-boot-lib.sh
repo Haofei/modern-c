@@ -68,3 +68,11 @@ kernel_boot_compile_llvm_support() {
         printf '%s' "$out"
     fi
 }
+
+# Compile the ONE shared freestanding libc (mem*/str*) every bare-metal image
+# links against. Replaces the mem*/str* copies that used to be duplicated into
+# each per-image runtime .c. Add the resulting object to every ld.lld line.
+kernel_boot_compile_rt() {
+    local out="$1"
+    kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/freestanding.c" "$out"
+}
