@@ -98,7 +98,7 @@ groundwork before it.**
   produces the expected provenance graph; **hot-channel opt-out** flag suppresses it.
 - [ ] **P1.3 — Emit capability-use events** (grant / revoke / cap invocation) so the
   audit covers *authority*, not just messages. **Where:** grant path + `kcall`.
-- [ ] **P1.4 — Sampling + opt-out policy** — the lever that keeps P1.* from invalidating
+- [x] **P1.4 — Sampling + opt-out policy** (DONE — fe0da04) — the lever that keeps P1.* from invalidating
   the P2.1 fast path. Co-decide the mechanism **before** building P2.1.
 
 ### Capability delegation & attenuation
@@ -107,7 +107,7 @@ groundwork before it.**
   **subset** of its own (intersect `allow_mask`/`kcall_mask`; sub-grant a subset of
   grants). **Where:** `proc_spawn` + grant tables (`kernel/lib/granttab.mc`,
   `std/grant.mc`). **Test:** child cannot exceed parent's authority; over-grant rejected.
-- [ ] **P1.6 — Revoke cascade.** Revoking/parent-death revokes delegated chains.
+- [x] **P1.6 — Revoke cascade.** (DONE — a792f6c) Revoking/parent-death revokes delegated chains.
   Generational grants already revoke-on-owner-death; extend to delegated descendants.
 
 ### Agent lifecycle (needs a durable sink first)
@@ -134,13 +134,13 @@ groundwork before it.**
   checkpoint sink.
 - [ ] **P2.3 — Fair-share scheduling + throttle** — bound CPU per agent; deprioritize
   misbehaving agents (extends the P0.5 throttle path).
-- [ ] **P2.4 — Migrate** — checkpoint on A, restore on B (builds on P1.8/P1.9).
+- [x] **P2.4 — Migrate** (DONE — 781893d) — checkpoint on A, restore on B (builds on P1.8/P1.9).
 
 ---
 
 ## P3 — Debuggability
 
-- [ ] **P3.1 — Deterministic record** (leverages P1.2 provenance).
+- [x] **P3.1 — Deterministic record** (first cut DONE — 960618f; full re-exec future) (leverages P1.2 provenance).
 - [ ] **P3.2 — Replay.**
 
 ---
