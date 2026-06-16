@@ -2141,6 +2141,26 @@ pub fn build(b: *std.Build) void {
     const llvm_kmain_test_step = b.step("llvm-kmain-test", "Boot one LLVM-lowered integrated kernel image under QEMU");
     llvm_kmain_test_step.dependOn(&llvm_kmain_test_cmd.step);
 
+    const agentos_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/agentos-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    agentos_test_cmd.step.dependOn(b.getInstallStep());
+    const agentos_test_step = b.step("agentos-test", "Boot the agent-OS governance keystone (OOM-kill + reclaim) under QEMU");
+    agentos_test_step.dependOn(&agentos_test_cmd.step);
+
+    const llvm_agentos_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/agentos-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_agentos_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_agentos_test_step = b.step("llvm-agentos-test", "Boot the LLVM-lowered agent-OS governance keystone under QEMU");
+    llvm_agentos_test_step.dependOn(&llvm_agentos_test_cmd.step);
+
     const kmain_net_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/net/kmain-net-test.sh",
@@ -2574,6 +2594,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&paging_activate_test_cmd.step);
     // kmain-test boots one integrated kernel image (heap+console+log+VFS+scheduler).
     m0_step.dependOn(&kmain_test_cmd.step);
+    // agentos-test boots the agent-OS governance keystone (OOM-kill + reclaim) under QEMU.
+    m0_step.dependOn(&agentos_test_cmd.step);
+    m0_step.dependOn(&llvm_agentos_test_cmd.step);
     // vm-switch-test switches satp between two address spaces (per-process VM).
     m0_step.dependOn(&vm_switch_test_cmd.step);
     // vmspace-test switches satp per process slot (per-process page tables).
