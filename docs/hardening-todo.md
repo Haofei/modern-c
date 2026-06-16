@@ -124,7 +124,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 > Data races + deadlocks + sleep-in-atomic are the worst kernel bug class. Primitives exist;
 > nothing enforces their use.
 
-- [ ] **C1 — Lock-guards-data** *(multi-PR)* — associate data with its lock (data inside the lock);
+- [x] **C1 — Lock-guards-data** *(DONE `c3ce2c0`; `std/guarded.mc` `Guarded<T>` (opaque, data private → `E_PRIVATE_FIELD` on direct access) + linear `Guard` (must-release, no-dup via the move checker), tied to the specific lock instance. Lock ORDERING/deadlock-freedom = C3, follow-up)* — associate data with its lock (data inside the lock);
   access requires static proof the lock is held. **Where:** `std/sync` + a check pass. **Test:**
   `fuzz-failclosed` (unlocked access rejected); migrate kernel locks incrementally. **Prior art:**
   Rust `Mutex<T>`, Rust-for-Linux **klint**, lockdep. **Depends:** none.
@@ -194,7 +194,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## T — Termination & bounded resources / the agent-program verifier (on-thesis)
 
-- [ ] **T(term)1 — Bounded-loop / no-unbounded-recursion check for critical code** *(PR)* — loops in
+- [x] **T(term)1 — Bounded-loop / no-unbounded-recursion check for critical code** *(DONE `9b38b3c`; in `#[irq_context]`/`#[bounded]` fns a loop must match a bounded shape (for-over-array, monotone counter<bound, or has a break) else `E_UNBOUNDED_LOOP`; direct recursion → `E_UNBOUNDED_RECURSION`. Shapes not proofs — opt-in; mutual recursion is follow-up)* — loops in
   critical sections + IRQ handlers must be statically bounded; no unbounded recursion. **Where:** a
   check pass + region marking. **Test:** unbounded loop in a critical region rejected. **Prior art:**
   eBPF verifier, SPARK. **Depends:** C2.
