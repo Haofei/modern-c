@@ -49,7 +49,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## Tier 1 — Static type system: temporal safety (highest leverage, zero runtime cost)
 
-- [ ] **T1.1 — Lexical region/scope borrows** *(multi-PR)* — a reference may not outlive the region
+- [~] **T1.1 — Lexical region/scope borrows** *(PARTIAL `a0d2ace`; `return &local` already caught — CLOSED the gap of storing a stack borrow outward through a pointer param (`*out=&local`) → `E_BORROW_ESCAPES_SCOPE`. NOT covered (→ T1.3 lifetimes): escape-to-global, escape-to-outer-block — needs per-block region machinery)* — a reference may not outlive the region
   of the value it borrows (catch use-after-scope/dangling). Start lexical. **Where:** borrow pass
   (`src/hir.zig`). **Test:** escaping-reference fixtures rejected (`fuzz-failclosed`); kernel still
   type-checks; `move-fuzz` borrow cases. **Prior art:** Rust borrow checker, Cyclone regions,
