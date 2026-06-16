@@ -3,21 +3,20 @@
 // Brings the NIC up, ARP-resolves the gateway, then drives a single TCP connection
 // through a real 3-way handshake to a live HTTP server reachable via the slirp
 // gateway: SYN → SYN-ACK → ACK, then PSH "GET / HTTP/1.0" → the server's real 200
-// response → ACK. The TCP control plane is kernel/net/tcp_conn (pure state machine);
-// the frames are built by kernel/net/tcp_tx and transmitted through the production
-// virtio-net driver (nic_tx_frame); responses are parsed by tcp_parse_frame. No
+// response → ACK. The active-open + send/recv/ACK/reassembly loop is NOT hand-rolled
+// here: it lives once in kernel/net/tcp_socket (which owns the tcp_conn state machine,
+// the tcp_window sequence accounting and the tcp_reasm receive reassembly, and does the
+// action→frame glue through kernel/net/tcp_tx + the production virtio-net driver). No
 // mocks — genuine packets, verified on the wire (pcap) and by the server access log.
 
 import "kernel/drivers/virtio/virtio_net.mc";
-import "kernel/net/tcp_conn.mc";
-import "kernel/net/tcp_tx.mc";
+import "kernel/net/tcp_socket.mc";
 import "std/bytes.mc";
 
 const OUR_IP: u32 = 0x0A00_020F; // 10.0.2.15 (QEMU guest)
 const GW_IP: u32 = 0x0A00_0202;  // 10.0.2.2  (QEMU slirp gateway → host)
 
 const OUR_PORT: u16 = 0xC000;    // 49152, an ephemeral source port
-const TCP_WINDOW: u16 = 0x2000;  // advertised receive window
 
 // The accumulated HTTP response (filled by the drive loop, read back by the runtime).
 const RESP_CAP: usize = 4096;
@@ -28,6 +27,9 @@ global g_resp_len: usize;
 // "GET / HTTP/1.0\r\nHost: 10.0.2.2\r\n\r\n"
 global g_req: [40]u8;
 global g_req_len: usize;
+
+// The socket: owns the connection (state machine + window + reassembly + segment-hold).
+global g_sock: TcpSocket;
 
 fn req_set(i: usize, c: u8) -> void {
     g_req[i] = c;
@@ -76,8 +78,7 @@ fn build_request() -> void {
     g_req_len = 34;
 }
 
-// Append received payload bytes (read from raw region `src`) into g_resp. Reads
-// through a bounds-checked ByteReader (no open-coded raw loads).
+// Append received payload bytes (read from raw region `src`) into g_resp.
 fn resp_append(src: usize, n: usize) -> void {
     if n == 0 {
         return;
@@ -92,43 +93,6 @@ fn resp_append(src: usize, n: usize) -> void {
         }
         i = i + 1;
     }
-}
-
-// Transmit one TCP segment built from the connection's current sequence accounting.
-fn tx_segment(
-    dev: *NetDevice, gw_mac: *MacAddr, src_mac: *MacAddr,
-    dst_port: u16, seq: u32, ack: u32, flags: u16,
-    payload_src: usize, payload_len: usize,
-) -> bool {
-    let cpu: CpuBuffer = tcp_build_frame(
-        gw_mac, src_mac, OUR_IP, GW_IP, OUR_PORT, dst_port,
-        seq, ack, flags, TCP_WINDOW, payload_src, payload_len);
-    let total: usize = cpu.len;
-    return nic_tx_frame(dev, cpu, total);
-}
-
-// Receive the next TCP segment addressed to our source port (bounded retries). Skips
-// non-TCP frames (e.g. ARP) and TCP to other ports. Returns is_tcp=false on timeout.
-fn rx_tcp_segment(dev: *NetDevice, buf: usize, max: usize) -> TcpRx {
-    var none: TcpRx = .{
-        .is_tcp = false, .src_port = 0, .dst_port = 0,
-        .seq = 0, .ack = 0, .flags = 0, .window = 0,
-        .payload_off = 0, .payload_len = 0,
-    };
-    var tries: u32 = 0;
-    while tries < 16 {
-        let n: usize = nic_rx_into(dev, buf, max);
-        if n > 0 {
-            let seg: TcpRx = tcp_parse_frame(buf, n);
-            if seg.is_tcp {
-                if seg.dst_port == OUR_PORT {
-                    return seg;
-                }
-            }
-        }
-        tries = tries + 1;
-    }
-    return none;
 }
 
 // Drive the connection. Returns a status code:
@@ -156,80 +120,34 @@ export fn http_get_drive(
         err(e) => { return 0; }
     }
 
-    // TCP active open: ISN = 0. After tcp_connect, snd_nxt = 1 (SYN consumes one).
-    var conn: TcpConn = .{ .state = .Closed, .snd_nxt = 0, .rcv_nxt = 0 };
-    let act: TcpAction = tcp_connect(&conn);
-    let _act: TcpAction = act; // SendSyn
-    // Transmit SYN with seq = ISN = 0.
-    if !tx_segment(&dev, &gw_mac, &src_mac, dst_port, 0, 0, TCP_SYN, 0, 0) {
-        return 0;
-    }
-
-    // Await the SYN-ACK to our source port.
-    let synack: TcpRx = rx_tcp_segment(&dev, rxbuf, rxmax);
-    if !synack.is_tcp {
+    // TCP active open via the socket layer (SYN → SYN-ACK → ACK → ESTABLISHED).
+    tcp_socket_init(&g_sock, &dev, rxbuf, rxmax);
+    if tcp_socket_connect(&g_sock, &src_mac, &gw_mac, OUR_IP, GW_IP, OUR_PORT, dst_port) == 0 {
         return 1;
     }
-    // Feed flags + their seq to the state machine → Established, SendAck.
-    let r1: TcpAction = tcp_on_segment(&conn, synack.flags, synack.seq);
-    let _ignored1: TcpAction = r1;
-    if !tcp_flag_set(synack.flags, TCP_SYN) {
-        return 1;
-    }
-    if !tcp_flag_set(synack.flags, TCP_ACK) {
-        return 1;
-    }
-    // rcv_nxt is now their_seq+1 (set by tcp_on_segment). snd_nxt is 1 (past our SYN).
-    // Transmit the ACK that completes the handshake (seq=1, ack=rcv_nxt).
-    if !tx_segment(&dev, &gw_mac, &src_mac, dst_port, conn.snd_nxt, conn.rcv_nxt, TCP_ACK, 0, 0) {
-        return 1;
-    }
-    // ---- 3-way handshake complete: ESTABLISHED. ----
 
     // Transmit the GET as a PSH|ACK data segment.
     let req_addr: usize = (&g_req[0]) as usize;
-    let psh_ack: u16 = TCP_PSH | TCP_ACK;
-    if !tx_segment(&dev, &gw_mac, &src_mac, dst_port, conn.snd_nxt, conn.rcv_nxt, psh_ack, req_addr, g_req_len) {
+    if tcp_socket_send(&g_sock, req_addr, g_req_len) == 0xFFFF_FFFF {
         return 2;
     }
-    conn.snd_nxt = conn.snd_nxt + (g_req_len as u32); // data consumes payload_len
 
-    // Receive the response data segment(s); ACK each and accumulate the payload.
+    // Read the response: the socket layer drains multi-record segments and ACKs them.
     var got_data: bool = false;
-    var rounds: u32 = 0;
-    while rounds < 64 {
-        let seg: TcpRx = rx_tcp_segment(&dev, rxbuf, rxmax);
-        if !seg.is_tcp {
-            // No more segments arrived within the bounded wait.
-            if got_data {
-                return 4;
-            }
-            return 3;
+    while true {
+        var chunk: [512]u8 = uninit;
+        let chunk_addr: usize = (&chunk[0]) as usize;
+        let n: u32 = tcp_socket_recv(&g_sock, chunk_addr, 512);
+        if n == 0 {
+            break; // clean EOF (FIN)
         }
-        if seg.payload_len > 0 {
-            // In-order data: advance rcv_nxt and capture the bytes.
-            if seg.seq == conn.rcv_nxt {
-                resp_append(seg.payload_off, seg.payload_len);
-                conn.rcv_nxt = conn.rcv_nxt + (seg.payload_len as u32);
-                got_data = true;
-            }
-            // ACK whatever we have (cumulative).
-            let _tx: bool = tx_segment(&dev, &gw_mac, &src_mac, dst_port, conn.snd_nxt, conn.rcv_nxt, TCP_ACK, 0, 0);
+        if n == 0xFFFF_FFFF {
+            break; // timeout / no more segments
         }
-        // A FIN also consumes one sequence number; ACK it so the server can close.
-        if tcp_flag_set(seg.flags, TCP_FIN) {
-            let fin_seq: u32 = seg.seq + (seg.payload_len as u32); // FIN sits after the segment's data
-            if fin_seq == conn.rcv_nxt {
-                conn.rcv_nxt = conn.rcv_nxt + 1;
-                let _txf: bool = tx_segment(&dev, &gw_mac, &src_mac, dst_port, conn.snd_nxt, conn.rcv_nxt, TCP_ACK, 0, 0);
-            }
-            if got_data {
-                return 4;
-            }
-            return 3;
-        }
-        rounds = rounds + 1;
+        resp_append(chunk_addr, n as usize);
+        got_data = true;
     }
+
     if got_data {
         return 4;
     }
