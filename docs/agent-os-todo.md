@@ -12,12 +12,12 @@ groundwork before it.**
 
 ## D — Decisions that gate scope (do first, they're cheap)
 
-- [ ] **D.1 — Pick the near-term deployment lane.** Hypervisor-hosted (host owns
-  drivers; agent OS sees virtio+NIC+clock) vs bare-metal edge (own a driver set).
-  Recommend hypervisor-hosted first. *Output: one paragraph in the vision doc.*
-- [ ] **D.2 — Pick where inference runs (near term).** Remote API vs on-host accelerator
-  vs on-device. Recommend **remote first** → governance is mem/CPU/IPC only, and
-  accelerator accounting (`P0.6`) is deferred. *Output: a line in the vision doc.*
+- [x] **D.1 — Deployment lane: hypervisor-hosted first.** Host/hypervisor owns
+  hardware+drivers; the agent OS sees virtio + NIC + clock. (Bare-metal edge is a later
+  target with its own driver set.)
+- [x] **D.2 — Inference: remote-API first.** Governance is mem/CPU/IPC only for now;
+  **accelerator accounting (`P0.6`) is deferred** until an on-host/on-device lane is
+  taken.
 
 ---
 
@@ -27,7 +27,7 @@ groundwork before it.**
 > the host is the agent that never exits, so cleanup-on-exit doesn't defend against it —
 > `P0.5` (live reclaim) does.
 
-- [ ] **P0.1 — `ResourceAccount` primitive** *(first PR; pure unit, like slotmap/fdspace)*
+- [x] **P0.1 — `ResourceAccount` primitive** (DONE — b3012a4) *(first PR; pure unit, like slotmap/fdspace)*
   - **What:** a struct `{ used, limit }` with `charge(n) -> Result<void, MemError>`
     (fails `OverQuota` without charging when `used+n > limit`), `uncharge(n)`,
     `available()`, `reset()`. New enum `MemError { OverQuota }`.
@@ -45,7 +45,7 @@ groundwork before it.**
     its account is reset (released on exit).
   - **Depends on:** P0.1.
 
-- [ ] **P0.3 — Real reclamation in the allocator** *(load-bearing, not cosmetic)*
+- [x] **P0.3 — Real reclamation in the allocator** (DONE — 472bb1a) *(load-bearing, not cosmetic)*
   - **What:** `heap_free` is currently a no-op (`heap_free_noop`). Replace the bump heap
     with a freeing allocator (free-list / buddy) **or** add per-process page-list
     tracking so reclaim actually returns memory. Without this, accounting drifts and
@@ -77,7 +77,7 @@ groundwork before it.**
     reclaimed (ties to P0.2/P0.3).
   - **Depends on:** P0.2, P0.3, P0.4. **This closes the thesis threat.**
 
-- [ ] **P0.6 — Accelerator/compute accounting** *(conditional — only if D.2 ≠ remote)*
+- [~] **P0.6 — Accelerator/compute accounting** (DEFERRED per D.2 — remote inference first) *(conditional — only if D.2 ≠ remote)*
   - **What:** extend `ResourceAccount` to a compute/VRAM budget with its own reclaim;
     GPU/NPU accounting is a different beast than pages.
   - **Depends on:** D.2 (on-host/on-device inference), P0.1.
@@ -88,7 +88,7 @@ groundwork before it.**
 
 ### Observability / IPC provenance (co-design with the future fast path, P2.1)
 
-- [ ] **P1.1 — Off-critical-path IPC event ring**
+- [x] **P1.1 — Off-critical-path IPC event ring** (DONE — 043eceb)
   - **What:** a bounded event ring the kernel writes provenance into; a service drains
     it. Design for **async / sampling** so it doesn't sit on the IPC hot path.
   - **Where:** new `kernel/core/ipc_trace.mc` (or `kernel/lib/`), drained by a service.
