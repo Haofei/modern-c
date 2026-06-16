@@ -4713,6 +4713,9 @@ fn genericValueTypeAlias(node: anytype, enums: *const std.StringHashMap(EnumSumm
     if (std.mem.eql(u8, name, "UserPtr")) return .{ .address = .user_ptr };
     if (std.mem.eql(u8, name, "MmioPtr")) return .{ .address = .mmio_ptr };
     if (std.mem.eql(u8, name, "PhysPtr")) return .{ .address = .phys_ptr };
+    // `Secret<T>` is a transparent constant-time tag: the MIR verifier sees T, so
+    // T's arithmetic/bitwise operand rules apply unchanged (and lowering matches).
+    if (std.mem.eql(u8, name, "Secret") and node.args.len == 1) return valueTypeFromTypeAlias(node.args[0], enums, structs, packed_bits, aliases);
     if (aliases.get(name)) |resolved| return valueTypeFromTypeAlias(resolved, enums, structs, packed_bits, aliases);
     return namedValueTypeAlias(name, enums, structs, packed_bits);
 }

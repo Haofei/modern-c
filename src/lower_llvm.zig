@@ -2544,6 +2544,14 @@ const LlvmEmitter = struct {
 
     fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) !?[]const u8 {
         if (self.reflectionCallValue(call)) |value| return value;
+        // `declassify(x)` / `reveal(x)` strip the constant-time `Secret<T>` tag.
+        // Secret shares T's representation, so this is a value-identity pass-through.
+        if (isDeclassifyCall(call)) {
+            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const source_ty = self.exprType(call.args[0]) orelse expected_ty;
+            const value = try self.emitExpr(call.args[0], source_ty);
+            return try self.coerceExprValue(value, call.args[0], expected_ty);
+        }
         if (isAssumeNoaliasCall(call)) {
             if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
             const source_ty = self.exprType(call.args[0]) orelse expected_ty;
@@ -3130,7 +3138,11 @@ const LlvmEmitter = struct {
     }
 
     fn emitComparison(self: *LlvmEmitter, node: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
-        if (!typeNameEql(expected_ty, "bool")) return error.UnsupportedLlvmEmission;
+        // A comparison yields i1. The expected type is `bool` — or `Secret<bool>`
+        // when the verdict stays secret-tainted (constant-time `secret == k`);
+        // Secret is transparent, so the inner bool is what we lower against.
+        const want = secretInnerType(expected_ty) orelse expected_ty;
+        if (!typeNameEql(want, "bool")) return error.UnsupportedLlvmEmission;
         const operand_ty = self.exprType(node.left.*) orelse self.exprType(node.right.*) orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(operand_ty);
         const pred = if (self.isFloatTypeOf(operand_ty))
@@ -3799,6 +3811,9 @@ const LlvmEmitter = struct {
             .grouped => |inner| self.exprType(inner.*),
             .call => |call| if (isAssumeNoaliasCall(call))
                 if (call.args.len == 2) self.exprType(call.args[0]) else null
+            else if (isDeclassifyCall(call))
+                // declassify/reveal yields the Secret<T> argument's inner T.
+                if (call.args.len == 1) (if (self.exprType(call.args[0])) |ty| secretInnerType(self.resolveAliasType(ty)) orelse ty else null) else null
             else
                 self.callReturnType(call),
             .cast => |node| node.ty.*,
@@ -5515,6 +5530,26 @@ fn typeNameEql(ty: ast.TypeExpr, expected: []const u8) bool {
 
 
 
+fn secretInnerType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .generic => |node| if (std.mem.eql(u8, node.base.text, "Secret") and node.args.len == 1) node.args[0] else null,
+        .qualified => |node| secretInnerType(node.child.*),
+        else => null,
+    };
+}
+
+fn isDeclassifyCall(call: anytype) bool {
+    const name = switch (call.callee.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| switch (inner.kind) {
+            .ident => |ident| ident.text,
+            else => return false,
+        },
+        else => return false,
+    };
+    return std.mem.eql(u8, name, "declassify") or std.mem.eql(u8, name, "reveal");
+}
+
 fn isAssumeNoaliasCall(call: anytype) bool {
     return switch (call.callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "assume_noalias_unchecked") and isIdentNamed(member.base.*, "compiler"),
@@ -5783,7 +5818,12 @@ fn isPayloadDomainGenericName(name: []const u8) bool {
         std.mem.eql(u8, name, "sat") or
         std.mem.eql(u8, name, "serial") or
         std.mem.eql(u8, name, "counter") or
-        std.mem.eql(u8, name, "Duration");
+        std.mem.eql(u8, name, "Duration") or
+        // `Secret<T>` is a constant-time tag, fully transparent in codegen: it
+        // shares T's LLVM type, size, alignment, and (checked, not wrapping —
+        // it is not in isWrapDomainType/isSatDomainType) arithmetic. The
+        // secret-flow rules are enforced in sema.
+        std.mem.eql(u8, name, "Secret");
 }
 
 fn libraryScalarLlvmType(name: []const u8) ?[]const u8 {

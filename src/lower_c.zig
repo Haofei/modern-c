@@ -2140,6 +2140,8 @@ const CEmitter = struct {
                     std.mem.eql(u8, node.base.text, "sat") or
                     std.mem.eql(u8, node.base.text, "serial") or
                     std.mem.eql(u8, node.base.text, "counter") or
+                    // `Secret<T>` is a transparent constant-time tag: it emits as T.
+                    std.mem.eql(u8, node.base.text, "Secret") or
                     std.mem.eql(u8, node.base.text, "Duration")) and node.args.len == 1)
                 {
                     return self.appendType(out, node.args[0], style);
@@ -2222,6 +2224,15 @@ const CEmitter = struct {
                 return self.resolveAliasTypeDepth(target, depth + 1);
             },
             .qualified => |node| self.resolveAliasTypeDepth(node.child.*, depth),
+            // `Secret<T>` is a constant-time tag that is fully transparent at the
+            // lowering level: it shares T's representation and arithmetic. Peel it
+            // here so every downstream site (typeName, checked arithmetic, sizeof,
+            // C type emission) sees the underlying T. The secret-flow restrictions
+            // (no secret-dependent branch/index/deref) are enforced in sema.
+            .generic => |node| if (std.mem.eql(u8, node.base.text, "Secret") and node.args.len == 1)
+                self.resolveAliasTypeDepth(node.args[0], depth + 1)
+            else
+                ty,
             else => ty,
         };
     }
@@ -4877,6 +4888,7 @@ const CEmitter = struct {
                 if (try self.emitEnumRawCall(node, locals)) return;
                 if (try self.emitConversionCall(node, locals)) return;
                 if (try self.emitBitcastCall(node, locals)) return;
+                if (try self.emitDeclassifyCall(node, locals)) return;
                 if (try self.emitDmaCall(node, locals)) return;
                 if (try self.emitMmioMapCall(node, locals)) return;
                 if (try self.emitMaybeUninitAssumeInitCall(node, locals)) return;
@@ -5600,6 +5612,16 @@ const CEmitter = struct {
         try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(payload_ty, .typedef_name)});
         try self.emitExpr(call.args[0], locals);
         try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    // `declassify(x)` / `reveal(x)` strip the `Secret<T>` tag, yielding a plain T.
+    // Secret is already a transparent newtype over T in codegen, so the escape is a
+    // value-identity pass-through: emit the argument expression unchanged.
+    fn emitDeclassifyCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        if (!isDeclassifyCall(call)) return false;
+        if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedCEmission;
+        try self.emitExpr(call.args[0], locals);
         return true;
     }
 
@@ -12859,6 +12881,18 @@ fn isBitcastCall(call: anytype) bool {
 fn bitcastReturnTypeForCall(call: anytype) ?ast.TypeExpr {
     if (!isBitcastCall(call) or call.type_args.len != 1) return null;
     return call.type_args[0];
+}
+
+fn isDeclassifyCall(call: anytype) bool {
+    const name = switch (call.callee.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| switch (inner.kind) {
+            .ident => |ident| ident.text,
+            else => return false,
+        },
+        else => return false,
+    };
+    return std.mem.eql(u8, name, "declassify") or std.mem.eql(u8, name, "reveal");
 }
 
 

@@ -1595,7 +1595,8 @@ pub const Checker = struct {
         const enum_checked = self.checkEnumValueCompatibility(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(ty, initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(initializer, ctx, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion") else false;
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, source)) {
+        const secret_checked = target == .secret and self.checkSecretWrapInitializer(ty, initializer, ctx);
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, source)) {
             self.errorCode(initializer.span, "E_NO_IMPLICIT_CONVERSION", "global initializer requires an explicit conversion");
         }
         // A typed global initializer is static when it is either a C static
@@ -2423,7 +2424,9 @@ pub const Checker = struct {
             .loop => |loop| {
                 if (loop.iterable) |expr| {
                     const condition = self.checkExpr(expr, ctx);
-                    if (loop.kind == .@"while" and !isConditionType(condition)) {
+                    if (loop.kind == .@"while" and condition == .secret) {
+                        self.errorCode(expr.span, "E_SECRET_BRANCH", "secret value cannot drive a loop condition; this would leak it through control-flow timing");
+                    } else if (loop.kind == .@"while" and !isConditionType(condition)) {
                         self.errorCode(expr.span, "E_CONDITION_NOT_BOOL", "condition must be bool");
                     } else if (loop.kind == .@"for" and !isForIterableBase(condition)) {
                         self.errorCode(expr.span, "E_FOR_BASE_NOT_ARRAY_OR_SLICE", "for loops iterate over arrays and slices");
@@ -2654,9 +2657,10 @@ pub const Checker = struct {
                 const enum_checked = if (local.ty) |ty| self.checkEnumValueCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 const union_checked = if (local.ty) |ty| self.checkTaggedUnionConstructorCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
+                const secret_checked = if (local.ty) |ty| (kind == .secret and self.checkSecretWrapInitializer(ty, expr, ctx)) else false;
                 if (local.ty == null and untargeted_union_checked) {
                     // The diagnostic was emitted above; constructor calls need an explicit union target.
-                } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(kind, initializer)) {
+                } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(kind, initializer)) {
                     self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                 }
             }
@@ -2748,7 +2752,8 @@ pub const Checker = struct {
         const enum_checked = self.checkEnumValueCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion") else false;
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target_class, value_class)) {
+        const secret_checked = target_class == .secret and self.checkSecretWrapInitializer(target_ty, value, ctx);
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
     }
@@ -2879,6 +2884,11 @@ pub const Checker = struct {
                 if (isPointerArithmeticBinary(node.op) and (isSingleObjectPointerLike(left) or isSingleObjectPointerLike(right))) {
                     self.errorCode(expr.span, "E_POINTER_ARITH_SINGLE_OBJECT", "single-object pointers do not support arithmetic");
                 }
+                // Constant-time: offsetting a pointer by a secret is a secret-dependent
+                // memory address — the same cache leak as a secret array index.
+                if (isPointerArithmeticBinary(node.op) and (isPointerLike(left) or isPointerLike(right)) and (left == .secret or right == .secret)) {
+                    self.errorCode(expr.span, "E_SECRET_INDEX", "secret value cannot offset a pointer; a secret-dependent memory access leaks it through the cache");
+                }
                 if (isBitwiseBinary(node.op) and (isCheckedSigned(left) or isCheckedSigned(right))) {
                     self.errorCode(expr.span, "E_BITWISE_SIGNED_OPERAND", "bitwise operations are not defined on signed checked integers");
                 }
@@ -2906,7 +2916,14 @@ pub const Checker = struct {
                     }
                     return .bool;
                 }
-                if (isComparisonBinary(node.op)) return .bool;
+                if (isComparisonBinary(node.op)) {
+                    // A comparison touching a secret produces a *secret* bool, not a
+                    // plain bool: it must not be usable as a branch/switch condition
+                    // (that would leak the secret through control flow). Constant-time
+                    // code selects on it via bitmask/CMOV helpers after `declassify`.
+                    if (left == .secret or right == .secret) return .secret;
+                    return .bool;
+                }
                 // `bool & bool` (the unsafe C-compat case above) yields a bool.
                 if (isBitwiseBinary(node.op) and ctx.in_unsafe and left == .bool and right == .bool) return .bool;
                 return mergeArithmetic(left, right);
@@ -2969,6 +2986,7 @@ pub const Checker = struct {
                 const raw_many_offset_class = self.checkRawManyOffsetCall(expr.span, node, ctx);
                 const reflection_class = self.checkReflectionCall(expr.span, node, ctx);
                 if (reflection_class) |class| return class;
+                if (self.checkDeclassifyCall(expr.span, node, ctx)) |class| return class;
                 const const_get_class = self.checkConstGetCall(expr.span, node, ctx);
                 if (const_get_class) |class| return class;
                 if (trap_call) self.checkTrapKind(expr.span, node.args);
@@ -3103,7 +3121,12 @@ pub const Checker = struct {
                     self.errorCode(node.base.span, "E_INDEX_BASE_NOT_ARRAY_OR_SLICE", "indexing is defined only for arrays and slices");
                 }
                 const index_class = self.checkExpr(node.index.*, ctx);
-                if (!isIndexType(index_class)) {
+                // Constant-time: a secret value cannot be used as an array/slice
+                // index (nor, by the same token, a pointer offset). A secret-dependent
+                // memory access reveals the secret through the data-cache footprint.
+                if (index_class == .secret) {
+                    self.errorCode(node.index.span, "E_SECRET_INDEX", "secret value cannot be used as an array index; a secret-dependent memory access leaks it through the cache — declassify/reveal it first (unsafe) or use a constant-time table scan");
+                } else if (!isIndexType(index_class)) {
                     self.errorCode(node.index.span, "E_INDEX_NOT_USIZE", "array and slice indices must be checked usize");
                 }
                 if (indexResultType(node, ctx)) |ty| return classifyTypeCtx(ty, ctx);
@@ -3832,6 +3855,35 @@ pub const Checker = struct {
         return target;
     }
 
+    // `declassify(secret)` / `reveal(secret)` — the controlled escape from the
+    // constant-time discipline. It takes a `Secret<T>` and yields a plain T, so
+    // its result is no longer secret-tainted and CAN feed branches/indices. Because
+    // that defeats the leak protection, it is only allowed inside `unsafe` (the
+    // caller asserts the timing channel is acceptable here). Returns the inner-T
+    // class so taint stops propagating; null if this isn't a declassify call.
+    fn checkDeclassifyCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) ?TypeClass {
+        if (!isDeclassifyCallName(call.callee.*)) return null;
+        if (call.type_args.len != 0 or call.args.len != 1) {
+            self.errorCode(span, "E_CALL_ARG_COUNT", "declassify/reveal takes exactly one secret value argument");
+            return .unknown;
+        }
+        if (!ctx.in_unsafe) {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "declassify/reveal escapes the constant-time discipline and requires unsafe");
+        }
+        const arg = call.args[0];
+        const arg_class = self.checkExpr(arg, ctx);
+        if (arg_class != .secret) {
+            self.errorCode(arg.span, "E_DECLASSIFY_NOT_SECRET", "declassify/reveal applies only to a Secret<T> value");
+            return .unknown;
+        }
+        // Result is the underlying T, classified from Secret<T>'s payload type.
+        const arg_ty = exprResultType(arg, ctx) orelse exprStorageType(arg, ctx);
+        if (arg_ty) |ty| {
+            if (secretPayloadType(resolveAliasType(ty, ctx))) |inner| return classifyTypeCtx(inner, ctx);
+        }
+        return .unknown;
+    }
+
     fn checkMmioReadOrdering(self: *Checker, expr: ast.Expr) void {
         const ordering = mmioOrderingName(expr) orelse {
             self.errorCode(expr.span, "E_MMIO_ORDERING", "MMIO read ordering must be .relaxed or .acquire");
@@ -4193,6 +4245,21 @@ pub const Checker = struct {
             }
             return true;
         }
+        // `Secret<intT>` accepts an in-range integer literal, range-checked against
+        // the inner integer type (a literal is the natural way to introduce a key
+        // byte / constant secret).
+        if (target == .secret) {
+            const inner = secretPayloadType(resolveAliasType(target_ty, ctx)) orelse return false;
+            const bounds = checkedIntBounds(classifyTypeCtx(inner, ctx)) orelse return false;
+            if (value.negative) {
+                if (!bounds.signed or value.magnitude > bounds.min_abs) {
+                    self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
+                }
+            } else if (value.magnitude > bounds.max) {
+                self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
+            }
+            return true;
+        }
         const bounds = checkedIntBounds(target) orelse return false;
         if (value.negative) {
             if (!bounds.signed or value.magnitude > bounds.min_abs) {
@@ -4203,6 +4270,23 @@ pub const Checker = struct {
         if (value.magnitude > bounds.max) {
             self.errorCode(expr.span, "E_INTEGER_LITERAL_OUT_OF_RANGE", "integer literal is not representable in the annotated type");
         }
+        return true;
+    }
+
+    // A plain value of T (or another Secret<T>) may initialize/assign a Secret<T>:
+    // classifying a value as secret is a non-narrowing tag, range-checked by the
+    // inner type's own rules. Returns true if it handled the initializer (so the
+    // caller skips the generic E_NO_IMPLICIT_CONVERSION gate).
+    fn checkSecretWrapInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
+        const inner = secretPayloadType(resolveAliasType(target_ty, ctx)) orelse return false;
+        const value_class = self.checkExpr(expr, ctx);
+        // Already a secret (Secret<T> -> Secret<T>) or the neutral classes: accept.
+        if (value_class == .secret or isDiagnosticNeutralOperand(value_class)) return true;
+        // An integer literal is handled by checkIntegerLiteralInitializer; defer.
+        if (integerLiteralValue(expr) != null) return false;
+        const inner_class = classifyTypeCtx(inner, ctx);
+        if (value_class == inner_class) return true;
+        self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "Secret<T> can only wrap a value of its underlying type T");
         return true;
     }
 
@@ -4445,7 +4529,8 @@ pub const Checker = struct {
         const enum_checked = self.checkEnumValueCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type") else false;
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, returned)) {
+        const secret_checked = target == .secret and self.checkSecretWrapInitializer(target_ty, expr, ctx);
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
@@ -4514,7 +4599,8 @@ pub const Checker = struct {
         // vs DeviceBuffer) are not interchangeable just because they classify the
         // same. (Struct literals are target-typed and handled above.)
         if (self.checkNamedStructMismatch(target_ty, arg, ctx)) return;
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(target, source)) {
+        const secret_checked = target == .secret and self.checkSecretWrapInitializer(target_ty, arg, ctx);
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         }
     }
@@ -4981,6 +5067,13 @@ pub const Checker = struct {
 
     fn checkSwitch(self: *Checker, node: ast.Switch, ctx: Context) void {
         const subject_class = self.checkExpr(node.subject, ctx);
+        // Constant-time: a secret value must never steer control flow. Both `if`
+        // (desugared to a bool `switch`) and `switch` route through here, so this
+        // one check forbids `if (secret …)` and `switch (secret) { … }` alike —
+        // including a secret *bool* produced by `secret == k`. Reveal it first.
+        if (subject_class == .secret) {
+            self.errorCode(node.subject.span, "E_SECRET_BRANCH", "secret value cannot drive a branch or switch; this would leak it through control-flow timing — use declassify/reveal (unsafe) or a constant-time select");
+        }
         const subject_ty = exprResultType(node.subject, ctx);
         const subject_enum = if (subject_ty) |ty| enumInfoForType(ty, ctx) else null;
         const subject_union = if (subject_ty) |ty| unionInfoForType(ty, ctx) else null;
@@ -4996,7 +5089,11 @@ pub const Checker = struct {
         defer literal_cases_seen.deinit();
         self.checkSwitchWildcardOrdering(node);
         for (node.arms) |arm| {
-            self.checkSwitchArmPatterns(arm.patterns, subject_class, subject_ty, ctx);
+            // A secret subject is already rejected with E_SECRET_BRANCH above;
+            // skip per-pattern type checks so the dispositive error isn't buried
+            // under spurious pattern/subject mismatches (the bool patterns of a
+            // desugared `if secret` would otherwise mismatch the secret class).
+            if (subject_class != .secret) self.checkSwitchArmPatterns(arm.patterns, subject_class, subject_ty, ctx);
             if (subject_enum) |enum_info| {
                 self.checkDuplicateSwitchEnumCases(arm.patterns, enum_info, &enum_cases_seen);
             }
@@ -5455,6 +5552,11 @@ const TypeClass = enum {
     user_ptr,
     mmio_ptr,
     phys_ptr,
+    // `Secret<T>` — a constant-time key/crypto-material tag. Carries T's value
+    // and arithmetic but FORBIDS secret-dependent control flow and memory
+    // access (branch/switch condition, array index, pointer offset, deref) so a
+    // secret value can never steer a timing- or cache-observable decision.
+    secret,
     atomic,
     dma_buf,
     result,
@@ -5671,11 +5773,11 @@ fn isDiagnosticNeutralOperand(kind: TypeClass) bool {
 }
 
 fn isArithmeticOperand(kind: TypeClass) bool {
-    return isDiagnosticNeutralOperand(kind) or isIntegerLike(kind) or isArithmeticDomain(kind) or isFloatish(kind);
+    return isDiagnosticNeutralOperand(kind) or isIntegerLike(kind) or isArithmeticDomain(kind) or isFloatish(kind) or kind == .secret;
 }
 
 fn isBitwiseOperand(kind: TypeClass) bool {
-    return isDiagnosticNeutralOperand(kind) or isCheckedUnsigned(kind) or kind == .int_literal or kind == .wrap;
+    return isDiagnosticNeutralOperand(kind) or isCheckedUnsigned(kind) or kind == .int_literal or kind == .wrap or kind == .secret;
 }
 
 fn isOrderedComparisonOperand(kind: TypeClass) bool {
@@ -5688,6 +5790,7 @@ fn isEqualityOperand(kind: TypeClass) bool {
         isArithmeticDomain(kind) or
         isFloatish(kind) or
         kind == .bool or
+        kind == .secret or
         isPointerLike(kind) or
         kind == .null_literal;
 }
@@ -5695,6 +5798,11 @@ fn isEqualityOperand(kind: TypeClass) bool {
 fn equalityOperandsCompatible(left: TypeClass, right: TypeClass) bool {
     if (!isEqualityOperand(left) or !isEqualityOperand(right)) return false;
     if (isDiagnosticNeutralOperand(left) or isDiagnosticNeutralOperand(right)) return true;
+    // A secret may be compared against another secret or an integer literal; the
+    // result is itself secret (see checkExpr) so it cannot reach a branch.
+    if (left == .secret or right == .secret) {
+        return (left == .secret or isIntegerLike(left)) and (right == .secret or isIntegerLike(right));
+    }
     if (left == .null_literal or right == .null_literal) return isPointerLike(left) or isPointerLike(right);
     if (left == .bool or right == .bool) return left == .bool and right == .bool;
     if (isPointerLike(left) or isPointerLike(right)) return isPointerLike(left) and isPointerLike(right);
@@ -5731,6 +5839,10 @@ fn isNoTrapArithmeticDomainOp(op: ast.BinaryOp, left: TypeClass, right: TypeClas
 }
 
 fn mergeArithmetic(left: TypeClass, right: TypeClass) TypeClass {
+    // Secret taint propagates: any operation involving a secret yields a secret,
+    // so derived values stay constant-time-constrained (no declassification by
+    // arithmetic). `declassify`/`reveal` (behind unsafe) is the only escape.
+    if (left == .secret or right == .secret) return .secret;
     if (left == .f64 or right == .f64) return .f64;
     if (left == .f32 or right == .f32) return .f32;
     if (left == .float_literal or right == .float_literal) return .float_literal;
@@ -5769,7 +5881,7 @@ fn classifyTypeCtx(ty: ast.TypeExpr, ctx: Context) TypeClass {
 // never made pending (avoids false positives on the `buf[i] = …` / `s.f = …` idiom).
 fn diIsScalarType(ty: ast.TypeExpr, ctx: Context) bool {
     return switch (classifyTypeCtx(ty, ctx)) {
-        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_usize, .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_isize, .wrap, .sat, .serial, .counter, .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer, .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr, .fn_pointer, .bool, .f32, .f64, .duration, .order => true,
+        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_usize, .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_isize, .wrap, .sat, .serial, .counter, .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer, .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr, .secret, .fn_pointer, .bool, .f32, .f64, .duration, .order => true,
         // Not tracked: array, slice, atomic, dma_buf, result, void, never, the
         // literal/unknown classes (structs/enums/unions/generics resolve to .unknown).
         else => false,
@@ -6175,6 +6287,7 @@ fn classifyGenericTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "UserPtr")) return .user_ptr;
     if (std.mem.eql(u8, name, "MmioPtr")) return .mmio_ptr;
     if (std.mem.eql(u8, name, "PhysPtr")) return .phys_ptr;
+    if (std.mem.eql(u8, name, "Secret")) return .secret;
     if (std.mem.eql(u8, name, "wrap")) return .wrap;
     if (std.mem.eql(u8, name, "sat")) return .sat;
     if (std.mem.eql(u8, name, "serial")) return .serial;
@@ -7589,6 +7702,24 @@ fn isBitcastCallName(expr: ast.Expr) bool {
         .ident => |ident| std.mem.eql(u8, ident.text, "bitcast"),
         .grouped => |inner| isBitcastCallName(inner.*),
         else => false,
+    };
+}
+
+fn isDeclassifyCallName(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, "declassify") or std.mem.eql(u8, ident.text, "reveal"),
+        .grouped => |inner| isDeclassifyCallName(inner.*),
+        else => false,
+    };
+}
+
+// The payload type T of a `Secret<T>` type expression, or null if `ty` is not a
+// `Secret<...>`. (`ty` should already be alias-resolved.)
+fn secretPayloadType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .generic => |node| if (std.mem.eql(u8, node.base.text, "Secret") and node.args.len == 1) node.args[0] else null,
+        .qualified => |node| secretPayloadType(node.child.*),
+        else => null,
     };
 }
 
