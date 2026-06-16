@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# BearSSL freestanding in-kernel crypto smoke test (Phase 1 TLS de-risking).
+#
+# Compiles every BearSSL src/**/*.c freestanding for riscv64, links them with the
+# smoke-test runtime (kernel/drivers/virtio/bearssl_smoke_runtime.c) into a
+# bare-metal `virt` image, and boots it under qemu-system-riscv64 WITH a
+# virtio-rng-device. The guest:
+#   1. computes SHA256("abc") with BearSSL and checks it == the known vector,
+#   2. pulls two live reads from the virtio-rng device and asserts they are
+#      non-zero AND differ,
+#   3. prints the build epoch threaded in via -D MC_BUILD_EPOCH.
+# PASS requires all three UART proofs: SHA256-OK, RNG-OK, BEARSSL-SMOKE-OK.
+#
+# No TLS handshake is attempted here -- this only proves BearSSL builds/links/runs
+# freestanding and that we have a real entropy source.
+#
+# Usage: tools/tls/bearssl-smoke-test.sh <path-to-mcc> [c|llvm]
+# Skips (exit 0) when the riscv toolchain or QEMU is unavailable.
+set -euo pipefail
+
+MCC="${1:-zig-out/bin/mcc}"
+BACKEND="${2:-c}"
+CLANG="${CLANG:-clang}"
+LLD="${LLD:-ld.lld}"
+LLC="${LLC:-llc}"
+QEMU="${QEMU:-qemu-system-riscv64}"
+
+source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
+HERE="$(kernel_boot_repo_root)"
+RUNTIME="$HERE/kernel/drivers/virtio/bearssl_smoke_runtime.c"
+LDSCRIPT="$HERE/tests/qemu/virt.ld"
+BEARSSL="$HERE/third_party/bearssl"
+TEST_NAME="bearssl-smoke-test"
+
+kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
+
+WORK="$(mktemp -d)"
+cleanup() { rm -rf "$WORK"; }
+trap cleanup EXIT
+
+EPOCH="$(date +%s)"
+
+# Freestanding riscv64 flags. BR_USE_*=0 keeps BearSSL from pulling in any OS
+# time/entropy source -- we provide our own (virtio-rng + the clock seam).
+CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
+        -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O2 -fno-builtin
+        -DBR_USE_UNIX_TIME=0 -DBR_USE_WIN32_TIME=0
+        -DBR_USE_URANDOM=0 -DBR_USE_GETENTROPY=0
+        -I"$BEARSSL/freestanding-shim" -I"$BEARSSL/inc" -I"$BEARSSL/src")
+
+echo "Compiling BearSSL freestanding for riscv64..."
+BEARSSL_OBJS=()
+NBEAR=0
+mkdir -p "$WORK/bearssl"
+while IFS= read -r f; do
+    obj="$WORK/bearssl/$(echo "$f" | sed 's#[/.]#_#g').o"
+    "$CLANG" "${CFLAGS[@]}" -c "$f" -o "$obj"
+    BEARSSL_OBJS+=("$obj")
+    NBEAR=$((NBEAR+1))
+done < <(find "$BEARSSL/src" -name '*.c' | sort)
+echo "Compiled $NBEAR BearSSL .c files."
+
+# The runtime carries the entry point, virtio-rng driver, SHA-256 check and the
+# clock seam; pass the build epoch in.
+"$CLANG" "${CFLAGS[@]}" -DMC_BUILD_EPOCH="$EPOCH" -c "$RUNTIME" -o "$WORK/runtime.o"
+
+"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "${BEARSSL_OBJS[@]}" -o "$WORK/smoke.elf"
+
+# Rough .text size added by BearSSL (for the report).
+TEXT_SIZE="$("$CLANG" -print-prog-name=llvm-size >/dev/null 2>&1; command -v llvm-size >/dev/null 2>&1 && llvm-size "$WORK/smoke.elf" 2>/dev/null | tail -1 | awk '{print $1}' || echo '?')"
+
+# Boot under QEMU virt WITH a virtio-rng device. The rng appears as another
+# virtio-mmio slot (device-id 4); the runtime scans for it.
+OUT="$(timeout 40 "$QEMU" -machine virt -bios none -nographic \
+        -global virtio-mmio.force-legacy=false \
+        -device virtio-rng-device \
+        -kernel "$WORK/smoke.elf" 2>/dev/null || true)"
+
+echo "--- smoke UART output ---"
+printf '%s\n' "$OUT"
+echo "-------------------------"
+echo "build epoch passed: $EPOCH"
+echo ".text size of linked ELF: $TEXT_SIZE bytes"
+
+SHA_OK=0; RNG_OK=0; SMOKE_OK=0
+printf '%s' "$OUT" | grep -q 'SHA256-OK'       && SHA_OK=1
+printf '%s' "$OUT" | grep -q 'RNG-OK'          && RNG_OK=1
+printf '%s' "$OUT" | grep -q 'BEARSSL-SMOKE-OK' && SMOKE_OK=1
+
+if [ "$SHA_OK" = 1 ] && [ "$RNG_OK" = 1 ] && [ "$SMOKE_OK" = 1 ]; then
+    echo "PASS: $TEST_NAME -- BearSSL SHA-256 vector verified in-kernel + live virtio-rng entropy under QEMU."
+    exit 0
+fi
+
+echo "FAIL: $TEST_NAME -- SHA256-OK=$SHA_OK RNG-OK=$RNG_OK BEARSSL-SMOKE-OK=$SMOKE_OK"
+exit 1

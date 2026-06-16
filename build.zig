@@ -1839,6 +1839,16 @@ pub fn build(b: *std.Build) void {
     const llvm_http_get_test_step = b.step("llvm-http-get-test", "Active-open a real LLVM-lowered TCP connection and HTTP GET a live server over virtio-net under QEMU");
     llvm_http_get_test_step.dependOn(&llvm_http_get_test_cmd.step);
 
+    const bearssl_smoke_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/tls/bearssl-smoke-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    bearssl_smoke_test_cmd.step.dependOn(b.getInstallStep());
+    const bearssl_smoke_test_step = b.step("bearssl-smoke-test", "Compute a SHA-256 vector via freestanding BearSSL and pull live virtio-rng entropy in a bare-metal riscv64 kernel under QEMU (Phase 1 TLS de-risking)");
+    bearssl_smoke_test_step.dependOn(&bearssl_smoke_test_cmd.step);
+
     const dns_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/net/dns-test.sh",
