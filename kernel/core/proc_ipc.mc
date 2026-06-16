@@ -26,6 +26,14 @@ import "kernel/core/ipc_trace.mc";
 global g_ipc_trace: IpcTrace;
 global g_ipc_provenance_enabled: bool = true;
 
+// Sampling lever: record only 1 of every `g_ipc_sample` messages. n=1 records every message;
+// n=0 records none (equivalent to disabled). `g_ipc_sample_counter` counts candidate messages
+// (those seen while enabled) so the selection is deterministic and testable: a message is
+// recorded when (counter % n) == 0. This keeps provenance cheap on a hot channel — observe a
+// representative fraction instead of every send — without changing delivery behavior.
+global g_ipc_sample: u32 = 1;
+global g_ipc_sample_counter: u32 = 0;
+
 // Initialize (or reset) the IPC provenance ring. Call once after proc_table_init.
 export fn ipc_provenance_init() -> void {
     ipc_trace_init(&g_ipc_trace);
@@ -43,11 +51,30 @@ export fn ipc_provenance_set_enabled(on: bool) -> void {
     g_ipc_provenance_enabled = on;
 }
 
-// Record one provenance event for a successful delivery, unless provenance is disabled. The
+// Sampling lever for a hot channel: record only 1 of every `n` messages. n=1 records every
+// message; n=0 records none (equivalent to disabled). Resets the deterministic sample counter
+// so the next selected message is the very next candidate (counter restarts at 0). This is the
+// fast-path knob — turn the sample rate down to keep provenance cheap when a channel is hot.
+export fn ipc_provenance_set_sample(n: u32) -> void {
+    g_ipc_sample = n;
+    g_ipc_sample_counter = 0;
+}
+
+// Record one provenance event for a successful delivery, subject to the enable toggle AND the
+// sample lever. Disabled (or sample n=0) records nothing. Otherwise the candidate counter is
+// advanced and the message is recorded only when (counter % n) == 0 — i.e. 1 of every n. The
 // Message carries no explicit payload length (its a0/a1/a2 are fixed inline words), so `size`
-// is 0. Observe-only: the caller's delivery result is unaffected.
+// is 0. Observe-only: the caller's delivery result is unaffected by recording or by sampling.
 fn ipc_provenance_emit(from: u32, to: u32, msg: *Message) -> void {
-    if g_ipc_provenance_enabled {
+    if !g_ipc_provenance_enabled {
+        return;
+    }
+    if g_ipc_sample == 0 {
+        return; // sampling off — equivalent to disabled
+    }
+    let selected: bool = (g_ipc_sample_counter % g_ipc_sample) == 0;
+    g_ipc_sample_counter = g_ipc_sample_counter + 1;
+    if selected {
         ipc_trace_record(&g_ipc_trace, from, to, msg.tag, 0); // seq is observe-only; discard
     }
 }
