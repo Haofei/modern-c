@@ -40,7 +40,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   manual `move` overrides) behind an explicit greppable marker; the *safe* subset is provably free
   of them. **Where:** spec + sema. **Test:** safe code contains zero unsafe ops; an audited list of
   unsafe sites in `kernel/`. **Prior art:** Rust `unsafe` + RustBelt; Zig. **Depends:** none.
-- [ ] **S0.3 — Pin down inherited C UB in the C backend** *(PR)* — a UB-class matrix (signed
+- [x] **S0.3 — Pin down inherited C UB in the C backend** *(DONE `ef14ee4`; `docs/c-ub-matrix.md` + `-fno-strict-aliasing`/`-fwrapv`/`-fno-delete-null-pointer-checks` on emitted C + 9 UBSan-clean fixtures; only `-fno-strict-aliasing` is load-bearing — MMIO type-pun)* — a UB-class matrix (signed
   overflow, strict aliasing, OOB, shift≥width, INT_MIN/-1, null deref, uninit, eval order): for
   each, "MC forbids / checks+traps / defines away." Emit with `-fno-strict-aliasing`/`-fwrapv`
   where checks don't cover it. **Where:** `src/lower_c.zig` + `tools/toolchain/mcc-cc.sh`. **Test:**
@@ -82,7 +82,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   stacks, redzone the kernel heap, optional canaries. **Where:** `kernel/core/heap.mc` + stack
   setup. **Test:** stack/heap-overflow demo traps. **Prior art:** Linux stackguard, glibc canaries.
   **Depends:** none.
-- [ ] **D2.5 — Explicit safe vs release profile** *(PR)* — safe keeps all trap checks; release elides
+- [x] **D2.5 — Explicit safe vs release profile** *(DONE `efbe0f4`; `--checks=all` (safe, default) / `--checks=elide-proven` (release); formalizes existing proven-dead elision; `safe-release-parity` gate proves functional equivalence)* — safe keeps all trap checks; release elides
   proven-dead ones (machinery exists). Kernel default = safe. **Where:** `src/mir.zig` + profile +
   `build.zig`. **Test:** parity gate that safe & release agree functionally. **Prior art:** Zig
   ReleaseSafe/ReleaseFast. **Depends:** none.
@@ -188,7 +188,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   drift is a **compile error**. Would have caught the Virtq bug. **Where:** the C emit + `*_runtime.c`
   headers. **Test:** deliberately drift a struct → build fails; regression fixture. **Prior art:**
   `cbindgen`, Rust `#[repr(C)]` layout tests. **Depends:** none.
-- [ ] **A2 — Single source of truth for shared structs** *(PR)* — generate the C mirror from the MC
+- [x] **A2 — Single source of truth for shared structs** *(DONE `175684f`; `mcc emit-c-struct` generates the full C struct from MC; the virtqueue structs are no longer hand-written — `grep "typedef struct Virtq"` finds only the generated header → drift structurally impossible)* — generate the C mirror from the MC
   struct (or vice-versa) — drift becomes impossible. **Where:** a header-codegen step. **Test:**
   generated header matches; no hand-edit path. **Prior art:** `bindgen`. **Depends:** A1.
 
