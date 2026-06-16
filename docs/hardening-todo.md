@@ -66,7 +66,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## Tier 2 — Cheap dynamic sanitizers in the QEMU build (best near-term ROI)
 
-- [ ] **D2.1 — KASAN-style shadow memory** *(multi-PR) — START HERE for dynamic* — instrument
+- [x] **D2.1 — KASAN-style shadow memory** *(DONE `9078889`; opt-in `--checks=ksan`; 1:8 shadow, `raw.load`/`raw.store` instrumented + heap poison-on-free; QEMU demo catches UAF/OOB on ACCESS, both backends. Coverage: heap-tracked raw deref only — array-index/struct-field/stack/MMIO accesses not yet shadowed)* — instrument
   loads/stores against a shadow map; poison freed heap (`kernel/core/heap.mc` free path), redzone
   allocations, trap on poisoned access. **Where:** an emit profile/instrument pass + shadow runtime
   + heap hooks. **Test:** a QEMU boot demo triggering UAF + OOB → trap → `KASAN-OK` (mirror the
@@ -100,7 +100,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   branches the fixtures+fuzzer hit, to surface untested divergence-prone paths (the overlay bug
   lived in an uncovered branch). **Test:** a coverage gate. **Prior art:** lcov/kcov, mutation
   testing. **Depends:** none.
-- [ ] **V3.3 — Memory-op metamorphic checks** *(PR)* — semantics-preserving transforms over
+- [x] **V3.3 — Memory-op metamorphic checks** *(DONE `ac3fb0b`; field-reorder@offset, overlay read recompose + position-swap, sizeof/offset identities, slice/index equivalence; fuzz-metamorphic PASS 600 seeds — no divergence)* — semantics-preserving transforms over
   layout/offset/overlay/slice ops must not change results. **Where:** `fuzz-metamorphic`. **Depends:**
   the offset/overlay generator surface (added).
 - [ ] **V3.4 — Machine-checked soundness of a core subset** *(research)* — formal semantics + a proof
@@ -155,7 +155,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## P — Untrusted-input parsing (we now parse attacker bytes: TCP/IP/DNS/TLS, ELF, fs)
 
-- [ ] **P1 — Total, bounds-checked parser primitives** *(multi-PR)* — a parser API (over
+- [x] **P1 — Total, bounds-checked parser primitives** *(DONE `33b3e82`; `std/bytes.mc` reads were already bounds-checked — added non-trapping `br_try_*` + adopted in DNS/TCP parsers; `parser-fuzz` oracle: 4.82M malformed parses, 0 over-reads, teeth verified)* — a parser API (over
   `std/bytes.mc` `ByteReader`) where every read is bounds-checked and a parser is a **total
   function** over a finite buffer (no read past end, no infinite loop). Adopt in `kernel/net/*`,
   `kernel/core/elf.mc`, fs decode. **Where:** `std/bytes.mc` + the parsers. **Test:** a **parser fuzz
