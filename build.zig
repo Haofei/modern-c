@@ -1143,6 +1143,14 @@ pub fn build(b: *std.Build) void {
     mask_test_step.dependOn(&mask_test_cmd.step);
 
 
+    const rights_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "rights-test",
+    });
+    rights_test_cmd.step.dependOn(b.getInstallStep());
+    const rights_test_step = b.step("rights-test", "K1 unforgeable+monotonic Rights/RCap (narrow-only attenuation, parent⊇child law)");
+    rights_test_step.dependOn(&rights_test_cmd.step);
+
+
     const mmio_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mmio-test",
     });
@@ -2763,6 +2771,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_x86_qemu_test_cmd.step);
     m0_step.dependOn(&slotmap_test_cmd.step);
     m0_step.dependOn(&mask_test_cmd.step);
+    m0_step.dependOn(&rights_test_cmd.step);
     m0_step.dependOn(&mmio_test_cmd.step);
     m0_step.dependOn(&synclock_test_cmd.step);
     m0_step.dependOn(&ipc_result_test_cmd.step);
