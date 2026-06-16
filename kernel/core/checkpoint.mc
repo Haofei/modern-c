@@ -106,3 +106,40 @@ export fn checkpoint_restore(t: *mut ProcTable, store: *mut BlobStore, id: u32, 
 
     return ok(slot);
 }
+
+// Migrate an agent from one ProcTable to another. A single-host stand-in for moving an agent between
+// nodes: the two tables model two nodes, the durable BlobStore is the transport. migrate is exactly
+// "checkpoint on the source, restore on the destination" composed into one atomic-ish step:
+//   1. checkpoint_save(src_t, src_slot, ...) serializes the source agent's { fd-space, account }.
+//   2. checkpoint_restore(dst_t, ...) spawns a fresh slot on the destination carrying that state.
+//   3. ONLY on a successful restore is the source vacated — proc_exit'd on src_t (slot -> Zombie,
+//      fds released, account reset). Returns the NEW slot on dst_t.
+//
+// Atomicity contract: if step 1 or step 2 fails, the source agent is left fully intact and running
+// (NOT vacated), and migrate returns the underlying error — so a failed migration loses nothing and
+// the caller can retry. The source is touched only once the destination already holds the restored
+// agent, so at no point is the agent absent from both tables. (Single-threaded model: there is no
+// window where another observer sees neither copy.)
+export fn migrate(src_t: *mut ProcTable, src_slot: usize, dst_t: *mut ProcTable, store: *mut BlobStore, id: u32, stack_top: usize, entry: fn() -> void) -> Result<usize, CkptError> {
+    // 1. Checkpoint the source agent into the durable blob. On failure the source is untouched.
+    switch checkpoint_save(src_t, src_slot, store, id) {
+        ok(n) => {}
+        err(e) => { return err(e); }
+    }
+
+    // 2. Restore into a fresh slot on the destination table. On failure the source is NOT vacated
+    //    (the agent stays live on src_t), so a failed restore loses nothing.
+    var dst_slot: usize = 0;
+    switch checkpoint_restore(dst_t, store, id, stack_top, entry) {
+        ok(slot) => { dst_slot = slot; }
+        err(e) => { return err(e); }
+    }
+
+    // 3. Restore succeeded — vacate the source. proc_exit retires t.current, so point src_t.current
+    //    at the migrated slot for the duration of the exit, then leave current at the bootstrap slot.
+    src_t.current = src_slot;
+    proc_exit(src_t, 0);          // src_slot -> Zombie; its fds released, account reset
+    src_t.current = 0;            // back to the bootstrap slot (scheduler stub does not restore this)
+
+    return ok(dst_slot);
+}
