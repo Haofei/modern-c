@@ -46,9 +46,11 @@ echo "--- kernel UART output ---"
 printf '%s\n' "$OUT"
 echo "--------------------------"
 
+EPOCH_LINE="$(printf '%s' "$OUT" | grep -oE 'EPOCH=[0-9]+' | head -1)"
 if printf '%s' "$OUT" | grep -q "RTC-OK"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend wall-clock: read the goldfish-RTC MMIO (non-zero host time) under QEMU"
+    echo "PASS: $TEST_NAME — $BACKEND backend wall-clock: read the goldfish-RTC MMIO under QEMU;"
+    echo "  full 64-bit epoch via kernel/core/time.mc is a plausible live 'now' ($EPOCH_LINE)"
     exit 0
 fi
-echo "FAIL: $TEST_NAME — expected RTC-OK"
+echo "FAIL: $TEST_NAME — expected RTC-OK (plausible 2026 epoch); got: ${EPOCH_LINE:-<none>}"
 exit 1

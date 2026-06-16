@@ -56,7 +56,11 @@
 #endif
 
 // ------------------------------------------------------------------- clock seam
+// PRIMARY wall-clock: the real goldfish-RTC, read via the kernel/core/time.mc seam
+// (linked in as time.o). mc_build_epoch is now only a documented FALLBACK for when
+// the RTC is absent/unpopulated (reads back an implausible epoch).
 const uint64_t mc_build_epoch = (uint64_t)MC_BUILD_EPOCH;
+uint64_t time_now_epoch(void); // kernel/core/time.mc — real wall-clock, seconds
 
 #define CLINT_MTIME 0x0200BFF8UL
 uint64_t mc_read_ticks(void) { return *(volatile uint64_t *)CLINT_MTIME; }
@@ -267,8 +271,16 @@ __attribute__((used)) void test_main(void) {
     // Inject the live entropy BEFORE reset (else the engine has no PRNG).
     br_ssl_engine_inject_entropy(&cc.eng, seed, got);
 
-    // Set the X.509 validation time from the build epoch (BearSSL day/second convention).
-    uint64_t epoch = mc_build_epoch;
+    // Set the X.509 validation time from the REAL goldfish-RTC wall clock (PRIMARY).
+    // Fall back to the build epoch only if the RTC reads back an implausible "now"
+    // (device absent/unpopulated). BearSSL day/second convention.
+    uint64_t epoch = time_now_epoch();
+    if (epoch < 1700000000ull || epoch >= 2000000000ull) {
+        puts_("RTC-IMPLAUSIBLE-USING-BUILD-EPOCH\n");
+        epoch = mc_build_epoch;
+    } else {
+        puts_("X509-TIME-FROM-RTC="); puthex(epoch); putc_('\n');
+    }
     uint32_t days = (uint32_t)(epoch / 86400u) + 719528u;
     uint32_t secs = (uint32_t)(epoch % 86400u);
     br_x509_minimal_set_time(&xc, days, secs);

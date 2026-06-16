@@ -1239,7 +1239,7 @@ pub fn build(b: *std.Build) void {
 
 
     rtc_test_cmd.step.dependOn(b.getInstallStep());
-    const rtc_test_step = b.step("rtc-test", "Wall-clock via goldfish-RTC");
+    const rtc_test_step = b.step("rtc-test", "Wall-clock via goldfish-RTC: read the 64-bit epoch and assert a plausible live 'now'");
     rtc_test_step.dependOn(&rtc_test_cmd.step);
     llvm_rtc_test_cmd.step.dependOn(b.getInstallStep());
     const llvm_rtc_test_step = b.step("llvm-rtc-test", "Run LLVM-lowered goldfish-RTC MMIO under QEMU");
