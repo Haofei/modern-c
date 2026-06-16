@@ -14,6 +14,7 @@ vfsmount-test	tests/qemu/fs/vfsmount_demo.mc	entry	vfsmount_run	-Wno-switch-bool
 endpoint-test	tests/qemu/ipc/endpoint_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	MINIX hardening: generation-checked endpoints (stale fails closed), derived runnable state (block reasons), death cleanup (waiter released with DEAD)
 grant-test	tests/qemu/ipc/grant_demo.mc	entry	grant_demo_run		memory grant: bounded delegation (OOB rejected) + revocation (stale ref caught)
 granttab-test	tests/qemu/ipc/granttab_demo.mc	entry	granttab_run	-Wno-switch-bool	granttab (kernel/lib): owner-tracked grants, bounded IPC sharing, revoke-on-death
+grantcascade-test	tests/qemu/ipc/grantcascade_demo.mc	entry	grantcascade_run	-Wno-switch-bool	grant revoke cascade (kernel/lib): delegated grant chains (bounds attenuated ⊆ parent), revoking the root invalidates the whole chain
 mailbox-test	tests/qemu/ipc/mailbox_demo.mc	entry	mailbox_run	-Wno-switch-bool	Mailbox<T,N>: post/take, source-filtered take_from, drop-when-full
 registry2-test	tests/qemu/ipc/registry2_demo.mc	entry	registry2_run	-Wno-switch-bool	Registry v2 (kernel/lib): multiple per class, enumerate, gen-checked, unregister-on-death
 service-test	tests/qemu/ipc/service_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	service (kernel/lib): request/reply over IPC, unknown-tag error reply, stateless loop with handler-held state
