@@ -91,3 +91,5 @@ record-test	tests/qemu/lang/record_demo.mc	driver		-Wno-switch-bool	IPC event re
 capaudit-test	tests/qemu/proc/capaudit_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	capability-use audit (kernel/core/process): kcall invocations recorded (caller pid + op) into a dedicated trace, opt-out toggle
 kvstore-test	tests/qemu/fs/kvstore_demo.mc	driver		-Wno-switch-bool	agent KV store (kernel/fs): u64 key -> bytes, put/get/has/delete/overwrite + slot reuse, typed Full/NotFound/TooLarge
 fairsched-test	tests/qemu/proc/fairsched_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	fair-share scheduling (kernel/core/proc_sched): least-served-first pick bounds CPU per agent; throttle deprioritizes a misbehaving agent without killing it
+
+replay-test	tests/qemu/lang/replay_demo.mc	driver		-Wno-switch-bool	IPC stream replay (kernel/core): deterministic ordered playback of a recorded provenance log via a cursor (debug/replay foundation)

@@ -44,6 +44,7 @@ enum RecError {
     GetFailed,  // the BlobStore read back fewer bytes than the framed log needs (corrupt/short)
     NotFound,   // no recorded log blob with that id
     OutOfRange, // requested event index i >= the recorded count
+    Done,       // replay cursor reached end-of-stream: no more events to play back (typed EOS)
 }
 
 // The framed log, staged contiguously: a count word then the events oldest-first. Laid out as
@@ -136,4 +137,66 @@ export fn record_get(store: *mut BlobStore, id: u32, i: usize) -> Result<TraceEv
         err(e) => { return err(.NotFound); }
     }
     return ok(frame.events[i]);
+}
+
+// ─── P3.2: replay — deterministic ordered playback of the recorded event stream (first cut) ───
+//
+// Honest scope: this is deterministic PLAYBACK of the recorded event ORDER. A ReplayCursor walks
+// the persisted provenance log (the blob `record_capture` wrote) front-to-back, handing each
+// `TraceEvent` back in the exact recorded order so a consumer (a future replay-driver / debugger)
+// can step the stream deterministically. Re-opening the same log yields the identical sequence —
+// the cursor holds no state the log doesn't, it only reads via the existing `record_get`.
+//
+// What this is NOT (future work): deterministic RE-EXECUTION of the kernel against the log —
+// re-driving scheduling, thread interleavings and syscall/IO inputs to reproduce a run. This
+// module only replays *what happened, in causal order*; it is the foundation that substrate
+// builds on, not the substrate itself.
+
+// A read-only playback cursor over a recorded log. Holds the blob `id` and the next position to
+// play; `len` is the recorded event count, snapshotted at open so `replay_remaining` is O(1) and
+// the cursor needs no further metadata reads. All event reads go through `record_get`, so the
+// cursor adds no new persistence path and stays consistent with the recorded bytes.
+struct ReplayCursor {
+    id: u32,    // the recorded log blob this cursor plays
+    pos: usize, // index of the NEXT event to return (0..len), advanced by replay_next
+    len: usize, // total recorded events, snapshotted at open (replay_remaining == len - pos)
+}
+
+// Open a playback cursor positioned at the first recorded event of log `id`. NotFound if no log
+// was recorded under `id` (propagated from record_count). An empty (zero-event) log opens fine —
+// it is simply already exhausted, so the first replay_next returns Done.
+export fn replay_open(store: *mut BlobStore, id: u32) -> Result<ReplayCursor, RecError> {
+    switch record_count(store, id) {
+        ok(n) => {
+            var c: ReplayCursor = uninit;
+            c.id = id;
+            c.pos = 0;
+            c.len = n;
+            return ok(c);
+        }
+        err(e) => { return err(e); } // NotFound (absent log) or GetFailed (short blob)
+    }
+}
+
+// Return the next event in recorded order and advance the cursor. Yields the typed end-of-stream
+// signal `Done` once the cursor has played every recorded event (pos == len) — a clean, distinct
+// EOS the caller switches on rather than a sentinel value. The actual event read is delegated to
+// record_get, so playback order is exactly the recorded oldest-first order.
+export fn replay_next(store: *mut BlobStore, c: *mut ReplayCursor) -> Result<TraceEvent, RecError> {
+    if c.pos >= c.len {
+        return err(.Done); // stream exhausted: no event to hand back
+    }
+    switch record_get(store, c.id, c.pos) {
+        ok(e) => {
+            c.pos = c.pos + 1; // advance only on a successful read
+            return ok(e);
+        }
+        err(x) => { return err(x); } // GetFailed/NotFound from a vanished/corrupt blob; pos unchanged
+    }
+}
+
+// How many events remain to be played (len - pos). Decrements by one per successful replay_next;
+// reaches 0 exactly when the next replay_next would signal Done. Pure cursor arithmetic — no read.
+export fn replay_remaining(c: *mut ReplayCursor) -> usize {
+    return c.len - c.pos;
 }
