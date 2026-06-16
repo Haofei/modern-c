@@ -2181,6 +2181,26 @@ pub fn build(b: *std.Build) void {
     const llvm_agent_e2e_test_step = b.step("llvm-agent-e2e-test", "Boot the LLVM-lowered end-to-end sandboxed-agent showcase under QEMU");
     llvm_agent_e2e_test_step.dependOn(&llvm_agent_e2e_test_cmd.step);
 
+    const agent_net_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/agent-net-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    agent_net_test_cmd.step.dependOn(b.getInstallStep());
+    const agent_net_test_step = b.step("agent-net-test", "Boot the agent-OS network-model showcase (brokered/egress-checked/budgeted/audited network calls) under QEMU");
+    agent_net_test_step.dependOn(&agent_net_test_cmd.step);
+
+    const llvm_agent_net_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/agent-net-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_agent_net_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_agent_net_test_step = b.step("llvm-agent-net-test", "Boot the LLVM-lowered agent-OS network-model showcase under QEMU");
+    llvm_agent_net_test_step.dependOn(&llvm_agent_net_test_cmd.step);
+
     const kmain_net_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/net/kmain-net-test.sh",
@@ -2620,6 +2640,8 @@ pub fn build(b: *std.Build) void {
     // agent-e2e-test boots the end-to-end sandboxed-agent showcase under QEMU.
     m0_step.dependOn(&agent_e2e_test_cmd.step);
     m0_step.dependOn(&llvm_agent_e2e_test_cmd.step);
+    m0_step.dependOn(&agent_net_test_cmd.step);
+    m0_step.dependOn(&llvm_agent_net_test_cmd.step);
     // vm-switch-test switches satp between two address spaces (per-process VM).
     m0_step.dependOn(&vm_switch_test_cmd.step);
     // vmspace-test switches satp per process slot (per-process page tables).
