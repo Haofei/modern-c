@@ -890,6 +890,8 @@ const LlvmEmitter = struct {
         }
         if (self.local_types.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text});
         if (self.global_types.get(ident.text)) |ty| {
+            const global_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
+            try self.emitOrdinaryShadowHook(global_ptr, ty, .load_pre);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = load {s}, ptr @{s}{s}\n", .{ result, try self.llvmType(ty), ident.text, try self.debugCallSuffix() });
             return result;
@@ -1404,7 +1406,10 @@ const LlvmEmitter = struct {
             if (self.global_types.get(ident.text)) |ty| {
                 const llvm_ty = try self.llvmType(ty);
                 const value = try self.emitExpr(value_expr, ty);
+                const global_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
+                try self.emitOrdinaryShadowHook(global_ptr, ty, .store_pre);
                 try self.out.print(self.allocator, "  store {s} {s}, ptr @{s}{s}\n", .{ llvm_ty, value, ident.text, try self.debugCallSuffix() });
+                try self.emitOrdinaryShadowHook(global_ptr, ty, .store_post);
                 return;
             }
             return error.UnsupportedLlvmEmission;
@@ -1435,7 +1440,11 @@ const LlvmEmitter = struct {
                 const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitIndexAddress(node);
                 const value = try self.emitExpr(value_expr, element_ty);
+                // Global array element store: instrument to match the C `mc_race_store_<T>`.
+                const is_global = self.indexBaseIsGlobal(node);
+                if (is_global) try self.emitOrdinaryShadowHook(ptr, element_ty, .store_pre);
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(element_ty), value, ptr, try self.debugCallSuffix() });
+                if (is_global) try self.emitOrdinaryShadowHook(ptr, element_ty, .store_post);
                 break :blk true;
             },
             .grouped => |inner| try self.emitIndexAssignment(inner.*, value_expr),
@@ -1559,7 +1568,11 @@ const LlvmEmitter = struct {
                 const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitMemberAddress(node);
                 const value = try self.emitExpr(value_expr, field.ty);
+                // Global struct-field store: instrument to match the C `mc_race_store_<T>`.
+                const field_global = self.memberBaseIsGlobal(node);
+                if (field_global) try self.emitOrdinaryShadowHook(ptr, field.ty, .store_pre);
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(field.ty), value, ptr, try self.debugCallSuffix() });
+                if (field_global) try self.emitOrdinaryShadowHook(ptr, field.ty, .store_post);
                 break :blk true;
             },
             .grouped => |inner| try self.emitMemberAssignment(inner.*, value_expr),
@@ -2095,12 +2108,14 @@ const LlvmEmitter = struct {
             // a bare member load only applies to scalar members.
             if (overlayArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
             const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
+            try self.emitOrdinaryShadowHook(ptr, field.ty, .load_pre);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(field.ty), ptr, try self.debugCallSuffix() });
             return result;
         }
         const field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
         const ptr = try self.emitMemberAddress(node);
+        try self.emitOrdinaryShadowHook(ptr, field.ty, .load_pre);
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(field.ty), ptr, try self.debugCallSuffix() });
         return result;
@@ -2128,6 +2143,69 @@ const LlvmEmitter = struct {
         return result;
     }
 
+    // Splice the sanitizer shadow hook before/after an ordinary (non-raw) scalar access. Used
+    // at the access classes that have a parity-matched hook on the C backend:
+    //   - a struct-FIELD load (emitMemberAccess) — C wraps the same load in a comma expression;
+    //   - a scalar-GLOBAL load (emitIdent) and store (emitAssignment) — C instruments these
+    //     inside the `mc_race_load_<T>`/`mc_race_store_<T>` macro body.
+    // Here the address is the GEP/global `ptr` SSA value, which we `ptrtoint` to the i64 the
+    // hooks expect; size matches the access (scalar == llvmAlignOf, same as the C `sizeof`).
+    // (Array-index and pointer/local field STORES are intentionally NOT hooked, to stay byte-
+    // for-byte at parity with the C backend, which does not instrument those — see the report.)
+    // Default builds emit nothing (all three flags false), keeping codegen byte-identical.
+    //   - ksan (non-msan): pre-load + pre-store mc_ksan_check (poisoned/freed/redzone traps).
+    //   - msan:            pre-load mc_ksan_check (+ uninit trap) + POST-store mc_ksan_store.
+    //   - csan:            pre-load mc_csan_read / pre-store mc_csan_write watchpoint brackets.
+    // `phase` is .load_pre, .store_pre, or .store_post — store_post is the msan init-mark.
+    fn emitOrdinaryShadowHook(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, phase: enum { load_pre, store_pre, store_post }) !void {
+        if (!self.ksan and !self.msan and !self.csan) return;
+        const size = self.llvmAlignOf(ty);
+        const hook: ?[]const u8 = switch (phase) {
+            .load_pre => if (self.csan) "mc_csan_read" else if (self.ksan) "mc_ksan_check" else null,
+            .store_pre => if (self.csan) "mc_csan_write" else if (self.ksan and !self.msan) "mc_ksan_check" else null,
+            .store_post => if (self.msan) "mc_ksan_store" else null,
+        };
+        const name = hook orelse return;
+        const addr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = ptrtoint ptr {s} to i64\n", .{ addr, ptr });
+        try self.out.print(self.allocator, "  call void @{s}(i64 {s}, i64 {d})\n", .{ name, addr, size });
+    }
+
+    // True when an index expression's base is a (non-local) global array. The C backend
+    // instruments array-element accesses ONLY for globals — `g_arr[i]` lowers to
+    // `mc_race_load_<T>` / `mc_race_store_<T>`, whose macro body is hook-instrumented — while a
+    // pointer/local array element is a plain access. We mirror that exactly: instrument the
+    // array-index hook here only when the base is a global, so the two backends agree.
+    fn indexBaseIsGlobal(self: *LlvmEmitter, node: anytype) bool {
+        const base = switch (node.base.*.kind) {
+            .ident => |ident| ident,
+            .grouped => |inner| switch (inner.*.kind) {
+                .ident => |ident| ident,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (self.local_slots.contains(base.text) or self.local_types.contains(base.text)) return false;
+        return self.global_types.contains(base.text);
+    }
+
+    // True when a member expression's base is a (non-local) global struct. The C backend
+    // routes a global struct-field STORE through `mc_race_store_<T>` (hook-instrumented) but a
+    // pointer/local field store through a plain access; we match that — instrument the field
+    // store hook only for a global base.
+    fn memberBaseIsGlobal(self: *LlvmEmitter, node: anytype) bool {
+        const base = switch (node.base.*.kind) {
+            .ident => |ident| ident,
+            .grouped => |inner| switch (inner.*.kind) {
+                .ident => |ident| ident,
+                else => return false,
+            },
+            else => return false,
+        };
+        if (self.local_slots.contains(base.text) or self.local_types.contains(base.text)) return false;
+        return self.global_types.contains(base.text);
+    }
+
     fn emitIndexLoad(self: *LlvmEmitter, node: anytype) ![]const u8 {
         if (overlayMemberFromIndexBase(node.base.*)) |member| {
             if (self.overlayField(member.base.*, member.name.text)) |field| {
@@ -2143,6 +2221,8 @@ const LlvmEmitter = struct {
         }
         const element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const ptr = try self.emitIndexAddress(node);
+        // Global array element load: instrument to match the C backend's `mc_race_load_<T>`.
+        if (self.indexBaseIsGlobal(node)) try self.emitOrdinaryShadowHook(ptr, element_ty, .load_pre);
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(element_ty), ptr, try self.debugCallSuffix() });
         return result;

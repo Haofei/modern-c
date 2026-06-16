@@ -63,11 +63,17 @@ run_scenario() {
 
 UAF="$(run_scenario "" uaf)"
 OOB="$(run_scenario "-DOOB_SCENARIO=1" oob)"
+# New coverage (this change): a UAF reached through a STRUCT FIELD — NOT a raw.load — is now
+# instrumented and must trap. Before the field instrumentation this load bypassed mc_ksan_check
+# entirely and the UAF was silently MISSED.
+FIELD="$(run_scenario "-DFIELD_SCENARIO=1" field)"
 
 echo "--- use-after-free scenario UART ---"
 printf '%s\n' "$UAF"
 echo "--- out-of-bounds scenario UART ---"
 printf '%s\n' "$OOB"
+echo "--- struct-field UAF scenario UART ---"
+printf '%s\n' "$FIELD"
 echo "------------------------------------"
 
 fail=0
@@ -85,9 +91,10 @@ check() { # haystack tag
 }
 check "$UAF" "use-after-free"
 check "$OOB" "out-of-bounds"
+check "$FIELD" "struct-field-uaf"
 
 if [ "$fail" -eq 0 ]; then
-    echo "PASS: $TEST_NAME — $BACKEND backend: KASAN heap clean path (KASAN-OK), a REAL read of freed memory caught at access time by the shadow check (KASAN-DETECTED), and a read past the allocation caught by the shadow (KASAN-DETECTED) under QEMU"
+    echo "PASS: $TEST_NAME — $BACKEND backend: KASAN heap clean path (KASAN-OK), a REAL read of freed memory caught at access time by the shadow check (KASAN-DETECTED), a read past the allocation caught by the shadow (KASAN-DETECTED), AND a use-after-free reached through a STRUCT FIELD (not raw.load) now caught by the extended instrumentation (KASAN-DETECTED) under QEMU"
     exit 0
 fi
 exit 1

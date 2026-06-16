@@ -23,6 +23,16 @@
 import "std/addr.mc";
 import "kernel/core/heap.mc";
 
+// A small struct laid over a heap block, used to prove the sanitizer now sees a struct-FIELD
+// access that does NOT go through raw.load/raw.store. Reading `node.value` lowers to an ordinary
+// struct-field load (a comma-expression `mc_ksan_check` wrap on the C backend / an instrumented
+// `load` on LLVM) — exactly the path that was INVISIBLE to KASAN before this change. With the
+// field instrumentation, that load now calls mc_ksan_check, so a use-after-free reached through
+// a field traps at access time.
+struct Node {
+    value: u32,
+}
+
 // ---- 1. clean path: in-bounds use of a KASAN allocation ----
 export fn ksan_clean(region: usize, len: usize) -> u32 {
     var h: Heap = heap_new_ksan(phys_range(pa(region), len));
@@ -87,3 +97,23 @@ export fn ksan_oob(region: usize, len: usize) -> u32 {
     }
     return v as u32; // unreachable if detection works
 }
+
+// ---- 4. use-after-free through a STRUCT FIELD (not raw.load) ----
+// Alloc a block, overlay a Node on it, free it, then read `node.value` — an ordinary
+// struct-field load, NOT a raw.load. Before this change that load was uninstrumented and the
+// UAF was MISSED; now the field load calls mc_ksan_check and traps on the poisoned shadow.
+export fn ksan_field_uaf(region: usize, len: usize) -> u32 {
+    var h: Heap = heap_new_ksan(phys_range(pa(region), len));
+
+    let n: usize = 64;
+    let p: PAddr = heap_alloc(&h, n, 16);
+    heap_free(&h, p, n); // poisons the block in the shadow
+
+    var v: u32 = 0;
+    unsafe {
+        let node: *Node = raw.ptr<Node>(pa_value(p));
+        v = node.value; // STRUCT-FIELD load of freed memory -> mc_ksan_check traps
+    }
+    return v; // unreachable if detection works
+}
+

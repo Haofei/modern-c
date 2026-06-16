@@ -28,6 +28,7 @@
 uint32_t ksan_clean(uintptr_t region, uintptr_t len);
 uint32_t ksan_uaf(uintptr_t region, uintptr_t len);
 uint32_t ksan_oob(uintptr_t region, uintptr_t len);
+uint32_t ksan_field_uaf(uintptr_t region, uintptr_t len);
 
 // Arm the shadow for [base, base+len): everything addressable (clean) to start. The MC heap
 // then poisons freed blocks / redzones as it runs.
@@ -50,7 +51,14 @@ __attribute__((used)) void m_main(void) {
         halt();
     }
 
-#if defined(OOB_SCENARIO)
+#if defined(FIELD_SCENARIO)
+    // 4. UAF through a STRUCT FIELD (not raw.load): `node.value` of freed memory traps.
+    // This is the new-coverage proof — before field instrumentation this was MISSED.
+    mc_ksan_arm((uintptr_t)pool, (uintptr_t)sizeof(pool));
+    puts_("field-uaf: reading freed node.value (struct-field load)...\n");
+    ksan_field_uaf((uintptr_t)pool, (uintptr_t)sizeof(pool));
+    puts_("FIELD-UAF-MISSED\n"); // only reached if the field load was NOT instrumented
+#elif defined(OOB_SCENARIO)
     // 3. Out-of-bounds: a read one past the user region (a poisoned redzone byte) traps.
     mc_ksan_arm((uintptr_t)pool, (uintptr_t)sizeof(pool));
     puts_("oob: reading one past allocation...\n");

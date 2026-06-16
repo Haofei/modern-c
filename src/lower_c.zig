@@ -400,16 +400,52 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         \\MC_DEFINE_SAT_UNSIGNED(u64, uint64_t, UINT64_MAX)
         \\MC_DEFINE_SAT_UNSIGNED(usize, uintptr_t, UINTPTR_MAX)
         \\
-        \\#define MC_DEFINE_RACE_SCALAR(NAME, TYPE) \
-        \\MC_UNUSED static inline TYPE mc_race_load_##NAME(TYPE const *p) { \
-        \\    TYPE value; \
-        \\    __atomic_load(p, &value, __ATOMIC_RELAXED); \
-        \\    return value; \
-        \\} \
-        \\MC_UNUSED static inline void mc_race_store_##NAME(TYPE *p, TYPE value) { \
-        \\    __atomic_store(p, &value, __ATOMIC_RELAXED); \
-        \\}
-        \\
+    );
+
+    // The synchronized scalar load/store helpers (`mc_race_load_<T>`/`mc_race_store_<T>`).
+    // EVERY non-raw memory access funnels through these: a scalar `global` read/write, a
+    // struct-field load/store, and an array-index load/store all lower to `mc_race_*` (see
+    // emitMemberAccess / emitIndexAccess / the global paths). The raw macros above only cover
+    // `raw.load`/`raw.store`; this is where the bulk of real kernel data access lives. So the
+    // sanitizer profiles splice the SAME shadow hooks in here as on the raw path, giving
+    // KASAN/KMSAN/KCSAN real coverage of UAF/OOB/uninit/race through fields, elements, and
+    // globals — not just the raw-pointer demo path. Default builds emit no hook (unchanged).
+    //   - ksan (non-msan): pre-load + pre-store mc_ksan_check (poisoned/freed/redzone traps).
+    //   - msan:            pre-load mc_ksan_check (+ uninit trap) + POST-store mc_ksan_store.
+    //   - csan:            pre-load mc_csan_read / pre-store mc_csan_write watchpoint brackets.
+    const race_load_pre: []const u8 = if (csan)
+        "    mc_csan_read((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
+    else if (ksan)
+        "    mc_ksan_check((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
+    else
+        "";
+    const race_store_pre: []const u8 = if (csan)
+        "    mc_csan_write((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
+    else if (ksan and !msan)
+        "    mc_ksan_check((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
+    else
+        "";
+    const race_store_post: []const u8 = if (msan)
+        "    mc_ksan_store((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
+    else
+        "";
+    try out.print(allocator,
+        "#define MC_DEFINE_RACE_SCALAR(NAME, TYPE) \\\n" ++
+            "MC_UNUSED static inline TYPE mc_race_load_##NAME(TYPE const *p) {{ \\\n" ++
+            "{s}" ++
+            "    TYPE value; \\\n" ++
+            "    __atomic_load(p, &value, __ATOMIC_RELAXED); \\\n" ++
+            "    return value; \\\n" ++
+            "}} \\\n" ++
+            "MC_UNUSED static inline void mc_race_store_##NAME(TYPE *p, TYPE value) {{ \\\n" ++
+            "{s}" ++
+            "    __atomic_store(p, &value, __ATOMIC_RELAXED); \\\n" ++
+            "{s}" ++
+            "}}\n\n",
+        .{ race_load_pre, race_store_pre, race_store_post },
+    );
+
+    try out.appendSlice(allocator,
         \\MC_DEFINE_RACE_SCALAR(bool, bool)
         \\MC_DEFINE_RACE_SCALAR(u8, uint8_t)
         \\MC_DEFINE_RACE_SCALAR(u16, uint16_t)
@@ -586,6 +622,9 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
     defer typed_mir.deinit();
 
     var emitter = CEmitter.init(allocator, out, &typed_mir, source_path);
+    emitter.ksan = ksan;
+    emitter.msan = msan;
+    emitter.csan = csan;
     try emitter.emitModule(module);
 }
 
@@ -1015,6 +1054,17 @@ const CEmitter = struct {
     bind_thunks: std.StringHashMap(BindThunk),
     mir_module: *const mir.Module,
     source_path: ?[]const u8,
+    // Sanitizer profile (D2.1/2.2/2.3). When set, ordinary (non-raw, non-global) scalar LOADS
+    // through a struct field / array element are wrapped with the shadow hook via a comma
+    // expression, so a UAF/OOB reached through a field or element is caught — matching the LLVM
+    // backend. Global loads/stores are already instrumented inside the `mc_race_*` macro. All
+    // false by default (no hook emitted).
+    ksan: bool = false,
+    msan: bool = false,
+    csan: bool = false,
+    // Set while emitting an assignment LHS (a store target / lvalue), so the field-LOAD shadow
+    // hook is not spliced into a context where the result must remain assignable.
+    suppress_load_hook: bool = false,
     current_function: ?[]const u8 = null,
     temp_index: usize,
     indent: usize,
@@ -3021,7 +3071,7 @@ const CEmitter = struct {
                     try self.emitExprWithTarget(node.value, locals, simpleNameType(target.info.type_name, node.value.span));
                     try self.emitGlobalStoreSuffix(target);
                 } else {
-                    try self.emitExpr(node.target, locals);
+                    try self.emitAssignTarget(node.target, locals);
                     try self.out.appendSlice(self.allocator, " = ");
                     try self.emitExprWithTarget(node.value, locals, self.assignmentTargetType(node.target, locals));
                     try self.out.appendSlice(self.allocator, ";\n");
@@ -3452,7 +3502,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, result_temp);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{result_temp});
         }
         return true;
@@ -4593,14 +4643,14 @@ const CEmitter = struct {
             if (global_target) |target| {
                 try self.emitGlobalStoreValue(target, temp_name);
             } else {
-                try self.emitExpr(assignment.target, locals);
+                try self.emitAssignTarget(assignment.target, locals);
                 try self.out.print(self.allocator, " = {s};\n", .{temp_name});
             }
             return true;
         }
 
         try self.writeIndent();
-        try self.emitExpr(assignment.target, locals);
+        try self.emitAssignTarget(assignment.target, locals);
         try self.out.print(self.allocator, " = ({s})mc_mmio_read_{s}(&{s}->{s});\n", .{ value_c_type, access.width, access.param, access.field });
         return true;
     }
@@ -4627,7 +4677,7 @@ const CEmitter = struct {
             try self.emitMmioReadExprWithReplacements(assignment.value, &nested, null, replacements.items);
             try self.emitGlobalStoreSuffix(target);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.appendSlice(self.allocator, " = ");
             try self.emitMmioReadExprWithReplacements(assignment.value, &nested, self.assignmentTargetType(assignment.target, locals), replacements.items);
             try self.out.appendSlice(self.allocator, ";\n");
@@ -4703,7 +4753,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -4793,6 +4843,29 @@ const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "mc_barrier_acquire_after();\n");
         }
         return true;
+    }
+
+    // The read shadow hook for an ordinary (non-raw, non-global) scalar field/array load, or
+    // null when no sanitizer profile selects one. Globals are instrumented in the `mc_race_*`
+    // macro instead; raw.load on the raw macro. This covers the pointer/aggregate field & array
+    // LOAD path so a UAF/OOB reached through a field or element traps — matching lower_llvm.zig.
+    fn ordinaryLoadHookName(self: *const CEmitter) ?[]const u8 {
+        if (self.suppress_load_hook) return null;
+        if (self.csan) return "mc_csan_read";
+        if (self.ksan) return "mc_ksan_check"; // msan implies ksan
+        return null;
+    }
+
+    // Emit an assignment LHS (a store target / lvalue). Identical to emitExpr but with the
+    // field-LOAD shadow hook suppressed: wrapping an lvalue in a `(hook(...), lv)` comma
+    // expression would make it non-assignable. (Pointer/local field STORES are therefore
+    // uninstrumented on this path — at parity with the LLVM backend, which hooks only GLOBAL
+    // field/array stores.)
+    fn emitAssignTarget(self: *CEmitter, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+        const prev = self.suppress_load_hook;
+        self.suppress_load_hook = true;
+        defer self.suppress_load_hook = prev;
+        try self.emitExpr(target, locals);
     }
 
     fn emitExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
@@ -5030,8 +5103,25 @@ const CEmitter = struct {
                     return;
                 }
                 const op: []const u8 = if (self.exprIsPointer(node.base.*, locals)) "->" else ".";
+                const field_name = try self.cIdent(node.name.text);
+                // Sanitizer (D2.1/2.2/2.3): a struct-field LOAD reached through a pointer/local
+                // (NOT a global, handled by `mc_race_*`) is wrapped with the shadow hook via a
+                // comma expression — `(hook(&lv, sizeof(lv)), lv)` — so a UAF/OOB through a
+                // field traps at access time, matching the LLVM backend's emitMemberAccess hook.
+                // The base is re-emitted (as elsewhere, e.g. the slice path); a member lvalue is
+                // always addressable. No hook is emitted by default (ordinaryLoadHookName null).
+                if (self.ordinaryLoadHookName()) |hook| {
+                    try self.out.print(self.allocator, "({s}((uintptr_t)&(", .{hook});
+                    try self.emitExpr(node.base.*, locals);
+                    try self.out.print(self.allocator, "{s}{s}), (uintptr_t)sizeof(", .{ op, field_name });
+                    try self.emitExpr(node.base.*, locals);
+                    try self.out.print(self.allocator, "{s}{s})), ", .{ op, field_name });
+                    try self.emitExpr(node.base.*, locals);
+                    try self.out.print(self.allocator, "{s}{s})", .{ op, field_name });
+                    return;
+                }
                 try self.emitExpr(node.base.*, locals);
-                try self.out.print(self.allocator, "{s}{s}", .{ op, try self.cIdent(node.name.text) });
+                try self.out.print(self.allocator, "{s}{s}", .{ op, field_name });
             },
             .cast => |node| {
                 try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(node.ty.*, .typedef_name)});
@@ -6998,7 +7088,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, value_temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
         }
         return true;
@@ -7063,7 +7153,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, value_temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
         }
         return true;
@@ -7122,7 +7212,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, value_temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
         }
         return true;
@@ -7189,7 +7279,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, value_temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{value_temp.name});
         }
         return true;
@@ -7702,7 +7792,7 @@ const CEmitter = struct {
             try self.emitResultTryExprWithReplacements(assignment.value, locals, null, replacements.items);
             try self.emitGlobalStoreSuffix(target);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.appendSlice(self.allocator, " = ");
             try self.emitResultTryExprWithReplacements(assignment.value, locals, null, replacements.items);
             try self.out.appendSlice(self.allocator, ";\n");
@@ -7724,7 +7814,7 @@ const CEmitter = struct {
             try self.emitNullableTryExprWithReplacements(assignment.value, locals, null, replacements.items);
             try self.emitGlobalStoreSuffix(target);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.appendSlice(self.allocator, " = ");
             try self.emitNullableTryExprWithReplacements(assignment.value, locals, null, replacements.items);
             try self.out.appendSlice(self.allocator, ";\n");
@@ -7772,7 +7862,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -7788,7 +7878,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -7865,7 +7955,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, result_temp);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{result_temp});
         }
         return true;
@@ -7900,7 +7990,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, result_temp);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{result_temp});
         }
         return true;
@@ -8324,7 +8414,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -8384,7 +8474,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -8483,7 +8573,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -8549,7 +8639,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -8619,7 +8709,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -8803,7 +8893,7 @@ const CEmitter = struct {
             try self.emitArrayLiteralWithTemps(items, locals, target_ty, temps.items);
             try self.emitGlobalStoreSuffix(target);
         } else {
-            try self.emitExpr(target_expr, locals);
+            try self.emitAssignTarget(target_expr, locals);
             try self.out.appendSlice(self.allocator, " = ");
             try self.emitArrayLiteralWithTemps(items, locals, target_ty, temps.items);
             try self.out.appendSlice(self.allocator, ";\n");
@@ -8822,7 +8912,7 @@ const CEmitter = struct {
             try self.emitStructLiteralWithTemps(fields, locals, target_ty, temps.items);
             try self.emitGlobalStoreSuffix(target);
         } else {
-            try self.emitExpr(target_expr, locals);
+            try self.emitAssignTarget(target_expr, locals);
             try self.out.appendSlice(self.allocator, " = ");
             try self.emitStructLiteralWithTemps(fields, locals, target_ty, temps.items);
             try self.out.appendSlice(self.allocator, ";\n");
@@ -8865,7 +8955,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -8943,7 +9033,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -9070,7 +9160,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, temp.name);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{temp.name});
         }
         return true;
@@ -9158,7 +9248,7 @@ const CEmitter = struct {
         if (self.globalAssignmentTarget(assignment.target, locals)) |target| {
             try self.emitGlobalStoreValue(target, result_temp);
         } else {
-            try self.emitExpr(assignment.target, locals);
+            try self.emitAssignTarget(assignment.target, locals);
             try self.out.print(self.allocator, " = {s};\n", .{result_temp});
         }
         return true;
