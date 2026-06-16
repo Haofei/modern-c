@@ -7,7 +7,18 @@ dynamic** (the trap model / sanitizers in the QEMU build), or **verification / h
 Two parts: **Part I — Memory & UB**, **Part II — other kernel-language axes** (concurrency, the
 trust boundary, parsing, capabilities/IFC, ABI, termination, side channels, fault isolation).
 Each item is sized (PR / multi-PR / research) with **What / Where / Test / Prior art / Depends**.
-`[ ]` = todo. IDs: Part I uses tier-dotted (`S0.1`, `D2.1`); Part II uses letter (`C1`, `A1`).
+`[ ]` = todo, `[x]` = done, `[~]` = partial/deferred (with rationale inline). IDs: Part I uses
+tier-dotted (`S0.1`, `D2.1`); Part II uses letter (`C1`, `A1`).
+
+> **STATUS (resolved).** 25 items DONE + 1 PARTIAL (T1.1), each landed on `master` with a commit
+> hash, both-backend (`diff-backend`) parity, and the relevant QEMU/fuzz gates green; built via
+> worktree sub-agents, integrated + independently re-validated. **10 items DEFERRED** with
+> rationale — genuine research (formal proofs, CHERI/MTE hardware, IFC, model checking, verified
+> parsers) or prerequisite-blocked (T(term)2 needs an agent loader). The hardening surfaced and
+> fixed **several real latent bugs** (Virtq struct drift ×3, a forgeable `Cap`, a `UserPtr`
+> field-deref hole, read-before-init, the overlay miscompile) and proved the parsers robust
+> (4.8M malformed inputs, 0 over-reads). Every static check is opt-in/additive — the kernel boots
+> unchanged on both backends.
 
 ## What MC already has (harden the gaps, don't reinvent)
 - **Spatial, trapping:** `mc_check_index_usize` (bounds), checked arithmetic, `__builtin_trap`,
@@ -54,13 +65,13 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   (`src/hir.zig`). **Test:** escaping-reference fixtures rejected (`fuzz-failclosed`); kernel still
   type-checks; `move-fuzz` borrow cases. **Prior art:** Rust borrow checker, Cyclone regions,
   **RustBelt**. **Depends:** S0.2.
-- [ ] **T1.2 — Use-after-move for derived aliases** *(PR)* — invalidate any pointer/alias derived
+- [x] **T1.2 — Use-after-move for derived aliases** *(DONE `beb6b72`; extended the move checker — an alias `let p = &t` taken before `t` is moved is now flagged `E_USE_AFTER_MOVE` (stale alias) on use-after-move; sound, no false positives. Sub-place/escape aliases → follow-up)* — invalidate any pointer/alias derived
   from a moved-out value (not just double-free of the owner). **Where:** move checker (`src/ir.zig`).
   **Test:** `move-fuzz` stale-alias cases. **Prior art:** Rust move/affine types. **Depends:** T1.1.
-- [ ] **T1.3 — Lifetime-parameterized references** *(research → multi-PR)* — for fns returning/storing
+- [~] **T1.3 — Lifetime-parameterized references** (DEFERRED — full lifetime/region system; deliberate language-design building on the T1.1 lexical slice) *(research → multi-PR)* — for fns returning/storing
   borrows. **Where:** type system. **Test:** differential + `fuzz-failclosed`. **Prior art:** Rust
   lifetimes, RustBelt. **Depends:** T1.1.
-- [ ] **T1.4 — Soundness spec for the safe subset** *(doc, research)* — "well-typed safe MC has no
+- [~] **T1.4 — Soundness spec for the safe subset** (DEFERRED — formal proof-obligation document; follows T1.3 maturity) *(doc, research)* — "well-typed safe MC has no
   UB," proof obligations per construct (informal first). **Prior art:** RustBelt, seL4. **Depends:**
   S0.2, T1.1.
 
@@ -103,17 +114,17 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 - [x] **V3.3 — Memory-op metamorphic checks** *(DONE `ac3fb0b`; field-reorder@offset, overlay read recompose + position-swap, sizeof/offset identities, slice/index equivalence; fuzz-metamorphic PASS 600 seeds — no divergence)* — semantics-preserving transforms over
   layout/offset/overlay/slice ops must not change results. **Where:** `fuzz-metamorphic`. **Depends:**
   the offset/overlay generator surface (added).
-- [ ] **V3.4 — Machine-checked soundness of a core subset** *(research)* — formal semantics + a proof
+- [~] **V3.4 — Machine-checked soundness of a core subset** (DEFERRED — Coq/Isabelle/Lean proof artifact; multi-month research) *(research)* — formal semantics + a proof
   that well-typed safe programs have no UB (and/or lowering refinement). **Prior art:** **seL4**,
   **CompCert**, RustBelt, RefinedC/Iris. **Depends:** T1.4.
 
 ## Tier 4 — Hardware-assisted (future; aligns with the capability thesis)
 
-- [ ] **H4.1 — CHERI target** *(research)* — hardware capabilities = spatial **and** temporal safety
+- [~] **H4.1 — CHERI target** (DEFERRED — new hardware backend; needs a CHERI/Morello toolchain + the native-backend abstraction; research) *(research)* — hardware capabilities = spatial **and** temporal safety
   at pointer granularity; the kernel is already a *capability* microkernel. **Where:** a backend
   behind `src/backend.zig`. **Prior art:** CHERI/Morello, CheriBSD. **Depends:** the backend
   abstraction; ideally a native backend.
-- [ ] **H4.2 — ARM MTE heap tagging** *(research)* — cheap probabilistic UAF/OOB in production.
+- [~] **H4.2 — ARM MTE heap tagging** (DEFERRED — needs aarch64 MTE hardware/target maturity; research) *(research)* — cheap probabilistic UAF/OOB in production.
   **Where:** `kernel/core/heap.mc` + aarch64. **Prior art:** Android/Linux arm64 MTE. **Depends:**
   aarch64 maturity.
 
@@ -132,10 +143,10 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   op (mutex/alloc) from IRQ context is a compile error. **Where:** an effect/attribute +
   `kernel/core/sched.mc`/`kernel/drivers/irq/`. **Test:** sleep-in-IRQ fixture rejected. **Prior art:**
   Linux `might_sleep`/lockdep, Rust-for-Linux context types. **Depends:** none.
-- [ ] **C3 — Static lock ordering (deadlock-freedom)** *(multi-PR)* — a partial order over locks;
+- [~] **C3 — Static lock ordering (deadlock-freedom)** (DEFERRED — partial-order/deadlock-freedom typing on top of C1; multi-PR follow-up) *(multi-PR)* — a partial order over locks;
   out-of-order acquisition rejected. **Where:** lock types + check. **Test:** cyclic acquisition
   rejected. **Prior art:** lockdep, Abadi–Flanagan. **Depends:** C1.
-- [ ] **C4 — Concurrency model checking** *(research)* — bounded model-checking (Loom/Coyote-style)
+- [~] **C4 — Concurrency model checking** (DEFERRED — Loom/Coyote-style bounded model checker; research harness) *(research)* — bounded model-checking (Loom/Coyote-style)
   of IPC/scheduler vs the memory model. **Where:** harness over `kernel/core/proc_ipc.mc`/`sched.mc`.
   **Prior art:** Loom, Coyote, CDSChecker. **Depends:** C1.
 
@@ -164,7 +175,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 - [x] **P2 — Never trust a length field** *(DONE `c25eb99`; `br_validate_len` gates rdlength (DNS), IP total-length, UDP length, ELF phnum×phentsize + filesz before they drive loops/copies; 196K hostile-length fuzz cases rejected, 0 over-reads)* — wire length/count fields validated against the
   remaining buffer before driving a copy/loop. **Where:** parser type + check. **Test:**
   unvalidated-length fixture rejected. **Prior art:** Heartbleed. **Depends:** P1.
-- [ ] **P3 — Verified parsers for the wire formats** *(research)* — generate TCP/IP/DNS/TLS-record
+- [~] **P3 — Verified parsers for the wire formats** (DEFERRED — EverParse-style spec→verified-parser generation; research. P1/P2 give the total + length-validated slice) *(research)* — generate TCP/IP/DNS/TLS-record
   parsers from a spec with machine-checked safety. **Prior art:** EverParse/miTLS. **Depends:** P1.
 
 ## K — Capability & information-flow in the type system (on-thesis)
@@ -175,7 +186,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   (`kernel/lib/granttab.mc`, `std/grant.mc`, `std/mask.mc`). **Test:** forging/widening rejected
   (`fuzz-failclosed`); parent⊇child mask law as a test. **Prior art:** **seL4** capability calculus.
   **Depends:** none.
-- [ ] **K2 — Information-flow / taint for secret & untrusted data** *(research)* — label data; secret
+- [~] **K2 — Information-flow / taint for secret & untrusted data** (DEFERRED — full IFC/label typing; research. U3 + secret<T> give the runtime/lint + constant-time slice) *(research)* — label data; secret
   cannot flow to an untrusted sink (the agent-exfiltration threat, lifted to types). **Where:** an
   IFC pass. **Test:** labeled-flow fixture; metamorphic. **Prior art:** **Jif, HiStar, Flume**.
   **Depends:** K1. *(Pairs with U3.)*
@@ -198,7 +209,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   critical sections + IRQ handlers must be statically bounded; no unbounded recursion. **Where:** a
   check pass + region marking. **Test:** unbounded loop in a critical region rejected. **Prior art:**
   eBPF verifier, SPARK. **Depends:** C2.
-- [ ] **T(term)2 — Agent-program verifier (the eBPF-verifier analog)** *(multi-PR → research) —
+- [~] **T(term)2 — Agent-program verifier (the eBPF-verifier analog)** (DEFERRED — BLOCKED on the agent-program loader (R3), which doesn't exist yet; the capstone, builds on K1 + T(term)1) *(multi-PR → research) —
   agent-OS capstone* — before a loaded agent program runs, statically verify it is memory-safe,
   bounded/total, and only invokes its **granted capabilities**. The loader gate that lets the kernel
   run untrusted agent code. **Where:** a verify pass + the agent loader (deferred R3) +
