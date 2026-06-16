@@ -97,23 +97,34 @@ export fn tcp_parse_frame(base: usize, len: usize) -> TcpRx {
         return out; // too short for eth + ip + tcp
     }
     var r: ByteReader = byte_reader(phys(base), len);
-    let ethertype: u16 = br_be16(&r, 12);
+
+    // Every field is read through the total checked reader (br_try_*): a frame that
+    // claims more than it delivers (a hostile IHL / data-offset / total-length) makes
+    // a read return OutOfBounds, and we reject cleanly (is_tcp=false) instead of
+    // trapping. The explicit length guards stay as the semantic checks; safety no
+    // longer depends on them being exhaustive — over-read is impossible here.
+    var ethertype: u16 = 0;
+    switch br_try_be16(&r, 12) { ok(v) => { ethertype = v; } err(e) => { return out; } }
     if ethertype != ETHERTYPE_IPV4 {
         return out;
     }
     let ip_at: usize = 14;
     // IHL (low nibble of byte 0) words → header byte length.
-    let vihl: u8 = br_u8(&r, ip_at);
+    var vihl: u8 = 0;
+    switch br_try_u8(&r, ip_at) { ok(v) => { vihl = v; } err(e) => { return out; } }
     let ihl_words: usize = (vihl & 0x0F) as usize;
     let ip_hdr_len: usize = ihl_words * 4;
     if ip_hdr_len < 20 {
         return out;
     }
-    let proto: u8 = br_u8(&r, ip_at + 9);
+    var proto: u8 = 0;
+    switch br_try_u8(&r, ip_at + 9) { ok(v) => { proto = v; } err(e) => { return out; } }
     if proto != TCPTX_IP_PROTO_TCP {
         return out;
     }
-    let ip_total: usize = br_be16(&r, ip_at + 2) as usize; // IP total length (header+payload)
+    var ip_total_raw: u16 = 0;
+    switch br_try_be16(&r, ip_at + 2) { ok(v) => { ip_total_raw = v; } err(e) => { return out; } }
+    let ip_total: usize = ip_total_raw as usize; // IP total length (header+payload)
     let ip_min: usize = ip_hdr_len + 20; // IP header + a full TCP header
     if ip_total < ip_min {
         return out;
@@ -123,7 +134,9 @@ export fn tcp_parse_frame(base: usize, len: usize) -> TcpRx {
         return out; // IP claims more than the frame delivered
     }
     let tcp_at: usize = ip_at + ip_hdr_len;
-    let data_off_words: usize = ((br_be16(&r, tcp_at + 12) >> 12) & 0x0F) as usize;
+    var off_flags: u16 = 0;
+    switch br_try_be16(&r, tcp_at + 12) { ok(v) => { off_flags = v; } err(e) => { return out; } }
+    let data_off_words: usize = ((off_flags >> 12) & 0x0F) as usize;
     let tcp_hdr_len: usize = data_off_words * 4;
     if tcp_hdr_len < 20 {
         return out;
@@ -132,13 +145,23 @@ export fn tcp_parse_frame(base: usize, len: usize) -> TcpRx {
     if seg_total < tcp_hdr_len {
         return out;
     }
+    var src_port: u16 = 0;
+    var dst_port: u16 = 0;
+    var seq: u32 = 0;
+    var ack: u32 = 0;
+    var window: u16 = 0;
+    switch br_try_be16(&r, tcp_at + 0) { ok(v) => { src_port = v; } err(e) => { return out; } }
+    switch br_try_be16(&r, tcp_at + 2) { ok(v) => { dst_port = v; } err(e) => { return out; } }
+    switch br_try_be32(&r, tcp_at + 4) { ok(v) => { seq = v; } err(e) => { return out; } }
+    switch br_try_be32(&r, tcp_at + 8) { ok(v) => { ack = v; } err(e) => { return out; } }
+    switch br_try_be16(&r, tcp_at + 14) { ok(v) => { window = v; } err(e) => { return out; } }
     out.is_tcp = true;
-    out.src_port = br_be16(&r, tcp_at + 0);
-    out.dst_port = br_be16(&r, tcp_at + 2);
-    out.seq = br_be32(&r, tcp_at + 4);
-    out.ack = br_be32(&r, tcp_at + 8);
-    out.flags = br_be16(&r, tcp_at + 12) & 0x01FF;
-    out.window = br_be16(&r, tcp_at + 14);
+    out.src_port = src_port;
+    out.dst_port = dst_port;
+    out.seq = seq;
+    out.ack = ack;
+    out.flags = off_flags & 0x01FF;
+    out.window = window;
     out.payload_off = base + tcp_at + tcp_hdr_len; // absolute address of the payload
     out.payload_len = seg_total - tcp_hdr_len;
     return out;

@@ -81,7 +81,13 @@ export fn dns_build_query(w: *ByteWriter, at: usize, txn_id: u16, hostname_ptr: 
 fn dns_skip_name(r: *ByteReader, base_off: usize, len: usize) -> usize {
     var off: usize = base_off;
     while off < len {
-        let b: u8 = br_u8(r, off);
+        // Total checked read: an off past the end can't happen here (off < len), but
+        // routing through br_try_u8 keeps the parser free of any trapping read.
+        var b: u8 = 0;
+        switch br_try_u8(r, off) {
+            ok(v) => { b = v; }
+            err(e) => { return len; } // out of bounds => treat as structural error
+        }
         if b == 0 {
             return off + 1; // root label: name ends here
         }
@@ -108,11 +114,17 @@ export fn dns_parse_response(base: usize, len: usize, txn_id: u16) -> Result<u32
     }
     var r: ByteReader = byte_reader(phys(base), len);
 
-    let id: u16 = br_be16(&r, 0);
+    // Every read below goes through the total checked reader (br_try_*): a read that
+    // would run off the end returns .Malformed rather than trapping. The length/count
+    // guards remain as the semantic validation (and defense in depth), but no read
+    // depends on them for safety — over-read is impossible by construction.
+    var id: u16 = 0;
+    switch br_try_be16(&r, 0) { ok(v) => { id = v; } err(e) => { return err(.Malformed); } }
     if id != txn_id {
         return err(.Mismatch);
     }
-    let flags: u16 = br_be16(&r, 2);
+    var flags: u16 = 0;
+    switch br_try_be16(&r, 2) { ok(v) => { flags = v; } err(e) => { return err(.Malformed); } }
     if (flags & DNS_FLAG_QR) == 0 {
         return err(.Mismatch); // not a response
     }
@@ -120,8 +132,10 @@ export fn dns_parse_response(base: usize, len: usize, txn_id: u16) -> Result<u32
         return err(.Truncated); // TC bit
     }
 
-    let qdcount: u16 = br_be16(&r, 4);
-    let ancount: u16 = br_be16(&r, 6);
+    var qdcount: u16 = 0;
+    var ancount: u16 = 0;
+    switch br_try_be16(&r, 4) { ok(v) => { qdcount = v; } err(e) => { return err(.Malformed); } }
+    switch br_try_be16(&r, 6) { ok(v) => { ancount = v; } err(e) => { return err(.Malformed); } }
     if ancount == 0 {
         return err(.NoAnswer);
     }
@@ -145,9 +159,12 @@ export fn dns_parse_response(base: usize, len: usize, txn_id: u16) -> Result<u32
         if off + 10 > len {
             return err(.Malformed);
         }
-        let rtype: u16 = br_be16(&r, off + 0);
-        let rclass: u16 = br_be16(&r, off + 2);
-        let rdlength: u16 = br_be16(&r, off + 8);
+        var rtype: u16 = 0;
+        var rclass: u16 = 0;
+        var rdlength: u16 = 0;
+        switch br_try_be16(&r, off + 0) { ok(v) => { rtype = v; } err(e) => { return err(.Malformed); } }
+        switch br_try_be16(&r, off + 2) { ok(v) => { rclass = v; } err(e) => { return err(.Malformed); } }
+        switch br_try_be16(&r, off + 8) { ok(v) => { rdlength = v; } err(e) => { return err(.Malformed); } }
         let rdata_off: usize = off + 10;
         if rdata_off + (rdlength as usize) > len {
             return err(.Malformed);
@@ -155,7 +172,8 @@ export fn dns_parse_response(base: usize, len: usize, txn_id: u16) -> Result<u32
         if rtype == DNS_TYPE_A {
             if rclass == DNS_CLASS_IN {
                 if rdlength == 4 {
-                    let ip: u32 = br_be32(&r, rdata_off);
+                    var ip: u32 = 0;
+                    switch br_try_be32(&r, rdata_off) { ok(v) => { ip = v; } err(e) => { return err(.Malformed); } }
                     return ok(ip);
                 }
             }

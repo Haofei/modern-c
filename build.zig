@@ -1866,6 +1866,17 @@ pub fn build(b: *std.Build) void {
     const net_fuzz_test_step = b.step("net-fuzz-test", "Fuzz the RX parser with random frames (no OOB)");
     net_fuzz_test_step.dependOn(&net_fuzz_test_cmd.step);
 
+    // P1: parser fuzz oracle — drive the DNS + TCP parsers over a million random /
+    // truncated / malformed byte buffers; every parse must terminate and never over-read
+    // (each read now routes through std/bytes' total checked reader, br_try_*).
+    const parser_fuzz_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "parser-fuzz-test",
+    });
+    parser_fuzz_test_cmd.step.dependOn(b.getInstallStep());
+    const parser_fuzz_test_step = b.step("parser-fuzz-test", "Fuzz the DNS+TCP parsers with malformed bytes (total, no over-read)");
+    parser_fuzz_test_step.dependOn(&parser_fuzz_test_cmd.step);
+
     const net_rx_live_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/net/net-rx-live-test.sh",
@@ -2807,6 +2818,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&net_rx_test_cmd.step);
     // net-fuzz-test fuzzes the RX parser with random frames (needs clang).
     m0_step.dependOn(&net_fuzz_test_cmd.step);
+    // parser-fuzz-test (P1) fuzzes the DNS+TCP parsers with malformed/truncated bytes:
+    // every parse is total over its finite buffer — no over-read, garbage rejected (clang).
+    m0_step.dependOn(&parser_fuzz_test_cmd.step);
     // net-rx-live-test routes a real virtio-net RX frame through net_rx_deliver under QEMU.
     m0_step.dependOn(&net_rx_live_test_cmd.step);
     // http-get-test active-opens a real TCP connection and HTTP GETs a live server under QEMU.
