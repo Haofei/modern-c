@@ -806,6 +806,14 @@ pub fn build(b: *std.Build) void {
     const udp_test_step = b.step("udp-test", "Link + run the UDP datagram build/parse + checksum");
     udp_test_step.dependOn(&udp_test_cmd.step);
 
+    const dns_host_test_cmd = b.addSystemCommand(&.{
+        "sh",
+        "tools/lib/host-harness.sh", "zig-out/bin/mcc", "dns-test",
+    });
+    dns_host_test_cmd.step.dependOn(b.getInstallStep());
+    const dns_host_test_step = b.step("dns-host-test", "Link + run the DNS A-query build + response parse (host fixture)");
+    dns_host_test_step.dependOn(&dns_host_test_cmd.step);
+
     const arena_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arena-test",
@@ -1831,6 +1839,25 @@ pub fn build(b: *std.Build) void {
     const llvm_http_get_test_step = b.step("llvm-http-get-test", "Active-open a real LLVM-lowered TCP connection and HTTP GET a live server over virtio-net under QEMU");
     llvm_http_get_test_step.dependOn(&llvm_http_get_test_cmd.step);
 
+    const dns_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/net/dns-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_dns_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/net/dns-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    dns_test_cmd.step.dependOn(b.getInstallStep());
+    const dns_test_step = b.step("dns-test", "Resolve a name via a real DNS A-query then HTTP GET that host over virtio-net under QEMU");
+    dns_test_step.dependOn(&dns_test_cmd.step);
+    llvm_dns_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_dns_test_step = b.step("llvm-dns-test", "Resolve a name via a real LLVM-lowered DNS A-query then HTTP GET that host over virtio-net under QEMU");
+    llvm_dns_test_step.dependOn(&llvm_dns_test_cmd.step);
+
     const backtrace_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/lang/backtrace-test.sh",
@@ -2423,6 +2450,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_e1000_test_cmd.step);
     m0_step.dependOn(&llvm_net_rx_live_test_cmd.step);
     m0_step.dependOn(&llvm_http_get_test_cmd.step);
+    m0_step.dependOn(&llvm_dns_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
@@ -2502,6 +2530,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&blockfs_test_cmd.step);
     // udp-test links + runs the UDP build/parse + checksum (needs clang).
     m0_step.dependOn(&udp_test_cmd.step);
+    m0_step.dependOn(&dns_host_test_cmd.step);
     // alloc-test links + runs the type-erased Allocator (needs clang).
     m0_step.dependOn(&alloc_test_cmd.step);
     m0_step.dependOn(&arc_test_cmd.step);
@@ -2622,6 +2651,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&net_rx_live_test_cmd.step);
     // http-get-test active-opens a real TCP connection and HTTP GETs a live server under QEMU.
     m0_step.dependOn(&http_get_test_cmd.step);
+    // dns-test resolves a name via a real DNS A-query then HTTP GETs that host under QEMU.
+    m0_step.dependOn(&dns_test_cmd.step);
     // backtrace-test walks the frame-pointer chain + symbolizes under QEMU.
     m0_step.dependOn(&backtrace_test_cmd.step);
     // paging-test links + runs the Sv39 page-table map/translate (needs clang).
