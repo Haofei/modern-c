@@ -13,6 +13,44 @@ import "std/mask.mc";
 import "kernel/lib/mailbox.mc";
 import "kernel/core/process.mc";
 import "kernel/core/proc_sched.mc";
+import "kernel/core/ipc_trace.mc";
+
+// ----- IPC provenance (observe-only) -----
+//
+// A bounded, non-blocking trace of who sent what to whom, emitted from the kernel's IPC
+// mediation path. This is PURE observability: it records a provenance event on each
+// successful delivery WITHOUT changing IPC semantics, return values, or control flow. The
+// record call is O(1), never blocks, and is skipped entirely when provenance is disabled
+// (the hot-channel opt-out lever for the future fast path). Kept self-contained in this
+// module so it stays disjoint from process.mc.
+global g_ipc_trace: IpcTrace;
+global g_ipc_provenance_enabled: bool = true;
+
+// Initialize (or reset) the IPC provenance ring. Call once after proc_table_init.
+export fn ipc_provenance_init() -> void {
+    ipc_trace_init(&g_ipc_trace);
+}
+
+// The provenance ring, for a drainer service to read/drain recorded events.
+export fn ipc_provenance() -> *mut IpcTrace {
+    return &g_ipc_trace;
+}
+
+// Hot-channel opt-out: when off, the IPC path records no provenance (delivery is unchanged).
+// Enabled by default. This is the per-build lever the future IPC fast path flips to stay off
+// the trace path entirely.
+export fn ipc_provenance_set_enabled(on: bool) -> void {
+    g_ipc_provenance_enabled = on;
+}
+
+// Record one provenance event for a successful delivery, unless provenance is disabled. The
+// Message carries no explicit payload length (its a0/a1/a2 are fixed inline words), so `size`
+// is 0. Observe-only: the caller's delivery result is unaffected.
+fn ipc_provenance_emit(from: u32, to: u32, msg: *Message) -> void {
+    if g_ipc_provenance_enabled {
+        ipc_trace_record(&g_ipc_trace, from, to, msg.tag, 0); // seq is observe-only; discard
+    }
+}
 
 // The reserved IPC tag the kernel delivers to a receiver that was blocked on a process which
 // then died: the message's `from` is the dead pid and `tag` is TAG_DEAD, so the receiver
@@ -71,6 +109,9 @@ fn ipc_send_try_id(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, 
     let msg: Message = proc_make_msg(t, tag, a0, a1, a2, call_id);
     if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
         wake_if_blocked(t, dst);
+        // Observe-only: record provenance for this successful delivery. Does not affect the
+        // result — the same sends succeed/fail exactly as before.
+        ipc_provenance_emit(msg.from, dst_pid, &msg);
         return true;
     }
     return false; // mailbox full
