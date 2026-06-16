@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const backend = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const fmt = @import("fmt.zig");
@@ -469,9 +470,10 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
         return error.EmitCFailed;
     }
 
+    const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_c.appendCProfileWithSourcePath(allocator, module, &output, profile, path, optimize);
+    try be.lower(allocator, module, &output, .{ .profile = profile, .optimize = optimize, .source_path = path });
     try writeStdout(output.items);
 }
 
@@ -504,9 +506,10 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
         return error.EmitCFailed;
     }
 
+    const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_c.appendCSourceMap(allocator, module, &output, profile, path, null);
+    try be.emitMap(allocator, module, &output, profile, path);
     try writeStdout(output.items);
 }
 
@@ -540,9 +543,10 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
         return error.EmitLlvmFailed;
     }
 
+    const be = backend.byName("llvm").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_llvm.appendLlvmWithSourcePath(allocator, module, &output, path, optimize);
+    try be.lower(allocator, module, &output, .{ .profile = .kernel, .optimize = optimize, .source_path = path });
     try writeStdout(output.items);
 }
 
@@ -565,6 +569,7 @@ test {
     _ = diagnostics;
     _ = eval;
     _ = ast;
+    _ = backend;
     _ = hir;
     _ = ir;
     _ = lexer;

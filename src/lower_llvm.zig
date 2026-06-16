@@ -29,6 +29,31 @@ const taggedUnionCase = ast_query.taggedUnionCase;
 const scalarLayout = type_layout.scalarLayout;
 const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 
+const backend_mod = @import("backend.zig");
+
+/// Construct the `Backend` registry entry for the LLVM backend. The LLVM
+/// backend is profile-agnostic and has no source-map artifact.
+pub fn mcBackend() backend_mod.Backend {
+    return .{
+        .name = "llvm",
+        .artifact_ext = ".ll",
+        .supports_profiles = false,
+        .ctx = undefined,
+        .lowerFn = backendLower,
+    };
+}
+
+fn backendLower(
+    ctx: *anyopaque,
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    out: *std.ArrayList(u8),
+    opts: backend_mod.LowerOptions,
+) anyerror!void {
+    _ = ctx;
+    try appendLlvmWithSourcePath(allocator, module, out, opts.source_path orelse "input.mc", opts.optimize);
+}
+
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     try appendLlvmWithSourcePath(allocator, module, out, "input.mc", false);
 }

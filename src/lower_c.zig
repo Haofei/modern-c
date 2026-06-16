@@ -61,6 +61,44 @@ pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *
 // reader can see which target was selected.
 pub const Profile = enum { kernel, hosted };
 
+const backend_mod = @import("backend.zig");
+
+/// Construct the `Backend` registry entry for the C backend. The C backend is
+/// profile-aware and supports source-map emission (`emit-map`).
+pub fn mcBackend() backend_mod.Backend {
+    return .{
+        .name = "c",
+        .artifact_ext = ".c",
+        .supports_profiles = true,
+        .ctx = undefined,
+        .lowerFn = backendLower,
+        .emitMapFn = backendEmitMap,
+    };
+}
+
+fn backendLower(
+    ctx: *anyopaque,
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    out: *std.ArrayList(u8),
+    opts: backend_mod.LowerOptions,
+) anyerror!void {
+    _ = ctx;
+    return appendCProfileWithSourcePath(allocator, module, out, opts.profile, opts.source_path, opts.optimize);
+}
+
+fn backendEmitMap(
+    ctx: *anyopaque,
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    out: *std.ArrayList(u8),
+    profile: Profile,
+    source_path: []const u8,
+) anyerror!void {
+    _ = ctx;
+    return appendCSourceMap(allocator, module, out, profile, source_path, null);
+}
+
 pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
     return appendCProfile(allocator, module, out, .kernel);
 }
