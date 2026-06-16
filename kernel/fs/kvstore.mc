@@ -25,7 +25,7 @@ import "std/addr.mc";
 import "std/mem.mc";
 
 const MAX_KEYS: usize = 8;      // directory capacity (entries)
-const STORE_BYTES: usize = 4096; // backing arena size (bytes)
+const KV_STORE_BYTES: usize = 4096; // backing arena size (bytes)
 
 enum KvError {
     Full,     // directory is full (no free slot for a new key)
@@ -45,7 +45,7 @@ struct KvEntry {
 
 struct KvStore {
     dir: [MAX_KEYS]KvEntry, // fixed directory, indexed by slot (not by key)
-    arena: [STORE_BYTES]u8, // backing byte storage for all values
+    arena: [KV_STORE_BYTES]u8, // backing byte storage for all values
     bump: usize,            // next free arena offset (top of the packed region)
 }
 
@@ -121,7 +121,7 @@ export fn kv_put(s: *mut KvStore, key: u64, src: PAddr, len: usize) -> Result<us
         // Overwrite: free the old bytes first so the fit check sees true headroom.
         kv_evict(s, slot);
     }
-    if (s.bump + len) > STORE_BYTES {
+    if (s.bump + len) > KV_STORE_BYTES {
         return err(.TooLarge);
     }
     // Claim the first free directory slot (the evicted one is now free, if any).
