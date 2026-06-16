@@ -93,3 +93,4 @@ kvstore-test	tests/qemu/fs/kvstore_demo.mc	driver		-Wno-switch-bool	agent KV sto
 fairsched-test	tests/qemu/proc/fairsched_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	fair-share scheduling (kernel/core/proc_sched): least-served-first pick bounds CPU per agent; throttle deprioritizes a misbehaving agent without killing it
 
 replay-test	tests/qemu/lang/replay_demo.mc	driver		-Wno-switch-bool	IPC stream replay (kernel/core): deterministic ordered playback of a recorded provenance log via a cursor (debug/replay foundation)
+oom-test	tests/qemu/proc/oom_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	live reclaim / OOM-kill (kernel/core/process): a live over-quota runaway is selected + killed, its memory+fds reclaimed, other agents survive (the agent-OS safety keystone)

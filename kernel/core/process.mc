@@ -361,6 +361,116 @@ export fn proc_macct(t: *mut ProcTable, slot: usize) -> *mut ResourceAccount {
     return &t.procs[slot].macct;
 }
 
+// ----- P0.4: per-process allocation accounting (the allocator's charge hook) -----
+//
+// The allocator path consults these on every grow/shrink of a process's memory footprint, so a
+// process can never reserve more than its quota. Both delegate to the process's ResourceAccount.
+
+// Charge `n` units against process `slot`'s memory quota. All-or-nothing (fail closed): on
+// success returns the new used total; on failure returns err(.OverQuota) and reserves nothing,
+// so the allocator can treat an over-quota charge as a clean no-op and refuse the allocation.
+export fn proc_charge_mem(t: *mut ProcTable, slot: usize, n: usize) -> Result<usize, MemError> {
+    return resacct_charge(proc_macct(t, slot), n);
+}
+
+// Release `n` units previously charged to process `slot` (on free). Saturates at zero.
+export fn proc_uncharge_mem(t: *mut ProcTable, slot: usize, n: usize) -> void {
+    resacct_uncharge(proc_macct(t, slot), n);
+}
+
+// ----- P0.5: LIVE reclaim — OOM-kill a runaway that won't exit (the safety keystone) -----
+//
+// A cooperative process exits via proc_exit and releases its resources. A *runaway* agent never
+// does: it allocates without bound and stays LIVE, so its memory account and fds are never
+// released. Without an external reclaim mechanism such a process can OOM the host — defeating the
+// whole agent-OS isolation thesis. These three functions are that mechanism: select the worst
+// live offender, forcibly terminate it (reusing the exact death-cleanup path proc_exit runs), and
+// reclaim its resources, while every other agent survives untouched. The heap/allocator calls
+// proc_oom_reclaim when it hits exhaustion (wiring that single call site into heap.mc is a
+// follow-up); the selection + kill + reclaim mechanism is delivered and tested here.
+
+enum OomError {
+    NoVictim, // no live, non-bootstrap process exists to reclaim — nothing to kill
+}
+
+// A sentinel exit code marking a process that was OOM-killed (vs. a clean self-exit). A parent
+// reaping the zombie sees this code and can distinguish a forced reclaim from a normal exit.
+const OOM_KILLED_CODE: u32 = 0xDEAD_00F0;
+
+// Select the OOM-kill victim: the live (proc_is_live), non-bootstrap (slot 0 is the kernel
+// bootstrap and is never a victim) process with the HIGHEST current memory usage — the worst
+// offender, the most likely runaway. Returns its slot, or err(.NoVictim) if no eligible process
+// exists. Pure selection: makes no state changes.
+export fn proc_oom_victim(t: *mut ProcTable) -> Result<usize, OomError> {
+    var best: usize = MAX_PROCS; // sentinel: no victim found yet
+    var best_used: usize = 0;
+    var found: bool = false;
+    var i: usize = 1; // skip slot 0 (bootstrap)
+    while i < t.count {
+        if proc_is_live(t, i) {
+            let used: usize = resacct_used(proc_macct(t, i));
+            if !found {
+                best = i;
+                best_used = used;
+                found = true;
+            } else {
+                if used > best_used {
+                    best = i;
+                    best_used = used;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if !found {
+        return err(.NoVictim);
+    }
+    return ok(best);
+}
+
+// Forcibly terminate a LIVE process (the runaway) that is NOT the current process — the victim
+// is not running, so we never context-switch. Runs the same proc_death_cleanup that proc_exit
+// runs (releasing fds, resetting the memory account, clearing IPC, waking blocked waiters), then
+// marks the slot a Zombie with the OOM sentinel exit code and wakes its parent (mirroring
+// proc_exit's parent-wake) so the death can be reaped like any other. Idempotent guard: a no-op
+// if the slot isn't a live, non-current victim, so a double-kill or a bad slot can't corrupt
+// state. After this the killed agent's memory and fds are reclaimed; the slot is later reaped
+// like any zombie.
+export fn proc_oom_kill(t: *mut ProcTable, slot: usize) -> void {
+    if slot == t.current {
+        return; // never kill the running process via this path (it isn't the runaway)
+    }
+    if !proc_is_live(t, slot) {
+        return; // already dead/zombie/free — nothing to reclaim
+    }
+    t.procs[slot].exit_code = OOM_KILLED_CODE; // recognizable: OOM-killed, not a clean exit
+    proc_death_cleanup(t, slot); // SAME path as proc_exit: fds + macct + IPC + waiters released
+    t.procs[slot].state = .Zombie; // a parent can still reap its death
+    // Wake the parent if it is blocked in proc_wait — this forced exit is the event it awaits.
+    let parent_slot: usize = t.procs[slot].parent_slot;
+    if parent_slot < t.count {
+        if t.procs[parent_slot].gen == t.procs[slot].parent_gen {
+            proc_unblock(t, parent_slot, BLOCK_WAIT);
+        }
+    }
+    // Deliberately NO context switch: the victim is not the running process.
+}
+
+// The memory-pressure entry point: pick the worst live offender (proc_oom_victim) and OOM-kill
+// it (proc_oom_kill), returning the reclaimed slot. err(.NoVictim) if there is nothing to kill.
+// The heap/allocator calls this on allocation exhaustion to reclaim memory from a runaway agent.
+export fn proc_oom_reclaim(t: *mut ProcTable) -> Result<usize, OomError> {
+    switch proc_oom_victim(t) {
+        ok(slot) => {
+            proc_oom_kill(t, slot);
+            return ok(slot);
+        }
+        err(e) => {
+            return err(e);
+        }
+    }
+}
+
 // Replace a process's executable image in place — exec() semantics. The saved context is reset
 // to start `entry` on a fresh stack, but the process KEEPS its identity (same pid and
 // generation, so existing endpoints stay valid) and, crucially, its open file descriptors:
