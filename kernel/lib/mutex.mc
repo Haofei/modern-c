@@ -58,6 +58,10 @@ export fn mutex_try_lock(m: *mut Mutex, task: u32) -> bool {
 // Acquire the lock for `task`. If free, the caller holds it (Acquired). If held, the caller is
 // enqueued as a waiter (Blocked) — the kernel then parks `task` until a later unlock hands the
 // lock to it.
+//
+// C2: this op may block (the caller is parked on contention), so it is sleepable —
+// calling it from an `#[irq_context]` function is "scheduling while atomic".
+#[may_sleep]
 export fn mutex_lock(m: *mut Mutex, task: u32) -> LockOutcome {
     if !m.locked {
         m.locked = true;

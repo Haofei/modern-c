@@ -81,6 +81,11 @@ export fn enable(base: usize, l: IrqLine<Unclaimed>) -> IrqLine<Enabled> {
 // caller asserts this line is the pending source. A mismatch (a different source,
 // or 0 = nothing pending) is a contract violation and traps rather than minting a
 // bogus Pending token that `complete` would then acknowledge.
+//
+// C2: this runs inside the interrupt to claim the pending source, so it is
+// IRQ/atomic context — the sema rule forbids it from calling any `#[may_sleep]`
+// op (heap alloc, mutex_lock, sched_yield). It only touches PLIC registers.
+#[irq_context]
 export fn claim_if_pending(base: usize, l: IrqLine<Enabled>) -> IrqLine<Pending> {
     let line: u32 = l.line;
     let claimed: u32 = plic_claim(base);

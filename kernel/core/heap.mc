@@ -241,6 +241,10 @@ fn heap_release(h: *mut Heap, start: PAddr, len: usize) -> void {
 // pointer stays aligned) and a trailing band of `redzone` bytes, both filled with
 // the poison pattern. The user pointer (raw_start + lead) is returned; `heap_free`
 // reconstructs the bands from `redzone`/`align` and verifies the poison is intact.
+// C2: heap allocation is a sleepable op (it may walk/coalesce the free list and,
+// in a fuller kernel, block on memory pressure) — allocating from an
+// `#[irq_context]` function is forbidden ("sleeping in interrupt").
+#[may_sleep]
 export fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
     let rz: usize = h.redzone;
     if rz == 0 {

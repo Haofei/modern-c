@@ -438,6 +438,7 @@ pub const Checker = struct {
                         .return_ty = fn_decl.return_type,
                         .no_lang_trap = hasNoLangTrap(decl.attrs),
                         .is_const = fn_decl.is_const,
+                        .may_sleep = hasMaySleep(decl.attrs),
                     }) catch {
                         self.oom = true;
                     };
@@ -522,9 +523,10 @@ pub const Checker = struct {
 
     fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
+        const irq_context = hasIrqContext(decl.attrs);
         const type_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
         switch (decl.kind) {
-            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases),
+            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, irq_context, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases),
             .struct_decl => |struct_decl| {
                 var struct_ctx = type_ctx;
                 if (struct_decl.abi) |abi| {
@@ -1628,7 +1630,7 @@ pub const Checker = struct {
         }
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, irq_context: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         self.current_fn_name = fn_decl.name.text;
         defer self.current_fn_name = null;
         var scope = Scope.init(self.reporter.allocator);
@@ -1673,6 +1675,7 @@ pub const Checker = struct {
         if (fn_decl.body) |body| {
             const fn_ctx = Context{
                 .no_lang_trap = no_lang_trap,
+                .irq_context = irq_context,
                 .returns_never = returns_never,
                 .returns_void = returns_void,
                 .return_ty = fn_decl.return_type,
@@ -2989,6 +2992,12 @@ pub const Checker = struct {
                     }
                     if (ctx.no_lang_trap and !function.no_lang_trap) {
                         self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "call target is not proven #[no_lang_trap]");
+                    }
+                    // C2: an IRQ/atomic-context function may not call a sleepable op
+                    // (heap alloc, mutex/lock acquire, scheduler yield) — that is
+                    // "scheduling while atomic" / "sleeping in interrupt".
+                    if (ctx.irq_context and function.may_sleep) {
+                        self.errorCode(expr.span, "E_SLEEP_IN_ATOMIC", "calling a #[may_sleep] op from an #[irq_context] function (sleeping in interrupt)");
                     }
                     if (node.args.len != function.params.len) {
                         self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match function declaration");
@@ -5243,6 +5252,9 @@ pub const Checker = struct {
 
 const Context = struct {
     no_lang_trap: bool = false,
+    // C2: the enclosing function runs in IRQ/atomic context (`#[irq_context]`/
+    // `#[atomic]`); calling a `#[may_sleep]` op is "sleeping in interrupt".
+    irq_context: bool = false,
     in_unsafe: bool = false,
     in_comptime: bool = false,
     returns_never: bool = false,
@@ -5322,6 +5334,9 @@ const FunctionInfo = struct {
     return_ty: ?ast.TypeExpr,
     no_lang_trap: bool = false,
     is_const: bool = false,
+    // C2: this function is a sleepable op (`#[may_sleep]`) — calling it from an
+    // `#[irq_context]`/`#[atomic]` function is a compile error.
+    may_sleep: bool = false,
 };
 
 const GlobalInfo = struct {
@@ -5468,6 +5483,27 @@ fn hasNoLangTrap(attrs: []ast.Attr) bool {
         if (std.meta.activeTag(attr.kind) == .no_lang_trap) return true;
     }
     return false;
+}
+
+// C2 (IRQ/atomic-context discipline): bare `#[name]` attributes parse as `.named`.
+// `#[irq_context]` marks a function that runs in interrupt/atomic context;
+// `#[may_sleep]` marks an op that may block (heap alloc, mutex/lock acquire,
+// scheduler yield). An irq-context fn may not call a may_sleep op. (`atomic` is a
+// reserved keyword, so the synonym attribute name is `#[atomic_context]`.)
+fn hasNamedAttr(attrs: []ast.Attr, name: []const u8) bool {
+    for (attrs) |attr| switch (attr.kind) {
+        .named => |id| if (std.mem.eql(u8, id.text, name)) return true,
+        else => {},
+    };
+    return false;
+}
+
+fn hasIrqContext(attrs: []ast.Attr) bool {
+    return hasNamedAttr(attrs, "irq_context") or hasNamedAttr(attrs, "atomic_context");
+}
+
+fn hasMaySleep(attrs: []ast.Attr) bool {
+    return hasNamedAttr(attrs, "may_sleep");
 }
 
 fn backendNameAttr(attrs: []ast.Attr) ?[]const u8 {

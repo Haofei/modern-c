@@ -36,6 +36,10 @@ export fn sched_spawn(s: *mut Scheduler, stack_top: usize, entry: fn() -> void) 
 }
 
 // Cooperative round-robin: save the current context and switch to the next.
+//
+// C2: yielding the CPU is the canonical sleepable op — doing it from an
+// `#[irq_context]` function is "scheduling while atomic", a compile error.
+#[may_sleep]
 export fn sched_yield(s: *mut Scheduler) -> void {
     if s.count == 0 {
         unreachable; // nothing to schedule
