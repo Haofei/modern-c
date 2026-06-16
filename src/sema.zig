@@ -215,6 +215,25 @@ pub const Checker = struct {
 
         for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
 
+        // Definite-initialization pass (S0.1). A scalar `var x: T = uninit;`
+        // must be definitely assigned on every control-flow path before it is
+        // read; a read-before-assign is E_USE_BEFORE_INIT. Runs over every
+        // function body (the `uninit` idiom is pervasive, but the analysis is
+        // precise enough to accept it — see checkDefiniteInit).
+        {
+            const di_ctx = Context{
+                .functions = &functions,
+                .globals = &globals,
+                .type_aliases = &type_aliases,
+                .structs = &structs,
+                .enums = &enums,
+                .tagged_unions = &tagged_unions,
+            };
+            for (module.decls) |decl| {
+                if (decl.kind == .fn_decl) self.checkDefiniteInit(decl.kind.fn_decl, di_ctx);
+            }
+        }
+
         // Linear `move`/liveness pass (section 18.1, annex D.7). No-op unless the
         // module declares `move` types.
         if (move_types.count() > 0) {
@@ -1682,6 +1701,296 @@ pub const Checker = struct {
                     self.errorCode(span, "E_RETURN_MISSING", "function return type requires all paths to return a value");
                 }
             }
+        }
+    }
+
+    // ----- Definite-initialization pass (S0.1) ---------------------------------
+    //
+    // A scalar `var x: T = uninit;` declares storage whose bytes are unspecified;
+    // reading it before it is definitely assigned on every control-flow path is a
+    // compile error (E_USE_BEFORE_INIT), not a runtime hazard. This is the flow-
+    // sensitive "definite assignment" check.
+    //
+    // State is the set of *pending* names: scalar `uninit` vars declared but not yet
+    // proven assigned on the current path. A pending name is:
+    //   - removed when it is the whole target of an assignment `x = …` (now assigned),
+    //   - removed when its address is taken (`&x`) or it is used through a member /
+    //     index / deref base — such a use may initialize it, so we conservatively
+    //     treat the var as assigned (this is what keeps the pervasive
+    //     `var x: T = uninit; init(&x); use(x)` idiom accepted),
+    //   - reported (E_USE_BEFORE_INIT) when it is read as a plain value.
+    //
+    // Only SCALAR vars are tracked. Aggregates (arrays, structs, unions, slices,
+    // results, …) are initialized field/element-at-a-time through index/member
+    // assignment, which this whole-variable analysis cannot prove — so they are never
+    // made pending (no false positives on `var buf: [N]u8 = uninit; buf[i] = …`).
+    //
+    // Branches (if/else, switch — `if` desugars to a switch on the bool) intersect:
+    // a name is assigned after the branch only if assigned on every arm that falls
+    // through to the join. A diverging arm (ends in return/break/continue/unreachable)
+    // contributes nothing to the join. Loops are conservative: a body assignment is
+    // not guaranteed (the loop may run zero times), so the outer pending set is
+    // restored after the loop — but reads inside the body are still checked.
+    const DefInitState = std.StringHashMap(diagnostics.Span);
+
+    fn checkDefiniteInit(self: *Checker, fn_decl: ast.FnDecl, ctx: Context) void {
+        const body = fn_decl.body orelse return;
+        var pending = DefInitState.init(self.reporter.allocator);
+        defer pending.deinit();
+        _ = self.diBlock(body, &pending, ctx);
+    }
+
+    fn diCloneState(self: *Checker, state: *const DefInitState) DefInitState {
+        var clone = DefInitState.init(self.reporter.allocator);
+        var it = state.iterator();
+        while (it.next()) |entry| {
+            clone.put(entry.key_ptr.*, entry.value_ptr.*) catch {
+                self.oom = true;
+            };
+        }
+        return clone;
+    }
+
+    fn diReplaceState(self: *Checker, dest: *DefInitState, src: *const DefInitState) void {
+        dest.clearRetainingCapacity();
+        var it = src.iterator();
+        while (it.next()) |entry| {
+            dest.put(entry.key_ptr.*, entry.value_ptr.*) catch {
+                self.oom = true;
+            };
+        }
+    }
+
+    // Analyze a block's statements in order. Returns whether the block diverges
+    // (every path through it ends in return/break/continue/unreachable), so the
+    // join after it is unreachable.
+    fn diBlock(self: *Checker, block: ast.Block, state: *DefInitState, ctx: Context) bool {
+        for (block.items) |stmt| {
+            if (self.diStmt(stmt, state, ctx)) return true;
+        }
+        return false;
+    }
+
+    // Returns whether the statement diverges.
+    fn diStmt(self: *Checker, stmt: ast.Stmt, state: *DefInitState, ctx: Context) bool {
+        switch (stmt.kind) {
+            .var_decl => |decl| {
+                if (decl.init) |init_expr| {
+                    if (isUninitLiteral(init_expr)) {
+                        // A scalar `var x: T = uninit;` becomes pending until definitely
+                        // assigned. Aggregates and untyped/unknown storage are not tracked.
+                        if (decl.ty) |ty| {
+                            if (diIsScalarType(ty, ctx)) {
+                                for (decl.names) |name| {
+                                    state.put(name.text, name.span) catch {
+                                        self.oom = true;
+                                    };
+                                }
+                            }
+                        }
+                    } else {
+                        self.diRead(init_expr, state, ctx);
+                    }
+                }
+                return false;
+            },
+            .let_decl => |decl| {
+                if (decl.init) |init_expr| self.diRead(init_expr, state, ctx);
+                return false;
+            },
+            .assignment => |a| {
+                // The value is read first; then the target may become assigned.
+                self.diRead(a.value, state, ctx);
+                switch (a.target.kind) {
+                    .ident => |id| {
+                        // Whole-variable assignment: the pending var is now definitely set.
+                        _ = state.remove(id.text);
+                    },
+                    else => {
+                        // Member/index/deref target: the base is used as storage (address-like);
+                        // clear any pending root var (a partial write we cannot fully track) and
+                        // read the index/base subexpressions.
+                        self.diUseTarget(a.target, state, ctx);
+                    },
+                }
+                return false;
+            },
+            .@"return" => |maybe| {
+                if (maybe) |e| self.diRead(e, state, ctx);
+                return true;
+            },
+            .@"break", .@"continue" => return true,
+            .expr => |e| {
+                self.diRead(e, state, ctx);
+                // An expression that cannot fall through (`unreachable`, `trap(...)`, a
+                // `-> never` call) ends this path, like `return`.
+                if (!exprMayFallThrough(e, ctx) or exprIsNeverCall(e, ctx)) return true;
+                return false;
+            },
+            .assert => |e| {
+                self.diRead(e, state, ctx);
+                return false;
+            },
+            .@"defer" => |e| {
+                self.diRead(e, state, ctx);
+                return false;
+            },
+            .block, .unsafe_block, .comptime_block => |b| return self.diBlock(b, state, ctx),
+            .contract_block => |c| return self.diBlock(c.block, state, ctx),
+            .loop => |l| {
+                if (l.iterable) |iter| self.diRead(iter, state, ctx);
+                // Conservative: a body assignment may not run (zero iterations), so the
+                // outer pending set is restored afterwards. Reads inside the body are still
+                // checked against the entry state.
+                var body_state = self.diCloneState(state);
+                defer body_state.deinit();
+                _ = self.diBlock(l.body, &body_state, ctx);
+                // The loop may run zero times, so control always falls through.
+                return false;
+            },
+            .if_let => |n| {
+                self.diRead(n.value, state, ctx);
+                var then_state = self.diCloneState(state);
+                defer then_state.deinit();
+                const then_div = self.diBlock(n.then_block, &then_state, ctx);
+                var else_state = self.diCloneState(state);
+                defer else_state.deinit();
+                var else_div = false;
+                if (n.else_block) |eb| {
+                    else_div = self.diBlock(eb, &else_state, ctx);
+                }
+                self.diJoin(state, &then_state, then_div, &else_state, else_div);
+                return then_div and (n.else_block != null) and else_div;
+            },
+            .@"switch" => |sw| {
+                self.diRead(sw.subject, state, ctx);
+                var joined: ?DefInitState = null;
+                defer if (joined) |*m| m.deinit();
+                var any_arm = false;
+                var all_diverge = true;
+                for (sw.arms) |arm| {
+                    any_arm = true;
+                    var arm_state = self.diCloneState(state);
+                    defer arm_state.deinit();
+                    const arm_div = switch (arm.body) {
+                        .block => |b| self.diBlock(b, &arm_state, ctx),
+                        .expr => |e| blk: {
+                            self.diRead(e, &arm_state, ctx);
+                            break :blk false;
+                        },
+                    };
+                    if (!arm_div) {
+                        all_diverge = false;
+                        if (joined) |*m| {
+                            self.diMerge(m, &arm_state);
+                        } else {
+                            joined = self.diCloneState(&arm_state);
+                        }
+                    }
+                }
+                if (joined) |*m| self.diReplaceState(state, m);
+                return any_arm and all_diverge;
+            },
+            .asm_stmt => return false,
+        }
+    }
+
+    // Join two arms into `dest`. A diverging arm does not reach the join, so it
+    // contributes nothing; only arms that fall through are intersected (a name is
+    // assigned after the branch only if assigned on every reaching arm — i.e. it is
+    // pending after the branch if it is still pending on any reaching arm).
+    fn diJoin(self: *Checker, dest: *DefInitState, left: *const DefInitState, left_div: bool, right: *const DefInitState, right_div: bool) void {
+        if (left_div and right_div) return; // join unreachable; leave dest as-is
+        if (left_div) {
+            self.diReplaceState(dest, right);
+            return;
+        }
+        if (right_div) {
+            self.diReplaceState(dest, left);
+            return;
+        }
+        var merged = self.diCloneState(left);
+        defer merged.deinit();
+        self.diMerge(&merged, right);
+        self.diReplaceState(dest, &merged);
+    }
+
+    // Merge `other` into `dest` as the union of pending names (a name is pending after
+    // the join if it is still pending on EITHER reaching arm — assigned only if
+    // assigned on BOTH).
+    fn diMerge(self: *Checker, dest: *DefInitState, other: *const DefInitState) void {
+        var it = other.iterator();
+        while (it.next()) |entry| {
+            dest.put(entry.key_ptr.*, entry.value_ptr.*) catch {
+                self.oom = true;
+            };
+        }
+    }
+
+    // Walk an expression evaluated for its value, reporting a read of any pending var
+    // and clearing vars whose address is taken (an address-of use may initialize them).
+    fn diRead(self: *Checker, expr: ast.Expr, state: *DefInitState, ctx: Context) void {
+        switch (expr.kind) {
+            .ident => |id| {
+                if (state.contains(id.text)) {
+                    self.errorCode(expr.span, "E_USE_BEFORE_INIT", "scalar variable initialized with `uninit` is read before it is assigned on all paths");
+                }
+            },
+            .address_of => |inner| self.diUseTarget(inner.*, state, ctx),
+            .grouped => |inner| self.diRead(inner.*, state, ctx),
+            .unary => |u| self.diRead(u.expr.*, state, ctx),
+            .binary => |b| {
+                self.diRead(b.left.*, state, ctx);
+                self.diRead(b.right.*, state, ctx);
+            },
+            .cast => |c| self.diRead(c.value.*, state, ctx),
+            .call => |c| {
+                self.diRead(c.callee.*, state, ctx);
+                for (c.args) |arg| self.diRead(arg, state, ctx);
+            },
+            .index => |n| {
+                self.diRead(n.base.*, state, ctx);
+                self.diRead(n.index.*, state, ctx);
+            },
+            .slice => |n| {
+                self.diRead(n.base.*, state, ctx);
+                self.diRead(n.start.*, state, ctx);
+                self.diRead(n.end.*, state, ctx);
+            },
+            .deref => |inner| self.diRead(inner.*, state, ctx),
+            .member => |m| self.diRead(m.base.*, state, ctx),
+            .array_literal => |items| for (items) |item| self.diRead(item, state, ctx),
+            .struct_literal => |fields| for (fields) |field| self.diRead(field.value, state, ctx),
+            .block => |b| {
+                var inner = self.diCloneState(state);
+                defer inner.deinit();
+                _ = self.diBlock(b, &inner, ctx);
+            },
+            .try_expr => |t| {
+                self.diRead(t.operand.*, state, ctx);
+                if (t.mapped) |m| self.diRead(m.*, state, ctx);
+            },
+            else => {},
+        }
+    }
+
+    // An assignment/address-of target (or a base used as storage). A pending var whose
+    // address or storage is used this way may be initialized through that reference, so
+    // it is cleared (conservatively assigned) rather than reported as a read. Index
+    // subexpressions are still read-checked.
+    fn diUseTarget(self: *Checker, target: ast.Expr, state: *DefInitState, ctx: Context) void {
+        switch (target.kind) {
+            .ident => |id| {
+                _ = state.remove(id.text);
+            },
+            .grouped => |inner| self.diUseTarget(inner.*, state, ctx),
+            .member => |m| self.diUseTarget(m.base.*, state, ctx),
+            .index => |n| {
+                self.diUseTarget(n.base.*, state, ctx);
+                self.diRead(n.index.*, state, ctx);
+            },
+            .deref => |inner| self.diRead(inner.*, state, ctx),
+            else => self.diRead(target, state, ctx),
         }
     }
 
@@ -5415,6 +5724,20 @@ fn classifyType(ty: ast.TypeExpr) TypeClass {
 
 fn classifyTypeCtx(ty: ast.TypeExpr, ctx: Context) TypeClass {
     return classifyType(resolveAliasType(ty, ctx));
+}
+
+// Definite-init (S0.1) tracks only single-storage SCALAR vars: a whole-variable
+// assignment definitely initializes them, and a plain read is a use of the whole
+// value. Aggregates (arrays, structs, unions, slices, results, …) are filled
+// element/field-at-a-time and are not whole-variable trackable here, so they are
+// never made pending (avoids false positives on the `buf[i] = …` / `s.f = …` idiom).
+fn diIsScalarType(ty: ast.TypeExpr, ctx: Context) bool {
+    return switch (classifyTypeCtx(ty, ctx)) {
+        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_usize, .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_isize, .wrap, .sat, .serial, .counter, .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer, .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr, .fn_pointer, .bool, .f32, .f64, .duration, .order => true,
+        // Not tracked: array, slice, atomic, dma_buf, result, void, never, the
+        // literal/unknown classes (structs/enums/unions/generics resolve to .unknown).
+        else => false,
+    };
 }
 
 fn resolveAliasType(ty: ast.TypeExpr, ctx: Context) ast.TypeExpr {

@@ -2,7 +2,7 @@
 // SPEC: milestone=local-initialization
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_LOCAL_REQUIRES_INITIALIZER,E_UNINIT_REQUIRES_STORAGE,E_LITERAL_REQUIRES_TARGET,E_NO_IMPLICIT_CONVERSION,E_CALL_ARG_COUNT
+// SPEC: check=E_LOCAL_REQUIRES_INITIALIZER,E_UNINIT_REQUIRES_STORAGE,E_LITERAL_REQUIRES_TARGET,E_NO_IMPLICIT_CONVERSION,E_CALL_ARG_COUNT,E_USE_BEFORE_INIT
 
 fn takes_u32(value: u32) -> u32 {
     return value;
@@ -41,11 +41,41 @@ fn accept_grouped_maybe_uninit_write_payload() -> u32 {
     return node.value;
 }
 
-fn accept_read_materialized_uninit_scalar() -> u32 {
+// S0.1 definite-initialization: a scalar `var x: T = uninit;` must be assigned on
+// every path before it is read; a read-before-assign is a compile error.
+fn reject_read_uninit_scalar_before_assign() -> u32 {
     var x: u32 = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
     return x;
 }
 
+fn accept_uninit_scalar_assigned_before_read() -> u32 {
+    var x: u32 = uninit;
+    x = 5;
+    return x;
+}
+
+fn accept_uninit_scalar_assigned_both_branches(c: bool) -> u32 {
+    var x: u32 = uninit;
+    if c {
+        x = 1;
+    } else {
+        x = 2;
+    }
+    return x;
+}
+
+fn reject_uninit_scalar_assigned_one_branch(c: bool) -> u32 {
+    var x: u32 = uninit;
+    if c {
+        x = 1;
+    }
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    return x;
+}
+
+// Aggregates are filled element/field-at-a-time, which whole-variable definite-init
+// does not track; reading them after `uninit` stays accepted (unspecified, not UB).
 fn accept_read_materialized_uninit_byte() -> u8 {
     var buf: [4]u8 = uninit;
     return buf[0];
