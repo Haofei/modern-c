@@ -38,6 +38,7 @@ const usage =
     \\  mcc emit-map <file.mc> [--profile=kernel|hosted]
     \\  mcc emit-llvm <file.mc>
     \\  mcc emit-layout <file.mc> --structs=A,B,C
+    \\  mcc emit-c-struct <file.mc> --structs=A,B,C
     \\  mcc fmt <file.mc> [--check]
     \\  mcc symbols <file.mc>
     \\
@@ -104,12 +105,14 @@ pub fn main(init: std.process.Init) !void {
     const accepts_optimize = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir") or
         std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
     const is_emit_layout = std.mem.eql(u8, command, "emit-layout");
+    const is_emit_c_struct = std.mem.eql(u8, command, "emit-c-struct");
+    const needs_structs = is_emit_layout or is_emit_c_struct;
     if (saw_profile_flag and !is_c_artifact_command) return failUsage();
     if (optimize and !accepts_optimize) return failUsage();
     if (check_fmt and !std.mem.eql(u8, command, "fmt")) return failUsage();
-    // `--structs=` is consumed only by `emit-layout`, and `emit-layout` requires it.
-    if (structs_flag != null and !is_emit_layout) return failUsage();
-    if (is_emit_layout and structs_flag == null) return failUsage();
+    // `--structs=` is consumed only by the struct-from-MC commands, which both require it.
+    if (structs_flag != null and !needs_structs) return failUsage();
+    if (needs_structs and structs_flag == null) return failUsage();
 
     const root_source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(root_source);
@@ -157,6 +160,8 @@ pub fn main(init: std.process.Init) !void {
         try runEmitLlvm(allocator, path, source, optimize);
     } else if (is_emit_layout) {
         try runEmitLayout(allocator, path, source, structs_flag.?);
+    } else if (is_emit_c_struct) {
+        try runEmitCStruct(allocator, path, source, structs_flag.?);
     } else {
         return failUsage();
     }
@@ -615,6 +620,60 @@ fn runEmitLayout(allocator: std.mem.Allocator, path: []const u8, source: []const
         error.LayoutUnresolved => {
             std.debug.print("emit-layout: could not resolve a struct's layout in {s}\n", .{path});
             return error.EmitLayoutFailed;
+        },
+        else => return err,
+    };
+    try writeStdout(output.items);
+}
+
+// `emit-c-struct` (hardening A2): emit a generated C header with the FULL struct *definitions* for
+// the comma-separated structs in `--structs=` — the actual `typedef struct { ... }` matching MC's
+// field order/types/layout, plus the by-value array/struct wrappers they embed, plus the A1
+// `_Static_assert`s as a cross-check. A C runtime includes this header and drops its hand-written
+// mirror, so the MC struct becomes the single source of truth and MC↔C drift is impossible (there
+// is no second declaration to diverge).
+fn runEmitCStruct(allocator: std.mem.Allocator, path: []const u8, source: []const u8, structs_csv: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitCStructFailed;
+    }
+
+    var checker = sema.Checker.init(&diag);
+    checker.checkModule(module);
+    if (diag.has_errors) {
+        diag.render();
+        return error.EmitCStructFailed;
+    }
+
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(allocator);
+    var it = std.mem.splitScalar(u8, structs_csv, ',');
+    while (it.next()) |name| {
+        if (name.len == 0) continue;
+        try names.append(allocator, name);
+    }
+    if (names.items.len == 0) return failUsage();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+    lower_c.appendStructDecls(allocator, module, &output, names.items) catch |err| switch (err) {
+        error.LayoutStructNotFound => {
+            std.debug.print("emit-c-struct: a struct named in --structs= was not found in {s}\n", .{path});
+            return error.EmitCStructFailed;
+        },
+        error.LayoutUnresolved => {
+            std.debug.print("emit-c-struct: could not resolve a struct's layout in {s}\n", .{path});
+            return error.EmitCStructFailed;
         },
         else => return err,
     };

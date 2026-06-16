@@ -46,30 +46,15 @@ void mc_thread_init(Context *ctx, uintptr_t stack_top, void (*entry)(void)) {
 void mc_switch_context_vm(Context *old, Context *next, uint64_t satp) { (void)old; (void)next; (void)satp; }
 
 // ----- virtqueue + DMA (NIC) -----
-typedef struct VringDesc { uint64_t addr; uint32_t len; uint16_t flags; uint16_t next; } VringDesc;
-typedef struct DescTable { VringDesc d[8]; } DescTable;
-typedef struct VringAvail { uint16_t flags; uint16_t idx; uint16_t ring[8]; uint16_t used_event; } VringAvail;
-typedef struct UsedElem { uint32_t id; uint32_t len; } UsedElem;
-typedef struct VringUsed { uint16_t flags; uint16_t idx; UsedElem ring[8]; uint16_t avail_event; } VringUsed;
-// `Virtq` mirrors std/virtqueue.mc's `Virtq` field-for-field; MC writes through a pointer to it,
-// so a missing/reordered field corrupts adjacent BSS (this exact struct was missing inflight_len/
-// inflight_present once → boot hang). virtq_layout_assert.h makes any drift a compile error.
-typedef struct mc_array_u64_8 { uint64_t elems[8]; } mc_array_u64_8;
-typedef struct mc_array_u32_8 { uint32_t elems[8]; } mc_array_u32_8;
-typedef struct mc_array_bool_8 { _Bool elems[8]; } mc_array_bool_8;
-typedef struct Virtq {
-    DescTable *desc; VringAvail *avail; VringUsed *used;
-    uint16_t size; uint16_t free_head; uint16_t num_free; uint16_t last_used;
-    mc_array_u64_8 inflight_addr;
-    mc_array_u32_8 inflight_len;
-    mc_array_bool_8 inflight_present;
-} Virtq;
+// A2 (single source of truth): the virtqueue structs are GENERATED from std/virtqueue.mc by
+// `mcc emit-c-struct` (tools/qemu/kernel-boot-lib.sh) — the MC struct is the only declaration, so
+// this runtime can never drift from MC's `Virtq` layout (the missing-field BSS-corruption / boot-
+// hang class is structurally impossible). The generated header also carries the A1 sizeof/offsetof
+// asserts. No hand-written mirror remains here.
+#include "virtq_structs.h"
 typedef struct CpuBuffer { uintptr_t dev_addr; uintptr_t cpu_addr; uintptr_t len; } CpuBuffer;
 typedef struct DeviceBuffer { uintptr_t dev_addr; uintptr_t len; } DeviceBuffer;
 typedef struct VirtioMmio VirtioMmio;
-
-// Authoritative MC layout checks (generated). Fails to compile on any MC<->C struct drift.
-#include "virtq_layout_assert.h"
 
 static uint8_t g_dma_pool[2048] __attribute__((aligned(16)));
 static int g_dma_in_use = 0;

@@ -67,15 +67,31 @@ kernel_boot_emit_virtq_layout_header() {
         >"$dir/virtq_layout_assert.h"
 }
 
+# Generate the authoritative MC virtqueue struct *definitions* (A2: single source of truth) into
+# $1/virtq_structs.h. The platform header `#include`s this instead of hand-declaring the vring/Virtq
+# structs, so the MC struct in std/virtqueue.mc is the ONLY declaration — there is no hand-written C
+# copy to drift. The generated header carries the A1 sizeof/offsetof asserts too (belt-and-suspenders).
+# Idempotent — safe to call repeatedly per build.
+kernel_boot_emit_virtq_structs_header() {
+    local dir="$1"
+    local root
+    root="$(kernel_boot_repo_root)"
+    "$MCC" emit-c-struct "$root/std/virtqueue.mc" \
+        --structs=VringDesc,DescTable,VringAvail,UsedElem,VringUsed,Virtq \
+        >"$dir/virtq_structs.h"
+}
+
 kernel_boot_compile_c_object() {
     local src="$1"
     local out="$2"
     local dir
     dir="$(dirname "$out")"
-    # Make the generated virtq layout-assert header available to any runtime that includes it.
-    # Generated next to the output object and added to the include path; harmless for runtimes
-    # that don't include it.
+    # Make the generated virtq headers available to any runtime that includes them. Generated next
+    # to the output object and added to the include path; harmless for runtimes that don't include
+    # them. virtq_structs.h holds the GENERATED struct definitions (the platform header includes it
+    # instead of hand-mirroring); virtq_layout_assert.h holds the standalone A1 layout asserts.
     kernel_boot_emit_virtq_layout_header "$dir"
+    kernel_boot_emit_virtq_structs_header "$dir"
     "$CLANG" "${CFLAGS[@]}" -I"$dir" -c "$src" -o "$out"
 }
 

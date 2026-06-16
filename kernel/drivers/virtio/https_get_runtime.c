@@ -69,27 +69,14 @@ void mc_udelay(uint32_t us) {
     while (*(volatile uint64_t *)CLINT_MTIME < target) { }
 }
 
-// ----- virtqueue structs matching the MC layout (std/virtqueue.mc) -----
-typedef struct VringDesc { uint64_t addr; uint32_t len; uint16_t flags; uint16_t next; } VringDesc;
-typedef struct DescTable { VringDesc d[8]; } DescTable;
-typedef struct VringAvail { uint16_t flags; uint16_t idx; uint16_t ring[8]; uint16_t used_event; } VringAvail;
-typedef struct UsedElem { uint32_t id; uint32_t len; } UsedElem;
-typedef struct VringUsed { uint16_t flags; uint16_t idx; UsedElem ring[8]; uint16_t avail_event; } VringUsed;
-typedef struct mc_array_u64_8 { uint64_t elems[8]; } mc_array_u64_8;
-typedef struct mc_array_u32_8 { uint32_t elems[8]; } mc_array_u32_8;
-typedef struct mc_array_bool_8 { uint8_t elems[8]; } mc_array_bool_8;
-typedef struct Virtq {
-    DescTable *desc; VringAvail *avail; VringUsed *used;
-    uint16_t size; uint16_t free_head; uint16_t num_free; uint16_t last_used;
-    mc_array_u64_8 inflight_addr;
-    mc_array_u32_8 inflight_len;
-    mc_array_bool_8 inflight_present;
-} Virtq;
+// ----- virtqueue structs (A2: single source of truth) -----
+// GENERATED from std/virtqueue.mc by `mcc emit-c-struct` (tools/qemu/kernel-boot-lib.sh) — the MC
+// struct is the only declaration, so this runtime can never drift from MC's `Virtq` layout. The
+// generated header also carries the A1 sizeof/offsetof asserts. No hand-written mirror remains here.
+#include "virtq_structs.h"
 typedef struct CpuBuffer { uintptr_t dev_addr; uintptr_t cpu_addr; uintptr_t len; } CpuBuffer;
 typedef struct DeviceBuffer { uintptr_t dev_addr; uintptr_t len; } DeviceBuffer;
 typedef struct VirtioMmio VirtioMmio;
-// Authoritative MC layout checks (generated). Fails to compile on any MC<->C struct drift.
-#include "virtq_layout_assert.h"
 
 // The typed kernel entry points (tests/qemu/tls/tls_demo.mc).
 uint32_t tls_net_up(volatile VirtioMmio *regs, Virtq *rxq, Virtq *txq, uintptr_t rxbuf, uintptr_t rxmax);

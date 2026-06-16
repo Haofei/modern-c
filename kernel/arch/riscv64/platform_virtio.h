@@ -8,33 +8,19 @@
 #define MC_PLATFORM_VIRTIO_H
 #include <stdint.h>
 
-typedef struct VringDesc { uint64_t addr; uint32_t len; uint16_t flags; uint16_t next; } VringDesc;
-typedef struct DescTable { VringDesc d[8]; } DescTable;
-typedef struct VringAvail { uint16_t flags; uint16_t idx; uint16_t ring[8]; uint16_t used_event; } VringAvail;
-typedef struct UsedElem { uint32_t id; uint32_t len; } UsedElem;
-typedef struct VringUsed { uint16_t flags; uint16_t idx; UsedElem ring[8]; uint16_t avail_event; } VringUsed;
-// `Virtq` mirrors std/virtqueue.mc's `Virtq` field-for-field. MC owns the queue logic and
-// writes through a pointer to this struct, so the C declaration MUST match MC's layout exactly —
-// a missing or reordered field means MC writes past (or into the wrong slot of) the C `Virtq`,
-// corrupting adjacent BSS. This bit us once (the inflight_len/inflight_present arrays were absent
-// here → BSS corruption → boot hang). The `_Static_assert`s in virtq_layout_assert.h (generated
-// by `mcc emit-layout std/virtqueue.mc`) now make any such drift a compile error.
-typedef struct mc_array_u64_8 { uint64_t elems[8]; } mc_array_u64_8;
-typedef struct mc_array_u32_8 { uint32_t elems[8]; } mc_array_u32_8;
-typedef struct mc_array_bool_8 { _Bool elems[8]; } mc_array_bool_8;
-typedef struct Virtq {
-    DescTable *desc; VringAvail *avail; VringUsed *used;
-    uint16_t size; uint16_t free_head; uint16_t num_free; uint16_t last_used;
-    mc_array_u64_8 inflight_addr;
-    mc_array_u32_8 inflight_len;
-    mc_array_bool_8 inflight_present;
-} Virtq;
+// A2 (single source of truth): the virtio split-virtqueue structs (VringDesc, DescTable,
+// VringAvail, UsedElem, VringUsed, Virtq, and the `mc_array_*` wrappers they embed) are NO LONGER
+// hand-written here. They are GENERATED verbatim from std/virtqueue.mc's MC structs by
+// `mcc emit-c-struct` into virtq_structs.h (see tools/qemu/kernel-boot-lib.sh), which the build
+// drops next to each object and puts on the include path. The MC struct is the ONLY declaration, so
+// there is no hand copy to drift — the BSS-corruption / boot-hang class (MC writing past a C `Virtq`
+// that lost a field) is structurally impossible. The generated header also carries the A1
+// sizeof/offsetof `_Static_assert`s as a belt-and-suspenders cross-check.
+#include "virtq_structs.h"
+
 typedef struct CpuBuffer { uintptr_t dev_addr; uintptr_t cpu_addr; uintptr_t len; } CpuBuffer;
 typedef struct DeviceBuffer { uintptr_t dev_addr; uintptr_t len; } DeviceBuffer;
 typedef struct VirtioMmio VirtioMmio;
-
-// Authoritative MC layout checks (generated). Fails to compile on any MC<->C struct drift.
-#include "virtq_layout_assert.h"
 
 // DMA ownership transitions (std/dma): identity on QEMU's coherent memory.
 void mc_dma_clean_for_device_base(uintptr_t dev_addr, uintptr_t cpu_addr, uintptr_t len) { (void)dev_addr; (void)cpu_addr; (void)len; }
