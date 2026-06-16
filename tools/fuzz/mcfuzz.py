@@ -136,6 +136,8 @@ class Gen:
         self._slice_helpers = set()  # G8: element types for which a `[]mut T` sum helper is declared
         self.aliases = {}    # alias name -> underlying int type (A11); transparent in use
         self.packed = {}     # packed-bits type name -> [bool field names] (G2 kernel surface)
+        self.offset_structs = {}  # G15 kernel surface: mmio struct name -> [(field, regW, off)] (layout via sizeof/field_offset)
+        self.overlays = {}   # G15 kernel surface: overlay-union name -> [(member, "u%d"|"[%d]u%d", isArray)]
         self.unions = {}     # G7: union name -> ([(caseName, intPayloadType)], emptyCaseName|None)
         self.immutable = set()  # binding names that are read-only (e.g. a `for x in …` element)
         # trapping mode: emit *checked* arithmetic (`+ * / <<`) whose operands are unconstrained,
@@ -542,6 +544,104 @@ class Gen:
             self.packed[name] = (fields, store_w)
             decls.append("packed bits %s: u%d { %s }" % (name, store_w, ", ".join("%s: bool" % f for f in fields)))
 
+    def gen_offset_overlay_decls(self, decls):
+        # G15 (kernel/driver surface): the backend-divergent LAYOUT constructs where a latent
+        # `comptimeStructLayout` (src/layout.zig) C/LLVM divergence hid.
+        #
+        # (a) Explicit `@offset(N)` MMIO register structs. MMIO structs are NOT host-runnable
+        #     (volatile loads to fixed addresses), so the layout is observed PURELY through
+        #     comptime folding the oracle can see: `sizeof(S)` (computed BY comptimeStructLayout)
+        #     and `field_offset(S, .f)`. Offsets are monotonically non-decreasing (the language
+        #     rejects overlap), but we deliberately stress the guard's boundary: tightly-packed
+        #     adjacent fields (offset == running offset) and large gaps (reserved padding), with
+        #     mixed widths so alignment-forwarding participates. Each observer is folded into the
+        #     digest via a comptime helper fn, so both backends must agree on the layout.
+        REGW = (8, 16, 32)
+        for i in range(self.rng.randrange(0, 2)):
+            name = "OFF%d" % i
+            nf = self.rng.randrange(2, 5)
+            fields = []
+            off = 0
+            for j in range(nf):
+                w = self.rng.choice(REGW)
+                sz = w // 8
+                # Mode is irrelevant to layout; vary it for surface coverage.
+                mode = self.rng.choice((".read", ".write", ".read_write"))
+                if j == 0:
+                    cur = 0
+                else:
+                    # tight (adjacent, offset == running) OR a gap; both keep monotonic order.
+                    if self.rng.random() < 0.5:
+                        cur = off                       # tightly packed: offset == running offset
+                    else:
+                        cur = off + self.rng.choice((sz, 8, 16, 64, 0x100))  # large/odd gap
+                # round the chosen offset up so the field's natural alignment is respected
+                if cur % sz != 0:
+                    cur += sz - (cur % sz)
+                fields.append(("of%d" % j, w, cur, mode))
+                off = cur + sz
+            self.offset_structs[name] = fields
+            decls.append("extern mmio struct %s {\n%s\n}" % (
+                name,
+                "\n".join("    %s: Reg<u%d, %s> @offset(%d)," % (f, w, m, o) for f, w, o, m in fields)))
+            # Comptime observers folded into a u64 the digest reads. sizeof of the whole struct
+            # plus the offset-of one chosen field (the last, which carries the accumulated layout).
+            tgt = fields[-1][0]
+            decls.append(
+                "fn offobs_%s() -> u64 {\n"
+                "    return ((sizeof(%s) as u64) ^ ((field_offset(%s, .%s) as u64) << 1));\n}"
+                % (name, name, name, tgt))
+
+        # (b) Overlay unions (byte-aliasing storage). These ARE host-runnable: construct, write the
+        #     scalar member, read the aliased members back into the digest. Both backends must agree
+        #     on the storage size and member aliasing.
+        #
+        #     IMPORTANT (read form): a bare overlay-member read (`w.bytes[0]`, `w.u`) only lowers
+        #     correctly in *direct return position* of a same-typed accessor fn — the existing
+        #     `tests/c_emit/packed_overlay.mc::first_byte` shows this. Reading a member inside any
+        #     other context (an `as` cast, an initializer, an arbitrary expression) is NOT lowered
+        #     by either backend today — it emits a raw `w.<member>` access against the `storage`-only
+        #     C struct, which fails to compile (and emit-llvm fails too). Likewise a *non-byte* array
+        #     view (`[2]u16`, `[2]u32`) is not lowered at all. See the bug note in the report. To stay
+        #     valid we therefore (i) restrict views to the scalar member + the `[N]u8` byte view, and
+        #     (ii) read ONLY through generated accessor helpers, then fold the returned scalars.
+        for i in range(self.rng.randrange(0, 2)):
+            name = "OV%d" % i
+            w = self.rng.choice((32, 64))
+            nbytes = w // 8
+            members = [("u", "u%d" % w, False), ("bytes", "[%d]u8" % nbytes, True)]
+            self.overlays[name] = (w, members)
+            decls.append("overlay union %s {\n%s\n}" % (
+                name, "\n".join("    %s: %s," % (m, t) for m, t, _a in members)))
+            # Accessor helpers — bare member read in return position (the supported lowering form).
+            decls.append("fn ovget_u_%s(w: %s) -> u%d {\n    return w.u;\n}" % (name, name, w))
+            decls.append("fn ovget_b_%s(w: %s, i: usize) -> u8 {\n    return w.bytes[i];\n}" % (name, name))
+
+    def gen_offset_overlay_body(self, out):
+        # G15: fold the @offset struct layouts (comptime) and the overlay-union reads (runtime).
+        for name in self.offset_structs:
+            ov = "offv%d" % self.nvars
+            self.nvars += 1
+            out.append("    var %s: u64 = offobs_%s();" % (ov, name))
+            self._kernel_terms.append(ov)
+        for name, (w, members) in self.overlays.items():
+            nbytes = w // 8
+            vn = "ovv%d" % self.nvars
+            self.nvars += 1
+            out.append("    var %s: %s = uninit;" % (vn, name))
+            out.append("    %s.u = %d;" % (vn, self.rng.randrange(1, 1 << min(w, 32))))
+            acc = "ovo%d" % self.nvars
+            self.nvars += 1
+            # Read scalar + each byte of the aliasing byte view through the accessor helpers (the
+            # supported overlay-read lowering); the returned scalars then fold/cast freely. The byte
+            # reads are a sound cross-backend observable: same target, fully-written storage.
+            out.append("    var %s: u64 = (ovget_u_%s(%s) as u64);" % (acc, name, vn))
+            for k in range(nbytes):
+                out.append("    %s = (%s ^ ((ovget_b_%s(%s, %d) as u64) << %d));"
+                           % (acc, acc, name, vn, k, (k % 8) * 8))
+            out.append("    %s = (%s ^ ((sizeof(%s) as u64) << 4));" % (acc, acc, name))
+            self._kernel_terms.append(acc)
+
     def gen_kernel_body(self, out):
         # Atomics (G2): single-threaded `atomic<uN>` with init/store/fetch_add/fetch_sub/load.
         # Single-threaded so fully deterministic; the loaded values fold into the digest. Orderings
@@ -777,6 +877,7 @@ class Gen:
             self.aliases[name] = u
             decls.append("type %s = %s;" % (name, u))
         self.gen_kernel_decls(decls)
+        self.gen_offset_overlay_decls(decls)  # G15: explicit @offset structs + overlay unions
         self.gen_unions(decls)  # G7: tagged unions + per-union fold helpers
         self.gen_exprswitch_decls(decls)  # G11: return-form expression-switch helpers
         if self.rng.random() < 0.6:  # G13: a wrap-domain alias for from_mod/residue conversions
@@ -878,6 +979,7 @@ class Gen:
                 out.append("    var %s: *%s = &%s;" % (pname, ty, gname))
                 plainptrs.append((pname, ty))
         self.gen_kernel_body(out)  # G2: atomics + packed-bits register vars
+        self.gen_offset_overlay_body(out)  # G15: @offset-layout (comptime) + overlay-union reads
         for _ in range(self.rng.randrange(5, 12)):
             self.stmt(out, 1)
 
@@ -1349,6 +1451,8 @@ def main():
             ("generic fn", r"comptime T: type"), ("closure", r"bind\("),
             ("aggregate ABI", r"fn agg(id|get)"), ("&&/||", r"&&|\|\|"),
             ("atomic", r"atomic<u"), ("packed bits", r"^packed bits "),
+            ("@offset struct", r"@offset\("), ("offset sizeof/field_offset", r"field_offset\("),
+            ("overlay union", r"^overlay union "),
             ("tuple", r": \([^)]+, "), ("struct-of-ptr", r"struct SPk"), ("array-of-Result", r"\]Result<"),
             ("byte-view slice", r"mem\.as_bytes"), ("checked reduce", r"reduce\.sum_checked"),
             ("slice .len/index", r"\.len \{"),
