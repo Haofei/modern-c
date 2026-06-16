@@ -281,3 +281,54 @@ fn reject_alias_launder_after_move() -> u32 {
     let b: u32 = peek(q);        // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
+
+// accepted (bug #2): REASSIGNING a borrow-alias pointer to a different referent must NOT
+// turn the alias into a phantom live linear resource. `var p = &t1; p = &t2;` keeps `p` a
+// borrow (re-derived from the RHS), so `p` does not "leak" at exit and both real tokens are
+// consumed. Previously the `p = &t2` arm unconditionally flipped `p` live → false E_RESOURCE_LEAK.
+fn accept_reassign_alias_pointer() -> u32 {
+    let t1: Token = make();
+    let t2: Token = make();
+    var p: *Token = &t1;
+    let x: u32 = peek(p);        // p aliases t1
+    p = &t2;                     // p now aliases t2 — still a borrow, not a resource
+    let y: u32 = peek(p);        // p aliases t2 (valid: t2 not yet moved)
+    return consume(t1) + consume(t2) + x + y;
+}
+
+// rejected (bug #2 dual): after reassigning the alias to t2, reading through it once t2 is
+// moved out is still a stale use-after-move — the re-derived alias tracks the NEW referent.
+fn reject_reassigned_alias_after_move() -> u32 {
+    let t1: Token = make();
+    let t2: Token = make();
+    var p: *Token = &t1;
+    p = &t2;                     // p now aliases t2
+    let a: u32 = consume(t2);    // t2 moved out
+    let b: u32 = peek(p);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return consume(t1) + a + b;
+}
+
+// --- T1.2 (bug #3): a borrow of a move binding laundered through a STRUCT FIELD ---
+
+struct Holder {
+    p: *Token,
+}
+
+// accepted: the field alias `h.p` is read while its referent `t` is still live.
+fn accept_field_alias_before_move() -> u32 {
+    let t: Token = make();
+    let h: Holder = .{ .p = &t };
+    let b: u32 = peek(h.p);      // h.p valid: t not yet moved
+    return consume(t) + b;
+}
+
+// rejected: `h.p` aliases `t` (`.{ .p = &t }`); reading through it after `t` is moved out is
+// a stale use-after-move laundered through the struct field. (Previously a false negative —
+// the alias tracking only followed bare-ident aliases, not aliases stored in aggregate fields.)
+fn reject_field_alias_after_move() -> u32 {
+    let t: Token = make();
+    let h: Holder = .{ .p = &t };
+    let a: u32 = consume(t);     // t moved out
+    let b: u32 = peek(h.p);      // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + b;
+}

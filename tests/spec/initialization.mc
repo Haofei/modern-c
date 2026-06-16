@@ -93,6 +93,29 @@ fn reject_defer_reads_never_assigned_var() -> u32 {
     return 0;
 }
 
+// (bug #1, regression) A `defer` ALSO runs on EARLY-exit edges (`return`/`?`), not just
+// fall-through. On the early `return` below, x is still uninit when the deferred read runs,
+// so this must be rejected even though x is assigned on the fall-through path.
+fn reject_defer_reads_uninit_on_early_return(flag: bool) -> void {
+    var x: u32 = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    defer takes_u32(x);
+    if flag {
+        return;        // x still uninit here — deferred read is use-before-init
+    }
+    x = 5;
+    return;
+}
+
+// The dual valid case: x is assigned on EVERY exit edge the defer runs on, so the deferred
+// read is fine. (Must still be accepted — do not regress into a false positive.)
+fn accept_defer_reads_var_assigned_on_every_exit_edge() -> u32 {
+    var x: u32 = uninit;
+    defer takes_u32(x);
+    x = 5;
+    return x;
+}
+
 // Aggregates are filled element/field-at-a-time, which whole-variable definite-init
 // does not track; reading them after `uninit` stays accepted (unspecified, not UB).
 fn accept_read_materialized_uninit_byte() -> u8 {

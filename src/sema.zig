@@ -102,9 +102,17 @@ pub const Checker = struct {
     // (bug #3) Definite-init: defer bodies do NOT run at their lexical position — they
     // run at scope EXIT, after later assignments. Reading them eagerly mid-block produced
     // a false E_USE_BEFORE_INIT (`var x=uninit; defer sink(x); x=5;`). Instead we COLLECT
-    // each defer expression here and evaluate its reads once, against the function's exit
-    // init-state (where `x` is already assigned). Non-null only during a DI pass.
-    di_defers: ?*std.ArrayListUnmanaged(ast.Expr) = null,
+    // each defer expression here, paired with the count of defers already live when it was
+    // declared (its index), and evaluate its reads against the MEET (union of still-pending /
+    // uninit names) over EVERY exit edge — return / `?` (try) propagation / fall-through —
+    // that is reachable while the defer is live. (Regression fix: a defer ALSO runs on
+    // early-return / `?` edges where a var may still be uninit; checking only fall-through
+    // let those slip.) Non-null only during a DI pass.
+    di_defers: ?*std.ArrayListUnmanaged(DiDefer) = null,
+    // Exit-edge snapshots taken while inside a DI pass: each records the set of still-pending
+    // (uninit) names at an exit edge and how many defers were live there (so a defer at index
+    // i is only checked against snapshots whose live_defers > i).
+    di_exits: ?*std.ArrayListUnmanaged(DiExitSnapshot) = null,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -910,6 +918,13 @@ pub const Checker = struct {
                                 self.oom = true;
                             };
                         }
+                    } else if (decl.init.?.kind == .struct_literal) {
+                        // (bug #3) `let h = .{ .p = &t };` launders a borrow of the move binding
+                        // `t` through the struct FIELD `h.p`. Register a field-place alias
+                        // `h.p -> t` so reading `h.p` after `t` is moved is caught as a stale
+                        // alias. Only direct `&<move-binding>` fields are tracked (the
+                        // no-false-positive slice); deeper nesting is the open T1.3 work.
+                        self.registerAggregateFieldAliases(decl.names[0].text, decl.init.?, state);
                     }
                 }
                 return false;
@@ -941,6 +956,11 @@ pub const Checker = struct {
             .assignment => |a| {
                 switch (a.target.kind) {
                     .ident => |id| {
+                        // (bug #2) Whether the EXISTING slot is a borrow alias (registered
+                        // `live=false, alias_of=...`). Overwrite/defer-reserve checks below
+                        // only concern linear resources, not aliases (an alias is never `live`
+                        // or `deferred`), and re-binding an alias must NOT flip it live.
+                        const was_alias = if (state.getPtr(id.text)) |slot| slot.alias_of != null else false;
                         if (state.getPtr(id.text)) |slot| {
                             if (slot.live and !slot.deferred) {
                                 self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot overwrite a live linear `move` value; consume it first");
@@ -949,7 +969,29 @@ pub const Checker = struct {
                             }
                         }
                         self.moveConsume(a.value, state, aliases);
-                        if (state.getPtr(id.text)) |slot| slot.live = true;
+                        if (was_alias) {
+                            // Re-derive the alias from the RHS: `p = &t2` keeps `p` a borrow
+                            // (live=false) now aliasing `t2`, so it does not leak at exit and
+                            // its stale-after-move tracking follows the NEW referent. If the RHS
+                            // is not an alias of a tracked move binding, drop the slot entirely
+                            // (it is no longer a meaningful borrow); leaving it live would be the
+                            // phantom-leak false positive this fixes.
+                            const new_ref = aliasReferentOf(a.value, state);
+                            if (state.getPtr(id.text)) |slot| {
+                                if (new_ref) |referent| {
+                                    if (state.contains(referent)) {
+                                        slot.alias_of = referent;
+                                        slot.live = false;
+                                    } else {
+                                        _ = state.remove(id.text);
+                                    }
+                                } else {
+                                    _ = state.remove(id.text);
+                                }
+                            }
+                        } else if (state.getPtr(id.text)) |slot| {
+                            slot.live = true;
+                        }
                     },
                     .member => |m| {
                         // Assigning through `p.field`: the base must be live, and overwriting a
@@ -1303,6 +1345,11 @@ pub const Checker = struct {
             .address_of => |inner| self.moveBorrow(inner.*, state),
             .member => |m| {
                 self.moveBorrow(m.base.*, state); // the base must be live to take a field
+                // (bug #3) Using a struct-field borrow alias (`h.p`) by value after its
+                // referent was moved is a stale-alias use-after-move.
+                if (self.aggregateFieldAliasSlot(expr, state)) |slot| {
+                    self.checkStaleAlias("", slot, expr.span, state);
+                }
                 // Moving a `move`-typed field out of a tracked aggregate: poison the field
                 // so a second move (or a borrow) of it is caught.
                 if (self.moveFieldPlaceKey(expr, m, state, aliases)) |key| {
@@ -1504,6 +1551,65 @@ pub const Checker = struct {
         }
     }
 
+    // (bug #3) Register field-place borrow aliases for a struct-literal initializer bound to
+    // `base`: for each field `.f = &t` whose `t` is a tracked move binding, record a slot keyed
+    // `base.f` with `alias_of = t` (a non-live borrow). Reading `base.f` after `t` is moved is
+    // then a stale-alias use-after-move (see moveBorrow `.member`). Scoped to direct
+    // `&<move-binding>` fields — the no-false-positive slice.
+    fn registerAggregateFieldAliases(self: *Checker, base: []const u8, init_expr: ast.Expr, state: *std.StringHashMap(MoveSlot)) void {
+        const fields = switch (init_expr.kind) {
+            .struct_literal => |f| f,
+            .grouped => |inner| return self.registerAggregateFieldAliases(base, inner.*, state),
+            else => return,
+        };
+        for (fields) |field| {
+            const referent = aliasReferentOf(field.value, state) orelse continue;
+            if (!state.contains(referent)) continue;
+            const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, field.name.text }) catch {
+                self.oom = true;
+                continue;
+            };
+            self.move_place_keys.append(self.reporter.allocator, key) catch {
+                self.oom = true;
+            };
+            state.put(key, .{ .live = false, .span = field.value.span, .alias_of = referent }) catch {
+                self.oom = true;
+            };
+        }
+    }
+
+    // (bug #3) If `expr` is a member access `base.f…` whose place-key names a registered
+    // field-place borrow alias, return its slot — for the stale-alias check on member reads.
+    fn aggregateFieldAliasSlot(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?MoveSlot {
+        const key = self.memberPlaceKey(expr) orelse return null;
+        defer self.reporter.allocator.free(key);
+        if (state.get(key)) |slot| {
+            if (slot.alias_of != null) return slot;
+        }
+        return null;
+    }
+
+    // The dotted place key for a member access over a bare-ident root (`base.f.g`), allocated
+    // for the caller to free. Null if the root is not a bare ident.
+    fn memberPlaceKey(self: *Checker, expr: ast.Expr) ?[]const u8 {
+        switch (expr.kind) {
+            .grouped => |inner| return self.memberPlaceKey(inner.*),
+            .ident => |id| return self.reporter.allocator.dupe(u8, id.text) catch {
+                self.oom = true;
+                return null;
+            },
+            .member => |m| {
+                const base = self.memberPlaceKey(m.base.*) orelse return null;
+                defer self.reporter.allocator.free(base);
+                return std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, m.name.text }) catch {
+                    self.oom = true;
+                    return null;
+                };
+            },
+            else => return null,
+        }
+    }
+
     // Borrow: check the move bindings referenced are live, without consuming.
     fn moveBorrow(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot)) void {
         switch (expr.kind) {
@@ -1525,6 +1631,11 @@ pub const Checker = struct {
             },
             .member => |m| {
                 self.moveBorrow(m.base.*, state);
+                // (bug #3) Reading a struct-field borrow alias (`h.p` from `let h=.{.p=&t}`)
+                // after its referent `t` was moved is a stale-alias use-after-move.
+                if (self.aggregateFieldAliasSlot(expr, state)) |slot| {
+                    self.checkStaleAlias("", slot, expr.span, state);
+                }
                 // Borrowing a field (at any nesting depth) that was already moved out is a
                 // use-after-move.
                 if (self.placeExprIsMoved(expr, state)) {
@@ -1795,22 +1906,70 @@ pub const Checker = struct {
     // restored after the loop — but reads inside the body are still checked.
     const DefInitState = std.StringHashMap(diagnostics.Span);
 
+    // A collected `defer EXPR`. `live_before` is the number of defers already collected when
+    // this one was declared — equivalently, this defer's own index — used to scope it to the
+    // exit edges that occur while it is live.
+    const DiDefer = struct {
+        expr: ast.Expr,
+        live_before: usize,
+    };
+
+    // A snapshot of the still-pending (uninit) names at one exit edge, plus how many defers
+    // were live there. Owns its `pending` map.
+    const DiExitSnapshot = struct {
+        pending: DefInitState,
+        live_defers: usize,
+    };
+
     fn checkDefiniteInit(self: *Checker, fn_decl: ast.FnDecl, ctx: Context) void {
         const body = fn_decl.body orelse return;
         var pending = DefInitState.init(self.reporter.allocator);
         defer pending.deinit();
         // Collect defer bodies during the walk instead of reading them in place; they
-        // execute at scope exit, so their reads are checked against the EXIT state.
-        var defers: std.ArrayListUnmanaged(ast.Expr) = .empty;
+        // execute at scope exit, so their reads are checked against the EXIT state(s).
+        var defers: std.ArrayListUnmanaged(DiDefer) = .empty;
         defer defers.deinit(self.reporter.allocator);
+        // Exit-edge snapshots (return / `?` propagation) captured while defers are live.
+        var exits: std.ArrayListUnmanaged(DiExitSnapshot) = .empty;
+        defer {
+            for (exits.items) |*s| s.pending.deinit();
+            exits.deinit(self.reporter.allocator);
+        }
         const prev = self.di_defers;
+        const prev_exits = self.di_exits;
         self.di_defers = &defers;
+        self.di_exits = &exits;
         defer self.di_defers = prev;
-        _ = self.diBlock(body, &pending, ctx);
-        // After the body, `pending` holds the names still un-assigned on the fall-through
-        // exit path. A defer reading such a name is a genuine use-before-init; a defer
-        // reading a name assigned before exit (the FP case) is now accepted.
-        for (defers.items) |e| self.diRead(e, &pending, ctx);
+        defer self.di_exits = prev_exits;
+        const diverged = self.diBlock(body, &pending, ctx);
+        // The fall-through exit is itself an edge a defer can run on (unless the body always
+        // diverges first). Record it so the meet below includes it.
+        if (!diverged) self.diRecordExit(&pending, defers.items.len);
+        // For each defer, a name it reads is use-before-init if that name is still pending on
+        // ANY exit edge where the defer is live (meet = union of pending across those edges).
+        // This restores the early-return/`?` catch the prior fall-through-only check dropped,
+        // while still accepting a var assigned on every edge the defer actually runs on.
+        for (defers.items) |d| {
+            var meet = DefInitState.init(self.reporter.allocator);
+            defer meet.deinit();
+            for (exits.items) |*snap| {
+                if (snap.live_defers <= d.live_before) continue; // defer not yet live at this edge
+                self.diMerge(&meet, &snap.pending);
+            }
+            self.diRead(d.expr, &meet, ctx);
+        }
+    }
+
+    // Capture the current pending set as an exit-edge snapshot (only meaningful inside a DI
+    // pass with the accumulator installed). `live_defers` is the count of defers live here.
+    fn diRecordExit(self: *Checker, state: *const DefInitState, live_defers: usize) void {
+        const exits = self.di_exits orelse return;
+        exits.append(self.reporter.allocator, .{
+            .pending = self.diCloneState(state),
+            .live_defers = live_defers,
+        }) catch {
+            self.oom = true;
+        };
     }
 
     fn diCloneState(self: *Checker, state: *const DefInitState) DefInitState {
@@ -1890,6 +2049,10 @@ pub const Checker = struct {
             },
             .@"return" => |maybe| {
                 if (maybe) |e| self.diRead(e, state, ctx);
+                // A defer runs on the way out of this early-return edge; snapshot the pending
+                // set (with the return value already read/cleared) so its reads are checked
+                // against the state a deferred body would actually observe here.
+                self.diRecordExit(state, (self.di_defers orelse return true).items.len);
                 return true;
             },
             .@"break", .@"continue" => return true,
@@ -1909,7 +2072,10 @@ pub const Checker = struct {
                 // of the block. Collect it; checkDefiniteInit evaluates it against the
                 // exit init-state. (If di_defers is unset we fall back to in-place reads.)
                 if (self.di_defers) |defers| {
-                    defers.append(self.reporter.allocator, e) catch {
+                    // `live_before` = this defer's index. A defer is live (runs) on exit edges
+                    // recorded AFTER it; snapshots whose live_defers <= live_before predate it
+                    // and are skipped when computing its read-meet.
+                    defers.append(self.reporter.allocator, .{ .expr = e, .live_before = defers.items.len }) catch {
                         self.oom = true;
                     };
                 } else {
@@ -2051,6 +2217,10 @@ pub const Checker = struct {
             .try_expr => |t| {
                 self.diRead(t.operand.*, state, ctx);
                 if (t.mapped) |m| self.diRead(m.*, state, ctx);
+                // `EXPR?` propagates on the error path, exiting the function: a live defer
+                // runs on that edge. Snapshot the pending set so deferred reads are checked
+                // against it too (an early `?`-exit can leave a var uninit, same as `return`).
+                if (self.di_defers) |defers| self.diRecordExit(state, defers.items.len);
             },
             else => {},
         }
@@ -4849,6 +5019,11 @@ pub const Checker = struct {
         const fn_pointer_checked = self.checkFunctionPointerInitializer(target_ty, expr, ctx);
         const address_class_checked = checkAddressClassConversion(self, expr.span, target, returned);
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
+        // (bug #3) Returning an aggregate literal that embeds `&local` makes the borrow dangle
+        // once the frame is gone — even though the return TYPE is a struct/array, not a pointer.
+        if (aggregateLocalAddressRoot(expr, ctx)) |span| {
+            self.errorCode(span, "E_LOCAL_ADDRESS_ESCAPE", "cannot return the address of local storage inside an aggregate (the borrow would dangle)");
+        }
         const enum_checked = self.checkEnumValueCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type") else false;
@@ -7675,6 +7850,34 @@ fn localAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
             return null;
         },
         .grouped => |inner| localAddressRoot(inner.*, ctx),
+        else => null,
+    };
+}
+
+// (bug #3, borrow-escape through an aggregate) The span of a `&local` (the address of local
+// storage) that appears as a FIELD/ELEMENT of a struct or array literal — i.e. the address
+// is laundered into an aggregate that then escapes (returned by value). Recurses through
+// nested aggregate literals. Returns null if no laundered local address is found. This is a
+// no-false-positive slice: a field that is itself `&local` (or a nested aggregate holding
+// one) is the only thing flagged; a plain `&local` not inside an aggregate is already caught
+// by the direct pointer-return / escape checks.
+fn aggregateLocalAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
+    return switch (expr.kind) {
+        .grouped => |inner| aggregateLocalAddressRoot(inner.*, ctx),
+        .struct_literal => |fields| {
+            for (fields) |f| {
+                if (localAddressRoot(f.value, ctx)) |span| return span;
+                if (aggregateLocalAddressRoot(f.value, ctx)) |span| return span;
+            }
+            return null;
+        },
+        .array_literal => |items| {
+            for (items) |item| {
+                if (localAddressRoot(item, ctx)) |span| return span;
+                if (aggregateLocalAddressRoot(item, ctx)) |span| return span;
+            }
+            return null;
+        },
         else => null,
     };
 }

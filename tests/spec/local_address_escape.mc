@@ -263,6 +263,32 @@ fn reject_store_local_address_into_global() -> void {
     escape_slot = &x;
 }
 
+// (bug #3) Returning an AGGREGATE that embeds `&local` by value. The aggregate escapes the
+// frame, so the laundered stack borrow dangles — even though the return type is a struct/array,
+// not a pointer. Previously a false negative (the escape check only fired on pointer returns).
+
+fn reject_return_struct_with_local_address() -> Holder {
+    var x: u32 = 5;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return .{ .slot = &x };
+}
+
+fn reject_return_array_with_local_address() -> [1]*mut u32 {
+    var x: u32 = 5;
+    // EXPECT_ERROR: E_LOCAL_ADDRESS_ESCAPE
+    return .{ &x };
+}
+
+// Returning an aggregate that embeds a PARAMETER or GLOBAL address stays accepted: those
+// outlive the frame, so the embedded borrow does not dangle.
+fn accept_return_struct_with_param_address(p: *mut u32) -> Holder {
+    return .{ .slot = p };
+}
+
+fn accept_return_struct_with_global_address() -> Holder {
+    return .{ .slot = &shared_counter };
+}
+
 // Passing `&local` DOWN to a callee (a call argument, not an assignment target) and
 // storing a local address into another *local* pointer stay accepted: neither outlives
 // the local's frame, so neither can dangle.
