@@ -55,7 +55,7 @@ groundwork before it.**
     long alloc/free loop does not monotonically shrink available memory.
   - **Depends on:** none (parallel to P0.1/2) — but P0.5 needs it.
 
-- [ ] **P0.4 — Quota enforcement at allocation**
+- [x] **P0.4 — Quota enforcement at allocation** (DONE — acc8c46)
   - **What:** the per-process allocation path consults `proc_macct` and `charge`s;
     over-quota returns a typed `MemError` to the caller instead of exhausting the heap.
     Decide the seam: an allocator wrapper that carries the current process/domain.
@@ -65,7 +65,7 @@ groundwork before it.**
     process is unaffected (isolation).
   - **Depends on:** P0.2, P0.3.
 
-- [ ] **P0.5 — ⭐ LIVE reclaim / OOM-kill-an-agent (THE SAFETY MILESTONE)**
+- [x] **P0.5 — ⭐ LIVE reclaim (DONE — acc8c46) / OOM-kill-an-agent (THE SAFETY MILESTONE)**
   - **What:** under memory pressure or persistent over-quota, the kernel reclaims from /
     throttles / **kills a live agent that won't yield** — the runaway that never calls
     `proc_exit`. Reuse `proc_exit`/`proc_death_cleanup` for the kill path; add a
@@ -128,7 +128,7 @@ groundwork before it.**
 
 ## P2 — Performance & richer state (after P0/P1)
 
-- [ ] **P2.1 — IPC fast path** (zero-copy / batched for hot channels) — **co-designed
+- [x] **P2.1 — IPC fast path** (DONE — 451f300) (zero-copy / batched for hot channels) — **co-designed
   with P1.1/P1.4**; do not build until the observability mechanism is fixed.
 - [x] **P2.2 — Rich agent memory store** (DONE — a2de19f) (content-addressed / KV) — beyond P1.7's
   checkpoint sink.
@@ -147,7 +147,7 @@ groundwork before it.**
 
 ## X — Boundary / docs (not kernel code)
 
-- [ ] **X.1 — "Policy plane" boundary note.** The kernel provides *complete,
+- [x] **X.1 — "Policy plane" boundary note.** (DONE — in agent-os-vision.md) The kernel provides *complete,
   tamper-evident provenance + cheap revoke/kill*; the **verdict** "is this agent
   hijacked?" (tier-3) needs a behavioral baseline and lives in a policy layer **above**
   the kernel. Document the seam so we don't overclaim the kernel solves tier-3 alone.

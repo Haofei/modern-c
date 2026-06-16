@@ -207,3 +207,27 @@ milestone)** → observability (co-designed with the future fast path) → capab
 attenuation + agent lifecycle (with a minimal durable sink) → rich state, fast
 transport, fair-share. Start with the P0 groundwork slice; treat live reclaim, not
 reclaim-on-exit, as "done."
+
+---
+
+## Policy plane — the kernel/agent-runtime boundary
+
+The kernel's job stops at *mechanism*; the *verdict* lives above it. Restating the
+threat-model conclusion as an architectural seam so we don't overclaim:
+
+- **The kernel provides** complete, tamper-evident **provenance** (every IPC message
+  and capability use, since it mediates them — P1.2/P1.3), and cheap, decisive
+  **levers**: revoke a capability, throttle, pause, OOM-kill, checkpoint/restore.
+- **The kernel does NOT decide** whether an agent is *misbehaving*. A prompt-injected
+  (tier-3) agent acts **within** its granted authority, so no kernel rule fires —
+  "this agent used a capability it was granted" is, by construction, allowed.
+- **The verdict needs a behavioral baseline** ("is this agent doing what it should?"),
+  which requires intent/policy the kernel can't have. That logic — anomaly detection,
+  policy evaluation over the provenance stream, deciding *when* to pull a lever — is a
+  **policy plane in the agent runtime, above the kernel.**
+
+So the kernel is the **sensor + actuator** (see everything, act instantly); the policy
+plane is the **controller** (decide). Keeping them separate is deliberate: it keeps the
+kernel small and auditable, and lets the policy plane evolve (or be swapped per
+deployment) without touching the trusted base. The kernel's obligation is to make the
+controller *possible* — total observability + zero-cost revocation/kill — not to be it.
