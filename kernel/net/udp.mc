@@ -29,11 +29,7 @@ export fn udp_write(w: *ByteWriter, off: usize, src_ip: u32, dst_ip: u32, src_po
     var r: ByteReader = byte_reader(w.base, w.len);
     var sum: u32 = inet_pseudo_sum(src_ip, dst_ip, IP_PROTO_UDP, total);
     sum = inet_sum(&r, off, UDP_HEADER_LEN + payload_len, sum);
-    var cksum: u16 = inet_fold(sum) ^ 0xFFFF;
-    if cksum == 0 {
-        cksum = 0xFFFF; // 0 means "no checksum" on the wire; send all-ones instead
-    }
-    bw_be16(w, off + 6, cksum);
+    bw_be16(w, off + 6, checksum_finalize_udp(sum));
 }
 
 // Parse the UDP header at `off`.
@@ -51,5 +47,5 @@ export fn udp_checksum_valid(r: *ByteReader, off: usize, src_ip: u32, dst_ip: u3
     let total: u16 = br_be16(r, off + 4);
     var sum: u32 = inet_pseudo_sum(src_ip, dst_ip, IP_PROTO_UDP, total);
     sum = inet_sum(r, off, total as usize, sum);
-    return inet_fold(sum) == 0xFFFF;
+    return checksum_valid(sum);
 }

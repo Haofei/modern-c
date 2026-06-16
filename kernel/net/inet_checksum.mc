@@ -41,3 +41,27 @@ export fn inet_fold(sum: u32) -> u16 {
     }
     return s as u16;
 }
+
+// Fold then ones-complement: the 16-bit value to place in the checksum field
+// (RFC 1071). Used by TCP and UDP. `0xFFFF` is the all-ones mask, here meaning
+// the bitwise complement of the folded sum.
+export fn checksum_finalize(sum: u32) -> u16 {
+    return inet_fold(sum) ^ 0xFFFF;
+}
+
+// UDP variant: a computed checksum of 0 is reserved on the wire to mean "no
+// checksum", so UDP transmits all-ones (0xFFFF) instead — the two are
+// equivalent in ones-complement arithmetic (RFC 768).
+export fn checksum_finalize_udp(sum: u32) -> u16 {
+    let cksum: u16 = checksum_finalize(sum);
+    if cksum == 0 {
+        return 0xFFFF;
+    }
+    return cksum;
+}
+
+// Receiver-side check: a correct TCP/UDP segment (pseudo-header + payload,
+// checksum field included) folds to all-ones (0xFFFF).
+export fn checksum_valid(sum: u32) -> bool {
+    return inet_fold(sum) == 0xFFFF;
+}

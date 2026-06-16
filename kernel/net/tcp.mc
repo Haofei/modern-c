@@ -44,7 +44,7 @@ export fn tcp_write(w: *ByteWriter, off: usize, src_ip: u32, dst_ip: u32, src_po
     var r: ByteReader = byte_reader(w.base, w.len);
     var sum: u32 = inet_pseudo_sum(src_ip, dst_ip, IP_PROTO_TCP, seg_len);
     sum = inet_sum(&r, off, TCP_HEADER_LEN + payload_len, sum);
-    bw_be16(w, off + 16, inet_fold(sum) ^ 0xFFFF);
+    bw_be16(w, off + 16, checksum_finalize(sum));
 }
 
 export fn tcp_parse(r: *ByteReader, off: usize) -> TcpHeader {
@@ -63,7 +63,7 @@ export fn tcp_parse(r: *ByteReader, off: usize) -> TcpHeader {
 export fn tcp_checksum_valid(r: *ByteReader, off: usize, src_ip: u32, dst_ip: u32, seg_len: u16) -> bool {
     var sum: u32 = inet_pseudo_sum(src_ip, dst_ip, IP_PROTO_TCP, seg_len);
     sum = inet_sum(r, off, seg_len as usize, sum);
-    return inet_fold(sum) == 0xFFFF;
+    return checksum_valid(sum);
 }
 
 // Is `flag` set in a raw flags word (for the connection state machine)?
