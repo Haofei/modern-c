@@ -1,5 +1,5 @@
 // kernel/core/ipc_trace — a bounded, non-blocking IPC provenance event ring. The kernel's
-// IPC mediation path appends one `TraceEvent` per message (who sent what to whom, how big,
+// IPC mediation path appends one `IpcEvent` per message (who sent what to whom, how big,
 // in what causal order); a separate drainer service reads them back later. This is pure
 // observability substrate: it records provenance WITHOUT ever blocking the producer.
 //
@@ -17,12 +17,12 @@
 
 // Ring capacity. Small by design — provenance is meant to be drained promptly; a deep buffer
 // would just hide a slow drainer. `dropped` makes overflow observable rather than silent.
-const TRACE_CAP: usize = 16;
+const IPC_TRACE_CAP: usize = 16;
 
 // A single IPC provenance record. `seq` is a kernel-monotonic causal counter (assigned at
 // record time, never reused), so a drainer can order/dedupe events and detect the gap left
 // by an overwrite even after loss.
-struct TraceEvent {
+struct IpcEvent {
     seq: u64,  // monotonic causal sequence (assigned by record())
     from: u32, // sender pid
     to: u32,   // receiver pid
@@ -31,11 +31,11 @@ struct TraceEvent {
 }
 
 // The ring. `head` is the index of the OLDEST live event (the read/drain cursor); writes land
-// at `(head + count) % TRACE_CAP`. `count` is the number of live events (0..TRACE_CAP).
+// at `(head + count) % IPC_TRACE_CAP`. `count` is the number of live events (0..IPC_TRACE_CAP).
 // `next_seq` is the next causal stamp to hand out. `dropped` counts events overwritten before
 // any drainer read them — pure overflow accounting, never an error to the producer.
 struct IpcTrace {
-    events: [TRACE_CAP]TraceEvent,
+    events: [IPC_TRACE_CAP]IpcEvent,
     head: usize,
     count: usize,
     next_seq: u64,
@@ -78,16 +78,16 @@ export fn ipc_trace_dropped(t: *mut IpcTrace) -> u64 {
 // an older event is dropped to make room).
 export fn ipc_trace_record(t: *mut IpcTrace, from: u32, to: u32, tag: u32, size: u32) -> u64 {
     let seq: u64 = t.next_seq;
-    let ev: TraceEvent = .{ .seq = seq, .from = from, .to = to, .tag = tag, .size = size };
+    let ev: IpcEvent = .{ .seq = seq, .from = from, .to = to, .tag = tag, .size = size };
 
     // Tail slot = head + count (mod CAP). When full, head and tail coincide: we land on the
     // oldest event and overwrite it, then advance head so it points at the new oldest.
-    let slot: usize = (t.head + t.count) % TRACE_CAP;
+    let slot: usize = (t.head + t.count) % IPC_TRACE_CAP;
     t.events[slot] = ev;
 
-    if t.count == TRACE_CAP {
+    if t.count == IPC_TRACE_CAP {
         // Full: we just clobbered the oldest event. Advance the read cursor and count the loss.
-        t.head = (t.head + 1) % TRACE_CAP;
+        t.head = (t.head + 1) % IPC_TRACE_CAP;
         t.dropped = t.dropped + 1;
     } else {
         t.count = t.count + 1;
@@ -99,23 +99,23 @@ export fn ipc_trace_record(t: *mut IpcTrace, from: u32, to: u32, tag: u32, size:
 
 // Read (peek) the i-th live event, oldest-first (i in 0..len). Does NOT remove it — for a
 // drainer that wants to scan/snapshot without consuming. Empty if `i` is out of range.
-export fn ipc_trace_get(t: *mut IpcTrace, i: usize) -> Result<TraceEvent, TraceError> {
+export fn ipc_trace_get(t: *mut IpcTrace, i: usize) -> Result<IpcEvent, TraceError> {
     if i >= t.count {
         return err(.Empty);
     }
-    let slot: usize = (t.head + i) % TRACE_CAP;
+    let slot: usize = (t.head + i) % IPC_TRACE_CAP;
     return ok(t.events[slot]);
 }
 
 // Pop the oldest live event, removing it — the drainer's consuming read. Advances `head` and
 // shrinks `count`. Empty when there is nothing to drain. A drainer loops this until Empty,
 // then checks `ipc_trace_dropped` to learn how many records were lost since last time.
-export fn ipc_trace_drain(t: *mut IpcTrace) -> Result<TraceEvent, TraceError> {
+export fn ipc_trace_drain(t: *mut IpcTrace) -> Result<IpcEvent, TraceError> {
     if t.count == 0 {
         return err(.Empty);
     }
-    let ev: TraceEvent = t.events[t.head];
-    t.head = (t.head + 1) % TRACE_CAP;
+    let ev: IpcEvent = t.events[t.head];
+    t.head = (t.head + 1) % IPC_TRACE_CAP;
     t.count = t.count - 1;
     return ok(ev);
 }

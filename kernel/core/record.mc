@@ -3,14 +3,14 @@
 // P3.1 (deterministic record, first cut). Full deterministic replay — re-running an agent
 // with the SAME scheduling order and the SAME external inputs — is future work and NOT what
 // this module does. The tractable first cut, which this module IS, is to capture the ordered
-// IPC provenance event stream (the `TraceEvent`s an `IpcTrace` ring accumulates) into a
+// IPC provenance event stream (the `IpcEvent`s an `IpcTrace` ring accumulates) into a
 // single durable, replayable log blob in the `BlobStore`. It persists *what happened, in
 // causal order*; it does not yet persist *enough to re-execute* (no thread interleavings, no
 // syscall/IO inputs, no register/memory state). That deterministic re-execution substrate is
 // the future; this is the provenance-log foundation the replay reader (P3.2) iterates over.
 //
 // HOW: `record_capture` DRAINS the trace ring oldest-first (consuming it, exactly like a
-// drainer service would) and stages the popped `TraceEvent`s, in order, into one contiguous
+// drainer service would) and stages the popped `IpcEvent`s, in order, into one contiguous
 // framed buffer, then writes that buffer as a single durable blob. `record_count` /
 // `record_get` read the framed blob back — count first, then the i-th event oldest-first —
 // the foundation the replay reader iterates.
@@ -21,7 +21,7 @@
 //     offset                  size                       contents
 //     ------                  ----                       --------
 //     0                       sizeof(usize)              count: number of recorded events
-//     sizeof(usize)           count * sizeof(TraceEvent) the events, oldest-first, verbatim
+//     sizeof(usize)           count * sizeof(IpcEvent) the events, oldest-first, verbatim
 //
 // The staging frame (RecFrame) is sized to hold the whole ring (REC_CAP events — the trace
 // ring's capacity, the maximum that can ever be drained at once), so the entire log is one
@@ -34,7 +34,7 @@ import "std/mem.mc";
 import "kernel/core/ipc_trace.mc";
 import "kernel/fs/blobstore.mc";
 
-// Staging capacity for the framed log. The IpcTrace ring holds at most TRACE_CAP live events
+// Staging capacity for the framed log. The IpcTrace ring holds at most IPC_TRACE_CAP live events
 // (16, module-private to ipc_trace.mc — kept in sync here), which bounds how many a single
 // drain can yield, so a frame this size always holds a full capture.
 const REC_CAP: usize = 16;
@@ -53,14 +53,14 @@ enum RecError {
 // blob_get into a frame then index it. Only the first `count` events are live.
 struct RecFrame {
     count: usize,
-    events: [REC_CAP]TraceEvent,
+    events: [REC_CAP]IpcEvent,
 }
 
 // The exact framed length for `count` events: the count word plus that many events. A short
 // capture writes (and a reader needs) only this prefix of the staging frame, so the blob never
 // carries dead trailing slots.
 fn rec_frame_len(count: usize) -> usize {
-    return sizeof(usize) + (count * sizeof(TraceEvent));
+    return sizeof(usize) + (count * sizeof(IpcEvent));
 }
 
 // Drain `trace` oldest-first and serialize the ordered events into durable blob `id`, returning
@@ -116,7 +116,7 @@ export fn record_count(store: *mut BlobStore, id: u32) -> Result<usize, RecError
 // verbatim. NotFound if `id` was never recorded; GetFailed on a short/corrupt blob; OutOfRange
 // if `i` is past the recorded count. This is the read the replay reader (P3.2) iterates to walk
 // the persisted provenance stream in causal order.
-export fn record_get(store: *mut BlobStore, id: u32, i: usize) -> Result<TraceEvent, RecError> {
+export fn record_get(store: *mut BlobStore, id: u32, i: usize) -> Result<IpcEvent, RecError> {
     var frame: RecFrame = uninit;
 
     // First read just the count word so we know how much of the frame is live, then validate.
@@ -143,7 +143,7 @@ export fn record_get(store: *mut BlobStore, id: u32, i: usize) -> Result<TraceEv
 //
 // Honest scope: this is deterministic PLAYBACK of the recorded event ORDER. A ReplayCursor walks
 // the persisted provenance log (the blob `record_capture` wrote) front-to-back, handing each
-// `TraceEvent` back in the exact recorded order so a consumer (a future replay-driver / debugger)
+// `IpcEvent` back in the exact recorded order so a consumer (a future replay-driver / debugger)
 // can step the stream deterministically. Re-opening the same log yields the identical sequence —
 // the cursor holds no state the log doesn't, it only reads via the existing `record_get`.
 //
@@ -182,7 +182,7 @@ export fn replay_open(store: *mut BlobStore, id: u32) -> Result<ReplayCursor, Re
 // signal `Done` once the cursor has played every recorded event (pos == len) — a clean, distinct
 // EOS the caller switches on rather than a sentinel value. The actual event read is delegated to
 // record_get, so playback order is exactly the recorded oldest-first order.
-export fn replay_next(store: *mut BlobStore, c: *mut ReplayCursor) -> Result<TraceEvent, RecError> {
+export fn replay_next(store: *mut BlobStore, c: *mut ReplayCursor) -> Result<IpcEvent, RecError> {
     if c.pos >= c.len {
         return err(.Done); // stream exhausted: no event to hand back
     }
