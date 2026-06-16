@@ -318,6 +318,36 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     return slot as u32;
 }
 
+// Attenuated spawn: like proc_spawn, but the child is granted a SUBSET of the spawning
+// process's authority — never more. proc_spawn gives a child empty masks (least privilege);
+// this variant instead sets the child's masks to the intersection of the parent's authority
+// (t.current, the spawner) and the requested subset. A bit the parent lacks can never appear
+// in the child even if `*_subset` requests it (intersection is monotone-decreasing). Mask32
+// has no intersect op, so we AND the raw bits via mask32_raw and rebuild with mask32_from.
+export fn proc_spawn_attenuated(t: *mut ProcTable, stack_top: usize, entry: fn() -> void, allow_subset: Mask32, kcall_subset: Mask32) -> u32 {
+    let pid: u32 = proc_spawn(t, stack_top, entry); // spawns with empty masks; parent = t.current
+    let slot: usize = pid as usize;
+    var parent_allow: Mask32 = t.procs[t.current].allow_mask;
+    var parent_kcall: Mask32 = t.procs[t.current].kcall_mask;
+    var allow_sub: Mask32 = allow_subset;
+    var kcall_sub: Mask32 = kcall_subset;
+    let allow_bits: u32 = mask32_raw(&parent_allow) & mask32_raw(&allow_sub);
+    let kcall_bits: u32 = mask32_raw(&parent_kcall) & mask32_raw(&kcall_sub);
+    t.procs[slot].allow_mask = mask32_from(allow_bits);
+    t.procs[slot].kcall_mask = mask32_from(kcall_bits);
+    return pid;
+}
+
+// Read a process's IPC allow-mask / kernel-call mask (introspection, e.g. for tests and a
+// policy server). Returned by value — Mask32 is a single-field struct, trivially copyable.
+export fn proc_allow_mask(t: *mut ProcTable, slot: usize) -> Mask32 {
+    return t.procs[slot].allow_mask;
+}
+
+export fn proc_kcall_mask(t: *mut ProcTable, slot: usize) -> Mask32 {
+    return t.procs[slot].kcall_mask;
+}
+
 // A mutable handle to a process's open-file-descriptor space — for the syscall surface and
 // fork/exec wiring to populate, inherit, and inspect a process's fds.
 export fn proc_fds(t: *mut ProcTable, slot: usize) -> *mut FdSpace {
