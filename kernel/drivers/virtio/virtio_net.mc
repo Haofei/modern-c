@@ -143,6 +143,26 @@ export fn nic_send_arp(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_i
     }
 }
 
+// Submit an already-built frame (virtio_net_hdr at offset 0, Ethernet frame at
+// FRAME_AT) to the TX queue, kick the device, and reclaim the buffer once the device
+// completes it. The generic transmit primitive: the caller builds any L2/L3/L4 frame
+// into `cpu` and hands it here, so TCP/UDP/etc. transmit without re-implementing the
+// DMA cycle. `total_len` documents the framed byte count (NET_HDR_LEN + Ethernet
+// payload); the whole allocation is submitted. Consumes `cpu`. Returns false on a
+// full queue or a device fault/timeout.
+export fn nic_tx_frame(dev: *NetDevice, cpu: CpuBuffer, total_len: usize) -> bool {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let txq: *mut Virtq = dev.txq;
+    let _ignored: usize = total_len;
+    let txbuf: DeviceBuffer = clean_for_device(cpu); // cpu consumed
+    switch vq_submit_tx(txq, txbuf) {                 // txbuf consumed (in flight, or reclaimed)
+        ok(id) => {}
+        err(e) => { return false; } // queue full: buffer reclaimed inside, nothing to send
+    }
+    vq_kick(regs, TX_QUEUE);
+    return tx_wait_reclaim(dev); // true only if the TX actually completed
+}
+
 // Poll the RX queue once. Returns the sender IP of a received ARP reply, or 0 if
 // nothing was received (or it was not an ARP reply). Refills the consumed buffer.
 export fn nic_poll_arp(dev: *NetDevice) -> u32 {

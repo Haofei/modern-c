@@ -1,9 +1,8 @@
-// Live-RX runtime: discovery + DMA + vrings (as net_runtime.c), then drive a real
-// RX frame off the queue and route it through net_rx_deliver.
-// platform's job — virtio-mmio discovery, a bump DMA allocator (multiple
-// buffers), the vring memory — and drives the MC net stack through a real ARP
-// exchange under QEMU user networking: send an ARP request for the gateway and
-// receive slirp's reply on the RX queue. Reports over the QEMU `virt` 16550 UART.
+// HTTP-GET runtime: platform glue (virtio-mmio discovery, a bump DMA allocator,
+// the vring memory) that drives the MC TCP/HTTP client (tests/qemu/net/http_get_demo)
+// through a real outbound connection to a live HTTP server under QEMU user
+// networking. Reports the captured response and HTTP-GET-OK over the QEMU `virt`
+// 16550 UART. Modeled on net_rx_live_runtime.c.
 #include <stdint.h>
 #include <stddef.h>
 
@@ -34,9 +33,10 @@ typedef struct DescTable { VringDesc d[8]; } DescTable;
 typedef struct VringAvail { uint16_t flags; uint16_t idx; uint16_t ring[8]; uint16_t used_event; } VringAvail;
 typedef struct UsedElem { uint32_t id; uint32_t len; } UsedElem;
 typedef struct VringUsed { uint16_t flags; uint16_t idx; UsedElem ring[8]; uint16_t avail_event; } VringUsed;
-// Mirrors std/virtqueue.mc `Virtq` exactly, including the in-flight len/present
-// arrays (the MC code indexes them at their MC offsets; a too-small C struct lets the
-// driver corrupt adjacent storage — which hangs the device handshake).
+// Mirrors std/virtqueue.mc `Virtq` exactly: the three vring pointers, the negotiated
+// size + free-list cursors, and the in-flight record (addr/len/present per descriptor).
+// The C struct MUST match the MC field order/layout or the driver writes corrupt the
+// handle (the MC code indexes inflight_len/inflight_present at their MC offsets).
 typedef struct mc_array_u64_8 { uint64_t elems[8]; } mc_array_u64_8;
 typedef struct mc_array_u32_8 { uint32_t elems[8]; } mc_array_u32_8;
 typedef struct mc_array_bool_8 { uint8_t elems[8]; } mc_array_bool_8;
@@ -51,17 +51,20 @@ typedef struct CpuBuffer { uintptr_t dev_addr; uintptr_t cpu_addr; uintptr_t len
 typedef struct DeviceBuffer { uintptr_t dev_addr; uintptr_t len; } DeviceBuffer;
 typedef struct VirtioMmio VirtioMmio;
 
-// The typed kernel entry (kernel/main.mc).
-uintptr_t rx_live_get_frame(volatile VirtioMmio *regs, Virtq *rxq, Virtq *txq, uintptr_t buf, uintptr_t max);
-void rx_route_init(uint16_t port);
-uint32_t rx_route(uintptr_t buf, uintptr_t len);
-static uint8_t framebuf[256];
+// The typed kernel entry (tests/qemu/net/http_get_demo.mc).
+uint32_t http_get_drive(volatile VirtioMmio *regs, Virtq *rxq, Virtq *txq,
+                        uint16_t dst_port, uintptr_t rxbuf, uintptr_t rxmax);
+uintptr_t http_resp_len(void);
+uint8_t http_resp_byte(uintptr_t i);
+static uint8_t framebuf[2048];
+
+// The HTTP server port (must match tools/net/http-get-test.sh).
+#define HTTP_PORT 8080
 
 // ----- std/dma platform primitives: a bump allocator over one DMA pool -----
-// Multiple buffers can be outstanding (RX ring + TX frames). A bump allocator
-// never aliases live buffers; `free` is a no-op (the pool is one-shot for this
-// smoke test). Exhaustion halts rather than overruns.
-static uint8_t g_dma_pool[65536] __attribute__((aligned(16)));
+// TCP drives many RX refills + TX segments, none freed (bump pool), so size it
+// generously. Exhaustion halts rather than overruns.
+static uint8_t g_dma_pool[8u << 20] __attribute__((aligned(16))); // 8 MiB
 static uintptr_t g_dma_off = 0;
 uintptr_t mc_dma_alloc_base(uintptr_t len) {
     uintptr_t a = (len + 15u) & ~(uintptr_t)15u; // 16-byte aligned
@@ -100,19 +103,24 @@ static DescTable  g_tx_desc  __attribute__((aligned(16)));
 static VringAvail g_tx_avail __attribute__((aligned(2)));
 static VringUsed  g_tx_used  __attribute__((aligned(4)));
 
-// Static network identity (slirp's default 10.0.2.0/24, gateway .2, guest .15).
-#define OUR_IP     0x0A00020Fu // 10.0.2.15
-#define GATEWAY_IP 0x0A000202u // 10.0.2.2
-
-// The platform provides device discovery (the MC `?MmioPtr` returned by a bus
-// probe cannot yet flow into the `u32`-returning kernel_main — `if let` does not
-// narrow `?MmioPtr`); the typed bus probe lives in kernel/drivers/virtio/mmio_bus.
 static volatile VirtioMmio *find_net_device(void) {
     for (int i = 0; i < VIRTIO_MMIO_COUNT; ++i) {
         volatile uint32_t *slot = (volatile uint32_t *)(VIRTIO_MMIO_BASE + (uintptr_t)i * VIRTIO_MMIO_STRIDE);
         if (slot[0] == 0x74726976u && slot[2] == 1u) return (volatile VirtioMmio *)slot;
     }
     return 0;
+}
+
+// Print the captured response, escaping CR/LF so the UART transcript stays on lines.
+static void dump_response(void) {
+    uintptr_t n = http_resp_len();
+    puts_("RESP-LEN="); puthex(n); putc_('\n');
+    puts_("RESP-BEGIN\n");
+    for (uintptr_t i = 0; i < n; ++i) {
+        uint8_t b = http_resp_byte(i);
+        putc_((char)b); // raw bytes (the response is text; CR/LF render as newlines)
+    }
+    puts_("\nRESP-END\n");
 }
 
 __attribute__((used)) void test_main(void) {
@@ -123,16 +131,22 @@ __attribute__((used)) void test_main(void) {
     rxq.desc = &g_rx_desc; rxq.avail = &g_rx_avail; rxq.used = &g_rx_used;
     txq.desc = &g_tx_desc; txq.avail = &g_tx_avail; txq.used = &g_tx_used;
 
-    puts_("net-rx-live booting\n");
-    rx_route_init(12345);
-    // ARP the gateway; copy the real reply frame off the RX queue.
-    uintptr_t n = rx_live_get_frame(regs, &rxq, &txq, (uintptr_t)framebuf, sizeof(framebuf));
-    if (n == 0) { puts_("RX-NONE\n"); goto done; }
-    uint32_t r = rx_route((uintptr_t)framebuf, n);   // through the production demux
-    puts_("RX-FRAME len="); puthex((uint32_t)n);
-    if (r & 0x80000000u) puts_(" UDP-DELIVERED"); else puts_(" routed");
-    putc_('\n');
-    puts_("NET-RX-LIVE-OK\n");
+    puts_("http-get booting\n");
+    uint32_t st = http_get_drive(regs, &rxq, &txq, HTTP_PORT,
+                                 (uintptr_t)framebuf, sizeof(framebuf));
+    puts_("DRIVE-STATUS="); puthex(st); putc_('\n');
+    switch (st) {
+        case 0: puts_("NIC-OR-ARP-FAILED\n"); break;
+        case 1: puts_("NO-SYN-ACK\n"); break;
+        case 2: puts_("HANDSHAKE-OK-GET-TX-FAILED\n"); break;
+        case 3: puts_("HANDSHAKE+GET-OK-NO-RESPONSE\n"); break;
+        case 4: puts_("HANDSHAKE+GET+RESPONSE-OK\n"); break;
+        default: puts_("UNKNOWN\n"); break;
+    }
+    if (st == 4) {
+        dump_response();
+        puts_("HTTP-GET-OK\n");
+    }
 
 done:
     *FINISHER = 0x5555;
