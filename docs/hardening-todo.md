@@ -78,7 +78,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 - [ ] **D2.3 — KCSAN-style data-race detection** *(multi-PR, opt-in)* — build on
   `mc_race_load`/`store` to detect conflicting concurrent accesses. **Test:** racy demo flagged.
   **Prior art:** **Linux KCSAN**, TSan. **Depends:** D2.1. *(Dynamic complement to Part II/C.)*
-- [ ] **D2.4 — Guard pages + heap redzones + stack canaries** *(PR)* — unmapped guard pages around
+- [x] **D2.4 — Guard pages + heap redzones + stack canaries** *(redzones+canary DONE `eed0482`; guard pages deferred — need paging)* — unmapped guard pages around
   stacks, redzone the kernel heap, optional canaries. **Where:** `kernel/core/heap.mc` + stack
   setup. **Test:** stack/heap-overflow demo traps. **Prior art:** Linux stackguard, glibc canaries.
   **Depends:** none.
@@ -96,7 +96,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   the separate-per-backend-path constructs (offset/overlay/switch-family). **Test:** the suite;
   would have caught the overlay bug structurally. **Prior art:** translation validation (Pnueli),
   CompCert. **Depends:** the reference oracle.
-- [ ] **V3.2 — Lowering coverage instrumentation** *(PR)* — measure which `lower_c`/`lower_llvm`
+- [x] **V3.2 — Lowering coverage instrumentation** *(DONE `bec15f0`; function-level — lower_c 72.5%, lower_llvm 85.3%; uncovered MMIO-read/overlay/atomics paths reported in `docs/lowering-coverage.md`)* — measure which `lower_c`/`lower_llvm`
   branches the fixtures+fuzzer hit, to surface untested divergence-prone paths (the overlay bug
   lived in an uncovered branch). **Test:** a coverage gate. **Prior art:** lcov/kcov, mutation
   testing. **Depends:** none.
@@ -183,7 +183,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 ## A — ABI / FFI layout safety (proven gap — the Virtq drift bug)
 > A `std/virtqueue.mc` struct mirrored in a C runtime drifted → BSS corruption → boot hang.
 
-- [ ] **A1 — Auto-generated layout assertions for shared structs** *(PR) — HIGH ROI, do early* —
+- [x] **A1 — Auto-generated layout assertions for shared structs** *(DONE `1f538e5`; `mcc emit-layout` → `_Static_assert(sizeof/offsetof)`; also FIXED real Virtq drift in 3 C mirrors that were ~32B short)* —
   emit `static_assert(sizeof==…, offsetof(f)==…)` for every MC struct mirrored in a C runtime, so
   drift is a **compile error**. Would have caught the Virtq bug. **Where:** the C emit + `*_runtime.c`
   headers. **Test:** deliberately drift a struct → build fails; regression fixture. **Prior art:**
@@ -216,7 +216,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## F — Fault isolation / panic discipline
 
-- [ ] **F1 — Classify traps + contain agent faults** *(PR)* — traps classified recoverable vs fatal;
+- [x] **F1 — Classify traps + contain agent faults** *(DONE `1e88424`; real M-mode trap from an illegal op classified by fault domain → faulting agent killed+reclaimed, kernel+others survive. Honest limit: from-trap context-switch INTO another agent's saved register context not yet wired — agents are inline-driven, as elsewhere)* — traps classified recoverable vs fatal;
   a recoverable fault in an agent is contained to its capability/fault domain (reuse
   `proc_oom_kill`/death path), not a kernel halt. **Where:** `kernel/arch/riscv64/trap_runtime.c` +
   the process fault path. **Test:** a faulting-agent demo — kernel survives, agent killed, others run
