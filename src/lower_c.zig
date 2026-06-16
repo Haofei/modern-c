@@ -1276,32 +1276,7 @@ const CEmitter = struct {
     }
 
     fn comptimeStructLayout(self: *CEmitter, struct_decl: ast.StructDecl, wanted_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
-        if (depth > 32) return null;
-        var offset: i128 = 0;
-        var max_align: i128 = 1;
-        var found: ?i128 = null;
-        for (struct_decl.fields) |field| {
-            const size = self.comptimeSizeOf(field.ty, depth + 1) orelse return null;
-            const alignment = self.comptimeAlignOf(field.ty, depth + 1) orelse return null;
-            if (alignment <= 0) return null;
-            if (alignment > max_align) max_align = alignment;
-            if (field.offset) |explicit| {
-                const explicit_offset: i128 = @intCast(explicit);
-                if (explicit_offset < offset) return null;
-                offset = explicit_offset;
-            } else {
-                offset = alignForward(offset, alignment) orelse return null;
-            }
-            if (wanted_field) |wanted| {
-                if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
-            }
-            offset += size;
-        }
-        return .{
-            .size = alignForward(offset, max_align) orelse return null,
-            .alignment = max_align,
-            .field_offset = found,
-        };
+        return type_layout.comptimeStructLayout(*CEmitter, self, struct_decl, wanted_field, depth, comptimeSizeOf, comptimeAlignOf);
     }
 
     fn comptimeFieldOffset(self: *CEmitter, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {

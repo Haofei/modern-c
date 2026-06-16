@@ -6,6 +6,9 @@
 // here would mean the front-end and a backend disagree on a struct's layout.
 
 const std = @import("std");
+const ast = @import("ast.zig");
+const numeric = @import("numeric.zig");
+const alignForward = numeric.alignForward;
 
 /// Size and (natural) alignment in bytes. For the scalar builtins these are equal.
 pub const ScalarLayout = struct { size: u32, alignment: u32 };
@@ -17,6 +20,58 @@ pub const ComptimeStructLayout = struct {
     alignment: i128,
     field_offset: ?i128,
 };
+
+/// Compute the comptime layout of `struct_decl`, returning total size/alignment and (when
+/// `wanted_field` is non-null) the byte offset of that field. This is the single shared
+/// implementation used by BOTH backends (`lower_c.zig` and `lower_llvm.zig`) so they can never
+/// silently diverge on how a struct is laid out.
+///
+/// The per-field size and alignment are resolved through caller-supplied callbacks, because each
+/// backend consults its own emitter state (type aliases, enums, packed-bit reprs, Result payloads,
+/// …) to size a field type. `ctx` is that emitter; `sizeOf`/`alignOf` are the emitter methods.
+/// `depth` is threaded through unchanged for the existing recursion-guard.
+///
+/// Explicit field offsets (`field.offset`, from `@offset(N)` field attributes) must be
+/// monotonically non-decreasing: an explicit offset that lands *before* the current running
+/// offset would overlap a previous field and yields a bogus layout, so it is rejected (returns
+/// null). Both backends now share this guard — previously only the C backend had it while the
+/// LLVM backend accepted overlapping offsets, a latent divergence.
+pub fn comptimeStructLayout(
+    comptime Ctx: type,
+    ctx: Ctx,
+    struct_decl: ast.StructDecl,
+    wanted_field: ?[]const u8,
+    depth: usize,
+    comptime sizeOf: fn (Ctx, ast.TypeExpr, usize) ?i128,
+    comptime alignOf: fn (Ctx, ast.TypeExpr, usize) ?i128,
+) ?ComptimeStructLayout {
+    if (depth > 32) return null;
+    var offset: i128 = 0;
+    var max_align: i128 = 1;
+    var found: ?i128 = null;
+    for (struct_decl.fields) |field| {
+        const size = sizeOf(ctx, field.ty, depth + 1) orelse return null;
+        const alignment = alignOf(ctx, field.ty, depth + 1) orelse return null;
+        if (alignment <= 0) return null;
+        if (alignment > max_align) max_align = alignment;
+        if (field.offset) |explicit| {
+            const explicit_offset: i128 = @intCast(explicit);
+            if (explicit_offset < offset) return null;
+            offset = explicit_offset;
+        } else {
+            offset = alignForward(offset, alignment) orelse return null;
+        }
+        if (wanted_field) |wanted| {
+            if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
+        }
+        offset += size;
+    }
+    return .{
+        .size = alignForward(offset, max_align) orelse return null,
+        .alignment = max_align,
+        .field_offset = found,
+    };
+}
 
 /// The layout of a scalar builtin type named `name`, or null if `name` is not one. Opaque
 /// address classes (`PAddr`/`VAddr`/`DmaAddr`) lower to pointer-width integers.
