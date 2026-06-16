@@ -809,6 +809,28 @@ pub fn build(b: *std.Build) void {
     const llvm_redzone_test_step = b.step("llvm-redzone-test", "Boot the LLVM-lowered redzone+canary demo under QEMU");
     llvm_redzone_test_step.dependOn(&llvm_redzone_test_cmd.step);
 
+    // ksan-test boots the D2.1 KASAN demo under QEMU: access-time use-after-free + OOB
+    // detection via shadow memory (the `--checks=ksan` profile), strictly finer than D2.4.
+    const ksan_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/ksan-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    ksan_test_cmd.step.dependOn(b.getInstallStep());
+    const ksan_test_step = b.step("ksan-test", "Boot the KASAN demo under QEMU (access-time use-after-free + OOB detection)");
+    ksan_test_step.dependOn(&ksan_test_cmd.step);
+
+    const llvm_ksan_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/ksan-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_ksan_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_ksan_test_step = b.step("llvm-ksan-test", "Boot the LLVM-lowered KASAN demo under QEMU");
+    llvm_ksan_test_step.dependOn(&llvm_ksan_test_cmd.step);
+
     const elf_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/lib/host-harness.sh", "zig-out/bin/mcc", "elf-test",
@@ -2655,6 +2677,9 @@ pub fn build(b: *std.Build) void {
     // redzone-test boots the D2.4 redzone+canary demo under QEMU (needs clang+qemu).
     m0_step.dependOn(&redzone_test_cmd.step);
     m0_step.dependOn(&llvm_redzone_test_cmd.step);
+    // ksan-test (D2.1): access-time UAF/OOB detection via KASAN shadow memory.
+    m0_step.dependOn(&ksan_test_cmd.step);
+    m0_step.dependOn(&llvm_ksan_test_cmd.step);
     // elf-test links + runs the ELF64 parser (needs clang).
     m0_step.dependOn(&elf_test_cmd.step);
     // ramfs-test links + runs the in-memory filesystem (needs clang).

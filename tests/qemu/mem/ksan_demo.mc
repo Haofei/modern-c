@@ -1,0 +1,89 @@
+// QEMU boot demo for KASAN-style shadow-memory access-time UAF/OOB detection (D2.1).
+//
+// Compiled with `--checks=ksan`, so every raw.load/raw.store in this file is wrapped by
+// the compiler with `mc_ksan_check(addr, size)`, which consults a shadow map and traps
+// if the accessed bytes are poisoned. The KASAN heap (`heap_new_ksan`) poisons a block
+// in the shadow on `heap_free` and unpoisons the user region on `heap_alloc`. So:
+//
+//   1. ksan_clean — alloc, write+read the user region in bounds (valid shadow), free.
+//                   No access touches poison, so nothing traps.            -> KASAN-OK
+//   2. ksan_uaf   — alloc, free, then READ the freed pointer. The read is an instrumented
+//                   raw.load; the shadow byte for the freed block is poisoned, so
+//                   mc_ksan_check traps BEFORE the load — access-time use-after-free
+//                   detection (D2.4 redzones would NOT catch this: nothing is freed-then-
+//                   accessed there, and free already succeeded).            -> trap
+//   3. ksan_oob   — alloc N, then READ at offset N (one past the user region). That byte
+//                   lies in the trailing redzone, poisoned in the shadow, so the
+//                   instrumented load traps — access-time out-of-bounds.    -> trap
+//
+// The detection is real: mc_ksan_check reads the shadow byte for the exact address being
+// dereferenced and traps via the language `unreachable`/`__builtin_trap`. The clean path
+// never reaches a poisoned byte, so it never traps.
+
+import "std/addr.mc";
+import "kernel/core/heap.mc";
+
+// ---- 1. clean path: in-bounds use of a KASAN allocation ----
+export fn ksan_clean(region: usize, len: usize) -> u32 {
+    var h: Heap = heap_new_ksan(phys_range(pa(region), len));
+
+    let n: usize = 64;
+    let p: PAddr = heap_alloc(&h, n, 16);
+
+    // In-bounds writes then reads of the user region — all valid shadow, no trap.
+    var i: usize = 0;
+    while i < n {
+        unsafe {
+            raw.store<u8>(pa_offset(p, i), 0x41);
+        }
+        i = i + 1;
+    }
+    var sum: u32 = 0;
+    i = 0;
+    while i < n {
+        unsafe {
+            sum = sum + (raw.load<u8>(pa_offset(p, i)) as u32);
+        }
+        i = i + 1;
+    }
+
+    heap_free(&h, p, n);
+    if sum == 0 {
+        return 0; // we wrote 0x41s; a zero sum would mean the reads were wrong
+    }
+    return 1;
+}
+
+// ---- 2. use-after-free: a real read of freed memory traps at access time ----
+// Returns only if the shadow check did NOT fire (a failure); on a real UAF read the
+// instrumented load traps and this never returns.
+export fn ksan_uaf(region: usize, len: usize) -> u32 {
+    var h: Heap = heap_new_ksan(phys_range(pa(region), len));
+
+    let n: usize = 64;
+    let p: PAddr = heap_alloc(&h, n, 16);
+    heap_free(&h, p, n); // poisons [p-rz, p+n+rz) in the shadow
+
+    // USE AFTER FREE: read the freed pointer. mc_ksan_check sees poisoned shadow -> trap.
+    var v: u8 = 0;
+    unsafe {
+        v = raw.load<u8>(p);
+    }
+    return v as u32; // unreachable if detection works
+}
+
+// ---- 3. out-of-bounds: a read one past the user region traps at access time ----
+export fn ksan_oob(region: usize, len: usize) -> u32 {
+    var h: Heap = heap_new_ksan(phys_range(pa(region), len));
+
+    let n: usize = 64;
+    let p: PAddr = heap_alloc(&h, n, 16);
+
+    // OUT OF BOUNDS: read at offset n (one past the user region) — lands in the trailing
+    // redzone, poisoned in the shadow. The instrumented load traps.
+    var v: u8 = 0;
+    unsafe {
+        v = raw.load<u8>(pa_offset(p, n));
+    }
+    return v as u32; // unreachable if detection works
+}

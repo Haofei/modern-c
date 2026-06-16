@@ -53,7 +53,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    try appendLlvmWithSourcePath(allocator, module, out, opts.source_path orelse "input.mc", opts.optimize);
+    try appendLlvmWithSourcePathKsan(allocator, module, out, opts.source_path orelse "input.mc", opts.optimize, opts.ksan);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -61,6 +61,10 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
 }
 
 pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool) !void {
+    try appendLlvmWithSourcePathKsan(allocator, module, out, source_path, optimize, false);
+}
+
+pub fn appendLlvmWithSourcePathKsan(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool, ksan: bool) !void {
     var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
     defer module_mir.deinit();
 
@@ -104,6 +108,7 @@ pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module
         .debug_functions = std.ArrayList(DebugFunction).empty,
         .debug_locations = std.ArrayList(DebugLocation).empty,
         .source_path = source_path,
+        .ksan = ksan,
     };
     defer ctx.deinit();
     for (module.decls) |decl| {
@@ -188,6 +193,22 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(allocator, "declare void @mc_trap_Assert() noreturn\n\n");
     try out.appendSlice(allocator, "declare void @mc_trap_NullUnwrap() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_Unreachable() noreturn\n\n");
+    // KASAN shadow hooks (D2.1): weak no-op `define`s so EVERY build links and behaves
+    // identically when no KASAN runtime is present. A linked KASAN shadow runtime (the
+    // ksan profile) provides STRONG definitions that override these — poisoning/unpoisoning
+    // the shadow on heap free/alloc and trapping on a poisoned access. The heap calls these
+    // only on a `heap_new_ksan` heap, so default heaps never even reach the stubs.
+    try out.appendSlice(allocator, "define weak void @mc_ksan_poison(i64 %a, i64 %b) {\n  ret void\n}\n");
+    try out.appendSlice(allocator, "define weak void @mc_ksan_unpoison(i64 %a, i64 %b) {\n  ret void\n}\n");
+    try out.appendSlice(allocator, "define weak void @mc_ksan_check(i64 %a, i64 %b) {\n  ret void\n}\n\n");
+}
+
+// The KASAN shadow hook symbols (D2.1), which get weak no-op definitions and so must not
+// also be `declare`d from an MC `extern fn`.
+fn isKsanHook(name: []const u8) bool {
+    return std.mem.eql(u8, name, "mc_ksan_poison") or
+        std.mem.eql(u8, name, "mc_ksan_unpoison") or
+        std.mem.eql(u8, name, "mc_ksan_check");
 }
 
 const LlvmEmitter = struct {
@@ -236,6 +257,10 @@ const LlvmEmitter = struct {
     current_debug_span: ?ast.Span = null,
     current_return_ty: ?ast.TypeExpr = null,
     source_path: []const u8,
+    // KASAN profile (D2.1): when true, each raw.load/raw.store emits a
+    // `call void @mc_ksan_check(i64 addr, i64 size)` before the volatile access, so a
+    // poisoned (freed/redzone) access traps at access time. Default false = original IR.
+    ksan: bool = false,
 
     fn deinit(self: *LlvmEmitter) void {
         self.need_uadd.deinit();
@@ -766,6 +791,9 @@ const LlvmEmitter = struct {
     }
 
     fn emitExternFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl) !void {
+        // The KASAN shadow hooks (D2.1) get weak no-op `define`s in emitTrapDecl so every
+        // build links; skip the `declare` here to avoid an LLVM declare-vs-define clash.
+        if (isKsanHook(fn_decl.name.text)) return;
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         try self.out.print(self.allocator, "declare {s} @{s}(", .{ try self.llvmType(ret_ty), fn_decl.name.text });
         for (fn_decl.params, 0..) |param, i| {
@@ -1401,6 +1429,9 @@ const LlvmEmitter = struct {
             const value = try self.emitExpr(call.args[1], value_ty);
             const ptr = try self.nextTemp();
             const llvm_ty = try self.llvmType(value_ty);
+            // KASAN (D2.1): consult the shadow before the store — a poisoned (freed/
+            // redzone) target traps in mc_ksan_check. Scalar size == llvmAlignOf here.
+            if (self.ksan) try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
             try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
             return true;
@@ -2577,6 +2608,9 @@ const LlvmEmitter = struct {
             const ptr = try self.nextTemp();
             const result = try self.nextTemp();
             const llvm_ty = try self.llvmType(value_ty);
+            // KASAN (D2.1): consult the shadow before the load — a use-after-free read
+            // of poisoned (freed) memory traps in mc_ksan_check before the deref.
+            if (self.ksan) try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
             try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, llvm_ty, ptr, try self.debugCallSuffix() });
             return result;

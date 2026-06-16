@@ -25,6 +25,21 @@ import "std/alloc.mc";
 // little; coalescing collapses adjacent frees, so this rarely fills.
 const HEAP_FREE_SLOTS: usize = 64;
 
+// ----- KASAN shadow hooks (D2.1) -----
+//
+// A KASAN-profile heap (built with `heap_new_ksan`) drives a shadow map: it POISONS a
+// block's bytes on `heap_free` and UNPOISONS the user bytes on `heap_alloc`. The shadow
+// is consulted by the compiler-instrumented memory accesses (raw.load/raw.store under
+// `--checks=ksan`) via `mc_ksan_check`, so a use-after-free or out-of-bounds ACCESS
+// traps the moment it touches a poisoned byte — before the freed block is reused. These
+// hooks are no-ops in a default heap (`ksan == 0`), so non-KASAN builds are unchanged.
+//
+// The shadow runtime (poison/unpoison/check) is provided externally and must itself be
+// UNinstrumented (it manipulates the shadow with raw accesses); it lives in C in the
+// boot runtime so the ksan profile never recurses through its own shadow writes.
+extern fn mc_ksan_poison(addr: usize, size: usize) -> void;
+extern fn mc_ksan_unpoison(addr: usize, size: usize) -> void;
+
 // ----- redzone hardening (D2.4) -----
 //
 // A redzone-profile heap (built with `heap_new_redzoned`) reserves guard bytes
@@ -85,6 +100,10 @@ struct Heap {
     // the redzone profile entirely (default `heap_new`), so non-redzone builds keep
     // their original layout and incur no poison work.
     redzone: usize,
+    // KASAN shadow profile (D2.1): 1 enables shadow poison/unpoison on free/alloc, 0
+    // (default) disables it. Independent of `redzone`, though `heap_new_ksan` enables
+    // both so freed blocks AND redzones are poisoned in the shadow.
+    ksan: usize,
 }
 
 // An empty free slot.
@@ -98,6 +117,7 @@ export fn heap_new(range: PhysRange) -> Heap {
     h.range = range;
     h.next = pr_start(&range);
     h.redzone = 0; // redzone profile off: original layout, no guard bytes
+    h.ksan = 0;    // KASAN shadow profile off: no poison/unpoison hooks
     var i: usize = 0;
     while i < HEAP_FREE_SLOTS {
         h.free[i] = fb_empty();
@@ -113,6 +133,19 @@ export fn heap_new(range: PhysRange) -> Heap {
 export fn heap_new_redzoned(range: PhysRange) -> Heap {
     var h: Heap = heap_new(range);
     h.redzone = REDZONE_BYTES;
+    return h;
+}
+
+// Build a heap with the KASAN shadow hardening profile (D2.1). On top of the redzone
+// profile (so guard bands are poisoned in the shadow too), every `heap_alloc` UNPOISONS
+// the user region in the shadow and every `heap_free` POISONS the whole fenced block.
+// Combined with compiler-instrumented accesses (`--checks=ksan`), a read or write of a
+// freed (or out-of-bounds) byte traps at ACCESS time via `mc_ksan_check` — strictly
+// finer than D2.4, which only catches a redzone clobber on FREE. The caller must arm the
+// shadow region for this heap's backing store (`mc_ksan_arm`, runtime-side) first.
+export fn heap_new_ksan(range: PhysRange) -> Heap {
+    var h: Heap = heap_new_redzoned(range);
+    h.ksan = 1;
     return h;
 }
 
@@ -226,8 +259,21 @@ export fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
     let inner: usize = rz + size + rz; // checked arithmetic via overflow traps
     let raw_start: PAddr = heap_alloc_raw(h, inner, align);
     let user: PAddr = pa_offset(raw_start, rz);
+    // KASAN: unpoison the entire fenced block BEFORE filling the guards, so the heap's
+    // own redzone writes never land on poisoned shadow (the block may be a reused, and
+    // thus poisoned, freed block). The bands are re-poisoned in the shadow just below.
+    if h.ksan != 0 {
+        mc_ksan_unpoison(pa_value(raw_start), inner);
+    }
     redzone_fill(raw_start, rz);                 // leading guard [raw_start, user)
     redzone_fill(pa_offset(user, size), rz);     // trailing guard [user+size, +rz)
+    // KASAN: poison the two guard bands in the shadow (an OOB access into them traps at
+    // access time, the access-time analogue of the free-time redzone check) and leave
+    // the user region `[user, user+size)` valid/addressable.
+    if h.ksan != 0 {
+        mc_ksan_poison(pa_value(raw_start), rz);             // leading guard
+        mc_ksan_poison(pa_value(pa_offset(user, size)), rz); // trailing guard
+    }
     return user;
 }
 
@@ -312,9 +358,16 @@ export fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
     var fsize: usize = size;
     let rz: usize = h.redzone;
     if rz != 0 && size != 0 {
-        heap_check_block(h, addr, size); // traps on corruption
         faddr = pa(pa_value(addr) - rz); // raw fenced start, checked subtraction
         fsize = rz + size + rz;          // full fenced length
+        // KASAN: the redzone bands are POISONED in the shadow (so a user OOB access traps);
+        // but `heap_check_block` below legitimately READS them, which would itself trap
+        // under instrumentation. Unpoison the whole fenced block first so the heap's own
+        // guard read is valid, then the block is re-poisoned wholesale just below.
+        if h.ksan != 0 {
+            mc_ksan_unpoison(pa_value(faddr), fsize);
+        }
+        heap_check_block(h, addr, size); // traps on corruption
     }
     if !pr_contains(&h.range, faddr) {
         unreachable; // freeing an address this heap never owned
@@ -332,6 +385,15 @@ export fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
     // A free above the current frontier would be a free of never-allocated memory.
     if pa_lt(h.next, end) {
         unreachable;
+    }
+    // KASAN: poison the whole fenced block in the shadow. From here on, any ACCESS to
+    // these bytes (a use-after-free read or write) consults the shadow via mc_ksan_check
+    // and traps — the access-time detection that is strictly finer than the free-time
+    // redzone check. Poison AFTER the redzone read above (which needs valid shadow) and
+    // before release; the free-list metadata `heap_release` touches lives in the Heap
+    // struct, not in these freed bytes, so it is never instrumented against this poison.
+    if h.ksan != 0 {
+        mc_ksan_poison(pa_value(faddr), fsize);
     }
     heap_release(h, faddr, fsize);
 }

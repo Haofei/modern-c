@@ -50,6 +50,10 @@ const usage =
     \\                         --checks=all on every non-trapping program, since a
     \\                         proven-dead check could never have fired.
     \\  --optimize             deprecated alias for --checks=elide-proven.
+    \\  --checks=ksan          KASAN profile (D2.1): instrument raw.load/raw.store with a
+    \\                         shadow-memory check that traps on a poisoned (freed/redzone)
+    \\                         access, catching use-after-free / out-of-bounds at ACCESS
+    \\                         time. Composes: e.g. --checks=ksan,elide-proven.
     \\
 ;
 
@@ -87,6 +91,11 @@ pub fn main(init: std.process.Init) !void {
     // (the fact-gated MIR optimizer drops only provably-dead checks, annex E.4). `optimize`
     // is the single bool that selects RELEASE; `--optimize` is a deprecated alias.
     var optimize = false;
+    // KASAN profile (D2.1): when set (`--checks=ksan`), instrumented memory accesses
+    // (raw.load/raw.store — the pointer-deref / raw-access path) emit a shadow-memory
+    // check that traps on a poisoned (freed/redzone) access. Orthogonal to `optimize`;
+    // default builds leave it off, so the emitted code is byte-for-byte unchanged.
+    var ksan = false;
     var saw_checks_flag = false;
     var check_fmt = false;
     // `emit-layout --structs=A,B,C`: the comma-separated structs whose MC layout is asserted.
@@ -106,13 +115,21 @@ pub fn main(init: std.process.Init) !void {
             }
         } else if (std.mem.startsWith(u8, flag, "--checks=")) {
             saw_checks_flag = true;
+            // Comma-separated tokens so the build-safety axis (`all`/`elide-proven`)
+            // composes with the orthogonal `ksan` profile, e.g. `--checks=ksan` or
+            // `--checks=ksan,elide-proven`. Default (no `ksan` token) leaves ksan off.
             const value = flag["--checks=".len..];
-            if (std.mem.eql(u8, value, "all")) {
-                optimize = false;
-            } else if (std.mem.eql(u8, value, "elide-proven")) {
-                optimize = true;
-            } else {
-                return failUsage();
+            var tokens = std.mem.splitScalar(u8, value, ',');
+            while (tokens.next()) |tok| {
+                if (std.mem.eql(u8, tok, "all")) {
+                    optimize = false;
+                } else if (std.mem.eql(u8, tok, "elide-proven")) {
+                    optimize = true;
+                } else if (std.mem.eql(u8, tok, "ksan")) {
+                    ksan = true;
+                } else {
+                    return failUsage();
+                }
             }
         } else if (std.mem.eql(u8, flag, "--optimize")) {
             // Deprecated alias for `--checks=elide-proven`.
@@ -180,11 +197,11 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        try runEmitC(allocator, path, source, profile, optimize);
+        try runEmitC(allocator, path, source, profile, optimize, ksan);
     } else if (std.mem.eql(u8, command, "emit-map")) {
         try runEmitMap(allocator, path, source, profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source, optimize);
+        try runEmitLlvm(allocator, path, source, optimize, ksan);
     } else if (is_emit_layout) {
         try runEmitLayout(allocator, path, source, structs_flag.?);
     } else if (is_emit_c_struct) {
@@ -491,7 +508,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     try writeStdout(output.items);
 }
 
-fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, optimize: bool) !void {
+fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, optimize: bool, ksan: bool) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -524,7 +541,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = profile, .optimize = optimize, .source_path = path });
+    try be.lower(allocator, module, &output, .{ .profile = profile, .optimize = optimize, .source_path = path, .ksan = ksan });
     try writeStdout(output.items);
 }
 
@@ -564,7 +581,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     try writeStdout(output.items);
 }
 
-fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool) !void {
+fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool, ksan: bool) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -597,7 +614,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     const be = backend.byName("llvm").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = .kernel, .optimize = optimize, .source_path = path });
+    try be.lower(allocator, module, &output, .{ .profile = .kernel, .optimize = optimize, .source_path = path, .ksan = ksan });
     try writeStdout(output.items);
 }
 

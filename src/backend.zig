@@ -20,6 +20,11 @@ pub const LowerOptions = struct {
     /// Source path embedded in #line / !DILocation metadata; null means the
     /// backend picks its own default.
     source_path: ?[]const u8,
+    /// KASAN profile (D2.1): when true, instrumented memory accesses (raw.load /
+    /// raw.store) emit a shadow-memory check (`mc_ksan_check`) that traps on a
+    /// poisoned access. Default false leaves the emitted code byte-for-byte
+    /// unchanged. Backends that don't instrument simply ignore it.
+    ksan: bool = false,
 };
 
 /// A code-generation backend: the seam at which `main.zig` selects a target and
