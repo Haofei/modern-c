@@ -24,6 +24,23 @@ fn drain_fifo(limit: u32) -> u32 {
     return sum;
 }
 
+// ACCEPTED: (bug #4) the counter advance sits inside an `if`/`else`. A plain `if`
+// desugars to a `switch` on the bool, so the advance lives in a switch arm. The
+// bounded-loop walker must recurse into switch arms (it previously recursed into
+// `if_let` but forgot `switch`, producing a false E_UNBOUNDED_LOOP here).
+#[bounded]
+fn advance_in_if(n: u32, c: bool) -> u32 {
+    var i: u32 = 0;
+    while i < n {
+        if c {
+            i = i + 1;
+        } else {
+            i = i + 2;
+        }
+    }
+    return i;
+}
+
 // ACCEPTED: a decrementing counter toward zero.
 #[bounded]
 fn countdown(start: u32) -> u32 {

@@ -99,6 +99,12 @@ pub const Checker = struct {
     // its state to track a `move` field that has been moved out of its aggregate. Freed at
     // the end of each function's analysis.
     move_place_keys: std.ArrayListUnmanaged([]const u8) = .empty,
+    // (bug #3) Definite-init: defer bodies do NOT run at their lexical position — they
+    // run at scope EXIT, after later assignments. Reading them eagerly mid-block produced
+    // a false E_USE_BEFORE_INIT (`var x=uninit; defer sink(x); x=5;`). Instead we COLLECT
+    // each defer expression here and evaluate its reads once, against the function's exit
+    // init-state (where `x` is already assigned). Non-null only during a DI pass.
+    di_defers: ?*std.ArrayListUnmanaged(ast.Expr) = null,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -439,6 +445,7 @@ pub const Checker = struct {
                         .no_lang_trap = hasNoLangTrap(decl.attrs),
                         .is_const = fn_decl.is_const,
                         .may_sleep = hasMaySleep(decl.attrs),
+                        .irq_context = hasIrqContext(decl.attrs),
                     }) catch {
                         self.oom = true;
                     };
@@ -894,7 +901,7 @@ pub const Checker = struct {
                 // a by-value resource, so it is only registered when the binding was not already
                 // classed as a move resource above.
                 if (!bound_as_move and decl.names.len > 0 and decl.init != null) {
-                    if (aliasReferentName(decl.init.?)) |referent| {
+                    if (aliasReferentOf(decl.init.?, state)) |referent| {
                         if (state.contains(referent)) {
                             // `live = false`: the alias is a borrow, not a linear resource, so
                             // leak/exit checks (which only fire on `live` slots) must skip it.
@@ -1792,7 +1799,18 @@ pub const Checker = struct {
         const body = fn_decl.body orelse return;
         var pending = DefInitState.init(self.reporter.allocator);
         defer pending.deinit();
+        // Collect defer bodies during the walk instead of reading them in place; they
+        // execute at scope exit, so their reads are checked against the EXIT state.
+        var defers: std.ArrayListUnmanaged(ast.Expr) = .empty;
+        defer defers.deinit(self.reporter.allocator);
+        const prev = self.di_defers;
+        self.di_defers = &defers;
+        defer self.di_defers = prev;
         _ = self.diBlock(body, &pending, ctx);
+        // After the body, `pending` holds the names still un-assigned on the fall-through
+        // exit path. A defer reading such a name is a genuine use-before-init; a defer
+        // reading a name assigned before exit (the FP case) is now accepted.
+        for (defers.items) |e| self.diRead(e, &pending, ctx);
     }
 
     fn diCloneState(self: *Checker, state: *const DefInitState) DefInitState {
@@ -1887,7 +1905,16 @@ pub const Checker = struct {
                 return false;
             },
             .@"defer" => |e| {
-                self.diRead(e, state, ctx);
+                // (bug #3) Do NOT read here — a defer runs at scope exit, after the rest
+                // of the block. Collect it; checkDefiniteInit evaluates it against the
+                // exit init-state. (If di_defers is unset we fall back to in-place reads.)
+                if (self.di_defers) |defers| {
+                    defers.append(self.reporter.allocator, e) catch {
+                        self.oom = true;
+                    };
+                } else {
+                    self.diRead(e, state, ctx);
+                }
                 return false;
             },
             .block, .unsafe_block, .comptime_block => |b| return self.diBlock(b, state, ctx),
@@ -3070,11 +3097,25 @@ pub const Checker = struct {
                     if (ctx.no_lang_trap and !function.no_lang_trap) {
                         self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "call target is not proven #[no_lang_trap]");
                     }
-                    // C2: an IRQ/atomic-context function may not call a sleepable op
-                    // (heap alloc, mutex/lock acquire, scheduler yield) — that is
-                    // "scheduling while atomic" / "sleeping in interrupt".
-                    if (ctx.irq_context and function.may_sleep) {
-                        self.errorCode(expr.span, "E_SLEEP_IN_ATOMIC", "calling a #[may_sleep] op from an #[irq_context] function (sleeping in interrupt)");
+                    // C2 (reconciled with the MIR verifier's E_IRQ_CONTEXT_CALL model):
+                    // an IRQ/atomic-context function may only call OTHER irq-context
+                    // functions (plus the non-blocking primitives `raw.`/`mmio.`/`atomic.`,
+                    // which are member-method builtins and never resolve to `direct_function`
+                    // here). A direct call to any other named function would run unbounded,
+                    // possibly-sleeping work in interrupt/atomic context.
+                    //
+                    // Previously the sema check only rejected `#[may_sleep]` callees, so a
+                    // plain non-irq call (`ack_irq()`) PASSED `mcc check` but FAILED
+                    // `mcc verify` — a check/verify contradiction. We now mirror the
+                    // verifier: `#[may_sleep]` callees keep the specific E_SLEEP_IN_ATOMIC
+                    // diagnostic; any other non-irq callee is the same E_IRQ_CONTEXT_CALL
+                    // the verifier raises, so the two passes agree.
+                    if (ctx.irq_context and !function.irq_context) {
+                        if (function.may_sleep) {
+                            self.errorCode(expr.span, "E_SLEEP_IN_ATOMIC", "calling a #[may_sleep] op from an #[irq_context] function (sleeping in interrupt)");
+                        } else {
+                            self.errorCode(expr.span, "E_IRQ_CONTEXT_CALL", "an #[irq_context] function may only call other #[irq_context] functions or non-blocking primitives");
+                        }
                     }
                     if (node.args.len != function.params.len) {
                         self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match function declaration");
@@ -4214,6 +4255,16 @@ pub const Checker = struct {
             .if_let => |n| blk: {
                 if (bodyAdvancesCounter(n.then_block, name, toward_increase)) break :blk true;
                 if (n.else_block) |eb| if (bodyAdvancesCounter(eb, name, toward_increase)) break :blk true;
+                break :blk false;
+            },
+            // (bug #4) A plain `if`/`else` desugars to a `switch` on the bool, so the
+            // counter update may live inside a switch arm — the same loop body. Forgetting
+            // this arm was the bounded-loop false positive; mirror `stmtHasBreak`'s switch.
+            .@"switch" => |n| blk: {
+                for (n.arms) |arm| switch (arm.body) {
+                    .block => |b| if (bodyAdvancesCounter(b, name, toward_increase)) break :blk true,
+                    .expr => {},
+                };
                 break :blk false;
             },
             .unsafe_block, .comptime_block, .block => |b| bodyAdvancesCounter(b, name, toward_increase),
@@ -5712,6 +5763,11 @@ const FunctionInfo = struct {
     // C2: this function is a sleepable op (`#[may_sleep]`) — calling it from an
     // `#[irq_context]`/`#[atomic]` function is a compile error.
     may_sleep: bool = false,
+    // C2: this function itself runs in IRQ/atomic context (`#[irq_context]`/
+    // `#[atomic_context]`). An irq-context caller may ONLY call other irq-context
+    // functions (or non-blocking primitives) — this mirrors the MIR verifier's
+    // `E_IRQ_CONTEXT_CALL` discipline so `mcc check` and `mcc verify` agree.
+    irq_context: bool = false,
 };
 
 const GlobalInfo = struct {
@@ -7563,6 +7619,51 @@ fn updateAssignmentAddressOrigin(target: ast.Expr, value: ast.Expr, ctx: Context
     }
 }
 
+// ----- unified place-root classification (closes the bug-#1/#2 class) -------
+//
+// "What storage does this lvalue ultimately name?" was previously re-derived in
+// THREE places with divergent coverage (localAddressRoot/localStorageRoot,
+// pointerParamRoot, aliasReferentName) — and the divergence WAS the soundness holes:
+//   - the escape check only knew pointer *params* outlive the frame, not globals (#2);
+//   - the alias check only matched `&ident`, never an alias copied into a new slot (#1).
+// `placeRoot` is the single classifier all the lifetime/escape checks consult.
+const PlaceRoot = union(enum) {
+    // A function-local binding (`var`/`let` at function scope).
+    local: struct { span: diagnostics.Span },
+    // A function parameter; `class` is its type class (for pointer-like tests).
+    param: struct { span: diagnostics.Span, class: TypeClass },
+    // A module-level global — outlives every frame.
+    global,
+    // Not resolvable to a known binding (a temporary, a builtin, etc.).
+    none,
+};
+
+// Resolve the root binding that a bare-ident (peeling `grouped`) names.
+fn placeRoot(expr: ast.Expr, ctx: Context) PlaceRoot {
+    return switch (expr.kind) {
+        .ident => |ident| {
+            if (ctx.scope) |scope| {
+                if (scope.get(ident.text)) |entry| {
+                    return switch (entry.origin) {
+                        .local => .{ .local = .{ .span = expr.span } },
+                        .param => .{ .param = .{
+                            .span = expr.span,
+                            .class = if (entry.ty) |ty| classifyTypeCtx(ty, ctx) else entry.class,
+                        } },
+                    };
+                }
+            }
+            // A name not in the local scope that IS a declared global.
+            if (ctx.globals) |globals| {
+                if (globals.contains(ident.text)) return .global;
+            }
+            return .none;
+        },
+        .grouped => |inner| placeRoot(inner.*, ctx),
+        else => .none,
+    };
+}
+
 fn localAddressRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
     return switch (expr.kind) {
         .address_of => |inner| localStorageRoot(inner.*, ctx),
@@ -7604,6 +7705,23 @@ fn aliasReferentName(expr: ast.Expr) ?[]const u8 {
     };
 }
 
+// T1.2 (bug #1, stale-alias laundering): the move-binding that a `let`-initializer
+// derives a pointer alias of, given the current move `state`. Two shapes:
+//   - `let p = &a;`  → the referent is `a` (handled by `aliasReferentName`).
+//   - `let q = p;`   → copying an existing alias slot. `q` must INHERIT `p`'s
+//     `alias_of`, otherwise a use-after-move through `q` is a false negative (the
+//     copy "launders" the staleness). We resolve to the ORIGINAL referent so the
+//     stale check has one referent to consult regardless of the alias chain length.
+fn aliasReferentOf(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[]const u8 {
+    if (aliasReferentName(expr)) |referent| return referent;
+    if (identName(expr)) |name| {
+        if (state.get(name)) |slot| {
+            if (slot.alias_of) |inherited| return inherited;
+        }
+    }
+    return null;
+}
+
 // The bare-binding name of an lvalue, peeling `grouped`. Null if it is not a simple ident.
 fn identName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
@@ -7630,48 +7748,48 @@ fn localStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
 }
 
 // T1.1 lexical region/scope borrows: does an assignment *target* write to storage
-// that OUTLIVES the current function's locals — i.e. it writes *through a pointer
-// parameter* (a deref of a param pointer, or a field reached through one)?
+// that OUTLIVES the current function's locals?
 //
-// This is the sound, no-false-positive slice. A bare-ident target (`p = ...`) is a
-// same-function local at the (flat) function scope, so it does NOT outlive a local
-// referent and is never reported here (that needs nested-scope/lifetime analysis,
-// T1.3). Only writes that reach OUT of the function via a `*out`/`out.field` pointer
-// parameter can make a stack borrow dangle, so only those escape.
+// Two such places exist, and BOTH must be caught (a write to only one was bug #2):
+//   - *through a pointer parameter* — `*out = ...` / `out.field = ...` where `out`
+//     is a pointer parameter; the caller owns that storage, so it outlives us.
+//   - *a GLOBAL pointer* — `gp = &local;` where `gp` is a module-level global;
+//     a global outlives every frame, so the stored borrow dangles after return.
+//
+// This is the sound, no-false-positive slice. A bare-ident target that resolves to a
+// *local* (`p = ...`) is a same-function binding and does NOT outlive a local referent
+// (that needs nested-scope/lifetime analysis, T1.3), so it is never reported here.
 //
 // Passing `&local` DOWN to a callee is unaffected (that is a call argument, never an
 // assignment target), so the `init(&x); use(x)` idiom keeps compiling.
 fn assignmentTargetEscapesFunction(expr: ast.Expr, ctx: Context) bool {
     return switch (expr.kind) {
-        // `*p = ...` / `p.field = ...` escape when `p` resolves to a pointer parameter.
-        .deref => |inner| pointerParamRoot(inner.*, ctx),
-        .member => |node| pointerParamRoot(node.base.*, ctx),
-        .index => |node| pointerParamRoot(node.base.*, ctx),
+        // A bare-ident target escapes only if it resolves to a (pointer-like) global.
+        .ident => placeRoot(expr, ctx) == .global,
+        // `*p = ...` / `p.field = ...` escape when `p` resolves to a pointer parameter
+        // OR a pointer-like global (storage that outlives this frame either way).
+        .deref => |inner| placeOutlivesFrame(inner.*, ctx),
+        .member => |node| placeOutlivesFrame(node.base.*, ctx),
+        .index => |node| placeOutlivesFrame(node.base.*, ctx),
         .grouped => |inner| assignmentTargetEscapesFunction(inner.*, ctx),
         else => false,
     };
 }
 
-// Whether `expr` is (or transitively dereferences) a pointer *parameter* — storage the
-// caller owns, which outlives this function's stack frame. A local pointer is NOT a
-// param and does not qualify (it cannot outlive the function it lives in).
-fn pointerParamRoot(expr: ast.Expr, ctx: Context) bool {
-    return switch (expr.kind) {
-        .ident => |ident| {
-            const binding = (if (ctx.scope) |scope| scope.get(ident.text) else null) orelse return false;
-            if (binding.origin != .param) return false;
-            const ty = binding.ty orelse return false;
-            const class = classifyTypeCtx(ty, ctx);
-            return isNonNullPointerLike(class) or isNullablePointerLike(class);
-        },
-        // Reaching further through a param pointer (`*out.next`, `out.buf[i]`) still
-        // bottoms out at the caller-owned storage.
-        .deref => |inner| pointerParamRoot(inner.*, ctx),
-        .member => |node| pointerParamRoot(node.base.*, ctx),
-        .index => |node| pointerParamRoot(node.base.*, ctx),
-        .grouped => |inner| pointerParamRoot(inner.*, ctx),
+// Whether `expr` resolves to storage that OUTLIVES this function's stack frame —
+// either a pointer *parameter* (caller-owned) or a pointer-like *global* (outlives
+// every frame). A local pointer is NOT included (it cannot outlive the function it
+// lives in). Used as the base of `*p`/`p.field`/`p[i]` escape targets.
+fn placeOutlivesFrame(expr: ast.Expr, ctx: Context) bool {
+    return switch (placeRoot(expr, ctx)) {
+        .param => |p| isPointerLikeClass(p.class),
+        .global => true,
         else => false,
     };
+}
+
+fn isPointerLikeClass(class: TypeClass) bool {
+    return isNonNullPointerLike(class) or isNullablePointerLike(class);
 }
 
 fn indexedLocalArrayStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {

@@ -39,12 +39,18 @@ fn plic_set_threshold(base: usize, threshold: u32) -> void {
     }
 }
 
+// Marked `#[irq_context]`: these are trivial raw-register accessors with no blocking
+// work, so they are safe to call from the `#[irq_context]` claim/complete path. The
+// attribute makes them legal irq-context callees under the reconciled discipline
+// (sema `E_IRQ_CONTEXT_CALL` and the MIR verifier now agree).
+#[irq_context]
 fn plic_claim(base: usize) -> u32 {
     unsafe {
         return raw.load<u32>(phys(base + PLIC_CLAIM_M));
     }
 }
 
+#[irq_context]
 fn plic_complete_raw(base: usize, line: u32) -> void {
     unsafe {
         raw.store<u32>(phys(base + PLIC_CLAIM_M), line);

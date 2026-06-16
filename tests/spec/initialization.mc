@@ -74,6 +74,25 @@ fn reject_uninit_scalar_assigned_one_branch(c: bool) -> u32 {
     return x;
 }
 
+// (bug #3) A `defer` body runs at scope EXIT, after later statements — not at its
+// lexical position. So a defer reading a var that is assigned LATER (before exit) must
+// be accepted, and its reads are checked against the function's exit init-state.
+fn accept_defer_reads_var_assigned_after_defer() -> u32 {
+    var x: u32 = uninit;
+    defer takes_u32(x);   // runs at exit, where x is already 5 — accepted
+    x = 5;
+    return x;
+}
+
+// A defer reading a var that is NEVER assigned on the exit path is still a genuine
+// use-before-init (the deferred read runs with the var still uninitialized).
+fn reject_defer_reads_never_assigned_var() -> u32 {
+    var x: u32 = uninit;
+    // EXPECT_ERROR: E_USE_BEFORE_INIT
+    defer takes_u32(x);
+    return 0;
+}
+
 // Aggregates are filled element/field-at-a-time, which whole-variable definite-init
 // does not track; reading them after `uninit` stays accepted (unspecified, not UB).
 fn accept_read_materialized_uninit_byte() -> u8 {

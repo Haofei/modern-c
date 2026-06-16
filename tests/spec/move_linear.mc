@@ -268,3 +268,16 @@ fn reject_alias_deref_after_move() -> u32 {
     let b: u32 = (*p).v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
+
+// rejected: copying an alias into a new binding must NOT launder the staleness.
+// `let q = p;` inherits p's alias-of(t), so reading through q after t is moved is
+// still a stale use-after-move. (Bug #1: previously a false negative — the copy
+// dropped the alias_of and the read slipped through.)
+fn reject_alias_launder_after_move() -> u32 {
+    let t: Token = make();
+    let p: *Token = &t;
+    let q: *Token = p;           // q is a copy of the alias p; inherits alias-of(t)
+    let a: u32 = consume(t);     // t moved out
+    let b: u32 = peek(q);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + b;
+}

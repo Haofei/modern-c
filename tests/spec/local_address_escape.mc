@@ -5,6 +5,7 @@
 // SPEC: check=E_LOCAL_ADDRESS_ESCAPE,E_BORROW_ESCAPES_SCOPE
 
 global shared_counter: u32 = 0;
+global escape_slot: *mut u32 = &shared_counter;
 
 extern struct Packet {
     value: u32,
@@ -250,6 +251,16 @@ fn reject_store_local_address_through_param_field(b: *mut Holder) -> void {
     var x: u32 = 1;
     // EXPECT_ERROR: E_BORROW_ESCAPES_SCOPE
     b.slot = &x;
+}
+
+// T1.1 (bug #2) — storing a stack borrow into a GLOBAL pointer. A global outlives
+// every frame, so the stored borrow dangles after this function returns. Previously
+// accepted (the escape check only knew pointer *parameters* outlive the frame, not
+// globals); now rejected via the unified place-root classifier.
+fn reject_store_local_address_into_global() -> void {
+    var x: u32 = 5;
+    // EXPECT_ERROR: E_BORROW_ESCAPES_SCOPE
+    escape_slot = &x;
 }
 
 // Passing `&local` DOWN to a callee (a call argument, not an assignment target) and
