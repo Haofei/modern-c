@@ -226,3 +226,45 @@ fn reject_unused_move_switch_arm(tag: u32) -> void {
         _ => {}
     }
 }
+
+// --- T1.2: a pointer alias derived from a moved-out value is invalidated ---
+//
+// `let p = &t` records `p` as a borrow alias of the tracked move binding `t`. Reading
+// through `p` AFTER `t` is moved (through the alias `p`, or by deref `*p`) is a stale
+// use-after-move. An alias used BEFORE the move, or an alias of a value that is never
+// moved, is fine.
+
+// accepted: the alias is read before `t` is moved (still valid)
+fn accept_alias_before_move() -> u32 {
+    let t: Token = make();
+    let p: *Token = &t;
+    let x: u32 = peek(p);   // p valid here: t not yet moved
+    return consume(t) + x;  // now t is moved
+}
+
+// accepted: an alias of a value that is never moved (only borrowed) is fine
+fn accept_alias_no_move() -> u32 {
+    let t: Token = make();
+    let p: *Token = &t;
+    let x: u32 = peek(p);
+    let y: u32 = peek(p);   // repeated alias reads are fine while t lives
+    return consume(t) + x + y;
+}
+
+// rejected: the alias is read through (passed to a reader) AFTER t was moved
+fn reject_alias_after_move() -> u32 {
+    let t: Token = make();
+    let p: *Token = &t;
+    let a: u32 = consume(t);     // t moved out here
+    let b: u32 = peek(p);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + b;
+}
+
+// rejected: dereferencing the stale alias after the move
+fn reject_alias_deref_after_move() -> u32 {
+    let t: Token = make();
+    let p: *Token = &t;
+    let a: u32 = consume(t);     // t moved out
+    let b: u32 = (*p).v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + b;
+}

@@ -873,6 +873,7 @@ pub const Checker = struct {
                         if (self.move_ctx) |mctx| binding_ty = exprResultType(init_expr, mctx.*);
                     }
                 }
+                var bound_as_move = false;
                 if (binding_ty) |ty| {
                     if (decl.names.len > 0) {
                         if (self.typeIsMoveArray(ty, aliases)) {
@@ -881,6 +882,24 @@ pub const Checker = struct {
                             // A binding whose type embeds a `move` resource by value — a `move`
                             // struct, a `Result<…move…, …>`, or a `?move` — must be consumed.
                             state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span, .ty = ty }) catch {
+                                self.oom = true;
+                            };
+                            bound_as_move = true;
+                        }
+                    }
+                }
+                // T1.2: `let p = &a;` where `a` is a tracked `move` binding records `p` as a
+                // DERIVED alias of `a`. Reading through `p` after `a` is moved is then a stale
+                // use-after-move (see moveBorrow/moveConsume). A pointer alias is a borrow, not
+                // a by-value resource, so it is only registered when the binding was not already
+                // classed as a move resource above.
+                if (!bound_as_move and decl.names.len > 0 and decl.init != null) {
+                    if (aliasReferentName(decl.init.?)) |referent| {
+                        if (state.contains(referent)) {
+                            // `live = false`: the alias is a borrow, not a linear resource, so
+                            // leak/exit checks (which only fire on `live` slots) must skip it.
+                            // Its referent's moved-out state is what the stale check consults.
+                            state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .alias_of = referent }) catch {
                                 self.oom = true;
                             };
                         }
@@ -1243,6 +1262,13 @@ pub const Checker = struct {
         switch (expr.kind) {
             .ident => |id| {
                 if (state.getPtr(id.text)) |slot| {
+                    // T1.2: a pointer alias used by value (e.g. passed to a callee that reads
+                    // through it). The alias is not itself a linear resource — it is not
+                    // "moved" — so skip the move bookkeeping and only check it is not stale.
+                    if (slot.alias_of != null) {
+                        self.checkStaleAlias(id.text, slot.*, expr.span, state);
+                        return;
+                    }
                     if (!slot.live) {
                         self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
                     } else if (slot.deferred) {
@@ -1457,12 +1483,30 @@ pub const Checker = struct {
         return false;
     }
 
+    // T1.2: if `name`'s slot is a pointer alias DERIVED from a tracked `move` binding (`let
+    // p = &a`), reading through it after the referent `a` was moved out is a stale-alias
+    // use-after-move. The alias slot itself stays live (a pointer copy is fine); it is the
+    // referent's moved-out state that poisons reads through the alias.
+    fn checkStaleAlias(self: *Checker, name: []const u8, slot: MoveSlot, span: diagnostics.Span, state: *const std.StringHashMap(MoveSlot)) void {
+        _ = name;
+        const referent = slot.alias_of orelse return;
+        if (state.get(referent)) |r| {
+            if (!r.live) {
+                self.errorCode(span, "E_USE_AFTER_MOVE", "use of an alias derived from a linear `move` value after that value was moved (the alias is now stale)");
+            }
+        }
+    }
+
     // Borrow: check the move bindings referenced are live, without consuming.
     fn moveBorrow(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot)) void {
         switch (expr.kind) {
             .ident => |id| {
                 if (state.getPtr(id.text)) |slot| {
-                    if (!slot.live) self.errorCode(expr.span, "E_USE_AFTER_MOVE", "borrow of linear `move` value after it was moved");
+                    if (slot.alias_of != null) {
+                        self.checkStaleAlias(id.text, slot.*, expr.span, state);
+                    } else if (!slot.live) {
+                        self.errorCode(expr.span, "E_USE_AFTER_MOVE", "borrow of linear `move` value after it was moved");
+                    }
                 }
             },
             .grouped, .address_of, .deref => |inner| self.moveBorrow(inner.*, state),
@@ -5636,6 +5680,12 @@ const MoveSlot = struct {
     // The binding's declared/inferred type, when known — used to look up a `move` field's
     // type for place-sensitive field-move tracking. Null for synthetic field place keys.
     ty: ?ast.TypeExpr = null,
+    // T1.2: if this binding is a pointer/reference DERIVED from a tracked `move` binding
+    // (taken via `&x` and bound to `let p = &x`), this is the referent's binding name. The
+    // alias is itself a borrow — not a linear resource (`live`/leak rules do not apply to it)
+    // — but reading through it (`*p`, `peek(p)`) after the referent was moved out is a
+    // use-after-move (a stale derived alias). Null for non-alias bindings.
+    alias_of: ?[]const u8 = null,
 };
 
 const LayoutFieldInfo = struct {
@@ -7538,6 +7588,28 @@ fn addressOrigin(expr: ast.Expr, ctx: Context) AddressOrigin {
         },
         .grouped => |inner| addressOrigin(inner.*, ctx),
         else => .none,
+    };
+}
+
+// T1.2: if `expr` is `&<ident>` (the address of a bare local binding, possibly under
+// `grouped`), return that binding's name — the referent a derived pointer alias points at.
+// Scoped to the bare-ident case: `&a` aliases the binding `a`. `&a.field` / `&a[i]` are NOT
+// reported (the move checker tracks whole bindings and one-level fields by separate keys; a
+// pointer into a sub-place is a follow-up). This is the sound, no-false-positive slice.
+fn aliasReferentName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .address_of => |inner| identName(inner.*),
+        .grouped => |inner| aliasReferentName(inner.*),
+        else => null,
+    };
+}
+
+// The bare-binding name of an lvalue, peeling `grouped`. Null if it is not a simple ident.
+fn identName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .ident => |id| id.text,
+        .grouped => |inner| identName(inner.*),
+        else => null,
     };
 }
 
