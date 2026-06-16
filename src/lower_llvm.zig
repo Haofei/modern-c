@@ -53,7 +53,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    try appendLlvmWithSourcePathKsan(allocator, module, out, opts.source_path orelse "input.mc", opts.optimize, opts.ksan);
+    try appendLlvmWithSourcePathKsan(allocator, module, out, opts.source_path orelse "input.mc", opts.optimize, opts.ksan, opts.msan);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -61,10 +61,10 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
 }
 
 pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool) !void {
-    try appendLlvmWithSourcePathKsan(allocator, module, out, source_path, optimize, false);
+    try appendLlvmWithSourcePathKsan(allocator, module, out, source_path, optimize, false, false);
 }
 
-pub fn appendLlvmWithSourcePathKsan(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool, ksan: bool) !void {
+pub fn appendLlvmWithSourcePathKsan(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool, ksan: bool, msan: bool) !void {
     var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
     defer module_mir.deinit();
 
@@ -73,7 +73,7 @@ pub fn appendLlvmWithSourcePathKsan(allocator: std.mem.Allocator, module: ast.Mo
     try out.print(allocator, "source_filename = \"{s}\"\n", .{escaped_source_path});
     try out.appendSlice(allocator, "; MC LLVM IR backend v0\n");
     try out.appendSlice(allocator, "; semantic source: verified MC MIR\n\n");
-    try emitTrapDecl(allocator, out);
+    try emitTrapDecl(allocator, out, msan);
 
     var ctx = LlvmEmitter{
         .allocator = allocator,
@@ -109,6 +109,7 @@ pub fn appendLlvmWithSourcePathKsan(allocator: std.mem.Allocator, module: ast.Mo
         .debug_locations = std.ArrayList(DebugLocation).empty,
         .source_path = source_path,
         .ksan = ksan,
+        .msan = msan,
     };
     defer ctx.deinit();
     for (module.decls) |decl| {
@@ -184,7 +185,7 @@ pub fn appendLlvmWithSourcePathKsan(allocator: std.mem.Allocator, module: ast.Mo
     try ctx.emitDebugMetadata();
 }
 
-fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
+fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), msan: bool) !void {
     try out.appendSlice(allocator, "declare void @mc_trap_IntegerOverflow() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_DivideByZero() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_InvalidShift() noreturn\n\n");
@@ -201,6 +202,12 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(allocator, "define weak void @mc_ksan_poison(i64 %a, i64 %b) {\n  ret void\n}\n");
     try out.appendSlice(allocator, "define weak void @mc_ksan_unpoison(i64 %a, i64 %b) {\n  ret void\n}\n");
     try out.appendSlice(allocator, "define weak void @mc_ksan_check(i64 %a, i64 %b) {\n  ret void\n}\n\n");
+    // KMSAN init-tracking hook (D2.2): weak no-op default so KASAN/non-msan builds are
+    // unchanged. Under the msan profile, raw.store calls this (the linked msan runtime's
+    // STRONG definition marks the written bytes initialized in the shadow). Always emitted
+    // as a weak def so a non-msan build that never calls it still links cleanly.
+    _ = msan;
+    try out.appendSlice(allocator, "define weak void @mc_ksan_store(i64 %a, i64 %b) {\n  ret void\n}\n\n");
 }
 
 // The KASAN shadow hook symbols (D2.1), which get weak no-op definitions and so must not
@@ -208,7 +215,8 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
 fn isKsanHook(name: []const u8) bool {
     return std.mem.eql(u8, name, "mc_ksan_poison") or
         std.mem.eql(u8, name, "mc_ksan_unpoison") or
-        std.mem.eql(u8, name, "mc_ksan_check");
+        std.mem.eql(u8, name, "mc_ksan_check") or
+        std.mem.eql(u8, name, "mc_ksan_store");
 }
 
 const LlvmEmitter = struct {
@@ -261,6 +269,7 @@ const LlvmEmitter = struct {
     // `call void @mc_ksan_check(i64 addr, i64 size)` before the volatile access, so a
     // poisoned (freed/redzone) access traps at access time. Default false = original IR.
     ksan: bool = false,
+    msan: bool = false,
 
     fn deinit(self: *LlvmEmitter) void {
         self.need_uadd.deinit();
@@ -1431,9 +1440,17 @@ const LlvmEmitter = struct {
             const llvm_ty = try self.llvmType(value_ty);
             // KASAN (D2.1): consult the shadow before the store — a poisoned (freed/
             // redzone) target traps in mc_ksan_check. Scalar size == llvmAlignOf here.
-            if (self.ksan) try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
+            // KASAN (D2.1) pre-store check (write to freed/redzone traps). Under the msan
+            // profile (D2.2) the store does NOT pre-check: writing uninitialized memory is how
+            // it gets initialized, so a pre-store uninit check would false-positive on the first
+            // write. (Trade-off: a write through a freed pointer is not caught under msan.)
+            if (self.ksan and !self.msan) try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
             try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+            // KMSAN (D2.2): after the store, mark the written bytes initialized in the shadow,
+            // so a later load of these exact bytes is no longer uninit. Bytes never stored to
+            // remain uninit and trap on load. Same size as the access (scalar == llvmAlignOf).
+            if (self.msan) try self.out.print(self.allocator, "  call void @mc_ksan_store(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(value_ty) });
             return true;
         }
         if (self.mmioAccessInfo(call)) |info| {

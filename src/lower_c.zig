@@ -86,7 +86,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    return appendCProfileWithSourcePath(allocator, module, out, opts.profile, opts.source_path, opts.optimize, opts.ksan);
+    return appendCProfileWithSourcePath(allocator, module, out, opts.profile, opts.source_path, opts.optimize, opts.ksan, opts.msan);
 }
 
 fn backendEmitMap(
@@ -207,10 +207,10 @@ pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast.Module, out: 
 }
 
 pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
-    return appendCProfileWithSourcePath(allocator, module, out, profile, null, false, false);
+    return appendCProfileWithSourcePath(allocator, module, out, profile, null, false, false, false);
 }
 
-pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, optimize: bool, ksan: bool) anyerror!void {
+pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, optimize: bool, ksan: bool, msan: bool) anyerror!void {
     switch (profile) {
         .kernel => try out.appendSlice(allocator, "/* mc-profile: kernel (freestanding) */\n"),
         .hosted => try out.appendSlice(allocator, "/* mc-profile: hosted (links libc + -lm) */\n"),
@@ -281,6 +281,10 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         \\MC_WEAK void mc_ksan_poison(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
         \\MC_WEAK void mc_ksan_unpoison(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
         \\MC_WEAK void mc_ksan_check(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
+        \\/* KMSAN init-tracking hook (D2.2). Weak no-op by default, so the KASAN runtime and
+        \\   non-msan builds are byte-for-byte unaffected. The msan shadow runtime provides the
+        \\   strong definition that marks the written bytes initialized. */
+        \\MC_WEAK void mc_ksan_store(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
         \\
         \\#define MC_DEFINE_CHECKED_UNSIGNED(NAME, TYPE, MAXV) \
         \\MC_UNUSED static inline TYPE mc_checked_add_##NAME(TYPE a, TYPE b) { \
@@ -445,7 +449,31 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
     // at ACCESS time. `mc_ksan_check` is provided by the linked KASAN shadow runtime
     // (the MC `kernel/core/ksan.mc` shadow, exported to C); a non-ksan build never
     // references it. This is the ONLY codegen difference the profile makes.
-    if (ksan) {
+    if (ksan and msan) {
+        // KMSAN profile (D2.2): the load consults the shadow via mc_ksan_check (which the msan
+        // runtime makes trap on UNINIT bytes too, not just freed/redzone poison). The store does
+        // NOT pre-check — writing to uninitialized memory is exactly how it gets initialized, so
+        // a pre-store uninit check would false-positive on the very first write. The store calls
+        // mc_ksan_store to mark the written bytes initialized; bytes never stored to stay UNINIT
+        // and trap on a later load. (Trade-off: a write THROUGH a freed/poisoned pointer is not
+        // caught under msan — the orthogonal --checks=ksan profile keeps the store-side check.)
+        try out.appendSlice(allocator,
+            \\/* mc-checks: msan (KMSAN uninit-heap-use detection on the ksan shadow, D2.2).
+            \\   raw.store marks bytes initialized via mc_ksan_store; raw.load traps in
+            \\   mc_ksan_check if the bytes are still uninit (or freed/redzone-poisoned). */
+            \\#define MC_DEFINE_RAW_STORE(NAME, TYPE) \
+            \\MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) { \
+            \\    *((volatile TYPE *)(uintptr_t)addr) = value; \
+            \\    mc_ksan_store((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \
+            \\}
+            \\#define MC_DEFINE_RAW_LOAD(NAME, TYPE) \
+            \\MC_UNUSED static inline TYPE mc_raw_load_##NAME(uintptr_t addr) { \
+            \\    mc_ksan_check((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \
+            \\    return *((volatile TYPE *)(uintptr_t)addr); \
+            \\}
+            \\
+        );
+    } else if (ksan) {
         try out.appendSlice(allocator,
             \\/* mc-checks: ksan (KASAN shadow-memory access instrumentation, D2.1).
             \\   mc_ksan_check is declared+weak-defined above; the linked ksan runtime
@@ -570,7 +598,7 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
 pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: []const u8, generated_c_path: ?[]const u8) anyerror!void {
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path, false, false);
+    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path, false, false, false);
 
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
@@ -12964,7 +12992,7 @@ test "path-aware C emission writes source line hints" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc", false, false);
+    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc", false, false, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 1 \"debug\\\"map\\\\case.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 3 \"debug\\\"map\\\\case.mc\"") != null);

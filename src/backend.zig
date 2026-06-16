@@ -25,6 +25,11 @@ pub const LowerOptions = struct {
     /// poisoned access. Default false leaves the emitted code byte-for-byte
     /// unchanged. Backends that don't instrument simply ignore it.
     ksan: bool = false,
+    /// KMSAN profile (D2.2): when true (implies `ksan`), raw.store additionally calls
+    /// `mc_ksan_store` to mark the written bytes initialized in the shadow, and the
+    /// msan runtime makes `mc_ksan_check` trap on a load of still-uninitialized heap
+    /// bytes. Default false leaves emitted code unchanged.
+    msan: bool = false,
 };
 
 /// A code-generation backend: the seam at which `main.zig` selects a target and

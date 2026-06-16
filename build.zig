@@ -840,6 +840,29 @@ pub fn build(b: *std.Build) void {
     const llvm_ksan_test_step = b.step("llvm-ksan-test", "Boot the LLVM-lowered KASAN demo under QEMU");
     llvm_ksan_test_step.dependOn(&llvm_ksan_test_cmd.step);
 
+    // kmsan-test boots the D2.2 KMSAN demo under QEMU: access-time use-of-uninitialized-heap
+    // detection on the ksan shadow (the `--checks=msan` profile) — a read of never-written
+    // heap memory traps, the dynamic complement to S0.1's static check.
+    const kmsan_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/kmsan-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    kmsan_test_cmd.step.dependOn(b.getInstallStep());
+    const kmsan_test_step = b.step("kmsan-test", "Boot the KMSAN demo under QEMU (access-time uninitialized-heap-use detection)");
+    kmsan_test_step.dependOn(&kmsan_test_cmd.step);
+
+    const llvm_kmsan_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/kmsan-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_kmsan_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_kmsan_test_step = b.step("llvm-kmsan-test", "Boot the LLVM-lowered KMSAN demo under QEMU");
+    llvm_kmsan_test_step.dependOn(&llvm_kmsan_test_cmd.step);
+
     const elf_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/lib/host-harness.sh", "zig-out/bin/mcc", "elf-test",
@@ -2708,6 +2731,9 @@ pub fn build(b: *std.Build) void {
     // ksan-test (D2.1): access-time UAF/OOB detection via KASAN shadow memory.
     m0_step.dependOn(&ksan_test_cmd.step);
     m0_step.dependOn(&llvm_ksan_test_cmd.step);
+    // kmsan-test (D2.2): access-time use-of-uninitialized-heap detection on the ksan shadow.
+    m0_step.dependOn(&kmsan_test_cmd.step);
+    m0_step.dependOn(&llvm_kmsan_test_cmd.step);
     // elf-test links + runs the ELF64 parser (needs clang).
     m0_step.dependOn(&elf_test_cmd.step);
     // ramfs-test links + runs the in-memory filesystem (needs clang).

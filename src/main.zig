@@ -54,6 +54,10 @@ const usage =
     \\                         shadow-memory check that traps on a poisoned (freed/redzone)
     \\                         access, catching use-after-free / out-of-bounds at ACCESS
     \\                         time. Composes: e.g. --checks=ksan,elide-proven.
+    \\  --checks=msan          KMSAN profile (D2.2): builds on the ksan shadow to detect use
+    \\                         of UNINITIALIZED heap memory. Implies ksan; additionally marks
+    \\                         bytes initialized on raw.store (mc_ksan_store) so a raw.load of
+    \\                         still-uninit heap bytes traps (KMSAN-DETECTED).
     \\
 ;
 
@@ -96,6 +100,13 @@ pub fn main(init: std.process.Init) !void {
     // check that traps on a poisoned (freed/redzone) access. Orthogonal to `optimize`;
     // default builds leave it off, so the emitted code is byte-for-byte unchanged.
     var ksan = false;
+    // KMSAN profile (D2.2): when set (`--checks=msan`), builds on the ksan shadow to track
+    // initialized-ness of heap bytes. It implies the ksan access instrumentation (so loads
+    // still consult the shadow), and additionally wraps every raw.store with
+    // `mc_ksan_store(addr, size)` which marks the written bytes initialized. The msan runtime
+    // poisons fresh heap allocations as UNINIT; a load of still-uninit bytes traps. Default
+    // builds leave it off, so emitted code is byte-for-byte unchanged.
+    var msan = false;
     var saw_checks_flag = false;
     var check_fmt = false;
     // `emit-layout --structs=A,B,C`: the comma-separated structs whose MC layout is asserted.
@@ -126,6 +137,10 @@ pub fn main(init: std.process.Init) !void {
                 } else if (std.mem.eql(u8, tok, "elide-proven")) {
                     optimize = true;
                 } else if (std.mem.eql(u8, tok, "ksan")) {
+                    ksan = true;
+                } else if (std.mem.eql(u8, tok, "msan")) {
+                    // KMSAN (D2.2) builds on the ksan shadow and implies its instrumentation.
+                    msan = true;
                     ksan = true;
                 } else {
                     return failUsage();
@@ -197,11 +212,11 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        try runEmitC(allocator, path, source, profile, optimize, ksan);
+        try runEmitC(allocator, path, source, profile, optimize, ksan, msan);
     } else if (std.mem.eql(u8, command, "emit-map")) {
         try runEmitMap(allocator, path, source, profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source, optimize, ksan);
+        try runEmitLlvm(allocator, path, source, optimize, ksan, msan);
     } else if (is_emit_layout) {
         try runEmitLayout(allocator, path, source, structs_flag.?);
     } else if (is_emit_c_struct) {
@@ -508,7 +523,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     try writeStdout(output.items);
 }
 
-fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, optimize: bool, ksan: bool) !void {
+fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, optimize: bool, ksan: bool, msan: bool) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -541,7 +556,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = profile, .optimize = optimize, .source_path = path, .ksan = ksan });
+    try be.lower(allocator, module, &output, .{ .profile = profile, .optimize = optimize, .source_path = path, .ksan = ksan, .msan = msan });
     try writeStdout(output.items);
 }
 
@@ -581,7 +596,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     try writeStdout(output.items);
 }
 
-fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool, ksan: bool) !void {
+fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool, ksan: bool, msan: bool) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -614,7 +629,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     const be = backend.byName("llvm").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = .kernel, .optimize = optimize, .source_path = path, .ksan = ksan });
+    try be.lower(allocator, module, &output, .{ .profile = .kernel, .optimize = optimize, .source_path = path, .ksan = ksan, .msan = msan });
     try writeStdout(output.items);
 }
 
