@@ -3599,9 +3599,27 @@ MIR carries the facts a safe optimizer needs: each checked operation records a *
 **range facts**. The optimizer is the pass that turns a *provably-dead* trap edge into a
 removed check, and both backends **consume the optimized MIR to elide the emitted runtime
 check** (each elided check's operand source point is recorded so the C and LLVM emitters skip
-exactly it). It is **off by default** (`mcc verify|lower-mir|emit-c|emit-llvm <file>
---optimize`); the standard pipeline emits identical MIR and identical code, so an unfinished
-or unsound transform can never silently affect a normal build.
+exactly it). It is **off by default**; the standard pipeline emits identical MIR and identical
+code, so an unfinished or unsound transform can never silently affect a normal build.
+
+**Build-safety profile — SAFE vs RELEASE (D2.5).** This optimizer *is* the explicit build-safety
+knob, selected with `mcc verify|lower-mir|emit-c|emit-llvm <file> --checks=all|elide-proven`
+(orthogonal to the `--profile=kernel|hosted` *target* axis):
+
+- **`--checks=all` — SAFE (the default).** Every runtime trap check is kept; the optimizer
+  elides nothing. This is what the kernel builds with (the kernel-boot path passes no
+  `--checks`, i.e. SAFE).
+- **`--checks=elide-proven` — RELEASE.** The optimizer is enabled and elides *only* the checks
+  it proved can never trap (the transforms below); every check it cannot discharge is kept.
+
+`--optimize` is a deprecated alias for `--checks=elide-proven`. Because RELEASE drops *only*
+provably-dead checks, **SAFE and RELEASE are functionally identical on every non-trapping
+program** — a proven-dead check could never have fired, so removing it changes no observable
+behavior. (This is purely a code-size/speed choice, not a safety trade-off: RELEASE never
+removes a check that could trap, and SAFE never relies on the optimizer.) The
+`safe-release-parity` gate pins this — it compiles the optimizer fixture under both profiles,
+runs them, asserts identical output, and asserts SAFE keeps exactly the index/slice/divisor
+checks RELEASE elides.
 
 **Discipline — every transform must state, and a test must enforce:**
 
@@ -3668,7 +3686,11 @@ toward zero is identical between the checked helper and a plain `sdiv`, and a co
 construction guard is elided — through the C and LLVM backends, default and `--optimize`, runs
 all four, and asserts identical results — and that each optimized build actually dropped the
 check while the default kept it. So eliding the provably-dead checks is verified
-behavior-preserving across both backends, not merely a verification-precision change.
+behavior-preserving across both backends, not merely a verification-precision change. The
+`safe-release-parity` gate restates the same property through the documented profile names —
+SAFE (`--checks=all`) vs RELEASE (`--checks=elide-proven`) agree functionally, and RELEASE
+elides exactly the checks SAFE keeps — and the `kmain` boot runs in both profiles to confirm
+each yields a bootable kernel image (SAFE is the kernel default).
 
 ---
 

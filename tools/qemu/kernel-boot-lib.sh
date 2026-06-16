@@ -34,13 +34,20 @@ kernel_boot_compile_mc_object() {
     local src="$2"
     local out="$3"
     local work="$4"
+    # Build-safety profile (D2.5). The kernel DEFAULTS to SAFE: every runtime trap check is
+    # kept. Set MC_CHECKS=elide-proven to build the RELEASE profile (the fact-gated MIR
+    # optimizer elides only checks it proved can never trap, annex E.4) — used by the parity
+    # boot. MC_CHECKS=all is the explicit SAFE form and matches the no-flag default.
+    local checks="${MC_CHECKS:-all}"
+    local checks_flag=()
+    [ "$checks" != "all" ] && checks_flag=(--checks="$checks")
     case "$backend" in
         c)
-            "$MCC" emit-c "$src" >"$work/module.c"
+            "$MCC" emit-c "$src" ${checks_flag[@]+"${checks_flag[@]}"} >"$work/module.c"
             "$CLANG" "${CFLAGS[@]}" -c "$work/module.c" -o "$out"
             ;;
         llvm)
-            MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$src" -o "$out" \
+            MC_CHECKS="$checks" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$src" -o "$out" \
                 -mtriple=riscv64-unknown-elf \
                 -mattr=+m,+a,+c \
                 -target-abi=lp64 \

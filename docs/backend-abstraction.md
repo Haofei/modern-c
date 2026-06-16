@@ -25,8 +25,11 @@ is a separate, incremental effort.
 
 ```zig
 pub const LowerOptions = struct {
-    profile: Profile,          // kernel | hosted (honored iff supports_profiles)
-    optimize: bool,            // drives mir.buildOpt
+    profile: Profile,          // TARGET axis: kernel | hosted (honored iff supports_profiles)
+    optimize: bool,            // BUILD-SAFETY axis: false = SAFE (--checks=all, default,
+                               //   keep every trap check), true = RELEASE
+                               //   (--checks=elide-proven, drop only proven-dead checks).
+                               //   Drives mir.buildOpt. See spec annex E.4 / D2.5.
     source_path: ?[]const u8,  // embedded in #line / !DILocation; null => backend default
 };
 

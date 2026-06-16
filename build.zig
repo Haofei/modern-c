@@ -382,6 +382,18 @@ pub fn build(b: *std.Build) void {
     const opt_equiv_test_step = b.step("opt-equiv-test", "Validate the optimizer's elided bounds check is behavior-preserving: C vs LLVM, default vs --optimize");
     opt_equiv_test_step.dependOn(&opt_equiv_test_cmd.step);
 
+    // D2.5: explicit SAFE vs RELEASE build-safety profile (`--checks=all|elide-proven`).
+    // Asserts the two profiles agree functionally and that RELEASE elides exactly the
+    // checks SAFE keeps (the optimizer-proven-dead ones).
+    const safe_release_parity_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/safe-release-parity.sh",
+        "zig-out/bin/mcc",
+    });
+    safe_release_parity_cmd.step.dependOn(b.getInstallStep());
+    const safe_release_parity_step = b.step("safe-release-parity", "D2.5: SAFE (--checks=all) and RELEASE (--checks=elide-proven) agree functionally; RELEASE elides only proven-dead checks");
+    safe_release_parity_step.dependOn(&safe_release_parity_cmd.step);
+
     const comptime_fold_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/toolchain/comptime-fold-test.sh",
@@ -2589,6 +2601,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&opt_test_cmd.step);
     // opt-equiv-test validates the elided bounds check is behavior-preserving (C vs LLVM).
     m0_step.dependOn(&opt_equiv_test_cmd.step);
+    // safe-release-parity (D2.5): SAFE/RELEASE profiles agree functionally; RELEASE elides
+    // only the optimizer-proven-dead checks SAFE keeps.
+    m0_step.dependOn(&safe_release_parity_cmd.step);
     // comptime-fold-test validates comptime-only folds (byte strings, wrap/sat domains).
     m0_step.dependOn(&comptime_fold_test_cmd.step);
     // asm-targets-test validates per-architecture precise-asm register vocabularies.

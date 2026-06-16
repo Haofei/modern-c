@@ -40,5 +40,9 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 LL="$TMP_DIR/module.ll"
 
-"$MCC" emit-llvm "$INPUT" > "$LL"
+# Build-safety profile (D2.5): MC_CHECKS=all (default, SAFE) keeps every trap check;
+# MC_CHECKS=elide-proven (RELEASE) elides only the optimizer-proven-dead ones (annex E.4).
+CHECKS_FLAG=()
+[ "${MC_CHECKS:-all}" != "all" ] && CHECKS_FLAG=(--checks="${MC_CHECKS}")
+"$MCC" emit-llvm "$INPUT" ${CHECKS_FLAG[@]+"${CHECKS_FLAG[@]}"} > "$LL"
 "$LLC" -filetype=obj "$LL" -o "$OUT" "${LLC_ARGS[@]}"

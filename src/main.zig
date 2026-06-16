@@ -30,17 +30,26 @@ const usage =
     \\  mcc facts <file.mc>
     \\  mcc lower-hir <file.mc>
     \\  mcc verify-hir <file.mc>
-    \\  mcc lower-mir <file.mc>
-    \\  mcc verify <file.mc>
+    \\  mcc lower-mir <file.mc> [--checks=all|elide-proven]
+    \\  mcc verify <file.mc> [--checks=all|elide-proven]
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
-    \\  mcc emit-c <file.mc> [--profile=kernel|hosted]
+    \\  mcc emit-c <file.mc> [--profile=kernel|hosted] [--checks=all|elide-proven]
     \\  mcc emit-map <file.mc> [--profile=kernel|hosted]
-    \\  mcc emit-llvm <file.mc>
+    \\  mcc emit-llvm <file.mc> [--checks=all|elide-proven]
     \\  mcc emit-layout <file.mc> --structs=A,B,C
     \\  mcc emit-c-struct <file.mc> --structs=A,B,C
     \\  mcc fmt <file.mc> [--check]
     \\  mcc symbols <file.mc>
+    \\
+    \\build-safety profile (orthogonal to the --profile target axis):
+    \\  --checks=all           SAFE build (DEFAULT): keep every runtime trap check.
+    \\  --checks=elide-proven  RELEASE build: elide ONLY the checks the fact-gated MIR
+    \\                         optimizer (annex E.4) proved can never trap; all other
+    \\                         checks are kept. Observable behavior is identical to
+    \\                         --checks=all on every non-trapping program, since a
+    \\                         proven-dead check could never have fired.
+    \\  --optimize             deprecated alias for --checks=elide-proven.
     \\
 ;
 
@@ -70,10 +79,15 @@ pub fn main(init: std.process.Init) !void {
     const command = args.next() orelse return failUsage();
     const path = args.next() orelse return failUsage();
     // Optional flags follow the path. `emit-c` and `emit-map` accept:
-    // `--profile=kernel` (default) or `--profile=hosted`.
+    // `--profile=kernel` (default) or `--profile=hosted` (the *target* axis).
     var profile: lower_c.Profile = .kernel;
     var saw_profile_flag = false;
+    // Build-safety profile (orthogonal to the target `--profile`): `--checks=all` is the
+    // SAFE default (keep every trap check); `--checks=elide-proven` is the RELEASE build
+    // (the fact-gated MIR optimizer drops only provably-dead checks, annex E.4). `optimize`
+    // is the single bool that selects RELEASE; `--optimize` is a deprecated alias.
     var optimize = false;
+    var saw_checks_flag = false;
     var check_fmt = false;
     // `emit-layout --structs=A,B,C`: the comma-separated structs whose MC layout is asserted.
     var structs_flag: ?[]const u8 = null;
@@ -90,7 +104,19 @@ pub fn main(init: std.process.Init) !void {
             } else {
                 return failUsage();
             }
+        } else if (std.mem.startsWith(u8, flag, "--checks=")) {
+            saw_checks_flag = true;
+            const value = flag["--checks=".len..];
+            if (std.mem.eql(u8, value, "all")) {
+                optimize = false;
+            } else if (std.mem.eql(u8, value, "elide-proven")) {
+                optimize = true;
+            } else {
+                return failUsage();
+            }
         } else if (std.mem.eql(u8, flag, "--optimize")) {
+            // Deprecated alias for `--checks=elide-proven`.
+            saw_checks_flag = true;
             optimize = true;
         } else if (std.mem.eql(u8, flag, "--check")) {
             check_fmt = true;
@@ -98,17 +124,18 @@ pub fn main(init: std.process.Init) !void {
             return failUsage();
         }
     }
-    // `--profile` is consumed only by the C artifact commands; `--optimize` (the fact-gated
-    // MIR optimizer, annex E) by the MIR-level and code-emitting commands; `--check` only by
-    // `fmt`. A flag on any other command is an error.
+    // `--profile` (target axis) is consumed only by the C artifact commands; `--checks=`
+    // / `--optimize` (the build-safety axis: SAFE vs RELEASE, fact-gated MIR optimizer,
+    // annex E) by the MIR-level and code-emitting commands; `--check` only by `fmt`. A
+    // flag on any other command is an error.
     const is_c_artifact_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map");
-    const accepts_optimize = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir") or
+    const accepts_checks = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir") or
         std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
     const is_emit_layout = std.mem.eql(u8, command, "emit-layout");
     const is_emit_c_struct = std.mem.eql(u8, command, "emit-c-struct");
     const needs_structs = is_emit_layout or is_emit_c_struct;
     if (saw_profile_flag and !is_c_artifact_command) return failUsage();
-    if (optimize and !accepts_optimize) return failUsage();
+    if (saw_checks_flag and !accepts_checks) return failUsage();
     if (check_fmt and !std.mem.eql(u8, command, "fmt")) return failUsage();
     // `--structs=` is consumed only by the struct-from-MC commands, which both require it.
     if (structs_flag != null and !needs_structs) return failUsage();
