@@ -1849,6 +1849,41 @@ pub fn build(b: *std.Build) void {
     const bearssl_smoke_test_step = b.step("bearssl-smoke-test", "Compute a SHA-256 vector via freestanding BearSSL and pull live virtio-rng entropy in a bare-metal riscv64 kernel under QEMU (Phase 1 TLS de-risking)");
     bearssl_smoke_test_step.dependOn(&bearssl_smoke_test_cmd.step);
 
+    // https-get-test: a REAL BearSSL TLS 1.2 handshake over the kernel's TCP, validating
+    // a self-signed trust anchor and decrypting an HTTPS GET from a local python HTTPS
+    // server under QEMU (Phase 2 of in-kernel TLS; deterministic CI gate).
+    const https_get_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/tls/https-get-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_https_get_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/tls/https-get-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    https_get_test_cmd.step.dependOn(b.getInstallStep());
+    const https_get_test_step = b.step("https-get-test", "Run a REAL BearSSL TLS 1.2 handshake over the kernel TCP and decrypt an HTTPS GET from a local python HTTPS server under QEMU");
+    https_get_test_step.dependOn(&https_get_test_cmd.step);
+    llvm_https_get_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_https_get_test_step = b.step("llvm-https-get-test", "Run a REAL LLVM-lowered BearSSL TLS 1.2 handshake over the kernel TCP and decrypt an HTTPS GET from a local python HTTPS server under QEMU");
+    llvm_https_get_test_step.dependOn(&llvm_https_get_test_cmd.step);
+
+    // google-https-test: best-effort REAL google.com:443 fetch validating Google's actual
+    // cert chain against the embedded GTS Root R1. Standalone (PASS or honest SKIP);
+    // deliberately NOT added to the m0 gate (no flaky CI dependency on internet egress).
+    const google_https_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/tls/google-https-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    google_https_test_cmd.step.dependOn(b.getInstallStep());
+    const google_https_test_step = b.step("google-https-test", "Best-effort REAL google.com:443 HTTPS fetch validating Google's actual cert chain against the embedded GTS Root R1 under QEMU (standalone; PASS or honest SKIP)");
+    google_https_test_step.dependOn(&google_https_test_cmd.step);
+
     const dns_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/net/dns-test.sh",
@@ -2461,6 +2496,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_net_rx_live_test_cmd.step);
     m0_step.dependOn(&llvm_http_get_test_cmd.step);
     m0_step.dependOn(&llvm_dns_test_cmd.step);
+    m0_step.dependOn(&llvm_https_get_test_cmd.step);
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
@@ -2663,6 +2699,11 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&http_get_test_cmd.step);
     // dns-test resolves a name via a real DNS A-query then HTTP GETs that host under QEMU.
     m0_step.dependOn(&dns_test_cmd.step);
+    // https-get-test runs a REAL BearSSL TLS 1.2 handshake over the kernel TCP and
+    // decrypts an HTTPS GET from a local python HTTPS server under QEMU (Phase 2 TLS).
+    m0_step.dependOn(&https_get_test_cmd.step);
+    // NB: google-https-test (REAL google.com:443) is intentionally NOT in m0 -- it is a
+    // standalone best-effort check (PASS or honest SKIP), to avoid a flaky internet gate.
     // backtrace-test walks the frame-pointer chain + symbolizes under QEMU.
     m0_step.dependOn(&backtrace_test_cmd.step);
     // paging-test links + runs the Sv39 page-table map/translate (needs clang).
