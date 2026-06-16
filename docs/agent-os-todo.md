@@ -36,7 +36,7 @@ groundwork before it.**
     (no partial charge), uncharge restores, reset clears.
   - **Depends on:** none.
 
-- [ ] **P0.2 — Per-process account + reclaim-on-exit**
+- [x] **P0.2 — Per-process account + reclaim-on-exit** (DONE — a3acea6)
   - **What:** add a `ResourceAccount` (mem) to `Process`; `proc_table_init`/`proc_spawn`
     init it; `proc_death_cleanup` calls `uncharge`/`reset` (mirrors the `fd_init`
     on-exit we already added). Accessor `proc_macct(t, slot) -> *mut ResourceAccount`.
@@ -93,7 +93,7 @@ groundwork before it.**
     it. Design for **async / sampling** so it doesn't sit on the IPC hot path.
   - **Where:** new `kernel/core/ipc_trace.mc` (or `kernel/lib/`), drained by a service.
   - **Test:** events enqueued/drained; ring wraps without blocking the producer.
-- [ ] **P1.2 — Emit IPC provenance** at the mediation points (from, to, tag, size,
+- [x] **P1.2 — Emit IPC provenance** (DONE — 0a60f2b) at the mediation points (from, to, tag, size,
   causality id). **Where:** `kernel/core/proc_ipc.mc`. **Test:** a 3-agent message chain
   produces the expected provenance graph; **hot-channel opt-out** flag suppresses it.
 - [ ] **P1.3 — Emit capability-use events** (grant / revoke / cap invocation) so the
@@ -112,7 +112,7 @@ groundwork before it.**
 
 ### Agent lifecycle (needs a durable sink first)
 
-- [ ] **P1.7 — Minimal durable sink (P1‑ prerequisite).** A place to write a checkpoint
+- [x] **P1.7 — Minimal durable sink (P1‑ prerequisite).** (DONE — b98e303) A place to write a checkpoint
   blob (block region / simple object store). **Where:** reuse `kernel/fs/blockdev` or a
   new minimal store. **Test:** write blob → read back identical across a remount.
 - [ ] **P1.8 — Checkpoint.** Serialize an agent (context, fds, caps, mailbox, accounted
