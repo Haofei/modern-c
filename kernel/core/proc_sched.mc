@@ -161,6 +161,44 @@ export fn proc_unblock(t: *mut ProcTable, slot: usize, reason: u32) -> void {
     }
 }
 
+// ----- pause / resume (freeze/thaw a process's scheduling) -----
+// Runnability is DERIVED from the block-reason set: a process runs only when Ready/Running and
+// its block set is empty. Pausing sets a dedicated reason bit so the process becomes
+// non-runnable but stays alive (still Ready, just blocked); resuming clears that bit. We define
+// the reason here rather than in process.mc to keep this purely additive and disjoint from the
+// process table module. BLOCK_PAUSED must not collide with process.mc's BLOCK_RECV/SEND/WAIT
+// (bits 0/1/2), so it is bit 3.
+const BLOCK_PAUSED: u32 = 3;
+
+// Freeze a process: it becomes non-runnable (the scheduler skips it) but is not killed — it
+// stays Ready with the PAUSED block reason set, ready to thaw exactly where it left off.
+export fn proc_pause(t: *mut ProcTable, slot: usize) -> void {
+    proc_block(t, slot, BLOCK_PAUSED);
+}
+
+// Thaw a paused process: clear the PAUSED reason; it is runnable again once no reasons remain.
+export fn proc_resume(t: *mut ProcTable, slot: usize) -> void {
+    proc_unblock(t, slot, BLOCK_PAUSED);
+}
+
+// True iff `slot` is currently paused (has the PAUSED block reason set).
+export fn proc_is_paused(t: *mut ProcTable, slot: usize) -> bool {
+    if slot < t.count {
+        return mask32_contains(&t.procs[slot].block_reasons, BLOCK_PAUSED);
+    }
+    return false;
+}
+
+// Exported runnability reader (is_runnable in process.mc is module-private): true iff the
+// scheduler would consider `slot` for dispatch. Lets tests/callers observe derived runnability
+// without reaching into the process table internals.
+export fn proc_is_runnable_slot(t: *mut ProcTable, slot: usize) -> bool {
+    if slot < t.count {
+        return is_runnable(t, slot);
+    }
+    return false;
+}
+
 // Park the current process (generic block): non-runnable until woken.
 export fn proc_park(t: *mut ProcTable) -> void {
     proc_block(t, t.current, BLOCK_RECV);
