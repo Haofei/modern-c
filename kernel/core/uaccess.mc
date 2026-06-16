@@ -81,6 +81,51 @@ export fn copy_to_user(us: *UserSpace, dst: UserPtr<u8>, src: PAddr, len: usize)
     return ok(true);
 }
 
+// ----- single-snapshot discipline (U2: double-fetch / TOCTOU defense) -----
+//
+// The double-fetch (TOCTOU) bug class: the kernel copies a datum in from a
+// `UserPtr`, validates it, then copies the SAME user pointer in a SECOND time to
+// use it — and a concurrent thread (or a racing mapping) changed the bytes between
+// the two reads, so the value validated is not the value used (the classic
+// "validate, then it changes under you" CVE family, e.g. CVE-2016-6516).
+//
+// The structural fix is to copy a user datum in EXACTLY ONCE into a kernel-owned
+// snapshot, then read only the snapshot. `UserSnapshot<T>` is that handle: it owns
+// the copied-in bytes as an ordinary kernel value. There is no API to re-read the
+// originating `UserPtr` from a snapshot, so a second fetch of the same datum is
+// structurally unnecessary — validate and use both touch `.value`, immutable
+// kernel memory the attacker cannot race. A snapshot is a value, not a borrow: once
+// taken, the user pages may change freely; the decision is made against the frozen
+// copy. The companion lint `tools/toolchain/double-fetch-audit.sh` flags code that
+// copies the same `UserPtr` in twice — the pattern this type makes unnecessary.
+struct UserSnapshot<T> {
+    value: T,
+}
+
+// Copy a single `T` in from `src` (numeric UserSpace path) exactly once, returning
+// an immutable kernel snapshot. Callers MUST make every decision against `.value`
+// and MUST NOT re-fetch `src` — one fetch, one truth. On any validation failure
+// nothing is copied and the snapshot is never returned (fail closed).
+export fn fetch_user(comptime T: type, us: *UserSpace, src: UserPtr<T>) -> Result<UserSnapshot<T>, UaccessError> {
+    var snap: UserSnapshot<T> = uninit; // .value is fully overwritten by the copy below, or never returned
+    let dst: PAddr = pa((&snap.value) as usize);
+    switch copy_from_user(us, dst, (src as usize) as UserPtr<u8>, sizeof(T)) {
+        ok(v) => { return ok(snap); }
+        err(e) => { return err(e); }
+    }
+}
+
+// Page-table-aware single-fetch snapshot: copy one `T` in through the process page
+// table exactly once. Same contract as `fetch_user`: use `.value`, never re-fetch.
+export fn fetch_user_pt(comptime T: type, uas: *UserAddrSpace, src: UserPtr<T>) -> Result<UserSnapshot<T>, UaccessError> {
+    var snap: UserSnapshot<T> = uninit;
+    let dst: PAddr = pa((&snap.value) as usize);
+    switch copy_from_user_pt(uas, dst, (src as usize) as UserPtr<u8>, sizeof(T)) {
+        ok(v) => { return ok(snap); }
+        err(e) => { return err(e); }
+    }
+}
+
 // ----- page-table-aware path -----
 //
 // A target address space: the process page table plus its [base, limit) user-region
