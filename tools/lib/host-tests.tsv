@@ -94,3 +94,4 @@ fairsched-test	tests/qemu/proc/fairsched_demo.mc	driver		-Wno-switch-bool -Wno-u
 
 replay-test	tests/qemu/lang/replay_demo.mc	driver		-Wno-switch-bool	IPC stream replay (kernel/core): deterministic ordered playback of a recorded provenance log via a cursor (debug/replay foundation)
 oom-test	tests/qemu/proc/oom_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	live reclaim / OOM-kill (kernel/core/process): a live over-quota runaway is selected + killed, its memory+fds reclaimed, other agents survive (the agent-OS safety keystone)
+ipcfast-test	tests/qemu/ipc/ipcfast_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	IPC fast path (kernel/core/proc_ipc): hot-channel send with identical delivery but provenance skipped (the observability/fast-path co-design lever)

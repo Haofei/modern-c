@@ -127,8 +127,13 @@ fn proc_make_msg(t: *mut ProcTable, tag: u32, a0: u64, a1: u64, a2: u64, call_id
     };
 }
 
-// Try-post a message carrying an explicit correlation id (0 = not a call).
-fn ipc_send_try_id(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, call_id: u64) -> bool {
+// Try-post a message carrying an explicit correlation id (0 = not a call). `record_prov`
+// selects the per-message bookkeeping: the normal path passes true (emit provenance on a
+// successful delivery); the hot-channel fast path passes false to skip the provenance emit —
+// the ONLY difference between the two paths. Delivery itself (the mailbox post, the wake, and
+// the success/failure outcome) is identical regardless, so this single funnel keeps the fast
+// path and the normal path in lockstep on semantics while differing only on observability.
+fn ipc_send_try_id_prov(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, call_id: u64, record_prov: bool) -> bool {
     let dst: usize = dst_pid as usize;
     if !proc_is_live(t, dst) {
         return false; // no such process, or it has exited/died — never post into a dead slot
@@ -136,16 +141,58 @@ fn ipc_send_try_id(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, 
     let msg: Message = proc_make_msg(t, tag, a0, a1, a2, call_id);
     if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
         wake_if_blocked(t, dst);
-        // Observe-only: record provenance for this successful delivery. Does not affect the
-        // result — the same sends succeed/fail exactly as before.
-        ipc_provenance_emit(msg.from, dst_pid, &msg);
+        if record_prov {
+            // Observe-only: record provenance for this successful delivery. Does not affect the
+            // result — the same sends succeed/fail exactly as before. The fast path skips this
+            // (and, with it, the sampling-counter advance inside ipc_provenance_emit).
+            ipc_provenance_emit(msg.from, dst_pid, &msg);
+        }
         return true;
     }
     return false; // mailbox full
 }
 
+// Normal try-post: full bookkeeping, including the provenance emit.
+fn ipc_send_try_id(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, call_id: u64) -> bool {
+    return ipc_send_try_id_prov(t, dst_pid, tag, a0, a1, a2, call_id, true);
+}
+
 export fn ipc_send_try(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> bool {
     return ipc_send_try_id(t, dst_pid, tag, a0, a1, a2, 0);
+}
+
+// ----- hot-channel fast path (the observability/fast-path co-design lever) -----
+//
+// Streamlined send for a channel the caller has designated "hot": SAME delivery semantics as
+// the normal try-send — same allow_mask permission check, same liveness re-check, same mailbox
+// post, same receiver wake, same success/failure outcomes and return type as ipc_try_send — but
+// with the per-message provenance bookkeeping SKIPPED. Provenance (P1.2/P1.4) is exactly the
+// per-message work that would otherwise tax a hot channel, so the documented opt-out is to skip
+// the emit (and the sampling-counter advance) here, lowering per-message overhead.
+//
+// HONEST SCOPE: for this kernel a Message is small fixed inline words (already a cheap value
+// copy), so the meaningful fast-path win is minimal-bookkeeping + provenance-skipped delivery,
+// NOT zero-copy of large payloads. Literal zero-copy / batching of large buffers is future work
+// and not meaningful for this Message shape. This is an ADDITIONAL path: it does not change
+// normal-send behavior or semantics in any way.
+export fn ipc_fast_send(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> bool {
+    let cur: usize = t.current;
+    if !mask32_contains(&t.procs[cur].allow_mask, dst_pid) {
+        return false; // not permitted to send to this peer (same gate as ipc_try_send)
+    }
+    let dst: usize = dst_pid as usize;
+    var sending: bool = true;
+    while sending {
+        if !proc_is_live(t, dst) {
+            return false; // destination gone (never existed, or exited while we waited) — not sent
+        }
+        // Identical to ipc_try_send's inner post, minus the provenance emit (record_prov=false).
+        if ipc_send_try_id_prov(t, dst_pid, tag, a0, a1, a2, 0, false) {
+            return true; // delivered
+        }
+        proc_yield_or_idle(t); // mailbox full -- let the receiver drain it, or idle if none runnable
+    }
+    return false;
 }
 
 // Privilege-checked send: deliver only if the caller is allowed to reach `dst_pid`. Returns
