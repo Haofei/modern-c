@@ -1299,6 +1299,7 @@ INVALIDATIONS = [
     ("    var mcfuzz_bad: bool = true; var mcfuzz_bad: bool = false;", "duplicate local declaration"),
     ("    var mcfuzz_bad: u32 = (true + 1);", "arithmetic on a bool operand"),
     ("    mcfuzz_undeclared_fn(1, 2, 3);", "call of an undeclared function"),
+    ("    var mcfuzz_bad: u8 = ((0 as usize) as UserPtr<u8>).*;", "kernel deref of a UserPtr (user/kernel trust boundary)"),
 ]
 
 

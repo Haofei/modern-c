@@ -2835,6 +2835,12 @@ pub const Checker = struct {
                 if (base_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no fields in MC");
                 }
+                // A direct `.field` on a UserPtr<T> is a kernel dereference of user memory:
+                // reading T's field reaches through the user pointer. Forbid it exactly like
+                // `p.*` — the only path to a user value is a checked copy_from_user/copy_to_user.
+                if (base_class == .user_ptr) {
+                    self.errorCode(expr.span, "E_USER_PTR_DEREF", "cannot directly access a field through UserPtr; copy it in with copy_from_user first");
+                }
                 self.checkKnownStructField(expr.span, node.base.*, node.name.text, ctx);
                 if (memberResultFieldType(node, ctx)) |field_ty| return classifyTypeCtx(field_ty, ctx);
                 return .unknown;

@@ -2,7 +2,7 @@
 // SPEC: milestone=address-class-deref
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_PADDR_DEREF,E_VADDR_DEREF,E_USER_PTR_DEREF,E_MMIO_PTR_DEREF,E_DMA_ADDR_DEREF,E_PHYS_PTR_DEREF,E_DMA_ADDR_NOT_PADDR,E_DMA_ADDR_NOT_VADDR,E_ADDRESS_CLASS_MISMATCH,E_ADDRESS_CLASS_OPERATION,E_RETURN_TYPE_MISMATCH
+// SPEC: check=E_PADDR_DEREF,E_VADDR_DEREF,E_USER_PTR_DEREF,E_MMIO_PTR_DEREF,E_DMA_ADDR_DEREF,E_PHYS_PTR_DEREF,E_DMA_ADDR_NOT_PADDR,E_DMA_ADDR_NOT_VADDR,E_ADDRESS_CLASS_MISMATCH,E_ADDRESS_CLASS_OPERATION,E_RETURN_TYPE_MISMATCH,E_INDEX_BASE_NOT_ARRAY_OR_SLICE
 
 extern fn make_u8_pointer() -> *const u8;
 extern fn takes_paddr(addr: PAddr) -> void;
@@ -112,4 +112,20 @@ fn reject_dma_addr_equality(left: DmaAddr, right: DmaAddr) -> bool {
 fn reject_user_ptr_bitwise(ptr: UserPtr<u8>) -> UserPtr<u8> {
     // EXPECT_ERROR: E_ADDRESS_CLASS_OPERATION
     return ~ptr;
+}
+
+extern struct UserHeader {
+    tag: u8,
+}
+
+fn reject_user_ptr_field(hdr: UserPtr<UserHeader>) -> u8 {
+    // EXPECT_ERROR: E_USER_PTR_DEREF
+    // A `.field` through a UserPtr is a kernel deref of user memory: forbidden.
+    return hdr.tag;
+}
+
+fn reject_user_ptr_index(buf: UserPtr<u8>) -> u8 {
+    // EXPECT_ERROR: E_INDEX_BASE_NOT_ARRAY_OR_SLICE
+    // Indexing a UserPtr would reach through it: only copy_from_user may read it.
+    return buf[0];
 }
