@@ -166,8 +166,14 @@ export fn dns_parse_response(base: usize, len: usize, txn_id: u16) -> Result<u32
         switch br_try_be16(&r, off + 2) { ok(v) => { rclass = v; } err(e) => { return err(.Malformed); } }
         switch br_try_be16(&r, off + 8) { ok(v) => { rdlength = v; } err(e) => { return err(.Malformed); } }
         let rdata_off: usize = off + 10;
-        if rdata_off + (rdlength as usize) > len {
-            return err(.Malformed);
+        // P2: rdlength is an UNTRUSTED length from the wire that both bounds the RDATA
+        // run and advances the RR cursor to the next record. Validate it against the
+        // remaining buffer up front (one explicit, named check) before it is ever used
+        // as a bound — a claim larger than the packet is rejected cleanly, so it can
+        // neither over-read the RDATA nor walk the cursor off the end next iteration.
+        switch br_validate_len(&r, rdata_off, rdlength as usize) {
+            ok(u) => {}
+            err(e) => { return err(.Malformed); }
         }
         if rtype == DNS_TYPE_A {
             if rclass == DNS_CLASS_IN {

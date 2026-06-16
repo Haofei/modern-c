@@ -13,6 +13,11 @@ extern uint32_t fuzz_dns_truncated(uint32_t seed, uintptr_t len);
 extern uint32_t fuzz_dns_answer_trunc(uintptr_t len);
 extern uint32_t fuzz_tcp_random(uint32_t seed, uintptr_t len);
 extern uint32_t fuzz_tcp_hostile(uint32_t seed, uintptr_t len);
+// P2 explicit HOSTILE-LENGTH fixtures: a single length/count field inflated FAR beyond
+// the buffer. Each MUST return 1 (rejected cleanly) — never 0 (accepted) and never trap.
+extern uint32_t fuzz_dns_hostile_rdlength(uint16_t claimed);
+extern uint32_t fuzz_dns_hostile_count(uint16_t count);
+extern uint32_t fuzz_tcp_hostile_total(uint16_t claimed);
 
 // The property under test: every parse TERMINATES and RETURNS a typed result over any
 // finite buffer of any length 0..MAXLEN with arbitrary content. If a parser over-read,
@@ -48,12 +53,45 @@ int main(void) {
             if (d == 0) ok++; else rej++;
         }
     }
+    // P2 explicit HOSTILE-LENGTH assertions: sweep a length/count field across the whole
+    // hostile range (every value that claims more than the tiny buffer holds) and REQUIRE
+    // a clean reject (return 1) every time — no over-read (else we'd have aborted above),
+    // no accept. A single accepted hostile length, or a missing length-vs-buffer guard
+    // (revert br_validate_len -> trust the field), makes one of these fail and the run dies.
+    uint64_t hostile = 0;
+    for (uint32_t v = 0; v <= 65535u; v++) {
+        // rdlength/total over a ~28/54-byte buffer: anything past the real data is hostile.
+        // Skip the small values that legitimately fit; assert the clearly-hostile range.
+        if (v >= 100) {
+            if (fuzz_dns_hostile_rdlength((uint16_t)v) != 1) {
+                fprintf(stderr, "P2 FAIL: dns rdlength=%u accepted/over-read\n", v);
+                return 1;
+            }
+            if (fuzz_tcp_hostile_total((uint16_t)v) != 1) {
+                fprintf(stderr, "P2 FAIL: tcp total-length=%u accepted/over-read\n", v);
+                return 1;
+            }
+            hostile += 2;
+        }
+        // Any nonzero qd/ancount over a bare 12-byte header is hostile (no records exist).
+        if (v >= 1) {
+            if (fuzz_dns_hostile_count((uint16_t)v) != 1) {
+                fprintf(stderr, "P2 FAIL: dns count=%u accepted/over-read\n", v);
+                return 1;
+            }
+            hostile++;
+        }
+        total++;
+    }
+
     // Reaching here at all means no parse ever over-read (no trap/abort). Garbage input
     // should overwhelmingly reject; we require at least one rejection (the error path is
     // real). ok may legitimately stay 0 for pure-random TCP/DNS, so we don't require it.
-    if (total > 1000000ull && rej > 0) {
+    if (total > 1000000ull && rej > 0 && hostile > 100000ull) {
         printf("parser-fuzz: %llu parses, %llu accepted, %llu rejected, 0 over-reads\n",
                (unsigned long long)total, (unsigned long long)ok, (unsigned long long)rej);
+        printf("parser-fuzz: P2 hostile-length: %llu inflated length/count fields, all rejected cleanly\n",
+               (unsigned long long)hostile);
         return 0;
     }
     fprintf(stderr, "parser-fuzz: unexpected counts total=%llu rej=%llu\n",

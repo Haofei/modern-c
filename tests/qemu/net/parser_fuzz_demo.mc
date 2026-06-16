@@ -104,6 +104,55 @@ export fn fuzz_dns_answer_trunc(len: usize) -> u32 {
     }
 }
 
+// P2 HOSTILE-LENGTH (DNS): a structurally valid one-A-record response, but the RDLENGTH
+// field is set to `claimed` — deliberately FAR LARGER than the bytes the buffer actually
+// holds. A parser that trusts rdlength would copy/advance `claimed` bytes and read past
+// the end; the P2 length validation (br_validate_len) must reject it cleanly (Malformed)
+// without over-reading and without iterating on the inflated count. The whole packet is
+// only ~27 bytes, so any claimed >= a few hundred is hostile. Returns 0/1 = ok/rejected;
+// for a hostile claim the ONLY acceptable outcome is 1 (rejected) — never a trap, never ok.
+export fn fuzz_dns_hostile_rdlength(claimed: u16) -> u32 {
+    var w: ByteWriter = byte_writer(pa((&g_buf[0]) as usize), 512);
+    bw_be16(&w, 0, 0x1234);   // txn id
+    bw_be16(&w, 2, 0x8000);   // QR=1, TC=0
+    bw_be16(&w, 4, 0);        // qdcount = 0
+    bw_be16(&w, 6, 1);        // ancount = 1
+    bw_be16(&w, 8, 0);        // nscount
+    bw_be16(&w, 10, 0);       // arcount
+    bw_u8(&w, 12, 0);         // root-label name
+    bw_be16(&w, 13, 1);       // TYPE = A
+    bw_be16(&w, 15, 1);       // CLASS = IN
+    bw_be16(&w, 17, 0);       // TTL hi
+    bw_be16(&w, 19, 60);      // TTL lo
+    bw_be16(&w, 21, claimed); // RDLENGTH = HOSTILE (claims far more than the buffer holds)
+    // Parse over a SHORT buffer (28 bytes): RDATA at offset 23 has at most 5 real bytes,
+    // but rdlength claims `claimed`. Must reject, not over-read, not loop on the count.
+    switch dns_parse_response((&g_buf[0]) as usize, 28, 0x1234) {
+        ok(ip) => { return 0; }
+        err(e) => { return 1; }
+    }
+}
+
+// P2 HOSTILE-LENGTH (DNS counts): valid header, but qdcount/ancount are set to a huge
+// value (e.g. 0xFFFF) over a tiny buffer. An answer/question walk that trusts the count
+// must not iterate 65535 times reading garbage; it must terminate quickly (the cursor
+// runs out of buffer) and reject cleanly. Returns 0/1 = ok/rejected (hostile => 1).
+export fn fuzz_dns_hostile_count(count: u16) -> u32 {
+    var w: ByteWriter = byte_writer(pa((&g_buf[0]) as usize), 512);
+    bw_be16(&w, 0, 0x1234);   // txn id
+    bw_be16(&w, 2, 0x8000);   // QR=1, TC=0
+    bw_be16(&w, 4, count);    // qdcount = HOSTILE
+    bw_be16(&w, 6, count);    // ancount = HOSTILE
+    bw_be16(&w, 8, 0);
+    bw_be16(&w, 10, 0);
+    // Only the 12-byte header is present (parse over 12 bytes): the counts claim tens of
+    // thousands of records that aren't there.
+    switch dns_parse_response((&g_buf[0]) as usize, 12, 0x1234) {
+        ok(ip) => { return 0; }
+        err(e) => { return 1; }
+    }
+}
+
 // ---- TCP frame parser oracle ----------------------------------------------------
 
 // Parse a RANDOM Ethernet/IPv4/TCP frame of `len` bytes. Returns 0 if classified as
@@ -141,6 +190,29 @@ export fn fuzz_tcp_hostile(seed: u32, len: usize) -> u32 {
     // RANDOM TCP data-offset nibble lands wherever the (random IHL) header puts byte 12;
     // we just leave the random tail to supply it. tcp_parse_frame reads it via br_try_*.
     var rx: TcpRx = tcp_parse_frame((&g_buf[0]) as usize, len);
+    if rx.is_tcp {
+        return 0;
+    }
+    return 1;
+}
+
+// P2 HOSTILE-LENGTH (TCP/IP total length): a WELL-FORMED-looking IPv4/TCP frame whose
+// IP total-length field is set to `claimed` — deliberately FAR LARGER than the bytes
+// the buffer holds. A parser that trusts total-length would compute payload/segment
+// extents past the end; the P2 length validation (br_validate_len at the IP-length gate)
+// must reject it cleanly (is_tcp=false) without over-reading. The frame is laid out
+// minimally but parsed over a SHORT 54-byte buffer while claiming much more.
+// Returns 0/1 = tcp/rejected; for a hostile claim the only acceptable outcome is 1.
+export fn fuzz_tcp_hostile_total(claimed: u16) -> u32 {
+    var w: ByteWriter = byte_writer(pa((&g_buf[0]) as usize), 512);
+    // Minimal valid-looking eth+ip+tcp header at the front.
+    bw_be16(&w, 12, 0x0800);        // ethertype IPv4
+    bw_u8(&w, 14, 0x45);            // version 4, IHL 5 (20-byte IP header)
+    bw_be16(&w, 16, claimed);       // IP total length = HOSTILE (claims more than buffer)
+    bw_u8(&w, 23, 6);               // IP protocol = TCP
+    bw_u8(&w, 14 + 20 + 12, 0x50);  // TCP data offset = 5 words (20-byte TCP header)
+    // Parse over only 54 bytes (eth+ip+tcp minimum) while total-length claims `claimed`.
+    var rx: TcpRx = tcp_parse_frame((&g_buf[0]) as usize, 54);
     if rx.is_tcp {
         return 0;
     }

@@ -17,8 +17,10 @@ export fn elf_load_run(elf_base: usize, elf_len: usize, dst: usize) -> u64 {
             while i < h.phnum {
                 var ph: ProgramHeader = elf_program_header(&r, h.phoff as usize, h.phentsize as usize, i as usize);
                 if ph_is_load(&ph) {
-                    elf_load_segment(&r, &ph, pa(dst));
-                    return (dst as u64) + (h.entry - ph.vaddr);
+                    switch elf_load_segment(&r, &ph, pa(dst)) {
+                        ok(u) => { return (dst as u64) + (h.entry - ph.vaddr); }
+                        err(e) => { return 0; }
+                    }
                 }
                 i = i + 1;
             }

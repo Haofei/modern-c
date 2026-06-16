@@ -173,6 +173,28 @@ export fn br_try_le64(r: *ByteReader, off: usize) -> Result<u64, BytesError> {
     return ok((lo as u64) | ((hi as u64) << 32));
 }
 
+// ----- length-field validation: never trust a count from the wire -----
+//
+// A parser reading attacker-controlled bytes routinely lifts a LENGTH or COUNT field
+// off the wire (DNS rdlength, IP total length, an ELF phnum, …) and then uses it as a
+// bound for a copy or a loop. Even when every individual read is checked (br_try_*), a
+// hostile, inflated count can still drive an over-long loop (wasted work / a DoS) before
+// each read finally fails. These helpers make the length field pass an EXPLICIT,
+// up-front check against the bytes that actually remain — so a claim larger than the
+// buffer is rejected cleanly (OutOfBounds), once, before it ever drives iteration.
+
+// Does a claimed run of `claimed` bytes starting at `off` fit inside the buffer? This
+// is the predicate a length/count field must pass before it is trusted as a bound.
+// Returns ok(claimed) when [off, off+claimed) lies within `len` (no overflow), else
+// err(OutOfBounds). Use it the moment a length is read from untrusted input: the ok arm
+// hands back the now-validated length, so the call site reads as "length, checked".
+export fn br_validate_len(r: *ByteReader, off: usize, claimed: usize) -> Result<usize, BytesError> {
+    if !br_has(r, off, claimed) {
+        return err(.OutOfBounds);
+    }
+    return ok(claimed);
+}
+
 // Copy `n` bytes from the reader (starting at `off`) into the physical region `dst`.
 // Reads are bounds-checked against the reader; the raw store is the single unsafe
 // edge — so callers (the ELF loader, …) don't hand-roll a `while { raw.store }` loop.

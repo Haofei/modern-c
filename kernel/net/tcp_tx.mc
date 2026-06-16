@@ -129,9 +129,14 @@ export fn tcp_parse_frame(base: usize, len: usize) -> TcpRx {
     if ip_total < ip_min {
         return out;
     }
-    let frame_need: usize = 14 + ip_total; // Ethernet header + what IP claims
-    if frame_need > len {
-        return out; // IP claims more than the frame delivered
+    // P2: ip_total is an UNTRUSTED length from the wire. Validate that the bytes IP
+    // claims (the IP datagram starting at ip_at) actually fit in the frame BEFORE any
+    // of them are used as a bound — a hostile total-length that claims more than was
+    // delivered is rejected cleanly here (named check), so it can never push the TCP
+    // header / payload extents past the buffer.
+    switch br_validate_len(&r, ip_at, ip_total) {
+        ok(u) => {}
+        err(e) => { return out; } // IP claims more than the frame delivered
     }
     let tcp_at: usize = ip_at + ip_hdr_len;
     var off_flags: u16 = 0;

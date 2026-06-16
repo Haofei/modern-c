@@ -65,10 +65,15 @@ export fn elf_parse_header(r: *ByteReader) -> Result<ElfHeader, ElfError> {
     let phentsize: u16 = br_le16(r, 54); // e_phentsize
     let phnum: u16 = br_le16(r, 56);     // e_phnum
 
-    // The program-header table must lie within the buffer.
+    // The program-header table is sized by UNTRUSTED count/entsize fields (e_phnum,
+    // e_phentsize) and located by an untrusted offset (e_phoff). P2: validate that the
+    // whole claimed table lies within the buffer up front (named check) before any
+    // program header is read — a hostile phnum/phentsize/phoff is rejected cleanly here,
+    // so the per-PH reads below can never walk off the image.
     let table_bytes: usize = (phnum as usize) * (phentsize as usize);
-    if !br_has(r, phoff as usize, table_bytes) {
-        return err(.BadProgramHeaders);
+    switch br_validate_len(r, phoff as usize, table_bytes) {
+        ok(u) => {}
+        err(e) => { return err(.BadProgramHeaders); }
     }
     return ok(.{ .entry = entry, .phoff = phoff, .phnum = phnum, .phentsize = phentsize });
 }
@@ -91,14 +96,25 @@ export fn ph_is_load(p: *ProgramHeader) -> bool {
 }
 
 // Copy a PT_LOAD segment into memory at `dst`: `filesz` bytes from the image, then
-// zero-fill the bss tail up to `memsz`. Reads are bounds-checked against the image;
-// the raw stores into the destination are the isolated unsafe edge.
-export fn elf_load_segment(elf: *ByteReader, p: *ProgramHeader, dst: PAddr) -> void {
+// zero-fill the bss tail up to `memsz`.
+//
+// P2: `p.filesz` and `p.offset` are UNTRUSTED lengths/offsets from the program header
+// that drive the source copy. Validate that [offset, offset+filesz) actually lies in
+// the image up front (named check) BEFORE the copy — a hostile filesz/offset that
+// claims more than the image holds is rejected cleanly (BadProgramHeaders) instead of
+// driving br_copy_to's trapping reads off the end. On success returns the number of
+// bytes copied from the image (filesz) so the loader can advance; err stops the load.
+export fn elf_load_segment(elf: *ByteReader, p: *ProgramHeader, dst: PAddr) -> Result<usize, ElfError> {
     let filesz: usize = p.filesz as usize;
     let memsz: usize = p.memsz as usize;
     let src_off: usize = p.offset as usize;
-    br_copy_to(elf, src_off, dst, filesz); // image -> dst (bounds-checked read)
+    switch br_validate_len(elf, src_off, filesz) {
+        ok(n) => {}
+        err(e) => { return err(.BadProgramHeaders); }
+    }
+    br_copy_to(elf, src_off, dst, filesz); // image -> dst (read now proven in range)
     if memsz > filesz {
         mem_set(pa_offset(dst, filesz), 0, memsz - filesz); // zero the bss tail
     }
+    return ok(filesz);
 }

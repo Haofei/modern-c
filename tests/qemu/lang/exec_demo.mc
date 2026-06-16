@@ -33,7 +33,10 @@ fn sys_exec(elf_ptr: u64, len: u64, c: u64) -> u64 {
             while i < h.phnum {
                 var ph: ProgramHeader = elf_program_header(&r, h.phoff as usize, h.phentsize as usize, i as usize);
                 if ph_is_load(&ph) {
-                    elf_load_segment(&r, &ph, pa(g_load_addr));
+                    switch elf_load_segment(&r, &ph, pa(g_load_addr)) {
+                        ok(u) => {}
+                        err(e) => { return 1; } // hostile filesz/offset: reject, don't run
+                    }
                     icache_flush();
                     let entry: u64 = (g_load_addr as u64) + (h.entry - ph.vaddr);
                     enter_user(entry, g_user_sp); // replaces the caller; never returns

@@ -47,8 +47,14 @@ export fn net_rx_deliver(t: *mut SocketTable, frame: usize, len: usize) -> Resul
     if total < UDP_HDR {
         return err(.BadLength);
     }
-    if (udp_at + total) > len {
-        return err(.BadLength);
+    // P2: the UDP length is an UNTRUSTED length from the wire that bounds the payload
+    // extent handed to the socket layer. Validate that the `total`-byte UDP datagram
+    // (starting at udp_at) fits in the frame up front (named check) before it is used —
+    // a hostile length that claims more than the frame delivered is rejected cleanly,
+    // so socket_deliver can never be handed a payload extent past the buffer.
+    switch br_validate_len(&r, udp_at, total) {
+        ok(u) => {}
+        err(e) => { return err(.BadLength); }
     }
     let payload_at: usize = udp_at + UDP_HDR;
     let payload_len: usize = total - UDP_HDR;
