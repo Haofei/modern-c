@@ -925,6 +925,14 @@ pub const Checker = struct {
                         // alias. Only direct `&<move-binding>` fields are tracked (the
                         // no-false-positive slice); deeper nesting is the open T1.3 work.
                         self.registerAggregateFieldAliases(decl.names[0].text, decl.init.?, state);
+                    } else {
+                        // T1.2: `let p = &t.inner;` borrows a SUBFIELD/element of the move binding
+                        // `t`. The whole-binding stale-alias machinery keys on the bare referent
+                        // and does not poison such a sub-place alias, so we cannot prove the later
+                        // use safe. Mark `t` borrow-escaped so moving `t` as a whole is refused
+                        // while `p` is in scope. (A direct `&t` is the alias case above and is NOT
+                        // routed here; only sub-place borrows reach this.)
+                        self.markBorrowEscape(decl.init.?, decl.names[0].span, state);
                     }
                 }
                 return false;
@@ -1008,8 +1016,17 @@ pub const Checker = struct {
                         if (key_opt) |key| {
                             _ = state.remove(key); // the field now holds a fresh live resource
                         }
+                        // T1.2: `h.p = &t` launders a borrow of `t` into the struct field `h.p`
+                        // (memory we cannot track for deadness). Mark `t` borrow-escaped so a
+                        // later move of `t` is refused.
+                        self.markBorrowEscape(a.value, a.target.span, state);
                     },
                     else => {
+                        // T1.2: `arr[0] = &t` (or any non-ident lvalue) stores a borrow of `t`
+                        // into memory; mark `t` borrow-escaped. (Plain scalar `p = &t` is the
+                        // `.ident` arm above — tracked precisely by the stale-alias mechanism —
+                        // and is deliberately NOT routed here.)
+                        self.markBorrowEscape(a.value, a.target.span, state);
                         self.moveConsume(a.value, state, aliases);
                     },
                 }
@@ -1320,6 +1337,14 @@ pub const Checker = struct {
                     }
                     if (!slot.live) {
                         self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
+                    } else if (slot.escaped_borrow != null) {
+                        // T1.2 (conservative rejection): a borrow of this value (or a subfield)
+                        // was stored into memory we cannot prove dead (an aggregate field, an
+                        // array element, or a sub-place alias). Reading through that borrow after
+                        // the move would be a use-after-move we could not otherwise catch, so we
+                        // refuse the move itself.
+                        self.errorCode(expr.span, "E_USE_AFTER_MOVE", "cannot move this linear `move` value: a borrow of it (or of one of its fields) has been stored into memory and may still be read; the move would leave that borrow dangling");
+                        slot.live = false;
                     } else if (slot.deferred) {
                         self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be moved");
                     } else if (hasMovedSubplace(id.text, state)) {
@@ -1548,6 +1573,21 @@ pub const Checker = struct {
             if (!r.live) {
                 self.errorCode(span, "E_USE_AFTER_MOVE", "use of an alias derived from a linear `move` value after that value was moved (the alias is now stale)");
             }
+        }
+    }
+
+    // T1.2 (conservative rejection): if `value` takes the address of a place rooted at a
+    // tracked move binding (`&t`, `&t.inner`, `&t[i]`, possibly via an alias), mark that
+    // binding's slot as having an escaped, reachable borrow stored at `escape_span`. A later
+    // by-value move of the binding is then refused (moveConsume), because the borrow lives in
+    // memory we cannot prove dead. The DIRECT scalar pointer-local case (`let p = &t`, which
+    // the stale-alias mechanism already tracks precisely) is handled by the caller NOT routing
+    // here — only stores into aggregate/array memory or subfield aliases reach this.
+    fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+        _ = self;
+        const root = borrowedMoveRoot(value, state) orelse return;
+        if (state.getPtr(root)) |slot| {
+            if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
         }
     }
 
@@ -5912,6 +5952,15 @@ const MoveSlot = struct {
     // — but reading through it (`*p`, `peek(p)`) after the referent was moved out is a
     // use-after-move (a stale derived alias). Null for non-alias bindings.
     alias_of: ?[]const u8 = null,
+    // T1.2 (conservative rejection): a borrow of this move binding (or of one of its
+    // subfields/elements) has been stored into MEMORY — an aggregate field, an array
+    // element, or aliased through a subfield place — somewhere we cannot prove dead. Unlike
+    // a tracked scalar pointer local (`let p = &t`, tracked by the stale-alias mechanism),
+    // such an escaped borrow is unreachable to the use-after-move tracker, so we instead
+    // refuse to MOVE the binding while this is set (the borrow could still be read after the
+    // move). Holds the span of the escaping store, for the diagnostic. Null when no borrow
+    // has escaped into untracked memory.
+    escaped_borrow: ?diagnostics.Span = null,
 };
 
 const LayoutFieldInfo = struct {
@@ -7923,6 +7972,39 @@ fn aliasReferentOf(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[
         }
     }
     return null;
+}
+
+// T1.2 (conservative rejection): the root binding name of the *place* whose address an
+// `&…` expression takes, when that root is a tracked move binding — at ANY nesting depth.
+// `&t` → `t`, `&t.inner` → `t`, `&t[i]` → `t`, `&t.a.b` → `t`. Also resolves the address of
+// an existing borrow alias (`&p` where `p` aliases `t`) back to the original referent. This
+// is broader than `aliasReferentOf` (which is the no-false-positive scalar-alias slice): it
+// is used only to mark a move binding as having an ESCAPED borrow, where over-approximation
+// is the safe direction. Returns null if the address is not rooted at a tracked move binding.
+fn borrowedMoveRoot(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[]const u8 {
+    const target = switch (expr.kind) {
+        .address_of => |inner| inner.*,
+        .grouped => |inner| return borrowedMoveRoot(inner.*, state),
+        else => return null,
+    };
+    return placeRootMoveName(target, state);
+}
+
+// The root binding name of an lvalue place (`x`, `x.f`, `x[i]`, `x.f[i].g`), if that root is
+// a tracked move binding. Resolves an alias root back to its original referent.
+fn placeRootMoveName(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[]const u8 {
+    switch (expr.kind) {
+        .ident => |id| {
+            const slot = state.get(id.text) orelse return null;
+            if (slot.alias_of) |referent| return referent; // an alias: resolve to its target
+            return id.text;
+        },
+        .grouped => |inner| return placeRootMoveName(inner.*, state),
+        .member => |m| return placeRootMoveName(m.base.*, state),
+        .index => |ix| return placeRootMoveName(ix.base.*, state),
+        .deref => |inner| return placeRootMoveName(inner.*, state),
+        else => return null,
+    }
 }
 
 // The bare-binding name of an lvalue, peeling `grouped`. Null if it is not a simple ident.
