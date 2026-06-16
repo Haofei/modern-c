@@ -30,7 +30,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
-        -Wno-unused-parameter -Wno-unused-function -fno-builtin)
+        -Wno-unused-parameter -Wno-unused-function -fno-builtin
+        # UB-defining defensive flags for the kernel-image cc path (S0.3; see
+        # docs/c-ub-matrix.md). -ffreestanding/-fno-builtin are already here; add the
+        # aliasing + null-check + signed-wrap hardening so the emitted MC C (and the C
+        # runtime it links with) inherit the same UB-defining contract as the host path.
+        -fno-strict-aliasing -fno-delete-null-pointer-checks -fwrapv)
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/thread.o" "$WORK"
 kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"

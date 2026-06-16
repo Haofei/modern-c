@@ -62,7 +62,25 @@ EMIT_CMD=("$MCC" emit-c "$INPUT")
 if [ "${#PROFILE_ARGS[@]}" -gt 0 ]; then
     EMIT_CMD+=("${PROFILE_ARGS[@]}")
 fi
-CLANG_CMD=("$CLANG" -std=c11 -Wall -Wextra -Werror)
+# UB-defining defensive flags (S0.3; see docs/c-ub-matrix.md). MC's own checks/forbids
+# cover signed overflow, OOB, shifts, div, null-unwrap and aliasing in the emitted C, so
+# these are *defense in depth*, not the semantic foundation — but they harden the inherited
+# C UB classes MC does NOT trap and pin down the few idioms that rely on a compiler flag:
+#   -fno-strict-aliasing          : raw.load/store<T> + MMIO cast uintptr_t -> volatile T*
+#                                   (type-pun through incompatible type); the spec's
+#                                   recommended flag. memcpy-reinterpret idioms are already
+#                                   alias-safe; this covers the hardware-register path.
+#   -fno-delete-null-pointer-checks: don't let the optimizer assume a deref proved a pointer
+#                                   non-null and drop a later guard (MC traps null-unwrap, but
+#                                   raw addresses may legitimately be 0 in freestanding code).
+#   -fwrapv                       : define signed overflow as two's-complement wrap. NOT load-
+#                                   bearing — MC traps signed overflow via __builtin_*_overflow
+#                                   *before* the wrap, and forbids wrap<T>/sat<T> on signed
+#                                   types (E_ARITH_DOMAIN_UNSIGNED) — so no un-trapped signed
+#                                   overflow is ever emitted; this only removes a residual
+#                                   optimizer assumption. It does not mask any MC trap.
+UB_FLAGS=(-fno-strict-aliasing -fno-delete-null-pointer-checks -fwrapv)
+CLANG_CMD=("$CLANG" -std=c11 -Wall -Wextra -Werror "${UB_FLAGS[@]}")
 if [ "${#PASS[@]}" -gt 0 ]; then
     CLANG_CMD+=("${PASS[@]}")
 fi
