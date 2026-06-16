@@ -22,6 +22,7 @@ extern fn mk() -> T;
 extern fn cn(t: T) -> u32;       // consumes (moves) t
 extern fn pk(p: *T) -> u32;      // reads through a borrow
 extern fn use_ptr(p: *T) -> u32;
+extern fn id(p: *T) -> *T;       // returns the borrow it was given (laundering channel)
 
 // --- rejected: borrow stored into a struct FIELD by assignment, then the value is moved ---
 fn reject_struct_field_assign() -> u32 {
@@ -66,4 +67,38 @@ fn accept_subfield_borrow_used() -> u32 {
     let x: u32 = use_ptr(&t);     // a transient borrow, not stored anywhere
     let y: u32 = t.v;             // read a field by value (still a borrow of t)
     return cn(t) + x + y;         // t may be moved — no live escaped borrow
+}
+
+// (Gap #2) Interprocedural borrow laundering through a CALL RESULT. `id(p)` may return the
+// borrow it was given; we cannot see what the callee retains. A pointer-returning call whose
+// argument borrows the move binding `t` makes its result `q` a DERIVED ALIAS of `t`. A USE of
+// `q` after `t` is moved is then a stale-alias use-after-move. The rule is precise (not an
+// eager move-refusal): if `q` is dead before the move, nothing fires — so the legitimate
+// "launder, use, then move" pattern below still compiles.
+
+// --- rejected: pointer laundered out through a call, then USED after the move ---
+fn reject_call_launder_used_after_move() -> u32 {
+    let t: T = mk();
+    let p: *T = &t;               // direct alias of t
+    let q: *T = id(p);            // a borrow of t laundered out through id's pointer result
+    let a: u32 = cn(t);           // t is moved
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(q);             // q is a stale alias of the moved t — rejected
+}
+
+// --- rejected: the same, laundering `&t` directly (no intermediate alias) ---
+fn reject_call_launder_direct() -> u32 {
+    let t: T = mk();
+    let q: *T = id(&t);           // &t laundered through the pointer-returning call
+    let a: u32 = cn(t);           // t is moved
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(q);             // q is stale — rejected
+}
+
+// --- accepted: laundered pointer is DEAD before the move (the legitimate pattern) ---
+fn accept_call_launder_dead_before_move() -> u32 {
+    let t: T = mk();
+    let q: *T = id(&t);           // borrow laundered out
+    let b: u32 = pk(q);           // ...but used here, BEFORE the move — q is dead afterwards
+    return cn(t) + b;             // t may be moved — the laundered alias is no longer read
 }

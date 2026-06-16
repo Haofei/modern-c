@@ -96,3 +96,42 @@ fn reject_declassify_non_secret(x: u8) -> u8 {
         return reveal(x);
     }
 }
+
+// ---- rejected: secrecy must survive an overlay-union reinterpret -------------
+// (Gap #1) An `overlay union` whose arms alias the same bytes: if ANY arm is a
+// Secret<…>, writing the secret arm and reading a DIFFERENT (plain) arm would
+// otherwise strip secrecy and let the secret steer a branch. Reading ANY arm of
+// such a union is therefore secret.
+
+overlay union SecretWord {
+    s: Secret<u32>,
+    plain: u32,
+}
+
+fn reject_overlay_secret_arm_strip(v: Secret<u32>) -> u32 {
+    var u: SecretWord = uninit;
+    u.s = v;             // secret written into one arm
+    // EXPECT_ERROR: E_SECRET_BRANCH
+    if u.plain != 0 {    // reading a plain arm aliasing the secret bytes stays secret
+        return 1;
+    }
+    return 0;
+}
+
+// ---- accepted: an overlay union with NO secret arm is not secret -------------
+// (Gap #1, no-over-broaden) The secrecy classification fires ONLY when a secret
+// arm exists; a plain-only overlay union still drives ordinary control flow.
+
+overlay union PlainWord {
+    a: u32,
+    b: u32,
+}
+
+fn accept_overlay_plain_branch(v: u32) -> u32 {
+    var u: PlainWord = uninit;
+    u.a = v;
+    if u.b != 0 {        // no secret arm — plain bool, ordinary branch
+        return 1;
+    }
+    return 0;
+}

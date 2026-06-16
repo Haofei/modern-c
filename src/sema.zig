@@ -909,7 +909,15 @@ pub const Checker = struct {
                 // a by-value resource, so it is only registered when the binding was not already
                 // classed as a move resource above.
                 if (!bound_as_move and decl.names.len > 0 and decl.init != null) {
-                    if (aliasReferentOf(decl.init.?, state)) |referent| {
+                    if (self.callLaunderedMoveRoot(decl.init.?, state)) |referent| {
+                        // Gap #2: `let q = f(&t)` where `f` returns a pointer — `q` may alias a
+                        // borrow of the move binding `t` laundered through the callee's result.
+                        // Register it as a derived alias so a USE of `q` after `t` is moved is a
+                        // stale-alias use-after-move (and nothing fires if `q` is dead first).
+                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .alias_of = referent }) catch {
+                            self.oom = true;
+                        };
+                    } else if (aliasReferentOf(decl.init.?, state)) |referent| {
                         if (state.contains(referent)) {
                             // `live = false`: the alias is a borrow, not a linear resource, so
                             // leak/exit checks (which only fire on `live` slots) must skip it.
@@ -1589,6 +1597,50 @@ pub const Checker = struct {
         if (state.getPtr(root)) |slot| {
             if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
         }
+    }
+
+    // Gap #2 [interprocedural borrow laundering] — conservative rejection, precise variant.
+    // `let q = f(&t)` (or `f(p)` where `p` aliases `t`) where `f` RETURNS A POINTER may launder
+    // a borrow of the `move` binding `t` out through its result `q` (the callee can `return`
+    // the argument). We cannot see what the callee does, so we conservatively treat `q` as a
+    // DERIVED ALIAS of `t` — registered into the same stale-alias machinery as `let p = &t`.
+    // A later move of `t` followed by a USE of `q` is then a stale-alias use-after-move
+    // (E_USE_AFTER_MOVE). Registering an alias (rather than eagerly marking `t` escaped) is what
+    // keeps the legitimate "borrow through a call, use it, THEN move once the result is dead"
+    // pattern compiling: if `q` is never read after the move, nothing fires.
+    //
+    // Returns the move-root `t` that a pointer-returning call's args borrow, or null. Narrowed
+    // to KNOWN pointer-returning direct calls so a non-pointer result (`pk(&t) -> u32`) — which
+    // cannot retain the borrow — does not register an alias and the legit case still accepts.
+    fn callLaunderedMoveRoot(self: *Checker, init_expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[]const u8 {
+        const ctx = self.move_ctx orelse return null;
+        const call = switch (init_expr.kind) {
+            .call => |c| c,
+            .grouped => |inner| return self.callLaunderedMoveRoot(inner.*, state),
+            .cast => |c| return self.callLaunderedMoveRoot(c.value.*, state),
+            else => return null,
+        };
+        // `drop`/`forget_unchecked` are not borrow-laundering pointer factories.
+        if (isDropCall(call.callee.*) or isForgetUncheckedCall(call.callee.*)) return null;
+        const ret_ty = directCallReturnType(call.callee.*, ctx.*) orelse return null;
+        if (!isPointerLike(classifyTypeCtx(ret_ty, ctx.*))) return null;
+        for (call.args) |arg| {
+            const root = borrowedMoveRoot(arg, state) orelse blk: {
+                // an alias local `p` passed by value (→ its referent `t`)
+                if (aliasReferentOf(arg, state)) |referent| {
+                    if (state.contains(referent)) break :blk referent;
+                }
+                continue;
+            };
+            // Only register the laundered alias while the root is still LIVE. If it was already
+            // moved, the borrow of it (the `&t` arg) is itself the use-after-move and is reported
+            // by moveBorrow at the call — registering an alias here would double-report on the
+            // later `q.*` use.
+            if (state.getPtr(root)) |slot| {
+                if (slot.live and slot.alias_of == null) return root;
+            }
+        }
+        return null;
     }
 
     // (bug #3) Register field-place borrow aliases for a struct-literal initializer bound to
@@ -3504,6 +3556,13 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_USER_PTR_DEREF", "cannot directly access a field through UserPtr; copy it in with copy_from_user first");
                 }
                 self.checkKnownStructField(expr.span, node.base.*, node.name.text, ctx);
+                // Gap #1: reading ANY arm of an overlay union that has at least one `Secret<…>`
+                // arm is itself secret — the arms alias the same bytes, so a plain-arm read can
+                // observe secret bytes written through the secret arm. Classify the read secret
+                // so the subsequent branch/index is rejected (E_SECRET_BRANCH / E_SECRET_INDEX).
+                if (exprResultType(node.base.*, ctx) orelse exprStorageType(node.base.*, ctx)) |base_ty| {
+                    if (overlayUnionTypeHasSecretArm(base_ty, ctx)) return .secret;
+                }
                 if (memberResultFieldType(node, ctx)) |field_ty| return classifyTypeCtx(field_ty, ctx);
                 return .unknown;
             },
@@ -8843,6 +8902,22 @@ fn layoutFieldInfo(name: []const u8, ctx: Context) ?LayoutFieldInfo {
         if (overlay_unions.get(name)) |info| return info;
     }
     return null;
+}
+
+// Gap #1 [secret overlay-reinterpret]: an `overlay union` whose arms ALIAS the same bytes.
+// If ANY arm is a `Secret<…>`, then reading ANY arm reinterprets the secret bytes — writing
+// the secret arm and reading a plain arm would otherwise strip secrecy. So a read of ANY
+// member of such a union must be classified `.secret`. A union with NO secret arm stays
+// non-secret (do not over-broaden).
+fn overlayUnionTypeHasSecretArm(base_ty: ast.TypeExpr, ctx: Context) bool {
+    const overlay_unions = ctx.overlay_unions orelse return false;
+    const name = structTypeName(base_ty) orelse return false;
+    const info = overlay_unions.get(name) orelse return false;
+    var it = info.fields.valueIterator();
+    while (it.next()) |field_ty| {
+        if (classifyTypeCtx(field_ty.*, ctx) == .secret) return true;
+    }
+    return false;
 }
 
 fn knownEnumName(name: []const u8, ctx: Context) bool {
