@@ -10,6 +10,10 @@ const ir = @import("ir.zig");
 const lexer = @import("lexer.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
+// Lowering-coverage instrumentation (hardening V3.2). Zero-cost unless the
+// `MC_LOWER_COV` env var is set; `tools/toolchain/lowering-coverage.sh` injects the
+// per-function `lower_cov.hit(...)` probes into the two backend files at build time.
+const lower_cov = @import("lower_cov.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const monomorphize = @import("monomorphize.zig");
@@ -53,6 +57,10 @@ fn writeStdout(bytes: []const u8) !void {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     stdout_io = init.io;
+    // Flush the lowering-coverage trace on every exit path (no-op unless armed via
+    // the MC_LOWER_COV env var). Placed first so it covers all `try`/error returns.
+    lower_cov.init(init.io, init.environ_map.get("MC_LOWER_COV"));
+    defer lower_cov.dump();
 
     var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
     defer args.deinit();

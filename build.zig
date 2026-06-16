@@ -116,6 +116,16 @@ pub fn build(b: *std.Build) void {
     const move_fuzz_step = b.step("move-fuzz", "Generate move-resource programs; assert every resource is released once (live_count==0) on both backends");
     move_fuzz_step.dependOn(&move_fuzz_cmd.step);
 
+    // V3.2: function-level lowering-coverage report. The script instruments the two
+    // backend files, builds an instrumented mcc itself, and restores the sources on
+    // exit — so it deliberately does NOT depend on the normal install step.
+    const lowering_cov_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/lowering-coverage.sh",
+    });
+    const lowering_cov_step = b.step("lowering-coverage", "Report which lower_c.zig/lower_llvm.zig functions the differential corpus never exercises (V3.2)");
+    lowering_cov_step.dependOn(&lowering_cov_cmd.step);
+
     const fuzz_cmd = b.addSystemCommand(&.{
         "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--mcc", "zig-out/bin/mcc",
     });
