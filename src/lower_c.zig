@@ -86,7 +86,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    return appendCProfileWithSourcePath(allocator, module, out, opts.profile, opts.source_path, opts.optimize, opts.ksan, opts.msan);
+    return appendCProfileWithSourcePath(allocator, module, out, opts.profile, opts.source_path, opts.optimize, opts.ksan, opts.msan, opts.csan);
 }
 
 fn backendEmitMap(
@@ -207,10 +207,10 @@ pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast.Module, out: 
 }
 
 pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
-    return appendCProfileWithSourcePath(allocator, module, out, profile, null, false, false, false);
+    return appendCProfileWithSourcePath(allocator, module, out, profile, null, false, false, false, false);
 }
 
-pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, optimize: bool, ksan: bool, msan: bool) anyerror!void {
+pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, optimize: bool, ksan: bool, msan: bool, csan: bool) anyerror!void {
     switch (profile) {
         .kernel => try out.appendSlice(allocator, "/* mc-profile: kernel (freestanding) */\n"),
         .hosted => try out.appendSlice(allocator, "/* mc-profile: hosted (links libc + -lm) */\n"),
@@ -285,6 +285,14 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         \\   non-msan builds are byte-for-byte unaffected. The msan shadow runtime provides the
         \\   strong definition that marks the written bytes initialized. */
         \\MC_WEAK void mc_ksan_store(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
+        \\/* KCSAN data-race watchpoint hooks (D2.3). Weak no-op by default, so the KASAN/KMSAN
+        \\   runtimes and non-csan builds are byte-for-byte unaffected. The csan watchpoint
+        \\   runtime provides the strong definitions: each instrumented unsynchronized access
+        \\   briefly sets a watchpoint on the shadow for [addr,addr+size); a concurrent access
+        \\   (one of which is a write) that finds a live watchpoint on an overlapping range is a
+        \\   data race and traps. The synchronized `mc_race_*` accessors do NOT call these. */
+        \\MC_WEAK void mc_csan_read(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
+        \\MC_WEAK void mc_csan_write(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
         \\
         \\#define MC_DEFINE_CHECKED_UNSIGNED(NAME, TYPE, MAXV) \
         \\MC_UNUSED static inline TYPE mc_checked_add_##NAME(TYPE a, TYPE b) { \
@@ -490,6 +498,33 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
             \\}
             \\
         );
+    } else if (csan) {
+        // KCSAN profile (D2.3): the UNSYNCHRONIZED raw.load/raw.store path is the racy one.
+        // Each instrumented access tells the watchpoint runtime its [addr,size) and whether
+        // it is a write; the runtime sets a watchpoint, briefly watches the location (a soft
+        // window during which a concurrent context — here a preempting timer IRQ — may run),
+        // and on exit checks whether a conflicting concurrent access (one of which is a write)
+        // hit an overlapping watchpoint. Conflict -> trap -> CSAN-DETECTED. The synchronized
+        // `mc_race_*` accessors stay plain relaxed atomics and never set a watchpoint, so a
+        // race-accessor-vs-race-accessor pair is clean.
+        try out.appendSlice(allocator,
+            \\/* mc-checks: csan (KCSAN data-race watchpoint instrumentation, D2.3).
+            \\   mc_csan_write/mc_csan_read are declared+weak-defined above; the linked csan
+            \\   watchpoint runtime provides the strong, shadow-consulting definitions. The
+            \\   write hook brackets the store so a concurrent access lands inside the watch
+            \\   window; the read hook brackets the load. */
+            \\#define MC_DEFINE_RAW_STORE(NAME, TYPE) \
+            \\MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) { \
+            \\    mc_csan_write((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \
+            \\    *((volatile TYPE *)(uintptr_t)addr) = value; \
+            \\}
+            \\#define MC_DEFINE_RAW_LOAD(NAME, TYPE) \
+            \\MC_UNUSED static inline TYPE mc_raw_load_##NAME(uintptr_t addr) { \
+            \\    mc_csan_read((uintptr_t)addr, (uintptr_t)sizeof(TYPE)); \
+            \\    return *((volatile TYPE *)(uintptr_t)addr); \
+            \\}
+            \\
+        );
     } else {
         try out.appendSlice(allocator,
             \\#define MC_DEFINE_RAW_STORE(NAME, TYPE) \
@@ -598,7 +633,7 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
 pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: []const u8, generated_c_path: ?[]const u8) anyerror!void {
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path, false, false, false);
+    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path, false, false, false, false);
 
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
@@ -12992,7 +13027,7 @@ test "path-aware C emission writes source line hints" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc", false, false, false);
+    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc", false, false, false, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 1 \"debug\\\"map\\\\case.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 3 \"debug\\\"map\\\\case.mc\"") != null);

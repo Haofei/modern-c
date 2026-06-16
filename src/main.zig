@@ -58,6 +58,12 @@ const usage =
     \\                         of UNINITIALIZED heap memory. Implies ksan; additionally marks
     \\                         bytes initialized on raw.store (mc_ksan_store) so a raw.load of
     \\                         still-uninit heap bytes traps (KMSAN-DETECTED).
+    \\  --checks=csan          KCSAN profile (D2.3): instrument the UNSYNCHRONIZED
+    \\                         raw.load/raw.store path with a data-race watchpoint
+    \\                         (mc_csan_read/mc_csan_write) on the shadow; a conflicting
+    \\                         concurrent access (one a write) to the same location without
+    \\                         synchronization traps (CSAN-DETECTED). The synchronized
+    \\                         mc_race_* accessors stay plain atomics and are clean.
     \\
 ;
 
@@ -107,6 +113,10 @@ pub fn main(init: std.process.Init) !void {
     // poisons fresh heap allocations as UNINIT; a load of still-uninit bytes traps. Default
     // builds leave it off, so emitted code is byte-for-byte unchanged.
     var msan = false;
+    // KCSAN profile (D2.3): when set (`--checks=csan`), instruments the unsynchronized
+    // raw.load/raw.store path with a data-race watchpoint (mc_csan_read/mc_csan_write) on the
+    // shadow. Orthogonal to ksan/msan; default builds leave it off (byte-for-byte unchanged).
+    var csan = false;
     var saw_checks_flag = false;
     var check_fmt = false;
     // `emit-layout --structs=A,B,C`: the comma-separated structs whose MC layout is asserted.
@@ -142,6 +152,9 @@ pub fn main(init: std.process.Init) !void {
                     // KMSAN (D2.2) builds on the ksan shadow and implies its instrumentation.
                     msan = true;
                     ksan = true;
+                } else if (std.mem.eql(u8, tok, "csan")) {
+                    // KCSAN (D2.3): data-race watchpoint on the unsynchronized raw path.
+                    csan = true;
                 } else {
                     return failUsage();
                 }
@@ -212,11 +225,11 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        try runEmitC(allocator, path, source, profile, optimize, ksan, msan);
+        try runEmitC(allocator, path, source, profile, optimize, ksan, msan, csan);
     } else if (std.mem.eql(u8, command, "emit-map")) {
         try runEmitMap(allocator, path, source, profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source, optimize, ksan, msan);
+        try runEmitLlvm(allocator, path, source, optimize, ksan, msan, csan);
     } else if (is_emit_layout) {
         try runEmitLayout(allocator, path, source, structs_flag.?);
     } else if (is_emit_c_struct) {
@@ -523,7 +536,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     try writeStdout(output.items);
 }
 
-fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, optimize: bool, ksan: bool, msan: bool) !void {
+fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, optimize: bool, ksan: bool, msan: bool, csan: bool) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -556,7 +569,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = profile, .optimize = optimize, .source_path = path, .ksan = ksan, .msan = msan });
+    try be.lower(allocator, module, &output, .{ .profile = profile, .optimize = optimize, .source_path = path, .ksan = ksan, .msan = msan, .csan = csan });
     try writeStdout(output.items);
 }
 
@@ -596,7 +609,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     try writeStdout(output.items);
 }
 
-fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool, ksan: bool, msan: bool) !void {
+fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, optimize: bool, ksan: bool, msan: bool, csan: bool) !void {
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
 
@@ -629,7 +642,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     const be = backend.byName("llvm").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = .kernel, .optimize = optimize, .source_path = path, .ksan = ksan, .msan = msan });
+    try be.lower(allocator, module, &output, .{ .profile = .kernel, .optimize = optimize, .source_path = path, .ksan = ksan, .msan = msan, .csan = csan });
     try writeStdout(output.items);
 }
 

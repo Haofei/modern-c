@@ -872,6 +872,21 @@ pub fn build(b: *std.Build) void {
     const llvm_kmsan_test_step = b.step("llvm-kmsan-test", "Boot the LLVM-lowered KMSAN demo under QEMU");
     llvm_kmsan_test_step.dependOn(&llvm_kmsan_test_cmd.step);
 
+    // kcsan-test boots the D2.3 KCSAN demo under QEMU: data-race detection via a watchpoint
+    // on the shadow (the `--checks=csan` profile). An unsynchronized boot-thread access
+    // racing a REAL preempting timer-IRQ access is caught by the watchpoint conflict check
+    // (CSAN-DETECTED); a properly-synchronized (mc_race_*) access is clean (CSAN-OK). C
+    // backend only — the LLVM backend does not implement the csan watchpoint instrumentation.
+    const kcsan_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/kcsan-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    kcsan_test_cmd.step.dependOn(b.getInstallStep());
+    const kcsan_test_step = b.step("kcsan-test", "Boot the KCSAN demo under QEMU (data-race detection on the watchpoint)");
+    kcsan_test_step.dependOn(&kcsan_test_cmd.step);
+
     const elf_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/lib/host-harness.sh", "zig-out/bin/mcc", "elf-test",
@@ -2743,6 +2758,8 @@ pub fn build(b: *std.Build) void {
     // kmsan-test (D2.2): access-time use-of-uninitialized-heap detection on the ksan shadow.
     m0_step.dependOn(&kmsan_test_cmd.step);
     m0_step.dependOn(&llvm_kmsan_test_cmd.step);
+    // kcsan-test (D2.3): data-race detection via a watchpoint on the shadow (csan profile).
+    m0_step.dependOn(&kcsan_test_cmd.step);
     // elf-test links + runs the ELF64 parser (needs clang).
     m0_step.dependOn(&elf_test_cmd.step);
     // ramfs-test links + runs the in-memory filesystem (needs clang).

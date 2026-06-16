@@ -30,6 +30,13 @@ pub const LowerOptions = struct {
     /// msan runtime makes `mc_ksan_check` trap on a load of still-uninitialized heap
     /// bytes. Default false leaves emitted code unchanged.
     msan: bool = false,
+    /// KCSAN profile (D2.3): when true, instrumented memory accesses (raw.load /
+    /// raw.store) emit a data-race watchpoint hook (`mc_csan_read` / `mc_csan_write`)
+    /// on the shadow that flags a conflicting concurrent access (one a write) to the
+    /// same location without synchronization. The `mc_race_*` synchronized accessors
+    /// stay plain relaxed atomics (no watchpoint) — the properly-synchronized path is
+    /// clean. Default false leaves emitted code byte-for-byte unchanged.
+    csan: bool = false,
 };
 
 /// A code-generation backend: the seam at which `main.zig` selects a target and
