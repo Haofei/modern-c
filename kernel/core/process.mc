@@ -471,6 +471,103 @@ export fn proc_oom_reclaim(t: *mut ProcTable) -> Result<usize, OomError> {
     }
 }
 
+// ----- F1: fault isolation — contain a recoverable agent fault (kill+reclaim, kernel survives) --
+//
+// The OOM keystone above kills a NON-current runaway (it never context-switches). A FAULT is the
+// dual case: the faulting agent IS the one executing when the trap fires, so the kill path must be
+// allowed to terminate `t.current` and the trap handler resumes the KERNEL afterwards (the dead
+// agent never runs again). To classify a trap, the kernel marks which agent owns the CPU before
+// handing it control (its "fault domain"); the trap handler reads that marker to decide whether a
+// synchronous fault is recoverable-in-agent (an agent was running -> contain) or fatal-kernel
+// (no agent was running, i.e. the fault is the kernel's own -> panic + halt).
+
+// Sentinel exit code for an agent terminated by a contained fault (vs OOM_KILLED_CODE / a clean
+// exit). A parent reaping the zombie can tell a fault-kill apart from an OOM-kill or normal exit.
+const FAULT_KILLED_CODE: u32 = 0xDEAD_00F1;
+
+// No agent currently owns the CPU (the kernel itself is running): a synchronous fault here is the
+// kernel's own and must stay fatal. MAX_PROCS is never a valid slot, so it is the "no domain" mark.
+global g_fault_domain: usize = MAX_PROCS;
+
+// Enter an agent's fault domain: record that `slot` owns the CPU, so a trap that fires now is
+// attributable to that agent. Call immediately before transferring control into agent code.
+// Mirrors setting `t.current`, but is the authority the *trap handler* consults (it runs in an
+// arbitrary context and must not guess). A bad/non-live slot leaves the domain cleared (fail-safe:
+// an unattributable fault then classifies as fatal-kernel rather than killing an innocent agent).
+export fn proc_enter_agent(t: *mut ProcTable, slot: usize) -> void {
+    if proc_is_live(t, slot) {
+        t.current = slot;
+        g_fault_domain = slot;
+    } else {
+        g_fault_domain = MAX_PROCS;
+    }
+}
+
+// Leave the current fault domain (the agent returned cleanly): subsequent faults are the kernel's
+// until the next proc_enter_agent. Idempotent.
+export fn proc_leave_agent(t: *mut ProcTable) -> void {
+    g_fault_domain = MAX_PROCS;
+}
+
+// The slot of the agent that currently owns the CPU, or err(.NoVictim) if the kernel itself is
+// running (no fault domain marked). This is the trap handler's classifier: ok => a fault is a
+// recoverable agent fault; err => a fault is fatal-kernel.
+export fn proc_fault_domain(t: *mut ProcTable) -> Result<usize, OomError> {
+    if g_fault_domain == MAX_PROCS {
+        return err(.NoVictim);
+    }
+    if !proc_is_live(t, g_fault_domain) {
+        return err(.NoVictim); // domain marks a non-live slot — treat as unattributable
+    }
+    return ok(g_fault_domain);
+}
+
+// Contain a recoverable agent fault: forcibly terminate the FAULTING agent `slot` (which is the
+// one that owned the CPU, == g_fault_domain) and reclaim its resources through the SAME death path
+// the OOM-kill and proc_exit use (fds + memory account + IPC + waiters released), mark it a Zombie
+// with the fault sentinel, and wake its parent so the death reaps like any other. Unlike
+// proc_oom_kill this is ALLOWED to kill the current slot (the fault victim is, by definition, the
+// running agent); it then clears the fault domain so the kernel — which the trap handler resumes
+// next — runs outside any agent. Idempotent guard: a no-op on a non-live or out-of-range slot.
+// Deliberately performs NO context switch: the trap handler advances past the faulting instruction
+// and `mret`s back into the kernel; the dead agent's saved context is simply never scheduled again.
+export fn proc_fault_kill(t: *mut ProcTable, slot: usize) -> void {
+    if slot >= t.count {
+        return;
+    }
+    if !proc_is_live(t, slot) {
+        return; // already dead/zombie/free — nothing to reclaim
+    }
+    t.procs[slot].exit_code = FAULT_KILLED_CODE; // recognizable: contained-fault kill
+    proc_death_cleanup(t, slot); // SAME path as proc_exit/proc_oom_kill: fds + macct + IPC + waiters
+    t.procs[slot].state = .Zombie; // a parent can still reap its death
+    let parent_slot: usize = t.procs[slot].parent_slot;
+    if parent_slot < t.count {
+        if t.procs[parent_slot].gen == t.procs[slot].parent_gen {
+            proc_unblock(t, parent_slot, BLOCK_WAIT);
+        }
+    }
+    if g_fault_domain == slot {
+        g_fault_domain = MAX_PROCS; // the faulting agent is gone; the kernel runs next
+    }
+}
+
+// The fault-path entry point the trap handler calls: classify (is a fault attributable to a live
+// agent?) and, if so, contain it (kill+reclaim the faulting agent) — returning ok(slot) of the
+// reclaimed agent. err(.NoVictim) means the fault is NOT attributable to any agent (the kernel's
+// own fault), so the handler must keep it fatal (panic + halt) instead of recovering.
+export fn proc_fault_contain(t: *mut ProcTable) -> Result<usize, OomError> {
+    switch proc_fault_domain(t) {
+        ok(slot) => {
+            proc_fault_kill(t, slot);
+            return ok(slot);
+        }
+        err(e) => {
+            return err(e);
+        }
+    }
+}
+
 // Replace a process's executable image in place — exec() semantics. The saved context is reset
 // to start `entry` on a fresh stack, but the process KEEPS its identity (same pid and
 // generation, so existing endpoints stay valid) and, crucially, its open file descriptors:

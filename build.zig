@@ -2273,6 +2273,26 @@ pub fn build(b: *std.Build) void {
     const llvm_agentos_test_step = b.step("llvm-agentos-test", "Boot the LLVM-lowered agent-OS governance keystone under QEMU");
     llvm_agentos_test_step.dependOn(&llvm_agentos_test_cmd.step);
 
+    const fault_isolation_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/fault-isolation-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    fault_isolation_test_cmd.step.dependOn(b.getInstallStep());
+    const fault_isolation_test_step = b.step("fault-isolation-test", "Boot the F1 fault-isolation keystone (a real agent trap is contained: faulting agent killed+reclaimed, kernel+others survive) under QEMU");
+    fault_isolation_test_step.dependOn(&fault_isolation_test_cmd.step);
+
+    const llvm_fault_isolation_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/fault-isolation-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_fault_isolation_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_fault_isolation_test_step = b.step("llvm-fault-isolation-test", "Boot the LLVM-lowered F1 fault-isolation keystone under QEMU");
+    llvm_fault_isolation_test_step.dependOn(&llvm_fault_isolation_test_cmd.step);
+
     const agent_e2e_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-e2e-test.sh",
@@ -2785,6 +2805,10 @@ pub fn build(b: *std.Build) void {
     // agentos-test boots the agent-OS governance keystone (OOM-kill + reclaim) under QEMU.
     m0_step.dependOn(&agentos_test_cmd.step);
     m0_step.dependOn(&llvm_agentos_test_cmd.step);
+    // fault-isolation-test boots the F1 keystone: a real agent trap is CONTAINED (faulting agent
+    // killed+reclaimed via the death path, kernel + other agents survive) under QEMU.
+    m0_step.dependOn(&fault_isolation_test_cmd.step);
+    m0_step.dependOn(&llvm_fault_isolation_test_cmd.step);
     // agent-e2e-test boots the end-to-end sandboxed-agent showcase under QEMU.
     m0_step.dependOn(&agent_e2e_test_cmd.step);
     m0_step.dependOn(&llvm_agent_e2e_test_cmd.step);
