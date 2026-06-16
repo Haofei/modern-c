@@ -128,7 +128,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   access requires static proof the lock is held. **Where:** `std/sync` + a check pass. **Test:**
   `fuzz-failclosed` (unlocked access rejected); migrate kernel locks incrementally. **Prior art:**
   Rust `Mutex<T>`, Rust-for-Linux **klint**, lockdep. **Depends:** none.
-- [ ] **C2 — IRQ/atomic-context discipline** *(PR)* — mark fns IRQ-context vs sleepable; a sleepable
+- [x] **C2 — IRQ/atomic-context discipline** *(DONE `2410f32`; `#[irq_context]` + `#[may_sleep]` attributes (built on MC's existing attr machinery) + sema `E_SLEEP_IN_ATOMIC`; `heap_alloc`/`sched_yield`/`mutex_lock` marked sleepable, `claim_if_pending` irq-context — no real violation. Direct-call only; transitive is follow-up)* — mark fns IRQ-context vs sleepable; a sleepable
   op (mutex/alloc) from IRQ context is a compile error. **Where:** an effect/attribute +
   `kernel/core/sched.mc`/`kernel/drivers/irq/`. **Test:** sleep-in-IRQ fixture rejected. **Prior art:**
   Linux `might_sleep`/lockdep, Rust-for-Linux context types. **Depends:** none.
@@ -208,7 +208,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## S — Constant-time / secret types (side channels; relevant since TLS landed)
 
-- [ ] **S(secret)1 — `secret<T>` type** *(multi-PR)* — forbids secret-dependent branches, indexing,
+- [x] **S(secret)1 — `secret<T>` type** *(DONE `f1f3320`; `Secret<T>` opaque zero-cost class; `E_SECRET_BRANCH` (if/switch/while), `E_SECRET_INDEX` (array/slice/ptr-offset); taint propagates through arithmetic + comparison (secret bool); `declassify`/`reveal` behind `unsafe`. Both backends)* — forbids secret-dependent branches, indexing,
   and memory access (timing/cache side channels) for key/crypto material; apply to the TLS/key path.
   **Where:** a type + constant-time check + the TLS glue. **Test:** secret-dependent branch rejected;
   constant-time lint. **Prior art:** **FaCT**, HACL*/Vale, Rust `subtle`. **Depends:** none.
