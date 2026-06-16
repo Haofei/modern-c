@@ -126,6 +126,15 @@ pub fn build(b: *std.Build) void {
     const lowering_cov_step = b.step("lowering-coverage", "Report which lower_c.zig/lower_llvm.zig functions the differential corpus never exercises (V3.2)");
     lowering_cov_step.dependOn(&lowering_cov_cmd.step);
 
+    // S0.2: source-level audit of the unsafe boundary. Pure source scan (no mcc
+    // dependency), so it does not depend on the install step.
+    const unsafe_audit_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/unsafe-audit.sh",
+    });
+    const unsafe_audit_step = b.step("unsafe-audit", "Audit the MC unsafe boundary: flag gated unsafe ops outside an unsafe/unsafe_contract region and inventory the audited sites in kernel/ + std/ (S0.2)");
+    unsafe_audit_step.dependOn(&unsafe_audit_cmd.step);
+
     const fuzz_cmd = b.addSystemCommand(&.{
         "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--mcc", "zig-out/bin/mcc",
     });
