@@ -526,7 +526,14 @@ pub const Checker = struct {
         const irq_context = hasIrqContext(decl.attrs);
         const type_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
         switch (decl.kind) {
-            .fn_decl, .extern_fn => |fn_decl| self.checkFn(fn_decl, no_lang_trap, irq_context, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases),
+            .fn_decl, .extern_fn => |fn_decl| {
+                self.checkFn(fn_decl, no_lang_trap, irq_context, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
+                // T(term)1: bounded-loop / no-unbounded-recursion check for IRQ/atomic
+                // and `#[bounded]` functions (opt-in; existing code is unaffected).
+                if (hasBoundedContext(decl.attrs)) {
+                    if (fn_decl.body) |body| self.checkTermination(fn_decl.name.text, body);
+                }
+            },
             .struct_decl => |struct_decl| {
                 var struct_ctx = type_ctx;
                 if (struct_decl.abi) |abi| {
@@ -3950,6 +3957,219 @@ pub const Checker = struct {
         self.reporter.err(span, "{s}: {s}", .{ code, message });
     }
 
+    // ----- T(term)1: bounded-loop / no-unbounded-recursion check ----------------
+    //
+    // A function in IRQ/atomic context (or marked `#[bounded]`) must terminate:
+    // a kernel can't hang inside an interrupt. Static termination is undecidable
+    // in general, so we recognize SHAPES (not prove termination):
+    //
+    //   * `for x in ARR/SLICE` — always accepted (iteration is over a finite,
+    //     fixed-extent base; the type checker already enforces the base is an
+    //     array or slice via E_FOR_BASE_NOT_ARRAY_OR_SLICE).
+    //   * `while COUNTER </<=/>/>= BOUND { …; COUNTER = COUNTER +/- k; … }` —
+    //     accepted when the condition is a relational comparison naming a local
+    //     `COUNTER`, and the body monotonically advances that same counter toward
+    //     the bound (increment with `<`/`<=`, decrement with `>`/`>=`). `BOUND`
+    //     may be any expression (constant, length, field) — we bound the trip
+    //     count by the counter's monotone progress, not by evaluating the bound.
+    //   * any `while`/`for` whose body contains a `break` — accepted (the break
+    //     is an escape hatch; we do not prove it is reached).
+    //
+    // Everything else is rejected with E_UNBOUNDED_LOOP — notably `while true {}`
+    // and any `while cond {}` whose counter is not advanced. This is conservative
+    // (false positives on genuinely-bounded but unrecognized shapes), which is
+    // why the whole check is opt-in via the attribute.
+    //
+    // Recursion: DIRECT self-recursion (the function calls itself by name) from a
+    // bounded-context function is E_UNBOUNDED_RECURSION. Mutual/indirect recursion
+    // is NOT covered.
+    fn checkTermination(self: *Checker, fn_name: []const u8, body: ast.Block) void {
+        self.checkTerminationBlock(fn_name, body);
+    }
+
+    fn checkTerminationBlock(self: *Checker, fn_name: []const u8, block: ast.Block) void {
+        for (block.items) |stmt| self.checkTerminationStmt(fn_name, stmt);
+    }
+
+    fn checkTerminationStmt(self: *Checker, fn_name: []const u8, stmt: ast.Stmt) void {
+        switch (stmt.kind) {
+            .loop => |loop| {
+                if (!loopIsBounded(loop)) {
+                    self.errorCode(stmt.span, "E_UNBOUNDED_LOOP", "loop in a bounded/IRQ-context function is not statically bounded (no monotone counter toward a bound, fixed-range for, or break)");
+                }
+                self.checkTerminationBlock(fn_name, loop.body);
+            },
+            .if_let => |node| {
+                self.checkTerminationBlock(fn_name, node.then_block);
+                if (node.else_block) |eb| self.checkTerminationBlock(fn_name, eb);
+            },
+            .@"switch" => |node| {
+                for (node.arms) |arm| switch (arm.body) {
+                    .block => |b| self.checkTerminationBlock(fn_name, b),
+                    .expr => |e| self.checkTerminationExpr(fn_name, e),
+                };
+            },
+            .unsafe_block, .comptime_block, .block => |b| self.checkTerminationBlock(fn_name, b),
+            .contract_block => |cb| self.checkTerminationBlock(fn_name, cb.block),
+            .@"return" => |maybe| {
+                if (maybe) |e| self.checkTerminationExpr(fn_name, e);
+            },
+            .@"defer" => |e| self.checkTerminationExpr(fn_name, e),
+            .assert => |e| self.checkTerminationExpr(fn_name, e),
+            .assignment => |a| {
+                self.checkTerminationExpr(fn_name, a.target);
+                self.checkTerminationExpr(fn_name, a.value);
+            },
+            .expr => |e| self.checkTerminationExpr(fn_name, e),
+            .let_decl, .var_decl => |local| {
+                if (local.init) |e| self.checkTerminationExpr(fn_name, e);
+            },
+            .asm_stmt, .@"break", .@"continue" => {},
+        }
+    }
+
+    fn checkTerminationExpr(self: *Checker, fn_name: []const u8, expr: ast.Expr) void {
+        switch (expr.kind) {
+            .call => |c| {
+                // Direct self-recursion: callee is the bare name of this function.
+                if (c.callee.kind == .ident and std.mem.eql(u8, c.callee.kind.ident.text, fn_name)) {
+                    self.errorCode(expr.span, "E_UNBOUNDED_RECURSION", "direct recursion from a bounded/IRQ-context function (a kernel must not recurse unboundedly in interrupt/atomic context)");
+                }
+                self.checkTerminationExpr(fn_name, c.callee.*);
+                for (c.args) |arg| self.checkTerminationExpr(fn_name, arg);
+            },
+            .block => |b| self.checkTerminationBlock(fn_name, b),
+            .grouped, .address_of, .deref => |inner| self.checkTerminationExpr(fn_name, inner.*),
+            .unary => |u| self.checkTerminationExpr(fn_name, u.expr.*),
+            .binary => |b| {
+                self.checkTerminationExpr(fn_name, b.left.*);
+                self.checkTerminationExpr(fn_name, b.right.*);
+            },
+            .cast => |c| self.checkTerminationExpr(fn_name, c.value.*),
+            .index => |i| {
+                self.checkTerminationExpr(fn_name, i.base.*);
+                self.checkTerminationExpr(fn_name, i.index.*);
+            },
+            .slice => |s| {
+                self.checkTerminationExpr(fn_name, s.base.*);
+                self.checkTerminationExpr(fn_name, s.start.*);
+                self.checkTerminationExpr(fn_name, s.end.*);
+            },
+            .member => |m| self.checkTerminationExpr(fn_name, m.base.*),
+            .try_expr => |t| {
+                self.checkTerminationExpr(fn_name, t.operand.*);
+                if (t.mapped) |m| self.checkTerminationExpr(fn_name, m.*);
+            },
+            .array_literal => |items| for (items) |it| self.checkTerminationExpr(fn_name, it),
+            .struct_literal => |fields| for (fields) |f| self.checkTerminationExpr(fn_name, f.value),
+            else => {},
+        }
+    }
+
+    // A loop matches a recognized statically-bounded shape (see checkTermination).
+    fn loopIsBounded(loop: ast.Loop) bool {
+        if (loop.kind == .@"for") return true; // iterates a finite array/slice
+        // `while`: a relational comparison whose counter is advanced monotonically
+        // toward the bound, or any loop body carrying a `break`.
+        if (blockHasBreak(loop.body)) return true;
+        const cond = loop.iterable orelse return false;
+        const counter = relationalCounter(cond) orelse return false;
+        return bodyAdvancesCounter(loop.body, counter.name, counter.toward_increase);
+    }
+
+    const CounterRel = struct { name: []const u8, toward_increase: bool };
+
+    // Recognize `COUNTER < BOUND` / `<=` / `>` / `>=` where one side is a bare
+    // identifier. `toward_increase` is true when the counter must grow to reach
+    // the bound (`<`, `<=`), false when it must shrink (`>`, `>=`).
+    fn relationalCounter(cond: ast.Expr) ?CounterRel {
+        const expr = if (cond.kind == .grouped) cond.kind.grouped.* else cond;
+        const b = switch (expr.kind) {
+            .binary => |bin| bin,
+            else => return null,
+        };
+        const counter_on_left: bool = b.left.kind == .ident;
+        const counter_on_right: bool = b.right.kind == .ident;
+        if (!counter_on_left and !counter_on_right) return null;
+        const name = if (counter_on_left) b.left.kind.ident.text else b.right.kind.ident.text;
+        // Direction the counter must move to *stay in* the loop's bound, i.e.
+        // toward making the condition false. `i < N`: i increases. `i > 0`: i
+        // decreases. When the counter is the right operand, flip.
+        const increases: bool = switch (b.op) {
+            .lt, .le => true,
+            .gt, .ge => false,
+            else => return null,
+        };
+        return .{ .name = name, .toward_increase = if (counter_on_left) increases else !increases };
+    }
+
+    fn blockHasBreak(block: ast.Block) bool {
+        for (block.items) |stmt| if (stmtHasBreak(stmt)) return true;
+        return false;
+    }
+
+    // A `break` that escapes *this* loop. Breaks nested inside an inner loop
+    // belong to that inner loop, so we do not descend into nested loop bodies.
+    fn stmtHasBreak(stmt: ast.Stmt) bool {
+        return switch (stmt.kind) {
+            .@"break" => true,
+            .loop => false,
+            .if_let => |n| blockHasBreak(n.then_block) or (if (n.else_block) |eb| blockHasBreak(eb) else false),
+            .@"switch" => |n| blk: {
+                for (n.arms) |arm| switch (arm.body) {
+                    .block => |b| if (blockHasBreak(b)) break :blk true,
+                    .expr => {},
+                };
+                break :blk false;
+            },
+            .unsafe_block, .comptime_block, .block => |b| blockHasBreak(b),
+            .contract_block => |cb| blockHasBreak(cb.block),
+            else => false,
+        };
+    }
+
+    // The loop body assigns `name = name +/- k` (or `name = k +/- name`) in the
+    // direction that drives the condition false. Recognizes the common increment
+    // (`i = i + 1`) and decrement (`i = i - 1`) shapes; also `i = i + step`.
+    fn bodyAdvancesCounter(block: ast.Block, name: []const u8, toward_increase: bool) bool {
+        for (block.items) |stmt| if (stmtAdvancesCounter(stmt, name, toward_increase)) return true;
+        return false;
+    }
+
+    fn stmtAdvancesCounter(stmt: ast.Stmt, name: []const u8, toward_increase: bool) bool {
+        return switch (stmt.kind) {
+            .assignment => |a| blk: {
+                if (a.target.kind != .ident or !std.mem.eql(u8, a.target.kind.ident.text, name)) break :blk false;
+                const v = if (a.value.kind == .grouped) a.value.kind.grouped.* else a.value;
+                const bin = switch (v.kind) {
+                    .binary => |b| b,
+                    else => break :blk false,
+                };
+                const refs_left = bin.left.kind == .ident and std.mem.eql(u8, bin.left.kind.ident.text, name);
+                const refs_right = bin.right.kind == .ident and std.mem.eql(u8, bin.right.kind.ident.text, name);
+                if (!refs_left and !refs_right) break :blk false;
+                // `+` advances the counter up; `-` advances it down. (`k - i`
+                // is not a monotone self-update, so require the counter on the
+                // left for subtraction.)
+                break :blk switch (bin.op) {
+                    .add => toward_increase,
+                    .sub => !toward_increase and refs_left,
+                    else => false,
+                };
+            },
+            // Recurse into nested control flow so the update may sit under a
+            // conditional/block — still the same loop body.
+            .if_let => |n| blk: {
+                if (bodyAdvancesCounter(n.then_block, name, toward_increase)) break :blk true;
+                if (n.else_block) |eb| if (bodyAdvancesCounter(eb, name, toward_increase)) break :blk true;
+                break :blk false;
+            },
+            .unsafe_block, .comptime_block, .block => |b| bodyAdvancesCounter(b, name, toward_increase),
+            .contract_block => |cb| bodyAdvancesCounter(cb.block, name, toward_increase),
+            else => false,
+        };
+    }
+
     // ----- inline-asm register/constraint verification (§23.2) ------------------
     //
     // The backends lower precise-asm operands with generic `"r"` constraints and
@@ -5606,6 +5826,15 @@ fn hasIrqContext(attrs: []ast.Attr) bool {
 
 fn hasMaySleep(attrs: []ast.Attr) bool {
     return hasNamedAttr(attrs, "may_sleep");
+}
+
+// T(term)1: `#[bounded]` opts a function into the bounded-loop / no-unbounded-
+// recursion check (so does `#[irq_context]`/`#[atomic_context]`, since a kernel
+// must never hang in an interrupt). Every loop in such a function must match a
+// recognized statically-bounded shape (or carry a `break`), and the function may
+// not recurse into itself. See `checkTermination`.
+fn hasBoundedContext(attrs: []ast.Attr) bool {
+    return hasIrqContext(attrs) or hasNamedAttr(attrs, "bounded");
 }
 
 fn backendNameAttr(attrs: []ast.Attr) ?[]const u8 {
