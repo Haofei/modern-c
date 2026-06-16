@@ -31,7 +31,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## Tier 0 — Foundations & obvious gaps (cheap, do first)
 
-- [ ] **S0.1 — Definite-initialization analysis** *(PR)* — reading `uninit` before assignment is a
+- [x] **S0.1 — Definite-initialization analysis** *(DONE `40c6cc7`; plain uninit-vars already required init — FOUND+CLOSED the gap: reading a `var x=uninit` scalar before assign-on-all-paths is now `E_USE_BEFORE_INIT` (flow-sensitive, branch/loop aware). Scalar-only to avoid false positives on the aggregate fill idiom)* — reading `uninit` before assignment is a
   **compile error**, flow-sensitive. **Where:** sema (`src/hir.zig`). **Test:** `fuzz-failclosed`
   + fixtures; no false positives on the `var x:T=uninit; … x=v;` idiom. **Prior art:** Zig/Rust
   definite-assignment; KMSAN (dynamic counterpart, D2.2). **Depends:** none.
@@ -71,7 +71,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   allocations, trap on poisoned access. **Where:** an emit profile/instrument pass + shadow runtime
   + heap hooks. **Test:** a QEMU boot demo triggering UAF + OOB → trap → `KASAN-OK` (mirror the
   `*-test.sh`/`m0` wiring). **Prior art:** **Linux KASAN**, ASan. **Depends:** none.
-- [ ] **D2.2 — KMSAN-style uninit-use detection** *(multi-PR, opt-in)* — shadow-track
+- [x] **D2.2 — KMSAN-style uninit-use detection** *(DONE `13197f9`; 3-state shadow (clean/uninit/poison) under `--checks=msan`; load of never-written heap byte traps, both backends. Heap-only, no origin tracking — dynamic complement to S0.1)* — shadow-track
   initialized-ness; trap on use of uninit (dynamic complement to S0.1). **Where:** instrument +
   shadow. **Test:** QEMU demo reads uninit heap → trap. **Prior art:** **Linux KMSAN**, MSan.
   **Depends:** D2.1.
@@ -148,7 +148,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 - [x] **U2 — No double-fetch / TOCTOU** *(DONE `29c700d`; `UserSnapshot<T>` + `fetch_user` copy-once frozen value (structural defense) + `double-fetch-audit` lint flagging same-`UserPtr` re-reads; current kernel clean, self-test flags a textbook double-fetch)* — a copied-in value is an immutable snapshot;
   re-reading the same user datum (the double-fetch CVE class) is flagged. **Where:** uaccess + lint.
   **Test:** double-fetch fixture flagged. **Prior art:** double-fetch CVEs, Bochspwn. **Depends:** U1.
-- [ ] **U3 — Taint untrusted lengths/indices** *(PR)* — values from `UserPtr` are untrusted ints,
+- [x] **U3 — Taint untrusted lengths/indices** *(DONE `b2e6f40`; `Tainted<T>` wrapper with no raw accessor — only `checked_len`/`checked_index`/`validate_bound` extract a usable value (fail-closed) + `taint-audit` lint flagging unvalidated tainted length/index/loop-bound use; kernel clean. Full sema taint typing is follow-up)* — values from `UserPtr` are untrusted ints,
   bounds-validated before use as length/index/loop bound. **Where:** a taint pass. **Test:**
   unvalidated user length used as index rejected. **Prior art:** taint analysis, IFC (K2). **Depends:**
   U1.
