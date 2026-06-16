@@ -44,7 +44,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## Tier 0 — Foundations & obvious gaps (cheap, do first)
 
-- [x] **S0.1 — Definite-initialization analysis** *(DONE `40c6cc7`; plain uninit-vars already required init — FOUND+CLOSED the gap: reading a `var x=uninit` scalar before assign-on-all-paths is now `E_USE_BEFORE_INIT` (flow-sensitive, branch/loop aware). Scalar-only to avoid false positives on the aggregate fill idiom)* — reading `uninit` before assignment is a
+- [x] **S0.1 — Definite-initialization analysis** *(DONE `40c6cc7`; plain uninit-vars already required init — FOUND+CLOSED the gap: reading a `var x=uninit` scalar before assign-on-all-paths is now `E_USE_BEFORE_INIT` (flow-sensitive, branch/loop aware). Scalar-only to avoid false positives on the aggregate fill idiom. R3 boundary: taking `&x` clears the pending flag (to support the `init(&x)` idiom), so a read laundered through the alias — `let p=&x; sink(*p)` before assigning `x` — is NOT caught; soundly closing it needs escape/init tracking (T1.3))* — reading `uninit` before assignment is a
   **compile error**, flow-sensitive. **Where:** sema (`src/hir.zig`). **Test:** `fuzz-failclosed`
   + fixtures; no false positives on the `var x:T=uninit; … x=v;` idiom. **Prior art:** Zig/Rust
   definite-assignment; KMSAN (dynamic counterpart, D2.2). **Depends:** none.
@@ -79,19 +79,19 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## Tier 2 — Cheap dynamic sanitizers in the QEMU build (best near-term ROI)
 
-- [x] **D2.1 — KASAN-style shadow memory** *(DONE `9078889`; opt-in `--checks=ksan`; 1:8 shadow, `raw.load`/`raw.store` instrumented + heap poison-on-free; QEMU demo catches UAF/OOB on ACCESS, both backends. Coverage: heap-tracked raw deref only — array-index/struct-field/stack/MMIO accesses not yet shadowed)* — instrument
+- [x] **D2.1 — KASAN-style shadow memory** *(DONE `9078889`; opt-in `--checks=ksan`; 1:8 shadow, `raw.load`/`raw.store` instrumented + heap poison-on-free; QEMU demo catches UAF/OOB on ACCESS, both backends. Coverage (NARROW — R3 sweep): only `raw.load`/`raw.store` into the ONE armed `heap_new_ksan` pool; array-index/struct-field/stack/MMIO/globals lower through a different path and are NOT shadowed; and the check FAILS OPEN on any address outside the armed pool (a second heap / stray pointer is waved through). Not a general heap-UAF net)* — instrument
   loads/stores against a shadow map; poison freed heap (`kernel/core/heap.mc` free path), redzone
   allocations, trap on poisoned access. **Where:** an emit profile/instrument pass + shadow runtime
   + heap hooks. **Test:** a QEMU boot demo triggering UAF + OOB → trap → `KASAN-OK` (mirror the
   `*-test.sh`/`m0` wiring). **Prior art:** **Linux KASAN**, ASan. **Depends:** none.
-- [x] **D2.2 — KMSAN-style uninit-use detection** *(DONE `13197f9`; 3-state shadow (clean/uninit/poison) under `--checks=msan`; load of never-written heap byte traps, both backends. Heap-only, no origin tracking — dynamic complement to S0.1)* — shadow-track
+- [x] **D2.2 — KMSAN-style uninit-use detection** *(DONE `13197f9`; 3-state shadow (clean/uninit/poison) under `--checks=msan`; load of never-written heap byte traps, both backends. Coverage (NARROW — R3 sweep): only a `raw.load` of armed-pool heap (a field/index read of the same uninit byte is missed; "heap-only" = raw.load of the ksan pool, not all heap); and under `--checks=msan` a write THROUGH a freed pointer is not caught (use `ksan` for that). No origin tracking)* — shadow-track
   initialized-ness; trap on use of uninit (dynamic complement to S0.1). **Where:** instrument +
   shadow. **Test:** QEMU demo reads uninit heap → trap. **Prior art:** **Linux KMSAN**, MSan.
   **Depends:** D2.1.
-- [x] **D2.3 — KCSAN-style data-race detection** *(DONE `20ee08d`; opt-in `--checks=csan` watchpoint table; race detected on a REAL preempting timer-IRQ vs boot-thread access (the timing window is widened for determinism; the preemption is genuine), synchronized `mc_race_*` path clean)* — build on
+- [x] **D2.3 — KCSAN-style data-race detection** *(DONE `20ee08d`; opt-in `--checks=csan` watchpoint table; race detected on a REAL preempting timer-IRQ vs boot-thread access (the timing window is widened for determinism; the preemption is genuine). Coverage (VERY NARROW — R3 sweep): detection requires BOTH accesses be `raw.load`/`raw.store` on the armed pool AND the pair be exactly boot-thread vs the CLINT timer-IRQ (the watchpoint table is hard-wired to 2 contexts). A race on a kernel `global`/struct-field/array — which lower to the UNinstrumented `mc_race_*` accessors — is NOT detectable. This is a demo of the mechanism, not a general race net)* — build on
   `mc_race_load`/`store` to detect conflicting concurrent accesses. **Test:** racy demo flagged.
   **Prior art:** **Linux KCSAN**, TSan. **Depends:** D2.1. *(Dynamic complement to Part II/C.)*
-- [x] **D2.4 — Guard pages + heap redzones + stack canaries** *(redzones+canary DONE `eed0482`; guard pages deferred — need paging)* — unmapped guard pages around
+- [x] **D2.4 — Guard pages + heap redzones + stack canaries** *(redzones+canary DONE `eed0482`; guard pages deferred — need paging. Coverage limits (R3 sweep): detection is on free/`heap_check_block`, NOT at the bad access; a never-freed overflow is silent; a write ≥16B past the allocation skips the 16B guard into the next block; a read-only OOB is not caught (only clobbered poison is). UAF is KASAN's job, not redzone's)* — unmapped guard pages around
   stacks, redzone the kernel heap, optional canaries. **Where:** `kernel/core/heap.mc` + stack
   setup. **Test:** stack/heap-overflow demo traps. **Prior art:** Linux stackguard, glibc canaries.
   **Depends:** none.
@@ -137,11 +137,11 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 > Data races + deadlocks + sleep-in-atomic are the worst kernel bug class. Primitives exist;
 > nothing enforces their use.
 
-- [x] **C1 — Lock-guards-data** *(DONE `c3ce2c0`; `std/guarded.mc` `Guarded<T>` (opaque, data private → `E_PRIVATE_FIELD` on direct access) + linear `Guard` (must-release, no-dup via the move checker), tied to the specific lock instance. Lock ORDERING/deadlock-freedom = C3, follow-up)* — associate data with its lock (data inside the lock);
+- [x] **C1 — Lock-guards-data** *(DONE `c3ce2c0`; `std/guarded.mc` `Guarded<T>` (opaque, data private → `E_PRIVATE_FIELD` on direct access) + linear `Guard` (must-release, no-dup via the move checker), tied to the specific lock instance. R3 sweep FOUND+FIXED a bypass: `bitcast<*Shadow>(g)` pointer-reinterpret reached `.data` without the guard → now rejected (`E_BITCAST_TYPE`); the only remaining bypass is an explicit `unsafe` reinterpret. Lock ORDERING/deadlock-freedom = C3, follow-up)* — associate data with its lock (data inside the lock);
   access requires static proof the lock is held. **Where:** `std/sync` + a check pass. **Test:**
   `fuzz-failclosed` (unlocked access rejected); migrate kernel locks incrementally. **Prior art:**
   Rust `Mutex<T>`, Rust-for-Linux **klint**, lockdep. **Depends:** none.
-- [x] **C2 — IRQ/atomic-context discipline** *(DONE `2410f32`; `#[irq_context]` + `#[may_sleep]` attributes (built on MC's existing attr machinery) + sema `E_SLEEP_IN_ATOMIC`; `heap_alloc`/`sched_yield`/`mutex_lock` marked sleepable, `claim_if_pending` irq-context — no real violation. Direct-call only; transitive is follow-up)* — mark fns IRQ-context vs sleepable; a sleepable
+- [x] **C2 — IRQ/atomic-context discipline** *(DONE `2410f32`; `#[irq_context]` + `#[may_sleep]` attributes (built on MC's existing attr machinery) + sema `E_SLEEP_IN_ATOMIC`; `heap_alloc`/`sched_yield`/`mutex_lock` marked sleepable, `claim_if_pending` irq-context — no real violation. R3: indirect/fn-pointer calls in irq context now also rejected by `check` (`E_IRQ_CONTEXT_CALL`, check==verify — closed a check/verify disagreement); transitive sleep via a marked `#[irq_context]` helper is blocked (each link is checked at its own def). Remaining gap: the `#[may_sleep]` set is hand-marked — an unmarked sleepable op is invisible)* — mark fns IRQ-context vs sleepable; a sleepable
   op (mutex/alloc) from IRQ context is a compile error. **Where:** an effect/attribute +
   `kernel/core/sched.mc`/`kernel/drivers/irq/`. **Test:** sleep-in-IRQ fixture rejected. **Prior art:**
   Linux `might_sleep`/lockdep, Rust-for-Linux context types. **Depends:** none.
@@ -154,14 +154,14 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## U — Trusted/untrusted boundary (the #1 attack surface)
 
-- [x] **U1 — User-pointer type** *(DONE `5072599`; `UserPtr<T>` opaque address class — deref/index/arithmetic already rejected, FOUND+FIXED a real hole: `.field` through a UserPtr was a kernel deref of user memory, now `E_USER_PTR_DEREF`. uaccess copy-in/out is the only path)* — a `UserPtr<T>` that **cannot be dereferenced**; only
+- [x] **U1 — User-pointer type** *(DONE `5072599`; `UserPtr<T>` opaque address class — deref/index/arithmetic already rejected, FOUND+FIXED a real hole: `.field` through a UserPtr was a kernel deref of user memory, now `E_USER_PTR_DEREF`. uaccess copy-in/out is the only path. R3 sweep FOUND+FIXED a second hole: `p as *u32` cast-stripped to a derefable kernel pointer (a user-address deref) → now `E_USERPTR_CAST_DEREF`; `UserPtr↔usize` still allowed. The only remaining deref path is an explicit `unsafe` cast/bitcast)* — a `UserPtr<T>` that **cannot be dereferenced**; only
   checked copy-in/out yields a value. **Where:** `kernel/core/uaccess.mc` + `kernel/core/syscall.mc`
   + the user_runtime path. **Test:** direct deref rejected (`fuzz-failclosed`); syscall paths adopt
   it. **Prior art:** Linux `__user`+sparse, Rust-for-Linux `UserSlice`/`UserPtr`. **Depends:** none.
 - [x] **U2 — No double-fetch / TOCTOU** *(DONE `29c700d`; `UserSnapshot<T>` + `fetch_user` copy-once frozen value (structural defense) + `double-fetch-audit` lint flagging same-`UserPtr` re-reads; current kernel clean, self-test flags a textbook double-fetch)* — a copied-in value is an immutable snapshot;
   re-reading the same user datum (the double-fetch CVE class) is flagged. **Where:** uaccess + lint.
   **Test:** double-fetch fixture flagged. **Prior art:** double-fetch CVEs, Bochspwn. **Depends:** U1.
-- [x] **U3 — Taint untrusted lengths/indices** *(DONE `b2e6f40`; `Tainted<T>` wrapper with no raw accessor — only `checked_len`/`checked_index`/`validate_bound` extract a usable value (fail-closed) + `taint-audit` lint flagging unvalidated tainted length/index/loop-bound use; kernel clean. Full sema taint typing is follow-up)* — values from `UserPtr` are untrusted ints,
+- [x] **U3 — Taint untrusted lengths/indices** *(DONE `b2e6f40`; `Tainted<T>` wrapper with no raw accessor — only `checked_len`/`checked_index`/`validate_bound` extract a usable value (fail-closed) + `taint-audit` lint flagging unvalidated tainted length/index/loop-bound use; kernel clean. R3 sweep FOUND+FIXED a bypass: `bitcast<*Shadow>(t)` reached `.raw` past the opaque privacy → now `E_BITCAST_TYPE`. The `taint-audit` lint is best-effort (misses cross-fn / reassign laundering — it's a lint, not a type). Full sema taint typing is follow-up)* — values from `UserPtr` are untrusted ints,
   bounds-validated before use as length/index/loop bound. **Where:** a taint pass. **Test:**
   unvalidated user length used as index rejected. **Prior art:** taint analysis, IFC (K2). **Depends:**
   U1.
@@ -221,7 +221,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## S — Constant-time / secret types (side channels; relevant since TLS landed)
 
-- [x] **S(secret)1 — `secret<T>` type** *(DONE `f1f3320`; `Secret<T>` opaque zero-cost class; `E_SECRET_BRANCH` (if/switch/while), `E_SECRET_INDEX` (array/slice/ptr-offset); taint propagates through arithmetic + comparison (secret bool); `declassify`/`reveal` behind `unsafe`. Both backends)* — forbids secret-dependent branches, indexing,
+- [x] **S(secret)1 — `secret<T>` type** *(DONE `f1f3320`; `Secret<T>` opaque zero-cost class; `E_SECRET_BRANCH` (if/switch/while), `E_SECRET_INDEX` (array/slice/ptr-offset); taint propagates through arithmetic + comparison (secret bool); `declassify`/`reveal` behind `unsafe`. Both backends. R3 sweep FOUND+FIXED an `as`-cast declassify bypass (`s as u32` stripped secrecy with no unsafe → now `E_SECRET_DECLASSIFY`). REMAINING gap: overlay-union reinterpret (write `.s`, read a plain arm) is still accepted — secrecy doesn't propagate across overlay arms; follow-up)* — forbids secret-dependent branches, indexing,
   and memory access (timing/cache side channels) for key/crypto material; apply to the TLS/key path.
   **Where:** a type + constant-time check + the TLS glue. **Test:** secret-dependent branch rejected;
   constant-time lint. **Prior art:** **FaCT**, HACL*/Vale, Rust `subtle`. **Depends:** none.
