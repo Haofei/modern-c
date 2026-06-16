@@ -2292,6 +2292,26 @@ pub fn build(b: *std.Build) void {
     const llvm_agent_net_test_step = b.step("llvm-agent-net-test", "Boot the LLVM-lowered agent-OS network-model showcase under QEMU");
     llvm_agent_net_test_step.dependOn(&llvm_agent_net_test_cmd.step);
 
+    const agent_net_real_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/agent-net-real-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    agent_net_real_test_cmd.step.dependOn(b.getInstallStep());
+    const agent_net_real_test_step = b.step("agent-net-real-test", "Boot the agent-OS network model with the REAL tcp_socket transport: a sandboxed agent makes a genuinely brokered (egress-checked/budgeted/audited) network call to a live server under QEMU");
+    agent_net_real_test_step.dependOn(&agent_net_real_test_cmd.step);
+
+    const llvm_agent_net_real_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/agent-net-real-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_agent_net_real_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_agent_net_real_test_step = b.step("llvm-agent-net-real-test", "Boot the LLVM-lowered agent-OS real-transport brokered network call under QEMU");
+    llvm_agent_net_real_test_step.dependOn(&llvm_agent_net_real_test_cmd.step);
+
     const kmain_net_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/net/kmain-net-test.sh",
@@ -2746,6 +2766,10 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_agent_e2e_test_cmd.step);
     m0_step.dependOn(&agent_net_test_cmd.step);
     m0_step.dependOn(&llvm_agent_net_test_cmd.step);
+    // agent-net-real-test boots the broker's REAL tcp_socket transport: a sandboxed agent makes a
+    // genuinely brokered (egress-checked/budgeted/audited) network call to a live server under QEMU.
+    m0_step.dependOn(&agent_net_real_test_cmd.step);
+    m0_step.dependOn(&llvm_agent_net_real_test_cmd.step);
     // vm-switch-test switches satp between two address spaces (per-process VM).
     m0_step.dependOn(&vm_switch_test_cmd.step);
     // vmspace-test switches satp per process slot (per-process page tables).
