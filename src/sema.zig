@@ -2562,7 +2562,7 @@ pub const Checker = struct {
                 }
                 if (isComparisonBinary(node.op)) {
                     self.checkPointerComparison(expr.span, node.op, node.left.*, left, node.right.*, right, ctx);
-                    self.checkComparisonOperatorOperands(expr.span, node.op, left, right);
+                    self.checkComparisonOperatorOperands(expr.span, node.op, left, right, ctx.in_unsafe);
                 }
                 if (isPointerArithmeticBinary(node.op) and (isSingleObjectPointerLike(left) or isSingleObjectPointerLike(right))) {
                     self.errorCode(expr.span, "E_POINTER_ARITH_SINGLE_OBJECT", "single-object pointers do not support arithmetic");
@@ -2570,7 +2570,13 @@ pub const Checker = struct {
                 if (isBitwiseBinary(node.op) and (isCheckedSigned(left) or isCheckedSigned(right))) {
                     self.errorCode(expr.span, "E_BITWISE_SIGNED_OPERAND", "bitwise operations are not defined on signed checked integers");
                 }
-                if (isBitwiseBinary(node.op) and (left == .bool or right == .bool)) {
+                // `&`/`|`/`^` on two bools is the bitwise spelling of logical and/or/xor (0/1
+                // values). MC normally forbids it, but permits it inside `unsafe` as a C-compat
+                // escape hatch (e.g. machine-generated kernel code). A single bool mixed with a
+                // non-bool operand is always rejected.
+                if (isBitwiseBinary(node.op) and (left == .bool or right == .bool) and
+                    !(ctx.in_unsafe and left == .bool and right == .bool))
+                {
                     self.errorCode(expr.span, "E_BITWISE_BOOL_OPERAND", "bitwise operations are not defined on bool operands");
                 }
                 if (isBitwiseBinary(node.op) and (isPointerLike(left) or isPointerLike(right))) {
@@ -2589,6 +2595,8 @@ pub const Checker = struct {
                     return .bool;
                 }
                 if (isComparisonBinary(node.op)) return .bool;
+                // `bool & bool` (the unsafe C-compat case above) yields a bool.
+                if (isBitwiseBinary(node.op) and ctx.in_unsafe and left == .bool and right == .bool) return .bool;
                 return mergeArithmetic(left, right);
             },
             .cast => |node| {
@@ -2761,6 +2769,7 @@ pub const Checker = struct {
                 if (bitcast_class) |class| return class;
                 if (raw_many_offset_class) |class| return class;
                 if (directCallReturnClass(node.callee.*, ctx)) |class| return class;
+                if (mathBuiltinCallReturnClass(node.callee.*)) |class| return class;
                 if (fnptr_ty) |fpty| return classifyTypeCtx(fpty.kind.fn_pointer.ret.*, ctx);
                 return .unknown;
             },
@@ -4412,10 +4421,13 @@ pub const Checker = struct {
         }
     }
 
-    fn checkComparisonOperatorOperands(self: *Checker, span: diagnostics.Span, op: ast.BinaryOp, left: TypeClass, right: TypeClass) void {
+    fn checkComparisonOperatorOperands(self: *Checker, span: diagnostics.Span, op: ast.BinaryOp, left: TypeClass, right: TypeClass, in_unsafe: bool) void {
         if (isAddressClass(left) or isAddressClass(right)) return;
         if (op == .eq or op == .ne) {
             if (equalityOperandsCompatible(left, right)) return;
+            // Inside `unsafe`, a bool may be compared against a bare integer literal (`b != 0`,
+            // `b != 1`) — bool models a 0/1 value. A C-compat escape hatch for generated code.
+            if (in_unsafe and ((left == .bool and right == .int_literal) or (left == .int_literal and right == .bool))) return;
             self.errorCode(span, "E_OPERATOR_OPERAND", "equality operators require comparable operands");
             return;
         }
@@ -6417,8 +6429,25 @@ fn exprStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
             const info = structs.get(struct_name) orelse break :blk null;
             break :blk info.fields.get(node.name.text);
         },
+        // An arithmetic/bitwise binary expression has the type of its operands. This lets a
+        // `bitcast<f32>((a + b) << c)` learn its source's integer type (the shift/add result
+        // is the left operand's type; a literal operand carries none, so prefer the other side).
+        .binary => |node| arithmeticBinaryType(node, ctx),
+        .unary => |node| if (node.op == .neg) exprStorageType(node.expr.*, ctx) else null,
         else => null,
     };
+}
+
+// The result type of an arithmetic/bitwise binary operator: the type of whichever operand
+// carries a concrete type (a bare literal operand has none). Comparison/logical operators are
+// handled by the caller (they yield bool), so this only sees value-producing operators.
+// Operands are resolved via `exprResultType` so a nested call (`bitcast<T>(..)`, a function
+// call) contributes its return type, not just storage-typed idents.
+fn arithmeticBinaryType(node: anytype, ctx: Context) ?ast.TypeExpr {
+    if (isComparisonBinary(node.op) or isLogicalBinary(node.op)) return null;
+    // For a shift, the result type is the left (shifted) operand's type.
+    if (node.op == .shl or node.op == .shr) return exprResultType(node.left.*, ctx);
+    return exprResultType(node.left.*, ctx) orelse exprResultType(node.right.*, ctx);
 }
 
 fn globalType(name: []const u8, ctx: Context) ?ast.TypeExpr {
@@ -6434,7 +6463,7 @@ fn globalClass(name: []const u8, ctx: Context) ?TypeClass {
 
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse mathBuiltinReturnType(node.callee.*) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .try_expr => |inner| tryPayloadType(inner.operand.*, ctx),
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),
@@ -6455,6 +6484,19 @@ fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
 
 fn boolTypeExpr(span: diagnostics.Span) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .text = "bool", .span = span } } };
+}
+
+// The float result type of a pass-through math builtin call (`__builtin_sqrtf` -> f32,
+// `__builtin_sqrt` -> f64), so a `let x: f32 = __builtin_sqrtf(..)` typechecks.
+fn mathBuiltinReturnType(callee: ast.Expr) ?ast.TypeExpr {
+    return switch (callee.kind) {
+        .ident => |ident| blk: {
+            const name = if (mathBuiltinFloatClass(ident.text)) |class| (if (class == .f32) "f32" else "f64") else break :blk null;
+            break :blk ast.TypeExpr{ .span = ident.span, .kind = .{ .name = .{ .text = name, .span = ident.span } } };
+        },
+        .grouped => |inner| mathBuiltinReturnType(inner.*),
+        else => null,
+    };
 }
 
 
@@ -7156,7 +7198,25 @@ fn isBuiltinFunctionName(name: []const u8) bool {
     if (std.mem.eql(u8, name, "field_type")) return true;
     if (std.mem.eql(u8, name, "bit_offset")) return true;
     if (std.mem.eql(u8, name, "repr_of")) return true;
+    if (mathBuiltinFloatClass(name) != null) return true;
     return false;
+}
+
+// Pass-through clang math builtins MC accepts unchanged: `__builtin_sqrtf` (f32->f32) and
+// `__builtin_sqrt` (f64->f64). They typecheck as a single-float-argument call returning the
+// matching float class, and the C backend emits them verbatim (clang provides them natively).
+fn mathBuiltinFloatClass(name: []const u8) ?TypeClass {
+    if (std.mem.eql(u8, name, "__builtin_sqrtf")) return .f32;
+    if (std.mem.eql(u8, name, "__builtin_sqrt")) return .f64;
+    return null;
+}
+
+fn mathBuiltinCallReturnClass(callee: ast.Expr) ?TypeClass {
+    return switch (callee.kind) {
+        .ident => |ident| mathBuiltinFloatClass(ident.text),
+        .grouped => |inner| mathBuiltinCallReturnClass(inner.*),
+        else => null,
+    };
 }
 
 fn isBitcastCallName(expr: ast.Expr) bool {

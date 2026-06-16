@@ -1805,7 +1805,10 @@ const FunctionBuilder = struct {
     fn addBinaryOperatorChecks(self: *FunctionBuilder, node: anytype, span: ast.Span) !void {
         const left_ty = self.exprType(node.left.*);
         const right_ty = self.exprType(node.right.*);
-        if (mirIsBitwiseBinary(node.op)) {
+        // `&`/`|`/`^` on two bools is allowed inside `unsafe` as a C-compat escape hatch
+        // (mirrors sema): skip the per-operand bool/operand checks for exactly that shape.
+        const both_bool_bitwise = self.active_unsafe and mirIsBitwiseBinary(node.op) and left_ty == .bool and right_ty == .bool;
+        if (mirIsBitwiseBinary(node.op) and !both_bool_bitwise) {
             try self.addBitwiseOperatorOperandChecks(left_ty, span);
             try self.addBitwiseOperatorOperandChecks(right_ty, span);
             if (!bitwiseOperandAllowed(self.exprArithmeticDomain(node.left.*), left_ty) or

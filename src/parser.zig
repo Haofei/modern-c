@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const lexer = @import("lexer.zig");
 const token = @import("token.zig");
+const layout = @import("layout.zig");
 
 pub const Parser = struct {
     lx: lexer.Lexer,
@@ -1245,6 +1246,22 @@ pub const Parser = struct {
             }
             const inner = try ast.makePtr(self.allocator, first);
             const end = try self.expectTok(.r_paren, "expected ')' after expression");
+            // C-style cast: `(ScalarType)(expr)`. A scalar builtin type name can never be a value
+            // or callable, so a parenthesized scalar-type name immediately applied to a
+            // parenthesized operand is unambiguously a cast (the dual of `expr as ScalarType`).
+            if (self.current.kind == .l_paren) {
+                if (scalarTypeNameIdent(first)) |type_name| {
+                    self.advance();
+                    const operand = try self.parseExpr(0);
+                    const close = try self.expectTok(.r_paren, "expected ')' after cast operand");
+                    const value = try ast.makePtr(self.allocator, operand);
+                    const ty = try ast.makePtr(self.allocator, ast.TypeExpr{
+                        .span = first.span,
+                        .kind = .{ .name = .{ .text = type_name, .span = first.span } },
+                    });
+                    return .{ .span = joinSpan(start, close.span), .kind = .{ .cast = .{ .value = value, .ty = ty } } };
+                }
+            }
             return .{ .span = joinSpan(start, end.span), .kind = .{ .grouped = inner } };
         }
         if (self.current.kind == .l_brace) {
@@ -1588,6 +1605,19 @@ fn infix(kind: token.Kind) ?Infix {
 
 fn ident(tok: token.Token) ast.Ident {
     return .{ .text = tok.lexeme, .span = tok.span };
+}
+
+// The name of a bare scalar-builtin-type ident expression (`f32`, `usize`, `i32`, …), or null.
+// Used to recognize the C-style cast `(ScalarType)(expr)`: such a name is never a value, so the
+// form is unambiguous. `PAddr`/`VAddr`/`DmaAddr` are excluded — those are real value types whose
+// parenthesized name could be a grouped value, not a cast.
+fn scalarTypeNameIdent(expr: ast.Expr) ?[]const u8 {
+    const name = switch (expr.kind) {
+        .ident => |id| id.text,
+        else => return null,
+    };
+    if (std.mem.eql(u8, name, "PAddr") or std.mem.eql(u8, name, "VAddr") or std.mem.eql(u8, name, "DmaAddr")) return null;
+    return if (layout.scalarLayout(name) != null) name else null;
 }
 
 fn joinSpan(first: diagnostics.Span, last: diagnostics.Span) diagnostics.Span {

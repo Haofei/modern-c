@@ -100,6 +100,12 @@ pub const Lexer = struct {
         while (!self.isAtEnd() and isIdentContinue(self.peek())) _ = self.advance();
         const lexeme = self.source[start.offset..self.index];
         if (std.mem.eql(u8, lexeme, "_")) return self.make(.underscore, start);
+        // `inf` and `nan` are IEEE floating constants, not identifiers: lex them as
+        // float literals so they typecheck and lower like any other float literal
+        // (their lexeme text is consumed by parseFloat / the C backend's float emitter).
+        if (std.mem.eql(u8, lexeme, "inf") or std.mem.eql(u8, lexeme, "nan")) {
+            return self.make(.float_literal, start);
+        }
         return self.make(token.keywordKind(lexeme) orelse .identifier, start);
     }
 
@@ -156,6 +162,34 @@ pub const Lexer = struct {
                 }
             }
             if (!saw_fraction_digit or last_was_underscore) invalid = true;
+        }
+
+        // Decimal scientific-notation exponent (`1e5`, `1.5e-3`, `2E+10`): an `e`/`E`,
+        // an optional sign, then one or more digits. Its presence makes the literal a float.
+        if (base == .decimal and !self.isAtEnd() and (self.peek() == 'e' or self.peek() == 'E') and
+            isExponentTail(self.peekNext(), self.peekAt(2)))
+        {
+            is_float = true;
+            _ = self.advance();
+            if (self.peek() == '+' or self.peek() == '-') _ = self.advance();
+            last_was_underscore = false;
+            var saw_exp_digit = false;
+            while (!self.isAtEnd()) {
+                const c = self.peek();
+                if (std.ascii.isDigit(c)) {
+                    saw_exp_digit = true;
+                    last_was_underscore = false;
+                    _ = self.advance();
+                } else if (c == '_') {
+                    if (isIdentStart(self.peekNext())) break;
+                    if (last_was_underscore) invalid = true;
+                    last_was_underscore = true;
+                    _ = self.advance();
+                } else {
+                    break;
+                }
+            }
+            if (!saw_exp_digit or last_was_underscore) invalid = true;
         }
 
         if (!self.isAtEnd() and self.peek() == '_') {
@@ -278,6 +312,10 @@ pub const Lexer = struct {
         return if (self.index + 1 >= self.source.len) 0 else self.source[self.index + 1];
     }
 
+    fn peekAt(self: *Lexer, ahead: usize) u8 {
+        return if (self.index + ahead >= self.source.len) 0 else self.source[self.index + ahead];
+    }
+
     fn advance(self: *Lexer) u8 {
         const c = self.source[self.index];
         self.index += 1;
@@ -305,6 +343,15 @@ const Mark = struct {
 
 fn isIdentStart(c: u8) bool {
     return std.ascii.isAlphabetic(c) or c == '_';
+}
+
+// True when an `e`/`E` begins a valid scientific-notation exponent: it is followed either by a
+// digit (`e5`) or by a sign and a digit (`e+5`). Guards against treating an identifier suffix
+// (e.g. a hypothetical `1ex`) as an exponent.
+fn isExponentTail(first: u8, second: u8) bool {
+    if (std.ascii.isDigit(first)) return true;
+    if ((first == '+' or first == '-') and std.ascii.isDigit(second)) return true;
+    return false;
 }
 
 fn isIdentContinue(c: u8) bool {
