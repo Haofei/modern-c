@@ -19,6 +19,7 @@ import "kernel/lib/resacct.mc";
 import "kernel/core/proc_sched.mc";
 import "kernel/core/proc_signals.mc";
 import "kernel/core/proc_ipc.mc";
+import "kernel/core/ipc_trace.mc"; // capability-use audit trace (also pulled transitively via proc_ipc)
 
 const MAX_PROCS: usize = 8;
 const IPC_SLOTS: usize = 4; // mailbox depth per process
@@ -609,11 +610,45 @@ export fn proc_set_kcall_mask(t: *mut ProcTable, pid: u32, mask: u32) -> void {
     }
 }
 
+// ----- capability-use audit (P1.3): observe-only trace of kcall invocations -----
+//
+// A DEDICATED provenance ring, disjoint from proc_ipc's `g_ipc_trace`. Where the IPC
+// trace records *messages* (who sent what to whom), this records *authority use*: each
+// time a process exercises its `kcall_mask` to invoke a kernel op, we append one event
+// (from=caller pid, tag=op). The audit is pure observation — it never changes kcall's
+// permission decision or its return value. Off the critical path by construction
+// (`ipc_trace_record` is O(1), non-blocking, overwrite-oldest on overflow).
+global g_cap_trace: IpcTrace;
+global g_cap_audit_enabled: bool = true; // default enabled; opt out via cap_audit_set_enabled
+
+// Reset the cap-audit ring to empty. Call after proc_table_init in any context that
+// wants a clean audit history.
+export fn cap_audit_init() -> void {
+    ipc_trace_init(&g_cap_trace);
+}
+
+// The dedicated cap-use trace, for a drainer to read back recorded authority use.
+export fn cap_audit() -> *mut IpcTrace {
+    return &g_cap_trace;
+}
+
+// Toggle cap-use recording. When off, kcall behaves identically but emits no events.
+export fn cap_audit_set_enabled(on: bool) -> void {
+    g_cap_audit_enabled = on;
+}
+
 // Kernel-call gateway: a server requests a privileged op through one checked entry
 // point. Denied unless the caller's kcall_mask permits `op`. (The op itself is a
 // stand-in here; a real kernel would map/grant/program IRQs behind this gate.)
 export fn kcall(t: *mut ProcTable, op: u32, arg: u64) -> Result<u64, KError> {
     let cur: usize = t.current;
+    // Capability-use audit: record the invocation BEFORE the permission decision, so the
+    // trace covers every attempt to exercise authority (allowed or denied), not just the
+    // ops that happened to pass the mask check. Observe-only — does not affect the result.
+    if g_cap_audit_enabled {
+        let caller_pid: u32 = t.procs[cur].pid;
+        ipc_trace_record(&g_cap_trace, caller_pid, 0, op, 0);
+    }
     if !mask32_contains(&t.procs[cur].kcall_mask, op) {
         return err(.Denied);
     }
