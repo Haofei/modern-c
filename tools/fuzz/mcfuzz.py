@@ -120,6 +120,13 @@ class Gen:
         # fold floats by *bitcast* instead of comparison, so the digest observes the exact float
         # bits — catching ~1-ULP cross-backend divergences the comparison fold hides.
         self.float_bits = float_bits
+        # V3.3: in metamorph mode the memory-op generators (@offset structs / overlay unions /
+        # slices) emit a *semantics-preserving* variant of the SAME layout/data observation — field
+        # reorder with pinned @offset, overlay-read recomposition / position swap, equivalent index
+        # expressions, slice-of-slice. Same seed -> identical RNG draws, so the only thing that
+        # changes is HOW the (identical) bytes are observed; the digest must be unchanged. This
+        # targets the memory-op lowering — the class that hid the overlay-read bug.
+        self.metamorph = False
         self.env = {}        # type name -> [var names in scope at top level]
         self.nvars = 0
         self.depth = 0       # block nesting (new vars only at depth 0)
@@ -581,9 +588,16 @@ class Gen:
                 fields.append(("of%d" % j, w, cur, mode))
                 off = cur + sz
             self.offset_structs[name] = fields
+            # V3.3 metamorphic (field reorder + explicit @offset): the field *declaration order* is
+            # cosmetic when every field pins an explicit `@offset(N)` — `sizeof` and
+            # `field_offset(S, .f)` are fixed by the offsets, not by source order. The variant
+            # reverses the declaration order but keeps each (field, width, offset) pin, so the
+            # comptime layout observer (offobs_*) MUST fold to the identical value. A divergence
+            # would mean source order leaks into comptimeStructLayout — a layout miscompile.
+            decl_fields = list(reversed(fields)) if self.metamorph else fields
             decls.append("extern mmio struct %s {\n%s\n}" % (
                 name,
-                "\n".join("    %s: Reg<u%d, %s> @offset(%d)," % (f, w, m, o) for f, w, o, m in fields)))
+                "\n".join("    %s: Reg<u%d, %s> @offset(%d)," % (f, w, m, o) for f, w, o, m in decl_fields)))
             # Comptime observers folded into a u64 the digest reads. sizeof of the whole struct
             # plus the offset-of one chosen field (the last, which carries the accumulated layout).
             tgt = fields[-1][0]
@@ -615,14 +629,34 @@ class Gen:
             self.overlays[name] = (w, members)
             decls.append("overlay union %s {\n%s\n}" % (
                 name, "\n".join("    %s: %s," % (m, t) for m, t, _a in members)))
+            if self.metamorph:
+                # V3.3 (overlay read in return position): a by-value helper that reads the `halves`
+                # view member in *return* position. The metamorph body calls this instead of the
+                # base's inline expression-position read; both forms must lower to the same value
+                # (the overlay-read bug class was exactly a position-dependent member-read lowering).
+                decls.append("fn ovhalf_%s(o: %s, i: usize) -> u64 {\n"
+                             "    return (o.halves[i] as u64);\n}" % (name, name))
 
     def gen_offset_overlay_body(self, out):
         # G15: fold the @offset struct layouts (comptime) and the overlay-union reads (runtime).
-        for name in self.offset_structs:
+        # V3.3: in metamorph mode each observation below is emitted in a semantics-preserving but
+        # *structurally different* form so the digest is invariant under the memory-op transforms.
+        for name, ofields in self.offset_structs.items():
             ov = "offv%d" % self.nvars
             self.nvars += 1
             out.append("    var %s: u64 = offobs_%s();" % (ov, name))
             self._kernel_terms.append(ov)
+            # V3.3 (sizeof/offset-of identities): a layout tautology that must hold in BOTH the base
+            # and the variant — the last field's offset plus its width-in-bytes never exceeds the
+            # struct's sizeof, i.e. `field_offset(S,.last) + sizeof(field) <= sizeof(S)`. We fold the
+            # boolean (always 1) so any layout miscompile that broke the inequality flips the digest.
+            lastf, lastw, _lo, _m = ofields[-1]
+            idn = "offid%d" % self.nvars
+            self.nvars += 1
+            out.append("    var %s: u64 = 0;" % idn)
+            out.append("    if ((field_offset(%s, .%s) as u64) + %d) <= (sizeof(%s) as u64) "
+                       "{ %s = 1; }" % (name, lastf, lastw // 8, name, idn))
+            self._kernel_terms.append(idn)
         HALF = {32: 2, 64: 4}
         for name, (w, members) in self.overlays.items():
             nbytes = w // 8
@@ -633,10 +667,24 @@ class Gen:
             out.append("    %s.u = %d;" % (vn, self.rng.randrange(1, 1 << min(w, 32))))
             acc = "ovo%d" % self.nvars
             self.nvars += 1
-            # Read members DIRECTLY in expression position (cast operand inside an initializer /
-            # xor) — the generalized overlay-read lowering. Same target, fully-written storage, so
-            # the aliased reads are a sound cross-backend observable.
-            out.append("    var %s: u64 = (%s.u as u64);" % (acc, vn))
+            if not self.metamorph:
+                # Base form: read the scalar member DIRECTLY in expression position (cast operand
+                # inside an initializer / xor) — the generalized overlay-read lowering.
+                out.append("    var %s: u64 = (%s.u as u64);" % (acc, vn))
+            else:
+                # V3.3 (overlay read equivalence): instead of reading the scalar `.u` directly,
+                # recompose it from its byte-view — `u == sum(bytes[k] << 8*k)` for a fully-written
+                # overlay. AND we read it in return-position (a helper) rather than expression
+                # position. Both must agree with the base's direct expression-position read; a
+                # mismatch is exactly the overlay-read bug class (member read lowering depending on
+                # syntactic position / byte-vs-scalar view).
+                rec = "ovrec%d" % self.nvars
+                self.nvars += 1
+                out.append("    var %s: u64 = 0;" % rec)
+                for k in range(nbytes):
+                    out.append("    %s = (%s | ((%s.bytes[%d] as u64) << %d));"
+                               % (rec, rec, vn, k, k * 8))
+                out.append("    var %s: u64 = %s;" % (acc, rec))
             for k in range(nbytes):
                 out.append("    %s = (%s ^ ((%s.bytes[%d] as u64) << %d));"
                            % (acc, acc, vn, k, (k % 8) * 8))
@@ -648,7 +696,18 @@ class Gen:
             hidx = self.rng.randrange(0, nhalves)
             hval = self.rng.randrange(1, 1 << 16)
             out.append("    %s.halves[%d] = %d;" % (vn, hidx, hval))
-            out.append("    %s = (%s ^ ((%s.halves[%d] as u64) << 3));" % (acc, acc, vn, hidx))
+            if not self.metamorph:
+                out.append("    %s = (%s ^ ((%s.halves[%d] as u64) << 3));" % (acc, acc, vn, hidx))
+            else:
+                # V3.3 (overlay read equivalence, position swap): re-observe the just-written half
+                # through a helper that takes the overlay by-pointer and returns the member in
+                # return position — equivalent to the base's inline expression-position read.
+                hv = "ovh%d" % self.nvars
+                self.nvars += 1
+                # Pass the (already-written) overlay BY VALUE; the helper reads .halves[i] in
+                # return position. Return-position vs expression-position member read must agree.
+                out.append("    var %s: u64 = ovhalf_%s(%s, %d);" % (hv, name, vn, hidx))
+                out.append("    %s = (%s ^ (%s << 3));" % (acc, acc, hv))
             out.append("    %s = (%s ^ ((sizeof(%s) as u64) << 4));" % (acc, acc, name))
             self._kernel_terms.append(acc)
 
@@ -720,8 +779,17 @@ class Gen:
         sm = "bvs%d" % self.nvars; self.nvars += 1
         out.append("    var %s: u64 = 0;" % sm)
         out.append("    var %s: usize = 0;" % it)
-        out.append("    while %s < %s.len { %s = (%s ^ (%s[%s] as u64)); %s = %s + 1; }"
-                   % (it, bv, sm, sm, bv, it, it, it))
+        if not self.metamorph:
+            out.append("    while %s < %s.len { %s = (%s ^ (%s[%s] as u64)); %s = %s + 1; }"
+                       % (it, bv, sm, sm, bv, it, it, it))
+        else:
+            # V3.3 (slice/index equivalence on the byte-view): same elements, observed via a
+            # full-range slice-of-slice and an equivalent index expression `(i + 1) - 1`. Must fold
+            # to the identical sum as the base's direct `bv[i]` walk.
+            bv2 = "bv2_%d" % self.nvars; self.nvars += 1
+            out.append("    let %s: []const u8 = %s[0..%s.len];" % (bv2, bv, bv))
+            out.append("    while %s < %s.len { %s = (%s ^ (%s[((%s + 1) - 1)] as u64)); %s = %s + 1; }"
+                       % (it, bv2, sm, sm, bv2, it, it, it))
         terms.append(sm)
 
     def gen_unions(self, decls):
@@ -820,8 +888,19 @@ class Gen:
         sm = "sls%d" % self.nvars; self.nvars += 1
         out.append("    var %s: u64 = 0;" % sm)
         out.append("    var %s: usize = 0;" % it)
-        out.append("    while %s < %s.len { %s = (%s ^ (%s[%s] as u64)); %s = %s + 1; }"
-                   % (it, sl, sm, sm, sl, it, it, it))
+        if not self.metamorph:
+            out.append("    while %s < %s.len { %s = (%s ^ (%s[%s] as u64)); %s = %s + 1; }"
+                       % (it, sl, sm, sm, sl, it, it, it))
+        else:
+            # V3.3 (slice/index equivalence): observe the SAME elements via a slice-of-slice over
+            # the full sub-range (`sl[0..sl.len]`) rather than `sl` directly, AND through an
+            # equivalent index expression (`(i + 0)`). Re-slicing the whole view and reindexing
+            # must yield the identical element sequence — a divergence is a slice-base/length or
+            # index-lowering miscompile.
+            s2 = "sl2_%d" % self.nvars; self.nvars += 1
+            out.append("    let %s: []mut %s = %s[0..%s.len];" % (s2, elem, sl, sl))
+            out.append("    while %s < %s.len { %s = (%s ^ (%s[(%s + 0)] as u64)); %s = %s + 1; }"
+                       % (it, s2, sm, sm, s2, it, it, it))
         terms.append(sm)
         if elem not in self._slice_helpers:  # one `[]mut T` sum helper per element type (param ABI)
             self._slice_helpers.add(elem)
@@ -835,6 +914,7 @@ class Gen:
 
     def program(self, metamorph=False):
         # Declare a couple of user types the generator can construct, read, and match.
+        self.metamorph = metamorph  # V3.3: gates the memory-op semantics-preserving transforms
         decls = []
         self._kernel_terms = []
         int_arrays = []
