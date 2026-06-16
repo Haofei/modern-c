@@ -126,6 +126,69 @@ export fn fetch_user_pt(comptime T: type, uas: *UserAddrSpace, src: UserPtr<T>) 
     }
 }
 
+// ----- tainted untrusted scalars (U3: bound-check user-derived lengths/indices) -----
+//
+// A value that ORIGINATES from user space is untrusted ("tainted"): the kernel must
+// not use it as a length, index, copy-size, or loop bound until it has passed an
+// explicit bounds check against a kernel-chosen limit. Skipping that check is the
+// heartbleed shape: trust an attacker-supplied length and over-read past the buffer
+// (CVE-2014-0160) — or under-index/overflow with an attacker-supplied index.
+//
+// `Tainted<T>` is the carrier. It wraps a scalar that came in from user space (via a
+// `UserSnapshot` — see `taint`) and, crucially, exposes NO way to read the raw value:
+// there is no `.value` field and no untaint-without-check accessor. The ONLY way to
+// extract a usable scalar is to pass it through `checked_len` / `checked_index` /
+// `validate_bound`, each of which returns `err(.OutOfRange)` (yielding nothing) when
+// the value is outside `[0, limit]` (length) or `[0, limit)` (index). So a tainted
+// length/index cannot reach a copy or a loop bound without first being validated — the
+// discipline is structural, and the companion lint `tools/toolchain/taint-audit.sh`
+// independently flags any user-derived value used as a length/index/loop-bound without
+// passing one of these validators.
+struct Tainted<T> {
+    raw: T, // private-by-convention: read it ONLY through checked_len/checked_index/validate_bound
+}
+
+// Mark a freshly-snapshotted user scalar as tainted. Taking a snapshot is the moment a
+// value crosses from user space into the kernel, so it is exactly where taint begins.
+export fn taint(comptime T: type, snap: UserSnapshot<T>) -> Tainted<T> {
+    return .{ .raw = snap.value };
+}
+
+// Validate a tainted value as a usable LENGTH: accept it only if it is <= `limit`
+// (a length may equal the buffer size — it bounds a half-open copy of `v` bytes into
+// a `limit`-byte buffer). Returns the now-trusted scalar, or `OutOfRange` if the
+// attacker-supplied length would run past the buffer. Fail closed: on rejection no
+// value is produced, so an over-long length can never drive a copy.
+export fn checked_len(comptime T: type, t: Tainted<T>, limit: T) -> Result<T, UaccessError> {
+    if t.raw > limit {
+        return err(.OutOfRange);
+    }
+    return ok(t.raw);
+}
+
+// Validate a tainted value as a usable INDEX: accept it only if it is < `limit`
+// (an index into a `limit`-element array is in [0, limit)). Returns the trusted
+// index, or `OutOfRange`. Fail closed: an out-of-bounds index never reaches the
+// subscript.
+export fn checked_index(comptime T: type, t: Tainted<T>, limit: T) -> Result<T, UaccessError> {
+    if t.raw >= limit {
+        return err(.OutOfRange);
+    }
+    return ok(t.raw);
+}
+
+// Validate a tainted value against an explicit half-open bound `[lo, hi)`. The general
+// form behind `checked_len`/`checked_index` for callers that need a non-zero floor.
+export fn validate_bound(comptime T: type, t: Tainted<T>, lo: T, hi: T) -> Result<T, UaccessError> {
+    if t.raw < lo {
+        return err(.OutOfRange);
+    }
+    if t.raw >= hi {
+        return err(.OutOfRange);
+    }
+    return ok(t.raw);
+}
+
 // ----- page-table-aware path -----
 //
 // A target address space: the process page table plus its [base, limit) user-region

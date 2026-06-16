@@ -135,6 +135,15 @@ pub fn build(b: *std.Build) void {
     const unsafe_audit_step = b.step("unsafe-audit", "Audit the MC unsafe boundary: flag gated unsafe ops outside an unsafe/unsafe_contract region and inventory the audited sites in kernel/ + std/ (S0.2)");
     unsafe_audit_step.dependOn(&unsafe_audit_cmd.step);
 
+    // U3: source-level audit of untrusted (user-derived) lengths/indices. Pure source
+    // scan (no mcc dependency), so it does not depend on the install step.
+    const taint_audit_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/taint-audit.sh",
+    });
+    const taint_audit_step = b.step("taint-audit", "Audit user-derived (tainted) values: flag a value from copy_from_user/fetch_user used as a length/index/loop-bound without passing checked_len/checked_index/validate_bound (U3)");
+    taint_audit_step.dependOn(&taint_audit_cmd.step);
+
     const fuzz_cmd = b.addSystemCommand(&.{
         "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--mcc", "zig-out/bin/mcc",
     });
