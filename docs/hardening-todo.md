@@ -10,7 +10,9 @@ Each item is sized (PR / multi-PR / research) with **What / Where / Test / Prior
 `[ ]` = todo, `[x]` = done, `[~]` = partial/deferred (with rationale inline). IDs: Part I uses
 tier-dotted (`S0.1`, `D2.1`); Part II uses letter (`C1`, `A1`).
 
-> **STATUS (resolved).** 25 items DONE + 1 PARTIAL (T1.1), each landed on `master` with a commit
+> **STATUS (resolved).** 24 items DONE + 2 PARTIAL (T1.1, T1.2 — both lexical-borrow checks
+> are sound only for their direct-binding fragment; aggregate/interprocedural laundering is a
+> known false negative, = T1.3), each landed on `master` with a commit
 > hash, both-backend (`diff-backend`) parity, and the relevant QEMU/fuzz gates green; built via
 > worktree sub-agents, integrated + independently re-validated. **10 items DEFERRED** with
 > rationale — genuine research (formal proofs, CHERI/MTE hardware, IFC, model checking, verified
@@ -65,7 +67,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   (`src/hir.zig`). **Test:** escaping-reference fixtures rejected (`fuzz-failclosed`); kernel still
   type-checks; `move-fuzz` borrow cases. **Prior art:** Rust borrow checker, Cyclone regions,
   **RustBelt**. **Depends:** S0.2.
-- [x] **T1.2 — Use-after-move for derived aliases** *(DONE `beb6b72`; extended the move checker — an alias `let p = &t` taken before `t` is moved is now flagged `E_USE_AFTER_MOVE` (stale alias) on use-after-move; sound, no false positives. Sub-place/escape aliases → follow-up)* — invalidate any pointer/alias derived
+- [~] **T1.2 — Use-after-move for derived aliases** *(PARTIAL `beb6b72`,`cca5ad4`. NOT "sound" — sound only for the direct-pointer-local fragment. COVERED (rejected): direct alias chains `let q=p=&t`, reassignment, struct-LITERAL field aliases `H{.p=&t}`, and returning an aggregate containing `&local`. MISSED (silent use-after-move, verified by probe): alias stored by ASSIGNMENT into a struct field `h.p=&t` / array element `arr[0]=&t`, alias of a subfield `&t.inner`, and alias laundered through a call `id(p)`. Closing these = conservative rejection via the borrow-escape signal (tractable) + interprocedural = T1.3)* — invalidate any pointer/alias derived
   from a moved-out value (not just double-free of the owner). **Where:** move checker (`src/ir.zig`).
   **Test:** `move-fuzz` stale-alias cases. **Prior art:** Rust move/affine types. **Depends:** T1.1.
 - [~] **T1.3 — Lifetime-parameterized references** (DEFERRED — full lifetime/region system; deliberate language-design building on the T1.1 lexical slice) *(research → multi-PR)* — for fns returning/storing
