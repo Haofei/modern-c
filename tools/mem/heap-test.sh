@@ -44,7 +44,10 @@ void mc_trap_NullUnwrap(void) { __builtin_trap(); }
 void mc_trap_Unreachable(void) { __builtin_trap(); }
 
 struct PhysRange { uintptr_t start; uintptr_t end; };
-struct Heap { struct PhysRange range; uintptr_t next; };
+// Full layout: heap_new returns the whole struct by sret into this buffer, so it must
+// be correctly sized (the free-list array + the redzone profile field live inside it).
+struct FreeBlock { uintptr_t start; uintptr_t len; };
+struct Heap { struct PhysRange range; uintptr_t next; struct FreeBlock free[64]; uintptr_t redzone; };
 extern struct Heap heap_new(struct PhysRange r);
 extern uintptr_t heap_alloc(struct Heap *h, uintptr_t size, uintptr_t align);
 extern uintptr_t heap_available(struct Heap *h);
@@ -57,7 +60,7 @@ int main(void) {
     struct PhysRange r = { base, base + sizeof(pool) };
 #ifdef MC_LLVM_BACKEND
     // TODO: cover heap_new once LLVM aggregate-return ABI matches the C ABI.
-    struct Heap h = { r, base };
+    struct Heap h = { r, base, { { 0, 0 } }, 0 };
 #else
     struct Heap h = heap_new(r);
 #endif
@@ -72,7 +75,10 @@ int main(void) {
     uintptr_t b = heap_alloc(&h, 8, 64);
     CHECK(b % 64 == 0);
     CHECK(b == base + 128);
-    CHECK(heap_available(&h) == sizeof(pool) - (128 + 8));
+    // Only the bytes actually carved are unavailable: a's 100 + b's 8 = 108. The 28-byte
+    // alignment gap [base+100, base+128) is returned to the free list (the allocator
+    // reclaims it), so it stays available — availability drops by exactly 108, not 136.
+    CHECK(heap_available(&h) == sizeof(pool) - (100 + 8));
 
     return 0;
 }

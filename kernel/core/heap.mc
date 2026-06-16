@@ -25,6 +25,52 @@ import "std/alloc.mc";
 // little; coalescing collapses adjacent frees, so this rarely fills.
 const HEAP_FREE_SLOTS: usize = 64;
 
+// ----- redzone hardening (D2.4) -----
+//
+// A redzone-profile heap (built with `heap_new_redzoned`) reserves guard bytes
+// immediately *before* and *after* every user allocation and fills them with a known
+// poison pattern. A buffer overflow that writes past the user region lands in the
+// trailing redzone; an underflow lands in the leading one. On `heap_free` (and via
+// the explicit `heap_check_block`) the allocator re-reads both redzones, and if any
+// poison byte has been clobbered it TRAPS (`unreachable`) instead of returning the
+// corrupted block to the free list, where it would silently propagate.
+//
+// The default `heap_new` leaves `redzone == 0`, so a non-redzone build keeps the
+// exact byte layout and free-list behaviour it had before — the guard work and the
+// poison writes are entirely skipped (the profile is selected at heap construction).
+//
+// REDZONE_BYTES is the guard width on each side. POISON is the fill byte; it is
+// deliberately not 0x00 so that an overflow which only zeroes memory is still caught.
+const REDZONE_BYTES: usize = 16;
+const REDZONE_POISON: u8 = 0xCD;
+
+// Write the poison pattern across `[start, start+len)`.
+fn redzone_fill(start: PAddr, len: usize) -> void {
+    var i: usize = 0;
+    while i < len {
+        unsafe {
+            raw.store<u8>(pa_offset(start, i), REDZONE_POISON);
+        }
+        i = i + 1;
+    }
+}
+
+// Return true iff every byte of `[start, start+len)` still holds the poison pattern.
+fn redzone_intact(start: PAddr, len: usize) -> bool {
+    var i: usize = 0;
+    while i < len {
+        var b: u8 = 0;
+        unsafe {
+            b = raw.load<u8>(pa_offset(start, i));
+        }
+        if b != REDZONE_POISON {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
 // One free region [start, start+len). `len == 0` marks an empty slot.
 struct FreeBlock {
     start: PAddr,
@@ -35,6 +81,10 @@ struct Heap {
     range: PhysRange,
     next: PAddr, // bump frontier: [next, range.end) is untouched tail
     free: [HEAP_FREE_SLOTS]FreeBlock,
+    // Guard width (bytes) reserved on each side of every user allocation. 0 disables
+    // the redzone profile entirely (default `heap_new`), so non-redzone builds keep
+    // their original layout and incur no poison work.
+    redzone: usize,
 }
 
 // An empty free slot.
@@ -47,11 +97,22 @@ export fn heap_new(range: PhysRange) -> Heap {
     var h: Heap = uninit;
     h.range = range;
     h.next = pr_start(&range);
+    h.redzone = 0; // redzone profile off: original layout, no guard bytes
     var i: usize = 0;
     while i < HEAP_FREE_SLOTS {
         h.free[i] = fb_empty();
         i = i + 1;
     }
+    return h;
+}
+
+// Build a heap with the redzone hardening profile enabled (D2.4). Every allocation
+// is fenced by `REDZONE_BYTES` poison bytes on each side; overflow into a redzone is
+// detected and trapped on free / `heap_check_block`. Same backing store, same API —
+// the only difference is the guard bytes and the corruption check.
+export fn heap_new_redzoned(range: PhysRange) -> Heap {
+    var h: Heap = heap_new(range);
+    h.redzone = REDZONE_BYTES;
     return h;
 }
 
@@ -141,7 +202,37 @@ fn heap_release(h: *mut Heap, start: PAddr, len: usize) -> void {
 // when one fits after alignment, else carves from the untouched tail. Traps if the
 // heap is exhausted (callers gate on `heap_available`). Returns the allocation's
 // physical address.
+//
+// With the redzone profile (`h.redzone != 0`) the request is widened to fence the
+// user region with guard bytes: a leading band rounded up to `align` (so the user
+// pointer stays aligned) and a trailing band of `redzone` bytes, both filled with
+// the poison pattern. The user pointer (raw_start + lead) is returned; `heap_free`
+// reconstructs the bands from `redzone`/`align` and verifies the poison is intact.
 export fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
+    let rz: usize = h.redzone;
+    if rz == 0 {
+        return heap_alloc_raw(h, size, align);
+    }
+    // The leading guard is exactly `rz` bytes; for the user pointer to stay aligned
+    // we therefore require `align <= rz` (rz is a power-of-two-friendly 16). Kernel
+    // heap allocations are 16-aligned or finer, so this always holds; a larger align
+    // is a misuse and fails closed.
+    if align > rz {
+        unreachable; // redzone profile supports align <= REDZONE_BYTES
+    }
+    // Request the fenced block [raw .. raw+rz+size+rz). `heap_alloc_raw` aligns `raw`
+    // to `align`; since `rz` is a multiple of `align`, `raw+rz` (the user pointer) is
+    // aligned too. Poison both guard bands, then hand back the user pointer.
+    let inner: usize = rz + size + rz; // checked arithmetic via overflow traps
+    let raw_start: PAddr = heap_alloc_raw(h, inner, align);
+    let user: PAddr = pa_offset(raw_start, rz);
+    redzone_fill(raw_start, rz);                 // leading guard [raw_start, user)
+    redzone_fill(pa_offset(user, size), rz);     // trailing guard [user+size, +rz)
+    return user;
+}
+
+// Core aligned allocator (no redzone). The original `heap_alloc` body.
+fn heap_alloc_raw(h: *mut Heap, size: usize, align: usize) -> PAddr {
     // First-fit over the free list: pick the first block whose aligned start still
     // leaves `size` bytes inside the block.
     var i: usize = 0;
@@ -190,21 +281,51 @@ export fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
     return start;
 }
 
+// Verify the redzones fencing the user allocation `[addr, addr+size)` are intact.
+// Traps (`unreachable`) the moment a guard byte has been overwritten — i.e. on the
+// first detected heap buffer overflow/underflow. No-op for a non-redzone heap. Can
+// be called at any point to check a live allocation, not only on free.
+export fn heap_check_block(h: *mut Heap, addr: PAddr, size: usize) -> void {
+    let rz: usize = h.redzone;
+    if rz == 0 {
+        return;
+    }
+    let lead: PAddr = pa(pa_value(addr) - rz); // [addr-rz, addr), checked subtraction
+    if !redzone_intact(lead, rz) {
+        unreachable; // underflow: leading redzone clobbered
+    }
+    if !redzone_intact(pa_offset(addr, size), rz) {
+        unreachable; // overflow: trailing redzone clobbered
+    }
+}
+
 // Return a block to the heap so a later `alloc` can reuse it. Validates the request
 // (fail closed on a bogus free), then releases [addr, addr+size) to the free list,
 // coalescing with adjacent free space. The signature matches the Allocator's free
 // closure once `h` is captured.
+//
+// On a redzone heap, the user passes the same `(addr, size)` it received; this routine
+// first verifies both guard bands (trapping on a detected overflow before the block
+// re-enters the free list) and then releases the *fenced* block [addr-rz, addr+size+rz).
 export fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
-    if !pr_contains(&h.range, addr) {
+    var faddr: PAddr = addr;
+    var fsize: usize = size;
+    let rz: usize = h.redzone;
+    if rz != 0 && size != 0 {
+        heap_check_block(h, addr, size); // traps on corruption
+        faddr = pa(pa_value(addr) - rz); // raw fenced start, checked subtraction
+        fsize = rz + size + rz;          // full fenced length
+    }
+    if !pr_contains(&h.range, faddr) {
         unreachable; // freeing an address this heap never owned
     }
-    if size > pr_len(&h.range) {
+    if fsize > pr_len(&h.range) {
         unreachable; // nonsensical size
     }
-    if size == 0 {
+    if fsize == 0 {
         return;
     }
-    let end: PAddr = pa_offset(addr, size); // checked
+    let end: PAddr = pa_offset(faddr, fsize); // checked
     if pa_lt(pr_end(&h.range), end) {
         unreachable; // block runs past the end of the region
     }
@@ -212,7 +333,7 @@ export fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
     if pa_lt(h.next, end) {
         unreachable;
     }
-    heap_release(h, addr, size);
+    heap_release(h, faddr, fsize);
 }
 
 // Bytes still available: the untouched tail plus everything on the free list.

@@ -766,6 +766,27 @@ pub fn build(b: *std.Build) void {
     const llvm_heap_test_step = b.step("llvm-heap-test", "Link + run the LLVM-lowered kernel heap");
     llvm_heap_test_step.dependOn(&llvm_heap_test_cmd.step);
 
+    // D2.4: heap-redzone + stack-canary runtime detection under QEMU.
+    const redzone_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/redzone-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    redzone_test_cmd.step.dependOn(b.getInstallStep());
+    const redzone_test_step = b.step("redzone-test", "Boot the redzone+canary demo under QEMU (detects heap overflow + smashed canary)");
+    redzone_test_step.dependOn(&redzone_test_cmd.step);
+
+    const llvm_redzone_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/mem/redzone-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_redzone_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_redzone_test_step = b.step("llvm-redzone-test", "Boot the LLVM-lowered redzone+canary demo under QEMU");
+    llvm_redzone_test_step.dependOn(&llvm_redzone_test_cmd.step);
+
     const elf_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/lib/host-harness.sh", "zig-out/bin/mcc", "elf-test",
@@ -2586,6 +2607,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&page_test_cmd.step);
     // heap-test links + runs the kernel heap (needs clang).
     m0_step.dependOn(&heap_test_cmd.step);
+    // redzone-test boots the D2.4 redzone+canary demo under QEMU (needs clang+qemu).
+    m0_step.dependOn(&redzone_test_cmd.step);
+    m0_step.dependOn(&llvm_redzone_test_cmd.step);
     // elf-test links + runs the ELF64 parser (needs clang).
     m0_step.dependOn(&elf_test_cmd.step);
     // ramfs-test links + runs the in-memory filesystem (needs clang).
