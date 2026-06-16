@@ -76,10 +76,14 @@ RUNTIME_FLAGS=("${CFLAGS[@]}"
 
 CFLAGS=("${MCFLAGS[@]}")
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/tls.o" "$WORK"
+# Real wall-clock seam (goldfish-RTC) for X.509 validity.
+kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/core/time.mc" "$WORK/time.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 "$CLANG" "${RUNTIME_FLAGS[@]}" -c "$RUNTIME" -o "$WORK/runtime.o"
+# Shared virtio-rng entropy driver (single source of truth).
+"$CLANG" "${RUNTIME_FLAGS[@]}" -c "$HERE/kernel/drivers/virtio/virtio_rng.c" -o "$WORK/virtio_rng.o"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/tls.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/google.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/virtio_rng.o" "$WORK/tls.o" "$WORK/time.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/google.elf"
 
 # Boot with plain slirp user networking (real upstream DNS + internet egress, if the
 # sandbox permits it) + virtio-rng. Capture a pcap for the honest report.
