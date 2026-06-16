@@ -91,7 +91,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 > The overlay-read miscompile was found by fuzz luck, not structurally. Push the existing oracle
 > culture toward real validation.
 
-- [ ] **V3.1 — Per-construct translation validation** *(multi-PR)* — extend `tools/fuzz/mcref.py` /
+- [x] **V3.1 — Per-construct translation validation** *(DONE `8319ec6`; reference interpreter `mcref.py` now independently evaluates @offset layout, overlay reads (scalar/byte/non-byte/expr-position), and the switch families — fuzz-reference PASS 300, no compiler-vs-interpreter divergence)* — extend `tools/fuzz/mcref.py` /
   `fuzz-reference` to assert each MIR construct's lowering matches reference semantics, focused on
   the separate-per-backend-path constructs (offset/overlay/switch-family). **Test:** the suite;
   would have caught the overlay bug structurally. **Prior art:** translation validation (Pnueli),
@@ -145,7 +145,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   checked copy-in/out yields a value. **Where:** `kernel/core/uaccess.mc` + `kernel/core/syscall.mc`
   + the user_runtime path. **Test:** direct deref rejected (`fuzz-failclosed`); syscall paths adopt
   it. **Prior art:** Linux `__user`+sparse, Rust-for-Linux `UserSlice`/`UserPtr`. **Depends:** none.
-- [ ] **U2 — No double-fetch / TOCTOU** *(PR)* — a copied-in value is an immutable snapshot;
+- [x] **U2 — No double-fetch / TOCTOU** *(DONE `29c700d`; `UserSnapshot<T>` + `fetch_user` copy-once frozen value (structural defense) + `double-fetch-audit` lint flagging same-`UserPtr` re-reads; current kernel clean, self-test flags a textbook double-fetch)* — a copied-in value is an immutable snapshot;
   re-reading the same user datum (the double-fetch CVE class) is flagged. **Where:** uaccess + lint.
   **Test:** double-fetch fixture flagged. **Prior art:** double-fetch CVEs, Bochspwn. **Depends:** U1.
 - [ ] **U3 — Taint untrusted lengths/indices** *(PR)* — values from `UserPtr` are untrusted ints,
@@ -169,7 +169,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 
 ## K — Capability & information-flow in the type system (on-thesis)
 
-- [ ] **K1 — Unforgeable, monotonic capability types** *(multi-PR)* — `Cap<T, Rights>` constructible
+- [x] **K1 — Unforgeable, monotonic capability types** *(DONE `c6ba536`; FOUND+FIXED a forgeable `Cap` (public field → struct-literal forge) by making it `opaque`; added `std/rights.mc` opaque narrow-only `Rights` + `RCap<R>` — forging/widening now `E_PRIVATE_FIELD`. Grant attenuation already runtime-enforced)* — `Cap<T, Rights>` constructible
   only by the kernel; rights only **narrow**, never widen; no ambient authority. The
   attenuated-subgrant property becomes a *type law*. **Where:** the `Cap<>`/grant types
   (`kernel/lib/granttab.mc`, `std/grant.mc`, `std/mask.mc`). **Test:** forging/widening rejected
