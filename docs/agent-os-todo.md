@@ -96,7 +96,7 @@ groundwork before it.**
 - [x] **P1.2 — Emit IPC provenance** (DONE — 0a60f2b) at the mediation points (from, to, tag, size,
   causality id). **Where:** `kernel/core/proc_ipc.mc`. **Test:** a 3-agent message chain
   produces the expected provenance graph; **hot-channel opt-out** flag suppresses it.
-- [ ] **P1.3 — Emit capability-use events** (grant / revoke / cap invocation) so the
+- [x] **P1.3 — Emit capability-use events** (DONE — 43862cb) (grant / revoke / cap invocation) so the
   audit covers *authority*, not just messages. **Where:** grant path + `kcall`.
 - [x] **P1.4 — Sampling + opt-out policy** (DONE — fe0da04) — the lever that keeps P1.* from invalidating
   the P2.1 fast path. Co-decide the mechanism **before** building P2.1.
@@ -130,9 +130,9 @@ groundwork before it.**
 
 - [ ] **P2.1 — IPC fast path** (zero-copy / batched for hot channels) — **co-designed
   with P1.1/P1.4**; do not build until the observability mechanism is fixed.
-- [ ] **P2.2 — Rich agent memory store** (content-addressed / KV) — beyond P1.7's
+- [x] **P2.2 — Rich agent memory store** (DONE — a2de19f) (content-addressed / KV) — beyond P1.7's
   checkpoint sink.
-- [ ] **P2.3 — Fair-share scheduling + throttle** — bound CPU per agent; deprioritize
+- [x] **P2.3 — Fair-share scheduling + throttle** (DONE — b61af75) — bound CPU per agent; deprioritize
   misbehaving agents (extends the P0.5 throttle path).
 - [x] **P2.4 — Migrate** (DONE — 781893d) — checkpoint on A, restore on B (builds on P1.8/P1.9).
 
@@ -141,7 +141,7 @@ groundwork before it.**
 ## P3 — Debuggability
 
 - [x] **P3.1 — Deterministic record** (first cut DONE — 960618f; full re-exec future) (leverages P1.2 provenance).
-- [ ] **P3.2 — Replay.**
+- [x] **P3.2 — Replay.** (first cut DONE — 5e84da6; full re-exec future)
 
 ---
 
