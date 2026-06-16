@@ -103,7 +103,7 @@ groundwork before it.**
 
 ### Capability delegation & attenuation
 
-- [ ] **P1.5 — Attenuated sub-grant.** An agent spawns a sub-agent whose authority is a
+- [x] **P1.5 — Attenuated sub-grant.** (DONE — f67572d) An agent spawns a sub-agent whose authority is a
   **subset** of its own (intersect `allow_mask`/`kcall_mask`; sub-grant a subset of
   grants). **Where:** `proc_spawn` + grant tables (`kernel/lib/granttab.mc`,
   `std/grant.mc`). **Test:** child cannot exceed parent's authority; over-grant rejected.
@@ -115,12 +115,12 @@ groundwork before it.**
 - [x] **P1.7 — Minimal durable sink (P1‑ prerequisite).** (DONE — b98e303) A place to write a checkpoint
   blob (block region / simple object store). **Where:** reuse `kernel/fs/blockdev` or a
   new minimal store. **Test:** write blob → read back identical across a remount.
-- [ ] **P1.8 — Checkpoint.** Serialize an agent (context, fds, caps, mailbox, accounted
+- [x] **P1.8 — Checkpoint.** (DONE — 8710acd) Serialize an agent (context, fds, caps, mailbox, accounted
   pages) to the sink. **Where:** new `kernel/core/checkpoint.mc`. **Test:** checkpoint a
   live agent; blob is self-describing.
-- [ ] **P1.9 — Restore.** Rebuild an agent from a checkpoint into a fresh slot, caps
+- [x] **P1.9 — Restore.** (DONE — 8710acd) Rebuild an agent from a checkpoint into a fresh slot, caps
   re-validated. **Test:** checkpoint → exit → restore → state matches.
-- [ ] **P1.10 — Pause / resume.** Freeze/thaw scheduling for an agent. **Where:**
+- [x] **P1.10 — Pause / resume.** (DONE — e8cb178) Freeze/thaw scheduling for an agent. **Where:**
   `proc_sched.mc` (block reason) + process state. **Test:** paused agent doesn't run;
   resume continues.
 
