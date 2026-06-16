@@ -12,6 +12,7 @@ import "std/math.mc";
 import "std/mask.mc";
 import "kernel/lib/mailbox.mc";
 import "kernel/lib/fdspace.mc";
+import "kernel/lib/resacct.mc";
 // Re-export the concerns split out of this file. MC imports are textual inclusion deduped
 // by path, so every existing `import "kernel/core/process.mc"` consumer transitively gets
 // the full process API (scheduling, signals, IPC) without changing any consumer import site.
@@ -94,9 +95,13 @@ struct Process {
     ticks: u32,                  // accounting: total ticks this incarnation has consumed
     sched_endpoint: u32,         // the scheduler service to notify on quantum expiry (0 = none)
     fds: FdSpace,                // open file descriptors; copied to a child on spawn (fork), kept across exec
+    macct: ResourceAccount,      // per-process memory account; reset on spawn (fresh, from zero) and on exit
 }
 
 const QUANTUM_DEFAULT: u32 = 10;
+// A generous default per-process memory quota. This is bookkeeping only for now; real policy
+// (and wiring into the allocator) comes later — see the agent-os memory-accounting backlog.
+const MEM_QUOTA_DEFAULT: usize = 0x100000;
 
 struct ProcTable {
     procs: [MAX_PROCS]Process,
@@ -220,6 +225,7 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].ticks = 0;
         t.procs[i].sched_endpoint = 0;
         fd_init(&t.procs[i].fds);
+        resacct_init(&t.procs[i].macct, MEM_QUOTA_DEFAULT);
         i = i + 1;
     }
     // Slot 0 is the running bootstrap context (filled on first switch out).
@@ -306,6 +312,9 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
         ok(n) => {}
         err(e) => {}
     }
+    // A fresh process starts at zero memory usage — it does NOT inherit the parent's usage.
+    // Re-init in case this slot was reaped from an earlier (possibly heavily-charged) process.
+    resacct_init(&t.procs[slot].macct, MEM_QUOTA_DEFAULT);
     return slot as u32;
 }
 
@@ -313,6 +322,12 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
 // fork/exec wiring to populate, inherit, and inspect a process's fds.
 export fn proc_fds(t: *mut ProcTable, slot: usize) -> *mut FdSpace {
     return &t.procs[slot].fds;
+}
+
+// A mutable handle to a process's memory ResourceAccount — for the allocator to charge/uncharge
+// against, and for policy/introspection to read. Released (reset to zero) when the process exits.
+export fn proc_macct(t: *mut ProcTable, slot: usize) -> *mut ResourceAccount {
+    return &t.procs[slot].macct;
 }
 
 // Replace a process's executable image in place — exec() semantics. The saved context is reset
@@ -399,6 +414,7 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     // spawn that reuses this slot can never inherit a ghost descriptor.
     mailbox_init(Message, IPC_SLOTS, &t.procs[dead].inbox);
     fd_init(&t.procs[dead].fds);
+    resacct_reset(&t.procs[dead].macct); // a zombie holds no charged memory — release the account
     t.procs[dead].pending_sig = mask32_zero();
     t.procs[dead].wait_slot = MAX_PROCS;
     // Wake anyone blocked receiving-from this exact incarnation. We do NOT post a DEAD message

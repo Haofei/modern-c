@@ -78,3 +78,4 @@ mutex-test	tests/qemu/proc/mutex_demo.mc	entry	mutex_run	-Wno-switch-bool -Wno-u
 resacct-test	tests/qemu/mem/resacct_demo.mc	driver		-Wno-switch-bool	ResourceAccount (kernel/lib): charge fails closed at quota (no partial), uncharge no-underflow, available/reset
 heapfree-test	tests/qemu/mem/heapfree_demo.mc	driver		-Wno-switch-bool	heap reclamation (kernel/core): free returns blocks to the pool, alloc reuses freed holes, available recovers (no monotonic leak)
 ipctrace-test	tests/qemu/ipc/ipctrace_demo.mc	driver		-Wno-switch-bool	IPC provenance ring (kernel/core): non-blocking record (overwrite-oldest + dropped count), monotonic seq, oldest-first drain
+procmem-test	tests/qemu/proc/procmem_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	per-process memory account (kernel/core/process): independent per-process quota, charge fails closed, released on exit
