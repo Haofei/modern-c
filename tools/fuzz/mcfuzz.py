@@ -588,13 +588,18 @@ class Gen:
                 fields.append(("of%d" % j, w, cur, mode))
                 off = cur + sz
             self.offset_structs[name] = fields
-            # V3.3 metamorphic (field reorder + explicit @offset): the field *declaration order* is
-            # cosmetic when every field pins an explicit `@offset(N)` — `sizeof` and
-            # `field_offset(S, .f)` are fixed by the offsets, not by source order. The variant
-            # reverses the declaration order but keeps each (field, width, offset) pin, so the
-            # comptime layout observer (offobs_*) MUST fold to the identical value. A divergence
-            # would mean source order leaks into comptimeStructLayout — a layout miscompile.
-            decl_fields = list(reversed(fields)) if self.metamorph else fields
+            # V3.3 metamorphic (explicit @offset layout): an `@offset` mmio struct's `sizeof` and
+            # field offsets are pinned by the offsets, not by source order — BUT the C backend
+            # *requires* the field declarations to appear in ascending-offset order (`emit-c`
+            # rejects a descending decl with UnsupportedCEmission, "offsets must increase"). A
+            # reversed declaration order is therefore NOT a compilable variant; reversing it here
+            # made the variant fail to compile, which the metamorphic oracle silently swallowed,
+            # giving this transform ~zero coverage. We keep the field declaration order identical
+            # in base and variant. The metamorphic difference is still exercised (compilably) by
+            # running the digest body in a called helper plus the reversed final fold (see
+            # program()), which re-exercises whole-program extraction / call-ABI / the layout
+            # observers without ever emitting a struct the backend rejects.
+            decl_fields = fields
             decls.append("extern mmio struct %s {\n%s\n}" % (
                 name,
                 "\n".join("    %s: Reg<u%d, %s> @offset(%d)," % (f, w, m, o) for f, w, o, m in decl_fields)))
@@ -786,8 +791,17 @@ class Gen:
             # V3.3 (slice/index equivalence on the byte-view): same elements, observed via a
             # full-range slice-of-slice and an equivalent index expression `(i + 1) - 1`. Must fold
             # to the identical sum as the base's direct `bv[i]` walk.
+            #
+            # NOTE: the slice HI bound must be a usize-typed *binding*, not the inline `bv.len`
+            # field access. `bv[0..bv.len]` (inline `.len`) is rejected by the MIR verifier with
+            # E_INDEX_NOT_USIZE — a real front-end wart where the `.len` field access in slice-hi
+            # position is not typed as usize — so it made this variant fail to compile and the
+            # oracle silently swallowed it. Binding `let bvn: usize = bv.len;` first and slicing
+            # `bv[0..bvn]` is the equivalent, compilable form.
+            bvn = "bvn%d" % self.nvars; self.nvars += 1
             bv2 = "bv2_%d" % self.nvars; self.nvars += 1
-            out.append("    let %s: []const u8 = %s[0..%s.len];" % (bv2, bv, bv))
+            out.append("    let %s: usize = %s.len;" % (bvn, bv))
+            out.append("    let %s: []const u8 = %s[0..%s];" % (bv2, bv, bvn))
             out.append("    while %s < %s.len { %s = (%s ^ (%s[((%s + 1) - 1)] as u64)); %s = %s + 1; }"
                        % (it, bv2, sm, sm, bv2, it, it, it))
         terms.append(sm)
@@ -893,12 +907,18 @@ class Gen:
                        % (it, sl, sm, sm, sl, it, it, it))
         else:
             # V3.3 (slice/index equivalence): observe the SAME elements via a slice-of-slice over
-            # the full sub-range (`sl[0..sl.len]`) rather than `sl` directly, AND through an
+            # the full sub-range (`sl[0..sln]`) rather than `sl` directly, AND through an
             # equivalent index expression (`(i + 0)`). Re-slicing the whole view and reindexing
             # must yield the identical element sequence — a divergence is a slice-base/length or
             # index-lowering miscompile.
+            #
+            # As with the byte-view re-slice above, the slice HI bound must be a usize-typed
+            # *binding* (`let sln: usize = sl.len;`), not the inline `sl.len` field access, which
+            # `emit-c` rejects with E_INDEX_NOT_USIZE.
+            sln = "sln%d" % self.nvars; self.nvars += 1
             s2 = "sl2_%d" % self.nvars; self.nvars += 1
-            out.append("    let %s: []mut %s = %s[0..%s.len];" % (s2, elem, sl, sl))
+            out.append("    let %s: usize = %s.len;" % (sln, sl))
+            out.append("    let %s: []mut %s = %s[0..%s];" % (s2, elem, sl, sln))
             out.append("    while %s < %s.len { %s = (%s ^ (%s[(%s + 0)] as u64)); %s = %s + 1; }"
                        % (it, s2, sm, sm, s2, it, it, it))
         terms.append(sm)
@@ -1376,16 +1396,48 @@ def _compile_run_c(env, src_path, work, tag, opt=None):
     return (p.returncode, p.stdout)
 
 
+def _compiles(env, src_path):
+    """Does `src_path` pass `mcc check` AND `mcc emit-c`? Returns (True, "") if it compiles, else
+    (False, first-error-line). Used by the metamorphic oracle to tell a *compile* divergence
+    (base compiles, the semantics-preserving variant does not) apart from a run-time divergence."""
+    chk = subprocess.run([env["mcc"], "check", src_path], capture_output=True)
+    if chk.returncode != 0:
+        return (False, "check: " + _first_error(chk.stderr.decode("utf-8", "replace")))
+    ec = subprocess.run([env["mcc"], "emit-c", src_path], capture_output=True)
+    if ec.returncode != 0:
+        return (False, "emit-c: " + _first_error(ec.stderr.decode("utf-8", "replace")))
+    return (True, "")
+
+
 def oracle_metamorphic(env, seed, src_path, work):
     """Metamorphic: a semantics-preserving source transform must not change the result. The
     variant runs the digest body in a helper that harness() calls; same seed -> same body, so the
-    output must be identical. A difference is a real codegen bug even when both backends agree."""
+    output must be identical. A difference is a real codegen bug even when both backends agree.
+
+    The base (`src_path`) is already `mcc check`-accepted by run_one(). The variant is built by a
+    *semantics-preserving* transform, so it MUST compile too. A variant that fails to compile is a
+    FINDING in its own right — either the transform is not actually compilable (a dead oracle, the
+    bug this guards against) or it surfaced a real front-end divergence between two equivalent
+    spellings. We therefore check compilability explicitly and fail on `base compiles but variant
+    does not`, instead of silently returning None (which made the whole oracle dead)."""
     variant = os.path.join(work, "variant.mc")
     open(variant, "w").write(Gen(seed, trapping=env.get("trapping", False)).program(metamorph=True))
+    var_ok, var_err = _compiles(env, variant)
+    if not var_ok:
+        # base is check-accepted (run_one guarantees it); a semantics-preserving variant that does
+        # NOT compile is a real finding, not a pass.
+        return ("METAMORPHIC COMPILE DIVERGENCE: base compiles but the semantics-preserving "
+                "variant does NOT (%s) — the transform is non-compilable or the variant spelling "
+                "exposes a front-end divergence" % var_err)
     base = _compile_run_c(env, src_path, work, "base")
     var = _compile_run_c(env, variant, work, "var")
-    if base is None or var is None:
-        return None  # emit/compile failure is another oracle's concern
+    if base is None:
+        return None  # base emit/compile/link failure is another oracle's concern
+    if var is None:
+        # The variant passed check+emit-c above, so a None here is a clang-compile or link failure
+        # of the emitted C for the variant only — still a base-vs-variant divergence worth surfacing.
+        return ("METAMORPHIC COMPILE DIVERGENCE: base's emitted C builds+links but the variant's "
+                "does not — divergent C emission for a semantics-preserving variant")
     if base[0] != var[0]:
         return "METAMORPHIC DIVERGENCE (status): base rc=%d, helper-extracted rc=%d" % (base[0], var[0])
     if base[0] == 0 and base[1] != var[1]:

@@ -126,20 +126,36 @@ pub fn build(b: *std.Build) void {
     const lowering_cov_step = b.step("lowering-coverage", "Report which lower_c.zig/lower_llvm.zig functions the differential corpus never exercises (V3.2)");
     lowering_cov_step.dependOn(&lowering_cov_cmd.step);
 
-    // S0.2: source-level audit of the unsafe boundary. Pure source scan (no mcc
-    // dependency), so it does not depend on the install step.
+    // The three source-level security audits (unsafe boundary / double-fetch / taint) are
+    // now one parameterized tool, tools/toolchain/mc-audit.sh, invoked with `--mode`. Pure
+    // source scans (no mcc dependency), so they do not depend on the install step.
+
+    // S0.2: source-level audit of the unsafe boundary.
     const unsafe_audit_cmd = b.addSystemCommand(&.{
         "bash",
-        "tools/toolchain/unsafe-audit.sh",
+        "tools/toolchain/mc-audit.sh",
+        "--mode",
+        "unsafe",
     });
     const unsafe_audit_step = b.step("unsafe-audit", "Audit the MC unsafe boundary: flag gated unsafe ops outside an unsafe/unsafe_contract region and inventory the audited sites in kernel/ + std/ (S0.2)");
     unsafe_audit_step.dependOn(&unsafe_audit_cmd.step);
 
-    // U3: source-level audit of untrusted (user-derived) lengths/indices. Pure source
-    // scan (no mcc dependency), so it does not depend on the install step.
+    // U2: source-level audit of double-fetch / TOCTOU on user memory.
+    const double_fetch_audit_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/mc-audit.sh",
+        "--mode",
+        "double-fetch",
+    });
+    const double_fetch_audit_step = b.step("double-fetch-audit", "Audit user-memory double-fetch / TOCTOU: flag a function that copies the same UserPtr in more than once (U2)");
+    double_fetch_audit_step.dependOn(&double_fetch_audit_cmd.step);
+
+    // U3: source-level audit of untrusted (user-derived) lengths/indices.
     const taint_audit_cmd = b.addSystemCommand(&.{
         "bash",
-        "tools/toolchain/taint-audit.sh",
+        "tools/toolchain/mc-audit.sh",
+        "--mode",
+        "taint",
     });
     const taint_audit_step = b.step("taint-audit", "Audit user-derived (tainted) values: flag a value from copy_from_user/fetch_user used as a length/index/loop-bound without passing checked_len/checked_index/validate_bound (U3)");
     taint_audit_step.dependOn(&taint_audit_cmd.step);
