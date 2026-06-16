@@ -75,7 +75,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   initialized-ness; trap on use of uninit (dynamic complement to S0.1). **Where:** instrument +
   shadow. **Test:** QEMU demo reads uninit heap → trap. **Prior art:** **Linux KMSAN**, MSan.
   **Depends:** D2.1.
-- [ ] **D2.3 — KCSAN-style data-race detection** *(multi-PR, opt-in)* — build on
+- [x] **D2.3 — KCSAN-style data-race detection** *(DONE `20ee08d`; opt-in `--checks=csan` watchpoint table; race detected on a REAL preempting timer-IRQ vs boot-thread access (the timing window is widened for determinism; the preemption is genuine), synchronized `mc_race_*` path clean)* — build on
   `mc_race_load`/`store` to detect conflicting concurrent accesses. **Test:** racy demo flagged.
   **Prior art:** **Linux KCSAN**, TSan. **Depends:** D2.1. *(Dynamic complement to Part II/C.)*
 - [x] **D2.4 — Guard pages + heap redzones + stack canaries** *(redzones+canary DONE `eed0482`; guard pages deferred — need paging)* — unmapped guard pages around
