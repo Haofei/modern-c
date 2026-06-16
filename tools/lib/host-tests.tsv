@@ -89,3 +89,4 @@ ipcsample-test	tests/qemu/ipc/ipcsample_demo.mc	driver		-Wno-switch-bool -Wno-un
 migrate-test	tests/qemu/proc/migrate_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	agent migration (kernel/core/checkpoint): checkpoint on source table, restore on destination with state intact, source vacated only on success
 record-test	tests/qemu/lang/record_demo.mc	driver		-Wno-switch-bool	IPC event recording (kernel/core): capture the ordered provenance stream into a durable log, read events back in order (replay foundation)
 capaudit-test	tests/qemu/proc/capaudit_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	capability-use audit (kernel/core/process): kcall invocations recorded (caller pid + op) into a dedicated trace, opt-out toggle
+kvstore-test	tests/qemu/fs/kvstore_demo.mc	driver		-Wno-switch-bool	agent KV store (kernel/fs): u64 key -> bytes, put/get/has/delete/overwrite + slot reuse, typed Full/NotFound/TooLarge
