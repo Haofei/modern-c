@@ -927,12 +927,13 @@ pub const Checker = struct {
                             };
                         }
                     } else if (decl.init.?.kind == .struct_literal) {
-                        // (bug #3) `let h = .{ .p = &t };` launders a borrow of the move binding
-                        // `t` through the struct FIELD `h.p`. Register a field-place alias
-                        // `h.p -> t` so reading `h.p` after `t` is moved is caught as a stale
-                        // alias. Only direct `&<move-binding>` fields are tracked (the
-                        // no-false-positive slice); deeper nesting is the open T1.3 work.
-                        self.registerAggregateFieldAliases(decl.names[0].text, decl.init.?, state);
+                        // (bug #3 / T1.3) `let h = .{ .p = &t };` launders a borrow of the move
+                        // binding `t` through the struct FIELD `h.p`. Register a field-place alias
+                        // `h.p -> t` so reading `h.p` after `t` is moved is caught as a stale alias.
+                        // The scan recurses through nested struct literals (`o.h.p`) for precise
+                        // tracking, and conservatively marks the move root escaped where the borrow
+                        // is buried in a non-nameable place (a nested array literal).
+                        self.registerAggregateFieldAliases(decl.names[0].text, decl.names[0].span, decl.init.?, state);
                     } else {
                         // T1.2: `let p = &t.inner;` borrows a SUBFIELD/element of the move binding
                         // `t`. The whole-binding stale-alias machinery keys on the bare referent
@@ -1419,6 +1420,17 @@ pub const Checker = struct {
                     // move is fine here (the aggregate is being thrown away, not reused).
                     for (c.args) |arg| self.moveForget(arg, state, aliases);
                 } else {
+                    // T1.3 (borrow-escape through a CALL argument). A struct/array literal argument
+                    // carrying `&<live-move-binding>` (`sink(.{ .p = &t })`, at any nesting depth)
+                    // launders the borrow into the callee — memory we cannot prove dead. The escape
+                    // scan, previously run only on decl/assignment initializers, runs here too: it
+                    // recurses through nested aggregate literals and marks the move root escaped, so
+                    // a later by-value move of the root is refused (E_USE_AFTER_MOVE). A direct
+                    // scalar `&t` arg (the legit transient borrow `pk(&t)`) takes NO move root from
+                    // markBorrowEscape unless it is *inside* an aggregate that escapes — only an
+                    // address-of laundered into memory marks the root, so `pk(&t); cn(t)` (borrow
+                    // dead at the call) still accepts.
+                    for (c.args) |arg| self.markBorrowEscapeCallArg(arg, c.callee.*.span, state);
                     for (c.args) |arg| self.moveConsume(arg, state, aliases);
                 }
             },
@@ -1664,6 +1676,27 @@ pub const Checker = struct {
         }
     }
 
+    // T1.3 (borrow-escape through a CALL argument). Scan a call argument for a borrow of a live
+    // move binding that escapes into the callee. The escape rule for a call arg differs from the
+    // decl/assignment store: a BARE top-level `&t` argument is a transient borrow for the duration
+    // of the call (the legit `pk(&t); cn(t)` pattern), so it does NOT escape here — that direction
+    // is covered precisely by the pointer-returning-call laundering check (callLaunderedMoveRoot).
+    // What DOES escape is a borrow buried INSIDE an aggregate literal passed by value: the callee
+    // receives a copy of the struct/array containing `&t`, so the borrow reaches memory we cannot
+    // prove dead. We therefore descend into struct/array literal arguments (peeling `grouped`) and
+    // run the full recursive escape scan on the aggregate's contents — at any nesting depth.
+    fn markBorrowEscapeCallArg(self: *Checker, arg: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
+        switch (arg.kind) {
+            .grouped => |inner| return self.markBorrowEscapeCallArg(inner.*, escape_span, state),
+            // An aggregate literal argument is copied into the callee — scan its contents (which
+            // recurses through any further nested aggregate literals) for an escaping borrow.
+            .struct_literal, .array_literal => return self.markBorrowEscape(arg, escape_span, state),
+            // A bare `&t` / `&t.v` / `n = &t as usize` etc. as a top-level argument is a transient
+            // borrow (or the ptr-to-int round-trip already handled at its decl); not escaped here.
+            else => {},
+        }
+    }
+
     // Gap #2 [interprocedural borrow laundering] — conservative rejection, precise variant.
     // `let q = f(&t)` (or `f(p)` where `p` aliases `t`) where `f` RETURNS A POINTER may launder
     // a borrow of the `move` binding `t` out through its result `q` (the callee can `return`
@@ -1708,19 +1741,51 @@ pub const Checker = struct {
         return null;
     }
 
-    // (bug #3) Register field-place borrow aliases for a struct-literal initializer bound to
-    // `base`: for each field `.f = &t` whose `t` is a tracked move binding, record a slot keyed
+    // (bug #3 / T1.3) Register field-place borrow aliases for a struct-literal initializer bound
+    // to `base`: for each field `.f = &t` whose `t` is a tracked move binding, record a slot keyed
     // `base.f` with `alias_of = t` (a non-live borrow). Reading `base.f` after `t` is moved is
-    // then a stale-alias use-after-move (see moveBorrow `.member`). Scoped to direct
-    // `&<move-binding>` fields — the no-false-positive slice.
-    fn registerAggregateFieldAliases(self: *Checker, base: []const u8, init_expr: ast.Expr, state: *std.StringHashMap(MoveSlot)) void {
+    // then a stale-alias use-after-move (see moveBorrow `.member`).
+    //
+    // The scan RECURSES through nested struct literals: `.{ .h = .{ .p = &t } }` bound to `o`
+    // registers the dotted place `o.h.p -> t` (precise, reject-at-use), closing the
+    // struct-of-struct decl channel that one-level-deep tracking was leaving open. A field whose
+    // value is NOT a directly-trackable borrow or a nested struct literal (e.g. an ARRAY literal,
+    // where the place would be `o.f[i]` — not expressible as a dotted member key) is handled by
+    // the conservative escape scan the caller also runs (markBorrowEscape), so the borrow is never
+    // lost: precise where a dotted place exists, conservative (reject-at-move) otherwise.
+    fn registerAggregateFieldAliases(self: *Checker, base: []const u8, escape_span: diagnostics.Span, init_expr: ast.Expr, state: *std.StringHashMap(MoveSlot)) void {
         const fields = switch (init_expr.kind) {
             .struct_literal => |f| f,
-            .grouped => |inner| return self.registerAggregateFieldAliases(base, inner.*, state),
+            .grouped => |inner| return self.registerAggregateFieldAliases(base, escape_span, inner.*, state),
             else => return,
         };
         for (fields) |field| {
-            const referent = aliasReferentOf(field.value, state) orelse continue;
+            // A nested struct literal: descend so a borrow buried at `base.f.g…` is tracked at its
+            // dotted place. The dotted `key` is owned by `move_place_keys` (so the recursive call
+            // can borrow it as the new base, and it is freed at function end).
+            if (fieldExprIsStructLiteral(field.value)) {
+                const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, field.name.text }) catch {
+                    self.oom = true;
+                    continue;
+                };
+                self.move_place_keys.append(self.reporter.allocator, key) catch {
+                    self.oom = true;
+                    self.reporter.allocator.free(key);
+                    continue;
+                };
+                self.registerAggregateFieldAliases(key, escape_span, field.value, state);
+                continue;
+            }
+            // A field whose value is NOT a directly-trackable scalar borrow (`&t`/an alias of it)
+            // — e.g. an array literal `.{ .arr = .{ &t } }`, where the place would be `arr[i]`, not
+            // nameable as a dotted member key. We cannot prove such a place dead, so fall back to
+            // the CONSERVATIVE escape: mark the move root escaped (reject-at-move). This composes
+            // the precise and conservative scans in one traversal so no nested borrow is lost.
+            // (A plain non-borrow field value `.v = 5` has no move root, so this is a no-op there.)
+            const referent = aliasReferentOf(field.value, state) orelse {
+                self.markBorrowEscape(field.value, escape_span, state);
+                continue;
+            };
             if (!state.contains(referent)) continue;
             const key = std.fmt.allocPrint(self.reporter.allocator, "{s}.{s}", .{ base, field.name.text }) catch {
                 self.oom = true;
@@ -1728,11 +1793,23 @@ pub const Checker = struct {
             };
             self.move_place_keys.append(self.reporter.allocator, key) catch {
                 self.oom = true;
+                self.reporter.allocator.free(key);
+                continue;
             };
             state.put(key, .{ .live = false, .span = field.value.span, .alias_of = referent }) catch {
                 self.oom = true;
             };
         }
+    }
+
+    // Whether a struct-literal field value is itself a (possibly grouped) struct literal — the
+    // recursion gate for registerAggregateFieldAliases' nested-place descent.
+    fn fieldExprIsStructLiteral(expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .struct_literal => true,
+            .grouped => |inner| fieldExprIsStructLiteral(inner.*),
+            else => false,
+        };
     }
 
     // (bug #3) If `expr` is a member access `base.f…` whose place-key names a registered

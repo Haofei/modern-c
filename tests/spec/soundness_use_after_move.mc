@@ -25,12 +25,17 @@
 move struct T { v: u32 }
 struct H { p: *T }
 struct Holder { p: *T }        // element type for the nested-aggregate channel
+struct Outer { h: Holder }     // struct-of-struct, for the nested-decl channel
+struct Deep { o: Outer }       // struct-of-struct-of-struct, for the triple-nested channel
 
 extern fn mk() -> T;
 extern fn cn(t: T) -> u32;       // consumes (moves) t
 extern fn pk(p: *T) -> u32;      // reads through a borrow
 extern fn rd(p: *u32) -> u32;    // reads through a sub-place borrow
 extern fn id(p: *T) -> *T;       // returns the borrow it was given (laundering channel)
+extern fn sink(h: Holder) -> void;       // takes an aggregate by value (call-arg escape channel)
+extern fn sinkOuter(o: Outer) -> void;   // takes a nested aggregate by value
+extern fn sinkArr(a: [1]*T) -> void;     // takes an array of borrows by value
 
 // ---------------------------------------------------------------------------
 // REJECTED channels — precise stale-alias reads (fire on the READ line)
@@ -150,6 +155,66 @@ fn reject_ptr_to_int_roundtrip() -> u32 {
 }
 
 // ---------------------------------------------------------------------------
+// UNIFIED aggregate/call-flow channels (T1.3) — a borrow that reaches memory or a
+// callee AT ANY NESTING DEPTH is caught. Precise (reject-at-use) where a dotted place
+// exists; conservative (reject-at-move) where the borrow is buried in a non-nameable
+// place (an array element) or copied into a callee by value.
+// ---------------------------------------------------------------------------
+
+// 11. NESTED struct-of-struct decl: `o.h.p = &t`. The precise field-alias scan now recurses
+// through nested struct literals, registering the dotted place `o.h.p -> t`, so reading it
+// after the move is a stale-alias use-after-move (the precise one-level path used to stop at
+// `o.h`, leaving this channel silently open).
+fn reject_nested_struct_decl() -> u32 {
+    let t: T = mk();
+    let o: Outer = .{ .h = .{ .p = &t } };   // &t buried at o.h.p
+    let a: u32 = cn(t);                       // t moved
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(o.h.p);                     // o.h.p is a stale alias of moved t
+}
+
+// 12. TRIPLE-nested struct-of-struct-of-struct decl: `d.o.h.p = &t`. One level deeper than
+// case 11 — the recursive precise scan tracks the place at arbitrary struct-literal depth.
+fn reject_triple_nested_struct_decl() -> u32 {
+    let t: T = mk();
+    let d: Deep = .{ .o = .{ .h = .{ .p = &t } } };
+    let a: u32 = cn(t);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(d.o.h.p);
+}
+
+// 13. borrow laundered into a CALL ARGUMENT aggregate (`sink(.{ .p = &t })`). The escape scan
+// now runs on call args too: a struct literal arg carrying `&t` is copied into the callee, so
+// the borrow reaches memory we cannot prove dead and the later move of t is refused. (Before,
+// the escape scan ran only on decl/assignment initializers — a borrow in a call arg escaped
+// silently.)
+fn reject_call_arg_struct() -> u32 {
+    let t: T = mk();
+    sink(.{ .p = &t });          // &t escapes into the callee
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return cn(t);
+}
+
+// 14. borrow laundered into a NESTED aggregate CALL ARGUMENT (`sinkOuter(.{ .h = .{ .p = &t } })`).
+// The call-arg escape scan recurses through the nested struct literal — symmetric with the
+// nested-decl case but flowing into a callee.
+fn reject_call_arg_nested_struct() -> u32 {
+    let t: T = mk();
+    sinkOuter(.{ .h = .{ .p = &t } });
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return cn(t);
+}
+
+// 15. borrow laundered into an ARRAY-LITERAL CALL ARGUMENT (`sinkArr(.{ &t })`). An array-literal
+// arg carrying `&t` is copied into the callee; the recursive escape scan marks t escaped.
+fn reject_call_arg_array() -> u32 {
+    let t: T = mk();
+    sinkArr(.{ &t });
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return cn(t);
+}
+
+// ---------------------------------------------------------------------------
 // ACCEPTED patterns (must compile clean — these are NOT bugs)
 // ---------------------------------------------------------------------------
 
@@ -181,6 +246,34 @@ fn accept_call_launder_dead_before_move() -> u32 {
     let q: *T = id(&t);
     let b: u32 = pk(q);           // used BEFORE the move
     return cn(t) + b;
+}
+
+// NESTED whole-value borrow stored in a struct-of-struct, USED before the move. The recursive
+// precise field-alias scan proves o.h.p dead at the move, so the move is accepted — the unified
+// recursion does NOT over-reject the nested legit pattern (symmetric with the one-level accept).
+fn accept_nested_struct_field_used_before_move() -> u32 {
+    let t: T = mk();
+    let o: Outer = .{ .h = .{ .p = &t } };
+    let b: u32 = pk(o.h.p);       // read BEFORE the move
+    return cn(t) + b;            // o.h.p never read again — t may be moved
+}
+
+// a transient borrow passed as a BARE call argument (not inside an aggregate), used and dead
+// before the move. The call-arg escape scan must NOT fire on a top-level `&t` arg (only on a
+// borrow buried in an aggregate copied into the callee), so this transient-borrow idiom compiles.
+fn accept_bare_borrow_call_arg() -> u32 {
+    let t: T = mk();
+    let x: u32 = pk(&t);          // &t is a bare arg — transient, does not escape
+    return cn(t) + x;
+}
+
+// passing an aggregate with NO move borrow into a callee: nothing escapes, so the move (of an
+// unrelated value) is unaffected. Proves the call-arg scan is scoped to `&<move-binding>`.
+fn accept_call_arg_no_borrow() -> u32 {
+    let t: T = mk();
+    let h: Holder = .{ .p = 0 as *T };
+    sink(h);                      // aggregate carries no borrow of t
+    return cn(t);
 }
 
 // --- narrow-trigger guards: the ptr-to-int escape gate must NOT over-fire ----------------
