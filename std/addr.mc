@@ -115,7 +115,10 @@ export fn pr_contains(r: *PhysRange, a: PAddr) -> bool {
 // two cannot be confused (E_ADDRESS_CLASS_MISMATCH).
 
 export fn va(value: usize) -> VAddr {
-    return value as VAddr;
+    // The single audited usize -> VAddr boundary (symmetric with `pa`'s `phys`
+    // builtin). Minting an address class via `as` is gated; this is the controlled
+    // escape — the value is a virtual address by construction here.
+    unsafe { return value as VAddr; }
 }
 
 export fn va_value(a: VAddr) -> usize {
@@ -123,7 +126,8 @@ export fn va_value(a: VAddr) -> usize {
 }
 
 export fn va_offset(a: VAddr, n: usize) -> VAddr {
-    return ((a as usize) + n) as VAddr; // checked: traps on overflow
+    // checked add (traps on overflow); re-mint stays within the VAddr class.
+    unsafe { return ((a as usize) + n) as VAddr; }
 }
 
 export fn va_diff(from: VAddr, to: VAddr) -> usize {
@@ -148,7 +152,7 @@ export fn va_align_down(a: VAddr, align: usize) -> VAddr {
         unreachable; // alignment must be a power of two (matches va_align_up)
     }
     let v: usize = a as usize;
-    return (v - (v % align)) as VAddr;
+    unsafe { return (v - (v % align)) as VAddr; } // re-mint within VAddr class
 }
 
 export fn va_align_up(a: VAddr, align: usize) -> VAddr {
@@ -160,7 +164,7 @@ export fn va_align_up(a: VAddr, align: usize) -> VAddr {
     }
     let v: usize = a as usize;
     let bumped: usize = v + (align - 1); // checked: traps on overflow
-    return (bumped - (bumped % align)) as VAddr;
+    unsafe { return (bumped - (bumped % align)) as VAddr; } // re-mint within VAddr class
 }
 
 export fn va_lt(a: VAddr, b: VAddr) -> bool {

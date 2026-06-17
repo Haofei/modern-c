@@ -31,7 +31,10 @@ extern fn mc_dma_invalidate_for_cpu_base(dev_addr: DmaAddr, len: usize) -> usize
 // Allocate a coherent/cpu-owned DMA buffer of `len` bytes (linear handle).
 export fn alloc(len: usize) -> CpuBuffer {
     let base: usize = mc_dma_alloc_base(len);
-    return .{ .dev_addr = (base as usize) as DmaAddr, .cpu_addr = pa(base), .len = len };
+    // Mint the device-address class from the allocator's raw base (audited DMA boundary).
+    var dev: DmaAddr = uninit;
+    unsafe { dev = (base as usize) as DmaAddr; }
+    return .{ .dev_addr = dev, .cpu_addr = pa(base), .len = len };
 }
 
 // Free a cpu-owned buffer, consuming it.

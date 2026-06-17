@@ -4403,6 +4403,22 @@ pub const Checker = struct {
             }
         }
 
+        // Address-class laundering via `bitcast` is the same forge/cross-class hole
+        // as the `as`-cast gate, one layout-reinterpret deeper: `bitcast<MmioPtr<Dev>>(p)`
+        // forges a device pointer from a plain `*u8`, and `bitcast<VAddr>(pa)` crosses
+        // PAddr into VAddr — both with no `unsafe`. A bitcast that mints, crosses, or
+        // strips a built-in address class is rejected outside `unsafe` (the controlled
+        // escape the typed constructors and raw MMIO path use). A same-class identity
+        // bitcast is a no-op and stays allowed.
+        if (!ctx.in_unsafe and target_ty != null and source_ty != null) {
+            if (isAddressClass(target) or isAddressClass(classifyTypeCtx(source_ty.?, ctx))) {
+                const source_cls = classifyTypeCtx(source_ty.?, ctx);
+                if (!(isAddressClass(target) and target == source_cls)) {
+                    self.errorCode(span, "E_ADDRESS_CLASS_CAST", "bitcast may not mint, cross, or strip a built-in address class (PAddr/VAddr/DmaAddr/MmioPtr/...); use the typed constructor or `unsafe`");
+                }
+            }
+        }
+
         return target;
     }
 
@@ -5499,6 +5515,45 @@ pub const Checker = struct {
         // controlled declassification) and an identity cast to the SAME opaque type
         // (a no-op). Pointer-class sources are left to the bitcast pointee gate.
         self.checkOpaqueCastDeclassify(span, value, target_ty, ctx);
+        // Address-class laundering gate. The built-in address classes
+        // (PAddr/VAddr/DmaAddr/UserPtr/MmioPtr/PhysPtr) are kept distinct so the
+        // checker can stop a physical address being dereferenced as virtual, a
+        // device pointer being forged from an integer, etc. The IMPLICIT-conversion
+        // sites already run `checkAddressClassConversion`, but an explicit `as`
+        // (this handler) and `bitcast` bypassed it entirely — `n as MmioPtr<Dev>`
+        // forged a device pointer with no `unsafe`, and `p as VAddr` crossed PAddr
+        // into VAddr. Gate both directions of the laundering here (the same shape as
+        // the opaque-declassify gate above), keyed on the address-class PROPERTY:
+        //  - crossing between two DIFFERENT address classes, or
+        //  - MINTING an address class from a non-address source (integer/plain ptr).
+        // The audited boundary (the typed constructors/extractors in std/addr.mc,
+        // std/dma.mc, std/virtqueue.mc, uaccess.mc, and the `unsafe` MMIO path)
+        // wraps these in `unsafe`, the controlled escape. The EXTRACT direction
+        // (address class `as usize`) is NOT gated here: it cannot deref or forge and
+        // is the `pa_value`/`va_value` raw-access edge.
+        self.checkAddressClassCast(span, source, target, ctx);
+    }
+
+    // `as`-cast laundering of the built-in address classes. Rejected unless inside
+    // `unsafe`:
+    //  - CROSS: source and target are both address classes but different
+    //    (PAddr <-> VAddr <-> DmaAddr <-> MmioPtr <-> ...). Reuses the implicit
+    //    mismatch diagnostics (E_DMA_ADDR_NOT_PADDR etc.) for parity with the
+    //    implicit path, falling back to E_ADDRESS_CLASS_CAST.
+    //  - MINT: target is an address class and source is NOT (an integer or plain
+    //    pointer) — forging a device/physical/virtual address out of thin air.
+    // EXTRACT (address class -> non-address, e.g. `a as usize`) is allowed: it is
+    // the audited raw-access edge and can neither deref nor forge.
+    fn checkAddressClassCast(self: *Checker, span: diagnostics.Span, source: TypeClass, target: TypeClass, ctx: Context) void {
+        if (ctx.in_unsafe) return;
+        if (isAddressClass(target) and isAddressClass(source)) {
+            if (target == source) return; // identity cast extracts/forges nothing
+            self.errorCode(span, addressClassMismatchDiagnostic(target, source), addressClassMismatchMessage(target, source));
+            return;
+        }
+        if (isAddressClass(target) and !isAddressClass(source)) {
+            self.errorCode(span, "E_ADDRESS_CLASS_CAST", "casting to a built-in address class forges it from a non-address value; use the typed constructor (pa/va/dma/mmio.map) or `unsafe`");
+        }
     }
 
     fn checkOpaqueCastDeclassify(self: *Checker, span: diagnostics.Span, value: ast.Expr, target_ty: ast.TypeExpr, ctx: Context) void {

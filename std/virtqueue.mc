@@ -365,12 +365,16 @@ export fn vq_complete_chain(vq: *mut Virtq) -> Result<CompletedChain3, VqComplet
     vq_free_desc(vq, id0);
     vq_free_desc(vq, id1);
     vq_free_desc(vq, id2);
-    return ok(.{
-        .header = .{ .dev_addr = (a0 as usize) as DmaAddr, .len = l0 as usize },
-        .data = .{ .dev_addr = (a1 as usize) as DmaAddr, .len = l1 as usize },
-        .status = .{ .dev_addr = (a2 as usize) as DmaAddr, .len = l2 as usize },
-        .used_len = used,
-    });
+    // Reconstruct the device-address class from the raw u64 the device reported:
+    // the audited DMA boundary (minting an address class via `as` is gated).
+    unsafe {
+        return ok(.{
+            .header = .{ .dev_addr = (a0 as usize) as DmaAddr, .len = l0 as usize },
+            .data = .{ .dev_addr = (a1 as usize) as DmaAddr, .len = l1 as usize },
+            .status = .{ .dev_addr = (a2 as usize) as DmaAddr, .len = l2 as usize },
+            .used_len = used,
+        });
+    }
 }
 
 // Notify the device that `q` has new buffers (§4.2.3.3): order then doorbell.
@@ -448,7 +452,10 @@ export fn vq_complete(vq: *mut Virtq) -> Result<CompletedBuffer, VqCompleteError
     vq.last_used = wrapping_add_u16(vq.last_used, 1); // virtio ring cursor wraps mod 2^16
     let addr: u64 = vq.inflight_addr[id as usize];
     vq_free_desc(vq, id);
-    return ok(.{ .buf = .{ .dev_addr = (addr as usize) as DmaAddr, .len = alloc_len as usize }, .used_len = used });
+    // Reconstruct the device-address class from the raw in-flight u64 (audited DMA boundary).
+    unsafe {
+        return ok(.{ .buf = .{ .dev_addr = (addr as usize) as DmaAddr, .len = alloc_len as usize }, .used_len = used });
+    }
 }
 
 // Reclaim every in-flight buffer after a fault or timeout, so a failed request does not
@@ -466,7 +473,9 @@ export fn vq_reset_reclaim(vq: *mut Virtq) -> usize {
             let len: usize = vq.inflight_len[i] as usize;
             // Reconstruct the owned buffer from the in-flight record and reclaim it. The
             // device was reset above, so these bytes are CPU-owned again.
-            let dev: DeviceBuffer = .{ .dev_addr = (addr as usize) as DmaAddr, .len = len };
+            var da: DmaAddr = uninit;
+            unsafe { da = (addr as usize) as DmaAddr; } // reconstruct device-address class (audited DMA boundary)
+            let dev: DeviceBuffer = .{ .dev_addr = da, .len = len };
             free(invalidate_for_cpu(dev));
             reclaimed = reclaimed + 1;
         }

@@ -109,7 +109,11 @@ struct UserSnapshot<T> {
 export fn fetch_user(comptime T: type, us: *UserSpace, src: UserPtr<T>) -> Result<UserSnapshot<T>, UaccessError> {
     var snap: UserSnapshot<T> = uninit; // .value is fully overwritten by the copy below, or never returned
     let dst: PAddr = pa((&snap.value) as usize);
-    switch copy_from_user(us, dst, (src as usize) as UserPtr<u8>, sizeof(T)) {
+    // Re-tag UserPtr<T> -> UserPtr<u8> for the byte-wise copy: stays within the
+    // UserPtr class (the round-trips through usize); the audited uaccess boundary.
+    var src_bytes: UserPtr<u8> = uninit;
+    unsafe { src_bytes = (src as usize) as UserPtr<u8>; }
+    switch copy_from_user(us, dst, src_bytes, sizeof(T)) {
         ok(v) => { return ok(snap); }
         err(e) => { return err(e); }
     }
@@ -120,7 +124,10 @@ export fn fetch_user(comptime T: type, us: *UserSpace, src: UserPtr<T>) -> Resul
 export fn fetch_user_pt(comptime T: type, uas: *UserAddrSpace, src: UserPtr<T>) -> Result<UserSnapshot<T>, UaccessError> {
     var snap: UserSnapshot<T> = uninit;
     let dst: PAddr = pa((&snap.value) as usize);
-    switch copy_from_user_pt(uas, dst, (src as usize) as UserPtr<u8>, sizeof(T)) {
+    // Re-tag UserPtr<T> -> UserPtr<u8> for the byte-wise copy (audited uaccess boundary).
+    var src_bytes: UserPtr<u8> = uninit;
+    unsafe { src_bytes = (src as usize) as UserPtr<u8>; }
+    switch copy_from_user_pt(uas, dst, src_bytes, sizeof(T)) {
         ok(v) => { return ok(snap); }
         err(e) => { return err(e); }
     }
