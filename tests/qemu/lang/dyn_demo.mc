@@ -42,6 +42,35 @@ impl Shape for Rect {
     }
 }
 
+// --- Uniform `*T -> *dyn Shape` coercion at NON-let positions (the bug fix) ---
+// The coercion + vtable synthesis is ONE typed conversion applied at every
+// assignment context. Each of these forms a `*dyn Shape` from a `*T` VALUE
+// (a `*Square`/`*Rect` parameter, not `&x` at the same scope), so the vtable is
+// synthesized from the static pointee type T. Before the fix these miscompiled
+// (invalid IR / uninitialized vtable) — the coercion only ran at let/array.
+
+// `*dyn` formed at a RETURN, from a `*Square` PARAMETER.
+fn square_as_dyn(p: *Square) -> *dyn Shape {
+    return p;
+}
+
+// A struct holding a `*dyn Shape` field, initialized from a `*Rect` parameter
+// (the coercion runs at the struct-field init).
+struct DynHolder {
+    inner: *dyn Shape,
+}
+
+fn hold_rect(p: *Rect) -> DynHolder {
+    return .{ .inner = p };
+}
+
+// Dispatch through a `*dyn Shape` passed as a call ARGUMENT (the coercion forms
+// the fat pointer at the call site). Sums both vtable slots so a wrong dispatch
+// changes the digest.
+fn dispatch_arg(s: *dyn Shape) -> u32 {
+    return s.area() + s.sides();
+}
+
 export fn dyn_run() -> u32 {
     var sq1: Square = .{ .side = 3 };    // area 9
     var rc1: Rect = .{ .w = 5, .h = 6 }; // area 30
@@ -64,7 +93,7 @@ export fn dyn_run() -> u32 {
         sides_sum = sides_sum + s.sides(); // 4 * 4 = 16 (second vtable slot)
         i = i + 1;
     }
-    let digest: u32 = sum * 1000 + sides_sum; // 69 * 1000 + 16 = 69016
+    let array_digest: u32 = sum * 1000 + sides_sum; // 69 * 1000 + 16 = 69016
 
     if sum != 69 {
         return 0;
@@ -72,7 +101,45 @@ export fn dyn_run() -> u32 {
     if sides_sum != 16 {
         return 0;
     }
-    if digest != 69016 {
+    if array_digest != 69016 {
+        return 0;
+    }
+
+    // --- The fix: `*dyn` formed at RETURN / FIELD / ARG, from a `*T` value ---
+
+    // RETURN: square_as_dyn returns a `*dyn Shape` built from its `*Square` param.
+    var sq5: Square = .{ .side = 5 };
+    let p5: *Square = &sq5;
+    let d_ret: *dyn Shape = square_as_dyn(p5);
+    let ret_area: u32 = d_ret.area(); // 25
+
+    // FIELD: hold_rect stores a `*dyn Shape` field initialized from a `*Rect`.
+    var rc34: Rect = .{ .w = 3, .h = 4 };
+    let p34: *Rect = &rc34;
+    let holder: DynHolder = hold_rect(p34);
+    let field_area: u32 = holder.inner.area(); // 12
+
+    // ARG: pass a `*Square` value where a `*dyn Shape` is expected (coercion at
+    // the call site), dispatching both vtable slots inside the callee.
+    var sq6: Square = .{ .side = 6 };
+    let p6: *Square = &sq6;
+    let arg_result: u32 = dispatch_arg(p6); // area 36 + sides 4 = 40
+
+    if ret_area != 25 {
+        return 0;
+    }
+    if field_area != 12 {
+        return 0;
+    }
+    if arg_result != 40 {
+        return 0;
+    }
+
+    // Fold the three new paths (return + field + arg) into one digest (kept within
+    // u32 so checks=all does not trap), so a miscompile or wrong dispatch on ANY
+    // path changes the exact value: 25 * 1000000 + 12 * 1000 + 40 = 25012040.
+    let digest: u32 = ret_area * 1000000 + field_area * 1000 + arg_result;
+    if digest != 25012040 {
         return 0;
     }
     return 1;
