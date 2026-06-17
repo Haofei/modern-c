@@ -4,11 +4,13 @@
 // SPEC: expect=compile_error
 // SPEC: check=E_DYN_FORGE
 
-// Forge-safety (docs/traits-design.md §7, review #4): the ONLY way to build a
-// `*dyn Trait` in safe code is the checked coercion `&x` / `&mut x`. Initializing a
-// `*dyn` from anything else — here a bare `*Square` pointer (no impl-checked coercion,
-// no vtable) — would fabricate a trait object. Rejected: `*dyn` is a compiler-protected
-// type kind; only `unsafe` may fabricate one (gated like opaque-struct declassification).
+// Forge-safety (docs/traits-design.md §7, review #4): a `*dyn Trait` is a
+// compiler-protected type. It may be formed only by the checked `*T -> *dyn`
+// coercion (a `&x` or a `*T` value of a conforming type, which synthesizes the
+// vtable from the static pointee type). Hand-assembling one from RAW PARTS — here
+// initializing a `*dyn Shape` from a bare `usize` integer (no conforming pointee,
+// no vtable) — fabricates a trait object. Rejected in safe code; only `unsafe` may
+// fabricate one (gated like opaque-struct declassification).
 
 trait Shape {
     fn area(self: *Self) -> u32;
@@ -24,7 +26,7 @@ impl Shape for Square {
     }
 }
 
-fn forge(p: *Square) -> u32 {
-    let d: *dyn Shape = p; // EXPECT_ERROR: E_DYN_FORGE
+fn forge(raw: usize) -> u32 {
+    let d: *dyn Shape = raw; // EXPECT_ERROR: E_DYN_FORGE
     return d.area();
 }
