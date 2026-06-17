@@ -32,6 +32,17 @@ tier-dotted (`S0.1`, `D2.1`); Part II uses letter (`C1`, `A1`).
 > direct+indirect, definite-init) — so every "closed" claim, and the documented conservative
 > over-rejections, FAIL `zig build test` if they silently regress. Write claims from adversarial
 > test results, not intended design.
+>
+> Later rounds extended the probing past the type-law surface to the **runtime and structural**
+> guarantees (the shapes `mcc check` can't reach). The QEMU sanitizer sweep verified coverage by
+> *execution* and fixed a KCSAN false-positive (`172445b`). The structural-launder round found the
+> two deepest holes: a **systemic name-keyed opacity bypass** (any file could write a peer `impl`
+> of an opaque type and read its private field — undercutting Cap/Rights/Tainted/Guarded) → fixed
+> with an **orphan rule** (`a882495`); and **address classes laundered by `as`/`bitcast`** (forge
+> an `MmioPtr` from an integer → device write, no `unsafe`) → fixed by gating cast/bitcast on the
+> address-class property and moving the legit mint sites behind `unsafe` (`d385c8c`). The recurring
+> shape across every fix: **a gate keyed on enumerated cases misses the general property** — the
+> durable answer is gates keyed on the property + self-verifying fixtures.
 
 ## What MC already has (harden the gaps, don't reinvent)
 - **Spatial, trapping:** `mc_check_index_usize` (bounds), checked arithmetic, `__builtin_trap`,
@@ -99,7 +110,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   initialized-ness; trap on use of uninit (dynamic complement to S0.1). **Where:** instrument +
   shadow. **Test:** QEMU demo reads uninit heap → trap. **Prior art:** **Linux KMSAN**, MSan.
   **Depends:** D2.1.
-- [x] **D2.3 — KCSAN-style data-race detection** *(DONE `20ee08d`; opt-in `--checks=csan` watchpoint table; race detected on a REAL preempting timer-IRQ vs boot-thread access (the timing window is widened for determinism; the preemption is genuine). Coverage (R3): kernel `global`/global-field/global-array accesses are now instrumented (`2b8ded9` — they no longer lower to an UNinstrumented path), so a race on real global data is now in scope; but detection still requires the pair be exactly boot-thread vs the CLINT timer-IRQ (watchpoint table hard-wired to 2 contexts) and both be on the armed pool — so it's broader than before but still bounded to that 2-context shape, not a general SMP race net)* — build on
+- [x] **D2.3 — KCSAN-style data-race detection** *(DONE `20ee08d`; opt-in `--checks=csan` watchpoint table; race detected on a REAL preempting timer-IRQ vs boot-thread access (the timing window is widened for determinism; the preemption is genuine). Coverage (R3): kernel `global`/global-field/global-array accesses are now instrumented (`2b8ded9` — they no longer lower to an UNinstrumented path), so a race on real global data is now in scope; but detection still requires the pair be exactly boot-thread vs the CLINT timer-IRQ (watchpoint table hard-wired to 2 contexts) and both be on the armed pool — so it's broader than before but still bounded to that 2-context shape, not a general SMP race net. The QEMU sweep FOUND+FIXED a FALSE POSITIVE (`172445b`): the synchronized `mc_race_*` path wrongly carried watchpoints, so a properly-locked global access raced by the timer IRQ was reported as a race — now the synchronized path sets no watchpoint. Coverage is now QEMU-execution-verified, detect-cases gate-asserted; one residual: KASAN array-field load detects on C but not LLVM)* — build on
   `mc_race_load`/`store` to detect conflicting concurrent accesses. **Test:** racy demo flagged.
   **Prior art:** **Linux KCSAN**, TSan. **Depends:** D2.1. *(Dynamic complement to Part II/C.)*
 - [x] **D2.4 — Guard pages + heap redzones + stack canaries** *(redzones+canary DONE `eed0482`; guard pages deferred — need paging. Coverage limits (R3 sweep): detection is on free/`heap_check_block`, NOT at the bad access; a never-freed overflow is silent; a write ≥16B past the allocation skips the 16B guard into the next block; a read-only OOB is not caught (only clobbered poison is). UAF is KASAN's job, not redzone's)* — unmapped guard pages around
@@ -148,7 +159,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
 > Data races + deadlocks + sleep-in-atomic are the worst kernel bug class. Primitives exist;
 > nothing enforces their use.
 
-- [x] **C1 — Lock-guards-data** *(DONE `c3ce2c0`; `std/guarded.mc` `Guarded<T>` (opaque, data private → `E_PRIVATE_FIELD` on direct access) + linear `Guard` (must-release, no-dup via the move checker), tied to the specific lock instance. R3 sweep FOUND+FIXED a bypass: `bitcast<*Shadow>(g)` pointer-reinterpret reached `.data` without the guard → now rejected (`E_BITCAST_TYPE`); the only remaining bypass is an explicit `unsafe` reinterpret. Lock ORDERING/deadlock-freedom = C3, follow-up)* — associate data with its lock (data inside the lock);
+- [x] **C1 — Lock-guards-data** *(DONE `c3ce2c0`; `std/guarded.mc` `Guarded<T>` (opaque, data private → `E_PRIVATE_FIELD` on direct access) + linear `Guard` (must-release, no-dup via the move checker), tied to the specific lock instance. The structural-launder round FOUND+FIXED THREE bypasses: `bitcast<*Shadow>(g)` (`E_BITCAST_TYPE`); the **systemic name-keyed opacity hole** — any file could write a peer `impl Guarded` and read `.data` (affected Cap/Rights/Tainted too) → now an **orphan rule** (`a882495`): `impl` of an opaque type must be in its defining file, else `E_ORPHAN_IMPL`; and the **public `Guard` fields** (`g.data` read / wrong-lock `ga.data=gb.data` / forge-a-guard) → `Guard` is now `opaque` (`E_PRIVATE_FIELD`). Linearity was already sound. Only remaining bypass is explicit `unsafe`. Lock ORDERING = C3, follow-up)* — associate data with its lock (data inside the lock);
   access requires static proof the lock is held. **Where:** `std/sync` + a check pass. **Test:**
   `fuzz-failclosed` (unlocked access rejected); migrate kernel locks incrementally. **Prior art:**
   Rust `Mutex<T>`, Rust-for-Linux **klint**, lockdep. **Depends:** none.
