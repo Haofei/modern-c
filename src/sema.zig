@@ -5432,8 +5432,9 @@ pub const Checker = struct {
             }
             return true;
         }
-        // Passing an existing `*dyn Trait` value through (same trait): allowed.
-        if (exprDeclaredType(expr, ctx)) |src| {
+        // Passing an existing `*dyn Trait` value through (same trait): allowed — an
+        // array element, a parameter, a field, a returned `*dyn`, etc.
+        if (exprResultType(expr, ctx) orelse exprDeclaredType(expr, ctx)) |src| {
             if (resolveAliasType(src, ctx).kind == .dyn_trait) {
                 if (sameTypeSyntaxCtx(src, resolved, ctx)) return true;
             }

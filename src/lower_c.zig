@@ -1060,6 +1060,12 @@ const CEmitter = struct {
     // generated thunk `RET f__envthunk(void *env, P...){ return f((T)(uintptr_t)env, P...); }`
     // whose signature genuinely matches the slot. Keyed by thunk name.
     bind_thunks: std.StringHashMap(BindThunk),
+    // Tier 2 trait objects. `trait_decls`: every `trait` by name (method sigs), so a
+    // `*dyn Trait` knows its vtable layout and a dispatch resolves the slot. `impl_methods`:
+    // (Trait,Type) → the mangled `Type__m` function names, in trait-method order, so the
+    // rodata vtable initializer lists the right function pointers.
+    trait_decls: std.StringHashMap(ast.TraitDecl),
+    impl_methods: std.StringHashMap([]const ast.ImplTraitMethod),
     mir_module: *const mir.Module,
     source_path: ?[]const u8,
     // Sanitizer profile (D2.1/2.2/2.3). When set, ordinary (non-raw, non-global) scalar LOADS
@@ -1115,6 +1121,8 @@ const CEmitter = struct {
             .fn_ptr_types = std.StringHashMap(ast.TypeExpr).init(allocator),
             .closure_types = std.StringHashMap(ast.TypeExpr).init(allocator),
             .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
+            .trait_decls = std.StringHashMap(ast.TraitDecl).init(allocator),
+            .impl_methods = std.StringHashMap([]const ast.ImplTraitMethod).init(allocator),
             .mir_module = mir_module,
             .source_path = source_path,
             .temp_index = 0,
@@ -1126,6 +1134,8 @@ const CEmitter = struct {
         self.fn_ptr_types.deinit();
         self.closure_types.deinit();
         self.bind_thunks.deinit();
+        self.trait_decls.deinit();
+        self.impl_methods.deinit();
         self.result_types.deinit();
         self.slice_types.deinit();
         self.array_types.deinit();
@@ -1233,6 +1243,11 @@ const CEmitter = struct {
                     try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = true });
                     try self.collectFunctionSliceTypes(fn_decl);
                 },
+                .trait_decl => |t| try self.trait_decls.put(t.name.text, t),
+                .impl_trait => |it| {
+                    const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ it.trait_name.text, it.type_name.text });
+                    try self.impl_methods.put(key, it.methods);
+                },
                 else => {},
             }
         }
@@ -1260,6 +1275,10 @@ const CEmitter = struct {
         // types, and structs/params may reference them by name.
         try self.emitFnPtrTypes();
         try self.emitClosureTypes();
+        // Tier 2 trait-object types: per object-safe trait, a `VT_Trait` vtable-struct
+        // typedef and the `mc_dyn_Trait` fat-pointer typedef. The rodata vtable
+        // INSTANCES are emitted later (after function forward declarations).
+        try self.emitDynTraitTypes();
         for (module.decls) |decl| {
             if (decl.kind == .struct_decl and self.mmio_structs.contains(decl.kind.struct_decl.name.text)) {
                 try self.emitMmioStruct(decl.kind.struct_decl);
@@ -1285,6 +1304,10 @@ const CEmitter = struct {
         // forward declarations (the thunks call those functions) and before any
         // body that might `bind` through one.
         try self.emitBindThunks();
+        // Rodata vtable instances: one `static const VT_Trait __vt_Type_Trait = {…}`
+        // per `impl Trait for Type` of an object-safe trait. Emitted after the function
+        // forward declarations the initializer references.
+        try self.emitVtables();
         // Emit every global before any function body. MC resolves names
         // module-wide regardless of declaration order, and import-merged sources
         // can place a function ahead of a global it reads (e.g. a `const` defined
@@ -2298,6 +2321,9 @@ const CEmitter = struct {
                 if (!self.closure_types.contains(name)) try self.closure_types.put(name, ty);
                 return out.appendSlice(self.scratch.allocator(), name);
             },
+            // A `*dyn Trait` lowers to its fat-pointer typedef `mc_dyn_Trait`
+            // (`struct { void *data; const VT_Trait *vtable; }`).
+            .dyn_trait => |node| return out.appendSlice(self.scratch.allocator(), try self.dynTypeName(node.trait_name.text)),
             else => {},
         }
         if (typeName(ty)) |name| {
@@ -2636,6 +2662,88 @@ const CEmitter = struct {
         }
     }
 
+    // ----- Tier 2 trait objects (traits-design §4,§8) ---------------------------
+    // The fat-pointer typedef name for `*dyn Trait`.
+    fn dynTypeName(self: *CEmitter, trait_name: []const u8) ![]const u8 {
+        return std.fmt.allocPrint(self.scratch.allocator(), "mc_dyn_{s}", .{trait_name});
+    }
+
+    // The C type of a trait method's slot in the vtable: the method signature with
+    // `self` erased to `void *` (the dispatch passes `d.data` there).
+    fn appendVtableSlotType(self: *CEmitter, out: *std.ArrayList(u8), trait: ast.TraitDecl, m: ast.TraitMethodSig) !void {
+        const ret_ty: ast.TypeExpr = m.return_type orelse ast.TypeExpr{ .span = trait.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.name.span } } };
+        try out.appendSlice(self.allocator, try self.cTypeFor(ret_ty, .typedef_name));
+        try out.appendSlice(self.allocator, " (*");
+        try out.appendSlice(self.allocator, m.name.text);
+        try out.appendSlice(self.allocator, ")(void *");
+        // The trait method's first param is `self`; the rest are real args.
+        for (m.params[1..]) |param| {
+            try out.appendSlice(self.allocator, ", ");
+            try out.appendSlice(self.allocator, try self.cTypeFor(param.ty, .typedef_name));
+        }
+        try out.appendSlice(self.allocator, ")");
+    }
+
+    // For every object-safe trait, emit `struct VT_Trait { … };` and the fat-pointer
+    // typedef `mc_dyn_Trait`. Only traits that are actually formed as `*dyn` need this,
+    // but emitting for every declared trait is harmless (unused typedefs cost nothing).
+    fn emitDynTraitTypes(self: *CEmitter) !void {
+        var it = self.trait_decls.iterator();
+        while (it.next()) |entry| {
+            const trait = entry.value_ptr.*;
+            if (!cTraitIsObjectSafe(trait)) continue;
+            // struct VT_Trait { RET (*m)(void*, P...); ... };
+            try self.out.print(self.allocator, "typedef struct {{ ", .{});
+            for (trait.methods) |m| {
+                try self.appendVtableSlotType(self.out, trait, m);
+                try self.out.appendSlice(self.allocator, "; ");
+            }
+            try self.out.print(self.allocator, "}} VT_{s};\n", .{trait.name.text});
+            // typedef struct { void *data; const VT_Trait *vtable; } mc_dyn_Trait;
+            try self.out.print(self.allocator, "typedef struct {{ void *data; VT_{s} const *vtable; }} {s};\n\n", .{ trait.name.text, try self.dynTypeName(trait.name.text) });
+        }
+    }
+
+    // One rodata vtable per `impl Trait for Type` of an object-safe trait:
+    //   static const VT_Trait __vt_Type_Trait = { &Type__m1, &Type__m2, ... };
+    // The function pointers are listed in trait-method order. Each is cast to the
+    // void*-self slot type (the thunk-free erasure is compiler-privileged — the
+    // concrete `*Type` self and the erased `void*` slot are ABI-identical).
+    fn emitVtables(self: *CEmitter) !void {
+        var it = self.impl_methods.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const sep = std.mem.indexOfScalar(u8, key, 0) orelse continue;
+            const trait_name = key[0..sep];
+            const type_name = key[sep + 1 ..];
+            const trait = self.trait_decls.get(trait_name) orelse continue;
+            if (!cTraitIsObjectSafe(trait)) continue;
+            try self.out.print(self.allocator, "static MC_UNUSED VT_{s} const __vt_{s}_{s} = {{ ", .{ trait_name, type_name, trait_name });
+            for (trait.methods, 0..) |m, i| {
+                if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                const mangled = implMethodMangled(entry.value_ptr.*, m.name.text) orelse return error.UnsupportedCEmission;
+                // Cast the concrete `RET Type__m(Type*, P...)` to the `void*`-self slot.
+                try self.out.appendSlice(self.allocator, "(");
+                try self.appendVtableSlotCastType(self.out, trait, m);
+                try self.out.print(self.allocator, "){s}", .{mangled});
+            }
+            try self.out.appendSlice(self.allocator, " };\n");
+        }
+        try self.out.appendSlice(self.allocator, "\n");
+    }
+
+    // The cast type for a vtable slot: `RET (*)(void *, P...)`.
+    fn appendVtableSlotCastType(self: *CEmitter, out: *std.ArrayList(u8), trait: ast.TraitDecl, m: ast.TraitMethodSig) !void {
+        const ret_ty: ast.TypeExpr = m.return_type orelse ast.TypeExpr{ .span = trait.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.name.span } } };
+        try out.appendSlice(self.allocator, try self.cTypeFor(ret_ty, .typedef_name));
+        try out.appendSlice(self.allocator, " (*)(void *");
+        for (m.params[1..]) |param| {
+            try out.appendSlice(self.allocator, ", ");
+            try out.appendSlice(self.allocator, try self.cTypeFor(param.ty, .typedef_name));
+        }
+        try out.appendSlice(self.allocator, ")");
+    }
+
     // The closure type of a callee expression, if it is closure-typed (so its call
     // dispatches through the {code, env} pair). Resolves through aliases.
     fn closureCalleeType(self: *CEmitter, callee: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -2811,6 +2919,44 @@ const CEmitter = struct {
         try self.out.print(self.allocator, ")){s}, .env = (void *)(", .{fname});
         try self.emitExpr(node.args[0], locals);
         try self.out.appendSlice(self.allocator, ") }");
+    }
+
+    // If `callee` is `d.method` where `d` has a `*dyn Trait` type, return the trait name;
+    // such a call dispatches through the vtable. Null otherwise.
+    fn dynCalleeTrait(self: *CEmitter, callee: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+        const member = switch (callee.kind) {
+            .member => |m| m,
+            .grouped => |inner| return self.dynCalleeTrait(inner.*, locals),
+            else => return null,
+        };
+        const base_ty = self.operandEmitType(member.base.*, locals) orelse self.exprSourceTypeForEmission(member.base.*, locals) orelse return null;
+        return switch (self.resolveAliasType(base_ty).kind) {
+            .dyn_trait => |d| d.trait_name.text,
+            else => null,
+        };
+    }
+
+    // `d.method(args)` -> `({ mc_dyn_T t = d; t.vtable->method(t.data, args); })`.
+    // The `d` value is spilled to a temp so its `.data`/`.vtable` are read once.
+    fn emitDynDispatch(self: *CEmitter, node: anytype, trait_name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        const member = switch (node.callee.*.kind) {
+            .member => |m| m,
+            .grouped => |inner| switch (inner.*.kind) {
+                .member => |m| m,
+                else => return error.UnsupportedCEmission,
+            },
+            else => return error.UnsupportedCEmission,
+        };
+        const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+        self.temp_index += 1;
+        try self.out.print(self.allocator, "({{ {s} {s} = ", .{ try self.dynTypeName(trait_name), temp_name });
+        try self.emitExpr(member.base.*, locals);
+        try self.out.print(self.allocator, "; {s}.vtable->{s}({s}.data", .{ temp_name, member.name.text, temp_name });
+        for (node.args) |arg| {
+            try self.out.appendSlice(self.allocator, ", ");
+            try self.emitExpr(arg, locals);
+        }
+        try self.out.appendSlice(self.allocator, "); })");
     }
 
     fn emitClosureCall(self: *CEmitter, node: anytype, clos: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !void {
@@ -4999,6 +5145,12 @@ const CEmitter = struct {
                         return;
                     }
                 }
+                // Tier 2 dynamic dispatch: `d.method(args)` through a `*dyn Trait` ->
+                // `d.vtable->method(d.data, args)` (a genuine load-through-vtable call).
+                if (self.dynCalleeTrait(node.callee.*, locals)) |trait_name| {
+                    try self.emitDynDispatch(node, trait_name, locals);
+                    return;
+                }
                 // Calling a closure-typed value: `c(args)` -> `c.code(c.env, args)`.
                 if (self.closureCalleeType(node.callee.*, locals)) |clos| {
                     try self.emitClosureCall(node, clos, locals);
@@ -6036,8 +6188,37 @@ const CEmitter = struct {
                 try self.emitExprWithTarget(inner.*, locals, target_ty);
                 try self.out.appendSlice(self.allocator, ")");
             },
+            .address_of => {
+                // `&x` / `&mut x` coerced to `*dyn Trait`: build the fat pointer
+                // `(mc_dyn_Trait){ .data = (void*)&x, .vtable = &__vt_Type_Trait }`.
+                if (target_ty) |ty| {
+                    if (try self.emitDynCoercion(expr, locals, ty)) return;
+                }
+                try self.emitExpr(expr, locals);
+            },
             else => try self.emitExpr(expr, locals),
         }
+    }
+
+    // If `target_ty` is `*dyn Trait` and `expr` is `&x`, emit the checked fat-pointer
+    // coercion and return true. The concrete type of `x` selects the rodata vtable.
+    fn emitDynCoercion(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+        const resolved = self.resolveAliasType(target_ty);
+        const trait_name = switch (resolved.kind) {
+            .dyn_trait => |d| d.trait_name.text,
+            else => return false,
+        };
+        const operand = switch (expr.kind) {
+            .address_of => |inner| inner.*,
+            .grouped => |inner| return self.emitDynCoercion(inner.*, locals, target_ty),
+            else => return false,
+        };
+        const source_ty = self.operandEmitType(operand, locals) orelse self.exprSourceTypeForEmission(operand, locals) orelse return false;
+        const type_name = typeName(self.resolveAliasType(source_ty)) orelse return false;
+        try self.out.print(self.allocator, "({s}){{ .data = (void *)&", .{try self.dynTypeName(trait_name)});
+        try self.emitExpr(operand, locals);
+        try self.out.print(self.allocator, ", .vtable = &__vt_{s}_{s} }}", .{ type_name, trait_name });
+        return true;
     }
 
     // Emit a float expression whose target type is f32: every float literal gets an `f` suffix
@@ -11795,6 +11976,28 @@ fn isCKeyword(name: []const u8) bool {
         if (std.mem.eql(u8, name, keyword)) return true;
     }
     return false;
+}
+
+// A trait is object-safe (so it can have a vtable): every method takes self by
+// pointer and is non-generic. Mirrors sema.traitIsObjectSafe — the backend never
+// emits a vtable for a non-object-safe trait.
+fn cTraitIsObjectSafe(t: ast.TraitDecl) bool {
+    for (t.methods) |m| {
+        switch (m.self_mode) {
+            .by_ptr, .by_mut_ptr => {},
+            else => return false,
+        }
+        for (m.params) |p| if (p.is_comptime) return false;
+    }
+    return true;
+}
+
+// The mangled `Type__m` free function an impl provides for trait method `name`.
+fn implMethodMangled(methods: []const ast.ImplTraitMethod, name: []const u8) ?[]const u8 {
+    for (methods) |m| {
+        if (std.mem.eql(u8, m.name.text, name)) return m.mangled;
+    }
+    return null;
 }
 
 fn cType(ty: ast.TypeExpr) []const u8 {
