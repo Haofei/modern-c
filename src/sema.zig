@@ -1602,6 +1602,59 @@ pub const Checker = struct {
                 for (items) |item| self.markBorrowEscape(item, escape_span, state);
                 return;
             },
+            // T1.3: descend into a NESTED struct literal (`.{ .{ .p = &t } }`) too — a borrow
+            // laundered into a struct that is itself an element/field of an outer aggregate
+            // escapes into the same untrackable memory. The escape scan was previously flat
+            // (it saw `&t` only at the TOP level of an array/struct literal); recursing through
+            // nested aggregate/array literals closes the nested-aggregate channel, symmetric
+            // with the one-level case. (Grouped wrappers are peeled below.)
+            .struct_literal => |fields| {
+                for (fields) |field| self.markBorrowEscape(field.value, escape_span, state);
+                return;
+            },
+            // T1.3 ptr-to-int round-trip: taking the address of a linear `move` value and casting
+            // it to an INTEGER (`&<move-value> as usize`) launders a borrow through an integer,
+            // dropping the provenance the borrow tracker follows. We cannot track the integer (or
+            // any pointer reconstituted from it), so the cast IS a borrow ESCAPE: mark the move
+            // root escaped here so the later by-value move is refused (E_USE_AFTER_MOVE). NARROW
+            // trigger — fires ONLY when an `&`/move-place is cast to an integer type. General
+            // `usize as *T`, `&<non-move-local> as usize`, address arithmetic, and MMIO/DMA
+            // address construction are unaffected (no `&<move-binding>` feeds the integer cast).
+            //
+            // Two parse shapes carry this (Pratt precedence makes `&` bind looser than `as`):
+            //   * `&t as usize`   parses as `&(t as usize)` — an `address_of` of a cast of `t`.
+            //   * `(&t) as usize` parses as `(&t) as usize` — a `cast` of an `address_of`.
+            // The `.cast` arm handles the explicit-paren form; the `.address_of` arm (below) the
+            // natural-precedence form.
+            .cast => |c| {
+                if (self.move_ctx) |mctx| {
+                    if (isIntegerLike(classifyTypeCtx(c.ty.*, mctx.*))) {
+                        // `(&<move>) as int`: the cast operand is itself the `&<move>` borrow.
+                        if (borrowedMoveRoot(c.value.*, state)) |root| {
+                            if (state.getPtr(root)) |slot| {
+                                if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
+                            }
+                            return;
+                        }
+                    }
+                }
+                // Not a `&<move> as int` round-trip — a plain `<non-move> as T` cast (including the
+                // pervasive `usize as *T` / integer-address-to-pointer direction) is NOT an escape.
+                return;
+            },
+            .address_of => |inner| {
+                // `&(<move-place> as int)`: address of a value cast from a move place into an
+                // integer — the natural-precedence parse of `&t as usize`. The borrow's
+                // provenance was already stripped by the integer cast, so the move root escapes.
+                // Only THIS shape is handled here; any other `&…` (e.g. a sub-place borrow
+                // `&t.v`) falls through to the default `borrowedMoveRoot` escape below.
+                if (castToIntegerMoveRoot(self, inner.*, state)) |root| {
+                    if (state.getPtr(root)) |slot| {
+                        if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
+                    }
+                    return;
+                }
+            },
             .grouped => |inner| return self.markBorrowEscape(inner.*, escape_span, state),
             else => {},
         }
@@ -8155,6 +8208,23 @@ fn aliasReferentOf(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[
 // is broader than `aliasReferentOf` (which is the no-false-positive scalar-alias slice): it
 // is used only to mark a move binding as having an ESCAPED borrow, where over-approximation
 // is the safe direction. Returns null if the address is not rooted at a tracked move binding.
+// T1.3 ptr-to-int round-trip: if `expr` is a cast-to-INTEGER of a value rooted at a tracked
+// `move` binding (`<move-place> as usize`, grouped peeled), return that move root; else null.
+// Used by the borrow-escape scan to treat `&<move> as int` as a provenance-stripping escape.
+// Narrow by construction: a non-integer target type or a non-move-rooted cast operand → null,
+// so the pervasive integer<->pointer kernel/uaccess code is unaffected.
+fn castToIntegerMoveRoot(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[]const u8 {
+    switch (expr.kind) {
+        .grouped => |inner| return castToIntegerMoveRoot(self, inner.*, state),
+        .cast => |c| {
+            const mctx = self.move_ctx orelse return null;
+            if (!isIntegerLike(classifyTypeCtx(c.ty.*, mctx.*))) return null;
+            return placeRootMoveName(c.value.*, state);
+        },
+        else => return null,
+    }
+}
+
 fn borrowedMoveRoot(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) ?[]const u8 {
     const target = switch (expr.kind) {
         .address_of => |inner| inner.*,

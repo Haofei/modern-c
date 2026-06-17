@@ -24,6 +24,7 @@
 
 move struct T { v: u32 }
 struct H { p: *T }
+struct Holder { p: *T }        // element type for the nested-aggregate channel
 
 extern fn mk() -> T;
 extern fn cn(t: T) -> u32;       // consumes (moves) t
@@ -120,6 +121,34 @@ fn reject_subfield_alias() -> u32 {
     return a + rd(p);
 }
 
+// 9. borrow laundered into a NESTED aggregate literal (array of struct holding &t). The
+// escape scan was flat — it saw `&t` only at the TOP level of an aggregate literal, so a
+// borrow buried one level deeper (`.{ .{ .p = &t } }`) escaped silently and a later
+// arr[0].p read a dangling borrow. The escape scan now recurses through nested
+// aggregate/array literals, so the borrow escapes into array memory we cannot prove dead
+// and the move of t is refused — symmetric with the flat `.{ .p = &t }` / `.{ &t }` cases.
+fn reject_nested_aggregate_element() -> u32 {
+    let t: T = mk();
+    let arr: [1]Holder = .{ .{ .p = &t } };   // &t escapes NESTED into arr[0].p
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let a: u32 = cn(t);          // moving t would leave arr[0].p dangling — refused
+    return a + arr[0].p.v;
+}
+
+// 10. borrow laundered through a ptr-to-int round-trip. `&t as usize` drops the provenance
+// the borrow tracker follows; a pointer reconstituted from the integer (`n as *T`) would
+// then read moved-out storage. We cannot track the integer, so the cast itself is treated
+// as a borrow ESCAPE (narrow trigger: `&<live-move-binding> as <integer>`), and the later
+// move of t is refused. (The reconstituted `p`/read are omitted so this case has exactly one
+// diagnostic; the escape fires at the move.)
+fn reject_ptr_to_int_roundtrip() -> u32 {
+    let t: T = mk();
+    let n: usize = &t as usize;   // address-of-move-value -> integer: provenance dropped, ESCAPE
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let a: u32 = cn(t);          // moving t refused — its borrow escaped through the integer
+    return a + (n as u32);
+}
+
 // ---------------------------------------------------------------------------
 // ACCEPTED patterns (must compile clean — these are NOT bugs)
 // ---------------------------------------------------------------------------
@@ -152,4 +181,27 @@ fn accept_call_launder_dead_before_move() -> u32 {
     let q: *T = id(&t);
     let b: u32 = pk(q);           // used BEFORE the move
     return cn(t) + b;
+}
+
+// --- narrow-trigger guards: the ptr-to-int escape gate must NOT over-fire ----------------
+// These prove the gate is `&<move-binding> as int` ONLY. A general integer->pointer cast,
+// `&<non-move-local> as usize`, and integer address arithmetic must all still compile clean.
+
+// integer -> pointer (NO move binding involved): the reverse round-trip is unrestricted.
+fn accept_usize_to_ptr_non_move(n: usize) -> u32 {
+    let p: *u32 = n as *u32;      // reconstituting a pointer from an integer is allowed
+    return rd(p);
+}
+
+// address-of a NON-move local cast to an integer: not a `move` borrow, so no escape gate.
+fn accept_addr_of_non_move_local() -> usize {
+    let x: u32 = 7;
+    let n: usize = &x as usize;   // &<non-move-local> as usize — allowed
+    return n;
+}
+
+// integer address arithmetic / construction (the pervasive MMIO/DMA pattern): allowed.
+fn accept_address_arith(base: usize, off: usize) -> *u32 {
+    let addr: usize = base + off; // address math on plain integers — never a move borrow
+    return addr as *u32;          // and the integer->pointer cast back is unrestricted
 }
