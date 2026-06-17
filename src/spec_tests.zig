@@ -61,6 +61,10 @@ const CheckKind = enum {
     diagnostic,
     ir_fact,
     lower_c,
+    // A fixture whose `check=` only documents that it must COMPILE CLEAN (an accept
+    // fixture with no diagnostic to assert). Counted, but not output-verified and not
+    // asserted-zero — the fixture's value is that `checkModule` produces no error.
+    acceptance,
     future_trap,
     future_lowering,
     unsupported,
@@ -70,6 +74,7 @@ const CheckKind = enum {
             .diagnostic => "diagnostic",
             .ir_fact => "IR fact",
             .lower_c => "lower-c",
+            .acceptance => "acceptance",
             .future_trap => "future trap",
             .future_lowering => "future lowering",
             .unsupported => "unsupported",
@@ -81,6 +86,7 @@ const CheckSummary = struct {
     diagnostics: usize = 0,
     ir_facts: usize = 0,
     lower_c: usize = 0,
+    acceptance: usize = 0,
     future_traps: usize = 0,
     future_lowering: usize = 0,
     unsupported: usize = 0,
@@ -90,6 +96,7 @@ const CheckSummary = struct {
             .diagnostic => self.diagnostics += 1,
             .ir_fact => self.ir_facts += 1,
             .lower_c => self.lower_c += 1,
+            .acceptance => self.acceptance += 1,
             .future_trap => self.future_traps += 1,
             .future_lowering => self.future_lowering += 1,
             .unsupported => self.unsupported += 1,
@@ -742,6 +749,7 @@ fn classifyCheck(check: []const u8) CheckKind {
     if (isDiagnosticCode(check)) return .diagnostic;
     if (isIrFactCheck(check)) return .ir_fact;
     if (isLowerCCheck(check)) return .lower_c;
+    if (isAcceptanceCheck(check)) return .acceptance;
     if (isFutureTrapCheck(check)) return .future_trap;
     if (isFutureLoweringCheck(check)) return .future_lowering;
     return .unsupported;
@@ -761,6 +769,14 @@ fn metadataListContains(value: []const u8, needle: []const u8) bool {
 
 fn isDiagnosticCode(check: []const u8) bool {
     return std.mem.startsWith(u8, check, "E_");
+}
+
+fn isAcceptanceCheck(check: []const u8) bool {
+    const names = [_][]const u8{
+        "traits-tier1-accept",
+        "traits-tier1-irq-accept",
+    };
+    return matchesAny(check, &names);
 }
 
 fn isIrFactCheck(check: []const u8) bool {

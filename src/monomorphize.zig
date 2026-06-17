@@ -45,6 +45,11 @@ const Instance = struct {
     mangled: []const u8,
     attrs: []ast.Attr = &.{},
     generated: bool = false,
+    // A `where T: Trait` bound was unsatisfied for this instantiation (already reported
+    // E_TRAIT_NOT_SATISFIED at the call). We still emit a specialization so the call
+    // resolves, but with an `unreachable` body — the real body would reference a missing
+    // `Type__method`, spilling a deep-body cascade the design forbids.
+    bound_failed: bool = false,
 };
 
 const StructInstance = struct {
@@ -219,6 +224,10 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
             var spec = try cloneFnDeclCtx(&spec_ctx, inst.decl);
             spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
             spec.params = try dropComptimeParams(arena, spec.params);
+            // A bound-failed instantiation already reported E_TRAIT_NOT_SATISFIED; emit an
+            // `unreachable`-only body so the call resolves but the real body (which would
+            // reference a missing `Type__method`) cannot spill a deep-body cascade.
+            if (inst.bound_failed) spec.body = unreachableBody(arena, inst.decl.name.span);
             try out.append(arena, .{ .span = inst.decl.name.span, .attrs = inst.attrs, .kind = .{ .fn_decl = spec } });
         }
     }
@@ -242,6 +251,15 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
     if (rewriter.oom) return error.OutOfMemory;
 
     return .{ .decls = try out.toOwnedSlice(arena) };
+}
+
+// A `{ return unreachable; }` body for a bound-failed specialization. `unreachable`
+// is a diverging expression in MC, so it type-checks as any return type.
+fn unreachableBody(arena: std.mem.Allocator, span: ast.Span) ast.Block {
+    const unreachable_expr = ast.Expr{ .span = span, .kind = .{ .unreachable_expr = {} } };
+    const items = arena.alloc(ast.Stmt, 1) catch return .{ .span = span, .items = &.{} };
+    items[0] = .{ .span = span, .kind = .{ .@"return" = unreachable_expr } };
+    return .{ .span = span, .items = items };
 }
 
 fn dropComptimeParams(arena: std.mem.Allocator, params: []const ast.Param) ![]ast.Param {
@@ -556,7 +574,12 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
     }
     // Tier 1 bound satisfaction (checked at the instantiation site): each `where
     // P: Trait` requires an `impl Trait for <subst(P)>`. An unmet bound names the type
-    // and trait — not a deep-body failure (cf. Zig comptime duck typing).
+    // and trait — not a deep-body failure (cf. Zig comptime duck typing). On failure we
+    // report E_TRAIT_NOT_SATISFIED at the call and DO NOT instantiate (returning null
+    // leaves the original call, which then resolves to E_UNKNOWN_FUNCTION on the SAME
+    // line) — so a non-conforming instantiation never spills a cascade of deep-body
+    // "unknown method" errors.
+    var bound_failed = false;
     if (rw.reporter) |reporter| {
         for (info.decl.bounds) |bound| {
             const concrete = switch (subst.get(bound.type_param.text) orelse continue) {
@@ -565,6 +588,7 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             };
             const conforms = if (rw.conformance.get(bound.trait_name.text)) |set| set.contains(concrete) else false;
             if (!conforms) {
+                bound_failed = true;
                 reporter.err(node.callee.*.span, "{s}: {s}", .{
                     "E_TRAIT_NOT_SATISFIED",
                     std.fmt.allocPrint(rw.arena, "type '{s}' does not satisfy the bound '{s}: {s}' (no `impl {s} for {s}`)", .{ concrete, bound.type_param.text, bound.trait_name.text, bound.trait_name.text, concrete }) catch "trait bound not satisfied",
@@ -578,7 +602,7 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             rw.oom = true;
             return null;
         };
-        inst.* = .{ .decl = info.decl, .subst = subst, .mangled = mangled_name, .attrs = info.attrs };
+        inst.* = .{ .decl = info.decl, .subst = subst, .mangled = mangled_name, .attrs = info.attrs, .bound_failed = bound_failed };
         rw.instances.put(mangled_name, inst) catch {
             rw.oom = true;
         };
