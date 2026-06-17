@@ -857,9 +857,14 @@ const LlvmEmitter = struct {
     }
 
     fn emitExpr(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
-        // Tier 2 coercion: `&x` / `&mut x` -> `*dyn Trait` builds the fat pointer
-        // { data = &x, vtable = @__vt_Type_Trait } (the only safe path to a `*dyn`).
-        if (expr.kind == .address_of or (expr.kind == .grouped and expr.kind.grouped.*.kind == .address_of)) {
+        // Tier 2 coercion: a `*T` value -> `*dyn Trait` builds the fat pointer
+        // { data = <ptr>, vtable = @__vt_T_Trait } (the only safe path to a `*dyn`).
+        // This runs UNIFORMLY wherever `expected_ty` is threaded — let-init, return,
+        // call arg, struct field, array element — not just at `&x`. The vtable is keyed
+        // on the STATIC pointee type T of the source `*T` (a `&x`, a `*Square` param, a
+        // `*T` field — all uniform). Sema has already verified conformance + forge-safety;
+        // a `*dyn` pass-through value (same trait) returns null and emits normally.
+        if (self.resolveAliasType(expected_ty).kind == .dyn_trait) {
             if (try self.emitDynCoercion(expr, expected_ty)) |value| return value;
         }
         const value = try switch (expr.kind) {
@@ -2091,23 +2096,43 @@ const LlvmEmitter = struct {
         }
     }
 
-    // Tier 2: if `expected_ty` is `*dyn Trait` and `expr` is `&x`, build the fat
-    // pointer `{ data = &x, vtable = @__vt_Type_Trait }` and return it. The concrete
-    // type of `x` selects the rodata vtable. Returns null when not applicable.
+    // Tier 2: if `expected_ty` is `*dyn Trait`, build the fat pointer
+    // `{ data = <ptr>, vtable = @__vt_T_Trait }` from a `*T` source and return it. The
+    // STATIC pointee type T selects the rodata vtable, UNIFORMLY for:
+    //   - `&x` / `&mut x`     : data = address-of x,  T = typeof(x)
+    //   - a `*T` value (param, field, returned `*T`, …): data = the pointer value, T = pointee
+    // An existing `*dyn Trait` value (pass-through, same trait) returns null so it emits
+    // normally. Returns null when not applicable. Sema verified conformance + forge-safety.
     fn emitDynCoercion(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) !?[]const u8 {
         const resolved = self.resolveAliasType(expected_ty);
         const trait_name = switch (resolved.kind) {
             .dyn_trait => |d| d.trait_name.text,
             else => return null,
         };
-        const operand = switch (expr.kind) {
-            .address_of => |inner| inner.*,
+        var type_name: []const u8 = undefined;
+        var data_ptr: []const u8 = undefined;
+        switch (expr.kind) {
             .grouped => |inner| return self.emitDynCoercion(inner.*, expected_ty),
-            else => return null,
-        };
-        const source_ty = self.exprType(operand) orelse return null;
-        const type_name = typeName(self.resolveAliasType(source_ty)) orelse return null;
-        const data_ptr = try self.emitAddressOf(operand);
+            .address_of => |inner| {
+                // `&x` -> data = &x, vtable keyed on typeof(x).
+                const source_ty = self.exprType(inner.*) orelse return null;
+                type_name = typeName(self.resolveAliasType(source_ty)) orelse return null;
+                data_ptr = try self.emitAddressOf(inner.*);
+            },
+            else => {
+                // A `*T` value: data = the pointer itself, vtable keyed on the pointee T.
+                const source_ty = self.resolveAliasType(self.exprType(expr) orelse return null);
+                // An existing `*dyn Trait` value passes through (no re-wrap).
+                if (source_ty.kind == .dyn_trait) return null;
+                const pointee = switch (source_ty.kind) {
+                    .pointer => |node| node.child.*,
+                    else => return null,
+                };
+                type_name = typeName(self.resolveAliasType(pointee)) orelse return null;
+                // Emit the pointer VALUE as the data word (it already points at the T).
+                data_ptr = try self.emitExpr(expr, source_ty);
+            },
+        }
         const dyn_llvm = try self.llvmType(resolved); // "{ ptr, ptr }"
         const with_data = try self.nextTemp();
         const result = try self.nextTemp();

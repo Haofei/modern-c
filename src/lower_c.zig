@@ -6143,6 +6143,13 @@ const CEmitter = struct {
             if (typeName(self.resolveAliasType(ty))) |tn| {
                 if (std.mem.eql(u8, tn, "f32")) return self.emitF32Expr(expr, locals);
             }
+            // The uniform `*T -> *dyn Trait` coercion: fires at EVERY assignment context
+            // that threads a target type (let-init, return, assignment RHS, struct field,
+            // array element, call arg), from any `*T` source — not just `&x`. A `*dyn`
+            // pass-through returns false and emits normally.
+            if (self.resolveAliasType(ty).kind == .dyn_trait) {
+                if (try self.emitDynCoercion(expr, locals, ty)) return;
+            }
         }
         switch (expr.kind) {
             .array_literal => |items| {
@@ -6204,25 +6211,48 @@ const CEmitter = struct {
         }
     }
 
-    // If `target_ty` is `*dyn Trait` and `expr` is `&x`, emit the checked fat-pointer
-    // coercion and return true. The concrete type of `x` selects the rodata vtable.
+    // If `target_ty` is `*dyn Trait`, emit the checked fat-pointer coercion from a `*T`
+    // source and return true. The STATIC pointee type T selects the rodata vtable,
+    // UNIFORMLY for:
+    //   - `&x` / `&mut x`     : .data = (void*)&x,   T = typeof(x)
+    //   - a `*T` value (param, field, returned `*T`, …): .data = (void*)<ptr>, T = pointee
+    // An existing `*dyn Trait` value passes through (returns false → normal emit). Sema
+    // verified conformance + forge-safety. Returns false when not applicable.
     fn emitDynCoercion(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
         const resolved = self.resolveAliasType(target_ty);
         const trait_name = switch (resolved.kind) {
             .dyn_trait => |d| d.trait_name.text,
             else => return false,
         };
-        const operand = switch (expr.kind) {
-            .address_of => |inner| inner.*,
+        switch (expr.kind) {
             .grouped => |inner| return self.emitDynCoercion(inner.*, locals, target_ty),
-            else => return false,
-        };
-        const source_ty = self.operandEmitType(operand, locals) orelse self.exprSourceTypeForEmission(operand, locals) orelse return false;
-        const type_name = typeName(self.resolveAliasType(source_ty)) orelse return false;
-        try self.out.print(self.allocator, "({s}){{ .data = (void *)&", .{try self.dynTypeName(trait_name)});
-        try self.emitExpr(operand, locals);
-        try self.out.print(self.allocator, ", .vtable = &__vt_{s}_{s} }}", .{ type_name, trait_name });
-        return true;
+            .address_of => |inner| {
+                // `&x` -> .data = (void*)&x, vtable keyed on typeof(x).
+                const operand = inner.*;
+                const source_ty = self.operandEmitType(operand, locals) orelse self.exprSourceTypeForEmission(operand, locals) orelse return false;
+                const type_name = typeName(self.resolveAliasType(source_ty)) orelse return false;
+                try self.out.print(self.allocator, "({s}){{ .data = (void *)&", .{try self.dynTypeName(trait_name)});
+                try self.emitExpr(operand, locals);
+                try self.out.print(self.allocator, ", .vtable = &__vt_{s}_{s} }}", .{ type_name, trait_name });
+                return true;
+            },
+            else => {
+                // A `*T` value: .data = (void*)<the pointer>, vtable keyed on the pointee T.
+                const source_ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return false;
+                const resolved_src = self.resolveAliasType(source_ty);
+                // An existing `*dyn Trait` value passes through (no re-wrap).
+                if (resolved_src.kind == .dyn_trait) return false;
+                const pointee = switch (resolved_src.kind) {
+                    .pointer => |node| node.child.*,
+                    else => return false,
+                };
+                const type_name = typeName(self.resolveAliasType(pointee)) orelse return false;
+                try self.out.print(self.allocator, "({s}){{ .data = (void *)", .{try self.dynTypeName(trait_name)});
+                try self.emitExpr(expr, locals);
+                try self.out.print(self.allocator, ", .vtable = &__vt_{s}_{s} }}", .{ type_name, trait_name });
+                return true;
+            },
+        }
     }
 
     // Emit a float expression whose target type is f32: every float literal gets an `f` suffix

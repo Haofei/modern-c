@@ -3285,6 +3285,8 @@ pub const Checker = struct {
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, value, ctx);
         const address_checked = self.checkAddressOfInitializer(target_class, target_ty, value, ctx);
         const fn_pointer_checked = self.checkFunctionPointerInitializer(target_ty, value, ctx);
+        // The uniform `*T -> *dyn Trait` coercion on an assignment RHS (same as let/return/arg/field).
+        const dyn_checked = self.checkDynCoercionInitializer(target_ty, value, ctx);
         const address_class_checked = checkAddressClassConversion(self, value.span, target_class, value_class);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, value, ctx, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
@@ -3298,7 +3300,7 @@ pub const Checker = struct {
         {
             self.errorCode(value.span, "E_BORROW_ESCAPES_SCOPE", "cannot store the address of local storage where it outlives the local's scope (the borrow would dangle)");
         }
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target_class, value_class)) {
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
         }
     }
@@ -5295,11 +5297,13 @@ pub const Checker = struct {
             const c_void_conversion_checked = self.checkCVoidPointerConversion(field_ty, field.value, ctx);
             const address_checked = self.checkAddressOfInitializer(field_class, field_ty, field.value, ctx);
             const fn_pointer_checked = self.checkFunctionPointerInitializer(field_ty, field.value, ctx);
+            // The uniform `*T -> *dyn Trait` coercion at a struct-field init.
+            const dyn_checked = self.checkDynCoercionInitializer(field_ty, field.value, ctx);
             const address_class_checked = checkAddressClassConversion(self, field.value.span, field_class, value_class);
             const enum_checked = self.checkEnumValueCompatibility(field_ty, field.value, ctx, code, message);
             const union_checked = self.checkTaggedUnionConstructorCompatibility(field_ty, field.value, ctx, code, message);
             const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(field.value, ctx, code, message) else false;
-            if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(field_class, value_class)) {
+            if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(field_class, value_class)) {
                 self.errorCode(field.value.span, code, message);
             }
         }
@@ -5432,11 +5436,29 @@ pub const Checker = struct {
             }
             return true;
         }
-        // Passing an existing `*dyn Trait` value through (same trait): allowed — an
-        // array element, a parameter, a field, a returned `*dyn`, etc.
+        // A `*T` VALUE (not a `&x` literal — a `*Square` parameter, a `*T` field, a
+        // `*T` returned from a call, etc.) coerces to `*dyn Trait` the SAME way `&x`
+        // does: the vtable is synthesized from the STATIC pointee type T. This is the
+        // uniform coercion — it must work at every assignment context (return, field,
+        // arg, …), not only `&x` at a `let`. Verify `impl Trait for T` here; the
+        // backend emits `{data, vtable=&__vt_T_Trait}` keyed on T.
         if (exprResultType(expr, ctx) orelse exprDeclaredType(expr, ctx)) |src| {
-            if (resolveAliasType(src, ctx).kind == .dyn_trait) {
+            const resolved_src = resolveAliasType(src, ctx);
+            // Passing an existing `*dyn Trait` value through (same trait): allowed.
+            if (resolved_src.kind == .dyn_trait) {
                 if (sameTypeSyntaxCtx(src, resolved, ctx)) return true;
+            }
+            // A `*T` value where T is a concrete nominal type that conforms.
+            if (dynSourcePointeeTypeName(resolved_src)) |type_name| {
+                // A `*mut dyn Trait` target needs a `*mut T` source (mutable borrow).
+                if (dyn.mutability == .mut and !pointerSourceIsMutable(resolved_src)) {
+                    self.errorCode(expr.span, "E_DYN_MUT_BORROW", "a `*mut dyn Trait` requires a `*mut T` (mutable) source pointer");
+                    return true;
+                }
+                if (!self.traitConforms(dyn.trait_name.text, type_name)) {
+                    self.errorCode(expr.span, "E_TRAIT_NOT_SATISFIED", "no `impl Trait for Type` for this concrete type, so it cannot coerce to `*dyn Trait`");
+                }
+                return true;
             }
         }
         // Anything else is an attempt to fabricate a trait object. Only `unsafe` may.
@@ -5479,6 +5501,10 @@ pub const Checker = struct {
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, expr, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, expr, ctx);
         const fn_pointer_checked = self.checkFunctionPointerInitializer(target_ty, expr, ctx);
+        // The uniform `*T -> *dyn Trait` coercion (conformance + forge-safety), applied
+        // at `return` exactly as at a `let` — so `return p;` (p: *Square) coerces and the
+        // backend synthesizes the vtable here; a forged `{data,vtable}` is E_DYN_FORGE.
+        const dyn_checked = self.checkDynCoercionInitializer(target_ty, expr, ctx);
         const address_class_checked = checkAddressClassConversion(self, expr.span, target, returned);
         const local_escape_checked = self.checkLocalAddressReturn(target, expr, ctx);
         // (bug #3) Returning an aggregate literal that embeds `&local` makes the borrow dangle
@@ -5490,7 +5516,7 @@ pub const Checker = struct {
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type") else false;
         const secret_checked = target == .secret and self.checkSecretWrapInitializer(target_ty, expr, ctx);
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, returned)) {
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
@@ -5550,6 +5576,8 @@ pub const Checker = struct {
         const pointer_conversion_checked = self.checkPointerViewInitializer(target_ty, arg, ctx);
         const c_void_conversion_checked = self.checkCVoidPointerConversion(target_ty, arg, ctx);
         const address_checked = self.checkAddressOfInitializer(target, target_ty, arg, ctx);
+        // The uniform `*T -> *dyn Trait` coercion at a call argument (same as let/return).
+        const dyn_checked = self.checkDynCoercionInitializer(target_ty, arg, ctx);
         const address_class_checked = checkAddressClassConversion(self, arg.span, target, source);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, arg, ctx, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
@@ -5560,7 +5588,7 @@ pub const Checker = struct {
         // same. (Struct literals are target-typed and handled above.)
         if (self.checkNamedStructMismatch(target_ty, arg, ctx)) return;
         const secret_checked = target == .secret and self.checkSecretWrapInitializer(target_ty, arg, ctx);
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, source)) {
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         }
     }
@@ -7586,6 +7614,35 @@ fn storageElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
         .array => |node| node.child.*,
         .qualified => |node| storageElementType(node.child.*),
         else => null,
+    };
+}
+
+// The nominal pointee type name of a `*T` source that may coerce to `*dyn Trait`:
+// a single (`.pointer`) pointer to a named nominal type. A `[*]` raw-many pointer, a
+// slice, or a non-nominal pointee is NOT a `*T` trait-object source. The vtable is
+// synthesized from this static pointee type T (`__vt_T_Trait`).
+fn dynSourcePointeeTypeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .pointer => |node| switch (node.child.*.kind) {
+            .name => |name| name.text,
+            .qualified => |q| switch (q.child.*.kind) {
+                .name => |name| name.text,
+                else => null,
+            },
+            else => null,
+        },
+        .qualified => |node| dynSourcePointeeTypeName(node.child.*),
+        else => null,
+    };
+}
+
+// True when a `*T` source pointer permits a mutable borrow (`*mut T`): a `*mut dyn
+// Trait` target requires it. A plain `*T` (shared) cannot form a `*mut dyn`.
+fn pointerSourceIsMutable(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .pointer => |node| node.mutability == .mut,
+        .qualified => |node| pointerSourceIsMutable(node.child.*),
+        else => false,
     };
 }
 
