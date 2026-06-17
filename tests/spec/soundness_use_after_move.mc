@@ -1,0 +1,155 @@
+// SPEC: section=18.1,D.1
+// SPEC: milestone=soundness-use-after-move
+// SPEC: phase=sema
+// SPEC: expect=pass,compile_error
+// SPEC: check=E_USE_AFTER_MOVE
+
+// SOUNDNESS SOURCE OF TRUTH — use-after-move / borrow-escape (T1.2).
+//
+// This fixture is the committed, self-verifying encoding of the use-after-move channel
+// matrix. Each `reject_*` case carries an inline `// EXPECT_ERROR:` that the harness
+// mechanically matches against a real diagnostic on the target line; each `accept_*` case
+// MUST compile clean (the harness fails the build if any of them emits a compiler-error-coded
+// diagnostic without an EXPECT_ERROR). So if a previously-closed channel silently re-opens
+// (a reject stops rejecting) OR a legitimate pattern starts being rejected (an accept
+// regresses), `zig build test` turns red. The claim is no longer trust-me prose — it is
+// enforced by this file.
+//
+// Two diagnostic shapes appear, both E_USE_AFTER_MOVE:
+//   * "use of an alias ... after that value was moved" — the precise stale-alias check, on
+//     the READ of a scalar pointer alias laundered out of a tracked move binding.
+//   * "cannot move this linear `move` value: a borrow ... stored into memory" — the
+//     conservative move-refusal, on the MOVE itself, when the borrow escaped into aggregate
+//     or array memory we cannot prove dead.
+
+move struct T { v: u32 }
+struct H { p: *T }
+
+extern fn mk() -> T;
+extern fn cn(t: T) -> u32;       // consumes (moves) t
+extern fn pk(p: *T) -> u32;      // reads through a borrow
+extern fn rd(p: *u32) -> u32;    // reads through a sub-place borrow
+extern fn id(p: *T) -> *T;       // returns the borrow it was given (laundering channel)
+
+// ---------------------------------------------------------------------------
+// REJECTED channels — precise stale-alias reads (fire on the READ line)
+// ---------------------------------------------------------------------------
+
+// 1. direct scalar alias chain, then use after move
+fn reject_direct_alias_chain() -> u32 {
+    let t: T = mk();
+    let p: *T = &t;
+    let q: *T = p;                // alias of an alias of t
+    let a: u32 = cn(t);          // t moved
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(q);            // q is a stale alias of moved t
+}
+
+// 2. reassignment of an alias local, then use after move
+fn reject_reassignment_alias() -> u32 {
+    let t: T = mk();
+    var p: *T = &t;
+    p = &t;                       // p re-points at t
+    let a: u32 = cn(t);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(p);
+}
+
+// 3. borrow laundered into a STRUCT-LITERAL field, read after move
+fn reject_struct_literal_field() -> u32 {
+    let t: T = mk();
+    let h: H = .{ .p = &t };      // &t escapes into h.p
+    let a: u32 = cn(t);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(h.p);          // h.p is a stale alias of moved t
+}
+
+// 8. call laundering: `id(p)` may retain the borrow; used after move
+fn reject_call_launder_used() -> u32 {
+    let t: T = mk();
+    let q: *T = id(&t);           // &t laundered through a pointer-returning call
+    let a: u32 = cn(t);
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(q);
+}
+
+// ---------------------------------------------------------------------------
+// REJECTED channels — conservative move-refusal (fire on the MOVE line, because the
+// borrow escaped into memory we cannot prove dead). The later read is omitted so each
+// case has exactly one diagnostic to assert.
+// ---------------------------------------------------------------------------
+
+// 4. borrow laundered into an ARRAY-LITERAL element (the newly-closed gap).
+// Before the fix, `let arr: [1]*T = .{ &t }` did NOT route the array-literal element
+// through the escape-into-memory hook, so the move of t was accepted and a later
+// pk(arr[0]) read a dangling borrow — a SILENT use-after-move. The element now marks t
+// escaped, so the move is refused, symmetric with `arr[0] = &t` (assignment) and
+// `.{ .p = &t }` (struct literal).
+fn reject_array_literal_element() -> u32 {
+    let t: T = mk();
+    let arr: [1]*T = .{ &t };     // &t escapes into arr[0] at init
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let a: u32 = cn(t);          // moving t would leave arr[0] dangling — refused
+    return a + arr[0].v;
+}
+
+// 5. borrow laundered into a struct-FIELD ASSIGNMENT, then moved
+fn reject_struct_field_assign() -> u32 {
+    let t: T = mk();
+    var h: H = .{ .p = &t };
+    h.p = &t;                     // re-laundered by assignment
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return cn(t);                // moving t refused while h.p holds the borrow
+}
+
+// 6. borrow laundered into an array-ELEMENT ASSIGNMENT, then moved
+fn reject_array_element_assign() -> u32 {
+    let t: T = mk();
+    var arr: [1]*T = .{ &t };
+    arr[0] = &t;
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return cn(t);
+}
+
+// 7. subfield borrow `&t.v`, whole value then moved
+fn reject_subfield_alias() -> u32 {
+    let t: T = mk();
+    let p: *u32 = &t.v;           // borrow of a sub-place of t
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let a: u32 = cn(t);
+    return a + rd(p);
+}
+
+// ---------------------------------------------------------------------------
+// ACCEPTED patterns (must compile clean — these are NOT bugs)
+// ---------------------------------------------------------------------------
+
+// plain move, no borrow at all
+fn accept_plain_move() -> u32 {
+    let t: T = mk();
+    return cn(t);
+}
+
+// borrow taken, used, and dead BEFORE the move (the legitimate transient-borrow pattern)
+fn accept_borrow_use_then_move() -> u32 {
+    let t: T = mk();
+    let x: u32 = pk(&t);          // borrow used here; nothing escapes into memory
+    return cn(t) + x;            // t may be moved — the borrow is dead
+}
+
+// whole-value borrow stored in a struct, USED before the move (precise field-alias tracking
+// proves h.p dead at the move, so the move is accepted — no over-rejection here)
+fn accept_struct_field_used_before_move() -> u32 {
+    let t: T = mk();
+    let h: H = .{ .p = &t };
+    let b: u32 = pk(h.p);         // read BEFORE the move
+    return cn(t) + b;            // h.p never read again — t may be moved
+}
+
+// laundered-through-a-call pointer, dead before the move
+fn accept_call_launder_dead_before_move() -> u32 {
+    let t: T = mk();
+    let q: *T = id(&t);
+    let b: u32 = pk(q);           // used BEFORE the move
+    return cn(t) + b;
+}

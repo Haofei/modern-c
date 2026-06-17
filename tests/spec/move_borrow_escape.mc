@@ -35,11 +35,24 @@ fn reject_struct_field_assign() -> u32 {
     return a + b;
 }
 
-// --- rejected: borrow stored into an ARRAY ELEMENT, then the value is moved ---
+// --- rejected: borrow stored into an ARRAY ELEMENT by assignment, then the value is moved ---
 fn reject_array_elem_assign() -> u32 {
     let t: T = mk();
     var arr: [1]*T = .{ &t };
     arr[0] = &t;                  // borrow of t laundered into memory (arr[0])
+    // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let a: u32 = cn(t);           // moving t would leave arr[0] dangling — rejected
+    return a + pk(arr[0]);
+}
+
+// --- rejected: borrow stored into an ARRAY-LITERAL ELEMENT, then the value is moved ---
+// The symmetric counterpart of the element-ASSIGNMENT case above. The array-literal
+// initializer `.{ &t }` launders &t into arr[0] just as `arr[0] = &t` does; before the
+// fix this element path was NOT routed through the escape-into-memory hook, so the move
+// was silently accepted (use-after-move). Now the move is refused.
+fn reject_array_literal_elem() -> u32 {
+    let t: T = mk();
+    let arr: [1]*T = .{ &t };     // borrow of t laundered into memory (arr[0]) at init
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let a: u32 = cn(t);           // moving t would leave arr[0] dangling — rejected
     return a + pk(arr[0]);

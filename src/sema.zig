@@ -1592,7 +1592,19 @@ pub const Checker = struct {
     // the stale-alias mechanism already tracks precisely) is handled by the caller NOT routing
     // here — only stores into aggregate/array memory or subfield aliases reach this.
     fn markBorrowEscape(self: *Checker, value: ast.Expr, escape_span: diagnostics.Span, state: *std.StringHashMap(MoveSlot)) void {
-        _ = self;
+        // T1.2: an ARRAY-LITERAL initializer (`let arr: [1]*T = .{ &t }`) launders a borrow of a
+        // move binding into array memory we cannot prove dead — symmetric with the `arr[0] = &t`
+        // element-ASSIGNMENT path (which reaches this same hook) and the struct-literal field path.
+        // Recurse into each element so the borrowed root is marked escaped and a later by-value
+        // move of the root is refused. (Grouped wrappers are peeled here too.)
+        switch (value.kind) {
+            .array_literal => |items| {
+                for (items) |item| self.markBorrowEscape(item, escape_span, state);
+                return;
+            },
+            .grouped => |inner| return self.markBorrowEscape(inner.*, escape_span, state),
+            else => {},
+        }
         const root = borrowedMoveRoot(value, state) orelse return;
         if (state.getPtr(root)) |slot| {
             if (slot.escaped_borrow == null) slot.escaped_borrow = escape_span;
