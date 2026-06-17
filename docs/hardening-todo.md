@@ -21,6 +21,17 @@ tier-dotted (`S0.1`, `D2.1`); Part II uses letter (`C1`, `A1`).
 > field-deref hole, read-before-init, the overlay miscompile) and proved the parsers robust
 > (4.8M malformed inputs, 0 over-reads). Every static check is opt-in/additive — the kernel boots
 > unchanged on both backends.
+>
+> **Soundness is adversarially re-probed, and the claims are now self-verifying.** Three review
+> rounds (review-by-area, then re-review of the fixes, then a launder-through-indirection probe
+> sweep of each *guarantee*) found, in order: 14 bugs → 1 fix-induced regression + 4 gaps → 1
+> systemic cast/bitcast class-strip (bypassing secret/UserPtr/Tainted/Guarded at once) + the
+> recurring lesson that **the *claim* runs ahead of the *code*** ("sound" / "no X remains" with
+> counterexamples). Fix: the probe matrix is promoted into committed `tests/spec/soundness_*.mc`
+> fixtures (use-after-move channels, cast-strip, secret incl. overlay, UserPtr/Tainted/Cap, IRQ
+> direct+indirect, definite-init) — so every "closed" claim, and the documented conservative
+> over-rejections, FAIL `zig build test` if they silently regress. Write claims from adversarial
+> test results, not intended design.
 
 ## What MC already has (harden the gaps, don't reinvent)
 - **Spatial, trapping:** `mc_check_index_usize` (bounds), checked arithmetic, `__builtin_trap`,
@@ -67,7 +78,7 @@ type system (static) or the trap/sanitizer model (cheap dynamic). The most on-th
   (`src/hir.zig`). **Test:** escaping-reference fixtures rejected (`fuzz-failclosed`); kernel still
   type-checks; `move-fuzz` borrow cases. **Prior art:** Rust borrow checker, Cyclone regions,
   **RustBelt**. **Depends:** S0.2.
-- [~] **T1.2 — Use-after-move for derived aliases** *(PARTIAL `beb6b72`,`cca5ad4`. NOT "sound" — sound only for the direct-pointer-local fragment. COVERED (rejected): direct alias chains `let q=p=&t`, reassignment, struct-LITERAL field aliases `H{.p=&t}`, and returning an aggregate containing `&local`. Those channels — struct-field/array assignment (`5c4c035`), subfield alias, and call laundering `id(p)` (`f93838a`) — are now CLOSED by **conservative rejection** (the move is refused when a borrow has escaped into memory or a pointer-returning call). So no SILENT use-after-move remains; the residual `[~]` is that conservative rejection may OVER-reject some hard-to-prove-safe programs — fully precise tracking is T1.3)* — invalidate any pointer/alias derived
+- [~] **T1.2 — Use-after-move for derived aliases** *(PARTIAL `beb6b72`,`cca5ad4`. NOT "sound" — sound only for the direct-pointer-local fragment. COVERED (rejected): direct alias chains `let q=p=&t`, reassignment, struct-LITERAL field aliases `H{.p=&t}`, and returning an aggregate containing `&local`. Those channels — struct-field/array assignment (`5c4c035`), subfield alias, call laundering `id(p)` (`f93838a`), and array-LITERAL element `.{&t}` (`571a5b4`, a residual found by re-probe) — are now CLOSED by **conservative rejection** (the move is refused when a borrow has escaped into memory or a pointer-returning call). No SILENT use-after-move remains across the probed channels; the residual `[~]` is that conservative rejection OVER-rejects some hard-to-prove-safe programs (the subfield-borrow-used-before-move case — recorded in `tests/spec/soundness_conservative_overrejection.mc`); fully precise tracking is T1.3. **Every channel here is now a committed `tests/spec/soundness_use_after_move.mc` fixture, so a silent re-opening fails `zig build test`)* — invalidate any pointer/alias derived
   from a moved-out value (not just double-free of the owner). **Where:** move checker (`src/ir.zig`).
   **Test:** `move-fuzz` stale-alias cases. **Prior art:** Rust move/affine types. **Depends:** T1.1.
 - [~] **T1.3 — Lifetime-parameterized references** (DEFERRED — full lifetime/region system; deliberate language-design building on the T1.1 lexical slice) *(research → multi-PR)* — for fns returning/storing
