@@ -775,6 +775,7 @@ fn isAcceptanceCheck(check: []const u8) bool {
     const names = [_][]const u8{
         "traits-tier1-accept",
         "traits-tier1-irq-accept",
+        "traits-tier2-dyn-accept",
     };
     return matchesAny(check, &names);
 }
