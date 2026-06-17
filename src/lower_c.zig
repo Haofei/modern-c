@@ -1135,6 +1135,10 @@ const CEmitter = struct {
         self.closure_types.deinit();
         self.bind_thunks.deinit();
         self.trait_decls.deinit();
+        {
+            var it = self.impl_methods.keyIterator();
+            while (it.next()) |k| self.allocator.free(k.*);
+        }
         self.impl_methods.deinit();
         self.result_types.deinit();
         self.slice_types.deinit();
