@@ -3426,7 +3426,7 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
                 }
                 self.checkEnumCast(expr.span, node.value.*, source, node.ty.*, target, ctx);
-                self.checkCastSafetyStrip(expr.span, source, target, ctx);
+                self.checkCastSafetyStrip(expr.span, node.value.*, source, node.ty.*, target, ctx);
                 return target;
             },
             .call => |node| {
@@ -5464,7 +5464,7 @@ pub const Checker = struct {
     // gate, the same hole `reveal`/`declassify` plug for secrets. We gate only the
     // class-stripping direction; numeric/enum/pointer-to-pointer casts and the
     // legitimate `UserPtr <-> usize` round-trip (uaccess.mc) stay accepted.
-    fn checkCastSafetyStrip(self: *Checker, span: diagnostics.Span, source: TypeClass, target: TypeClass, ctx: Context) void {
+    fn checkCastSafetyStrip(self: *Checker, span: diagnostics.Span, value: ast.Expr, source: TypeClass, target_ty: ast.TypeExpr, target: TypeClass, ctx: Context) void {
         // `Secret<T> as <non-secret>` declassifies a constant-time value; it is the
         // `reveal` operation in cast clothing and is forbidden outside `unsafe`.
         if (source == .secret and target != .secret and !ctx.in_unsafe) {
@@ -5477,6 +5477,42 @@ pub const Checker = struct {
         if (source == .user_ptr and isDerefablePointerClass(target)) {
             self.errorCode(span, "E_USERPTR_CAST_DEREF", "casting a UserPtr<T> to a derefable kernel pointer bypasses uaccess validation; only UserPtr<->usize is permitted");
         }
+        // General opacity gate: a value-level `as` cast whose SOURCE is an
+        // `opaque struct` declassifies its private fields with no `unsafe` and no
+        // accessor — `b as <inner>` extracts the hidden `.raw`/`.bits`/etc. directly.
+        // This generalizes the Secret/UserPtr-specific gates above to the `opaque`
+        // property itself, so it uniformly covers `Tainted`, `Cap`, `Rights`,
+        // `Guarded`, and any user-defined opaque struct (e.g. closing the `Tainted`
+        // checked-length bypass behind U3). Allowed escapes: an `unsafe` block (the
+        // controlled declassification) and an identity cast to the SAME opaque type
+        // (a no-op). Pointer-class sources are left to the bitcast pointee gate.
+        self.checkOpaqueCastDeclassify(span, value, target_ty, ctx);
+    }
+
+    fn checkOpaqueCastDeclassify(self: *Checker, span: diagnostics.Span, value: ast.Expr, target_ty: ast.TypeExpr, ctx: Context) void {
+        if (ctx.in_unsafe) return;
+        const source_ty = exprResultType(value, ctx) orelse return;
+        const src_resolved = resolveAliasType(source_ty, ctx);
+        // Only a VALUE-level opaque source is gated here; a pointer to an opaque is a
+        // pointer reinterpret governed by the bitcast pointee gate (E_BITCAST_TYPE).
+        const src_name = switch (src_resolved.kind) {
+            .name => |n| n.text,
+            .generic => |g| g.base.text,
+            .qualified => |q| opacityStructNameOf(q.child.*),
+            else => null,
+        } orelse return;
+        const structs = ctx.structs orelse return;
+        const info = structs.get(src_name) orelse return;
+        if (!info.is_opaque) return;
+        // The opaque type's own associated functions read their fields by `.field`
+        // access, not by `as`; but if some `impl` code does `self as inner`, treat it
+        // as allowed (it already has full access to the private representation).
+        if (self.opaqueAccessAllowed(src_name)) return;
+        // Identity / no-op cast to the SAME opaque type extracts nothing.
+        if (opacityStructNameOf(resolveAliasType(target_ty, ctx))) |tgt_name| {
+            if (std.mem.eql(u8, tgt_name, src_name)) return;
+        }
+        self.errorCode(span, "E_OPAQUE_DECLASSIFY", "casting an `opaque struct` value to another type declassifies its private fields; use an accessor in its `impl`, or `unsafe`");
     }
 
     fn checkEnumRawCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []const ast.Expr, ctx: Context) ?TypeClass {
