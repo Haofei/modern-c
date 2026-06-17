@@ -837,7 +837,7 @@ fn allMetadataValuesSupported(path: []const u8, key: []const u8, value: []const 
 fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !ast.Module {
     var p = parser.Parser.init(source, reporter);
     const module = try p.parseModule(allocator);
-    return try monomorphize.transform(allocator, module);
+    return try monomorphize.transformReport(allocator, module, reporter);
 }
 
 // A spec fixture's effective source, plus the import-flattened file boundaries needed to

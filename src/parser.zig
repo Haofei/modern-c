@@ -58,6 +58,10 @@ pub const Parser = struct {
 
         while (self.current.kind != .eof) {
             const attrs = try self.parseAttrs();
+            if (self.matchIdentifierText("trait")) {
+                try decls.append(allocator, try self.parseTraitDecl(attrs));
+                continue;
+            }
             if (self.matchIdentifierText("impl")) {
                 try self.parseImplBlock(&decls, allocator);
                 continue;
@@ -85,17 +89,99 @@ pub const Parser = struct {
     // at the call site (see resolveImplCallee); the impl block must precede such calls.
     fn parseImplBlock(self: *Parser, decls: *std.ArrayList(ast.Decl), allocator: std.mem.Allocator) anyerror!void {
         const start = self.previous.span;
-        const type_name = try self.expectName("expected type name after 'impl'");
+        const first_name = try self.expectName("expected type or trait name after 'impl'");
+        // `impl Trait for Type { ... }` — a trait conformance. The first name is the
+        // trait, then `for`, then the concrete type. Methods still desugar to `Type__m`
+        // free functions (same machinery as an inherent impl); a `impl_trait` record is
+        // appended for sema's conformance / coherence / orphan checks.
+        var trait_name: ?ast.Ident = null;
+        const type_name = if (self.match(.kw_for)) blk: {
+            trait_name = first_name;
+            break :blk try self.expectName("expected type name after 'impl Trait for'");
+        } else first_name;
+
         try self.expect(.l_brace, "expected '{' after impl type name");
+        var conf_methods: std.ArrayList(ast.ImplTraitMethod) = .empty;
+        errdefer conf_methods.deinit(allocator);
         while (self.current.kind != .r_brace and self.current.kind != .eof) {
+            const m_attrs = try self.parseAttrs();
             const exported = self.match(.kw_export);
             try self.expect(.kw_fn, "expected 'fn' in impl block");
+            const trait_rel_name = self.current; // the un-mangled method name
             var fn_decl = try self.finishFnDecl(null, false, exported);
+            const self_mode = selfModeOfParams(fn_decl.params);
             try self.registerQualified(type_name.text, fn_decl.name.text);
-            fn_decl.name = .{ .text = try self.mangleQualified(type_name.text, fn_decl.name.text), .span = fn_decl.name.span };
-            try decls.append(allocator, .{ .span = joinSpan(start, fn_decl.name.span), .attrs = &[_]ast.Attr{}, .kind = .{ .fn_decl = fn_decl } });
+            const mangled = try self.mangleQualified(type_name.text, fn_decl.name.text);
+            if (trait_name != null) {
+                try conf_methods.append(allocator, .{
+                    .name = .{ .text = trait_rel_name.lexeme, .span = trait_rel_name.span },
+                    .mangled = mangled,
+                    .self_mode = self_mode,
+                    .attrs = m_attrs,
+                });
+            }
+            fn_decl.name = .{ .text = mangled, .span = fn_decl.name.span };
+            try decls.append(allocator, .{ .span = joinSpan(start, fn_decl.name.span), .attrs = m_attrs, .kind = .{ .fn_decl = fn_decl } });
         }
         try self.expect(.r_brace, "expected '}' to close impl block");
+        if (trait_name) |tn| {
+            try decls.append(allocator, .{ .span = joinSpan(start, tn.span), .attrs = &[_]ast.Attr{}, .kind = .{ .impl_trait = .{
+                .trait_name = tn,
+                .type_name = type_name,
+                .methods = try conf_methods.toOwnedSlice(allocator),
+            } } });
+        }
+        return;
+    }
+
+    // `trait Name { fn sig(self: *Self, ...) -> R; ... }` — method signatures only.
+    fn parseTraitDecl(self: *Parser, attrs: []ast.Attr) anyerror!ast.Decl {
+        const start = self.previous.span;
+        const name = try self.expectName("expected trait name after 'trait'");
+        try self.expect(.l_brace, "expected '{' after trait name");
+        var methods: std.ArrayList(ast.TraitMethodSig) = .empty;
+        errdefer methods.deinit(self.allocator);
+        while (self.current.kind != .r_brace and self.current.kind != .eof) {
+            const m_attrs = try self.parseAttrs();
+            try self.expect(.kw_fn, "expected 'fn' in trait body");
+            const m_name = try self.expectName("expected trait method name");
+            try self.expect(.l_paren, "expected '(' after trait method name");
+            var params: std.ArrayList(ast.Param) = .empty;
+            errdefer params.deinit(self.allocator);
+            if (self.current.kind != .r_paren) {
+                while (true) {
+                    const is_comptime = self.match(.kw_comptime);
+                    const is_move = self.matchIdentifierText("move");
+                    const param_name = try self.expectName("expected trait method parameter name");
+                    if (is_move and std.mem.eql(u8, param_name.text, "self")) {
+                        // `move self` — recorded as a by-value self for object-safety later;
+                        // for Tier 1 conformance it is its own self-mode.
+                        try params.append(self.allocator, .{ .name = param_name, .ty = selfTypeExpr(param_name.span), .is_comptime = false });
+                    } else {
+                        try self.expect(.colon, "expected ':' after trait method parameter name");
+                        const ty = try self.parseType();
+                        try params.append(self.allocator, .{ .name = param_name, .ty = ty, .is_comptime = is_comptime });
+                    }
+                    if (!self.match(.comma) or self.current.kind == .r_paren) break;
+                }
+            }
+            try self.expect(.r_paren, "expected ')' after trait method parameters");
+            const return_type = if (self.match(.arrow)) try self.parseType() else null;
+            try self.expect(.semicolon, "expected ';' after trait method signature (no body)");
+            const self_mode = selfModeOfParams(params.items);
+            try methods.append(self.allocator, .{
+                .name = m_name,
+                .params = try params.toOwnedSlice(self.allocator),
+                .return_type = return_type,
+                .self_mode = self_mode,
+                .attrs = m_attrs,
+            });
+        }
+        try self.expect(.r_brace, "expected '}' to close trait body");
+        return .{ .span = joinSpan(start, name.span), .attrs = attrs, .kind = .{ .trait_decl = .{
+            .name = name,
+            .methods = try methods.toOwnedSlice(self.allocator),
+        } } };
     }
 
     // If `base` is a bare identifier `Owner` and `Owner.name` is a registered qualified symbol
@@ -144,6 +230,26 @@ pub const Parser = struct {
 
     fn mangleQualified(self: *Parser, owner: []const u8, name: []const u8) ![]const u8 {
         return std.fmt.allocPrint(self.allocator, "{s}__{s}", .{ owner, name });
+    }
+
+    // A `Self` type expression (used to record a `move self` parameter's type).
+    fn selfTypeExpr(span: ast.Span) ast.TypeExpr {
+        return .{ .span = span, .kind = .{ .name = .{ .text = "Self", .span = span } } };
+    }
+
+    // Classify the `self`-mode of a (trait/impl) method from its first parameter, when
+    // that parameter is named `self`. `*Self` / `*mut Self` / `Self` / move-self.
+    fn selfModeOfParams(params: []const ast.Param) ast.SelfMode {
+        if (params.len == 0) return .none;
+        const first = params[0];
+        if (!std.mem.eql(u8, first.name.text, "self")) return .none;
+        return switch (first.ty.kind) {
+            .pointer => |p| switch (p.mutability) {
+                .mut => .by_mut_ptr,
+                else => .by_ptr,
+            },
+            else => .by_value, // `self: Self` and the synthesized `move self`
+        };
     }
 
     fn registerQualified(self: *Parser, owner: []const u8, name: []const u8) !void {
@@ -391,6 +497,9 @@ pub const Parser = struct {
         try self.expect(.r_paren, "expected ')' after parameters");
 
         const return_type = if (self.match(.arrow)) try self.parseType() else null;
+        // `where T: TraitA, U: TraitB` — bounds on the function's comptime type
+        // parameters (Tier 1 trait bounds). Optional; precedes the body.
+        const bounds = try self.parseWhereClause();
         const body = if (self.current.kind == .l_brace) try self.parseBlock() else blk: {
             try self.expect(.semicolon, "expected function body or ';'");
             break :blk null;
@@ -404,7 +513,23 @@ pub const Parser = struct {
             .body = body,
             .is_const = is_const,
             .exported = exported,
+            .bounds = bounds,
         };
+    }
+
+    // `where T: TraitA, U: TraitB` (Tier 1). Returns an empty slice when absent.
+    fn parseWhereClause(self: *Parser) anyerror![]ast.TraitBound {
+        if (!self.matchIdentifierText("where")) return &.{};
+        var bounds: std.ArrayList(ast.TraitBound) = .empty;
+        errdefer bounds.deinit(self.allocator);
+        while (true) {
+            const tp = try self.expectName("expected type parameter name in 'where' clause");
+            try self.expect(.colon, "expected ':' after type parameter in 'where' clause");
+            const trait_name = try self.expectName("expected trait name in 'where' clause");
+            try bounds.append(self.allocator, .{ .type_param = tp, .trait_name = trait_name });
+            if (!self.match(.comma)) break;
+        }
+        return bounds.toOwnedSlice(self.allocator);
     }
 
     fn finishStructDecl(self: *Parser, abi: ?[]const u8) anyerror!ast.StructDecl {

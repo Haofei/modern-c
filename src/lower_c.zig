@@ -1302,7 +1302,8 @@ const CEmitter = struct {
                 .fn_decl => |fn_decl| if (fn_decl.body) |body| try self.emitFunction(fn_decl, body) else try self.emitFunctionPrototype(fn_decl),
                 // extern prototypes were already emitted in the forward-declaration pass.
                 .extern_fn => {},
-                .global_decl, .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
+                // Trait / impl-trait carry no runtime artifact (Tier 1 is direct calls).
+                .global_decl, .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -10910,7 +10911,7 @@ const Inspector = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .fn_decl, .extern_fn => |fn_decl| if (fn_decl.body) |body| try self.inspectFn(fn_decl, body),
-                .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -10930,7 +10931,7 @@ const Inspector = struct {
                 .global_decl => |global| {
                     if (global.ty) |ty| try self.globals.put(global.name.text, globalInfoFromType(ty));
                 },
-                .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .opaque_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .opaque_decl, .trait_decl, .impl_trait => {},
             }
         }
     }

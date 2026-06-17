@@ -798,7 +798,7 @@ fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *
     // Specialize comptime-parameter type-generic functions (section 22). This is
     // a no-op for modules without any such function, so non-generic code is
     // passed through untouched.
-    return monomorphize.transform(allocator, module) catch |err| {
+    return monomorphize.transformReport(allocator, module, diag) catch |err| {
         diag.render();
         return err;
     };

@@ -105,7 +105,7 @@ pub fn buildModuleIr(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr
                     try functions.append(allocator, try builder.finish());
                 }
             },
-            .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+            .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
         }
     }
 
@@ -595,7 +595,7 @@ const ModuleFactCollector = struct {
                 .global_decl => |global| if (global.ty) |ty| {
                     try self.globals.put(global.name.text, typeName(ty) orelse "unknown");
                 },
-                .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -641,7 +641,7 @@ const ModuleFactCollector = struct {
                     });
                 }
             },
-            .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+            .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
         }
     }
 

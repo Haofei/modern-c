@@ -163,6 +163,13 @@ pub const Checker = struct {
         // peer `impl <OpaqueType>` written in another file. No-op without file boundaries.
         self.checkOrphanImpls(module);
 
+        // Tier 1 traits: conformance (every trait method present, matching self-mode +
+        // effect annotations) and coherence (<=1 impl per (Trait, Type)). Bound
+        // satisfaction is checked at the instantiation site during monomorphization;
+        // the orphan rule for `impl Trait for <opaque>` is covered by checkOrphanImpls
+        // above (the impl methods are `Type__m` functions keyed on the opaque owner).
+        self.checkTraits(module);
+
         var const_fns = std.StringHashMap(ast.FnDecl).init(self.reporter.allocator);
         defer const_fns.deinit();
         for (module.decls) |decl| {
@@ -294,7 +301,7 @@ pub const Checker = struct {
                 .opaque_decl => |name| if (!type_aliases.contains(name.text)) type_aliases.put(name.text, simpleNameType(name.text, name.span)) catch {
                     self.oom = true;
                 },
-                .fn_decl, .extern_fn, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -360,7 +367,7 @@ pub const Checker = struct {
                         if (std.mem.eql(u8, abi, "mmio")) self.collectMmioStruct(struct_decl, mmio_structs);
                     }
                 },
-                .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -384,7 +391,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .struct_decl => |struct_decl| self.collectStruct(struct_decl, structs),
-                .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -406,7 +413,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .packed_bits_decl => |packed_bits_decl| self.collectLayoutFields(packed_bits_decl.name.text, packed_bits_decl.fields, packed_bits_decl.repr, packed_bits),
-                .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .union_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .union_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -415,7 +422,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .overlay_union_decl => |overlay_union_decl| self.collectLayoutFields(overlay_union_decl.name.text, overlay_union_decl.fields, null, overlay_unions),
-                .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -424,7 +431,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .union_decl => |union_decl| self.collectTaggedUnion(union_decl, tagged_unions),
-                .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -470,7 +477,7 @@ pub const Checker = struct {
                         self.oom = true;
                     };
                 },
-                .struct_decl, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .struct_decl, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -479,7 +486,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .enum_decl => |enum_decl| self.collectEnum(enum_decl, enums),
-                .fn_decl, .extern_fn, .type_alias, .struct_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl => {},
+                .fn_decl, .extern_fn, .type_alias, .struct_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -505,7 +512,7 @@ pub const Checker = struct {
                         self.oom = true;
                     };
                 },
-                .fn_decl, .extern_fn, .struct_decl, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl => {},
+                .fn_decl, .extern_fn, .struct_decl, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .trait_decl, .impl_trait => {},
             }
         }
     }
@@ -530,6 +537,9 @@ pub const Checker = struct {
         defer names.deinit();
 
         for (module.decls) |decl| {
+            // An `impl Trait for Type` record introduces no top-level name of its own
+            // (its methods are separate `Type__m` fn_decls); skip the uniqueness check.
+            if (decl.kind == .impl_trait) continue;
             const name = declName(decl);
             if (names.contains(name.text)) {
                 self.errorCode(name.span, "E_DUPLICATE_DECLARATION", "top-level declarations must have unique names");
@@ -574,6 +584,9 @@ pub const Checker = struct {
             .overlay_union_decl => |overlay_union_decl| self.checkOverlayUnion(overlay_union_decl, type_ctx),
             .type_alias => |alias| self.checkType(alias.ty, .normal, type_ctx),
             .opaque_decl => {},
+            // Trait / impl-trait conformance checks run as their own pass (checkTraits);
+            // the impl methods themselves are ordinary `Type__m` fn_decls checked above.
+            .trait_decl, .impl_trait => {},
             .global_decl => |global| {
                 const type_error_count = self.reporter.diagnostics.items.len;
                 if (global.ty) |ty| {
@@ -5938,6 +5951,84 @@ pub const Checker = struct {
         }
     }
 
+    // Tier 1 trait checks (docs/traits-design.md §7): conformance and coherence. The
+    // method bodies are ordinary `Type__m` fn_decls checked elsewhere; this pass works
+    // on the `trait_decl` / `impl_trait` records the parser emits.
+    fn checkTraits(self: *Checker, module: ast.Module) void {
+        // Collect trait declarations by name.
+        var traits = std.StringHashMap(ast.TraitDecl).init(self.reporter.allocator);
+        defer traits.deinit();
+        for (module.decls) |decl| {
+            if (decl.kind == .trait_decl) {
+                const t = decl.kind.trait_decl;
+                if (traits.contains(t.name.text)) {
+                    self.errorCode(t.name.span, "E_DUPLICATE_DECLARATION", "duplicate trait declaration");
+                } else {
+                    traits.put(t.name.text, t) catch {
+                        self.oom = true;
+                    };
+                }
+            }
+        }
+
+        // Coherence: at most one `impl Trait for Type` per (Trait, Type) pair.
+        var seen_pairs = std.StringHashMap(void).init(self.reporter.allocator);
+        defer {
+            var it = seen_pairs.keyIterator();
+            while (it.next()) |k| self.reporter.allocator.free(k.*);
+            seen_pairs.deinit();
+        }
+
+        for (module.decls) |decl| {
+            if (decl.kind != .impl_trait) continue;
+            const it = decl.kind.impl_trait;
+
+            const pair_key = std.fmt.allocPrint(self.reporter.allocator, "{s}\x00{s}", .{ it.trait_name.text, it.type_name.text }) catch {
+                self.oom = true;
+                continue;
+            };
+            if (seen_pairs.contains(pair_key)) {
+                self.errorCode(it.trait_name.span, "E_TRAIT_INCOHERENT", "duplicate `impl Trait for Type` (coherence: at most one impl per (Trait, Type) pair)");
+                self.reporter.allocator.free(pair_key);
+            } else {
+                seen_pairs.put(pair_key, {}) catch {
+                    self.reporter.allocator.free(pair_key);
+                    self.oom = true;
+                };
+            }
+
+            // The trait being implemented must exist.
+            const trait = traits.get(it.trait_name.text) orelse {
+                self.errorCode(it.trait_name.span, "E_UNKNOWN_TRAIT", "unknown trait in impl");
+                continue;
+            };
+
+            // Conformance: each trait method must be provided with a matching self-mode
+            // and matching effect annotations; no extra methods are allowed.
+            for (trait.methods) |tm| {
+                const provided = findImplMethod(it.methods, tm.name.text) orelse {
+                    self.errorCode(it.type_name.span, "E_TRAIT_MISSING_METHOD", "impl does not provide a trait method");
+                    continue;
+                };
+                if (provided.self_mode != tm.self_mode) {
+                    self.errorCode(provided.name.span, "E_TRAIT_SELF_MODE_MISMATCH", "impl method's self-mode does not match the trait signature");
+                }
+                // Effect contract: an impl method may not be `#[may_sleep]` unless the
+                // trait signature also declares it (so the effect a caller sees through
+                // the bound matches what conformance verified).
+                if (hasMaySleep(provided.attrs) != hasMaySleep(tm.attrs)) {
+                    self.errorCode(provided.name.span, "E_TRAIT_EFFECT_MISMATCH", "impl method's effect annotations (#[may_sleep]) do not match the trait signature");
+                }
+            }
+            // Reject methods the trait does not declare.
+            for (it.methods) |im| {
+                if (findTraitMethod(trait.methods, im.name.text) == null) {
+                    self.errorCode(im.name.span, "E_TRAIT_UNKNOWN_METHOD", "impl provides a method the trait does not declare");
+                }
+            }
+        }
+    }
+
     fn checkIfLetPattern(self: *Checker, pattern: ast.Pattern, value_class: TypeClass) void {
         switch (pattern.kind) {
             .bind => {
@@ -6485,6 +6576,9 @@ fn declName(decl: ast.Decl) ast.Ident {
         .overlay_union_decl => |overlay_union| overlay_union.name,
         .opaque_decl => |name| name,
         .global_decl => |global| global.name,
+        .trait_decl => |t| t.name,
+        // impl_trait is filtered out before declName is called.
+        .impl_trait => |it| it.trait_name,
     };
 }
 
@@ -6553,6 +6647,20 @@ const TypeMode = enum {
     return_type,
     ffi_opaque_pointer,
 };
+
+fn findImplMethod(methods: []const ast.ImplTraitMethod, name: []const u8) ?ast.ImplTraitMethod {
+    for (methods) |m| {
+        if (std.mem.eql(u8, m.name.text, name)) return m;
+    }
+    return null;
+}
+
+fn findTraitMethod(methods: []const ast.TraitMethodSig, name: []const u8) ?ast.TraitMethodSig {
+    for (methods) |m| {
+        if (std.mem.eql(u8, m.name.text, name)) return m;
+    }
+    return null;
+}
 
 fn hasNoLangTrap(attrs: []ast.Attr) bool {
     for (attrs) |attr| {

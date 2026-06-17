@@ -367,6 +367,11 @@ fn collectDecl(b: *Builder, decl: ast.Decl) !void {
         .packed_bits_decl => |p| try collectType(b, p.name, "packed_bits"),
         .overlay_union_decl => |o| try collectType(b, o.name, "overlay_union"),
         .opaque_decl => |n| try collectType(b, n, "opaque"),
+        // Trait / impl-trait declarations carry no backend symbol of their own: the
+        // trait is a signature set, and an `impl Trait for Type` desugars its methods
+        // to `Type__m` fn_decls (collected above). The conformance record is sema-only.
+        .trait_decl => |t| try collectType(b, t.name, "trait"),
+        .impl_trait => {},
     }
 }
 
@@ -409,6 +414,11 @@ fn walkDeclBody(b: *Builder, decl: ast.Decl) !void {
         },
         .enum_decl => |e| if (e.repr) |r| try walkTypeRefs(b, r),
         .opaque_decl => {},
+        .trait_decl => |t| for (t.methods) |m| {
+            for (m.params) |p| try walkTypeRefs(b, p.ty);
+            if (m.return_type) |rt| try walkTypeRefs(b, rt);
+        },
+        .impl_trait => {},
     }
 }
 

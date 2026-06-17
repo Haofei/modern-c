@@ -62,7 +62,60 @@ pub const Decl = struct {
         overlay_union_decl: OverlayUnionDecl,
         opaque_decl: Ident,
         global_decl: GlobalDecl,
+        // `trait Name { fn sig(...) -> R; ... }` — a set of method signatures (Tier 1).
+        trait_decl: TraitDecl,
+        // `impl Trait for Type { ... }` — a conformance record. The methods themselves
+        // are desugared to free functions `Type__m` (like an inherent impl); this node
+        // carries the (Trait, Type) pair plus the provided method names for sema's
+        // conformance / coherence / orphan checks.
+        impl_trait: ImplTrait,
     };
+};
+
+// One trait-method signature (no body).
+pub const TraitMethodSig = struct {
+    name: Ident,
+    params: []Param,
+    return_type: ?TypeExpr,
+    self_mode: SelfMode,
+    // The annotated effect attributes on the signature (e.g. `#[may_sleep]`),
+    // carried so conformance can require each impl method to match.
+    attrs: []Attr = &.{},
+};
+
+pub const TraitDecl = struct {
+    name: Ident,
+    methods: []TraitMethodSig,
+};
+
+// A method provided by an `impl Trait for Type` block: the trait-relative name and
+// the mangled free-function it desugared to (`Type__m`).
+pub const ImplTraitMethod = struct {
+    name: Ident,
+    mangled: []const u8,
+    self_mode: SelfMode,
+    attrs: []Attr = &.{},
+};
+
+// The `self` parameter form of a (trait or impl) method.
+pub const SelfMode = enum {
+    none, // no self parameter
+    by_ptr, // self: *Self
+    by_mut_ptr, // self: *mut Self
+    by_value, // self: Self
+    move_self, // move self
+};
+
+pub const ImplTrait = struct {
+    trait_name: Ident,
+    type_name: Ident,
+    methods: []ImplTraitMethod,
+};
+
+// `where T: TraitA, U: TraitB` — a bound on a `comptime T: type` generic parameter.
+pub const TraitBound = struct {
+    type_param: Ident,
+    trait_name: Ident,
 };
 
 pub const FnDecl = struct {
@@ -73,6 +126,8 @@ pub const FnDecl = struct {
     body: ?Block,
     is_const: bool,
     exported: bool = false,
+    // `where T: Trait, ...` bounds on the function's comptime type parameters.
+    bounds: []TraitBound = &.{},
 };
 
 pub const Param = struct {

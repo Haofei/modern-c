@@ -2,6 +2,10 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const eval = @import("eval.zig");
+const diagnostics = @import("diagnostics.zig");
+
+// A set of concrete type names that conform to a trait (`impl Trait for Type`).
+const ConformanceSet = std.StringHashMap(std.StringHashMap(void));
 
 // Comptime-parameter monomorphization (section 22). A *type-generic* function —
 // one whose `comptime` parameter appears in a type position, e.g.
@@ -30,12 +34,16 @@ const TypeGenericInfo = struct {
     decl: ast.FnDecl,
     // names of the comptime parameters that this function is generic over
     comptime_params: []const []const u8,
+    // The generic decl's attributes (e.g. `#[irq_context]`), carried onto each
+    // specialization so effect/context checks survive monomorphization.
+    attrs: []ast.Attr = &.{},
 };
 
 const Instance = struct {
     decl: ast.FnDecl, // the generic source decl
     subst: Subst,
     mangled: []const u8,
+    attrs: []ast.Attr = &.{},
     generated: bool = false,
 };
 
@@ -73,21 +81,52 @@ const Rewriter = struct {
     // argument. This intentionally resolves only fields whose type is a named type,
     // matching the existing type-parameter substitution model.
     field_types: *const std.StringHashMap(std.StringHashMap(ast.TypeExpr)),
+    // All top-level (and impl-method) function names. Used to resolve a trait-method
+    // call written `T.method(recv, ...)` — after a `where T: Trait` substitution makes
+    // the receiver type concrete (`Square.area(recv)`), this becomes a DIRECT call to
+    // the desugared impl method `Square__area(recv)` (Tier 1: zero runtime dispatch).
+    fn_names: *const std.StringHashMap(void),
+    // Trait-bound checking at the instantiation site (Tier 1). `conformance` maps each
+    // trait to the set of concrete types with an `impl Trait for Type`; when a generic
+    // fn with `where T: Trait` is instantiated with a concrete `T`, an unmet bound is
+    // E_TRAIT_NOT_SATISFIED reported at the call. Null reporter => no diagnostics (the
+    // surviving trait_decl/impl_trait still let sema run its other trait checks).
+    conformance: *const ConformanceSet,
+    reporter: ?*diagnostics.Reporter,
     oom: bool = false,
 };
 
 pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
+    return transformReport(arena, module, null);
+}
+
+pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter) !ast.Module {
     var type_generic = std.StringHashMap(TypeGenericInfo).init(arena);
     var const_fns = std.StringHashMap(ast.FnDecl).init(arena);
     var generic_structs = std.StringHashMap(ast.StructDecl).init(arena);
     var int_consts = std.StringHashMap(i128).init(arena);
     var field_types = std.StringHashMap(std.StringHashMap(ast.TypeExpr)).init(arena);
+    var fn_names = std.StringHashMap(void).init(arena);
+    var conformance = ConformanceSet.init(arena);
+    for (module.decls) |decl| {
+        switch (decl.kind) {
+            .fn_decl, .extern_fn => |fn_decl| {
+                try fn_names.put(fn_decl.name.text, {});
+            },
+            .impl_trait => |it| {
+                const gop = try conformance.getOrPut(it.trait_name.text);
+                if (!gop.found_existing) gop.value_ptr.* = std.StringHashMap(void).init(arena);
+                try gop.value_ptr.put(it.type_name.text, {});
+            },
+            else => {},
+        }
+    }
     for (module.decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| {
                 if (fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, fn_decl);
                 if (try typeGenericParams(arena, fn_decl)) |params| {
-                    try type_generic.put(fn_decl.name.text, .{ .decl = fn_decl, .comptime_params = params });
+                    try type_generic.put(fn_decl.name.text, .{ .decl = fn_decl, .comptime_params = params, .attrs = decl.attrs });
                 }
             },
             .struct_decl => |sd| {
@@ -137,6 +176,9 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
         .struct_list = &struct_list,
         .int_consts = &int_consts,
         .field_types = &field_types,
+        .fn_names = &fn_names,
+        .conformance = &conformance,
+        .reporter = reporter,
     };
     const ctx = CloneCtx{ .arena = arena, .rewrite = &rewriter };
 
@@ -177,7 +219,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module) !ast.Module {
             var spec = try cloneFnDeclCtx(&spec_ctx, inst.decl);
             spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
             spec.params = try dropComptimeParams(arena, spec.params);
-            try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .kind = .{ .fn_decl = spec } });
+            try out.append(arena, .{ .span = inst.decl.name.span, .attrs = inst.attrs, .kind = .{ .fn_decl = spec } });
         }
     }
     if (rewriter.oom) return error.OutOfMemory;
@@ -441,11 +483,49 @@ fn cloneCall(ctx: *const CloneCtx, expr: ast.Expr, node: anytype) anyerror!ast.E
             }
         }
     }
+    // Clone the callee (applying any `where T: Trait` substitution, so a generic-typed
+    // receiver `T.method` becomes the concrete `Square.method`).
+    const cloned_callee = try clonePtr(ctx, node.callee.*);
+    // Tier 1 trait-method resolution: a member-callee `Concrete.method` whose desugared
+    // impl function `Concrete__method` exists becomes a DIRECT call to that function.
+    // This completes the `Owner.member` resolution for the case where the owner was a
+    // generic type parameter (so the parser could not pre-resolve it). No vtable.
+    if (ctx.rewrite) |rw| {
+        if (memberCalleeDirect(rw, cloned_callee.*)) |mangled| {
+            const callee = try ast.makePtr(rw.arena, ast.Expr{ .span = cloned_callee.span, .kind = .{ .ident = .{ .text = mangled, .span = cloned_callee.span } } });
+            return .{ .span = expr.span, .kind = .{ .call = .{
+                .callee = callee,
+                .type_args = try cloneTypeSlice(ctx, node.type_args),
+                .args = try cloneExprSlice(ctx, node.args),
+            } } };
+        }
+    }
     return .{ .span = expr.span, .kind = .{ .call = .{
-        .callee = try clonePtr(ctx, node.callee.*),
+        .callee = cloned_callee,
         .type_args = try cloneTypeSlice(ctx, node.type_args),
         .args = try cloneExprSlice(ctx, node.args),
     } } };
+}
+
+// If `callee` is a member access `Concrete.method` on a bare type-name identifier and
+// the desugared impl method `Concrete__method` is a known function, return that mangled
+// name; otherwise null. Used to lower a Tier-1 trait-method call to a direct call.
+fn memberCalleeDirect(rw: *Rewriter, callee: ast.Expr) ?[]const u8 {
+    const m = switch (callee.kind) {
+        .member => |node| node,
+        .grouped => |inner| return memberCalleeDirect(rw, inner.*),
+        else => return null,
+    };
+    const owner = switch (m.base.*.kind) {
+        .ident => |id| id.text,
+        else => return null,
+    };
+    const mangled = std.fmt.allocPrint(rw.arena, "{s}__{s}", .{ owner, m.name.text }) catch {
+        rw.oom = true;
+        return null;
+    };
+    if (rw.fn_names.contains(mangled)) return mangled;
+    return null;
 }
 
 fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo, node: anytype) anyerror!?ast.Expr {
@@ -474,13 +554,31 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             try kept_args.append(rw.arena, arg_clone);
         }
     }
+    // Tier 1 bound satisfaction (checked at the instantiation site): each `where
+    // P: Trait` requires an `impl Trait for <subst(P)>`. An unmet bound names the type
+    // and trait — not a deep-body failure (cf. Zig comptime duck typing).
+    if (rw.reporter) |reporter| {
+        for (info.decl.bounds) |bound| {
+            const concrete = switch (subst.get(bound.type_param.text) orelse continue) {
+                .type_name => |tn| tn,
+                .int => continue,
+            };
+            const conforms = if (rw.conformance.get(bound.trait_name.text)) |set| set.contains(concrete) else false;
+            if (!conforms) {
+                reporter.err(node.callee.*.span, "{s}: {s}", .{
+                    "E_TRAIT_NOT_SATISFIED",
+                    std.fmt.allocPrint(rw.arena, "type '{s}' does not satisfy the bound '{s}: {s}' (no `impl {s} for {s}`)", .{ concrete, bound.type_param.text, bound.trait_name.text, bound.trait_name.text, concrete }) catch "trait bound not satisfied",
+                });
+            }
+        }
+    }
     const mangled_name = try mangled.toOwnedSlice(rw.arena);
     if (!rw.instances.contains(mangled_name)) {
         const inst = rw.arena.create(Instance) catch {
             rw.oom = true;
             return null;
         };
-        inst.* = .{ .decl = info.decl, .subst = subst, .mangled = mangled_name };
+        inst.* = .{ .decl = info.decl, .subst = subst, .mangled = mangled_name, .attrs = info.attrs };
         rw.instances.put(mangled_name, inst) catch {
             rw.oom = true;
         };
