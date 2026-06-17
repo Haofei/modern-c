@@ -697,6 +697,9 @@ fn substituteComptimeType(scope: *const ComptimeScope, ty: ast.TypeExpr) ?ast.Ty
             const ret = trySubstituteTypePtr(scope, node.ret.*) orelse return null;
             break :blk .{ .span = ty.span, .kind = .{ .closure_type = .{ .params = params, .ret = ret } } };
         },
+        // A `*dyn Trait` names a concrete trait, not a comptime type parameter — no
+        // substitution applies.
+        .dyn_trait => ty,
     };
 }
 

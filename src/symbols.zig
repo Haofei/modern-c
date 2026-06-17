@@ -182,6 +182,10 @@ fn writeType(buf: *std.ArrayList(u8), a: std.mem.Allocator, ty: ast.TypeExpr) er
             try buf.appendSlice(a, ") -> ");
             try writeType(buf, a, f.ret.*);
         },
+        .dyn_trait => |d| {
+            try buf.appendSlice(a, if (d.mutability == .mut) "*mut dyn " else "*dyn ");
+            try buf.appendSlice(a, d.trait_name.text);
+        },
     }
 }
 
@@ -235,6 +239,8 @@ fn walkTypeRefs(b: *Builder, ty: ast.TypeExpr) error{OutOfMemory}!void {
             for (f.params) |p| try walkTypeRefs(b, p);
             try walkTypeRefs(b, f.ret.*);
         },
+        // `*dyn Trait` references the trait name (go-to-definition on the trait).
+        .dyn_trait => |d| try b.addRef(d.trait_name),
     }
 }
 

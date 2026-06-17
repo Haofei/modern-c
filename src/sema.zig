@@ -120,6 +120,14 @@ pub const Checker = struct {
     // live in the SAME file as the type's definition. Null for single-file/standalone checks
     // (no imports, nothing cross-file to forge), where the orphan rule is a no-op.
     file_boundaries: ?[]const loader.FileBoundary = null,
+    // Tier 2 trait-object tables, populated by checkTraits and read while checking
+    // bodies (object-safety of `*dyn Trait`, dispatch type-checking). Set for the
+    // duration of checkModule.
+    known_traits: std.StringHashMap(void) = undefined,
+    object_safe_traits: std.StringHashMap(void) = undefined,
+    // Trait declarations by name, so a `d.method(args)` dispatch through a
+    // `*dyn Trait` can resolve the method signature.
+    trait_decls: ?*const std.StringHashMap(ast.TraitDecl) = null,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -145,6 +153,14 @@ pub const Checker = struct {
         var type_aliases = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
         defer type_aliases.deinit();
         self.qualified_owners = module.qualified_owners;
+        self.known_traits = std.StringHashMap(void).init(self.reporter.allocator);
+        defer self.known_traits.deinit();
+        self.object_safe_traits = std.StringHashMap(void).init(self.reporter.allocator);
+        defer self.object_safe_traits.deinit();
+        var trait_decls = std.StringHashMap(ast.TraitDecl).init(self.reporter.allocator);
+        defer trait_decls.deinit();
+        self.trait_decls = &trait_decls;
+        defer self.trait_decls = null;
         self.checkTopLevelNames(module);
         self.checkBackendNameUniqueness(module);
         self.collectTypeAliases(module, &type_aliases);
@@ -356,6 +372,8 @@ pub const Checker = struct {
                 return self.typeExprHasAliasCycle(root_name, node.ret.*, type_aliases, visiting);
             },
             .enum_literal => return false,
+            // A `*dyn Trait` names a trait, not a type alias — it cannot start a cycle.
+            .dyn_trait => return false,
         }
     }
 
@@ -3846,6 +3864,23 @@ pub const Checker = struct {
                 for (node.params) |param| self.checkType(param, .storage, ctx);
                 self.checkType(node.ret.*, .normal, ctx);
             },
+            // `*dyn Trait` (Tier 2): the trait must exist and be object-safe
+            // (traits-design §5). Object safety is checked once per trait in
+            // checkTraits; here we only validate that the named trait is one of them.
+            .dyn_trait => |node| self.checkDynTraitType(node.trait_name),
+        }
+    }
+
+    // Validate a `*dyn Trait` pointee: the trait must be declared and object-safe.
+    // The set of object-safe trait names is populated by checkTraits (which runs
+    // first in `check`).
+    fn checkDynTraitType(self: *Checker, trait_name: ast.Ident) void {
+        if (!self.known_traits.contains(trait_name.text)) {
+            self.errorCode(trait_name.span, "E_UNKNOWN_TRAIT", "unknown trait in `*dyn Trait`");
+            return;
+        }
+        if (!self.object_safe_traits.contains(trait_name.text)) {
+            self.errorCode(trait_name.span, "E_TRAIT_NOT_OBJECT_SAFE", "trait is not object-safe (every method must take `self` by pointer and be non-generic) so it cannot be used as `*dyn Trait`");
         }
     }
 
@@ -5004,7 +5039,7 @@ pub const Checker = struct {
                 for (node.params) |param| self.checkReflectedGenericTypeArgs(param, ctx);
                 self.checkReflectedGenericTypeArgs(node.ret.*, ctx);
             },
-            .member, .name, .enum_literal => {},
+            .member, .name, .enum_literal, .dyn_trait => {},
         }
     }
 
@@ -5967,6 +6002,24 @@ pub const Checker = struct {
                     traits.put(t.name.text, t) catch {
                         self.oom = true;
                     };
+                    self.known_traits.put(t.name.text, {}) catch {
+                        self.oom = true;
+                    };
+                    if (self.trait_decls) |td| {
+                        @constCast(td).put(t.name.text, t) catch {
+                            self.oom = true;
+                        };
+                    }
+                    // Object safety (traits-design §5): every method must take `self`
+                    // by pointer (`*Self`/`*mut Self`) — not `move self`, not by value —
+                    // and be non-generic (no `comptime` parameters). A trait that meets
+                    // this is usable as `*dyn Trait`; otherwise forming one is rejected
+                    // at the use site (E_TRAIT_NOT_OBJECT_SAFE), while Tier 1 still works.
+                    if (traitIsObjectSafe(t)) {
+                        self.object_safe_traits.put(t.name.text, {}) catch {
+                            self.oom = true;
+                        };
+                    }
                 }
             }
         }
@@ -6660,6 +6713,23 @@ fn findTraitMethod(methods: []const ast.TraitMethodSig, name: []const u8) ?ast.T
         if (std.mem.eql(u8, m.name.text, name)) return m;
     }
     return null;
+}
+
+// A trait is object-safe (usable as `*dyn Trait`, traits-design §5) iff every method
+// (1) takes `self` by pointer (`*Self`/`*mut Self`) — not `move self`, not by value —
+// and (2) is non-generic (no `comptime` parameters). A finite rodata vtable cannot
+// hold infinite monomorphizations, and you cannot move out of a borrowed `*dyn`.
+fn traitIsObjectSafe(t: ast.TraitDecl) bool {
+    for (t.methods) |m| {
+        switch (m.self_mode) {
+            .by_ptr, .by_mut_ptr => {},
+            else => return false, // move self / by value / no self → not object-safe
+        }
+        for (m.params) |p| {
+            if (p.is_comptime) return false; // a generic method → not object-safe
+        }
+    }
+    return true;
 }
 
 fn hasNoLangTrap(attrs: []ast.Attr) bool {
@@ -8887,6 +8957,14 @@ fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {
             }
             break :blk sameTypeSyntax(left_node.ret.*, right_node.ret.*);
         },
+        .dyn_trait => |left_node| blk: {
+            const right_node = switch (right.kind) {
+                .dyn_trait => |node| node,
+                else => unreachable,
+            };
+            break :blk left_node.mutability == right_node.mutability and
+                std.mem.eql(u8, left_node.trait_name.text, right_node.trait_name.text);
+        },
     };
 }
 
@@ -9198,6 +9276,7 @@ fn isKnownLayoutType(ty: ast.TypeExpr, ctx: Context) bool {
         .pointer, .raw_many_pointer, .slice, .array, .nullable => true,
         .fn_pointer => true, // a function pointer has pointer layout
         .closure_type => true, // a closure is a fixed {code, env} aggregate
+        .dyn_trait => true, // a *dyn Trait is a fixed {data, vtable} aggregate
         .qualified => |node| isKnownLayoutType(node.child.*, ctx),
         .generic => |node| isKnownLayoutGeneric(node, ctx),
         .member, .enum_literal => false,

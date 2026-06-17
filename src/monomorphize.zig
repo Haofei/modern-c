@@ -375,6 +375,8 @@ fn typeMentionsIdent(ty: ast.TypeExpr, name: []const u8) bool {
             break :blk typeMentionsIdent(node.ret.*, name);
         },
         .enum_literal => false,
+        // A `*dyn Trait` erases the concrete type; it never mentions a comptime param.
+        .dyn_trait => false,
     };
 }
 
@@ -727,6 +729,8 @@ pub fn cloneType(ctx: *const CloneCtx, ty: ast.TypeExpr) anyerror!ast.TypeExpr {
         },
         .fn_pointer => |node| .{ .fn_pointer = .{ .params = try cloneTypeSlice(ctx, node.params), .ret = try cloneTypePtr(ctx, node.ret.*) } },
         .closure_type => |node| .{ .closure_type = .{ .params = try cloneTypeSlice(ctx, node.params), .ret = try cloneTypePtr(ctx, node.ret.*) } },
+        // `*dyn Trait` carries no substitutable type argument; clone verbatim.
+        .dyn_trait => ty.kind,
     };
     return .{ .span = ty.span, .kind = kind };
 }

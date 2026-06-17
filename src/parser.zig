@@ -349,6 +349,10 @@ pub const Parser = struct {
                 try buf.appendSlice(a, m.field.text);
             },
             .fn_pointer, .closure_type => try buf.appendSlice(a, "fn"),
+            .dyn_trait => |d| {
+                try buf.appendSlice(a, "dyn");
+                try buf.appendSlice(a, d.trait_name.text);
+            },
         }
     }
 
@@ -1137,6 +1141,13 @@ pub const Parser = struct {
         }
         if (self.match(.star)) {
             const mutability = self.parseMutability();
+            // `*dyn Trait` / `*mut dyn Trait` — a trait-object fat pointer (Tier 2).
+            // The `dyn Trait` pointee is not an ordinary type; the whole `*dyn`
+            // folds into a single `dyn_trait` node.
+            if (self.matchIdentifierText("dyn")) {
+                const trait_name = try self.expectName("expected trait name after 'dyn'");
+                return .{ .span = joinSpan(start, trait_name.span), .kind = .{ .dyn_trait = .{ .mutability = mutability, .trait_name = trait_name } } };
+            }
             const child = try ast.makePtr(self.allocator, try self.parseType());
             return .{ .span = joinSpan(start, child.span), .kind = .{ .pointer = .{ .mutability = mutability, .child = child } } };
         }

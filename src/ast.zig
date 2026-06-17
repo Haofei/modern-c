@@ -266,6 +266,15 @@ pub const TypeExpr = struct {
             params: []TypeExpr,
             ret: *TypeExpr,
         },
+        // A trait object pointer `*dyn Trait` / `*mut dyn Trait` (traits-design §4).
+        // The whole `*dyn` is one fat pointer `{ data, vtable }` — the leading `*`
+        // is folded into this node (mutability records `*` vs `*mut`). It lowers,
+        // like a closure, to a two-word `{ ptr, ptr }` value; dispatch loads the
+        // method pointer out of the rodata vtable and calls it with `data` first.
+        dyn_trait: struct {
+            mutability: Mutability,
+            trait_name: Ident,
+        },
     };
 };
 
