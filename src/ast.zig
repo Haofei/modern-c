@@ -95,6 +95,13 @@ pub const ImplTraitMethod = struct {
     mangled: []const u8,
     self_mode: SelfMode,
     attrs: []Attr = &.{},
+    // The impl method's full parameter list and return type (from the desugared
+    // free function), carried so conformance can verify FULL-signature equality
+    // against the trait method (arity + each param type + return type), not just
+    // name + self-mode. Without this a wrong-arity/wrong-type impl is accepted and
+    // a `*dyn` vtable call becomes a wild/UB indirect call (the cast erases it).
+    params: []Param = &.{},
+    return_type: ?TypeExpr = null,
 };
 
 // The `self` parameter form of a (trait or impl) method.

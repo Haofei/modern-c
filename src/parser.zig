@@ -118,6 +118,11 @@ pub const Parser = struct {
                     .mangled = mangled,
                     .self_mode = self_mode,
                     .attrs = m_attrs,
+                    // Carry the impl method's full signature so conformance can check
+                    // FULL-signature equality (arity + each param type + return type)
+                    // against the trait method, not just name + self-mode.
+                    .params = fn_decl.params,
+                    .return_type = fn_decl.return_type,
                 });
             }
             fn_decl.name = .{ .text = mangled, .span = fn_decl.name.span };

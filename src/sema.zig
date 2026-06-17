@@ -6197,6 +6197,15 @@ pub const Checker = struct {
                 if (provided.self_mode != tm.self_mode) {
                     self.errorCode(provided.name.span, "E_TRAIT_SELF_MODE_MISMATCH", "impl method's self-mode does not match the trait signature");
                 }
+                // Full-signature equality: arity (param count), EACH non-self
+                // parameter type, AND the return type must match the trait method.
+                // Without this, a wrong-arity/wrong-type impl is accepted and a
+                // `*dyn` vtable call (which casts the slot to the trait signature)
+                // becomes a wild/UB indirect call with no sema error and no C
+                // backstop (the cast suppresses the warning). The `self` parameter
+                // is excluded — its form is already covered by the self-mode check
+                // (trait writes `*Self`, impl writes `*ConcreteType`).
+                else self.checkTraitSignatureEquality(provided, tm);
                 // Effect contract: an impl method may not be `#[may_sleep]` unless the
                 // trait signature also declares it (so the effect a caller sees through
                 // the bound matches what conformance verified).
@@ -6210,6 +6219,39 @@ pub const Checker = struct {
                     self.errorCode(im.name.span, "E_TRAIT_UNKNOWN_METHOD", "impl provides a method the trait does not declare");
                 }
             }
+        }
+    }
+
+    // Full-signature equality for `impl Trait for Type` conformance: the impl
+    // method must match the trait method in arity, each non-self parameter type,
+    // and the return type. (Self-mode and `#[may_sleep]` effects are checked by the
+    // caller.) A `*dyn Trait` vtable slot is *cast* to the trait method signature at
+    // dispatch, so a mismatch here would otherwise become a wild/UB indirect call.
+    fn checkTraitSignatureEquality(self: *Checker, provided: ast.ImplTraitMethod, tm: ast.TraitMethodSig) void {
+        // Both param lists carry `self` as params[0] when a self parameter exists
+        // (self_mode != .none); skip it (form covered by the self-mode check) and
+        // compare the remaining parameters positionally.
+        const self_skip: usize = if (tm.self_mode == .none) 0 else 1;
+        const trait_rest = tm.params[@min(self_skip, tm.params.len)..];
+        const impl_rest = provided.params[@min(self_skip, provided.params.len)..];
+
+        if (trait_rest.len != impl_rest.len) {
+            self.errorCode(provided.name.span, "E_TRAIT_SIGNATURE_MISMATCH", "impl method's parameter count does not match the trait signature");
+            return;
+        }
+        for (trait_rest, impl_rest) |tp, ip| {
+            if (!sameTypeSyntax(tp.ty, ip.ty)) {
+                self.errorCode(ip.name.span, "E_TRAIT_SIGNATURE_MISMATCH", "impl method's parameter type does not match the trait signature");
+            }
+        }
+
+        // Return type: a missing `-> R` is the unit/void return; both sides must
+        // agree (present-with-equal-type, or both absent).
+        const tr = tm.return_type;
+        const ir = provided.return_type;
+        const ret_matches = if (tr) |t| (if (ir) |i| sameTypeSyntax(t, i) else false) else (ir == null);
+        if (!ret_matches) {
+            self.errorCode(provided.name.span, "E_TRAIT_SIGNATURE_MISMATCH", "impl method's return type does not match the trait signature");
         }
     }
 
