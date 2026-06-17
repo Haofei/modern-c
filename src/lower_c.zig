@@ -412,15 +412,23 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
     // globals — not just the raw-pointer demo path. Default builds emit no hook (unchanged).
     //   - ksan (non-msan): pre-load + pre-store mc_ksan_check (poisoned/freed/redzone traps).
     //   - msan:            pre-load mc_ksan_check (+ uninit trap) + POST-store mc_ksan_store.
-    //   - csan:            pre-load mc_csan_read / pre-store mc_csan_write watchpoint brackets.
+    //   - csan:            NO watchpoint hook. The `mc_race_*` accessors ARE the SYNCHRONIZED
+    //     path — they lower to relaxed-atomic load/store, which in the KCSAN model is a "marked
+    //     atomic" access that does NOT participate in the unsynchronized-watchpoint conflict
+    //     check. Installing a plain read/write watchpoint here (as a previous version did) made a
+    //     properly-synchronized global-vs-global access (boot thread + timer IRQ both via
+    //     `mc_race_*`) FALSE-POSITIVE as a data race — the synchronized clean path trapped. Only
+    //     the genuinely-unsynchronized `raw.load`/`raw.store` path (the raw macro above) sets a
+    //     csan watchpoint, so a race is flagged only when at least one side is an unsynchronized
+    //     raw access — matching the demo's documented intent and the KCSAN atomic model.
     const race_load_pre: []const u8 = if (csan)
-        "    mc_csan_read((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
+        ""
     else if (ksan)
         "    mc_ksan_check((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
     else
         "";
     const race_store_pre: []const u8 = if (csan)
-        "    mc_csan_write((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
+        ""
     else if (ksan and !msan)
         "    mc_ksan_check((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
     else

@@ -31,6 +31,11 @@
 // MC entry points (compiled with --checks=msan).
 uint32_t kmsan_clean(void);
 uint32_t kmsan_uninit(void);
+// Per-access-path verification entry points (empirical coverage audit).
+uint32_t kmsan_field_load(void);
+uintptr_t kmsan_global_address(void);
+uint32_t kmsan_global_load(void);
+uint32_t kmsan_freed_write(uintptr_t p);
 
 static uintptr_t kmsan_bump;   // next free byte in the bump allocator
 
@@ -72,6 +77,33 @@ __attribute__((used)) void m_main(void) {
     puts_("uninit: reading never-written heap memory...\n");
     kmsan_uninit();
     puts_("UNINIT-MISSED\n"); // only reached if the shadow check FAILED to fire
+#elif defined(FIELD_LOAD_SCENARIO)
+    // Pointer struct-field LOAD of UNINIT heap. Doc claims DETECT (the field-load hook is
+    // mc_ksan_check, which traps on UNINIT). VERIFY: must trap.
+    kmsan_arm((uintptr_t)pool, (uintptr_t)sizeof(pool));
+    puts_("field-load: reading UNINIT node.value (struct-field load)...\n");
+    kmsan_field_load();
+    puts_("FIELD-LOAD-MISSED\n"); // reached iff the field load was NOT instrumented
+#elif defined(GLOBAL_LOAD_SCENARIO)
+    // Scalar GLOBAL load of poisoned shadow. Doc claims DETECT. Arm+poison &kmsan_global -> trap.
+    {
+        uintptr_t g = kmsan_global_address();
+        shadow_arm(g, (uintptr_t)POOL_BYTES, SHADOW_POISON); // whole window poisoned
+        puts_("global-load: reading poisoned global (mc_race_load)...\n");
+        kmsan_global_load();
+        puts_("GLOBAL-LOAD-MISSED\n"); // reached iff the global load was NOT instrumented
+    }
+#elif defined(FREED_WRITE_SCENARIO)
+    // Freed-WRITE under msan. Doc claims NOT caught (the store path uses mc_ksan_store only, no
+    // mc_ksan_check). Poison [p,p+8) then write it -> expected NOT to trap (a documented MISS).
+    {
+        kmsan_arm((uintptr_t)pool, (uintptr_t)sizeof(pool));
+        uintptr_t p = (uintptr_t)pool;
+        shadow_set(p, 8u, SHADOW_POISON); // simulate a freed/poisoned block
+        puts_("freed-write: writing poisoned (freed) memory under msan...\n");
+        kmsan_freed_write(p);
+        puts_("FREED-WRITE-MISSED\n"); // reached iff the freed write was waved through (expected)
+    }
 #else
     // 1. Clean path: write-before-read of a fresh allocation -> all CLEAN -> no trap.
     kmsan_arm((uintptr_t)pool, (uintptr_t)sizeof(pool));

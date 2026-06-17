@@ -2155,14 +2155,19 @@ const LlvmEmitter = struct {
     // Default builds emit nothing (all three flags false), keeping codegen byte-identical.
     //   - ksan (non-msan): pre-load + pre-store mc_ksan_check (poisoned/freed/redzone traps).
     //   - msan:            pre-load mc_ksan_check (+ uninit trap) + POST-store mc_ksan_store.
-    //   - csan:            pre-load mc_csan_read / pre-store mc_csan_write watchpoint brackets.
+    //   - csan:            NO watchpoint hook. This is the SYNCHRONIZED (global / mc_race_*,
+    //     relaxed-atomic) access class — a "marked atomic" in the KCSAN model, which does NOT
+    //     participate in the unsynchronized-watchpoint conflict check. Hooking it (as a prior
+    //     version did, mirroring the C `mc_race_*` macro) made a synchronized-vs-synchronized
+    //     global access FALSE-POSITIVE as a race. Only the genuinely-unsynchronized raw path
+    //     (emitRawLoad/emitRawStore) sets a csan watchpoint. Mirrors the C backend fix.
     // `phase` is .load_pre, .store_pre, or .store_post — store_post is the msan init-mark.
     fn emitOrdinaryShadowHook(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, phase: enum { load_pre, store_pre, store_post }) !void {
         if (!self.ksan and !self.msan and !self.csan) return;
         const size = self.llvmAlignOf(ty);
         const hook: ?[]const u8 = switch (phase) {
-            .load_pre => if (self.csan) "mc_csan_read" else if (self.ksan) "mc_ksan_check" else null,
-            .store_pre => if (self.csan) "mc_csan_write" else if (self.ksan and !self.msan) "mc_ksan_check" else null,
+            .load_pre => if (self.ksan) "mc_ksan_check" else null,
+            .store_pre => if (self.ksan and !self.msan) "mc_ksan_check" else null,
             .store_post => if (self.msan) "mc_ksan_store" else null,
         };
         const name = hook orelse return;

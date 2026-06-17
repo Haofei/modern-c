@@ -117,3 +117,101 @@ export fn ksan_field_uaf(region: usize, len: usize) -> u32 {
     return v; // unreachable if detection works
 }
 
+// =====================================================================================
+// PER-ACCESS-PATH VERIFICATION SCENARIOS (empirical coverage audit).
+// Each scenario performs a bad (use-after-free / out-of-bounds) access through ONE access
+// path. The runtime arms+poisons the shadow, then calls the scenario; if the instrumentation
+// hooked that path the access traps (KASAN-DETECTED), otherwise the function returns and the
+// driver prints a *-MISSED marker. This turns the doc's read-the-code claims into observed
+// trap/no-trap facts.
+// =====================================================================================
+
+// ---- pointer struct-field STORE to freed memory (doc claims MISS: emitAssignTarget
+//      suppresses the load hook, and there is no store hook on the field path) ----
+export fn ksan_field_store(region: usize, len: usize) -> u32 {
+    var h: Heap = heap_new_ksan(phys_range(pa(region), len));
+    let n: usize = 64;
+    let p: PAddr = heap_alloc(&h, n, 16);
+    heap_free(&h, p, n); // poison the block
+    unsafe {
+        let node: *Node = raw.ptr<Node>(pa_value(p));
+        node.value = 0xCAFE; // STRUCT-FIELD store of freed memory
+    }
+    return 1; // reached iff the store was NOT instrumented (a MISS)
+}
+
+// ---- array-index LOAD of freed memory (doc claims MISS: the `.index` value path does not
+//      call ordinaryLoadHookName) ----
+struct Arr {
+    cells: [16]u32,
+}
+export fn ksan_arr_load(region: usize, len: usize) -> u32 {
+    var h: Heap = heap_new_ksan(phys_range(pa(region), len));
+    let n: usize = 64;
+    let p: PAddr = heap_alloc(&h, n, 16);
+    heap_free(&h, p, n); // poison the block
+    var v: u32 = 0;
+    unsafe {
+        let a: *Arr = raw.ptr<Arr>(pa_value(p));
+        v = a.cells[3]; // ARRAY-INDEX load of freed memory
+    }
+    return v; // reached iff the array load was NOT instrumented (a MISS)
+}
+
+// ---- array-index STORE to freed memory (doc claims MISS) ----
+export fn ksan_arr_store(region: usize, len: usize) -> u32 {
+    var h: Heap = heap_new_ksan(phys_range(pa(region), len));
+    let n: usize = 64;
+    let p: PAddr = heap_alloc(&h, n, 16);
+    heap_free(&h, p, n); // poison the block
+    unsafe {
+        let a: *Arr = raw.ptr<Arr>(pa_value(p));
+        a.cells[3] = 0xBEEF; // ARRAY-INDEX store of freed memory
+    }
+    return 1; // reached iff the array store was NOT instrumented (a MISS)
+}
+
+// ---- scalar GLOBAL load (doc claims DETECT: a scalar global read lowers to mc_race_load_*,
+//      which carries mc_ksan_check). The runtime arms+poisons the shadow over &ksan_global,
+//      so the instrumented read of a poisoned global must trap. ----
+global ksan_global: u32 = 0xABCD;
+// The runtime arms+poisons the shadow over &ksan_global; since the emitted global is `static`
+// (file-local), expose its address from MC so the C driver can target it.
+export fn ksan_global_address() -> usize {
+    return (&ksan_global) as usize;
+}
+export fn ksan_global_load() -> u32 {
+    return ksan_global; // mc_race_load_u32 -> mc_ksan_check(&ksan_global, 4) -> trap if poisoned
+}
+
+// ---- scalar GLOBAL store (doc claims DETECT: mc_race_store_* carries mc_ksan_check on the
+//      non-msan ksan profile) ----
+export fn ksan_global_store() -> u32 {
+    ksan_global = 0x1234; // mc_race_store_u32 -> mc_ksan_check(&ksan_global, 4) -> trap if poisoned
+    return 1; // reached iff the global store was NOT instrumented (a MISS)
+}
+
+// ---- stack LOCAL access (doc claims MISS: stack locals are plain C locals, never routed
+//      through a hook, and their addresses are outside the armed pool anyway) ----
+export fn ksan_stack_local() -> u32 {
+    var x: u32 = 0;
+    x = 7;
+    return x; // ordinary local read/write; no hook -> always returns (a MISS by design)
+}
+
+// ---- access OUTSIDE the armed ksan pool (doc claims FAIL-OPEN: a UAF on memory the shadow
+//      does not cover is waved through because mc_ksan_check returns early when addr is not in
+//      [shadow_base, shadow_end)). The runtime arms the shadow over a DIFFERENT region than the
+//      one this heap lives in, so the freed-read addr is out of shadow scope. ----
+export fn ksan_outside_pool(region: usize, len: usize) -> u32 {
+    var h: Heap = heap_new_ksan(phys_range(pa(region), len));
+    let n: usize = 64;
+    let p: PAddr = heap_alloc(&h, n, 16);
+    heap_free(&h, p, n); // poison would happen, but shadow is armed elsewhere
+    var v: u8 = 0;
+    unsafe {
+        v = raw.load<u8>(p); // UAF read, but addr is outside the armed shadow -> waved through
+    }
+    return v as u32; // reached iff the access was waved through (fail-open)
+}
+

@@ -29,6 +29,15 @@ uint32_t ksan_clean(uintptr_t region, uintptr_t len);
 uint32_t ksan_uaf(uintptr_t region, uintptr_t len);
 uint32_t ksan_oob(uintptr_t region, uintptr_t len);
 uint32_t ksan_field_uaf(uintptr_t region, uintptr_t len);
+// Per-access-path verification entry points (empirical coverage audit).
+uint32_t ksan_field_store(uintptr_t region, uintptr_t len);
+uint32_t ksan_arr_load(uintptr_t region, uintptr_t len);
+uint32_t ksan_arr_store(uintptr_t region, uintptr_t len);
+uintptr_t ksan_global_address(void);
+uint32_t ksan_global_load(void);
+uint32_t ksan_global_store(void);
+uint32_t ksan_stack_local(void);
+uint32_t ksan_outside_pool(uintptr_t region, uintptr_t len);
 
 // Arm the shadow for [base, base+len): everything addressable (clean) to start. The MC heap
 // then poisons freed blocks / redzones as it runs.
@@ -58,6 +67,63 @@ __attribute__((used)) void m_main(void) {
     puts_("field-uaf: reading freed node.value (struct-field load)...\n");
     ksan_field_uaf((uintptr_t)pool, (uintptr_t)sizeof(pool));
     puts_("FIELD-UAF-MISSED\n"); // only reached if the field load was NOT instrumented
+#elif defined(FIELD_STORE_SCENARIO)
+    // Pointer struct-field STORE to freed memory. Doc claims MISS (the field-store path has no
+    // shadow hook; emitAssignTarget suppresses it). VERIFY: expect this to RETURN (no trap).
+    mc_ksan_arm((uintptr_t)pool, (uintptr_t)sizeof(pool));
+    puts_("field-store: writing freed node.value (struct-field store)...\n");
+    ksan_field_store((uintptr_t)pool, (uintptr_t)sizeof(pool));
+    puts_("FIELD-STORE-MISSED\n"); // reached iff the field store was NOT instrumented (expected)
+#elif defined(ARR_LOAD_SCENARIO)
+    // Array-index LOAD of freed memory (through a struct-field array). VERIFY observed behaviour.
+    mc_ksan_arm((uintptr_t)pool, (uintptr_t)sizeof(pool));
+    puts_("arr-load: reading freed a.cells[3] (array-index load)...\n");
+    ksan_arr_load((uintptr_t)pool, (uintptr_t)sizeof(pool));
+    puts_("ARR-LOAD-MISSED\n"); // reached iff the array load was NOT instrumented
+#elif defined(ARR_STORE_SCENARIO)
+    // Array-index STORE to freed memory. Doc claims MISS. VERIFY: expect this to RETURN.
+    mc_ksan_arm((uintptr_t)pool, (uintptr_t)sizeof(pool));
+    puts_("arr-store: writing freed a.cells[3] (array-index store)...\n");
+    ksan_arr_store((uintptr_t)pool, (uintptr_t)sizeof(pool));
+    puts_("ARR-STORE-MISSED\n"); // reached iff the array store was NOT instrumented (expected)
+#elif defined(GLOBAL_LOAD_SCENARIO)
+    // Scalar GLOBAL load. Doc claims DETECT (the read lowers to mc_race_load_u32, which carries
+    // mc_ksan_check). Arm+poison the shadow over &ksan_global, then read it -> must trap.
+    {
+        uintptr_t g = ksan_global_address();
+        mc_ksan_arm(g, (uintptr_t)POOL_BYTES);
+        mc_ksan_poison(g, 4u); // poison the 4 bytes of the global
+        puts_("global-load: reading poisoned global (mc_race_load)...\n");
+        ksan_global_load();
+        puts_("GLOBAL-LOAD-MISSED\n"); // reached iff the global load was NOT instrumented
+    }
+#elif defined(GLOBAL_STORE_SCENARIO)
+    // Scalar GLOBAL store. Doc claims DETECT (mc_race_store_u32 carries mc_ksan_check on the
+    // ksan profile). Arm+poison &ksan_global, then write it -> must trap.
+    {
+        uintptr_t g = ksan_global_address();
+        mc_ksan_arm(g, (uintptr_t)POOL_BYTES);
+        mc_ksan_poison(g, 4u);
+        puts_("global-store: writing poisoned global (mc_race_store)...\n");
+        ksan_global_store();
+        puts_("GLOBAL-STORE-MISSED\n"); // reached iff the global store was NOT instrumented
+    }
+#elif defined(STACK_LOCAL_SCENARIO)
+    // Stack LOCAL access. Doc claims MISS (locals are plain C locals, never hooked, and their
+    // addresses are outside any armed pool). VERIFY: expect this to RETURN.
+    mc_ksan_arm((uintptr_t)pool, (uintptr_t)sizeof(pool));
+    puts_("stack-local: read/write of an uninstrumented stack local...\n");
+    ksan_stack_local();
+    puts_("STACK-LOCAL-MISSED\n"); // reached iff the local access was NOT instrumented (expected)
+#elif defined(OUTSIDE_POOL_SCENARIO)
+    // UAF on memory the shadow does NOT cover. Doc claims FAIL-OPEN (mc_ksan_check returns early
+    // when addr is outside [shadow_base, shadow_end)). Arm the shadow over a DIFFERENT region
+    // (the top half of the pool) than the heap (the bottom half), so the freed-read addr is out
+    // of shadow scope and is waved through. VERIFY: expect this to RETURN.
+    mc_ksan_arm((uintptr_t)pool + (sizeof(pool) / 2u), (uintptr_t)(sizeof(pool) / 2u));
+    puts_("outside-pool: UAF read on memory outside the armed shadow...\n");
+    ksan_outside_pool((uintptr_t)pool, (uintptr_t)(sizeof(pool) / 2u));
+    puts_("OUTSIDE-POOL-MISSED\n"); // reached iff the access was waved through (expected fail-open)
 #elif defined(OOB_SCENARIO)
     // 3. Out-of-bounds: a read one past the user region (a poisoned redzone byte) traps.
     mc_ksan_arm((uintptr_t)pool, (uintptr_t)sizeof(pool));

@@ -68,3 +68,43 @@ export fn kmsan_uninit() -> u32 {
     }
     return v as u32; // unreachable if detection works
 }
+
+// =====================================================================================
+// PER-ACCESS-PATH VERIFICATION SCENARIOS for KMSAN (empirical coverage audit).
+// =====================================================================================
+
+struct MNode {
+    value: u32,
+}
+
+// ---- pointer struct-field LOAD of UNINIT heap (doc claims DETECT) ----
+export fn kmsan_field_load() -> u32 {
+    let p: usize = kmsan_alloc(64);
+    var v: u32 = 0;
+    unsafe {
+        let node: *MNode = raw.ptr<MNode>(p);
+        v = node.value; // struct-field load of never-written (UNINIT) memory -> mc_ksan_check traps
+    }
+    return v; // unreachable if detection works
+}
+
+// ---- scalar GLOBAL load of poisoned/uninit shadow (doc claims DETECT) ----
+global kmsan_global: u32 = 0xABCD;
+export fn kmsan_global_address() -> usize {
+    return (&kmsan_global) as usize;
+}
+export fn kmsan_global_load() -> u32 {
+    return kmsan_global; // mc_race_load_u32 -> mc_ksan_check -> trap if UNINIT/poisoned
+}
+
+// ---- freed-WRITE under msan (doc claims NOT caught: raw.store pre-checks with mc_ksan_store
+//      only, NOT mc_ksan_check, so a write to freed/poisoned memory is waved through) ----
+export fn kmsan_freed_write(p: usize) -> u32 {
+    // The runtime poisons [p, p+8) (simulating a freed block) before calling this. Under msan,
+    // the store path is `mc_ksan_store(addr,size); *addr = v;` — no mc_ksan_check — so this
+    // write to poisoned memory does NOT trap.
+    unsafe {
+        raw.store<u8>(pa(p), 0x55); // freed-write; expected to be MISSED under msan
+    }
+    return 1; // reached iff the freed write was waved through (expected)
+}

@@ -63,11 +63,24 @@ run_scenario() {
 
 CLEAN="$(run_scenario "" clean)"
 UNINIT="$(run_scenario "-DUNINIT_SCENARIO=1" uninit)"
+# ---- empirical per-access-path coverage audit (verify each claim by EXECUTION) ----
+# DETECT-claimed (must trap): pointer struct-field LOAD of UNINIT, scalar global LOAD of poison.
+FLOAD="$(run_scenario "-DFIELD_LOAD_SCENARIO=1" fload)"
+GLOAD="$(run_scenario "-DGLOBAL_LOAD_SCENARIO=1" gload)"
+# MISS-claimed (documented gap — recorded, not gated): freed-WRITE under msan (the store path
+# uses mc_ksan_store only, no mc_ksan_check, so a write to freed/poisoned memory is not caught).
+FWRITE="$(run_scenario "-DFREED_WRITE_SCENARIO=1" fwrite)"
 
 echo "--- clean (write-before-read) scenario UART ---"
 printf '%s\n' "$CLEAN"
 echo "--- uninitialized-read scenario UART ---"
 printf '%s\n' "$UNINIT"
+echo "--- struct-field UNINIT LOAD scenario UART ---"
+printf '%s\n' "$FLOAD"
+echo "--- global poisoned LOAD scenario UART ---"
+printf '%s\n' "$GLOAD"
+echo "--- [MISS-expected] freed-write-under-msan scenario UART ---"
+printf '%s\n' "$FWRITE"
 echo "-----------------------------------------------"
 
 fail=0
@@ -77,15 +90,29 @@ fi
 if printf '%s' "$CLEAN" | grep -q "KMSAN-DETECTED"; then
     echo "FAIL: $TEST_NAME — clean path trapped (false positive on initialized memory)"; fail=1
 fi
-if ! printf '%s' "$UNINIT" | grep -q "KMSAN-DETECTED"; then
-    echo "FAIL: $TEST_NAME — uninitialized read NOT detected (no KMSAN-DETECTED)"; fail=1
+# DETECT cases — gate-assert that each bad access actually trapped.
+detect() { # haystack tag
+    local out="$1" tag="$2"
+    if ! printf '%s' "$out" | grep -q "KMSAN-DETECTED"; then
+        echo "FAIL: $TEST_NAME — $tag NOT detected (no KMSAN-DETECTED)"; fail=1
+    fi
+    if printf '%s' "$out" | grep -q "MISSED"; then
+        echo "FAIL: $TEST_NAME — $tag shadow check failed to fire (got *-MISSED)"; fail=1
+    fi
+}
+detect "$UNINIT" "uninitialized read"
+detect "$FLOAD" "struct-field UNINIT load"
+detect "$GLOAD" "global poisoned load"
+# Documented MISS — confirm the freed-write under msan is NOT caught (reached its marker).
+if printf '%s' "$FWRITE" | grep -q "KMSAN-DETECTED"; then
+    echo "NOTE: $TEST_NAME — freed-write-under-msan now TRAPS (was a documented MISS) — coverage improved"
 fi
-if printf '%s' "$UNINIT" | grep -q "MISSED"; then
-    echo "FAIL: $TEST_NAME — init-state shadow check failed to fire (got *-MISSED)"; fail=1
+if ! printf '%s' "$FWRITE" | grep -q "FREED-WRITE-MISSED"; then
+    echo "FAIL: $TEST_NAME — freed-write scenario did not reach its documented-MISS marker; harness broken"; fail=1
 fi
 
 if [ "$fail" -eq 0 ]; then
-    echo "PASS: $TEST_NAME — $BACKEND backend: write-before-read clean path (KMSAN-OK), and a REAL read of never-written heap memory caught at access time by the init-state shadow check (KMSAN-DETECTED) under QEMU"
+    echo "PASS: $TEST_NAME — $BACKEND backend: write-before-read clean path (KMSAN-OK); uninitialized-use detection VERIFIED under QEMU on the raw.load, struct-field LOAD, and scalar global LOAD paths (KMSAN-DETECTED, gate-asserted); and the documented gap confirmed — a freed-WRITE under msan is NOT caught (the store path marks-init without a pre-check), reaching FREED-WRITE-MISSED with no trap"
     exit 0
 fi
 exit 1
