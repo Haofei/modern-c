@@ -125,6 +125,9 @@ pub const Checker = struct {
     // duration of checkModule.
     known_traits: std.StringHashMap(void) = undefined,
     object_safe_traits: std.StringHashMap(void) = undefined,
+    // `(Trait, Type)` conformance pairs (key = "Trait\x00Type"), so a `&x -> *dyn Trait`
+    // coercion can verify `impl Trait for typeof(x)` exists. Owns its key strings.
+    trait_conformances: std.StringHashMap(void) = undefined,
     // Trait declarations by name, so a `d.method(args)` dispatch through a
     // `*dyn Trait` can resolve the method signature.
     trait_decls: ?*const std.StringHashMap(ast.TraitDecl) = null,
@@ -157,6 +160,12 @@ pub const Checker = struct {
         defer self.known_traits.deinit();
         self.object_safe_traits = std.StringHashMap(void).init(self.reporter.allocator);
         defer self.object_safe_traits.deinit();
+        self.trait_conformances = std.StringHashMap(void).init(self.reporter.allocator);
+        defer {
+            var cit = self.trait_conformances.keyIterator();
+            while (cit.next()) |k| self.reporter.allocator.free(k.*);
+            self.trait_conformances.deinit();
+        }
         var trait_decls = std.StringHashMap(ast.TraitDecl).init(self.reporter.allocator);
         defer trait_decls.deinit();
         self.trait_decls = &trait_decls;
@@ -579,10 +588,11 @@ pub const Checker = struct {
     fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
         const irq_context = hasIrqContext(decl.attrs);
+        const bounded = hasBoundedContext(decl.attrs);
         const type_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
-                self.checkFn(fn_decl, no_lang_trap, irq_context, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
+                self.checkFn(fn_decl, no_lang_trap, irq_context, bounded, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
                 // T(term)1: bounded-loop / no-unbounded-recursion check for IRQ/atomic
                 // and `#[bounded]` functions (opt-in; existing code is unaffected).
                 if (hasBoundedContext(decl.attrs)) {
@@ -2077,7 +2087,7 @@ pub const Checker = struct {
         }
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, irq_context: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, irq_context: bool, bounded: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         self.current_fn_name = fn_decl.name.text;
         defer self.current_fn_name = null;
         var scope = Scope.init(self.reporter.allocator);
@@ -2123,6 +2133,7 @@ pub const Checker = struct {
             const fn_ctx = Context{
                 .no_lang_trap = no_lang_trap,
                 .irq_context = irq_context,
+                .bounded = bounded,
                 .returns_never = returns_never,
                 .returns_void = returns_void,
                 .return_ty = fn_decl.return_type,
@@ -3178,6 +3189,7 @@ pub const Checker = struct {
                 const c_void_conversion_checked = if (local.ty) |ty| self.checkCVoidPointerConversion(ty, expr, ctx) else false;
                 const address_checked = if (local.ty) |ty| self.checkAddressOfInitializer(kind, ty, expr, ctx) else false;
                 const fn_pointer_checked = if (local.ty) |ty| self.checkFunctionPointerInitializer(ty, expr, ctx) else false;
+                const dyn_checked = if (local.ty) |ty| self.checkDynCoercionInitializer(ty, expr, ctx) else false;
                 const address_class_checked = if (local.ty != null) checkAddressClassConversion(self, expr.span, kind, initializer) else false;
                 const enum_checked = if (local.ty) |ty| self.checkEnumValueCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 const union_checked = if (local.ty) |ty| self.checkTaggedUnionConstructorCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
@@ -3185,7 +3197,7 @@ pub const Checker = struct {
                 const secret_checked = if (local.ty) |ty| (kind == .secret and self.checkSecretWrapInitializer(ty, expr, ctx)) else false;
                 if (local.ty == null and untargeted_union_checked) {
                     // The diagnostic was emitted above; constructor calls need an explicit union target.
-                } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(kind, initializer)) {
+                } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(kind, initializer)) {
                     self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion");
                 }
             }
@@ -3545,6 +3557,38 @@ pub const Checker = struct {
                     if (ctx.irq_context) {
                         self.errorCode(expr.span, "E_IRQ_CONTEXT_CALL", "an #[irq_context] function may not make an indirect/fn-pointer call (the target may sleep or block)");
                     }
+                    // traits-design review #2 (T(term)1 extension): an indirect/fn-pointer
+                    // call from a `#[bounded]` function is rejected — the termination check
+                    // cannot see through the pointer to bound the callee.
+                    if (ctx.bounded and !ctx.irq_context) {
+                        self.errorCode(expr.span, "E_UNBOUNDED_INDIRECT_CALL", "a `#[bounded]` function may not make an indirect/fn-pointer call (the callee's termination cannot be checked through the pointer)");
+                    }
+                }
+                // Tier 2 dynamic dispatch: `d.method(args)` through a `*dyn Trait`. This is
+                // an indirect (load-through-vtable) call, so it inherits every restriction
+                // an indirect call carries: rejected in `#[irq_context]` (E_IRQ_CONTEXT_CALL,
+                // effect-sound by exclusion — traits-design §6,§9.1) and in `#[bounded]`
+                // (review #2). A `move self` method is static-dispatch only.
+                if (self.dynDispatchSig(node.callee.*, ctx)) |msig| {
+                    // Object-safe traits never have a move-self method, so this fires only on
+                    // an unsafe-forged dyn; it locks the linearity guarantee through dispatch.
+                    if (msig.self_mode == .move_self or msig.self_mode == .by_value) {
+                        self.errorCode(expr.span, "E_DYN_MOVE_SELF", "a consuming (`move self`/by-value) method cannot be called through `*dyn Trait` (you cannot move out of a borrowed trait object)");
+                    }
+                    // The dispatched method takes `self` first, then the declared params.
+                    const dispatch_arity = if (msig.params.len > 0) msig.params.len - 1 else 0;
+                    if (node.args.len != dispatch_arity) {
+                        self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match the trait method signature");
+                    }
+                    if (ctx.irq_context) {
+                        self.errorCode(expr.span, "E_IRQ_CONTEXT_CALL", "an #[irq_context] function may not dispatch through `*dyn Trait` (a virtual call is an indirect call whose target may sleep or block)");
+                    }
+                    if (ctx.bounded and !ctx.irq_context) {
+                        self.errorCode(expr.span, "E_UNBOUNDED_INDIRECT_CALL", "a `#[bounded]` function may not dispatch through `*dyn Trait` (the callee's termination cannot be checked through the vtable)");
+                    }
+                    for (node.args) |arg| _ = self.checkExpr(arg, ctx);
+                    if (msig.return_type) |rt| return classifyTypeCtx(rt, ctx);
+                    return .void;
                 }
                 if (direct_function) |function| {
                     // A `const fn` is evaluable at comptime (section 22); only
@@ -5183,11 +5227,12 @@ pub const Checker = struct {
             const c_void_conversion_checked = self.checkCVoidPointerConversion(element_ty, item, ctx);
             const address_checked = self.checkAddressOfInitializer(element_class, element_ty, item, ctx);
             const fn_pointer_checked = self.checkFunctionPointerInitializer(element_ty, item, ctx);
+            const dyn_checked = self.checkDynCoercionInitializer(element_ty, item, ctx);
             const address_class_checked = checkAddressClassConversion(self, item.span, element_class, item_class);
             const enum_checked = self.checkEnumValueCompatibility(element_ty, item, ctx, code, message);
             const union_checked = self.checkTaggedUnionConstructorCompatibility(element_ty, item, ctx, code, message);
             const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(item, ctx, code, message) else false;
-            if (!literal_checked and !null_checked and !array_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(element_class, item_class)) {
+            if (!literal_checked and !null_checked and !array_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(element_class, item_class)) {
                 self.errorCode(item.span, code, message);
             }
         }
@@ -5333,6 +5378,77 @@ pub const Checker = struct {
             self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "function-pointer signature does not match the expected type");
         }
         return true;
+    }
+
+    // Tier 2 coercion + forge-safety (traits-design §4,§7). The ONLY safe way to build
+    // a `*dyn Trait` value is `&x` / `&mut x` where `impl Trait for typeof(x)` exists:
+    //  - `&x` → verify the conformance; missing → E_TRAIT_NOT_SATISFIED.
+    //  - an existing `*dyn Trait`-typed value (pass-through) → allowed.
+    //  - anything else (hand-assembling `{data, vtable}` from raw parts, casts, etc.)
+    //    is a forge attempt — rejected in safe code (E_DYN_FORGE); `unsafe` is the only
+    //    escape, exactly like opaque-struct value-declassification. `*dyn` is a
+    //    compiler-protected type kind.
+    // Returns true when the target is `*dyn Trait` (so the caller suppresses the generic
+    // E_NO_IMPLICIT_CONVERSION and trusts this dedicated check).
+    // If `callee` is `d.method` where `d` has a `*dyn Trait` type and `method` is one
+    // of the trait's methods, return the (trait method signature). A call through it is
+    // a dynamic dispatch (load-through-vtable indirect call). Null otherwise.
+    fn dynDispatchSig(self: *Checker, callee: ast.Expr, ctx: Context) ?ast.TraitMethodSig {
+        const member = switch (callee.kind) {
+            .member => |m| m,
+            .grouped => |inner| return self.dynDispatchSig(inner.*, ctx),
+            else => return null,
+        };
+        const base_ty = exprDeclaredType(member.base.*, ctx) orelse return null;
+        const dyn = switch (resolveAliasType(base_ty, ctx).kind) {
+            .dyn_trait => |d| d,
+            else => return null,
+        };
+        const td = self.trait_decls orelse return null;
+        const trait = td.get(dyn.trait_name.text) orelse return null;
+        return findTraitMethod(trait.methods, member.name.text);
+    }
+
+    fn checkDynCoercionInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
+        const resolved = resolveAliasType(target_ty, ctx);
+        const dyn = switch (resolved.kind) {
+            .dyn_trait => |d| d,
+            else => return false,
+        };
+        // `&x` / `&mut x`: the checked coercion. Verify the concrete type conforms.
+        if (addressOfOperand(expr)) |operand| {
+            // A `*mut dyn Trait` borrow needs a mutable place.
+            if (dyn.mutability == .mut and !addressableStorageIsMutable(operand.*, ctx)) {
+                self.errorCode(expr.span, "E_DYN_MUT_BORROW", "a `*mut dyn Trait` requires `&mut` of a mutable place");
+                return true;
+            }
+            const source_ty = addressableStorageType(operand.*, ctx) orelse return true;
+            const type_name = typeName(resolveAliasType(source_ty, ctx)) orelse {
+                self.errorCode(expr.span, "E_TRAIT_NOT_SATISFIED", "a `*dyn Trait` can only be formed from a concrete nominal type that implements the trait");
+                return true;
+            };
+            if (!self.traitConforms(dyn.trait_name.text, type_name)) {
+                self.errorCode(expr.span, "E_TRAIT_NOT_SATISFIED", "no `impl Trait for Type` for this concrete type, so it cannot coerce to `*dyn Trait`");
+            }
+            return true;
+        }
+        // Passing an existing `*dyn Trait` value through (same trait): allowed.
+        if (exprDeclaredType(expr, ctx)) |src| {
+            if (resolveAliasType(src, ctx).kind == .dyn_trait) {
+                if (sameTypeSyntaxCtx(src, resolved, ctx)) return true;
+            }
+        }
+        // Anything else is an attempt to fabricate a trait object. Only `unsafe` may.
+        if (!ctx.in_unsafe) {
+            self.errorCode(expr.span, "E_DYN_FORGE", "a `*dyn Trait` cannot be hand-assembled in safe code; build it with `&x` / `&mut x` (the checked coercion). `*dyn` is a compiler-protected type — fabrication requires `unsafe`");
+        }
+        return true;
+    }
+
+    fn traitConforms(self: *Checker, trait_name: []const u8, type_name: []const u8) bool {
+        var buf: [256]u8 = undefined;
+        const key = std.fmt.bufPrint(&buf, "{s}\x00{s}", .{ trait_name, type_name }) catch return false;
+        return self.trait_conformances.contains(key);
     }
 
     fn checkPointerViewInitializer(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
@@ -6050,6 +6166,20 @@ pub const Checker = struct {
                 };
             }
 
+            // Record the conformance so a `&x -> *dyn Trait` coercion can verify it.
+            const conf_key = std.fmt.allocPrint(self.reporter.allocator, "{s}\x00{s}", .{ it.trait_name.text, it.type_name.text }) catch {
+                self.oom = true;
+                continue;
+            };
+            if (self.trait_conformances.contains(conf_key)) {
+                self.reporter.allocator.free(conf_key);
+            } else {
+                self.trait_conformances.put(conf_key, {}) catch {
+                    self.reporter.allocator.free(conf_key);
+                    self.oom = true;
+                };
+            }
+
             // The trait being implemented must exist.
             const trait = traits.get(it.trait_name.text) orelse {
                 self.errorCode(it.trait_name.span, "E_UNKNOWN_TRAIT", "unknown trait in impl");
@@ -6450,6 +6580,11 @@ const Context = struct {
     // C2: the enclosing function runs in IRQ/atomic context (`#[irq_context]`/
     // `#[atomic]`); calling a `#[may_sleep]` op is "sleeping in interrupt".
     irq_context: bool = false,
+    // T(term)1 + traits-design review #2: the enclosing function is `#[bounded]`
+    // (or IRQ/atomic, which is also bounded). An INDIRECT call (fn pointer, closure,
+    // or `*dyn` dispatch) is rejected here — the termination check cannot see through
+    // it, so `dyn` cannot smuggle unbounded behavior into a bounded context.
+    bounded: bool = false,
     in_unsafe: bool = false,
     in_comptime: bool = false,
     returns_never: bool = false,
