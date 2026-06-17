@@ -5,6 +5,7 @@ const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const hir = @import("hir.zig");
 const ir = @import("ir.zig");
+const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
 const mir = @import("mir.zig");
 const monomorphize = @import("monomorphize.zig");
@@ -327,17 +328,25 @@ test "tests/spec fixtures produce declared semantic error codes" {
         const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
         defer allocator.free(path);
 
-        var reporter = diagnostics.Reporter.init(allocator, path, source);
+        // Soundness fixtures that import std/kernel opaque types are import-expanded so the
+        // cross-file orphan rule (E_ORPHAN_IMPL) has file boundaries to compare; single-file
+        // fixtures (the overwhelming majority) borrow `source` and carry no boundaries.
+        var imported = false;
+        var spec = try resolveSpecSource(allocator, io, path, source, &imported);
+        defer spec.deinit(allocator, imported);
+
+        var reporter = diagnostics.Reporter.init(allocator, path, spec.source);
         defer reporter.deinit();
 
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        const module = try parseSpecModule(source, parse_allocator, &reporter);
+        const module = try parseSpecModule(spec.source, parse_allocator, &reporter);
         defer module.deinit(parse_allocator);
 
         var checker = sema.Checker.init(&reporter);
+        checker.file_boundaries = spec.boundaries;
         checker.checkModule(module);
         if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
             try mir.verify(allocator, module, &reporter);
@@ -384,17 +393,25 @@ test "tests/spec inline EXPECT_ERROR comments match diagnostic lines" {
         const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
         defer allocator.free(path);
 
-        var reporter = diagnostics.Reporter.init(allocator, path, source);
+        // Soundness fixtures that import std/kernel opaque types are import-expanded so the
+        // cross-file orphan rule (E_ORPHAN_IMPL) has file boundaries to compare; single-file
+        // fixtures (the overwhelming majority) borrow `source` and carry no boundaries.
+        var imported = false;
+        var spec = try resolveSpecSource(allocator, io, path, source, &imported);
+        defer spec.deinit(allocator, imported);
+
+        var reporter = diagnostics.Reporter.init(allocator, path, spec.source);
         defer reporter.deinit();
 
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        const module = try parseSpecModule(source, parse_allocator, &reporter);
+        const module = try parseSpecModule(spec.source, parse_allocator, &reporter);
         defer module.deinit(parse_allocator);
 
         var checker = sema.Checker.init(&reporter);
+        checker.file_boundaries = spec.boundaries;
         checker.checkModule(module);
         if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
             try mir.verify(allocator, module, &reporter);
@@ -442,6 +459,13 @@ test "tests/spec semantic errors are all explicitly expected" {
 
         const source = try dir.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024));
         defer allocator.free(source);
+
+        // Import-using fixtures (the soundness fixtures that pull in std/kernel opaque types)
+        // are import-expanded elsewhere; checking them here against inline EXPECT_ERROR comments
+        // would also see incidental diagnostics from the imported stdlib. Their declared
+        // diagnostic codes are locked by "tests/spec fixtures produce declared semantic error
+        // codes" (which IS import-aware), so skip them in this raw, single-file pass.
+        if (hasTopLevelImport(source)) continue;
 
         var expected_errors = try parseExpectedErrors(allocator, source);
         defer expected_errors.deinit(allocator);
@@ -814,6 +838,62 @@ fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *
     var p = parser.Parser.init(source, reporter);
     const module = try p.parseModule(allocator);
     return try monomorphize.transform(allocator, module);
+}
+
+// A spec fixture's effective source, plus the import-flattened file boundaries needed to
+// enforce the cross-file orphan rule (sema). Most fixtures are single-file: `source` is then
+// the raw text and `boundaries` is empty. A fixture that begins with `import "..."` (e.g. the
+// soundness fixtures that pull in std/kernel opaque types) is expanded through the loader, with
+// `rel_path` made absolute first so the loader's ancestor walk reaches the repo root — matching
+// how the real kernel/std build resolves rooted imports.
+const SpecSource = struct {
+    source: []const u8,
+    boundaries: []const loader.FileBoundary,
+
+    fn deinit(self: *SpecSource, allocator: std.mem.Allocator, imported: bool) void {
+        if (!imported) return;
+        allocator.free(self.source);
+        for (self.boundaries) |b| allocator.free(b.path);
+        allocator.free(self.boundaries);
+    }
+};
+
+fn hasTopLevelImport(source: []const u8) bool {
+    // A coarse, false-positive-tolerant probe: a line whose first token is `import`. The loader
+    // re-lexes precisely; this only decides whether to invoke it at all.
+    var it = std.mem.splitScalar(u8, source, '\n');
+    while (it.next()) |line| {
+        const t = std.mem.trim(u8, line, " \t\r");
+        if (std.mem.startsWith(u8, t, "import") and (t.len == 6 or t[6] == ' ' or t[6] == '\t' or t[6] == '"')) return true;
+    }
+    return false;
+}
+
+// Resolve a spec fixture to its effective source. `raw` is the fixture's own bytes; `rel_path`
+// is its repo-relative path (`tests/spec/<name>.mc`). `imported_out` is set true when the loader
+// was used (so the caller frees with the same flag). The returned `source`/`boundaries` are
+// loader-owned when imported, else borrow `raw`.
+fn resolveSpecSource(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    rel_path: []const u8,
+    raw: []const u8,
+    imported_out: *bool,
+) !SpecSource {
+    if (!hasTopLevelImport(raw)) {
+        imported_out.* = false;
+        return .{ .source = raw, .boundaries = &.{} };
+    }
+    imported_out.* = true;
+    const abs = try std.fs.path.resolve(allocator, &.{rel_path});
+    defer allocator.free(abs);
+    var boundaries: std.ArrayList(loader.FileBoundary) = .empty;
+    errdefer {
+        for (boundaries.items) |b| allocator.free(b.path);
+        boundaries.deinit(allocator);
+    }
+    const combined = try loader.loadCombinedSourceWithBoundaries(allocator, io, abs, raw, &boundaries);
+    return .{ .source = combined, .boundaries = try boundaries.toOwnedSlice(allocator) };
 }
 
 fn isSupportedPhase(phase: []const u8) bool {

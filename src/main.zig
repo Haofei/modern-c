@@ -22,6 +22,12 @@ const sema = @import("sema.zig");
 const spec_tests = @import("spec_tests.zig");
 const symbols = @import("symbols.zig");
 
+// File-origin boundaries of the import-flattened source (loader.loadCombinedSourceWithBoundaries),
+// set once per invocation in `run` and consumed by the semantic checker to enforce the orphan
+// rule for `impl` blocks of `opaque struct`s (a peer `impl` in a different file may not name the
+// type's private fields). Null when no module was loaded (e.g. `fmt`, which bypasses the loader).
+var combined_boundaries: ?[]const loader.FileBoundary = null;
+
 const usage =
     \\usage:
     \\  mcc lex <file.mc>
@@ -214,8 +220,15 @@ pub fn main(init: std.process.Init) !void {
     // Resolve `import "path";` declarations by textual inclusion (section 22 /
     // module system). With no imports this is the original source plus a
     // trailing newline, so single-file behavior is unchanged.
-    const source = try loader.loadCombinedSource(allocator, init.io, path, root_source);
+    var boundaries: std.ArrayList(loader.FileBoundary) = .empty;
+    defer {
+        for (boundaries.items) |b| allocator.free(b.path);
+        boundaries.deinit(allocator);
+    }
+    const source = try loader.loadCombinedSourceWithBoundaries(allocator, init.io, path, root_source, &boundaries);
     defer allocator.free(source);
+    combined_boundaries = boundaries.items;
+    defer combined_boundaries = null;
 
     if (std.mem.eql(u8, command, "lex")) {
         try runLex(allocator, path, source);
@@ -337,6 +350,7 @@ fn runVerify(allocator: std.mem.Allocator, path: []const u8, source: []const u8,
     }
 
     var checker = sema.Checker.init(&diag);
+    checker.file_boundaries = combined_boundaries;
     checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
@@ -437,6 +451,7 @@ fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     }
 
     var checker = sema.Checker.init(&diag);
+    checker.file_boundaries = combined_boundaries;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();
@@ -569,6 +584,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     }
 
     var checker = sema.Checker.init(&diag);
+    checker.file_boundaries = combined_boundaries;
     checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
@@ -606,6 +622,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     }
 
     var checker = sema.Checker.init(&diag);
+    checker.file_boundaries = combined_boundaries;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();
@@ -643,6 +660,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     }
 
     var checker = sema.Checker.init(&diag);
+    checker.file_boundaries = combined_boundaries;
     checker.optimize = optimize;
     checker.checkModule(module);
     if (diag.has_errors) {
@@ -683,6 +701,7 @@ fn runEmitLayout(allocator: std.mem.Allocator, path: []const u8, source: []const
     }
 
     var checker = sema.Checker.init(&diag);
+    checker.file_boundaries = combined_boundaries;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();
@@ -738,6 +757,7 @@ fn runEmitCStruct(allocator: std.mem.Allocator, path: []const u8, source: []cons
     }
 
     var checker = sema.Checker.init(&diag);
+    checker.file_boundaries = combined_boundaries;
     checker.checkModule(module);
     if (diag.has_errors) {
         diag.render();

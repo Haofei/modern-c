@@ -38,8 +38,12 @@ opaque struct Guarded<T> {
 
 // A live witness that the lock is held AND a mutable borrow of the protected data. Linear
 // (`move`): it cannot be duplicated and must be consumed by `Guard.unlock`. Holding it is
-// the *only* way to reach the inner `T`.
-move struct Guard<T> {
+// the *only* way to reach the inner `T`. Also `opaque`: `state`/`data` are PRIVATE to the
+// `impl Guard` accessors below, so outside code cannot read `g.data` to bypass `Guard.get`,
+// cannot wrong-lock via `ga.data = gb.data`, and cannot forge a lock witness with a struct
+// literal `.{ .state = ..., .data = ... }` (all E_PRIVATE_FIELD). The orphan rule additionally
+// blocks a peer `impl Guard` in another file from minting access to these fields.
+opaque move struct Guard<T> {
     state: *mut u32, // the lock word to release on unlock
     data: *mut T,    // borrow of the protected value, valid only while this guard is live
 }

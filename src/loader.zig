@@ -33,11 +33,35 @@ const ImportRef = struct {
     end: usize,
 };
 
+// One entry per file that contributes to the import-flattened source, in append order.
+// `start` is the byte offset in the combined source where this file's text begins; `path`
+// is its resolved (canonical) path. A span into the combined source is mapped back to its
+// origin file by taking the last boundary whose `start <= span.offset`. The orphan rule in
+// sema uses this to compare the defining file of an `opaque struct` against the file of a
+// peer `impl` accessor, so a cross-file `impl` can no longer forge access to private fields.
+pub const FileBoundary = struct {
+    start: usize,
+    path: []const u8, // owned by the caller's allocator
+};
+
 pub fn loadCombinedSource(
     allocator: std.mem.Allocator,
     io: std.Io,
     root_path: []const u8,
     root_source: []const u8,
+) LoadError![]u8 {
+    return loadCombinedSourceWithBoundaries(allocator, io, root_path, root_source, null);
+}
+
+// As `loadCombinedSource`, but if `boundaries` is non-null it is filled (appended) with one
+// `FileBoundary` per contributing file. The boundary `path` strings are allocated with
+// `allocator` and owned by the caller (free each `.path`, then the list).
+pub fn loadCombinedSourceWithBoundaries(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    root_path: []const u8,
+    root_source: []const u8,
+    boundaries: ?*std.ArrayList(FileBoundary),
 ) LoadError![]u8 {
     var visited = std.StringHashMap(void).init(allocator);
     defer {
@@ -49,7 +73,7 @@ pub fn loadCombinedSource(
     errdefer out.deinit(allocator);
     const canon_root = std.fs.path.resolve(allocator, &.{root_path}) catch try allocator.dupe(u8, root_path);
     defer allocator.free(canon_root);
-    try expand(allocator, io, canon_root, root_source, &visited, &out);
+    try expand(allocator, io, canon_root, root_source, &visited, &out, boundaries);
     return out.toOwnedSlice(allocator);
 }
 
@@ -60,9 +84,13 @@ fn expand(
     source: []const u8,
     visited: *std.StringHashMap(void),
     out: *std.ArrayList(u8),
+    boundaries: ?*std.ArrayList(FileBoundary),
 ) LoadError!void {
     if (visited.contains(path)) return;
     try visited.put(try allocator.dupe(u8, path), {});
+
+    // Record where this file's text starts in the combined source (before appending it).
+    if (boundaries) |b| try b.append(allocator, .{ .start = out.items.len, .path = try allocator.dupe(u8, path) });
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -89,7 +117,7 @@ fn expand(
             return error.ImportNotFound;
         };
         defer allocator.free(imp_source);
-        try expand(allocator, io, imp.path, imp_source, visited, out);
+        try expand(allocator, io, imp.path, imp_source, visited, out, boundaries);
     }
 }
 

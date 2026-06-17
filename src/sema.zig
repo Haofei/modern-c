@@ -7,6 +7,7 @@ const type_layout = @import("layout.zig");
 const numeric = @import("numeric.zig");
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
+const loader = @import("loader.zig");
 
 // Scalar type layout shared across the passes (see `layout.zig`).
 const scalarLayout = type_layout.scalarLayout;
@@ -113,6 +114,12 @@ pub const Checker = struct {
     // (uninit) names at an exit edge and how many defers were live there (so a defer at index
     // i is only checked against snapshots whose live_defers > i).
     di_exits: ?*std.ArrayListUnmanaged(DiExitSnapshot) = null,
+    // Origin-file boundaries of the import-flattened source (loader.FileBoundary), in append
+    // order by start offset. Maps a decl's span offset back to the file it came from, which the
+    // orphan rule (`checkOrphanImpls`) uses to require that an `impl` of an `opaque struct`
+    // live in the SAME file as the type's definition. Null for single-file/standalone checks
+    // (no imports, nothing cross-file to forge), where the orphan rule is a no-op.
+    file_boundaries: ?[]const loader.FileBoundary = null,
 
     pub fn init(reporter: *diagnostics.Reporter) Checker {
         return .{ .reporter = reporter };
@@ -150,6 +157,11 @@ pub const Checker = struct {
         self.collectEnums(module, &enums);
         self.collectFunctions(module, &functions);
         self.collectGlobals(module, &globals);
+
+        // Orphan rule: an `impl` of an `opaque struct` must live in the type's defining file,
+        // so the name-keyed private-field gate (`opaqueAccessAllowed`) cannot be forged by a
+        // peer `impl <OpaqueType>` written in another file. No-op without file boundaries.
+        self.checkOrphanImpls(module);
 
         var const_fns = std.StringHashMap(ast.FnDecl).init(self.reporter.allocator);
         defer const_fns.deinit();
@@ -5805,6 +5817,70 @@ pub const Checker = struct {
     fn ownerSegment(name: []const u8) []const u8 {
         if (std.mem.indexOf(u8, name, "__")) |idx| return name[0..idx];
         return name;
+    }
+
+    // The origin file of a span (its byte offset) in the import-flattened source: the last
+    // boundary whose start <= offset. Null when no boundaries are tracked (single-file check).
+    fn originFile(self: *Checker, offset: usize) ?[]const u8 {
+        const b = self.file_boundaries orelse return null;
+        var origin: ?[]const u8 = null;
+        for (b) |entry| {
+            if (entry.start <= offset) origin = entry.path else break;
+        }
+        return origin;
+    }
+
+    // Orphan rule (closes the name-keyed opacity bypass). MC's field-privacy for an
+    // `opaque struct` is decided purely on the symbol name (`opaqueAccessAllowed`): a function
+    // named `Owner__member` may read `Owner`'s private fields. Because the loader flattens all
+    // files into one unit with no module visibility, ANY file could write a peer
+    // `impl <OpaqueType> { fn member(...) { ...&t.private... } }` — the parser mangles it to the
+    // SAME `Owner__member` symbol and the name-match grants access, defeating Cap/Rights/Tainted/
+    // Guarded/Guard opacity with no `unsafe`. This pass requires that every `impl` accessor of an
+    // `opaque struct` live in the SAME file as the type's definition; a cross-file peer `impl`
+    // is E_ORPHAN_IMPL. Co-located stdlib/kernel impls (the legitimate case) are accepted. No-op
+    // without file boundaries (single-file/standalone check — nothing cross-file to forge).
+    fn checkOrphanImpls(self: *Checker, module: ast.Module) void {
+        if (self.file_boundaries == null) return;
+        // Map each opaque struct's OWNER segment -> its defining file. Keying on the owner
+        // segment (the text before the first `__`) makes this robust to monomorphization, which
+        // renames a generic `Box` to a specialized `Box__u32` (owner still `Box`) and an
+        // accessor `Box__steal` to `Box__steal__u32` (owner still `Box`). The owner is what the
+        // name-keyed private-field gate (`opaqueAccessAllowed`/`ownerSegment`) matches on, so the
+        // orphan rule must compare files on the SAME granularity.
+        var opaque_files = std.StringHashMap([]const u8).init(self.reporter.allocator);
+        defer opaque_files.deinit();
+        for (module.decls) |decl| {
+            const sd = switch (decl.kind) {
+                .struct_decl => |s| s,
+                else => continue,
+            };
+            if (!sd.is_opaque) continue;
+            const file = self.originFile(sd.name.span.offset) orelse continue;
+            const owner = ownerSegment(sd.name.text);
+            // First definition of an owner wins; later monomorphization specializations of the
+            // same opaque template share the owner and the same defining file, so ignore dups.
+            if (!opaque_files.contains(owner)) opaque_files.put(owner, file) catch {
+                self.oom = true;
+            };
+        }
+        if (opaque_files.count() == 0) return;
+        // Any function whose owner segment names an opaque struct is one of its `impl` accessors
+        // (the parser mangles `impl Owner { fn m }` to `Owner__m`). It must originate in the SAME
+        // file as the type's definition. A plain free function with no `__` owns itself, skipped.
+        for (module.decls) |decl| {
+            const fd = switch (decl.kind) {
+                .fn_decl, .extern_fn => |f| f,
+                else => continue,
+            };
+            const owner = ownerSegment(fd.name.text);
+            if (std.mem.eql(u8, owner, fd.name.text)) continue; // not an impl/qualified member
+            const type_file = opaque_files.get(owner) orelse continue; // owner isn't an opaque type
+            const member_file = self.originFile(fd.name.span.offset) orelse continue;
+            if (!std.mem.eql(u8, member_file, type_file)) {
+                self.errorCode(fd.name.span, "E_ORPHAN_IMPL", "impl of an opaque type must be in its defining module (file); a peer impl in another file cannot reach its private fields");
+            }
+        }
     }
 
     fn checkIfLetPattern(self: *Checker, pattern: ast.Pattern, value_class: TypeClass) void {
