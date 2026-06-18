@@ -1,6 +1,6 @@
 // SPEC: section=32.7
 // SPEC: milestone=traits-tier2
-// SPEC: phase=parse,sema,lower-c
+// SPEC: phase=parse,sema,lower-c,lower-ir
 // SPEC: expect=pass
 // SPEC: check=traits-tier2-nullable-dyn
 

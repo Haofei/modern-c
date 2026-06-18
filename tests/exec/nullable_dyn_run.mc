@@ -1,5 +1,5 @@
 // Runtime proof for nullable trait objects (`?*dyn Trait`, docs/spec §32.7), executed as
-// a native binary on BOTH backends by tools/exec/nullable-dyn-run.sh (`zig build exec-test`).
+// a native binary on BOTH backends by tools/exec/nullable-dyn-run.sh (`zig build nulldyn-run-test`).
 //
 // `run()` returns a checksum that is correct ONLY if the niche round-trips at runtime:
 //   - slot0 = &a0 (some), slot1 = null (none), slot2 = &a2 (some), slot3 = null (none),
