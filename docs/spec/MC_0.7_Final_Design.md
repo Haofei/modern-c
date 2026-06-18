@@ -3122,7 +3122,9 @@ switch dev { d => use(d), _ => absent() } // the dual; `unwrap(dev)` traps on `n
 `if let` / `switch` narrowing and `unwrap` (which traps `NullUnwrap` on `none`) behave exactly as for
 a thin `?*T` (sections 10, 11.1); only the niche test is on the data word rather than the whole
 value. This is what a registry of optional trait-object slots uses — `[N]?*dyn Trait` initialized to
-`null` — so absence is type-checked rather than tracked by a parallel boolean.
+`null` — so absence is type-checked rather than tracked by a parallel boolean. The `data == null`
+niche is observable runtime state, identical on both backends; the `zig build nulldyn-run-test`
+conformance gate (annex) runs the lowered program natively on each backend to confirm it round-trips.
 
 ---
 
@@ -4853,6 +4855,13 @@ The `zig build llvm-cc-test`, `zig build llvm-move-test`, and
 `zig build llvm-runtime-test` gates link and run LLVM-produced objects against C
 drivers, including a linear `move` handle roundtrip through the LLVM ABI,
 imported generic `std/stack`, `std/sync` guard, and fn-pointer runtime checks.
+The `zig build nulldyn-run-test` gate compiles a nullable-trait-object
+(`?*dyn Trait`, section 32.7) program through BOTH backends, links each into a
+native host binary (`cc` for C, `clang` for LLVM IR), and **runs** it — asserting
+a niche checksum that holds only if the `data == null` representation round-trips
+through array memory (`none` slots are skipped, `some` slots dispatch through the
+vtable) identically on both backends. This executes the nullable-trait-object niche,
+rather than only checking that it emits.
 The `zig build llvm-toolchain-test` gate links and runs LLVM-built import/std
 merge, monomorphization, and generic-struct modules, and verifies reflection
 with `check` plus LLVM object lowering.
