@@ -2,6 +2,12 @@
 // `Ring<T, N>` holds up to N elements of type T (capacity is a caller-chosen value type
 // parameter, like `Pool<T, N>`). In-place mutating API — what kernel queue users want;
 // it lets them stop hand-rolling head/tail/count/`% CAP` logic.
+//
+// `T` must be COPYABLE: `ring_front` returns the oldest element by value without
+// removing it, which would duplicate a linear `move` owner. `Ring<MoveT, N>` does
+// not type-check anyway — `slots: [N]T` of a `move` type is rejected at the struct
+// definition (E_MOVE_ARRAY_UNSUPPORTED) — so hold linear resources behind a copyable
+// handle (pointer, index, DmaAddr), not by value. (See §28.2.)
 
 struct Ring<T, N> {
     slots: [N]T,

@@ -1099,7 +1099,7 @@ pub fn build(b: *std.Build) void {
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "time-test",
     });
     time_test_cmd.step.dependOn(b.getInstallStep());
-    const time_test_step = b.step("time-test", "std/time wrap<u64> timeout arithmetic");
+    const time_test_step = b.step("time-test", "std/time counter<u64> timeout arithmetic");
     time_test_step.dependOn(&time_test_cmd.step);
 
     const vqfault_test_cmd = b.addSystemCommand(&.{

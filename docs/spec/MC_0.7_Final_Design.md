@@ -1015,11 +1015,18 @@ Contract:
 
 ```txt
 Within the region, the compiler may assume every unchecked arithmetic operation covered by no_overflow does not overflow.
-It may propagate resulting value-range facts forward through values produced by the region.
+It may propagate resulting value-range facts forward through values produced by the region, but only WITHIN the region.
+A value that leaves the region (a return value, an assignment to an outer binding, a store) carries no contract-derived range fact across the boundary: outside the region it is treated as range-unknown for its type.
 If any covered operation overflows at runtime, the marked region has region-scoped unspecified behavior.
 ```
 
-This is the sanctioned escape hatch.
+The boundary clause is what keeps a false contract from licensing transformations
+of unrelated outside code (section 1.3): a bogus `[0, K]` range derived inside the
+region cannot fold an `if sum > K` branch that sits *after* the region. The
+contract's assumption and the facts derived from it are both confined to the
+marked block; only the (possibly arbitrary) output *value* escapes, and outside
+code must treat that value as if it could be anything of its type. This is the
+sanctioned escape hatch.
 
 ---
 
@@ -1472,6 +1479,15 @@ They must be mapped.
 let page: *mut Page = vm.map<Page>(pa)?;
 ```
 
+`vm.map` is the *safe* path: it yields an ordinary dereferenceable `*mut T`. A
+kernel running on a direct/identity physical map may instead access a `PAddr`
+through the **strict-unsafe** `raw.load<T>` / `raw.store<T>` primitives (and
+`addr.pa_offset` for checked address arithmetic), which read and write physical
+memory without producing a CPU pointer. This is the only sanctioned way to touch a
+`PAddr` without `vm.map`; it is an explicit, audited strict-unsafe operation, never
+an implicit dereference (`pa.*` remains a compile error). The DMA ownership profile
+(section 18.2) builds its `CpuBuffer` accessors on exactly this primitive.
+
 User pointers cannot be dereferenced.
 
 ```mc
@@ -1759,10 +1775,16 @@ the program halts, or the path is provably impossible), and it is dropped from t
 rather than merged. Consuming a resource and then aborting on one branch, while another
 branch consumes and falls through, is therefore well-formed. Only `trap`/`unreachable`/
 `never` edges are exempt; an ordinary early `return` still leak-checks the whole live set.
-(A `-> never` call is recognized for this leak/join analysis, but it does not by itself
-satisfy the function's return-path requirement: a value-returning function whose last
-statement is a `-> never` call must still close the path with an explicit `trap`,
-`unreachable`, or `return`, so the obligation is uniform across both backends.)
+(A `-> never` call is recognized for this leak/join analysis, but — by deliberate
+design, not oversight — it does not by itself satisfy the *caller's* return-path
+requirement. A `-> never` **function body** is a true terminator: falling off its
+end is a compile error (§4). But for a value-returning *caller*, a trailing
+`-> never` *call* must still be closed with an explicit `trap`, `unreachable`, or
+`return`. The frontend's return-path check does not treat an arbitrary call's
+`never`-ness as a terminator — keeping the rule syntactic and identical across both
+backends — rather than depending on whole-program divergence analysis. The explicit
+terminator is one token and makes the diverging tail visible at the call site; the
+mild redundancy is the intended trade.)
 
 ---
 
@@ -1799,6 +1821,15 @@ fn device_addr(buf: *DeviceBuffer) -> DmaAddr;
 fn cpu_addr(buf: *CpuBuffer) -> PAddr;
 fn cpu_len(buf: *CpuBuffer) -> usize;
 ```
+
+`cpu_addr` returns a `PAddr`, not a dereferenceable pointer. The CPU touches the
+buffer through the buffer's own checked accessors (`read_u8` / `write_u8` / …),
+which lower to the strict-unsafe `raw.load` / `raw.store` physical-access
+primitives (section 9) over the direct/identity map — bounds-checked against
+`cpu_len`. This assumes a kernel direct physical map; a driver that runs under
+paging maps the `PAddr` with `vm.map` (section 9) first. The `PAddr` typing is
+deliberate: it prevents open-coded pointer arithmetic on a DMA address and keeps
+every CPU access inside the typestate-gated, bounds-checked accessor surface.
 
 The current `std/dma.mc` implementation keeps these ownership handles in MC and
 uses scalar platform hooks (`mc_dma_alloc_base`, `mc_dma_free_base`,
@@ -2047,6 +2078,15 @@ language trap it can prove dead — a constant in-range array index, a divide/mo
 const form. The default pipeline still rejects them; the guarantee is identical either way (no
 trap edge is emitted), only the proof precision differs.
 
+This is an **acceptance**-precision difference, not a semantics difference, so it does not violate
+"build mode never changes program semantics" (section 1): a program that type-checks under *both*
+modes has identical meaning under both, and `--optimize` never *accepts* a program that the default
+mode would miscompile — it only discharges more dead-trap proofs, narrowing the set of programs that
+need an explicit `const_get` form. The portable, mode-independent style is therefore to write the
+explicit no-trap forms (`const_get`, `wrapping.*`, a checked divisor) so acceptance does not depend
+on the optimizer; relying on `--optimize` to accept an otherwise-rejected `#[no_lang_trap]` function
+is a non-portable convenience, not a semantic guarantee.
+
 Boot entry:
 
 ```mc
@@ -2061,6 +2101,30 @@ export fn boot_entry() -> never {
     }
 }
 ```
+
+**`#[naked]`** marks a function whose body is entirely hand-written machine code:
+the compiler emits **no prologue or epilogue** (no frame setup, no callee-saved
+spills, no `ret` synthesis). It is constrained accordingly:
+
+```txt
+- The body is a single `asm` block (opaque or precise) plus comments; no ordinary
+  MC statements, locals, or expressions — there is no frame for them to live in.
+- It is an implicit strict-unsafe context (section 23.1): the `asm` block needs no
+  explicit `unsafe { }` wrapper.
+- No automatic argument lowering: parameters are not bound to names or registers by
+  the compiler; the body addresses the raw ABI registers itself. Naked functions
+  therefore normally take no parameters.
+- Control must leave via the asm (a jump or a `-> never` divergence); a naked
+  function does not fall through to a synthesized return, so it returns `-> never`
+  (or `void` only if the asm itself performs the ABI-correct return).
+- `#[naked]` composes with `#[no_lang_trap]` (boot entry emits no trap edges) and
+  with `export` (a fixed linker symbol for the reset/boot vector).
+```
+
+`#[naked]` is for reset vectors, trap/interrupt entry stubs, and context-switch
+trampolines — the handful of places where the compiler's calling convention must
+not intervene. Everywhere else, an ordinary function with an inline `asm` block
+(section 23) is the right tool.
 
 Distinction:
 
@@ -2271,6 +2335,22 @@ Does not grant optimizer assumptions.
 Belongs to strict unsafe MC.
 ```
 
+Because opaque (and precise) assembly is strict unsafe MC, an `asm` block must
+appear in an **unsafe context**. That context is established either explicitly —
+
+```mc
+unsafe { asm opaque volatile { "cli" clobber("memory") } }
+```
+
+— or implicitly by an **already-unsafe function body**: a `#[naked]` function
+(section 20.1) is an implicit strict-unsafe context, since its entire body is
+hand-written machine code, so an `asm` block inside it needs no further `unsafe`
+wrapper. The bare `asm opaque volatile { … }` blocks shown elsewhere in this
+document (the snippet above, the boot-entry and `#[no_lang_trap]` examples in
+section 20.1) are written inside such implicit-unsafe `#[naked]`/boot contexts, or
+elide the surrounding `unsafe { }` for brevity; in ordinary (non-naked) code the
+explicit wrapper is required.
+
 ---
 
 ## 23.2 Precise Assembly
@@ -2342,7 +2422,7 @@ c_void has no size, alignment, fields, or valid dereference operation in MC.
 Pointers to c_void may be passed, compared, and converted only through explicit FFI boundary operations.
 ```
 
-C strings are explicit:
+C strings are explicit, through the dedicated `cstr` type:
 
 ```mc
 extern "C" fn strlen(s: cstr) -> usize;
@@ -2353,6 +2433,32 @@ Not:
 ```mc
 extern "C" fn strlen(s: *const u8) -> usize;  // insufficient contract
 ```
+
+`cstr` is the FFI-boundary type for a C string. A `*const u8` is an insufficient
+contract because it carries neither the non-null nor the NUL-terminated guarantee
+the C callee assumes. `cstr` is defined as:
+
+```txt
+Representation : a non-null pointer to a NUL-terminated (`\0`) byte sequence;
+                 ABI-identical to a C `const char *`.
+Invariants     : non-null; some byte at or after the pointer is `\0`; the bytes
+                 up to and including that NUL are readable for the call's duration.
+                 Encoding is unspecified (raw bytes); interior bytes are arbitrary.
+Immutability   : `cstr` is a read-only view; it does not own or free the buffer.
+Construction   : only across the FFI boundary or from an explicitly NUL-terminated
+                 byte literal / buffer — never an implicit `*const u8` -> `cstr`
+                 coercion (that would forge the NUL guarantee). A non-terminated
+                 source must go through a checked constructor that scans for `\0`.
+Length         : `cstr` carries no length; obtaining one is an O(n) scan (`strlen`),
+                 which is precisely why MC keeps it distinct from a sized `[]const u8`.
+```
+
+> **Status (v0.7):** `cstr` is normative but **not yet implemented** in the
+> checker (using it currently raises `E_UNKNOWN_TYPE`). Until it lands, FFI string
+> parameters are written as `*const u8` with the NUL/non-null invariant maintained
+> by the caller; this is the "insufficient contract" the `cstr` type is meant to
+> replace. Tracking the same forward-looking status as the typed endian fields
+> (section 28.3) and capturing closures.
 
 C ABI structs are explicit:
 
@@ -2641,6 +2747,16 @@ current API mutates the ring in place; `ring_push` returns `false` when full,
 while `ring_front` and `ring_pop` trap if the ring is empty. Descriptors carry
 `DmaAddr` (section 18) for the buffer each slot points at.
 
+`Ring<T, N>` requires a **copyable** element type `T`: `ring_front` returns the
+oldest element *by value without removing it*, which would duplicate a linear
+`move` owner. This is not merely a convention — the backstop is structural: an
+array field of a `move` type (`slots: [N]T` with linear `T`) is rejected at the
+struct definition (`E_MOVE_ARRAY_UNSUPPORTED`), so `Ring<MoveT, N>` does not
+type-check and `ring_front` can never copy a linear value. A ring of linear
+resources holds them behind a copyable handle (a pointer, an index, a `DmaAddr`),
+not by value; a by-value `move` ring would need a borrowing `front` and a
+move-out `pop`, which is a possible future extension, not the current API.
+
 ## 28.3 `std/endian` — Byte Order
 
 Device registers and on-wire packet headers have a fixed endianness; the host may
@@ -2657,21 +2773,42 @@ export const fn to_le32(x: u32) -> u32;     // host → little-endian (most devi
 export const fn from_le32(x: u32) -> u32;
 ```
 
+These operate on **plain integers**: a host-endian `u32` and a converted `u32`
+have the same type, so the conversion is an explicit, comptime-foldable value
+operation, not a reinterpret. This makes byte order *visible* at the call site,
+but it does not by itself make a *missing* conversion a type error — `to_be32` and
+a raw `u32` are interchangeable to the type checker. Enforcing "host-endian value
+written to a big-endian field is a compile error" (section 28.6) requires distinct
+representation types — `be32` / `le32` newtypes, or typed register fields that
+carry endianness — so that the unconverted store fails to type-check. That typed
+endian-field layer is a planned extension; until it lands, the guarantee is
+"explicit conversion, reviewable at the call site," not a type-enforced one.
+
 ## 28.4 `std/time` — Delays and Monotonic Ticks
 
-Reset sequences, link-up polling, and DMA timeouts need bounded waits. Built on
-the `counter`/`serial` arithmetic domains (which model tick wraparound):
+Reset sequences, link-up polling, and DMA timeouts need bounded waits. The tick
+source is a free-running hardware counter, so `Ticks` is `counter<u64>` (section
+5.5) — **not** `wrap<u64>` or a plain integer. Consistent with section 5.5, the
+library exposes only the fully-defined modular difference (`delta_mod`) and
+bounded-wait helpers; it deliberately does **not** provide a plain `elapsed()`
+that pretends to recover real elapsed time from two modular samples.
 
 ```mc
-type Ticks = wrap<u64>;
+type Ticks = counter<u64>;                          // §5.5 free-running counter
 
-fn read_ticks() -> Ticks;                           // monotonic counter
-fn elapsed(start: Ticks, now: Ticks) -> u64;         // wrap-correct difference
+fn read_ticks() -> Ticks;                            // monotonic counter sample
+fn delta_mod(start: Ticks, now: Ticks) -> u64;       // §5.5 modular difference (magnitude)
 fn timed_out(start: Ticks, now: Ticks, limit: u64) -> bool;
 fn poll_until(probe: fn() -> bool, timeout: u64) -> bool;
 fn udelay(us: u32) -> void;                          // busy-wait microseconds
 fn mdelay(ms: u32) -> void;
 ```
+
+`delta_mod` is sound only when the true interval is below the counter's ambiguity
+window. `timed_out` / `poll_until` are the bounded-wait forms: their finite
+`limit` *is* the external temporal invariant section 5.5 requires (a reset,
+link-up, or DMA timeout bounds the interval by construction). For long sleeps and
+scheduler accounting, use a widened monotonic time (section 5.5), not raw ticks.
 
 ## 28.5 `std/barrier` — Memory Barriers
 
@@ -2745,9 +2882,16 @@ fn transmit(dev: *Nic, frame: CpuBuffer) -> void {
 ```
 
 Every hazard a C NIC driver hits by convention is here a typed contract: a buffer
-read after handoff, a lock left held, a descriptor write reordered past the
-doorbell, or a host-endian value written to a big-endian field is a **compile
-error**, not a runtime corruption.
+read after handoff is a **compile error** (the `move` handle is consumed, section
+18.2), a lock left held is a **compile error** (the guard is linear, section 28.1),
+and a descriptor write reordered past the doorbell is prevented by an explicit
+barrier (section 28.5) — none becomes a silent runtime corruption. Byte order is
+made **explicit at every call site** by the `std/endian` conversions (section
+28.3): there is no implicit host↔wire reinterpret, so an unconverted write is
+visible in the source rather than hidden. (Today `std/endian` operates on plain
+integers, so a *missing* conversion is not itself a type error; a typed
+endian-field representation that makes the mismatch a compile error is a planned
+extension — see section 28.3.)
 
 ---
 
@@ -2789,10 +2933,13 @@ typed tuple value.
 
 ## 29.2 Tuple Lowering
 
-A tuple is a nominal aggregate. Each distinct tuple **shape** lowers to one synthesized
-struct with fields `_0 … _n-1`, deduplicated structurally, so the same shape is the same
-type everywhere (a tuple returned by one function unifies with a tuple variable of the
-same shape). `t.i` lowers to the field `_i`; `let (a, b) = e` lowers to a temporary
+A tuple is a **structural aggregate**: type identity is by shape, not by name.
+Each distinct tuple shape lowers to one synthesized struct with fields `_0 … _n-1`,
+deduplicated structurally, so the same shape is the same type everywhere (a tuple
+returned by one function unifies with a tuple variable of the same shape). (It is
+*nominal only in lowering* — the synthesized struct has a name — but a tuple type
+is never written or matched by that name, so for the type system it is purely
+structural; do not read "synthesized struct" as giving tuples nominal identity.) `t.i` lowers to the field `_i`; `let (a, b) = e` lowers to a temporary
 holding `e` plus one binding per element. The rest of the pipeline (verifier, MIR, both
 backends) sees an ordinary struct.
 
@@ -2966,6 +3113,17 @@ assumed signature).
 At most **one** `impl Trait for Type` may exist per `(Trait, Type)` pair. A second is
 `E_TRAIT_INCOHERENT` (and, because both desugar to the same `Owner__member` symbol, also
 `E_DUPLICATE_DECLARATION`).
+
+The shared `Owner__member` namespace also settles the **two-traits-one-method-name**
+case: if `Type` implements both `trait A { fn step(...); }` and `trait B { fn step(...); }`,
+each `step` mangles to `Type__step`, so the second impl collides at the symbol level —
+`E_DUPLICATE_DECLARATION` (the same backend-name collision as a trait method clashing with
+an inherent method, `E_DUPLICATE_BACKEND_NAME`). This is a hard error, not silent
+shadowing or an ambiguous-call resolution: a single owner cannot host two same-named
+methods regardless of which trait declared them. There is no per-trait method
+disambiguation syntax (e.g. no `value.(A::step)()`); a type that must satisfy two such
+traits renames one method or wraps in a newtype. This is a deliberate consequence of the
+flat one-method-symbol-per-name model, not an unspecified corner.
 
 A trait `impl` is subject to the same **orphan rule** as an inherent `impl` (section 31): because
 its methods reach the owner's `Owner__…` namespace — including the private fields of an `opaque`
@@ -3731,8 +3889,13 @@ For each binding of a `move` type:
     - a `move` value cannot be copied/aliased (it has a single owner).
 ```
 
-Every function-exit edge (`return`, fallthrough, trap-like exits admitted by the
-frontend) is checked for still-live resources. Conditional control flow joins
+Every **normal** function-exit edge — a `return` and the `err(e)` branch of `?` —
+is leak-checked for still-live resources. Abnormal exits (`trap`, `unreachable`,
+or a call to a `-> never` function) are recognized but **exempt**: they reach no
+successor and run no cleanup, so per section 18.1 they carry no leak obligation and
+are dropped from the join rather than leak-checked. (Consuming a resource and then
+aborting on one branch, while another branch consumes and falls through, is
+well-formed.) Conditional control flow joins
 conservatively: a binding is live after a join only if it is live on every
 reachable predecessor path; otherwise a later use is rejected. Loops are
 conservative unless proven one-shot: moving an outer `move` resource inside a

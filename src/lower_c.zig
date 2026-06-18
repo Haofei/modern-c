@@ -10858,7 +10858,11 @@ fn isNumericStorageType(ty: ast.TypeExpr) bool {
     return switch (ty.kind) {
         .name => |ident| checkedTypeSuffix(ident.text) != null,
         .generic => |node| {
-            if ((!std.mem.eql(u8, node.base.text, "wrap") and !std.mem.eql(u8, node.base.text, "sat")) or node.args.len != 1) return false;
+            // wrap/sat/serial/counter all lower to their unsigned inner integer, so a
+            // `.from()` cast into any of them is a plain numeric storage conversion (the
+            // LLVM backend recognizes the same set via isPayloadDomainGenericName).
+            if ((!std.mem.eql(u8, node.base.text, "wrap") and !std.mem.eql(u8, node.base.text, "sat") and
+                !std.mem.eql(u8, node.base.text, "serial") and !std.mem.eql(u8, node.base.text, "counter")) or node.args.len != 1) return false;
             return isNumericStorageType(node.args[0]);
         },
         .qualified => |node| isNumericStorageType(node.child.*),
