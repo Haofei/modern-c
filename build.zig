@@ -317,6 +317,15 @@ pub fn build(b: *std.Build) void {
     const llvm_qemu_test_step = b.step("llvm-qemu-test", "Run the LLVM-lowered typed-MMIO program under QEMU");
     llvm_qemu_test_step.dependOn(&llvm_qemu_test_cmd.step);
 
+    const nulldyn_run_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/exec/nullable-dyn-run.sh",
+        "zig-out/bin/mcc",
+    });
+    nulldyn_run_cmd.step.dependOn(b.getInstallStep());
+    const nulldyn_run_step = b.step("nulldyn-run-test", "Compile + RUN nullable trait objects (?*dyn) as native binaries on both backends (needs cc + clang)");
+    nulldyn_run_step.dependOn(&nulldyn_run_cmd.step);
+
     const cc_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/mcc-cc-test.sh",
