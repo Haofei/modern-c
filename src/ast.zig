@@ -31,6 +31,9 @@ pub const Attr = struct {
     pub const Kind = union(enum) {
         unsafe_contract: UnsafeContract,
         no_lang_trap,
+        // `#[naked]` — emit no prologue/epilogue; the body is a single `asm` block that
+        // owns the whole calling convention (reset vectors, trap stubs, trampolines).
+        naked,
         // `#[backend_name("Y")]` — override the object/backend symbol of a declaration
         // (RSS namespace isolation: source symbol X lowers as backend symbol Y).
         backend_name: []const u8,

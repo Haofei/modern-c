@@ -186,7 +186,7 @@ pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: 
     }
     for (module.decls) |decl| {
         switch (decl.kind) {
-            .fn_decl => |fn_decl| if (fn_decl.body) |body| try ctx.emitFunction(fn_decl, body),
+            .fn_decl => |fn_decl| if (fn_decl.body) |body| try ctx.emitFunction(fn_decl, body, decl.attrs),
             .extern_fn => |fn_decl| try ctx.emitExternFunction(fn_decl),
             else => {},
         }
@@ -792,7 +792,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, body: ast.Block) !void {
+    fn emitFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, body: ast.Block, attrs: []const ast.Attr) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
         const old_scope = self.current_debug_scope;
@@ -806,15 +806,27 @@ const LlvmEmitter = struct {
             self.current_debug_span = old_span;
             self.current_return_ty = old_return_ty;
         }
+        // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
+        // epilogue. The body is a single inline-asm statement that performs the
+        // ABI-correct jump/return itself; we terminate the entry block with
+        // `unreachable` because the asm — not a synthesized `ret` — transfers control.
+        const naked = hasNakedAttr(attrs);
+        const attr_str: []const u8 = if (naked) " naked" else "";
         try self.out.print(self.allocator, "define {s} @{s}(", .{ ret_llvm, fn_decl.name.text });
         for (fn_decl.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, "{s} %{s}", .{ try self.llvmType(param.ty), param.name.text });
         }
         if (self.current_debug_scope) |scope| {
-            try self.out.print(self.allocator, ") !dbg !{d} {{\nbb_entry:\n", .{scope});
+            try self.out.print(self.allocator, "){s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, scope });
         } else {
-            try self.out.appendSlice(self.allocator, ") {\nbb_entry:\n");
+            try self.out.print(self.allocator, "){s} {{\nbb_entry:\n", .{attr_str});
+        }
+        if (naked) {
+            self.temp_index = 0;
+            try self.emitAsmStmt(ast_query.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
+            try self.out.appendSlice(self.allocator, "  unreachable\n}\n\n");
+            return;
         }
         self.temp_index = 0;
         self.trap_index = 0;
@@ -5681,6 +5693,13 @@ fn structLiteralField(fields: []const ast.StructLiteralField, field_name: []cons
     return null;
 }
 
+
+fn hasNakedAttr(attrs: []const ast.Attr) bool {
+    for (attrs) |attr| {
+        if (std.meta.activeTag(attr.kind) == .naked) return true;
+    }
+    return false;
+}
 
 fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .span = span, .text = name } } };

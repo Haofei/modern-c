@@ -977,6 +977,9 @@ const FunctionBuilder = struct {
             .return_type_expr = fn_decl.return_type,
             .no_lang_trap = hasAttr(attrs, "no_lang_trap"),
             .irq_context = hasAttr(attrs, "irq_context"),
+            // `#[naked]` is an implicit strict-unsafe context (the asm body needs no
+            // `unsafe {}` wrapper), matching sema — so no `.unsafe_check` is emitted.
+            .active_unsafe = hasAttr(attrs, "naked"),
             .summaries = summaries,
             .enums = enums,
             .structs = structs,
@@ -3585,6 +3588,7 @@ fn noOverflowUncheckedOp(callee: []const u8) ?[]const u8 {
 fn hasAttr(attrs: []const ast.Attr, name: []const u8) bool {
     for (attrs) |attr| switch (attr.kind) {
         .no_lang_trap => if (std.mem.eql(u8, name, "no_lang_trap")) return true,
+        .naked => if (std.mem.eql(u8, name, "naked")) return true,
         .named => |ident| if (std.mem.eql(u8, ident.text, name)) return true,
         .unsafe_contract, .backend_name, .origin => {},
     };

@@ -1326,7 +1326,7 @@ const CEmitter = struct {
         }
         for (module.decls) |decl| {
             switch (decl.kind) {
-                .fn_decl => |fn_decl| if (fn_decl.body) |body| try self.emitFunction(fn_decl, body) else try self.emitFunctionPrototype(fn_decl),
+                .fn_decl => |fn_decl| if (fn_decl.body) |body| try self.emitFunction(fn_decl, body, decl.attrs) else try self.emitFunctionPrototype(fn_decl),
                 // extern prototypes were already emitted in the forward-declaration pass.
                 .extern_fn => {},
                 // Trait / impl-trait carry no runtime artifact (Tier 1 is direct calls).
@@ -2189,8 +2189,20 @@ const CEmitter = struct {
         try self.emitFunctionPrototype(fn_decl);
     }
 
-    fn emitFunction(self: *CEmitter, fn_decl: ast.FnDecl, body: ast.Block) anyerror!void {
+    fn emitFunction(self: *CEmitter, fn_decl: ast.FnDecl, body: ast.Block, attrs: []const ast.Attr) anyerror!void {
         try self.writeLineDirective(fn_decl.name.span);
+        // `#[naked]`: no prologue/epilogue. GCC/Clang `__attribute__((naked))` suppresses
+        // frame setup; the body must be a single *basic* asm statement (extended asm with
+        // operands/clobbers is ill-formed in a naked function), so the asm owns the whole
+        // calling convention. Sema (E_NAKED_BODY/E_NAKED_RETURN) guarantees the shape.
+        if (hasNakedAttr(attrs)) {
+            try self.out.appendSlice(self.allocator, "__attribute__((naked)) ");
+            try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
+            try self.out.appendSlice(self.allocator, " {\n");
+            try self.emitNakedAsmBody(body);
+            try self.out.appendSlice(self.allocator, "}\n\n");
+            return;
+        }
         try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
 
@@ -2206,6 +2218,28 @@ const CEmitter = struct {
         try self.emitBlockItems(body, &locals, fn_decl.return_type);
         self.indent -= 1;
         try self.out.appendSlice(self.allocator, "}\n\n");
+    }
+
+    // The single asm block of a `#[naked]` function, emitted as *basic* asm (no
+    // operands or clobber list — those are ill-formed inside a naked function). The
+    // template strings carry the hand-written machine code that does the ABI-correct
+    // jump/return itself.
+    fn emitNakedAsmBody(self: *CEmitter, body: ast.Block) !void {
+        const asm_stmt = ast_query.nakedAsmStmt(body) orelse return error.UnsupportedCEmission;
+        self.indent += 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "__asm__(");
+        try self.emitAsmTemplate(asm_stmt.templates);
+        try self.out.appendSlice(self.allocator, ");\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#else\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#error \"#[naked] requires GCC/Clang inline-asm support\"\n");
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "#endif\n");
+        self.indent -= 1;
     }
 
     fn emitFunctionSignature(self: *CEmitter, fn_decl: ast.FnDecl, is_static: bool, with_asm_label: bool) !void {
@@ -10852,6 +10886,13 @@ fn numericExprType(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.
         },
         else => null,
     };
+}
+
+fn hasNakedAttr(attrs: []const ast.Attr) bool {
+    for (attrs) |attr| {
+        if (std.meta.activeTag(attr.kind) == .naked) return true;
+    }
+    return false;
 }
 
 fn isNumericStorageType(ty: ast.TypeExpr) bool {

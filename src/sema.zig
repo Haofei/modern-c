@@ -589,10 +589,11 @@ pub const Checker = struct {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
         const irq_context = hasIrqContext(decl.attrs);
         const bounded = hasBoundedContext(decl.attrs);
+        const is_naked = hasNaked(decl.attrs);
         const type_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
-                self.checkFn(fn_decl, no_lang_trap, irq_context, bounded, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
+                self.checkFn(fn_decl, no_lang_trap, irq_context, bounded, is_naked, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
                 // T(term)1: bounded-loop / no-unbounded-recursion check for IRQ/atomic
                 // and `#[bounded]` functions (opt-in; existing code is unaffected).
                 if (hasBoundedContext(decl.attrs)) {
@@ -2087,7 +2088,7 @@ pub const Checker = struct {
         }
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, irq_context: bool, bounded: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, no_lang_trap: bool, irq_context: bool, bounded: bool, is_naked: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         self.current_fn_name = fn_decl.name.text;
         defer self.current_fn_name = null;
         var scope = Scope.init(self.reporter.allocator);
@@ -2129,11 +2130,28 @@ pub const Checker = struct {
             break :blk isTypeName(ty, "never");
         } else false;
         const returns_void = if (fn_decl.return_type) |ty| isTypeName(ty, "void") else false;
+        if (is_naked) {
+            // `#[naked]` emits no prologue/epilogue: the body is a single `asm` block
+            // that owns the entire calling convention. Anything else has no frame to
+            // live in, and a value return cannot be synthesized. The body is an
+            // implicit strict-unsafe context (the `asm` needs no `unsafe {}` wrapper),
+            // wired below via `.in_unsafe = is_naked`.
+            if (fn_decl.return_type != null and !returns_never and !returns_void) {
+                self.errorCode(fn_decl.name.span, "E_NAKED_RETURN", "a #[naked] function must return `never` or `void`; it cannot synthesize a value return (the asm body owns the calling convention)");
+            }
+            if (fn_decl.body) |body| {
+                if (ast_query.nakedAsmStmt(body) == null) {
+                    const span = if (body.items.len > 0) body.items[0].span else fn_decl.name.span;
+                    self.errorCode(span, "E_NAKED_BODY", "a #[naked] function body must be exactly one `asm` block (optionally wrapped in one `unsafe {}`); there is no frame for locals, statements, or expressions");
+                }
+            }
+        }
         if (fn_decl.body) |body| {
             const fn_ctx = Context{
                 .no_lang_trap = no_lang_trap,
                 .irq_context = irq_context,
                 .bounded = bounded,
+                .in_unsafe = is_naked,
                 .returns_never = returns_never,
                 .returns_void = returns_void,
                 .return_ty = fn_decl.return_type,
@@ -2156,11 +2174,17 @@ pub const Checker = struct {
                 .trait_decls = self.trait_decls,
             };
             self.checkBlock(body, fn_ctx);
-            if (fallthroughSpan(body, fn_ctx)) |span| {
-                if (returns_never) {
-                    self.errorCode(span, "E_NEVER_FALLTHROUGH", "function declared -> never can fall off the end");
-                } else if (fn_decl.return_type != null and !returns_void) {
-                    self.errorCode(span, "E_RETURN_MISSING", "function return type requires all paths to return a value");
+            // A #[naked] body is a single `asm` block that transfers control itself
+            // (a jump, an ABI-correct `ret`, or a divergence). There is no synthesized
+            // return to fall through to, so the normal return-path obligation does not
+            // apply — the asm is the terminator.
+            if (!is_naked) {
+                if (fallthroughSpan(body, fn_ctx)) |span| {
+                    if (returns_never) {
+                        self.errorCode(span, "E_NEVER_FALLTHROUGH", "function declared -> never can fall off the end");
+                    } else if (fn_decl.return_type != null and !returns_void) {
+                        self.errorCode(span, "E_RETURN_MISSING", "function return type requires all paths to return a value");
+                    }
                 }
             }
         }
@@ -6830,7 +6854,7 @@ const UnsafeContracts = struct {
                 if (std.mem.eql(u8, contract.name.text, "noalias")) next.noalias_contract = true;
                 if (std.mem.eql(u8, contract.name.text, "precise_asm")) next.precise_asm = true;
             },
-            .no_lang_trap, .named, .backend_name, .origin => {},
+            .no_lang_trap, .naked, .named, .backend_name, .origin => {},
         }
         return next;
     }
@@ -6999,6 +7023,13 @@ fn traitIsObjectSafe(t: ast.TraitDecl) bool {
 fn hasNoLangTrap(attrs: []ast.Attr) bool {
     for (attrs) |attr| {
         if (std.meta.activeTag(attr.kind) == .no_lang_trap) return true;
+    }
+    return false;
+}
+
+fn hasNaked(attrs: []ast.Attr) bool {
+    for (attrs) |attr| {
+        if (std.meta.activeTag(attr.kind) == .naked) return true;
     }
     return false;
 }

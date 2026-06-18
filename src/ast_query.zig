@@ -129,11 +129,27 @@ pub fn resultSwitchHandlesLocal(name: []const u8, node: ast.Switch) bool {
     return has_wildcard or (has_ok and has_err);
 }
 
+/// The single `asm` statement of a `#[naked]` function body, or `null` if the body
+/// is not the well-formed shape (exactly one `asm` block, optionally wrapped in one
+/// `unsafe { }` block). A naked body has no frame for anything else; sema reports
+/// `E_NAKED_BODY` when this returns `null`, and both backends emit from it.
+pub fn nakedAsmStmt(body: ast.Block) ?ast.AsmStmt {
+    if (body.items.len != 1) return null;
+    return switch (body.items[0].kind) {
+        .asm_stmt => |stmt| stmt,
+        .unsafe_block => |inner| if (inner.items.len == 1) switch (inner.items[0].kind) {
+            .asm_stmt => |stmt| stmt,
+            else => null,
+        } else null,
+        else => null,
+    };
+}
+
 /// The contract name of an attribute (`#[unsafe_contract(name)]`), or `"unknown"`.
 pub fn contractName(attr: ast.Attr) []const u8 {
     return switch (attr.kind) {
         .unsafe_contract => |contract| contract.name.text,
-        .no_lang_trap, .named, .backend_name, .origin => "unknown",
+        .no_lang_trap, .naked, .named, .backend_name, .origin => "unknown",
     };
 }
 

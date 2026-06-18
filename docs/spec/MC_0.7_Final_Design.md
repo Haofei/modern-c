@@ -1481,12 +1481,16 @@ let page: *mut Page = vm.map<Page>(pa)?;
 
 `vm.map` is the *safe* path: it yields an ordinary dereferenceable `*mut T`. A
 kernel running on a direct/identity physical map may instead access a `PAddr`
-through the **strict-unsafe** `raw.load<T>` / `raw.store<T>` primitives (and
-`addr.pa_offset` for checked address arithmetic), which read and write physical
-memory without producing a CPU pointer. This is the only sanctioned way to touch a
-`PAddr` without `vm.map`; it is an explicit, audited strict-unsafe operation, never
-an implicit dereference (`pa.*` remains a compile error). The DMA ownership profile
-(section 18.2) builds its `CpuBuffer` accessors on exactly this primitive.
+through the **strict-unsafe** `raw.load<T>` / `raw.store<T>` primitives, which read
+and write physical memory without producing a CPU pointer. Checked address
+arithmetic on the `PAddr` itself is the `std/addr` library's job — `pa_offset` /
+`pa_diff` / `pa_align_up` funnel each operation through one audited `usize` boundary
+where MC's checked-by-default arithmetic catches overflow (the opaque address class
+forbids raw `+`/deref/ordering directly, `E_ADDRESS_CLASS_OPERATION`). `raw.load`/
+`raw.store` are the only sanctioned way to *touch* a `PAddr` without `vm.map`; they
+are explicit, audited strict-unsafe operations, never an implicit dereference
+(`pa.*` remains a compile error). The DMA ownership profile (section 18.2) builds
+its `CpuBuffer` accessors on exactly this primitive.
 
 User pointers cannot be dereferenced.
 

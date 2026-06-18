@@ -326,6 +326,15 @@ pub fn build(b: *std.Build) void {
     const nulldyn_run_step = b.step("nulldyn-run-test", "Compile + RUN nullable trait objects (?*dyn) as native binaries on both backends (needs cc + clang)");
     nulldyn_run_step.dependOn(&nulldyn_run_cmd.step);
 
+    const naked_run_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/exec/naked-run.sh",
+        "zig-out/bin/mcc",
+    });
+    naked_run_cmd.step.dependOn(b.getInstallStep());
+    const naked_run_step = b.step("naked-run-test", "Compile + RUN a #[naked] function (no prologue/epilogue) as native binaries on both backends (needs cc + clang)");
+    naked_run_step.dependOn(&naked_run_cmd.step);
+
     const cc_test_cmd = b.addSystemCommand(&.{
         "sh",
         "tools/toolchain/mcc-cc-test.sh",
