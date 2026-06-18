@@ -6,7 +6,8 @@ import "kernel/lib/registry.mc";
 import "kernel/lib/registry_client.mc";
 import "kernel/platform/qemu_virt/resources.mc";
 
-// Per-driver private state; `attach` captures it and returns an endpoint handle.
+// Per-driver private state; `attach` records on it and returns an endpoint handle. Each
+// driver conforms to DriverProvider (the trait object's `self` is its `*mut XDrv`).
 struct NetDrv { attaches: u32 }
 struct BlkDrv { attaches: u32 }
 struct ConDrv { attaches: u32 }
@@ -14,12 +15,21 @@ global g_net: NetDrv;
 global g_blk: BlkDrv;
 global g_con: ConDrv;
 
-fn probe_net(d: *mut NetDrv, id: DeviceId) -> bool { return id.vendor == 0x1AF4 && id.device == 1; }
-fn attach_net(d: *mut NetDrv, res: ResourceSet) -> u32 { d.attaches = d.attaches + 1; return 10; }
-fn probe_blk(d: *mut BlkDrv, id: DeviceId) -> bool { return id.vendor == 0x1AF4 && id.device == 2; }
-fn attach_blk(d: *mut BlkDrv, res: ResourceSet) -> u32 { d.attaches = d.attaches + 1; return 20; }
-fn probe_con(d: *mut ConDrv, id: DeviceId) -> bool { return id.vendor == 0x16550; }
-fn attach_con(d: *mut ConDrv, res: ResourceSet) -> u32 { d.attaches = d.attaches + 1; return 30; }
+impl DriverProvider for NetDrv {
+    fn probe(self: *mut NetDrv, id: DeviceId) -> bool { return id.vendor == 0x1AF4 && id.device == 1; }
+    fn attach(self: *mut NetDrv, res: ResourceSet) -> u32 { self.attaches = self.attaches + 1; return 10; }
+    fn class(self: *mut NetDrv) -> DeviceClass { return .Net; }
+}
+impl DriverProvider for BlkDrv {
+    fn probe(self: *mut BlkDrv, id: DeviceId) -> bool { return id.vendor == 0x1AF4 && id.device == 2; }
+    fn attach(self: *mut BlkDrv, res: ResourceSet) -> u32 { self.attaches = self.attaches + 1; return 20; }
+    fn class(self: *mut BlkDrv) -> DeviceClass { return .Block; }
+}
+impl DriverProvider for ConDrv {
+    fn probe(self: *mut ConDrv, id: DeviceId) -> bool { return id.vendor == 0x16550; }
+    fn attach(self: *mut ConDrv, res: ResourceSet) -> u32 { self.attaches = self.attaches + 1; return 30; }
+    fn class(self: *mut ConDrv) -> DeviceClass { return .Console; }
+}
 
 global g_bus: Bus;
 global g_reg: Registry;
@@ -32,9 +42,9 @@ export fn plugin_run() -> u32 {
     g_net.attaches = 0; g_blk.attaches = 0; g_con.attaches = 0;
 
     // register driver providers (drivers plug into the bus)
-    let pn: usize = bus_register_provider(&g_bus, bind(&g_net, probe_net), bind(&g_net, attach_net), .Net);
-    let pb: usize = bus_register_provider(&g_bus, bind(&g_blk, probe_blk), bind(&g_blk, attach_blk), .Block);
-    let pc: usize = bus_register_provider(&g_bus, bind(&g_con, probe_con), bind(&g_con, attach_con), .Console);
+    let pn: usize = bus_register_provider(&g_bus, &g_net);
+    let pb: usize = bus_register_provider(&g_bus, &g_blk);
+    let pc: usize = bus_register_provider(&g_bus, &g_con);
     if pn != 0 { pass = 0; }
     if pb != 1 { pass = 0; }
     if pc != 2 { pass = 0; }

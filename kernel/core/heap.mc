@@ -413,12 +413,20 @@ export fn heap_available(h: *mut Heap) -> usize {
     return total;
 }
 
-// View this heap as a generic `Allocator`: the alloc/free closures capture `h`, so
-// callers allocate against an `*Allocator` without knowing it's a kernel heap.
-// `heap_alloc`/`heap_free` are already (env, …) -> …, so they bind directly.
-export fn heap_allocator(h: *mut Heap) -> Allocator {
-    return .{
-        .alloc = bind(h, heap_alloc),
-        .free = bind(h, heap_free),
-    };
+// The heap conforms to the Allocator trait (std/alloc §32), so callers allocate against
+// a `*mut dyn Allocator` without knowing it's a kernel heap. `heap_alloc`/`heap_free` are
+// already (self, …) -> …, so the methods delegate directly.
+impl Allocator for Heap {
+    fn alloc(self: *mut Heap, size: usize, align: usize) -> PAddr {
+        return heap_alloc(self, size, align);
+    }
+    fn free(self: *mut Heap, addr: PAddr, size: usize) -> void {
+        heap_free(self, addr, size);
+    }
+}
+
+// View this heap as a generic `*mut dyn Allocator` — the checked coercion synthesizes the
+// shared rodata vtable; the heap itself is the trait object's data.
+export fn heap_allocator(h: *mut Heap) -> *mut dyn Allocator {
+    return h;
 }

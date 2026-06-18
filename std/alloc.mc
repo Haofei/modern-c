@@ -1,30 +1,32 @@
-// std/alloc — a type-erased allocator handle (the Zig pattern, realized with MC
-// closures). The concrete allocator (a kernel Heap, page allocator, slab, …) is
-// *captured* by the alloc/free closures, so generic code — containers, owning
-// closures, drivers — allocates against `*Allocator` without naming the backend, and
-// without an implicit global heap: you pass the allocator in. Adapters that build an
-// `Allocator` from a concrete allocator live with that allocator (e.g.
-// `heap_allocator` in kernel/core/heap).
+// std/alloc — a type-erased allocator interface (the Zig pattern, realized with an MC
+// `trait`; docs/spec/MC_0.7_Final_Design.md §32). The concrete allocator (a kernel Heap,
+// page allocator, slab, …) is the trait object's `data`, so generic code — containers,
+// owning handles, drivers — allocates against a `*mut dyn Allocator` without naming the
+// backend, and without an implicit global heap: you pass the allocator in. A
+// `*mut dyn Allocator` is one {data,vtable} fat pointer over a shared rodata vtable —
+// where the old closure-pair handle carried two per-instance {code,env} closures. Each
+// backend supplies an `impl Allocator for <Backend>` and an adapter that coerces it to
+// `*mut dyn Allocator`, living with that backend (e.g. `heap_allocator` in kernel/core/heap).
 
 import "std/addr.mc";
 
-struct Allocator {
+trait Allocator {
     // (size, align) -> address of the allocation. A power-of-two align.
-    alloc: closure(usize, usize) -> PAddr,
+    fn alloc(self: *mut Self, size: usize, align: usize) -> PAddr;
     // (address, size) -> void. A no-op for bump allocators that don't reclaim.
-    free: closure(PAddr, usize) -> void,
+    fn free(self: *mut Self, addr: PAddr, size: usize) -> void;
 }
 
-// Allocate `size` bytes aligned to `align` from `a`.
-export fn alloc_bytes(a: *Allocator, size: usize, align: usize) -> PAddr {
-    let f: closure(usize, usize) -> PAddr = a.alloc;
-    return f(size, align);
+// Allocate `size` bytes aligned to `align` from `a`. `*mut dyn Allocator`: one
+// {data,vtable} fat pointer over a shared rodata vtable, replacing the former struct of
+// two per-instance closures. Mutable because allocation advances the backend's state.
+export fn alloc_bytes(a: *mut dyn Allocator, size: usize, align: usize) -> PAddr {
+    return a.alloc(size, align);
 }
 
 // Return an allocation of `size` bytes at `addr` to `a` (no-op for bump allocators).
-export fn free_bytes(a: *Allocator, addr: PAddr, size: usize) -> void {
-    let f: closure(PAddr, usize) -> void = a.free;
-    f(addr, size);
+export fn free_bytes(a: *mut dyn Allocator, addr: PAddr, size: usize) -> void {
+    a.free(addr, size);
 }
 
 // ----- typed, owned allocation: a linear handle to one T, leak-checked -----
@@ -41,11 +43,11 @@ export fn free_bytes(a: *Allocator, addr: PAddr, size: usize) -> void {
 
 move struct Owned<T> {
     addr: PAddr,
-    allocator: *Allocator, // provenance: the allocator that minted `addr`
+    allocator: *mut dyn Allocator, // provenance: the allocator that minted `addr`
 }
 
 // Allocate storage for one T from `a` (size/align via reflection on T).
-export fn create(comptime T: type, a: *Allocator) -> Owned<T> {
+export fn create(comptime T: type, a: *mut dyn Allocator) -> Owned<T> {
     return .{ .addr = alloc_bytes(a, sizeof(T), alignof(T)), .allocator = a };
 }
 

@@ -11,10 +11,10 @@ struct Cell { v: u32 }
 export fn owned_demo_run() -> u32 {
     let base: usize = (&g_pool[0]) as usize;
     var heap: Heap = heap_new(phys_range(pa(base), 8192));
-    var a: Allocator = heap_allocator(&heap);
+    let a: *mut dyn Allocator = heap_allocator(&heap);
     var pass: u32 = 1;
 
-    var o: Owned<Cell> = create(Cell, &a);
+    var o: Owned<Cell> = create(Cell, a);
     let addr: PAddr = own_addr(Cell, &o);
     unsafe {
         raw.store<u32>(addr, 0x1234);

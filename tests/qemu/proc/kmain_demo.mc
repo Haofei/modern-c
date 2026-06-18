@@ -37,9 +37,11 @@ global g_sessions: Pool<Session, 16>;
 
 const N_REQUESTS: usize = 6;
 
-fn uart_putc(u: *Uart, b: u8) -> void {
-    unsafe {
-        raw.store<u8>(phys(u.base), b);
+impl CharDevice for Uart {
+    fn putc(self: *Uart, b: u8) -> void {
+        unsafe {
+            raw.store<u8>(phys(self.base), b);
+        }
     }
 }
 
@@ -240,7 +242,7 @@ export fn kmain(region_base: usize, region_len: usize) -> u32 {
     // 2) Driver framework: register the UART as the console device.
     char_registry_init(&g_chardevs);
     g_uart.base = UART_BASE;
-    g_uart_id = register_chardev(&g_chardevs, bind(&g_uart, uart_putc));
+    g_uart_id = register_chardev(&g_chardevs, &g_uart);
     stages = stages | 0x2;
     say(0x31); // '1' — heap + console are up
 

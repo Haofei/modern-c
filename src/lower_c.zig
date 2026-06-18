@@ -4060,9 +4060,10 @@ const CEmitter = struct {
         for (node.arms) |arm| {
             if (arm.patterns.len != 1) return false;
             const pattern = arm.patterns[0];
+            var cond_buf: [256]u8 = undefined;
             const branch = switch (pattern.kind) {
                 .bind => |binding| NullableSwitchBranch{
-                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s} != NULL", .{subject.name}),
+                    .condition = try std.fmt.allocPrint(self.scratch.allocator(), "{s}", .{subject.someCond(&cond_buf)}),
                     .binding_name = binding.text,
                 },
                 .wildcard => NullableSwitchBranch{ .condition = null },
@@ -4087,7 +4088,8 @@ const CEmitter = struct {
             defer nested.deinit();
             self.indent += 1;
             if (branch.binding_name) |binding_name| {
-                try nested.put(binding_name, .{ .c_type = subject.inner_c_type });
+                const binding_info: LocalInfo = if (subject.inner_ty) |it| try self.localInfoFromType(it) else .{ .c_type = subject.inner_c_type };
+                try nested.put(binding_name, binding_info);
                 try self.writeIndent();
                 try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ subject.inner_c_type, binding_name, subject.name });
             }
@@ -4290,7 +4292,8 @@ const CEmitter = struct {
         if (source_name) |name| {
             if (locals.get(name)) |info| {
                 if (info.nullable_inner_c_type) |inner_c_type| {
-                    return .{ .name = name, .inner_c_type = inner_c_type };
+                    const inner_ty = if (info.source_ty) |st| nullableInnerTypeExpr(st) else null;
+                    return .{ .name = name, .inner_c_type = inner_c_type, .is_dyn = isDynCTypeName(inner_c_type), .inner_ty = inner_ty };
                 }
                 return null;
             }
@@ -4300,7 +4303,7 @@ const CEmitter = struct {
         const inner_c_type = try self.nullableInnerCTypeForType(nullable_ty) orelse return null;
         const temp = try self.emitSequencedCallArgTemp(expr, locals, nullable_ty);
         try locals.put(temp.name, try self.localInfoFromType(nullable_ty));
-        return .{ .name = temp.name, .inner_c_type = inner_c_type };
+        return .{ .name = temp.name, .inner_c_type = inner_c_type, .is_dyn = isDynCTypeName(inner_c_type), .inner_ty = nullableInnerTypeExpr(nullable_ty) };
     }
 
     fn nullableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -4561,10 +4564,12 @@ const CEmitter = struct {
         };
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "if ({s} != NULL) {{\n", .{subject.name});
+        var cond_buf: [256]u8 = undefined;
+        try self.out.print(self.allocator, "if ({s}) {{\n", .{subject.someCond(&cond_buf)});
         var then_locals = try cloneLocals(self.allocator, locals.*);
         defer then_locals.deinit();
-        try then_locals.put(binding.text, .{ .c_type = subject.inner_c_type });
+        const binding_info: LocalInfo = if (subject.inner_ty) |it| try self.localInfoFromType(it) else .{ .c_type = subject.inner_c_type };
+        try then_locals.put(binding.text, binding_info);
         self.indent += 1;
         try self.writeIndent();
         try self.out.print(self.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ subject.inner_c_type, try self.cIdent(binding.text), subject.name });
@@ -6147,7 +6152,7 @@ const CEmitter = struct {
             // that threads a target type (let-init, return, assignment RHS, struct field,
             // array element, call arg), from any `*T` source — not just `&x`. A `*dyn`
             // pass-through returns false and emits normally.
-            if (self.resolveAliasType(ty).kind == .dyn_trait) {
+            if (self.targetIsDynOrNullableDyn(ty)) {
                 if (try self.emitDynCoercion(expr, locals, ty)) return;
             }
         }
@@ -6218,12 +6223,32 @@ const CEmitter = struct {
     //   - a `*T` value (param, field, returned `*T`, …): .data = (void*)<ptr>, T = pointee
     // An existing `*dyn Trait` value passes through (returns false → normal emit). Sema
     // verified conformance + forge-safety. Returns false when not applicable.
+    // True when `ty` is `*dyn Trait` or `?*dyn Trait` — both route through emitDynCoercion.
+    fn targetIsDynOrNullableDyn(self: *CEmitter, ty: ast.TypeExpr) bool {
+        return switch (self.resolveAliasType(ty).kind) {
+            .dyn_trait => true,
+            .nullable => |child| self.resolveAliasType(child.*).kind == .dyn_trait,
+            else => false,
+        };
+    }
+
     fn emitDynCoercion(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
         const resolved = self.resolveAliasType(target_ty);
+        // The target is `*dyn Trait` or `?*dyn Trait` (nullable trait object): both build
+        // the `mc_dyn_<Trait>` fat pointer; the nullable just adds the `null` niche below.
         const trait_name = switch (resolved.kind) {
             .dyn_trait => |d| d.trait_name.text,
+            .nullable => |child| switch (self.resolveAliasType(child.*).kind) {
+                .dyn_trait => |d| d.trait_name.text,
+                else => return false,
+            },
             else => return false,
         };
+        // `?*dyn Trait = null`: `none` is the zero fat pointer (data == NULL).
+        if (expr.kind == .null_literal) {
+            try self.out.print(self.allocator, "({s}){{0}}", .{try self.dynTypeName(trait_name)});
+            return true;
+        }
         switch (expr.kind) {
             .grouped => |inner| return self.emitDynCoercion(inner.*, locals, target_ty),
             .address_of => |inner| {
@@ -9651,7 +9676,7 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ";\n");
 
                 try self.writeIndent();
-                try self.out.print(self.allocator, "if ({s} == NULL) mc_trap_NullUnwrap();\n", .{temp_name});
+                try self.out.print(self.allocator, "if ({s}{s} == NULL) mc_trap_NullUnwrap();\n", .{ temp_name, if (isDynCTypeName(inner_c_type)) ".data" else "" });
                 return true;
             },
             .grouped => |inner| return try self.collectNullableTryHoistsForReturn(inner.*, locals, replacements),
@@ -9932,7 +9957,7 @@ const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ";\n");
 
         try self.writeIndent();
-        try self.out.print(self.allocator, "if ({s} == NULL) mc_trap_NullUnwrap();\n", .{temp_name});
+        try self.out.print(self.allocator, "if ({s}{s} == NULL) mc_trap_NullUnwrap();\n", .{ temp_name, if (isDynCTypeName(inner_c_type)) ".data" else "" });
         try self.writeIndent();
         try self.out.print(self.allocator, "return {s};\n", .{temp_name});
         return true;
@@ -10690,7 +10715,9 @@ const CEmitter = struct {
 
     fn nullableInnerCType(self: *CEmitter, ty: ast.TypeExpr) !?[]const u8 {
         return switch (ty.kind) {
-            .pointer, .raw_many_pointer => try self.cTypeFor(ty, .typedef_name),
+            // `?*dyn Trait`: the inner `*dyn Trait` lowers to the `mc_dyn_<Trait>` fat
+            // pointer struct (same niche representation; none is `data == NULL`).
+            .pointer, .raw_many_pointer, .dyn_trait => try self.cTypeFor(ty, .typedef_name),
             .qualified => |node| try self.nullableInnerCType(node.child.*),
             else => null,
         };
@@ -11055,7 +11082,34 @@ const ResultSwitchBranch = struct {
 const NullableSwitchSubject = struct {
     name: []const u8,
     inner_c_type: []const u8,
+    // A `?*dyn Trait` is a two-word fat pointer; its niche is `data == NULL`, so the
+    // none/some test is on the `.data` field, not the whole value.
+    is_dyn: bool = false,
+    // The narrowed inner type (`*dyn Trait`), so the some-binding carries enough type
+    // information for trait dispatch (`d.m()` -> `d.vtable->m(d.data, …)`).
+    inner_ty: ?ast.TypeExpr = null,
+
+    // The C boolean expression that is true when the subject is `some` (present).
+    fn someCond(self: NullableSwitchSubject, buf: []u8) []const u8 {
+        return if (self.is_dyn)
+            std.fmt.bufPrint(buf, "{s}.data != NULL", .{self.name}) catch "0"
+        else
+            std.fmt.bufPrint(buf, "{s} != NULL", .{self.name}) catch "0";
+    }
 };
+
+fn isDynCTypeName(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "mc_dyn_");
+}
+
+// The inner (non-null) type of a `?T` TypeExpr — e.g. `?*dyn Trait` -> `*dyn Trait`.
+fn nullableInnerTypeExpr(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .nullable => |child| child.*,
+        .qualified => |node| nullableInnerTypeExpr(node.child.*),
+        else => null,
+    };
+}
 
 const NullableSwitchBranch = struct {
     condition: ?[]const u8 = null,

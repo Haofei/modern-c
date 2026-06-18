@@ -1,4 +1,4 @@
-// SPEC: section=traits
+// SPEC: section=32.4
 // SPEC: milestone=traits-tier2
 // SPEC: phase=parse,sema
 // SPEC: expect=compile_error

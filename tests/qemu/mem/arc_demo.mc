@@ -11,11 +11,11 @@ global g_pool: [4096]u8;
 
 export fn arc_demo_run() -> u32 {
     var heap: Heap = heap_new(phys_range(pa((&g_pool[0]) as usize), 4096));
-    var a: Allocator = heap_allocator(&heap);
+    let a: *mut dyn Allocator = heap_allocator(&heap);
     var pass: u32 = 1;
 
     let p: Payload = .{ .value = 0xBEEF };
-    var h1: Arc<Payload> = arc_new(Payload, &a, p);
+    var h1: Arc<Payload> = arc_new(Payload, a, p);
     if arc_count(Payload, &h1) != 1 {
         pass = 0;
     }

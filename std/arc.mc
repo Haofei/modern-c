@@ -18,17 +18,17 @@ struct ArcBlock<T> {
     count: atomic<u32>,
 }
 
-// The handle carries the `*Allocator` it was allocated from (its provenance), so
+// The handle carries the `*mut dyn Allocator` it was allocated from (its provenance), so
 // `arc_drop` frees the block through that exact allocator with no separate, possibly
 // mismatched, allocator argument. Every clone copies the same provenance. The
 // allocator must outlive every handle (it is borrowed, not owned).
 move struct Arc<T> {
     block: PAddr,
-    allocator: *Allocator, // provenance: the allocator that minted `block`
+    allocator: *mut dyn Allocator, // provenance: the allocator that minted `block`
 }
 
 // Allocate a new refcounted block holding `value`, with one owner.
-export fn arc_new(comptime T: type, a: *Allocator, value: T) -> Arc<T> {
+export fn arc_new(comptime T: type, a: *mut dyn Allocator, value: T) -> Arc<T> {
     let addr: PAddr = alloc_bytes(a, sizeof(ArcBlock<T>), alignof(ArcBlock<T>));
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(addr);
     blk.count.store(1, .release);
@@ -38,7 +38,7 @@ export fn arc_new(comptime T: type, a: *Allocator, value: T) -> Arc<T> {
 
 // Allocate a refcounted block with one owner but an *uninitialized* value — the caller
 // fills it via `arc_get_mut` before cloning or publishing it.
-export fn arc_new_uninit(comptime T: type, a: *Allocator) -> Arc<T> {
+export fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -> Arc<T> {
     let addr: PAddr = alloc_bytes(a, sizeof(ArcBlock<T>), alignof(ArcBlock<T>));
     let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(addr);
     blk.count.store(1, .release);

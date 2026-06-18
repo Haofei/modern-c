@@ -1,10 +1,21 @@
-# Traits / interfaces — design note (proposal)
+# Traits / interfaces — design note (rationale)
 
-**Status: proposal, for review.** This describes how MC can gain declared, checked
-trait/interface abstraction **without** weakening any existing kernel-profile
-guarantee (no GC / no hidden allocation, move/linear types, IRQ-context
-discipline, `secret<T>` constant-time, opaque-struct opacity, no-UB IR, C+LLVM
-parity). Nothing here is implemented yet.
+**Status: largely implemented; this is now the rationale companion to the
+normative spec.** The normative definition of traits lives in
+`docs/spec/MC_0.7_Final_Design.md` §32 — it is the contract a conforming compiler
+enforces. This note keeps the design exploration and the reasoning behind each
+decision. Where the two differ, **the spec wins**; in particular the as-built
+behavior refined two points from the original proposal: (1) the `*dyn` coercion is
+checked from the source's static pointee type at *every* assignment position
+(`let`/return/arg/field/array), with `E_DYN_FORGE` reserved for raw/untyped
+sources rather than an `&x`-only rule; (2) conformance checks the **full**
+signature (§7). The deferred frontier (§9 effect-carrying `dyn`, comptime/const
+trait methods) is the part still ahead.
+
+This describes how MC gains declared, checked trait/interface abstraction
+**without** weakening any existing kernel-profile guarantee (no GC / no hidden
+allocation, move/linear types, IRQ-context discipline, `secret<T>` constant-time,
+opaque-struct opacity, no-UB IR, C+LLVM parity).
 
 The guiding result: **almost every MC invariant is preserved by one decision —
 static dispatch is the default, and dynamic dispatch is explicit and inherits the
@@ -176,9 +187,15 @@ This is the normative core. Each existing guarantee, and the rule that preserves
   conflicting impl is `E_TRAIT_INCOHERENT`. This guarantees a unique vtable and
   unambiguous dispatch. (No blanket impls in v1 — see §10.)
 - **Conformance checking:** an `impl Trait for Type` must provide exactly the
-  trait's methods, with matching `self`-mode and effect/context annotations.
-  A missing or mismatched method is `E_TRAIT_MISSING_METHOD` /
-  `E_TRAIT_SELF_MODE_MISMATCH`.
+  trait's methods, each with a **compatible full signature** (arity, every
+  parameter type, and the return type) plus matching `self`-mode and
+  effect/context annotations. A missing method is `E_TRAIT_MISSING_METHOD`; a
+  method the trait does not declare is `E_TRAIT_UNKNOWN_METHOD`; an arity /
+  parameter-type / return-type mismatch is `E_TRAIT_SIGNATURE_MISMATCH`; a
+  `self`-mode mismatch is `E_TRAIT_SELF_MODE_MISMATCH`. Name-only conformance is
+  **not** sufficient — a right-name/wrong-signature impl is rejected, never
+  silently accepted (otherwise it would be called through a monomorphized or
+  vtable call site under the trait's assumed signature).
 - **Bound satisfaction:** instantiating `where T: Trait` with a `T` that has no
   conformance is `E_TRAIT_NOT_SATISFIED` (reported at the instantiation site, with
   the unmet bound named — unlike Zig's comptime duck typing, which fails deep in

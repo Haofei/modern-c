@@ -1,4 +1,4 @@
-// SPEC: section=traits
+// SPEC: section=32.5
 // SPEC: milestone=traits-tier1
 // SPEC: phase=parse,sema,lower-c
 // SPEC: expect=pass

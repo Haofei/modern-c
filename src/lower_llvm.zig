@@ -864,7 +864,7 @@ const LlvmEmitter = struct {
         // on the STATIC pointee type T of the source `*T` (a `&x`, a `*Square` param, a
         // `*T` field — all uniform). Sema has already verified conformance + forge-safety;
         // a `*dyn` pass-through value (same trait) returns null and emits normally.
-        if (self.resolveAliasType(expected_ty).kind == .dyn_trait) {
+        if (self.targetIsDynOrNullableDyn(expected_ty)) {
             if (try self.emitDynCoercion(expr, expected_ty)) |value| return value;
         }
         const value = try switch (expr.kind) {
@@ -1148,6 +1148,12 @@ const LlvmEmitter = struct {
                     _ = try self.emitExpr(call.args[0], arg_ty);
                     return;
                 }
+                // A trait-object dispatch as a statement (`d.m(args);`) — including a
+                // `-> void` method, whose result is simply discarded.
+                if (self.dynDispatchTrait(call.callee.*)) |trait| {
+                    _ = try self.emitDynDispatch(call, trait);
+                    return;
+                }
                 if (try self.emitBuiltinVoidCall(call)) return;
                 if (self.callReturnType(call)) |ret_ty| {
                     // A `void` or `-> never` call statement produces no value, so it is emitted
@@ -1220,8 +1226,7 @@ const LlvmEmitter = struct {
         }
         const inner_ty = self.nullableInnerType(operand_ty) orelse return error.UnsupportedLlvmEmission;
         const value = try self.emitExpr(operand, operand_ty);
-        try self.emitNullUnwrapCheck(value);
-        _ = inner_ty;
+        try self.emitNullUnwrapCheck(value, inner_ty);
         return value;
     }
 
@@ -1257,11 +1262,26 @@ const LlvmEmitter = struct {
         try self.emitTrapBranch(is_ok, cont, trap, trap, cont, "InvalidRepresentation");
     }
 
-    fn emitNullUnwrapCheck(self: *LlvmEmitter, value: []const u8) !void {
+    // The pointer word a nullable niche-tests against: a thin `?*T` value IS the pointer;
+    // a `?*dyn Trait` fat pointer's niche is its data word (`extractvalue … , 0`).
+    fn nullableDataWord(self: *LlvmEmitter, value: []const u8, inner_ty: ast.TypeExpr) ![]const u8 {
+        if (!isDynTraitLlvmType(self.resolveAliasType(inner_ty))) return value;
+        const data = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {{ ptr, ptr }} {s}, 0\n", .{ data, value });
+        return data;
+    }
+
+    fn emitNullableSomeTest(self: *LlvmEmitter, dest: []const u8, value: []const u8, inner_ty: ast.TypeExpr) !void {
+        const word = try self.nullableDataWord(value, inner_ty);
+        try self.out.print(self.allocator, "  {s} = icmp ne ptr {s}, null\n", .{ dest, word });
+    }
+
+    fn emitNullUnwrapCheck(self: *LlvmEmitter, value: []const u8, inner_ty: ast.TypeExpr) !void {
+        const word = try self.nullableDataWord(value, inner_ty);
         const is_null = try self.nextTemp();
         const trap = try self.nextLabel("trap_null");
         const cont = try self.nextLabel("nonnull");
-        try self.out.print(self.allocator, "  {s} = icmp eq ptr {s}, null\n", .{ is_null, value });
+        try self.out.print(self.allocator, "  {s} = icmp eq ptr {s}, null\n", .{ is_null, word });
         try self.emitTrapBranch(is_null, trap, cont, trap, cont, "NullUnwrap");
     }
 
@@ -1277,7 +1297,7 @@ const LlvmEmitter = struct {
         const else_label = try self.nextLabel("nullable_none");
         const end_label = try self.nextLabel("nullable_end");
         const is_some = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = icmp ne ptr {s}, null\n", .{ is_some, subject });
+        try self.emitNullableSomeTest(is_some, subject, inner_ty);
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ is_some, then_label, else_label, try self.debugCallSuffix(), then_label });
 
         const old_type = self.local_types.fetchRemove(binding.text);
@@ -1766,7 +1786,7 @@ const LlvmEmitter = struct {
         const none_label = try self.nextLabel("nullable_none");
         const end_label = try self.nextLabel("nullable_end");
         const is_some = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = icmp ne ptr {s}, null\n", .{ is_some, subject });
+        try self.emitNullableSomeTest(is_some, subject, inner_ty);
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n", .{ is_some, some_label, none_label, try self.debugCallSuffix() });
 
         var all_terminated = true;
@@ -2103,12 +2123,29 @@ const LlvmEmitter = struct {
     //   - a `*T` value (param, field, returned `*T`, …): data = the pointer value, T = pointee
     // An existing `*dyn Trait` value (pass-through, same trait) returns null so it emits
     // normally. Returns null when not applicable. Sema verified conformance + forge-safety.
+    // True when `ty` is `*dyn Trait` or `?*dyn Trait` — both route through emitDynCoercion.
+    fn targetIsDynOrNullableDyn(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        return switch (self.resolveAliasType(ty).kind) {
+            .dyn_trait => true,
+            .nullable => |child| self.resolveAliasType(child.*).kind == .dyn_trait,
+            else => false,
+        };
+    }
+
     fn emitDynCoercion(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) !?[]const u8 {
         const resolved = self.resolveAliasType(expected_ty);
+        // `*dyn Trait` or `?*dyn Trait` (nullable trait object) target.
         const trait_name = switch (resolved.kind) {
             .dyn_trait => |d| d.trait_name.text,
+            .nullable => |child| switch (self.resolveAliasType(child.*).kind) {
+                .dyn_trait => |d| d.trait_name.text,
+                else => return null,
+            },
             else => return null,
         };
+        // `?*dyn Trait = null`: `none` is the zero fat pointer (data == null). The value is
+        // emitted in a typed context (store/insertvalue prefix the `{ ptr, ptr }` type).
+        if (expr.kind == .null_literal) return "zeroinitializer";
         var type_name: []const u8 = undefined;
         var data_ptr: []const u8 = undefined;
         switch (expr.kind) {
@@ -4040,7 +4077,10 @@ const LlvmEmitter = struct {
                 library_ty
             else
                 error.UnsupportedLlvmEmission,
-            .pointer, .raw_many_pointer, .nullable => "ptr",
+            .pointer, .raw_many_pointer => "ptr",
+            // A nullable lowers to its inner type's representation — the niche is in-band:
+            // `?*T` -> `ptr` (null address), `?*dyn Trait` -> `{ ptr, ptr }` (null data word).
+            .nullable => |child| try self.llvmType(child.*),
             .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ self.arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
             .slice => "{ ptr, i64 }",
             .fn_pointer => "ptr",
@@ -5193,7 +5233,8 @@ const LlvmEmitter = struct {
                 return null;
             },
             .pointer, .raw_many_pointer => 8,
-            .nullable => |child| if (isPointerLikeType(child.*)) 8 else null,
+            .dyn_trait => 16,
+            .nullable => |child| if (isPointerLikeType(child.*)) 8 else if (isDynTraitLlvmType(child.*)) 16 else null,
             .slice => 16,
             .generic => |g| {
                 if (std.mem.eql(u8, g.base.text, "Result") and g.args.len == 2) {
@@ -5246,7 +5287,8 @@ const LlvmEmitter = struct {
                 return null;
             },
             .pointer, .raw_many_pointer, .slice => 8,
-            .nullable => |child| if (isPointerLikeType(child.*)) 8 else null,
+            .dyn_trait => 8,
+            .nullable => |child| if (isPointerLikeType(child.*)) 8 else if (isDynTraitLlvmType(child.*)) 8 else null,
             .generic => |g| {
                 if (std.mem.eql(u8, g.base.text, "Result") and g.args.len == 2) {
                     const ok_align = self.comptimeResultPayloadAlignOf(g.args[0], depth + 1) orelse return null;
@@ -6116,6 +6158,15 @@ fn isPointerLikeType(ty: ast.TypeExpr) bool {
     return switch (ty.kind) {
         .pointer, .raw_many_pointer => true,
         .qualified => |node| isPointerLikeType(node.child.*),
+        else => false,
+    };
+}
+
+// True when `ty` is a `*dyn Trait` fat pointer (a two-word `{ data, vtable }` value).
+fn isDynTraitLlvmType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .dyn_trait => true,
+        .qualified => |node| isDynTraitLlvmType(node.child.*),
         else => false,
     };
 }

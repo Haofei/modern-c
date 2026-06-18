@@ -31,10 +31,10 @@ fn consume(owner: Arc<Packet>) -> u32 {
 
 export fn arc_pkt_run() -> u32 {
     var heap: Heap = heap_new(phys_range(pa((&g_pool[0]) as usize), 8192));
-    var a: Allocator = heap_allocator(&heap);
+    let a: *mut dyn Allocator = heap_allocator(&heap);
     var pass: u32 = 1;
 
-    var owner: Arc<Packet> = arc_new_uninit(Packet, &a); // filled below via arc_get_mut
+    var owner: Arc<Packet> = arc_new_uninit(Packet, a); // filled below via arc_get_mut
 
     // Fill the packet once while this handle is still unique. arc_get_mut is unsafe (the
     // checker can't prove no clone aliases the pointer); we do not clone `owner` until after.

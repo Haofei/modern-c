@@ -73,12 +73,21 @@ fn arena_free_noop(a: *mut Arena, addr: PAddr, size: usize) -> void {
     }
 }
 
-// View the arena as a generic Allocator (std/alloc): alloc bumps, free is a no-op.
-export fn arena_allocator(a: *mut Arena) -> Allocator {
-    return .{
-        .alloc = bind(a, arena_alloc),
-        .free = bind(a, arena_free_noop),
-    };
+// The arena conforms to the Allocator trait (std/alloc §32): alloc bumps, free is a
+// validated no-op. The methods delegate to the arena's existing operations.
+impl Allocator for Arena {
+    fn alloc(self: *mut Arena, size: usize, align: usize) -> PAddr {
+        return arena_alloc(self, size, align);
+    }
+    fn free(self: *mut Arena, addr: PAddr, size: usize) -> void {
+        arena_free_noop(self, addr, size);
+    }
+}
+
+// View the arena as a generic `*mut dyn Allocator` (std/alloc) — the checked coercion
+// synthesizes the shared rodata vtable; the arena itself is the trait object's data.
+export fn arena_allocator(a: *mut Arena) -> *mut dyn Allocator {
+    return a;
 }
 
 // ----- generational handles: runtime use-after-reset detection without lifetimes ----

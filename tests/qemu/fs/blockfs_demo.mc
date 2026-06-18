@@ -7,49 +7,53 @@ import "std/addr.mc";
 
 const DISK_BLOCKS: u64 = 8; // 8 * 512 = 4096 bytes
 
-struct Disk { base: usize } // the RAM-disk backend's captured context
+struct Disk { base: usize, n: u64 } // the RAM-disk backend (the trait object's `data`)
 
 global g_disk: [4096]u8;
 global g_disk_h: Disk;
 global g_fs: BlockFs;
 
-// The backend gets a *typed* `*Disk` (captured by the closure) — no ctx word, no cast.
-fn ramdisk_read(d: *Disk, blk: u64, dst: usize) -> bool {
-    let base: usize = d.base + (blk as usize) * 512;
-    var i: usize = 0;
-    while i < 512 {
-        unsafe {
-            let v: u8 = raw.load<u8>(phys(base + i));
-            raw.store<u8>(phys(dst + i), v);
+// The RAM disk conforms to BlockDevice (one checked impl; virtio-blk would supply its own
+// `impl BlockDevice for VirtioBlk` the same way). `self` is the typed `*Disk` — no ctx
+// word, no cast.
+impl BlockDevice for Disk {
+    fn read(self: *Disk, blk: u64, dst: usize) -> bool {
+        let base: usize = self.base + (blk as usize) * 512;
+        var i: usize = 0;
+        while i < 512 {
+            unsafe {
+                let v: u8 = raw.load<u8>(phys(base + i));
+                raw.store<u8>(phys(dst + i), v);
+            }
+            i = i + 1;
         }
-        i = i + 1;
+        return true;
     }
-    return true;
-}
-fn ramdisk_write(d: *Disk, blk: u64, src: usize) -> bool {
-    let base: usize = d.base + (blk as usize) * 512;
-    var i: usize = 0;
-    while i < 512 {
-        unsafe {
-            let v: u8 = raw.load<u8>(phys(src + i));
-            raw.store<u8>(phys(base + i), v);
+    fn write(self: *Disk, blk: u64, src: usize) -> bool {
+        let base: usize = self.base + (blk as usize) * 512;
+        var i: usize = 0;
+        while i < 512 {
+            unsafe {
+                let v: u8 = raw.load<u8>(phys(src + i));
+                raw.store<u8>(phys(base + i), v);
+            }
+            i = i + 1;
         }
-        i = i + 1;
+        return true;
     }
-    return true;
+    fn blocks(self: *Disk) -> u64 {
+        return self.n;
+    }
 }
 
 const ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
-// Build the device handle on the stack each call. The read/write closures capture the
-// RAM disk; virtio-blk would supply its own backend + captured context the same way.
-fn make_dev() -> BlockDevice {
+// Set up the RAM disk and view it as a `*dyn BlockDevice` (the checked coercion
+// synthesizes the shared rodata vtable; `&g_disk_h` is the trait object's data).
+fn make_dev() -> *dyn BlockDevice {
     g_disk_h.base = (&g_disk[0]) as usize;
-    return .{
-        .read = bind(&g_disk_h, ramdisk_read),
-        .write = bind(&g_disk_h, ramdisk_write),
-        .blocks = DISK_BLOCKS,
-    };
+    g_disk_h.n = DISK_BLOCKS;
+    return &g_disk_h;
 }
 
 export fn bfs_setup() -> void {
@@ -57,8 +61,8 @@ export fn bfs_setup() -> void {
 }
 
 export fn bfs_create_(nblocks: u64) -> u64 {
-    var dev: BlockDevice = make_dev();
-    switch bfs_create(&g_fs, &dev, nblocks) {
+    let dev: *dyn BlockDevice = make_dev();
+    switch bfs_create(&g_fs, dev, nblocks) {
         ok(i) => {
             return i as u64;
         }
@@ -68,8 +72,8 @@ export fn bfs_create_(nblocks: u64) -> u64 {
     }
 }
 export fn bfs_write_(idx: usize, src: usize, len: usize) -> u64 {
-    var dev: BlockDevice = make_dev();
-    switch bfs_write(&g_fs, &dev, idx, src, len) {
+    let dev: *dyn BlockDevice = make_dev();
+    switch bfs_write(&g_fs, dev, idx, src, len) {
         ok(n) => {
             return n as u64;
         }
@@ -79,8 +83,8 @@ export fn bfs_write_(idx: usize, src: usize, len: usize) -> u64 {
     }
 }
 export fn bfs_read_(idx: usize, dst: usize, len: usize) -> u64 {
-    var dev: BlockDevice = make_dev();
-    switch bfs_read(&g_fs, &dev, idx, dst, len) {
+    let dev: *dyn BlockDevice = make_dev();
+    switch bfs_read(&g_fs, dev, idx, dst, len) {
         ok(n) => {
             return n as u64;
         }

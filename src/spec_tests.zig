@@ -7,6 +7,7 @@ const hir = @import("hir.zig");
 const ir = @import("ir.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
+const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const monomorphize = @import("monomorphize.zig");
 const parser = @import("parser.zig");
@@ -721,6 +722,40 @@ test "tests/spec fixtures produce declared lower-c inspection markers" {
     }
 }
 
+// The "both backends" claim for `?*dyn Trait` is asserted by the fixture comment but the
+// lower-c marker test only exercises C. This emits the nullable-dyn fixture through BOTH
+// backends and asserts each succeeds AND carries the data-word niche evidence — so a future
+// edit that un-wires either backend (the original Findings 1–2 failure mode) goes red.
+test "nullable trait object fixture lowers on both backends with the data-word niche" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const path = "tests/spec/traits_dyn_nullable.mc";
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024));
+    var reporter = diagnostics.Reporter.init(a, path, source);
+
+    // C backend: none = the zero fat pointer, niche test on `.data`, dispatch via vtable.
+    {
+        const module = try parseSpecModule(source, a, &reporter);
+        var out: std.ArrayList(u8) = .empty;
+        try lower_c.appendC(a, module, &out);
+        try std.testing.expect(std.mem.indexOf(u8, out.items, "(mc_dyn_CharDevice){0}") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.items, ".data != NULL") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.items, "vtable->putc") != null);
+    }
+    // LLVM backend: must emit (not UnsupportedLlvmEmission), with the fat-pointer niche.
+    {
+        const module = try parseSpecModule(source, a, &reporter);
+        var out: std.ArrayList(u8) = .empty;
+        try lower_llvm.appendLlvm(a, module, &out);
+        try std.testing.expect(std.mem.indexOf(u8, out.items, "{ ptr, ptr }") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out.items, "extractvalue") != null);
+    }
+}
+
 fn hasExpectedDiagnosticCode(check_value: []const u8) bool {
     var checks = std.mem.splitScalar(u8, check_value, ',');
     while (checks.next()) |raw_check| {
@@ -776,6 +811,7 @@ fn isAcceptanceCheck(check: []const u8) bool {
         "traits-tier1-accept",
         "traits-tier1-irq-accept",
         "traits-tier2-dyn-accept",
+        "traits-tier2-nullable-dyn",
     };
     return matchesAny(check, &names);
 }

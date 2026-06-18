@@ -94,6 +94,9 @@ pub const ValueType = union(enum) {
     float: []const u8,
     pointer: PointerShape,
     nullable_pointer: PointerShape,
+    // `?*dyn Trait` — nullable trait object; niche is `data == null`. Narrows to a
+    // bare `*dyn Trait` (`.value`) under `if let` / switch / unwrap.
+    nullable_dyn_trait,
     slice: []const u8,
     array: []const u8,
     address: AddressClass,
@@ -116,6 +119,7 @@ pub const ValueType = union(enum) {
             .float => |n| n,
             .pointer => |shape| pointerShapeName(shape),
             .nullable_pointer => |shape| pointerShapeName(shape),
+            .nullable_dyn_trait => "?dyn",
             .slice => |n| n,
             .array => |n| n,
             .address => |kind| addressClassName(kind),
@@ -1440,6 +1444,7 @@ const FunctionBuilder = struct {
         return switch (node.pattern.kind) {
             .bind => |ident| switch (self.exprType(node.value)) {
                 .nullable_pointer => |shape| .{ .name = ident.text, .ty = .{ .pointer = shape }, .ty_expr = self.narrowedBindingTypeExpr(node.value, "ok") },
+                .nullable_dyn_trait => .{ .name = ident.text, .ty = .value, .ty_expr = self.narrowedBindingTypeExpr(node.value, "ok") },
                 else => null,
             },
             .tag_bind => |tag_bind| blk: {
@@ -1494,6 +1499,7 @@ const FunctionBuilder = struct {
         return switch (pattern.kind) {
             .bind => |ident| switch (self.exprType(subject)) {
                 .nullable_pointer => |shape| .{ .name = ident.text, .ty = .{ .pointer = shape }, .ty_expr = self.narrowedBindingTypeExpr(subject, "ok") },
+                .nullable_dyn_trait => .{ .name = ident.text, .ty = .value, .ty_expr = self.narrowedBindingTypeExpr(subject, "ok") },
                 else => null,
             },
             .tag_bind => |tag_bind| blk: {
@@ -4127,7 +4133,16 @@ fn isResultType(ty: ValueType) bool {
 
 fn isMirNullableValue(ty: ValueType) bool {
     return switch (ty) {
-        .nullable_pointer, .unknown, .never => true,
+        .nullable_pointer, .nullable_dyn_trait, .unknown, .never => true,
+        else => false,
+    };
+}
+
+// True when `ty` is a `*dyn Trait` fat pointer (possibly behind qualifiers).
+fn isDynTraitMirType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .dyn_trait => true,
+        .qualified => |node| isDynTraitMirType(node.child.*),
         else => false,
     };
 }
@@ -4169,6 +4184,16 @@ fn mirTypesAreCompatible(target: ValueType, source: ValueType) bool {
                 else => unreachable,
             }),
             else => unreachable,
+        };
+    }
+    // `?*dyn Trait` target accepts the checked coercion (a `*T`/`*dyn` source, `.pointer`),
+    // a `null` literal (typed `.nullable_pointer`), and another `?*dyn` value. Sema already
+    // enforced trait conformance (E_TRAIT_NOT_SATISFIED) and forge-safety (E_DYN_FORGE);
+    // the MIR check is structural.
+    if (target == .nullable_dyn_trait) {
+        return switch (source) {
+            .nullable_dyn_trait, .pointer, .nullable_pointer => true,
+            else => false,
         };
     }
     if (std.meta.activeTag(target) != std.meta.activeTag(source)) return false;
@@ -4220,7 +4245,7 @@ fn mirTypesAreCompatible(target: ValueType, source: ValueType) bool {
             };
             break :blk std.mem.eql(u8, target_shape.ok, source_shape.ok) and std.mem.eql(u8, target_shape.err, source_shape.err);
         },
-        .void, .never, .bool, .contract, .branch, .trap, .unknown, .value => true,
+        .void, .never, .bool, .contract, .branch, .trap, .unknown, .value, .nullable_dyn_trait => true,
     };
 }
 
@@ -4417,7 +4442,7 @@ fn valueTypeFromType(ty: ast.TypeExpr, enums: *const std.StringHashMap(EnumSumma
             const child_ty = valueTypeFromType(child.*, enums, structs);
             break :blk switch (child_ty) {
                 .pointer => |shape| .{ .nullable_pointer = shape },
-                else => .value,
+                else => if (isDynTraitMirType(child.*)) ValueType.nullable_dyn_trait else .value,
             };
         },
         .qualified => |node| valueTypeFromType(node.child.*, enums, structs),
@@ -4449,7 +4474,7 @@ fn valueTypeFromTypeAliasDepth(ty: ast.TypeExpr, enums: *const std.StringHashMap
             const child_ty = valueTypeFromTypeAliasDepth(child.*, enums, structs, packed_bits, aliases, depth + 1);
             break :blk switch (child_ty) {
                 .pointer => |shape| .{ .nullable_pointer = shape },
-                else => .value,
+                else => if (isDynTraitMirType(child.*)) ValueType.nullable_dyn_trait else .value,
             };
         },
         .qualified => |node| valueTypeFromTypeAliasDepth(node.child.*, enums, structs, packed_bits, aliases, depth + 1),

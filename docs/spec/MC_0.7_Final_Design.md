@@ -43,6 +43,7 @@
   - [29. Tuples](#29-tuples)
   - [30. Modules and Associated Functions](#30-modules-and-associated-functions)
   - [31. Opaque Structs](#31-opaque-structs)
+  - [32. Traits and Interfaces](#32-traits-and-interfaces)
 - [Part II — Implementation and Conformance Annex](#part-ii--implementation-and-conformance-annex)
   - [A. Spec Layering](#a-spec-layering)
   - [B. Recommended Compilation Pipeline](#b-recommended-compilation-pipeline)
@@ -193,6 +194,12 @@ unsafe { asm opaque volatile { "cli" clobber("memory") } }
 ```
 
 These may fault, hang, reset the machine, corrupt hardware state, or interact with external devices. Those are machine effects, not language UB.
+
+Some types are **compiler-protected kinds** that safe MC can produce only through their checked
+construction path: an `opaque struct` value (section 31) and a `*dyn Trait` trait object
+(section 32.4). Fabricating one from raw parts requires `unsafe`, on the same footing as the
+machine effects above — the language cannot prove a hand-assembled vtable or a forged private field
+is well-formed.
 
 ---
 
@@ -1135,6 +1142,9 @@ if let p = maybe {
 let p = unwrap(maybe);   // trap(.NullUnwrap) if null
 ```
 
+Nullability also applies to trait-object pointers: `?*dyn Trait` is a nullable trait object whose
+`none` is the niche `data == null` (section 32.7). It narrows and unwraps exactly as above.
+
 ---
 
 # 11. Narrow Pattern Binding
@@ -1929,7 +1939,14 @@ A #[irq_context] function may call:
 It may not call:
     - functions not proven #[irq_context]
     - operations that block, sleep, or allocate from a blocking allocator
+    - indirect calls whose callee is not statically known
 ```
+
+An indirect call through a `*dyn Trait` trait object (section 32.4) has no statically known callee,
+so its effect contract cannot be proven; a `*dyn` dispatch in a `#[irq_context]` function is
+therefore `E_IRQ_CONTEXT_CALL`. Polymorphism that must run in interrupt context uses static
+dispatch (`where T: Trait`, section 32.3), where the concrete callee is visible after
+monomorphization and checked by this rule normally.
 
 A critical section that requires interrupts to be disabled is expressed with a capability the operation takes, so the sequence cannot be written outside the section:
 
@@ -2172,6 +2189,11 @@ the declared width — is a compile error (E_COMPTIME_TRAP).
 Comptime evaluates **values** in MC's own type and arithmetic-domain system; it never
 computes **types** or generates code. So `const` tables (e.g. a CRC table built by a
 `const fn` loop) bake into the binary, but there is no `@Type`/`inline for`.
+
+A `comptime T: type` parameter may carry a trait bound (`where T: Trait`); this constrains which
+types satisfy the parameter and is checked at the instantiation site (section 32.3). The bound is a
+constraint on a type parameter, not type computation — it neither constructs nor transforms a type,
+so it stays within the value-evaluator line above.
 
 Reflection:
 
@@ -2815,6 +2837,10 @@ An `impl Type { … }` block declares functions associated with `Type`, reached 
 `Type.fn(args)`. The receiver is an ordinary explicit parameter (there is no implicit
 `self`-method call syntax); `Type.method(receiver, args)` is the call form.
 
+An `impl Trait for Type { … }` block additionally declares that `Type` *conforms to* a trait;
+its methods share this same `Owner__member` namespace and mangling, and conformance is checked
+against the trait's signatures. See section 32.
+
 ## 30.3 Lowering
 
 A module/impl member `Owner.member` lowers to a single mangled top-level symbol
@@ -2883,6 +2909,220 @@ ordinary struct representation with no runtime cost.
 Opacity is an encapsulation boundary for *accidental* forgery, consistent with MC's stance
 (*explicit machine contract, not a capability kernel*): it is not a defense against code that
 deliberately writes in the owner's `Owner__…` namespace or uses `unsafe`.
+
+---
+
+# 32. Traits and Interfaces
+
+A **trait** names a set of method signatures a type may implement. Traits give MC a checked
+abstraction over the hand-rolled function-pointer-table (`*_ops`) idiom, in two tiers that share
+one declaration:
+
+- **Static dispatch (Tier 1):** a generic bounded by `where T: Trait` is monomorphized to direct
+  `Owner__method` calls (section 30.3). Zero indirection; one specialized copy per instantiation.
+- **Dynamic dispatch (Tier 2):** a `*dyn Trait` value is a two-word object dispatched through a
+  read-only vtable. One shared code path; one indirect call per dispatch.
+
+Traits introduce no garbage collection, no boxing, and no hidden allocation. Like `module`/`impl`
+(section 30), they desugar to ordinary top-level declarations and calls.
+
+## 32.1 Declaration and Implementation
+
+```mc
+trait Shape {
+    fn area(self: *Self) -> u32;
+}
+
+struct Square { side: u32 }
+
+impl Shape for Square {
+    fn area(self: *Square) -> u32 { return self.side * self.side; }
+}
+```
+
+A `trait Name { … }` block declares method signatures. `Self` denotes the implementing type. An
+`impl Trait for Type { … }` block supplies the methods for one `(Trait, Type)` pair; each method
+lowers to the same `Owner__member` symbol an inherent `impl Type` would mint (section 30.3), so a
+trait method and an inherent method share one namespace and one mangling.
+
+**Conformance** is checked at the `impl`. The implementation must provide **exactly** the trait's
+method set, each with a **compatible full signature**:
+
+```txt
+missing a declared method            -> E_TRAIT_MISSING_METHOD
+a method the trait does not declare  -> E_TRAIT_UNKNOWN_METHOD
+arity / parameter type / return type -> E_TRAIT_SIGNATURE_MISMATCH
+self-mode (e.g. *Self vs *mut Self)  -> E_TRAIT_SELF_MODE_MISMATCH
+```
+
+Signature checking is total: parameter count, every parameter type, and the return type must match
+the trait declaration. Name-only conformance is not sufficient — an impl whose method has the right
+name but a different signature is rejected, never silently accepted (this closes the path by which a
+mismatched impl would be called through a monomorphized or vtable call site under the trait's
+assumed signature).
+
+## 32.2 Coherence and the Orphan Rule
+
+At most **one** `impl Trait for Type` may exist per `(Trait, Type)` pair. A second is
+`E_TRAIT_INCOHERENT` (and, because both desugar to the same `Owner__member` symbol, also
+`E_DUPLICATE_DECLARATION`).
+
+A trait `impl` is subject to the same **orphan rule** as an inherent `impl` (section 31): because
+its methods reach the owner's `Owner__…` namespace — including the private fields of an `opaque`
+owner — an `impl Trait for Type` is permitted only in the file that declares `Type`. A peer impl in
+a foreign file is `E_ORPHAN_IMPL`. Traits are therefore not a side door around opaque-struct
+encapsulation: conformance impls are covered exactly as inherent impls are.
+
+## 32.3 Tier 1 — Static Dispatch via Bounds
+
+A generic over `comptime T: type` may carry a `where T: Trait` bound and call the trait's methods on
+`T` using the explicit-receiver call form (section 30.2):
+
+```mc
+fn doubled_area(comptime T: type, x: *T) -> u32 where T: Shape {
+    return T.area(x) + T.area(x);
+}
+
+let a: u32 = doubled_area(Square, &sq);   // monomorphizes to Square__area(&sq) + …
+```
+
+The bound is verified at the **instantiation site**: instantiating `T` with a type that does not
+implement `Trait` is `E_TRAIT_NOT_SATISFIED`, naming the unmet bound — not a failure deep in the
+callee body. After monomorphization each `T.method` is an ordinary direct call; Tier 1 adds no
+runtime cost and no indirection.
+
+## 32.4 Tier 2 — Dynamic Dispatch via `*dyn Trait`
+
+`*dyn Trait` (and `*mut dyn Trait`) is a **trait object**: a two-word value `{ data, vtable }`,
+where `data` points at the underlying value and `vtable` points at a read-only method table. A trait
+object is formed by a **checked coercion** from a pointer whose static pointee implements the trait,
+and a method is dispatched on it with receiver syntax:
+
+```mc
+fn dispatch(s: *dyn Shape) -> u32 { return s.area(); }   // vtable->area(data)
+
+var sq: Square = .{ .side = 5 };
+let s: *dyn Shape = &sq;        // checked coercion: { data = &sq, vtable = &__vt_Square_Shape }
+let n: u32 = dispatch(s);       // 25
+```
+
+### 32.4.1 Forge-Safety
+
+`*dyn Trait` is a **compiler-protected type kind**: in safe MC it may be produced **only** by the
+checked coercion, which is the sole operation that selects and attaches the correct vtable. The
+coercion is uniform across every assignment context — `let`/assignment, `return`, call argument,
+aggregate field initialization, and array element — and in each it is checked identically against the
+source's static pointee type:
+
+```txt
+source pointee implements the trait   -> ok; vtable synthesized from the static pointee type
+source pointee does not implement it   -> E_TRAIT_NOT_SATISFIED
+source is a raw integer / untyped value -> E_DYN_FORGE   (nothing to synthesize a vtable from)
+```
+
+Hand-assembling a trait object from raw parts is `E_DYN_FORGE`. Fabricating one another way (a
+`bitcast` to `*dyn`) is rejected by the existing bitcast layout rule (`E_BITCAST_TYPE`, section 14)
+— `*dyn` has no fixed scalar/pointer layout to bitcast to. Only `unsafe` may fabricate a trait
+object outside the checked coercion; this is the same stance as opaque-struct construction
+(section 31): an encapsulation boundary for *accidental* forgery, not a defense against code that
+deliberately uses `unsafe`.
+
+### 32.4.2 Object Safety
+
+A trait is **object-safe** — eligible to form `*dyn Trait` — only if every method takes `self` by
+borrow (`self: *Self` or `self: *mut Self`). A **consuming** method (`move self`, legal only in a
+trait signature) is **static-dispatch only**: you cannot move out of a borrowed trait object.
+
+```txt
+forming *dyn for a trait with a move-self method   -> E_TRAIT_NOT_OBJECT_SAFE
+calling a move-self method through a *dyn           -> E_DYN_MOVE_SELF
+```
+
+A non-object-safe trait remains fully usable through Tier 1.
+
+## 32.5 Effects and Restricted Contexts
+
+A `*dyn` dispatch is an **indirect call**: the static caller cannot see the concrete callee, so it
+cannot prove the callee's effect contract. Dynamic dispatch is therefore excluded from contexts that
+require a statically provable callee:
+
+```txt
+*dyn dispatch inside #[irq_context]   -> E_IRQ_CONTEXT_CALL        (section 19.1: callee may sleep/block)
+*dyn dispatch inside #[bounded]       -> E_UNBOUNDED_INDIRECT_CALL (termination check cannot bound the callee)
+```
+
+These exclusions are uniform: `dyn` cannot launder a forbidden effect into the one place it is
+forbidden. Where a restricted context needs polymorphism, Tier 1 supplies it — after
+monomorphization the concrete callee is visible and its effect contract is checked normally. Effect
+checking propagates **through** monomorphization: a `where T: Trait` generic that calls a
+`#[may_sleep]` trait method, instantiated and called from `#[irq_context]`, is rejected at the
+concrete callee (`E_SLEEP_IN_ATOMIC`), not laundered past it; the dual — a non-sleeping
+`#[irq_context]` method so instantiated — passes with no false positive.
+
+> **Reserved (not in this revision).** Effect-carrying trait objects — a `#[may_sleep]`/`#[irq_safe]`
+> contract attached to a trait such that *some* `*dyn` dispatch is admissible in a restricted
+> context — and `const`/comptime-evaluable trait methods are deferred. This revision specifies the
+> effect behavior that exists: the two `dyn` exclusions above and effect propagation through Tier 1
+> monomorphization. See `docs/traits-design.md` for the design exploration of the deferred frontier.
+
+## 32.6 Lowering
+
+Traits add no runtime semantics beyond their two dispatch forms; both lower within the existing
+backend contract (Part II), and neither changes MC semantics by target (annex A).
+
+- **Tier 1** monomorphizes: each `where T: Trait` instantiation emits a specialization, and every
+  `T.method` resolves to a direct `Owner__method` call. Identical to ordinary generic + associated
+  function lowering (section 30.3).
+- **Tier 2** lowers a trait object to a two-word struct `{ data, vtable }`. For each
+  `(Type, Trait)` the compiler emits one `static const` vtable in **rodata**, named
+  `__vt_<Type>_<Trait>`, holding the type's method addresses. The checked coercion constructs the
+  pair `{ data = pointer, vtable = &__vt_<Type>_<Trait> }`; a dispatch loads the slot and performs
+  one indirect call `vtable->method(data, …)`. The vtable is immutable and shared across all objects
+  of that `(Type, Trait)`.
+
+A conforming backend must construct the trait object only via the checked coercion's synthesized
+pair: emitting a trait-object value whose vtable field is uninitialized (e.g. by treating the
+coercion source as already being the object) is a compiler bug, not a property of the MC program
+(annex A).
+
+## 32.7 Nullable Trait Objects
+
+A trait object may be made nullable with `?` (section 10): `?*dyn Trait` / `?*mut dyn Trait`. It is
+the fat-pointer generalization of a nullable thin pointer — the niche is **in-band**, with `none`
+encoded as the **data word being null**:
+
+```txt
+?*T          : none = the (one-word) pointer is null
+?*dyn Trait  : none = the data word of the {data, vtable} pair is null
+```
+
+So `?*dyn Trait` has the **same two-word layout** as `*dyn Trait` — no discriminant, no extra
+storage. A valid trait object always has a non-null data pointer (it is formed by coercion from
+`&x` / a `*T`), so `data == null` is a free niche.
+
+`none` is written `null`; a non-null value is produced by the same checked coercion as a non-nullable
+trait object (section 32.4.1) — `null` and a conforming `*T` are the only safe sources, and a raw or
+non-conforming source is still `E_DYN_FORGE` / `E_TRAIT_NOT_SATISFIED`. A nullable trait object is
+**not** directly dispatchable; it must first be narrowed. Dispatching a method on an un-narrowed
+`?*dyn Trait` is `E_NULLABLE_DYN_DISPATCH`, and coercing a `?*dyn Trait` to a non-null `*dyn Trait`
+(dropping the `none` case) is `E_NULLABLE_DYN_NARROW` — in both, the fix is to narrow or `unwrap`
+first. The narrowing is shown below:
+
+```mc
+let dev: ?*dyn BlockDevice = null;        // absent
+// … later …
+let dev: ?*dyn BlockDevice = &vblk;       // present (checked coercion)
+
+if let d = dev {                          // narrows `dev` to a non-null `*dyn BlockDevice`
+    d.read(lba, buf);                     // dispatch through the vtable
+}
+switch dev { d => use(d), _ => absent() } // the dual; `unwrap(dev)` traps on `none`
+```
+
+`if let` / `switch` narrowing and `unwrap` (which traps `NullUnwrap` on `none`) behave exactly as for
+a thin `?*T` (sections 10, 11.1); only the niche test is on the data word rather than the whole
+value. This is what a registry of optional trait-object slots uses — `[N]?*dyn Trait` initialized to
+`null` — so absence is type-checked rather than tracked by a parallel boolean.
 
 ---
 

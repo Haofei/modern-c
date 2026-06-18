@@ -46,20 +46,24 @@ struct Device {
     endpoint: u32,      // the attached driver-instance handle
 }
 
-// A driver provider: `probe` tests whether this driver matches a device id; `attach` binds
-// the device given its resources and returns a driver-instance endpoint. Closures, so a
-// driver captures its private state. `class` is the device class it exposes on attach.
-struct Provider {
-    probe: closure(DeviceId) -> bool,
-    attach: closure(ResourceSet) -> u32,
-    class: DeviceClass,
-    present: bool,
+// A driver provider conforms to the `DriverProvider` trait (docs/spec §32): `probe` tests
+// whether this driver matches a device id; `attach` binds the device given its resources and
+// returns a driver-instance endpoint; `class` is the device class it exposes on attach. The
+// driver's private state is the trait object's `self`. (All `*mut self`: `attach` records
+// the binding, and a uniform self-mode keeps registration a single `&driver` coercion.)
+trait DriverProvider {
+    fn probe(self: *mut Self, id: DeviceId) -> bool;
+    fn attach(self: *mut Self, res: ResourceSet) -> u32;
+    fn class(self: *mut Self) -> DeviceClass;
 }
 
 const MAX_PROVIDERS: usize = 8;
 
+// Each slot is `?*mut dyn DriverProvider` (docs/spec §32.7): `null` = empty, a trait object
+// = a registered driver. Absence is the niche (`data == null`), so there is no `present`
+// flag to keep in sync, and a slot can only be probed/attached by narrowing it.
 struct Bus {
-    providers: [MAX_PROVIDERS]Provider,
+    providers: [MAX_PROVIDERS]?*mut dyn DriverProvider,
     nprov: usize,
 }
 
@@ -71,22 +75,20 @@ enum AttachError {
 export fn bus_init(bus: *mut Bus) -> void {
     var i: usize = 0;
     while i < MAX_PROVIDERS {
-        bus.providers[i].present = false;
+        bus.providers[i] = null; // empty slot
         i = i + 1;
     }
     bus.nprov = 0;
 }
 
-// Register a driver provider; returns its index. Traps if the provider table is full.
-export fn bus_register_provider(bus: *mut Bus, probe: closure(DeviceId) -> bool, attach: closure(ResourceSet) -> u32, class: DeviceClass) -> usize {
+// Register a driver provider (any `*mut dyn DriverProvider`); returns its index. Traps if
+// the provider table is full.
+export fn bus_register_provider(bus: *mut Bus, provider: *mut dyn DriverProvider) -> usize {
     let id: usize = bus.nprov;
     if id >= MAX_PROVIDERS {
         unreachable; // provider table full
     }
-    bus.providers[id].probe = probe;
-    bus.providers[id].attach = attach;
-    bus.providers[id].class = class;
-    bus.providers[id].present = true;
+    bus.providers[id] = provider; // `*mut dyn` -> `?*mut dyn` (registered)
     bus.nprov = id + 1;
     return id;
 }
@@ -97,18 +99,17 @@ export fn bus_register_provider(bus: *mut Bus, probe: closure(DeviceId) -> bool,
 export fn bus_probe_attach(bus: *mut Bus, dev: *mut Device, reg: *mut Registry) -> Result<usize, AttachError> {
     var i: usize = 0;
     while i < bus.nprov {
-        let p: *Provider = &bus.providers[i];
-        if p.present {
-            let probe: closure(DeviceId) -> bool = p.probe;
-            if probe(dev.id) {
-                let attach: closure(ResourceSet) -> u32 = p.attach;
-                let endpoint: u32 = attach(dev.res);
+        if let p = bus.providers[i] {
+            let matched: bool = p.probe(dev.id); // dynamic dispatch through the trait vtable
+            if matched {
+                let endpoint: u32 = p.attach(dev.res);
+                let cls: DeviceClass = p.class();
                 // Register the endpoint first; only mark the device attached if a service can
                 // actually discover it. An unregisterable endpoint fails the whole transaction.
-                switch registry_add(reg, class_code(p.class), endpoint, 0) {
+                switch registry_add(reg, class_code(cls), endpoint, 0) {
                     ok(slot) => {
                         dev.attached = true;
-                        dev.class = p.class;
+                        dev.class = cls;
                         dev.endpoint = endpoint;
                         return ok(i);
                     }
@@ -120,7 +121,7 @@ export fn bus_probe_attach(bus: *mut Bus, dev: *mut Device, reg: *mut Registry) 
                     }
                 }
             }
-        }
+        } else {}
         i = i + 1;
     }
     return err(.NoDriver);

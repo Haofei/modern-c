@@ -4,7 +4,7 @@
 import "std/arc.mc";
 import "std/alloc.mc";
 move struct Res { v: u32 }
-fn bad(a: *mut Allocator) -> void {
+fn bad(a: *mut dyn Allocator) -> void {
     switch arc_new(Res, a, .{ .v = 1 }) {
         ok(h) => { arc_drop(Res, h); }
         err(e) => {}

@@ -2153,6 +2153,7 @@ pub const Checker = struct {
                 .const_fns = self.const_fns,
                 .const_globals = self.const_globals,
                 .type_params = &type_params,
+                .trait_decls = self.trait_decls,
             };
             self.checkBlock(body, fn_ctx);
             if (fallthroughSpan(body, fn_ctx)) |span| {
@@ -3565,6 +3566,13 @@ pub const Checker = struct {
                     if (ctx.bounded and !ctx.irq_context) {
                         self.errorCode(expr.span, "E_UNBOUNDED_INDIRECT_CALL", "a `#[bounded]` function may not make an indirect/fn-pointer call (the callee's termination cannot be checked through the pointer)");
                     }
+                }
+                // A method dispatch on a NULLABLE trait object (`?*dyn Trait`) must narrow
+                // first: you cannot dispatch through a possibly-absent receiver (the `none`
+                // niche has no vtable). Without this gate the call is accepted by sema but
+                // un-lowerable on both backends — so reject it here with a must-narrow rule.
+                if (nullableDynDispatchReceiver(node.callee.*, ctx)) {
+                    self.errorCode(expr.span, "E_NULLABLE_DYN_DISPATCH", "cannot dispatch a method through a `?*dyn Trait` (it may be absent / `none`); narrow it first with `if let` / `switch`, or `unwrap` it to a `*dyn Trait`");
                 }
                 // Tier 2 dynamic dispatch: `d.method(args)` through a `*dyn Trait`. This is
                 // an indirect (load-through-vtable) call, so it inherits every restriction
@@ -5176,7 +5184,7 @@ pub const Checker = struct {
 
     fn checkNullPointerInitializer(self: *Checker, target: TypeClass, expr: ast.Expr) bool {
         if (!isNullLiteral(expr)) return false;
-        if (isNullablePointerLike(target)) return true;
+        if (isNullablePointerLike(target) or target == .nullable_dyn_trait) return true;
         if (isNonNullPointerLike(target)) {
             self.errorCode(expr.span, "E_NULL_NON_NULL_POINTER", "null cannot initialize a non-null pointer");
             return true;
@@ -5397,6 +5405,21 @@ pub const Checker = struct {
     // If `callee` is `d.method` where `d` has a `*dyn Trait` type and `method` is one
     // of the trait's methods, return the (trait method signature). A call through it is
     // a dynamic dispatch (load-through-vtable indirect call). Null otherwise.
+    // True when `callee` is `recv.method` whose receiver `recv` is a nullable trait object
+    // (`?*dyn Trait`) — a dispatch that must be narrowed before it is legal.
+    fn nullableDynDispatchReceiver(callee: ast.Expr, ctx: Context) bool {
+        const member = switch (callee.kind) {
+            .member => |m| m,
+            .grouped => |inner| return nullableDynDispatchReceiver(inner.*, ctx),
+            else => return false,
+        };
+        const base_ty = exprDeclaredType(member.base.*, ctx) orelse exprResultType(member.base.*, ctx) orelse return false;
+        return switch (resolveAliasType(base_ty, ctx).kind) {
+            .nullable => |child| resolveAliasType(child.*, ctx).kind == .dyn_trait,
+            else => false,
+        };
+    }
+
     fn dynDispatchSig(self: *Checker, callee: ast.Expr, ctx: Context) ?ast.TraitMethodSig {
         const member = switch (callee.kind) {
             .member => |m| m,
@@ -5415,10 +5438,34 @@ pub const Checker = struct {
 
     fn checkDynCoercionInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         const resolved = resolveAliasType(target_ty, ctx);
+        // The target is `*dyn Trait` or `?*dyn Trait` (nullable trait object): a
+        // `null` source is handled by checkNullPointerInitializer; a non-null source
+        // coerces into the niche exactly as for the non-nullable trait object.
+        const target_is_nullable = resolved.kind == .nullable;
         const dyn = switch (resolved.kind) {
             .dyn_trait => |d| d,
+            .nullable => |child| switch (resolveAliasType(child.*, ctx).kind) {
+                .dyn_trait => |d| d,
+                else => return false,
+            },
             else => return false,
         };
+        if (isNullLiteral(expr)) return true;
+        // A `?*dyn Trait` SOURCE: copying it into another `?*dyn` is fine (a nullable copy),
+        // but coercing it into a non-null `*dyn` drops the `none` case — that is not a forge
+        // (F3), it is a missing narrow. Require `if let` / `switch` / `unwrap` first.
+        if (exprResultType(expr, ctx)) |src0| {
+            if (resolveAliasType(src0, ctx).kind == .nullable) {
+                if (nullableInnerType(resolveAliasType(src0, ctx))) |inner| {
+                    if (resolveAliasType(inner, ctx).kind == .dyn_trait) {
+                        if (!target_is_nullable) {
+                            self.errorCode(expr.span, "E_NULLABLE_DYN_NARROW", "a `?*dyn Trait` cannot coerce to a non-null `*dyn Trait`: it may be `none`. Narrow it with `if let` / `switch`, or `unwrap` it first");
+                        }
+                        return true; // nullable->nullable copy is fine; the non-null case erred above
+                    }
+                }
+            }
+        }
         // `&x` / `&mut x`: the checked coercion. Verify the concrete type conforms.
         if (addressOfOperand(expr)) |operand| {
             // A `*mut dyn Trait` borrow needs a mutable place.
@@ -5444,9 +5491,11 @@ pub const Checker = struct {
         // backend emits `{data, vtable=&__vt_T_Trait}` keyed on T.
         if (exprResultType(expr, ctx) orelse exprDeclaredType(expr, ctx)) |src| {
             const resolved_src = resolveAliasType(src, ctx);
-            // Passing an existing `*dyn Trait` value through (same trait): allowed.
+            // Passing an existing `*dyn Trait` value through (same trait): allowed. The
+            // target may be `*dyn Trait` or `?*dyn Trait` (the some-coercion), so compare
+            // the source's trait against the unwrapped target trait, not the full type.
             if (resolved_src.kind == .dyn_trait) {
-                if (sameTypeSyntaxCtx(src, resolved, ctx)) return true;
+                if (std.mem.eql(u8, resolved_src.kind.dyn_trait.trait_name.text, dyn.trait_name.text)) return true;
             }
             // A `*T` value where T is a concrete nominal type that conforms.
             if (dynSourcePointeeTypeName(resolved_src)) |type_name| {
@@ -6676,6 +6725,10 @@ const Context = struct {
     type_aliases: ?*const std.StringHashMap(ast.TypeExpr) = null,
     functions: ?*const std.StringHashMap(FunctionInfo) = null,
     globals: ?*const std.StringHashMap(GlobalInfo) = null,
+    // Trait declarations, for resolving a `*dyn Trait` dispatch's return type in
+    // exprResultType (so a dispatch result flows into a typed binding). Optional: when
+    // absent, dyn-dispatch return-type lookup gracefully no-ops.
+    trait_decls: ?*const std.StringHashMap(ast.TraitDecl) = null,
     // `const fn` bodies, for evaluating comptime const-fn calls (e.g. when a
     // const-fn result drives a fixed-array length — section 22 comptime↔type).
     const_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
@@ -6873,6 +6926,11 @@ const TypeClass = enum {
     c_void_pointer,
     nullable_pointer,
     nullable_c_void_pointer,
+    // `?*dyn Trait` — a nullable trait object. Same two-word {data, vtable}
+    // layout as `*dyn Trait`; `none` is the niche `data == null`. Eligible for
+    // `if let` / switch narrowing and `?` unwrap like the thin nullables, but its
+    // niche test and codegen are on the data word, not the whole value.
+    nullable_dyn_trait,
     paddr,
     vaddr,
     dma_addr,
@@ -7334,7 +7392,20 @@ fn classifyNullableType(child: ast.TypeExpr) TypeClass {
     return switch (classifyType(child)) {
         .c_void_pointer => .nullable_c_void_pointer,
         .pointer, .raw_many_pointer => .nullable_pointer,
-        else => .unknown,
+        // A `*dyn Trait` classifies as `.unknown` (dispatch keys off the TypeExpr
+        // kind, not the class), so recognize the trait-object niche explicitly.
+        else => if (isDynTraitTypeExpr(child)) .nullable_dyn_trait else .unknown,
+    };
+}
+
+// True when `ty` is a `*dyn Trait` fat pointer (possibly behind `const`/`mut`
+// qualifiers). Alias resolution is not applied here (classifyType has no ctx); a
+// direct `?*dyn Trait` is the supported form.
+fn isDynTraitTypeExpr(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .dyn_trait => true,
+        .qualified => |node| isDynTraitTypeExpr(node.child.*),
+        else => false,
     };
 }
 
@@ -8042,7 +8113,7 @@ fn addressableStorageIsMutable(expr: ast.Expr, ctx: Context) bool {
 
 fn isNullableValue(kind: TypeClass) bool {
     return switch (kind) {
-        .nullable_pointer, .nullable_c_void_pointer => true,
+        .nullable_pointer, .nullable_c_void_pointer, .nullable_dyn_trait => true,
         else => false,
     };
 }
@@ -8077,7 +8148,7 @@ fn isConditionType(kind: TypeClass) bool {
 
 fn isTryOperand(kind: TypeClass) bool {
     return switch (kind) {
-        .result, .nullable_pointer, .nullable_c_void_pointer, .never, .unknown => true,
+        .result, .nullable_pointer, .nullable_c_void_pointer, .nullable_dyn_trait, .never, .unknown => true,
         else => false,
     };
 }
@@ -8086,6 +8157,9 @@ fn tryResultType(kind: TypeClass) TypeClass {
     return switch (kind) {
         .nullable_pointer => .pointer,
         .nullable_c_void_pointer => .c_void_pointer,
+        // The narrowed `*dyn Trait` carries no specific class — dispatch keys off
+        // the narrowed binding's TypeExpr (the `.dyn_trait` child), like a bare dyn.
+        .nullable_dyn_trait => .unknown,
         .result => .unknown,
         else => kind,
     };
@@ -8392,7 +8466,7 @@ fn globalClass(name: []const u8, ctx: Context) ?TypeClass {
 
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse mathBuiltinReturnType(node.callee.*) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse mathBuiltinReturnType(node.callee.*) orelse unwrapCallReturnType(node, ctx) orelse dynDispatchReturnType(node, ctx) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .try_expr => |inner| tryPayloadType(inner.operand.*, ctx),
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),
@@ -9715,6 +9789,36 @@ fn isUnwrapCall(callee: ast.Expr) bool {
         .member => |node| std.mem.eql(u8, node.name.text, "unwrap"),
         else => false,
     };
+}
+
+// `unwrap(x)` yields the payload of a nullable `x` — the non-null inner type (e.g.
+// `unwrap(?*dyn Trait)` -> `*dyn Trait`). Wiring this into exprResultType lets the
+// unwrapped value flow into a typed binding (including the strict `*dyn` coercion).
+fn unwrapCallReturnType(node: anytype, ctx: Context) ?ast.TypeExpr {
+    if (!isUnwrapCall(node.callee.*)) return null;
+    if (node.args.len != 1) return null;
+    const operand_ty = exprResultType(node.args[0], ctx) orelse return null;
+    return nullableInnerType(operand_ty);
+}
+
+// The return type of a trait-object dispatch `recv.method(args)` where `recv` is a
+// `*dyn Trait` — looked up from the trait method signature. Wiring this into
+// exprResultType lets a dispatch result flow into a typed binding (e.g. an enum-returning
+// method assigned to `let x: SomeEnum = d.method()`), where a scalar would coerce anyway.
+fn dynDispatchReturnType(node: anytype, ctx: Context) ?ast.TypeExpr {
+    const member = switch (node.callee.*.kind) {
+        .member => |m| m,
+        else => return null,
+    };
+    const base_ty = exprDeclaredType(member.base.*, ctx) orelse return null;
+    const dyn = switch (resolveAliasType(base_ty, ctx).kind) {
+        .dyn_trait => |d| d,
+        else => return null,
+    };
+    const td = ctx.trait_decls orelse return null;
+    const trait = td.get(dyn.trait_name.text) orelse return null;
+    const m = findTraitMethod(trait.methods, member.name.text) orelse return null;
+    return m.return_type;
 }
 
 fn isTrapCall(callee: ast.Expr) bool {
