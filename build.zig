@@ -2328,6 +2328,26 @@ pub fn build(b: *std.Build) void {
     const llvm_elf_run_test_step = b.step("llvm-elf-run-test", "Load an ELF64 from an LLVM-lowered kernel image and run it in U-mode under QEMU");
     llvm_elf_run_test_step.dependOn(&llvm_elf_run_test_cmd.step);
 
+    const agent_confined_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/agent-confined-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    agent_confined_test_cmd.step.dependOn(b.getInstallStep());
+    const agent_confined_test_step = b.step("agent-confined-test", "Step 0: load a separate ELF into an isolated Sv39 address space (kernel unmapped) and run it confined in U-mode under QEMU");
+    agent_confined_test_step.dependOn(&agent_confined_test_cmd.step);
+
+    const llvm_agent_confined_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/agent-confined-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_agent_confined_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_agent_confined_test_step = b.step("llvm-agent-confined-test", "Step 0 (LLVM): load a separate ELF into an isolated Sv39 address space and run it confined in U-mode under QEMU");
+    llvm_agent_confined_test_step.dependOn(&llvm_agent_confined_test_cmd.step);
+
     const driver_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/arch/driver-test.sh",
@@ -2703,6 +2723,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_user_test_cmd.step);
     m0_step.dependOn(&llvm_process_test_cmd.step);
     m0_step.dependOn(&llvm_elf_run_test_cmd.step);
+    m0_step.dependOn(&llvm_agent_confined_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_exec_test_cmd.step);
@@ -3012,6 +3033,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&process_test_cmd.step);
     // elf-run-test loads an ELF64 and runs it in U-mode under QEMU.
     m0_step.dependOn(&elf_run_test_cmd.step);
+    // agent-confined-test (step 0): separate ELF into an isolated address space, run confined in U-mode.
+    m0_step.dependOn(&agent_confined_test_cmd.step);
     // driver-test runs the char-device driver framework (vtable dispatch) under QEMU.
     m0_step.dependOn(&driver_test_cmd.step);
     // fs-syscall-test runs U-mode file syscalls over the VFS under QEMU.
