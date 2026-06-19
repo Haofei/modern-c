@@ -1185,6 +1185,13 @@ pub fn build(b: *std.Build) void {
     const treefs_test_step = b.step("treefs-test", "Hierarchical tree FS: nested mkdir/create, path resolution, ./.. traversal, getdents listing, typed errors");
     treefs_test_step.dependOn(&treefs_test_cmd.step);
 
+    const fs_toolserver_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fs-toolserver-test",
+    });
+    fs_toolserver_test_cmd.step.dependOn(b.getInstallStep());
+    const fs_toolserver_test_step = b.step("fs-toolserver-test", "Capability-checked FS tool server: workspace-scoped path caps deny /etc + .. escapes with audit/attribution (M1 walking skeleton)");
+    fs_toolserver_test_step.dependOn(&fs_toolserver_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -2848,6 +2855,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&vfsmount_test_cmd.step);
     // treefs-test links + runs the hierarchical tree filesystem (needs clang); LLVM side via llvm-host-suite-test.
     m0_step.dependOn(&treefs_test_cmd.step);
+    // fs-toolserver-test links + runs the capability-checked FS tool server (M1); LLVM side via llvm-host-suite-test.
+    m0_step.dependOn(&fs_toolserver_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);

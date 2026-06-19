@@ -320,6 +320,30 @@ fn make_path(t: *mut Tree, path: usize, path_len: usize, kind: u32, capacity: us
     return ok(slot);
 }
 
+// Resolve every component of `path` EXCEPT the last, returning the directory
+// that would contain the final component — without creating anything. This is
+// the hook a capability layer uses to authorize a create/mkdir against the
+// parent directory (and so deny it) before any side effect occurs. A missing or
+// non-directory intermediate is NotFound/NotDir; a path with no final component
+// (empty / "/") is InvalidName.
+export fn tree_lookup_parent(t: *mut Tree, path: usize, path_len: usize) -> Result<usize, TreeError> {
+    var r: ByteReader = byte_reader(pa(path), path_len);
+    var cur: usize = ROOT;
+    var c: Comp = next_component(&r, 0);
+    if !c.found {
+        return err(.InvalidName);
+    }
+    while true {
+        let after: Comp = next_component(&r, c.next);
+        if !after.found {
+            break; // `c` is the final component; `cur` is its parent
+        }
+        cur = descend(t, cur, &r, &c)?;
+        c = after;
+    }
+    return ok(cur);
+}
+
 // Create a directory at `path`; its parent chain must already exist.
 export fn tree_mkdir(t: *mut Tree, path: usize, path_len: usize) -> Result<usize, TreeError> {
     return make_path(t, path, path_len, KIND_DIR, 0);
