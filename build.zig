@@ -1199,6 +1199,13 @@ pub fn build(b: *std.Build) void {
     const agent_fs_test_step = b.step("agent-fs-test", "Agent FS tool front door: allowlist+budget gate over the path-capability server; M6-shape acceptance (deny+audit+attribute)");
     agent_fs_test_step.dependOn(&agent_fs_test_cmd.step);
 
+    const policy_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "policy-test",
+    });
+    policy_test_cmd.step.dependOn(b.getInstallStep());
+    const policy_test_step = b.step("policy-test", "Policy plane: drain audit provenance into per-agent counters; denial pressure escalates Allow/Throttle/Revoke/Kill (M5 seed)");
+    policy_test_step.dependOn(&policy_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -2866,6 +2873,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&fs_toolserver_test_cmd.step);
     // agent-fs-test links + runs the agent FS tool front door (M3 seed); LLVM side via llvm-host-suite-test.
     m0_step.dependOn(&agent_fs_test_cmd.step);
+    // policy-test links + runs the policy-plane drainer (M5 seed); LLVM side via llvm-host-suite-test.
+    m0_step.dependOn(&policy_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);
