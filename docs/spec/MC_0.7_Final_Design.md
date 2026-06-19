@@ -374,7 +374,7 @@ Examples:
 
 ```mc
 trap(.Bounds)          // never
-unreachable()          // never
+unreachable            // never (a keyword, not a call — no parens)
 return err(e)          // never
 arch.halt_forever()    // never
 ```
@@ -397,10 +397,12 @@ fn get_or_fail(x: ?u32) -> u32 {
 let x: u32 = trap(.Bounds);  // typechecks, never coerces to u32
 ```
 
-`unreachable()` also has type `never`, but if execution reaches it, it traps:
+`unreachable` also has type `never`, but if execution reaches it, it traps. It is a
+keyword, not a callable — write it bare, with no parentheses (`unreachable()` parses
+as a call and is *not* a path terminator):
 
 ```mc
-unreachable();   // trap(.Unreachable)
+unreachable;   // trap(.Unreachable)
 ```
 
 A function declared `-> never` must not return normally.
@@ -1486,7 +1488,8 @@ and write physical memory without producing a CPU pointer. Checked address
 arithmetic on the `PAddr` itself is the `std/addr` library's job — `pa_offset` /
 `pa_diff` / `pa_align_up` funnel each operation through one audited `usize` boundary
 where MC's checked-by-default arithmetic catches overflow (the opaque address class
-forbids raw `+`/deref/ordering directly, `E_ADDRESS_CLASS_OPERATION`). `raw.load`/
+forbids raw `+`/ordering directly, `E_ADDRESS_CLASS_OPERATION`, and a direct deref
+with the dedicated `E_PADDR_DEREF`). `raw.load`/
 `raw.store` are the only sanctioned way to *touch* a `PAddr` without `vm.map`; they
 are explicit, audited strict-unsafe operations, never an implicit dereference
 (`pa.*` remains a compile error). The DMA ownership profile (section 18.2) builds
@@ -2059,7 +2062,7 @@ let z = a + b;       // checked add may trap
 let x = buf[i];      // bounds check may trap
 unwrap(ptr);         // may trap
 assert(cond);        // may trap
-unreachable();       // traps if reached
+unreachable;         // traps if reached
 ```
 
 Allowed:
