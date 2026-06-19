@@ -1206,6 +1206,13 @@ pub fn build(b: *std.Build) void {
     const policy_test_step = b.step("policy-test", "Policy plane: drain audit provenance into per-agent counters; denial pressure escalates Allow/Throttle/Revoke/Kill (M5 seed)");
     policy_test_step.dependOn(&policy_test_cmd.step);
 
+    const netcap_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "netcap-test",
+    });
+    netcap_test_cmd.step.dependOn(b.getInstallStep());
+    const netcap_test_step = b.step("netcap-test", "Capability-gated network egress: default-deny NetCap, audited+attributed allow/deny, attenuation only narrows (milestone #3)");
+    netcap_test_step.dependOn(&netcap_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -2875,6 +2882,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&agent_fs_test_cmd.step);
     // policy-test links + runs the policy-plane drainer (M5 seed); LLVM side via llvm-host-suite-test.
     m0_step.dependOn(&policy_test_cmd.step);
+    // netcap-test links + runs capability-gated network egress (milestone #3); LLVM side via llvm-host-suite-test.
+    m0_step.dependOn(&netcap_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);
