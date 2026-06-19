@@ -1192,6 +1192,13 @@ pub fn build(b: *std.Build) void {
     const fs_toolserver_test_step = b.step("fs-toolserver-test", "Capability-checked FS tool server: workspace-scoped path caps deny /etc + .. escapes with audit/attribution (M1 walking skeleton)");
     fs_toolserver_test_step.dependOn(&fs_toolserver_test_cmd.step);
 
+    const agent_fs_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-fs-test",
+    });
+    agent_fs_test_cmd.step.dependOn(b.getInstallStep());
+    const agent_fs_test_step = b.step("agent-fs-test", "Agent FS tool front door: allowlist+budget gate over the path-capability server; M6-shape acceptance (deny+audit+attribute)");
+    agent_fs_test_step.dependOn(&agent_fs_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -2857,6 +2864,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&treefs_test_cmd.step);
     // fs-toolserver-test links + runs the capability-checked FS tool server (M1); LLVM side via llvm-host-suite-test.
     m0_step.dependOn(&fs_toolserver_test_cmd.step);
+    // agent-fs-test links + runs the agent FS tool front door (M3 seed); LLVM side via llvm-host-suite-test.
+    m0_step.dependOn(&agent_fs_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);
