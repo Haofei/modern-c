@@ -1220,6 +1220,13 @@ pub fn build(b: *std.Build) void {
     const agent_containment_test_step = b.step("agent-containment-test", "Capstone M6-shape integration: every containment layer over a shared audit ring; benign task completes, all injected forbidden actions denied+audited, policy escalates");
     agent_containment_test_step.dependOn(&agent_containment_test_cmd.step);
 
+    const mcp_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mcp-test",
+    });
+    mcp_test_cmd.step.dependOn(b.getInstallStep());
+    const mcp_test_step = b.step("mcp-test", "MCP-compatible facade: method names resolve to native capability-checked tools (speak MCP, enforce with MC caps)");
+    mcp_test_step.dependOn(&mcp_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -2935,6 +2942,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&netcap_test_cmd.step);
     // agent-containment-test links + runs the capstone M6-shape integration; LLVM side via llvm-host-suite-test.
     m0_step.dependOn(&agent_containment_test_cmd.step);
+    // mcp-test links + runs the MCP-compatible facade (M4); LLVM side via llvm-host-suite-test.
+    m0_step.dependOn(&mcp_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);
