@@ -1178,6 +1178,13 @@ pub fn build(b: *std.Build) void {
     const vfsmount_test_step = b.step("vfsmount-test", "VFS mount switch");
     vfsmount_test_step.dependOn(&vfsmount_test_cmd.step);
 
+    const treefs_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "treefs-test",
+    });
+    treefs_test_cmd.step.dependOn(b.getInstallStep());
+    const treefs_test_step = b.step("treefs-test", "Hierarchical tree FS: nested mkdir/create, path resolution, ./.. traversal, getdents listing, typed errors");
+    treefs_test_step.dependOn(&treefs_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -2839,6 +2846,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&ushell_test_cmd.step);
     m0_step.dependOn(&llvm_ushell_test_cmd.step);
     m0_step.dependOn(&vfsmount_test_cmd.step);
+    // treefs-test links + runs the hierarchical tree filesystem (needs clang); LLVM side via llvm-host-suite-test.
+    m0_step.dependOn(&treefs_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);

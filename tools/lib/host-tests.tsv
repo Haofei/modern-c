@@ -11,6 +11,7 @@ pipe-test	tests/qemu/fs/pipe_demo.mc	entry	pipe_run		pipe FIFO: ordered write/re
 ramfs-test	tests/qemu/fs/ramfs_demo.mc	driver			in-memory FS: create / write / read-back / lookup / independence / not-found all correct
 vfs-test	tests/qemu/fs/vfs_demo.mc	driver			fd-table VFS over ramfs: open/write/read with positions, re-open, EOF, close, use-after-close
 vfsmount-test	tests/qemu/fs/vfsmount_demo.mc	entry	vfsmount_run	-Wno-switch-bool	VFS mount switch: mount/umount/resolve dispatches a path to its backing FS (ramfs/diskfs)
+treefs-test	tests/qemu/fs/treefs_demo.mc	entry	treefs_run	-Wno-switch-bool -Wno-unused-parameter	hierarchical tree FS: mkdir/create nested paths, write/read, absolute resolution, ./.. traversal (no escape above root), getdents listing, typed errors (Exists/NotFound/NotDir/TooLarge/InvalidName)
 endpoint-test	tests/qemu/ipc/endpoint_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	MINIX hardening: generation-checked endpoints (stale fails closed), derived runnable state (block reasons), death cleanup (waiter released with DEAD)
 grant-test	tests/qemu/ipc/grant_demo.mc	entry	grant_demo_run		memory grant: bounded delegation (OOB rejected) + revocation (stale ref caught)
 granttab-test	tests/qemu/ipc/granttab_demo.mc	entry	granttab_run	-Wno-switch-bool	granttab (kernel/lib): owner-tracked grants, bounded IPC sharing, revoke-on-death
