@@ -1213,6 +1213,13 @@ pub fn build(b: *std.Build) void {
     const netcap_test_step = b.step("netcap-test", "Capability-gated network egress: default-deny NetCap, audited+attributed allow/deny, attenuation only narrows (milestone #3)");
     netcap_test_step.dependOn(&netcap_test_cmd.step);
 
+    const agent_containment_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-containment-test",
+    });
+    agent_containment_test_cmd.step.dependOn(b.getInstallStep());
+    const agent_containment_test_step = b.step("agent-containment-test", "Capstone M6-shape integration: every containment layer over a shared audit ring; benign task completes, all injected forbidden actions denied+audited, policy escalates");
+    agent_containment_test_step.dependOn(&agent_containment_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -2884,6 +2891,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&policy_test_cmd.step);
     // netcap-test links + runs capability-gated network egress (milestone #3); LLVM side via llvm-host-suite-test.
     m0_step.dependOn(&netcap_test_cmd.step);
+    // agent-containment-test links + runs the capstone M6-shape integration; LLVM side via llvm-host-suite-test.
+    m0_step.dependOn(&agent_containment_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);
