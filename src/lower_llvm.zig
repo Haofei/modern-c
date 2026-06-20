@@ -3377,6 +3377,20 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
             return result;
         }
+        // Integer -> float: sitofp for signed sources, uitofp for unsigned.
+        if (self.integerBitsOf(source_ty) != null and self.isFloatTypeOf(target_ty)) {
+            const op = if (self.isSignedIntegerType(source_ty)) "sitofp" else "uitofp";
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
+            return result;
+        }
+        // Float -> integer: fptosi for signed targets, fptoui for unsigned (C truncation).
+        if (self.isFloatTypeOf(source_ty) and self.integerBitsOf(target_ty) != null) {
+            const op = if (self.isSignedIntegerType(target_ty)) "fptosi" else "fptoui";
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
+            return result;
+        }
         return error.UnsupportedLlvmEmission;
     }
 
