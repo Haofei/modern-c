@@ -3183,6 +3183,13 @@ pub fn build(b: *std.Build) void {
     const run_llvm_ushell_step = b.step("run-llvm-ushell", "Build + boot the LLVM-lowered user-mode MC shell in QEMU (interactive)");
     run_llvm_ushell_step.dependOn(&run_llvm_ushell_cmd.step);
 
+    // Preflight: explicit toolchain check for the QEMU milestone gates (clang/ld.lld/llc/qemu +
+    // riscv64 target). `zig build preflight`. Milestone gates with MC_REQUIRE_TOOLS=1/CI=1 fail
+    // rather than skip when a tool is missing (tools/qemu/kernel-boot-lib.sh).
+    const preflight_cmd = b.addSystemCommand(&.{ "bash", "tools/preflight.sh" });
+    const preflight_step = b.step("preflight", "Check the toolchain (clang/ld.lld/llc/qemu + riscv64 target) the QEMU milestone gates need");
+    preflight_step.dependOn(&preflight_cmd.step);
+
     const m0_step = b.step("m0", "Run M0 conformance gates");
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);

@@ -13,6 +13,13 @@ kernel_boot_repo_root() {
 kernel_boot_skip() {
     local name="$1"
     local reason="$2"
+    # In CI (or when MC_REQUIRE_TOOLS=1), a missing toolchain must FAIL rather than silently skip,
+    # so a milestone gate cannot look green just because qemu/clang/lld were absent. Locally (the
+    # var unset) it still skips, so contributors without the full riscv toolchain are not blocked.
+    if [ -n "${MC_REQUIRE_TOOLS:-}" ] || [ -n "${CI:-}" ]; then
+        echo "FAIL: $name (required tool missing: $reason; set up the toolchain or unset MC_REQUIRE_TOOLS/CI)"
+        exit 1
+    fi
     echo "SKIP: $name ($reason)"
     exit 0
 }
