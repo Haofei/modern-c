@@ -1452,6 +1452,12 @@ pub fn build(b: *std.Build) void {
     const llvm_fdt_boot_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "llvm",
     });
+    const fdt_devices_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/fdt-devices-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_fdt_devices_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/fdt-devices-test.sh", "zig-out/bin/mcc", "llvm",
+    });
     const e1000_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "c",
     });
@@ -1479,6 +1485,13 @@ pub fn build(b: *std.Build) void {
     llvm_fdt_boot_test_cmd.step.dependOn(b.getInstallStep());
     const llvm_fdt_boot_test_step = b.step("llvm-fdt-boot-test", "LLVM-lowered boot under OpenSBI + parse DTB /memory");
     llvm_fdt_boot_test_step.dependOn(&llvm_fdt_boot_test_cmd.step);
+
+    fdt_devices_test_cmd.step.dependOn(b.getInstallStep());
+    const fdt_devices_test_step = b.step("fdt-devices-test", "Boot under OpenSBI + discover UART/PLIC/virtio-mmio via FDT compatible strings");
+    fdt_devices_test_step.dependOn(&fdt_devices_test_cmd.step);
+    llvm_fdt_devices_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_fdt_devices_test_step = b.step("llvm-fdt-devices-test", "LLVM-lowered boot under OpenSBI + discover UART/PLIC/virtio-mmio via FDT");
+    llvm_fdt_devices_test_step.dependOn(&llvm_fdt_devices_test_cmd.step);
 
 
     liveupdate_test_cmd.step.dependOn(b.getInstallStep());
