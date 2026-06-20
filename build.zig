@@ -2579,15 +2579,15 @@ pub fn build(b: *std.Build) void {
     // QuickJS-agent Phase 4: the all-MC C-ABI allocator (user/libc/alloc.mc), reusing
     // kernel/core/heap.mc's free-list. Driven via malloc/free/calloc/realloc from a C runtime
     // under QEMU on both backends — the heap QuickJS allocates against.
-    const alloc_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/alloc-test.sh", "zig-out/bin/mcc", "c" });
-    alloc_test_cmd.step.dependOn(b.getInstallStep());
-    const alloc_test_step = b.step("alloc-test", "QuickJS-agent Phase 4: the all-MC C-ABI allocator (reusing heap.mc) runs under QEMU");
-    alloc_test_step.dependOn(&alloc_test_cmd.step);
+    const qjs_alloc_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/alloc-test.sh", "zig-out/bin/mcc", "c" });
+    qjs_alloc_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_alloc_test_step = b.step("qjs-alloc-test", "QuickJS-agent Phase 4: the all-MC C-ABI allocator (reusing heap.mc) runs under QEMU");
+    qjs_alloc_test_step.dependOn(&qjs_alloc_test_cmd.step);
 
-    const llvm_alloc_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/alloc-test.sh", "zig-out/bin/mcc", "llvm" });
-    llvm_alloc_test_cmd.step.dependOn(b.getInstallStep());
-    const llvm_alloc_test_step = b.step("llvm-alloc-test", "QuickJS-agent Phase 4 (LLVM): the all-MC C-ABI allocator runs under QEMU");
-    llvm_alloc_test_step.dependOn(&llvm_alloc_test_cmd.step);
+    const qjs_llvm_alloc_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/alloc-test.sh", "zig-out/bin/mcc", "llvm" });
+    qjs_llvm_alloc_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_llvm_alloc_test_step = b.step("llvm-qjs-alloc-test", "QuickJS-agent Phase 4 (LLVM): the all-MC C-ABI allocator runs under QEMU");
+    qjs_llvm_alloc_test_step.dependOn(&qjs_llvm_alloc_test_cmd.step);
 
     // QuickJS-agent Phase 4: the all-MC mem/string core (user/libc/cstr.mc) — memcpy/memset/
     // memmove/memcmp/strlen/strcmp/strncmp/strchr/memchr, driven from a C runtime under QEMU on
@@ -2614,6 +2614,20 @@ pub fn build(b: *std.Build) void {
     llvm_cnum_test_cmd.step.dependOn(b.getInstallStep());
     const llvm_cnum_test_step = b.step("llvm-cnum-test", "QuickJS-agent Phase 4 (LLVM): the all-MC ctype + integer parsing runs under QEMU");
     llvm_cnum_test_step.dependOn(&llvm_cnum_test_cmd.step);
+
+    // QuickJS-agent Phase 4: the all-MC printf family (user/libc/stdio.mc, built on the va.*
+    // varargs intrinsics), compiled as part of the AGGREGATED libc (user/libc/libc.mc — the
+    // single-unit artifact QuickJS links). snprintf/printf checked against expected strings from
+    // a C runtime under QEMU on both backends.
+    const stdio_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/stdio-test.sh", "zig-out/bin/mcc", "c" });
+    stdio_test_cmd.step.dependOn(b.getInstallStep());
+    const stdio_test_step = b.step("stdio-test", "QuickJS-agent Phase 4: the all-MC printf family (aggregated libc) runs under QEMU");
+    stdio_test_step.dependOn(&stdio_test_cmd.step);
+
+    const llvm_stdio_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/stdio-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_stdio_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_stdio_test_step = b.step("llvm-stdio-test", "QuickJS-agent Phase 4 (LLVM): the all-MC printf family runs under QEMU");
+    llvm_stdio_test_step.dependOn(&llvm_stdio_test_cmd.step);
 
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -3023,12 +3037,14 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_trig_app_test_cmd.step);
     m0_step.dependOn(&vararg_test_cmd.step);
     m0_step.dependOn(&llvm_vararg_test_cmd.step);
-    m0_step.dependOn(&alloc_test_cmd.step);
-    m0_step.dependOn(&llvm_alloc_test_cmd.step);
+    m0_step.dependOn(&qjs_alloc_test_cmd.step);
+    m0_step.dependOn(&qjs_llvm_alloc_test_cmd.step);
     m0_step.dependOn(&cstr_test_cmd.step);
     m0_step.dependOn(&llvm_cstr_test_cmd.step);
     m0_step.dependOn(&cnum_test_cmd.step);
     m0_step.dependOn(&llvm_cnum_test_cmd.step);
+    m0_step.dependOn(&stdio_test_cmd.step);
+    m0_step.dependOn(&llvm_stdio_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);

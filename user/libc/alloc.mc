@@ -20,6 +20,7 @@
 import "kernel/core/heap.mc";
 import "std/addr.mc";
 import "std/mem.mc";
+import "user/libc/lcommon.mc";
 
 // Arena size. Lives in .bss, so the cost is page-table coverage, not file size. QuickJS will
 // want this larger (megabytes); kept at 1 MiB while bringing the allocator up.
@@ -97,29 +98,17 @@ fn realloc_addr(old: usize, size: usize) -> usize {
     return new_addr;
 }
 
-// ---- C-ABI boundary: mint/consume `*mut u8` (== void*) only here ----
-
-fn as_ptr(addr: usize) -> *mut u8 {
-    unsafe {
-        return raw.ptr<u8>(addr);
-    }
-}
-
-fn ptr_addr(p: *mut u8) -> usize {
-    unsafe {
-        return p as usize;
-    }
-}
+// ---- C-ABI boundary: mint/consume `*mut u8` (== void*) only here (via lcommon) ----
 
 export fn malloc(size: usize) -> *mut u8 {
-    return as_ptr(malloc_addr(size));
+    return lc_as_ptr(malloc_addr(size));
 }
 
 // `free` is an MC built-in (linear-value drop), so the function is named `mc_free` and the
 // emitted object symbol is renamed to `free` for the C ABI.
 #[backend_name("free")]
 export fn mc_free(p: *mut u8) -> void {
-    free_addr(ptr_addr(p));
+    free_addr(lc_ptr_addr(p));
 }
 
 export fn calloc(count: usize, size: usize) -> *mut u8 {
@@ -128,9 +117,9 @@ export fn calloc(count: usize, size: usize) -> *mut u8 {
     if addr != 0 {
         mem_set(pa(addr), 0, total);
     }
-    return as_ptr(addr);
+    return lc_as_ptr(addr);
 }
 
 export fn realloc(p: *mut u8, size: usize) -> *mut u8 {
-    return as_ptr(realloc_addr(ptr_addr(p), size));
+    return lc_as_ptr(realloc_addr(lc_ptr_addr(p), size));
 }

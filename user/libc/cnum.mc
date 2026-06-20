@@ -5,6 +5,7 @@
 // strtod (floating) and the printf family live in separate modules.
 
 import "std/addr.mc";
+import "user/libc/lcommon.mc";
 
 // ---- ctype (ASCII) ----
 
@@ -124,14 +125,6 @@ export fn llabs(v: i64) -> i64 {
 
 // ---- string -> integer ----
 
-fn ld8(addr: usize) -> u8 {
-    var b: u8 = 0;
-    unsafe {
-        b = raw.load<u8>(pa(addr));
-    }
-    return b;
-}
-
 // Map an ASCII digit/letter to its value (0..35), or 99 if it is not a base-36 digit.
 fn digit_value(ch: u8) -> u32 {
     let c: u32 = ch as u32;
@@ -158,12 +151,12 @@ struct ParsedInt {
 fn parse_uint(nptr: usize, base_in: i32) -> ParsedInt {
     var p: usize = nptr;
     // skip whitespace
-    while isspace(ld8(p) as i32) != 0 {
+    while isspace(lc_ld8(p) as i32) != 0 {
         p = p + 1;
     }
     // sign
     var negative: bool = false;
-    let sign_ch: u8 = ld8(p);
+    let sign_ch: u8 = lc_ld8(p);
     if sign_ch == 43 { // '+'
         p = p + 1;
     } else if sign_ch == 45 { // '-'
@@ -173,8 +166,8 @@ fn parse_uint(nptr: usize, base_in: i32) -> ParsedInt {
     var base: u32 = base_in as u32;
     if base_in == 0 {
         base = 10;
-        if ld8(p) == 48 { // leading '0'
-            let n: u8 = ld8(p + 1);
+        if lc_ld8(p) == 48 { // leading '0'
+            let n: u8 = lc_ld8(p + 1);
             if n == 120 || n == 88 { // 'x'/'X'
                 base = 16;
                 p = p + 2;
@@ -183,8 +176,8 @@ fn parse_uint(nptr: usize, base_in: i32) -> ParsedInt {
             }
         }
     } else if base_in == 16 {
-        if ld8(p) == 48 {
-            let n: u8 = ld8(p + 1);
+        if lc_ld8(p) == 48 {
+            let n: u8 = lc_ld8(p + 1);
             if n == 120 || n == 88 {
                 p = p + 2;
             }
@@ -194,7 +187,7 @@ fn parse_uint(nptr: usize, base_in: i32) -> ParsedInt {
     var acc: u64 = 0;
     // bounded by the string length (each step advances p past a digit byte)
     while true {
-        let dv: u32 = digit_value(ld8(p));
+        let dv: u32 = digit_value(lc_ld8(p));
         if dv >= base {
             break;
         }
@@ -249,12 +242,5 @@ export fn strtoll(nptr: *const u8, endptr: *mut u8, base: i32) -> i64 {
 }
 
 export fn atoi(nptr: *const u8) -> i32 {
-    return strtol(nptr, uptr_null(), 10) as i32;
-}
-
-// A null `char**` endptr (parse without reporting the end).
-fn uptr_null() -> *mut u8 {
-    unsafe {
-        return raw.ptr<u8>(0);
-    }
+    return strtol(nptr, lc_as_ptr(0), 10) as i32; // null `char**` endptr: don't report the end
 }
