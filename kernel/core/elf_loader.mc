@@ -109,6 +109,13 @@ fn load_segment(elf: *ByteReader, pt: *mut PageTable, h: *mut Heap, p: *ProgramH
         return err(.BadSegment);
     }
 
+    // W^X: reject a segment that is BOTH writable and executable. A loaded image's pages must
+    // never be writable+executable at once (defense in depth against an agent writing then
+    // executing code); a normal toolchain emits distinct R|X / R / R|W segments.
+    if (p.flags & PF_W) != 0 && (p.flags & PF_X) != 0 {
+        return err(.BadSegment);
+    }
+
     // A zero-size segment maps nothing (a degenerate but legal PT_LOAD); skip it.
     if memsz == 0 {
         return ok(true);

@@ -58,6 +58,10 @@ __attribute__((used)) void test_main(void) {
     if (!r2) ok = 0;
     if (ok && !check(r2, 50, 0x44)) ok = 0; // first 50 bytes survive the grow
 
+    // calloc overflow returns NULL (must not trap) — reachable from a huge JS typed-array length.
+    if (calloc((size_t)-1, 2) != 0) ok = 0;
+    if (calloc((size_t)1 << 40, (size_t)1 << 40) != 0) ok = 0;
+
     free(b);
     free(c);
     free(z);

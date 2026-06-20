@@ -35,10 +35,17 @@ static JSValue js_host_async(JSContext *ctx, JSValueConst this_val, int argc, JS
         g_ids[g_inflight] = id;
         g_resolvers[g_inflight] = resolving[0]; // retain resolve until the completion arrives
         g_inflight++;
+        JS_FreeValue(ctx, resolving[1]); // reject unused for an accepted request
     } else {
+        // Table saturated: REJECT the promise so JS observes the back-pressure instead of getting
+        // a forever-pending Promise (which would silently hang any .then on it).
+        JSValue reason = JS_NewInt32(ctx, -1);
+        JSValue rr = JS_Call(ctx, resolving[1], JS_UNDEFINED, 1, &reason);
+        JS_FreeValue(ctx, rr);
+        JS_FreeValue(ctx, reason);
         JS_FreeValue(ctx, resolving[0]);
+        JS_FreeValue(ctx, resolving[1]);
     }
-    JS_FreeValue(ctx, resolving[1]); // reject unused in this toy op (it never fails)
     return promise;
 }
 
@@ -70,7 +77,13 @@ int main(void) {
         int guard = 0;
         for (;;) {
             JSContext *jctx;
-            while (JS_ExecutePendingJob(rt, &jctx) > 0) {
+            int jerr = 0;
+            while ((jerr = JS_ExecutePendingJob(rt, &jctx)) > 0) {
+            }
+            if (jerr < 0) { // a microtask threw — don't keep resolving with a live exception
+                emit("JOB-EXC\n", 8);
+                rc = 1;
+                break;
             }
             uint64_t comp[2]; // [id, result]
             long got = sys_poll(comp);
@@ -95,6 +108,12 @@ int main(void) {
             }
             if (++guard > 1000000) break; // safety against a stuck loop
         }
+        // Free any resolve functions for requests that never completed (none in this toy op, but
+        // the table must not leak refs into JS_FreeRuntime).
+        for (int i = 0; i < g_inflight; i++) {
+            JS_FreeValue(ctx, g_resolvers[i]);
+        }
+        g_inflight = 0;
     }
 
     JSValue global2 = JS_GetGlobalObject(ctx);

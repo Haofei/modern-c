@@ -49,7 +49,9 @@ case "$APP" in
         APP_OBJS+=("$LIBM")
         ;;
     *)
-        kernel_boot_compile_mc_object "$BACKEND" "$APP" "$WORK/app.o" "$WORK"
+        # Apps build with hardware FP (CFLAGS use lp64d), so the MC object must too — otherwise
+        # the LLVM backend emits an lp64 (integer-ABI) object that won't link with the lp64d crt0.
+        MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$APP" "$WORK/app.o" "$WORK"
         SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
         ;;
 esac

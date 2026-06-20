@@ -162,10 +162,26 @@ export fn app_entry() -> u64 {
     return g_entry;
 }
 
-// Confinement proof: the kernel VA is NOT mapped in the agent's address space.
+// Confinement proof: NO kernel VA is mapped in the agent's address space. The kernel image and
+// its 16 MiB frame `region` live from `kernel_va` (0x8000_0000) upward, so a single probe is weak
+// evidence — sweep several representative VAs across that range. If ANY is reachable through the
+// agent's page table, the kernel leaked into the agent and confinement is broken.
 export fn app_kernel_unmapped(kernel_va: usize) -> u32 {
-    if page_table_is_mapped(&g_pt, va(kernel_va)) {
-        return 0;
+    var off: usize = 0;
+    // 0, 2, 8, 16, 24 MiB above the kernel base — covers the kernel text/data + the region pool.
+    var probes: [5]usize = uninit;
+    probes[0] = 0;
+    probes[1] = 0x0020_0000;
+    probes[2] = 0x0080_0000;
+    probes[3] = 0x0100_0000;
+    probes[4] = 0x0180_0000;
+    var i: usize = 0;
+    while i < 5 {
+        off = probes[i];
+        if page_table_is_mapped(&g_pt, va(kernel_va + off)) {
+            return 0; // leaked
+        }
+        i = i + 1;
     }
-    return 1;
+    return 1; // none mapped -> confined
 }

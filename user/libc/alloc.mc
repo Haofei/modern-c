@@ -112,7 +112,15 @@ export fn mc_free(p: *mut u8) -> void {
 }
 
 export fn calloc(count: usize, size: usize) -> *mut u8 {
-    let total: usize = count * size; // checked multiply traps on overflow
+    // C calloc returns NULL on size overflow; MC's `*` would trap. Guard it (reachable from
+    // untrusted JS, e.g. a huge typed-array length): if count*size would overflow, fail closed.
+    if size != 0 {
+        let max: usize = 0xFFFF_FFFF_FFFF_FFFF;
+        if count > max / size {
+            return lc_as_ptr(0); // NULL
+        }
+    }
+    let total: usize = count * size; // guarded above: cannot overflow
     let addr: usize = malloc_addr(total);
     if addr != 0 {
         mem_set(pa(addr), 0, total);

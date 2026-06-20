@@ -185,14 +185,30 @@ fn parse_uint(nptr: usize, base_in: i32) -> ParsedInt {
     }
     let digits_start: usize = p;
     var acc: u64 = 0;
-    // bounded by the string length (each step advances p past a digit byte)
+    // C strtoul/strtoll SATURATE to the type max on overflow (and keep consuming digits so
+    // endptr is past the whole number); they must NOT trap. MC arithmetic is checked, so guard
+    // the multiply/add against overflow with the cutoff test instead of letting it trap — this
+    // is reachable from arbitrary (untrusted) JS numbers.
+    let u64_max: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    let b: u64 = base as u64;
+    let cutoff: u64 = u64_max / b;
+    let cutlim: u64 = u64_max % b;
+    var overflow: bool = false;
     while true {
         let dv: u32 = digit_value(lc_ld8(p));
         if dv >= base {
             break;
         }
-        acc = acc * (base as u64) + (dv as u64);
-        p = p + 1;
+        if !overflow {
+            let d: u64 = dv as u64;
+            if acc > cutoff || (acc == cutoff && d > cutlim) {
+                overflow = true;
+                acc = u64_max; // saturate
+            } else {
+                acc = acc * b + d;
+            }
+        }
+        p = p + 1; // keep consuming digits past the overflow point
     }
     var end: usize = p;
     if p == digits_start {
@@ -231,8 +247,17 @@ export fn strtoull(nptr: *const u8, endptr: *mut u8, base: i32) -> u64 {
 export fn strtol(nptr: *const u8, endptr: *mut u8, base: i32) -> i64 {
     let r: ParsedInt = parse_uint(nptr as usize, base);
     store_end(endptr as usize, r.end);
+    let i64_max: u64 = 0x7FFF_FFFF_FFFF_FFFF;
+    let i64_min_bits: u64 = 0x8000_0000_0000_0000;
     if r.negative {
-        return 0 - (r.value as i64);
+        // Clamp to LONG_MIN (and handle the 2^63 magnitude, which `as i64` can't hold positively).
+        if r.value > i64_max {
+            return bitcast<i64>(i64_min_bits); // LONG_MIN
+        }
+        return 0 - (r.value as i64); // value <= i64_max, so this can't overflow
+    }
+    if r.value > i64_max {
+        return bitcast<i64>(i64_max); // LONG_MAX
     }
     return r.value as i64;
 }

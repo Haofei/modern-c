@@ -56,6 +56,12 @@ __attribute__((used)) void test_main(void) {
     if (strtoul("-1", &end, 10) != (unsigned long)~0UL) ok = 0;
     if (strtoul("4294967296", &end, 10) != 4294967296UL) ok = 0;
 
+    // overflow SATURATES (must not trap) — reachable from untrusted JS numbers
+    if (strtoul("99999999999999999999999999", &end, 10) != (unsigned long)~0UL) ok = 0;
+    if (*end != '\0') ok = 0; // and consumed the whole number
+    if (strtol("99999999999999999999999999", &end, 10) != 0x7fffffffffffffffL) ok = 0;   // LONG_MAX
+    if (strtol("-99999999999999999999999999", &end, 10) != (long)0x8000000000000000L) ok = 0; // LONG_MIN
+
     if (ok) puts_("CNUM-OK\n");
     else puts_("CNUM-BAD\n");
 
