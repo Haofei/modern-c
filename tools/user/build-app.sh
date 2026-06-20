@@ -20,8 +20,12 @@ source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kern
 HERE="$(kernel_boot_repo_root)"
 MCC="${MCC:-$HERE/zig-out/bin/mcc}"
 
-# RISC-V freestanding target — the boot-lib compile helpers consume this `CFLAGS` array.
-CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
+# RISC-V freestanding target for the APP — the boot-lib compile helpers consume this `CFLAGS`.
+# Apps are built with the F/D float extension (rv64imafdc, lp64d ABI) because JS numbers (and
+# libm) are doubles; the kernel enables mstatus.FS before entering the app (app_runtime.c).
+# The app is a SEPARATE ELF from the (integer-only) kernel, so the ABIs don't link together;
+# the syscall boundary (mc_ecall) passes only integers, unaffected by lp64d.
+CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
     -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
     -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
@@ -36,7 +40,8 @@ case "$APP" in
     *.c)
         "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$APP" -o "$WORK/app.o"
         "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$HERE/user/libc/libc.c" -o "$WORK/libc.o"
-        APP_OBJS+=("$WORK/libc.o")
+        "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$HERE/user/libc/math.c" -o "$WORK/math.o"
+        APP_OBJS+=("$WORK/libc.o" "$WORK/math.o")
         ;;
     *)
         kernel_boot_compile_mc_object "$BACKEND" "$APP" "$WORK/app.o" "$WORK"

@@ -228,12 +228,29 @@ Provide exactly what C programs need, backed by the SDK syscalls:
 ### Phase 3 — Freestanding libm (the real gap)
 QuickJS needs full `double` math: `pow fmod floor ceil round trunc fabs sqrt sin cos tan
 asin acos atan atan2 exp log log2 log10 hypot copysign nextafter isnan isinf signbit`.
-Options, in order of preference:
-1. **Vendor openlibm or musl `src/math`** into `third_party/` and build freestanding (same
-   path as BearSSL). Cleanest, most correct.
-2. Implement/stub only the subset QuickJS references (smaller, but accuracy risk on edge cases).
 
-**Effort: M–H.** This is the largest single chunk; the BearSSL vendoring pattern applies.
+**Hardware-FP prerequisite (done).** The kernel/app target was integer-only (`rv64imac`); JS
+numbers and libm are doubles, so any `double` arithmetic needs FP. Resolved the clean way (QEMU
+virt has F/D): apps are now built with `-march=rv64imafdc -mabi=lp64d`, and the kernel enables
+the FPU for U-mode by setting `mstatus.FS = Initial` in `enter_user` before `mret`
+(`usermode_runtime.c`). The kernel stays integer-only (`rv64imac`) and never touches FP
+registers, so the app's FP state survives across syscalls with **no save/restore** needed (a
+single-agent simplification; SMP/preemption would need lazy FP context — Phase 8). The app ELF
+is separate from the kernel image, so the lp64d/lp64 ABIs never link together; the syscall
+boundary passes only integers.
+
+**Exact half (done).** `user/libc/math.c` implements the bit-exact functions — `fabs copysign
+signbit isnan isinf isfinite floor ceil trunc round fmod scalbn ldexp` (integer bit-twiddling
+on the IEEE-754 double, no approximation) and `sqrt` (hardware `fsqrt.d`, correctly rounded).
+Gated by `examples/apps/mathtest.c` (`math-app-test` / `llvm-math-app-test`, in m0): runs
+confined, computes on real doubles, asserts bit-exact results.
+
+**Remaining: transcendentals.** `pow exp log log2 log10 sin cos tan asin acos atan atan2 hypot
+cbrt sinh cosh tanh expm1 log1p` cannot be made exact by hand without a hack; **vendor
+openlibm `src/`** into `third_party/` and build freestanding (same path as BearSSL) — `nm` a
+QuickJS test build for the exact reference set.
+
+**Effort: remaining M** (openlibm vendoring + freestanding build of the referenced subset).
 
 ### Phase 4 — Vendor + build QuickJS
 - `third_party/quickjs/` — the engine core only: `quickjs.c libregexp.c libunicode.c
@@ -241,8 +258,9 @@ Options, in order of preference:
 - `qjs_agent.c` — a small **custom front-end**: `JS_NewRuntime`/`JS_NewContext` → obtain
   script bytes via the §0 ingress (SYS_READ or capability FS) → `JS_Eval` → drain pending
   jobs → `SYS_EXIT(rc)`. No argv, no host FS.
-- Build flags: riscv64 freestanding (`--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
-  -nostdlib -ffreestanding -mcmodel=medany`).
+- Build flags: riscv64 freestanding with hardware FP (`--target=riscv64-unknown-elf
+  -march=rv64imafdc -mabi=lp64d -nostdlib -ffreestanding -mcmodel=medany`) — doubles require the
+  F/D unit, enabled for U-mode in Phase 3.
 - Config: disable heavy/unsupported features — **no bignum** (`CONFIG_BIGNUM` off, drops
   `__int128`), **no os/std modules** (replaced by our binding), and **Workers DISABLED in
   Phase 4** — the `Worker` constructor stubs to `E_UNSUPPORTED`. Workers are flipped on in

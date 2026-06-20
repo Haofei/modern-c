@@ -124,13 +124,19 @@ uint64_t do_ecall(uint64_t number, uint64_t arg0, uint64_t arg1, uint64_t arg2) 
     return a0;
 }
 
-// Drop to U-mode: set the return PC + user stack, clear MPP to 0 (U), and mret.
+// Drop to U-mode: set the return PC + user stack, clear MPP to 0 (U), enable the FPU for the
+// app, and mret. The app (and its libm) compute on doubles (JS numbers are doubles), so the
+// F/D unit must be on: set mstatus.FS = Initial (01). The kernel is built integer-only
+// (rv64imac) and never touches FP registers, so the app's FP state survives across syscalls
+// with no save/restore needed.
 __attribute__((naked)) void enter_user(uintptr_t entry, uintptr_t user_sp) {
     __asm__ volatile(
         "csrw mepc, a0\n"
         "mv sp, a1\n"
         "li t0, 0x1800\n"    // MPP field (mstatus 12:11)
         "csrc mstatus, t0\n" // MPP <- 0 (U-mode)
+        "li t1, 0x2000\n"    // FS field = Initial (mstatus 14:13 = 01): enable the FPU
+        "csrs mstatus, t1\n"
         "mret\n");
 }
 

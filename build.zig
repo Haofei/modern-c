@@ -2524,6 +2524,26 @@ pub fn build(b: *std.Build) void {
     const llvm_compute_app_test_step = b.step("llvm-compute-app-test", "QuickJS-agent Phase 2 (LLVM kernel): a confined C app over the freestanding libc runs under QEMU");
     llvm_compute_app_test_step.dependOn(&llvm_compute_app_test_cmd.step);
 
+    // QuickJS-agent Phase 3: a confined C app over the freestanding libm (user/libc/math —
+    // the exact half: classification/rounding/fmod + hardware sqrt) on real doubles. Proves
+    // hardware FP is enabled for the app (kernel sets mstatus.FS before enter_user) — the
+    // prerequisite for JS numbers.
+    const math_app_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c",
+        "examples/apps/mathtest.c", "math-ok", "math-app",
+    });
+    math_app_test_cmd.step.dependOn(b.getInstallStep());
+    const math_app_test_step = b.step("math-app-test", "QuickJS-agent Phase 3: a confined C app over the freestanding libm (exact functions + hardware sqrt, FP enabled) runs under QEMU");
+    math_app_test_step.dependOn(&math_app_test_cmd.step);
+
+    const llvm_math_app_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm",
+        "examples/apps/mathtest.c", "math-ok", "math-app",
+    });
+    llvm_math_app_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_math_app_test_step = b.step("llvm-math-app-test", "QuickJS-agent Phase 3 (LLVM kernel): a confined C app over the freestanding libm runs under QEMU");
+    llvm_math_app_test_step.dependOn(&llvm_math_app_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -2926,6 +2946,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_agent_confined_test_cmd.step);
     m0_step.dependOn(&llvm_app_run_test_cmd.step);
     m0_step.dependOn(&llvm_compute_app_test_cmd.step);
+    m0_step.dependOn(&math_app_test_cmd.step);
+    m0_step.dependOn(&llvm_math_app_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);
