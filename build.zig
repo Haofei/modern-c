@@ -1227,6 +1227,16 @@ pub fn build(b: *std.Build) void {
     const mcp_test_step = b.step("mcp-test", "MCP-compatible facade: method names resolve to native capability-checked tools (speak MCP, enforce with MC caps)");
     mcp_test_step.dependOn(&mcp_test_cmd.step);
 
+    // examples/feature_showcase.mc — one self-verifying tour of the language; emit-c via
+    // the host harness here, emit-llvm auto-covered by llvm-host-suite-test. Returns 1 iff
+    // every demonstrated feature produces its expected result on the backend under test.
+    const showcase_test_cmd = b.addSystemCommand(&.{
+        "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "showcase-test",
+    });
+    showcase_test_cmd.step.dependOn(b.getInstallStep());
+    const showcase_test_step = b.step("showcase-test", "Language feature showcase (examples/feature_showcase.mc): one self-verifying program touring MC's features; returns 1 iff every feature's result is exactly right");
+    showcase_test_step.dependOn(&showcase_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -2999,6 +3009,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&agent_containment_test_cmd.step);
     // mcp-test links + runs the MCP-compatible facade (M4); LLVM side via llvm-host-suite-test.
     m0_step.dependOn(&mcp_test_cmd.step);
+    // showcase-test links + runs the language feature showcase (emit-c); LLVM side via llvm-host-suite-test.
+    m0_step.dependOn(&showcase_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);
