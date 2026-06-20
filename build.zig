@@ -1458,6 +1458,12 @@ pub fn build(b: *std.Build) void {
     const llvm_fdt_devices_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/arch/fdt-devices-test.sh", "zig-out/bin/mcc", "llvm",
     });
+    const smode_user_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_smode_user_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "llvm",
+    });
     const e1000_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "c",
     });
@@ -1492,6 +1498,13 @@ pub fn build(b: *std.Build) void {
     llvm_fdt_devices_test_cmd.step.dependOn(b.getInstallStep());
     const llvm_fdt_devices_test_step = b.step("llvm-fdt-devices-test", "LLVM-lowered boot under OpenSBI + discover UART/PLIC/virtio-mmio via FDT");
     llvm_fdt_devices_test_step.dependOn(&llvm_fdt_devices_test_cmd.step);
+
+    smode_user_test_cmd.step.dependOn(b.getInstallStep());
+    const smode_user_test_step = b.step("smode-user-test", "S-mode U-mode hello under OpenSBI (SYS_WRITE + bad-ptr -EFAULT)");
+    smode_user_test_step.dependOn(&smode_user_test_cmd.step);
+    llvm_smode_user_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_smode_user_test_step = b.step("llvm-smode-user-test", "LLVM-lowered S-mode U-mode hello under OpenSBI");
+    llvm_smode_user_test_step.dependOn(&llvm_smode_user_test_cmd.step);
 
 
     liveupdate_test_cmd.step.dependOn(b.getInstallStep());
@@ -3555,6 +3568,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&liveupdate_test_cmd.step);
     m0_step.dependOn(&sbi_boot_test_cmd.step);
     m0_step.dependOn(&llvm_sbi_boot_test_cmd.step);
+    m0_step.dependOn(&smode_user_test_cmd.step);
+    m0_step.dependOn(&llvm_smode_user_test_cmd.step);
     m0_step.dependOn(&e1000_test_cmd.step);
     m0_step.dependOn(&grant_test_cmd.step);
     m0_step.dependOn(&ipc_test_cmd.step);
