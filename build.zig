@@ -2706,6 +2706,19 @@ pub fn build(b: *std.Build) void {
     const llvm_qjs_agent_test_step = b.step("llvm-qjs-agent-test", "Run a PURE-JS agent confined under QEMU (LLVM)");
     llvm_qjs_agent_test_step.dependOn(&llvm_qjs_agent_test_cmd.step);
 
+    // The host ITSELF in MC (examples/apps/qjs_host.mc): MC drives the QuickJS C API directly —
+    // JSValue (the 16-byte struct) by value, JS_Eval/JS_GetPropertyStr/JS_ToInt32 from MC —
+    // evaluating 6*7=42 confined. Proves the host need not be C either. Both backends.
+    const qjs_mc_host_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-mc-host-test.sh", "zig-out/bin/mcc", "c", "", "6*7 -> 42", "qjs-mc-host" });
+    qjs_mc_host_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_mc_host_test_step = b.step("qjs-mc-host-test", "An MC host (not C) drives QuickJS and evaluates JS, confined under QEMU");
+    qjs_mc_host_test_step.dependOn(&qjs_mc_host_test_cmd.step);
+
+    const llvm_qjs_mc_host_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-mc-host-test.sh", "zig-out/bin/mcc", "llvm", "", "6*7 -> 42", "qjs-mc-host" });
+    llvm_qjs_mc_host_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_mc_host_test_step = b.step("llvm-qjs-mc-host-test", "An MC host drives QuickJS, confined under QEMU (LLVM)");
+    llvm_qjs_mc_host_test_step.dependOn(&llvm_qjs_mc_host_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -3134,6 +3147,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_qjs_worker_test_cmd.step);
     m0_step.dependOn(&qjs_agent_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_agent_test_cmd.step);
+    m0_step.dependOn(&qjs_mc_host_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_mc_host_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);
