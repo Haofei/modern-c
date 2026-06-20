@@ -5134,6 +5134,16 @@ const CEmitter = struct {
                     // the operand storage type and lower through the checked
                     // helper so the trap edge is still emitted.
                     if (self.numericExprTypeForEmission(expr, locals)) |inferred| {
+                        // wrap/sat are modular/saturating (no trap edge), so the checked
+                        // helper declines them. Emit the domain op directly with its
+                        // recovered target — the same lowering `let x: wrap<u32> = a + b;`
+                        // uses — so a domain arithmetic operand works in targetless
+                        // position too, e.g. `(a + b) != c`.
+                        const inferred_dom = self.resolveAliasType(inferred);
+                        if (isWrapType(inferred_dom) or isSatType(inferred_dom)) {
+                            try self.emitExprWithTarget(expr, locals, inferred);
+                            return;
+                        }
                         if (try self.emitCheckedBinaryWithTarget(node, locals, inferred)) return;
                     }
                     return error.UnsupportedCEmission;

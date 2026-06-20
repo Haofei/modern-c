@@ -43,12 +43,6 @@ fn tick_delta(now: Tick, start: Tick) -> wrap<u64> {
     return Tick.delta_mod(now, start);
 }
 
-// Domain comparisons are done in return position (where the operand type is known),
-// the same idiom the stdlib uses; the bool result then drives the checks below.
-fn wrap32_eq(a: wrap<u32>, b: wrap<u32>) -> bool { return a == b; }
-fn sat8_eq(a: sat<u8>, b: sat<u8>) -> bool { return a == b; }
-fn wrap64_eq(a: wrap<u64>, b: wrap<u64>) -> bool { return a == b; }
-
 // -----------------------------------------------------------------------------
 // 3. Bitwise ops and `packed bits` register-style flags
 // -----------------------------------------------------------------------------
@@ -323,18 +317,19 @@ export fn showcase_run() -> u32 {
     let wmax: wrap<u32> = 0xFFFFFFFF;
     let wone: wrap<u32> = 1;
     let wzero: wrap<u32> = 0;
-    if !wrap32_eq(wrap_over(wmax, wone), wzero) { pass = 0; }   // wraps to 0
+    if (wmax + wone) != wzero { pass = 0; }            // inline wrap binop, compared directly
+    if wrap_over(wmax, wone) != wzero { pass = 0; }    // wraps to 0 (call result, direct)
     let s250: sat<u8> = 250;
     let s50: sat<u8> = 50;
     let s255: sat<u8> = 255;
-    if !sat8_eq(sat_clamp(s250, s50), s255) { pass = 0; }       // saturates at 255
+    if (s250 + s50) != s255 { pass = 0; }              // inline sat binop saturates at 255
     let a_seq: Seq = Seq.from(5);     // enter the serial domain explicitly
     let b_seq: Seq = Seq.from(9);
     if !seq_before(a_seq, b_seq) { pass = 0; }
     let now: Tick = Tick.from(100);   // enter the counter domain explicitly
     let start: Tick = Tick.from(60);
     let forty: wrap<u64> = 40;
-    if !wrap64_eq(tick_delta(now, start), forty) { pass = 0; }
+    if tick_delta(now, start) != forty { pass = 0; }
 
     // 3. bitwise + packed bits
     let or_bits: u32 = 0xF0 | 0x0F;
