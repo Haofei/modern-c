@@ -316,8 +316,10 @@ worker binding; v1 is the concurrency-hardening (locks) before SMP-parallel.
 
 ## 7. Sequencing
 **1 → 2 → 3 → 4 → 5 → 6 → 7.** Phases 1–6 deliver a single-threaded JS agent; Phase 7
-(threads/Workers) is additive on top — the scheduler/SMP/mailbox it needs already exist, so
-it can land independently once a single agent runs. Phase 1 (the SDK) is the highest-leverage and unblocks
+(threads/Workers) is additive on top — the scheduler/context/mailbox PRIMITIVES exist (the
+hard kernel work), so v0 is integration (shared-satp scheduling) not new foundations, and it
+can land independently once a single agent runs; true SMP-parallel (v1) waits on the locking
+hardening called out in Phase 7. Phase 1 (the SDK) is the highest-leverage and unblocks
 everything after it: once apps are confined ELFs built from a reusable runtime, QuickJS is
 not a special case — it is the largest app, dropped onto the same spine. Phases 2–3 (libc/
 libm) are the bulk of the porting effort and are independently testable (build a tiny C
