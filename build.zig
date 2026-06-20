@@ -2589,6 +2589,19 @@ pub fn build(b: *std.Build) void {
     const llvm_alloc_test_step = b.step("llvm-alloc-test", "QuickJS-agent Phase 4 (LLVM): the all-MC C-ABI allocator runs under QEMU");
     llvm_alloc_test_step.dependOn(&llvm_alloc_test_cmd.step);
 
+    // QuickJS-agent Phase 4: the all-MC mem/string core (user/libc/cstr.mc) — memcpy/memset/
+    // memmove/memcmp/strlen/strcmp/strncmp/strchr/memchr, driven from a C runtime under QEMU on
+    // both backends. The freestanding bytes QuickJS leans on constantly.
+    const cstr_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/cstr-test.sh", "zig-out/bin/mcc", "c" });
+    cstr_test_cmd.step.dependOn(b.getInstallStep());
+    const cstr_test_step = b.step("cstr-test", "QuickJS-agent Phase 4: the all-MC mem/string core runs under QEMU");
+    cstr_test_step.dependOn(&cstr_test_cmd.step);
+
+    const llvm_cstr_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/cstr-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_cstr_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_cstr_test_step = b.step("llvm-cstr-test", "QuickJS-agent Phase 4 (LLVM): the all-MC mem/string core runs under QEMU");
+    llvm_cstr_test_step.dependOn(&llvm_cstr_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -2999,6 +3012,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_vararg_test_cmd.step);
     m0_step.dependOn(&alloc_test_cmd.step);
     m0_step.dependOn(&llvm_alloc_test_cmd.step);
+    m0_step.dependOn(&cstr_test_cmd.step);
+    m0_step.dependOn(&llvm_cstr_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);
