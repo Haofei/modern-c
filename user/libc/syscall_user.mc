@@ -2,14 +2,12 @@
 // console output (sys_write, mc_console_write) through the SYS_WRITE ecall instead of touching
 // hardware. The confined agent reaches the kernel ONLY through this syscall path.
 //
-// Deliberately imports NOTHING (no std/*), so it links as its own object alongside the
-// aggregated libc without duplicating shared std helpers. `mc_ecall` is the single syscall
-// primitive, provided by crt0 (the ELF entry runtime). SYS_WRITE = 0 (user/abi.mc).
+// Imports ONLY user/abi.mc (which itself imports nothing — pure const definitions), so the
+// syscall numbers come from the single ABI source of truth without pulling in std/* and
+// duplicating shared helpers. `mc_ecall` is the single syscall primitive, provided by crt0
+// (the ELF entry runtime).
 
-const SYS_WRITE: u64 = 0;
-const SYS_READ: u64 = 1;
-const SYS_SUBMIT: u64 = 4;
-const SYS_POLL: u64 = 5;
+import "user/abi.mc";
 
 extern fn mc_ecall(number: u64, a0: u64, a1: u64, a2: u64) -> u64;
 

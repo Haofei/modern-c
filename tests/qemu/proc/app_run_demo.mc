@@ -13,16 +13,9 @@ import "kernel/core/syscall.mc";
 import "kernel/core/uaccess.mc";
 import "kernel/core/console.mc";
 import "std/addr.mc";
+import "user/abi.mc"; // SYS_* numbers + E_AGAIN/E_FAULT — the single ABI source of truth
 
 const SATP_SV39: u64 = 0x8000_0000_0000_0000;
-const SYS_WRITE: usize = 0;
-const SYS_READ: usize = 1;
-const SYS_GETPID: usize = 2;
-// Async I/O (Phase 7): SYS_SUBMIT queues a non-blocking op and returns a request id; SYS_POLL
-// drains one completion ((id, result) written to a user buffer). The agent's event loop submits,
-// keeps running, and resolves the matching JS Promise when the completion arrives.
-const SYS_SUBMIT: usize = 4;
-const SYS_POLL: usize = 5;
 const COMP_CAP: usize = 8;
 const USER_BASE: usize = 0x10000;
 // Upper bound for uaccess validation. Must cover the agent's whole VA span — for the QuickJS
@@ -108,35 +101,38 @@ fn sys_read(buf: u64, max: u64, c: u64) -> u64 {
 // SYS_SUBMIT(op, arg): start a non-blocking op. Here the op is a toy compute (`arg + 2`) whose
 // completion is enqueued immediately; a real op would complete later off an IRQ/DMA event onto
 // the same queue. Returns the request id so the agent can match the completion to its Promise.
+//
+// Back-pressure: if the completion queue is FULL we must NOT hand back a request id — there is
+// nowhere to record its completion, so the caller would get a forever-pending Promise. Return
+// -E_AGAIN instead and enqueue nothing (the request id counter is left untouched). The host
+// observes the negative result and rejects the Promise without registering a resolver.
 fn sys_submit(op: u64, arg: u64, c: u64) -> u64 {
+    if g_comp_count >= COMP_CAP {
+        return bitcast<u64>(E_AGAIN);
+    }
     let id: u64 = g_next_req;
     g_next_req = g_next_req + 1;
-    if g_comp_count < COMP_CAP {
-        g_comp_id[g_comp_count] = id;
-        g_comp_val[g_comp_count] = arg + 2; // the op's result
-        g_comp_count = g_comp_count + 1;
-    }
+    g_comp_id[g_comp_count] = id;
+    g_comp_val[g_comp_count] = arg + 2; // the op's result
+    g_comp_count = g_comp_count + 1;
     return id;
 }
 
 // SYS_POLL(buf): drain ONE completion into the user buffer as two u64s [id, result]. Returns 1
 // if a completion was delivered, 0 if the queue is empty (the agent's loop then knows to stop
-// once nothing is in flight). The buffer is written through the agent's page table (copy_to_user).
+// once nothing is in flight), or -E_FAULT if the user buffer is unwritable.
+//
+// Ordering matters: stage and COPY OUT first, and only dequeue (FIFO shift) AFTER the copy
+// succeeds. If the user pointer is bad we must leave the completion at the head of the queue —
+// dequeuing before the copy would destroy a completion the agent never received, stranding its
+// in-flight request forever.
 fn sys_poll(buf: u64, b: u64, c: u64) -> u64 {
     if g_comp_count == 0 {
         return 0;
     }
     let id: u64 = g_comp_id[0];
     let val: u64 = g_comp_val[0];
-    // FIFO shift-down
-    var i: usize = 1;
-    while i < g_comp_count {
-        g_comp_id[i - 1] = g_comp_id[i];
-        g_comp_val[i - 1] = g_comp_val[i];
-        i = i + 1;
-    }
-    g_comp_count = g_comp_count - 1;
-    // stage [id, result] and copy out through the agent's page table
+    // stage [id, result] and copy out through the agent's page table BEFORE dequeuing
     let base: PAddr = pa((&g_pollbuf[0]) as usize);
     unsafe {
         raw.store<u64>(base, id);
@@ -144,8 +140,16 @@ fn sys_poll(buf: u64, b: u64, c: u64) -> u64 {
     }
     switch copy_to_user_pt(&g_uas, uptr(buf as usize), base, 16) {
         ok(v) => {}
-        err(e) => { return 0; }
+        err(e) => { return bitcast<u64>(E_FAULT); } // completion left intact at the head
     }
+    // delivered — now FIFO shift-down to dequeue the head
+    var i: usize = 1;
+    while i < g_comp_count {
+        g_comp_id[i - 1] = g_comp_id[i];
+        g_comp_val[i - 1] = g_comp_val[i];
+        i = i + 1;
+    }
+    g_comp_count = g_comp_count - 1;
     return 1;
 }
 
@@ -154,11 +158,11 @@ fn sys_poll(buf: u64, b: u64, c: u64) -> u64 {
 // any ecall can occur.
 export fn syscall_setup() -> void {
     syscall_init(&g_syscalls);
-    syscall_register(&g_syscalls, SYS_WRITE, sys_write);
-    syscall_register(&g_syscalls, SYS_READ, sys_read);
-    syscall_register(&g_syscalls, SYS_GETPID, sys_getpid);
-    syscall_register(&g_syscalls, SYS_SUBMIT, sys_submit);
-    syscall_register(&g_syscalls, SYS_POLL, sys_poll);
+    syscall_register(&g_syscalls, SYS_WRITE as usize, sys_write);
+    syscall_register(&g_syscalls, SYS_READ as usize, sys_read);
+    syscall_register(&g_syscalls, SYS_GETPID as usize, sys_getpid);
+    syscall_register(&g_syscalls, SYS_SUBMIT as usize, sys_submit);
+    syscall_register(&g_syscalls, SYS_POLL as usize, sys_poll);
 }
 
 // Called by the C trap for each ecall (number a7, args a0..a2). SYS_EXIT is handled by the

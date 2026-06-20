@@ -2706,6 +2706,20 @@ pub fn build(b: *std.Build) void {
     const llvm_qjs_agent_test_step = b.step("llvm-qjs-agent-test", "Run a PURE-JS agent confined under QEMU (LLVM)");
     llvm_qjs_agent_test_step.dependOn(&llvm_qjs_agent_test_cmd.step);
 
+    // Async-I/O UNDER LOAD: a pure-JS agent (examples/agents/agent_async.js) that fires overlapping
+    // host_async() requests (Promise.all) AND bursts past the kernel's 8-deep completion queue, so
+    // the excess is denied (-E_AGAIN) and those Promises REJECT instead of hanging. Proves overlap,
+    // independent completion, and back-pressure/denial — not just the single-request happy path.
+    const qjs_async_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "qjs-async-agent" });
+    qjs_async_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_async_agent_test_step = b.step("qjs-async-agent-test", "A pure-JS agent proves overlap + back-pressure/denial over async host I/O under QEMU");
+    qjs_async_agent_test_step.dependOn(&qjs_async_agent_test_cmd.step);
+
+    const llvm_qjs_async_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "qjs-async-agent" });
+    llvm_qjs_async_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_async_agent_test_step = b.step("llvm-qjs-async-agent-test", "A pure-JS agent proves overlap + back-pressure/denial over async host I/O under QEMU (LLVM)");
+    llvm_qjs_async_agent_test_step.dependOn(&llvm_qjs_async_agent_test_cmd.step);
+
     // The host ITSELF in MC (examples/apps/qjs_host.mc): MC drives the QuickJS C API directly —
     // JSValue (the 16-byte struct) by value, JS_Eval/JS_GetPropertyStr/JS_ToInt32 from MC —
     // evaluating 6*7=42 confined. Proves the host need not be C either. Both backends.
@@ -3147,6 +3161,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_qjs_worker_test_cmd.step);
     m0_step.dependOn(&qjs_agent_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_agent_test_cmd.step);
+    m0_step.dependOn(&qjs_async_agent_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_async_agent_test_cmd.step);
     m0_step.dependOn(&qjs_mc_host_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_mc_host_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);

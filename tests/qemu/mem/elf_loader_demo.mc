@@ -133,6 +133,46 @@ fn build_image() -> void {
     }
 }
 
+// Build a HOSTILE image whose two PT_LOAD segments OVERLAP (both map page 0x10000): PH[0] is
+// the same text segment, PH[1] claims the SAME vaddr. Each header is individually well-formed,
+// so this exercises the loader's per-page map specifically — the second segment's page is already
+// mapped. The loader must reject this (BadSegment) rather than panic via the trapping mapper.
+fn build_overlap_image() -> void {
+    var i: usize = 0;
+    while i < IMAGE_CAP {
+        g_image[i] = 0;
+        i = i + 1;
+    }
+
+    // ELF64 header @0 (identical to the valid image).
+    img_u8(0, 0x7F);
+    img_u8(1, 0x45);
+    img_u8(2, 0x4C);
+    img_u8(3, 0x46);
+    img_u8(4, 2);
+    img_u8(5, 1);
+    img_u8(6, 1);
+    img_u64(24, ENTRY);
+    img_u64(32, 64);
+    img_u16(54, 56);
+    img_u16(56, 2);
+
+    // PH[0]: text @vaddr 0x10000. PH[1]: data claiming the SAME vaddr 0x10000 (the overlap).
+    img_phdr(64, T_PT_LOAD, T_PF_R | T_PF_X, TEXT_OFF as u64, TEXT_VADDR as u64, TEXT_SZ as u64, TEXT_SZ as u64);
+    img_phdr(120, T_PT_LOAD, T_PF_R | T_PF_W, DATA_OFF as u64, TEXT_VADDR as u64, DATA_FILESZ as u64, DATA_MEMSZ as u64);
+
+    var t: usize = 0;
+    while t < TEXT_SZ {
+        g_image[TEXT_OFF + t] = (0xA0 + (t as u8));
+        t = t + 1;
+    }
+    var d: usize = 0;
+    while d < DATA_FILESZ {
+        g_image[DATA_OFF + d] = (0xD0 + (d as u8));
+        d = d + 1;
+    }
+}
+
 // Read a byte from a mapped VA by translating through the page table to its frame.
 fn read_va(pt: *PageTable, vaddr: usize) -> u8 {
     let phys: PAddr = page_table_translate(pt, va(vaddr));
@@ -215,6 +255,18 @@ export fn elf_loader_run() -> u32 {
             if !mapping_is_writable(&m) { pass = 0; } // data is R|W
         }
         err(e) => { pass = 0; }
+    }
+
+    // (f) HOSTILE-INPUT regression (review finding 5): a malformed ELF with OVERLAPPING PT_LOAD
+    //     segments must be REJECTED cleanly (the loader uses the non-trapping mapper and converts
+    //     the AlreadyMapped conflict into BadSegment) — it must NOT panic the kernel. A fresh
+    //     page table over the same pool; loading must fail (err), and we must reach this line.
+    build_overlap_image();
+    var heap2: Heap = heap_new(phys_range(pa((&g_pool[0]) as usize), 262144));
+    var pt2: PageTable = page_table_new(&heap2);
+    switch elf_load_image((&g_image[0]) as usize, IMAGE_CAP, &pt2, &heap2) {
+        ok(e) => { pass = 0; } // overlapping segments must NOT load successfully
+        err(e) => {} // rejected (BadSegment) without panicking — correct
     }
 
     return pass;

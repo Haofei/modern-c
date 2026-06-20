@@ -156,11 +156,14 @@ fn load_segment(elf: *ByteReader, pt: *mut PageTable, h: *mut Heap, p: *ProgramH
         let frame: PAddr = heap_alloc(h, PAGE, PAGE);
         mem_set(frame, 0, PAGE);
 
-        // Map this page (V is added by page_table_map). The boot-style trapping wrapper
-        // is correct here: the page range is freshly carved and disjoint by construction
-        // (each page_vaddr is distinct and previously unmapped), so a conflict would be a
-        // loader bug, not a recoverable input condition.
-        page_table_map(pt, h, va(page_vaddr), frame, pte_flags_for(p.flags));
+        // Map this page with the NON-trapping variant: a hostile ELF can present PT_LOAD
+        // segments whose page ranges OVERLAP, which surfaces here as AlreadyMapped (or a
+        // large-page conflict). That is a malformed-input condition, not a loader bug, so
+        // convert any map failure into a clean BadSegment instead of panicking the kernel.
+        switch page_table_try_map(pt, h, va(page_vaddr), frame, pte_flags_for(p.flags)) {
+            ok(v) => {}
+            err(e) => { return err(.BadSegment); }
+        }
 
         // Intersect this page's VA window [page_vaddr, page_vaddr+PAGE) with the file-byte
         // window [vaddr, vaddr+filesz). The overlap is the slice to copy into this frame.

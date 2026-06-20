@@ -21,31 +21,45 @@ static JSValue g_resolvers[MAXREQ];
 static int64_t g_ids[MAXREQ];
 static int g_inflight = 0;
 
+// Reject `promise` with `code` and free the capability — the request was never registered, so
+// JS observes a rejection instead of a forever-pending Promise (which would hang any .then).
+static void reject_async(JSContext *ctx, JSValue *resolving, JSValue promise, int32_t code) {
+    JSValue reason = JS_NewInt32(ctx, code);
+    JSValue rr = JS_Call(ctx, resolving[1], JS_UNDEFINED, 1, &reason);
+    JS_FreeValue(ctx, rr);
+    JS_FreeValue(ctx, reason);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+    (void)promise;
+}
+
 // host_async(arg): submit a non-blocking op and return a pending Promise (resolved by the loop).
 static JSValue js_host_async(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     int32_t arg = 0;
     if (argc > 0) JS_ToInt32(ctx, &arg, argv[0]);
-    int64_t id = sys_submit((uint64_t)arg);
 
+    // Create the Promise FIRST so a failure here submits nothing to the kernel.
     JSValue resolving[2]; // [0] = resolve, [1] = reject
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise)) return promise;
 
-    if (g_inflight < MAXREQ) {
-        g_ids[g_inflight] = id;
-        g_resolvers[g_inflight] = resolving[0]; // retain resolve until the completion arrives
-        g_inflight++;
-        JS_FreeValue(ctx, resolving[1]); // reject unused for an accepted request
-    } else {
-        // Table saturated: REJECT the promise so JS observes the back-pressure instead of getting
-        // a forever-pending Promise (which would silently hang any .then on it).
-        JSValue reason = JS_NewInt32(ctx, -1);
-        JSValue rr = JS_Call(ctx, resolving[1], JS_UNDEFINED, 1, &reason);
-        JS_FreeValue(ctx, rr);
-        JS_FreeValue(ctx, reason);
-        JS_FreeValue(ctx, resolving[0]);
-        JS_FreeValue(ctx, resolving[1]);
+    // Local resolver table saturated: reject without submitting (we could not record a completion).
+    if (g_inflight >= MAXREQ) {
+        reject_async(ctx, resolving, promise, -1);
+        return promise;
     }
+
+    // Submit; kernel returns -errno (e.g. -E_AGAIN) under back-pressure — reject, don't register.
+    int64_t id = sys_submit((uint64_t)arg);
+    if (id < 0) {
+        reject_async(ctx, resolving, promise, (int32_t)id);
+        return promise;
+    }
+
+    g_ids[g_inflight] = id;
+    g_resolvers[g_inflight] = resolving[0]; // retain resolve until the completion arrives
+    g_inflight++;
+    JS_FreeValue(ctx, resolving[1]); // reject unused for an accepted request
     return promise;
 }
 
