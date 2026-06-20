@@ -10,7 +10,6 @@ import "kernel/core/heap.mc";
 import "std/addr.mc";
 
 const GIB: usize = 0x4000_0000;
-const SATP_SV39: u64 = 0x8000_0000_0000_0000;
 const PAGE: usize = 4096;
 
 global g_heap: Heap;
@@ -31,8 +30,10 @@ export fn dp_setup(region_base: usize, region_len: usize) -> u64 {
     // the demand region [3 GiB, 4 GiB) is intentionally left unmapped — filled on demand
     g_demand_base = 3 * GIB;
     g_demand_end = 4 * GIB;
-    let root: PAddr = page_table_root(&g_pt);
-    return SATP_SV39 | ((pa_value(root) >> 12) as u64);
+    // dp_setup returns a raw satp word consumed by the C demand/contain runtimes, so it stays
+    // a u64 at this C-FFI boundary: build the opaque AddressSpace via the arch helper, then
+    // unwrap. The satp bit layout itself no longer appears in this architecture-independent file.
+    return AddressSpace.raw(riscv_aspace_of(&g_pt));
 }
 
 // Page-fault handler: map a fresh page at the faulting page — but only if the fault falls in

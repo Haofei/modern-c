@@ -362,6 +362,9 @@ export fn proc_yield_vm(t: *mut ProcTable) -> void {
     }
     t.procs[to].state = .Running;
     t.current = to;
-    let to_satp: u64 = t.procs[to].satp;
-    mc_switch_context_vm(&t.procs[from].context, &t.procs[to].context, to_satp);
+    // The address space is threaded as the opaque AddressSpace and unwrapped exactly once,
+    // here at the context-switch FFI: mc_switch_context_vm takes the raw satp word (the arch
+    // ABI), so we pass AddressSpace.raw — the same bits the field holds, no encoding in core.
+    let to_aspace: AddressSpace = t.procs[to].aspace;
+    mc_switch_context_vm(&t.procs[from].context, &t.procs[to].context, AddressSpace.raw(to_aspace));
 }

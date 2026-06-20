@@ -7,6 +7,7 @@
 // there. Cooperative for now (processes yield/exit); preemption is orthogonal.
 
 import "kernel/arch/riscv64/context.mc";
+import "kernel/core/aspace.mc";
 import "kernel/core/ipc.mc";
 import "std/math.mc";
 import "std/mask.mc";
@@ -83,7 +84,7 @@ struct Process {
     parent_slot: usize, // spawning process slot, paired with parent_gen
     parent_gen: u32,    // spawning process generation; prevents stale-parent reuse
     exit_code: u32, // valid once state == Zombie
-    satp: u64,      // this process's address space (Sv39 root); 0 = share the kernel's
+    aspace: AddressSpace, // this process's address space (opaque arch root); kernel() = share kernel's
     inbox: Mailbox<Message, IPC_SLOTS>, // multi-slot mailbox for kernel-mediated IPC
     block_reasons: Mask32,       // set of BLOCK_* reasons; runnable iff empty (derived state)
     wait_slot: usize,            // the slot this process is blocked receiving-from (for death cleanup)
@@ -213,7 +214,7 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].parent_slot = MAX_PROCS;
         t.procs[i].parent_gen = 0;
         t.procs[i].exit_code = 0;
-        t.procs[i].satp = 0;
+        t.procs[i].aspace = AddressSpace.kernel(); // share the kernel map until given one
         mailbox_init(Message, IPC_SLOTS, &t.procs[i].inbox);
         t.procs[i].block_reasons = mask32_zero();
         t.procs[i].wait_slot = MAX_PROCS; // no waiter target
@@ -781,14 +782,17 @@ export fn proc_wait(t: *mut ProcTable, parent_pid: u32) -> Result<ReapInfo, Reap
     return ok(result);
 }
 
-// Give process `idx` its own address space (Sv39 satp). A context switch into this
-// process loads this value into satp (see the vmspace demo); 0 keeps the kernel map.
+// Give process `idx` its own address space. A context switch into this process loads it
+// (see the vmspace demo); 0 keeps the kernel map. The stored handle is the opaque
+// AddressSpace, but the accessor keeps a raw `u64` because C runtimes (vmspace/vmctx) call
+// it: the raw satp word is wrapped on the way in and unwrapped on the way out, so the
+// arch-encoded value crosses the FFI unchanged while core stores it opaquely.
 export fn proc_set_satp(t: *mut ProcTable, idx: usize, satp: u64) -> void {
-    t.procs[idx].satp = satp;
+    t.procs[idx].aspace = AddressSpace.from_root(satp);
 }
 
 export fn proc_satp(t: *mut ProcTable, idx: usize) -> u64 {
-    return t.procs[idx].satp;
+    return AddressSpace.raw(t.procs[idx].aspace);
 }
 
 export fn proc_pid(t: *mut ProcTable) -> u32 {

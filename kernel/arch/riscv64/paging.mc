@@ -11,6 +11,7 @@
 
 import "std/addr.mc";
 import "kernel/core/heap.mc";
+import "kernel/core/aspace.mc";
 
 const PAGE_SIZE: usize = 4096;
 const GIGAPAGE_SIZE: usize = 0x4000_0000;
@@ -117,6 +118,17 @@ export fn page_table_try_new(h: *mut Heap) -> Result<PageTable, HeapError> {
         ok(root) => { return ok(.{ .root = root }); }
         err(e) => { return err(e); }
     }
+}
+
+// Encode this page table's root as a portable `AddressSpace` handle. This is the one place
+// the riscv64 satp bit layout lives: the satp word is MODE | PPN(root>>12), MODE=8 (Sv39) in
+// bits 63:60. Portable core (cow/demand) calls this instead of open-coding the layout, so the
+// satp encoding never leaks into architecture-independent code. The MODE constant is a local
+// `let` (not a module-level const) so this arch file adds no `SATP_SV39` symbol that would
+// collide with the demo runtimes that still define their own while paging.mc is included.
+export fn riscv_aspace_of(pt: *PageTable) -> AddressSpace {
+    let satp_sv39: u64 = 0x8000_0000_0000_0000; // MODE = 8 (Sv39) in bits 63:60
+    return AddressSpace.from_root(satp_sv39 | ((pa_value(page_table_root(pt)) >> 12) as u64));
 }
 
 // Why a mapping request was rejected.

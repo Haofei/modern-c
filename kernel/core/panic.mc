@@ -11,8 +11,8 @@ import "console.mc";
 // platform action, like the UART; the diagnostics above it are pure MC.
 extern fn mc_halt() -> void;
 
-export fn panic_trap(mcause: u64, mepc: u64, mtval: u64) -> void {
-    // "PANIC c=<mcause> p=<mepc> v=<mtval>"
+export fn panic_trap(cause: u64, pc: u64, fault_addr: u64) -> void {
+    // "PANIC c=<cause> p=<pc> v=<fault_addr>"
     console_putc('P');
     console_putc('A');
     console_putc('N');
@@ -21,15 +21,15 @@ export fn panic_trap(mcause: u64, mepc: u64, mtval: u64) -> void {
     console_putc(' ');
     console_putc('c');
     console_putc('=');
-    console_puthex64(mcause);
+    console_puthex64(cause);
     console_putc(' ');
     console_putc('p');
     console_putc('=');
-    console_puthex64(mepc);
+    console_puthex64(pc);
     console_putc(' ');
     console_putc('v');
     console_putc('=');
-    console_puthex64(mtval);
+    console_puthex64(fault_addr);
     console_newline();
     mc_halt();
 }

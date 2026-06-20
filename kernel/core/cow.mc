@@ -12,7 +12,6 @@ import "std/mem.mc";
 import "std/addr.mc";
 
 const GIB: usize = 0x4000_0000;
-const SATP_SV39: u64 = 0x8000_0000_0000_0000;
 const COW_VA: usize = 0xE000_0000;
 const PAGE: usize = 4096;
 
@@ -27,9 +26,10 @@ fn id_map(pt: *mut PageTable) -> void {
     page_table_map_gigapage(pt, va(2 * GIB), pa(2 * GIB), rwx);
 }
 
+// The satp encoding lives in the arch backend (riscv_aspace_of); core only unwraps the
+// resulting opaque AddressSpace to a raw u64 here, at the C-FFI boundary (cow_satp_*).
 fn satp_of(pt: *PageTable) -> u64 {
-    let root: PAddr = page_table_root(pt);
-    return SATP_SV39 | ((pa_value(root) >> 12) as u64);
+    return AddressSpace.raw(riscv_aspace_of(pt));
 }
 
 export fn cow_setup(region_base: usize, region_len: usize) -> void {
