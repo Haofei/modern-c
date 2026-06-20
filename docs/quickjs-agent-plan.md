@@ -179,8 +179,10 @@ buffers it named. **The kernel must therefore retain NO user pointer across that
   to its own buffers.
 - **The result** lives in a **kernel-owned** completion buffer (bounded; oversize ⇒ `E_2BIG`
   or a truncation flag).
-- **At poll:** `SYS_POLL` takes a **fresh user buffer supplied at poll time** and
-  `copy_to_user_pt`s the completed bytes into it then — never a pointer captured at submit.
+- **At poll:** `SYS_POLL` takes **fresh user buffers supplied at poll time** (for example,
+  each event entry names `handle/status/result_ptr/result_cap/result_len/flags`) and
+  `copy_to_user_pt`s completed bytes into those buffers then — never a pointer captured at
+  submit.
 - A bad pointer at either step ⇒ `-E_FAULT`; the per-agent in-flight count and total async
   buffer bytes are **bounded** (a quota, tied to the policy plane) so an agent can't pin
   unbounded kernel memory by submitting and never polling.
@@ -265,8 +267,9 @@ QuickJS wants MBs for non-trivial scripts.
   U-mode ELF; load it with the Phase-1 app loader/runtime (kernel unmapped).
 - Wire the JS-visible effect surface (a `Tool` global / `print` / a fetch-like API) through
   `SYS_TOOL`/`SYS_NET` → `agent_fs_call`/`net_fetch` → the PathCap/NetCap/allowlist/
-  budget gates. JS can do nothing the agent's capabilities don't permit; every effect is
-  audited to `ipc_trace` and attributed to the agent pid; the policy plane can throttle/kill.
+  budget gates. JS can do nothing the agent's capabilities don't permit; admitted effects are
+  audited to `ipc_trace` and attributed to the agent pid, FS denials are audited today, and
+  brokered-net denial audit is added in Phase 7 (§3.4); the policy plane can throttle/kill.
 - Gate: `qjs-agent-test` — run a fixed `agent.js` that (a) prints, (b) does an allowed
   `/workspace` write, (c) is DENIED an `/etc` write and an un-granted net egress, under QEMU,
   both backends. The acceptance shape mirrors `agent_confined_tool_demo`.
@@ -401,7 +404,7 @@ worker binding; v1 is the concurrency-hardening (locks) before SMP-parallel.
 *blocking* JS agent (runs a script, sequential tool calls). **Phase 7 (async I/O + event
 loop) is what makes it a *real* agent** — concurrent tool calls, streaming, responsiveness —
 and is REQUIRED, not optional; it stays single-JS-threaded and leans on the kernel's existing
-interrupt-driven I/O + scheduler. **Phase 8 (Workers) is optional**, for CPU-parallel
+network transport + scheduler while Phase 7 adds the missing completion-driven path. **Phase 8 (Workers) is optional**, for CPU-parallel
 subtasks, and its true-SMP-parallel half (v1) waits on the locking hardening it calls out.
 Phase 1 (the SDK) is the highest-leverage and unblocks
 everything after it: once apps are confined ELFs built from a reusable runtime, QuickJS is
@@ -431,7 +434,7 @@ sandboxed."
 - **Scheduler reality:** §1 + Phase 8 corrected — the core scheduler is COOPERATIVE (`sched.mc`); timer preemption is a demo-runtime mechanism; `smprq` is a primitive. Phase 8 v0 explicitly builds the confined-U-mode (shared-satp) scheduler integration.
 - **SMP claim:** split into v0 (single-core, contained) and v1 (true SMP-parallel) which is explicitly gated on mailbox locking + address-space/TLB-shootdown locking (`uaccess.mc` note) — not claimed before that lands.
 - **Worker source w/o host FS:** §Phase 8 — `Worker.fromSource(text)` for v0, capability-FS named modules later; matches QuickJS's separate-runtime + cloned-message semantics.
-- **Real-agent concurrency (this review):** §3.2 + Phase 7 added an async-I/O event-loop model (non-blocking SYS_SUBMIT/SYS_POLL + front-end loop driving QuickJS jobs) as the REQUIRED concurrency for a real agent — single-JS-threaded, backed by kernel IRQ I/O. No JS engine supports shared-memory threads in one runtime, so "threads" for the agent means async I/O, not JS threads. Workers (shared-nothing, CPU-parallel) demoted to optional Phase 8.
+- **Real-agent concurrency (this review):** §3.2 + Phase 7 added an async-I/O event-loop model (non-blocking SYS_SUBMIT/SYS_POLL + front-end loop driving QuickJS jobs) as the REQUIRED concurrency for a real agent — single-JS-threaded, backed by a Phase-7 completion path over the existing kernel transport/scheduler substrate. No JS engine supports shared-memory threads in one runtime, so "threads" for the agent means async I/O, not JS threads. Workers (shared-nothing, CPU-parallel) demoted to optional Phase 8.
 
 ### Async I/O review (2026-06-20)
 - **Async memory lifetime (High):** §3.5 — submit copies all inputs into kernel-owned bounded buffers (no retained user pointer); result in a kernel buffer; `SYS_POLL` copies into a poll-time user buffer; in-flight count + async bytes are quota-bounded.
