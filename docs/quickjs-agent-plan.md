@@ -58,6 +58,9 @@ boundary").
 | Heap / allocator | partial | `std/alloc.mc` (alloc_bytes/free_bytes), kernel heap |
 | libc core | minimal | `std/libc.mc`: memeq/strlen/atoi |
 | libm | thin | `std/math.mc`: sqrt/sin/cos/exp/log/tanh only |
+| Threads: preemptive scheduling, SMP run queues + work stealing, context switch | done | `kernel/core/sched.mc` (sched_spawn/yield), `preempt_demo` (timer preemption), `kernel/core/smprq.mc`, `kernel/arch/riscv64/context.mc` |
+| Message passing (Worker postMessage) | done | `kernel/lib/mailbox.mc` (mailbox_post/take/take_from) |
+| Userspace thread spawn + multi-thread-per-confined-agent | NOT done — kernel threads exist; not exposed to a U-mode agent (Phase 7) | — |
 
 The two things people fear most — "can it run a big foreign C blob?" and "can it be
 truly contained?" — are **already proven** (BearSSL; agent_confined). The remaining work is
@@ -67,7 +70,7 @@ a bounded porting job.
 
 ```
   ┌─────────────────────────── isolated U-mode ELF (the agent) ──────────────────────────┐
-  │  qjs front-end  →  QuickJS core (quickjs.c, libregexp.c, libunicode.c, cutils.c)      │
+  │  qjs_agent front-end → QuickJS core (quickjs.c, libregexp.c, libunicode.c, cutils.c)  │
   │        │                    │                                                         │
   │        │              freestanding libc shim (malloc/str*/snprintf) + libm            │
   │        │                    │                                                         │
@@ -77,7 +80,7 @@ a bounded porting job.
                                  ▼  (kernel UNMAPPED above; only the ecall vector is reachable)
   ┌──────────────────────────── kernel (M-mode) ─────────────────────────────────────────┐
   │  syscall_dispatch  →  thin ABI handlers  →  capability front door (agent_fs_call /     │
-  │                                              net_egress_check / mcp_call)  →  audited   │
+  │                                              net_fetch / mcp_call)  →  audited          │
   └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -208,7 +211,8 @@ Options, in order of preference:
 - Build flags: riscv64 freestanding (`--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
   -nostdlib -ffreestanding -mcmodel=medany`).
 - Config: disable heavy/unsupported features — **no bignum** (`CONFIG_BIGNUM` off, drops
-  `__int128`), **no worker threads**, **no os/std modules** (replaced by our binding).
+  `__int128`), **no os/std modules** (replaced by our binding). **Workers ENABLED** — but
+  bound to kernel threads + mailboxes (Phase 7), not the stock pthread/os worker.
 - **`quickjs-libc-mc.c`** replaces `quickjs-libc.c`: implement only the `js_*` hooks the
   agent exposes (a `print`/console binding, and a `Tool`/`fetch` binding) against
   `SYS_WRITE`/`SYS_TOOL`/`SYS_NET` — this is the actual "QuickJS-with-the-ABI" glue, and it
@@ -224,11 +228,11 @@ QuickJS wants MBs for non-trivial scripts.
 
 **Effort: M.**
 
-### Phase 6 — qjs as a confined agent + capability wiring
-- Build `qjs + QuickJS + libc + libm + quickjs-libc-mc + user runtime` into one isolated
-  U-mode ELF; load it with the `agent_confined` loader (kernel unmapped).
+### Phase 6 — qjs_agent as a confined agent + capability wiring
+- Build `qjs_agent + QuickJS + libc + libm + quickjs-libc-mc + user runtime` into one isolated
+  U-mode ELF; load it with the Phase-1 app loader/runtime (kernel unmapped).
 - Wire the JS-visible effect surface (a `Tool` global / `print` / a fetch-like API) through
-  `SYS_TOOL`/`SYS_NET` → `agent_fs_call`/`net_egress_check` → the PathCap/NetCap/allowlist/
+  `SYS_TOOL`/`SYS_NET` → `agent_fs_call`/`net_fetch` → the PathCap/NetCap/allowlist/
   budget gates. JS can do nothing the agent's capabilities don't permit; every effect is
   audited to `ipc_trace` and attributed to the agent pid; the policy plane can throttle/kill.
 - Gate: `qjs-agent-test` — run a fixed `agent.js` that (a) prints, (b) does an allowed
@@ -237,11 +241,40 @@ QuickJS wants MBs for non-trivial scripts.
 
 **Effort: M.** The hard parts (isolation, capability front door) are done; this is integration.
 
+### Phase 7 — Threads / Workers (concurrency)
+Expose the kernel's existing preemptive/SMP threading to the agent, and enable QuickJS
+Workers on top. QuickJS is not thread-safe within one JS context, so the model is
+**Web-Worker-style**: each `Worker` is a SEPARATE `JS_Runtime` on its own kernel thread,
+communicating only by message-passing — no shared JS heap, no interpreter locking.
+- **User ABI:** `SYS_SPAWN(entry, arg) -> tid` (a new U-mode thread sharing the agent's
+  address space + page table + capabilities) and `SYS_MSG_SEND/RECV(chan, ptr, len)` over
+  `kernel/lib/mailbox.mc`. The scheduler (`sched_spawn`) already does preemptive multi-thread
+  scheduling and SMP work-stealing; the new work is letting multiple U-mode threads share one
+  confined address space (one page table, per-thread stack/context) and accounting them to the
+  one agent.
+- **QuickJS binding:** map `JS_NewRuntime`-per-worker → `SYS_SPAWN`; `postMessage` →
+  `SYS_MSG_SEND`; the worker event loop → `SYS_MSG_RECV` on its mailbox. Structured-clone the
+  message bytes through the kernel (copy_*_user_pt), so the two runtimes never share heap.
+- **Containment:** all worker threads share the agent's sandbox and capabilities; every
+  effect from any thread is attributed to the one agent pid, and the policy budget is shared
+  (spawning workers cannot widen authority or escape the quota). On SMP the agent's workers
+  may run in parallel on multiple cores.
+- **Sync (if shared memory is later added):** `SharedArrayBuffer`/atomics over the kernel's
+  `std/sync` (spinlock/rwlock/seqlock) + atomics. v0 stays message-passing-only (simpler,
+  safer).
+- Gate: `qjs-worker-test` — a fixed `agent.js` spawns a Worker, `postMessage`s a value, the
+  worker replies, the main runtime asserts the round-trip; under QEMU, both backends.
+
+**Effort: M.** Threading/scheduler/mailbox exist; the work is the spawn ABI + multi-thread
+sharing of a confined address space + the QuickJS worker binding.
+
 ## 5. Acceptance criteria
 - `examples/apps/hello.mc` builds and runs as a confined U-mode ELF (Phase 1 gate).
 - A trivial `agent.js` (`print(1+2)`) runs through QuickJS on the kernel and prints `3`.
 - `agent.js` doing fs/net effects: allowed ops succeed, forbidden ops are denied at the
   capability boundary it cannot bypass (kernel unmapped), all audited+attributed.
+- (Phase 7) `agent.js` spawns a Worker, `postMessage`s a value, the worker replies, and the
+  main runtime asserts the round-trip — proving real preemptive/SMP concurrency, contained.
 - All gates pass on **both** backends under QEMU; joined to `m0`.
 
 ## 6. Risks & how to retire each (early)
@@ -258,7 +291,9 @@ QuickJS wants MBs for non-trivial scripts.
 | script ingress / no argv | custom non-CLI front-end + SYS_READ/capability-FS ingress (§0); no initial-stack/auxv synthesis |
 
 ## 7. Sequencing
-**1 → 2 → 3 → 4 → 5 → 6.** Phase 1 (the SDK) is the highest-leverage and unblocks
+**1 → 2 → 3 → 4 → 5 → 6 → 7.** Phases 1–6 deliver a single-threaded JS agent; Phase 7
+(threads/Workers) is additive on top — the scheduler/SMP/mailbox it needs already exist, so
+it can land independently once a single agent runs. Phase 1 (the SDK) is the highest-leverage and unblocks
 everything after it: once apps are confined ELFs built from a reusable runtime, QuickJS is
 not a special case — it is the largest app, dropped onto the same spine. Phases 2–3 (libc/
 libm) are the bulk of the porting effort and are independently testable (build a tiny C
