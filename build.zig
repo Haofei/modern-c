@@ -2694,6 +2694,18 @@ pub fn build(b: *std.Build) void {
     const llvm_qjs_worker_test_step = b.step("llvm-qjs-worker-test", "QuickJS-agent Phase 8 (LLVM): a confined agent spawns an isolated JS worker under QEMU");
     llvm_qjs_worker_test_step.dependOn(&llvm_qjs_worker_test_cmd.step);
 
+    // The payoff: a PURE-JS agent (examples/agents/agent.js — async/await over host I/O, no C) run
+    // by the FIXED generic host (qjs_host.c), confined under QEMU. You write the agent in JS only.
+    const qjs_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "c" });
+    qjs_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_agent_test_step = b.step("qjs-agent-test", "Run a PURE-JS agent (fixed generic C host) confined under QEMU, with async host I/O");
+    qjs_agent_test_step.dependOn(&qjs_agent_test_cmd.step);
+
+    const llvm_qjs_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_qjs_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_agent_test_step = b.step("llvm-qjs-agent-test", "Run a PURE-JS agent confined under QEMU (LLVM)");
+    llvm_qjs_agent_test_step.dependOn(&llvm_qjs_agent_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -3120,6 +3132,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_qjs_io_test_cmd.step);
     m0_step.dependOn(&qjs_worker_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_worker_test_cmd.step);
+    m0_step.dependOn(&qjs_agent_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_agent_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);

@@ -1,0 +1,131 @@
+// qjs_host — the GENERIC, fixed agent host. It is written ONCE and never changes per agent: it
+// injects the host API (print, host_async) as JS globals, evaluates whatever agent source is
+// provided (here embedded as agent_js[]; the plan's §0 ingress would instead SYS_READ it), and
+// runs the event loop. The agent itself is PURE JAVASCRIPT (examples/agents/agent.js).
+//
+// host_async(n) is the non-blocking-I/O binding: SYS_SUBMIT starts the op and returns a PENDING
+// Promise; the event loop SYS_POLLs the completion and resolves it. The agent uses plain
+// async/await over it — it never blocks and never touches C.
+#include "quickjs.h"
+#include <stdint.h>
+#include <stddef.h>
+
+extern long sys_write(unsigned long fd, const void *buf, unsigned long len);
+extern long sys_submit(uint64_t arg);
+extern long sys_poll(void *buf);
+size_t strlen(const char *s);
+
+// The agent's JavaScript source, embedded by the build (NUL-terminated).
+extern const char agent_js[];
+
+static void emit(const char *s, unsigned long n) { sys_write(1, s, n); }
+
+// ---- host API exposed to JS ----
+
+// print(str): write a line to the console.
+static JSValue js_print(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc > 0) {
+        const char *s = JS_ToCString(ctx, argv[0]);
+        if (s) {
+            emit(s, (unsigned long)strlen(s));
+            emit("\n", 1);
+            JS_FreeCString(ctx, s);
+        }
+    }
+    return JS_UNDEFINED;
+}
+
+// host_async(n): start a non-blocking op, return a pending Promise (resolved by the event loop).
+#define MAXREQ 32
+static JSValue g_resolvers[MAXREQ];
+static int64_t g_ids[MAXREQ];
+static int g_inflight = 0;
+
+static JSValue js_host_async(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    int32_t arg = 0;
+    if (argc > 0) JS_ToInt32(ctx, &arg, argv[0]);
+    int64_t id = sys_submit((uint64_t)arg);
+
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) return promise;
+
+    if (g_inflight < MAXREQ) {
+        g_ids[g_inflight] = id;
+        g_resolvers[g_inflight] = resolving[0];
+        g_inflight++;
+        JS_FreeValue(ctx, resolving[1]);
+    } else {
+        JSValue reason = JS_NewInt32(ctx, -1);
+        JSValue rr = JS_Call(ctx, resolving[1], JS_UNDEFINED, 1, &reason);
+        JS_FreeValue(ctx, rr);
+        JS_FreeValue(ctx, reason);
+        JS_FreeValue(ctx, resolving[0]);
+        JS_FreeValue(ctx, resolving[1]);
+    }
+    return promise;
+}
+
+int main(void) {
+    JSRuntime *rt = JS_NewRuntime();
+    if (!rt) { emit("host: no runtime\n", 16); return 1; }
+    JSContext *ctx = JS_NewContext(rt);
+    if (!ctx) { emit("host: no context\n", 16); return 1; }
+
+    // Inject the host API.
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_print, "print", 1));
+    JS_SetPropertyStr(ctx, global, "host_async", JS_NewCFunction(ctx, js_host_async, "host_async", 1));
+    JS_FreeValue(ctx, global);
+
+    // Run the pure-JS agent.
+    JSValue v = JS_Eval(ctx, agent_js, strlen(agent_js), "agent.js", JS_EVAL_TYPE_GLOBAL);
+    int rc = 0;
+    if (JS_IsException(v)) {
+        emit("host: agent threw\n", 18);
+        rc = 1;
+    }
+    JS_FreeValue(ctx, v);
+
+    // The event loop: drain microtasks (async/await reactions), poll non-blocking completions and
+    // resolve their Promises, until nothing is queued and nothing is in flight.
+    if (rc == 0) {
+        int guard = 0;
+        for (;;) {
+            JSContext *jctx;
+            int jerr = 0;
+            while ((jerr = JS_ExecutePendingJob(rt, &jctx)) > 0) {
+            }
+            if (jerr < 0) { emit("host: job threw\n", 16); rc = 1; break; }
+
+            uint64_t comp[2];
+            long got = sys_poll(comp);
+            if (got > 0) {
+                int64_t id = (int64_t)comp[0];
+                int32_t val = (int32_t)comp[1];
+                for (int i = 0; i < g_inflight; i++) {
+                    if (g_ids[i] == id) {
+                        JSValue a = JS_NewInt32(ctx, val);
+                        JSValue ret = JS_Call(ctx, g_resolvers[i], JS_UNDEFINED, 1, &a);
+                        JS_FreeValue(ctx, ret);
+                        JS_FreeValue(ctx, a);
+                        JS_FreeValue(ctx, g_resolvers[i]);
+                        g_resolvers[i] = g_resolvers[g_inflight - 1];
+                        g_ids[i] = g_ids[g_inflight - 1];
+                        g_inflight--;
+                        break;
+                    }
+                }
+            } else if (g_inflight == 0) {
+                break;
+            }
+            if (++guard > 1000000) break;
+        }
+        for (int i = 0; i < g_inflight; i++) JS_FreeValue(ctx, g_resolvers[i]);
+        g_inflight = 0;
+    }
+
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+    return rc;
+}
