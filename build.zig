@@ -1269,6 +1269,21 @@ pub fn build(b: *std.Build) void {
     const llvm_mod_visibility_test_step = b.step("llvm-mod-visibility-test", "Opt-in `pub` module visibility (LLVM backend): pub API reachable across files; private cross-file use is E_PRIVATE_IMPORT");
     llvm_mod_visibility_test_step.dependOn(&llvm_mod_visibility_test_cmd.step);
 
+    // std/sort — in-place insertion sort + ordered search (concrete u32 + generic comparator).
+    const sort_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/test/mc-test-runner.sh", "zig-out/bin/mcc", "c", "tests/test/sort_test.mc",
+    });
+    sort_test_cmd.step.dependOn(b.getInstallStep());
+    const sort_test_step = b.step("sort-test", "std/sort (emit-c): in-place sort + binary search (concrete u32 and generic comparator-closure), via the #[test] runner");
+    sort_test_step.dependOn(&sort_test_cmd.step);
+
+    const llvm_sort_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/test/mc-test-runner.sh", "zig-out/bin/mcc", "llvm", "tests/test/sort_test.mc",
+    });
+    llvm_sort_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_sort_test_step = b.step("llvm-sort-test", "std/sort (LLVM backend): in-place sort + binary search, via the #[test] runner");
+    llvm_sort_test_step.dependOn(&llvm_sort_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -3049,6 +3064,9 @@ pub fn build(b: *std.Build) void {
     // mod-visibility-test checks opt-in `pub` module boundaries on both backends.
     m0_step.dependOn(&mod_visibility_test_cmd.step);
     m0_step.dependOn(&llvm_mod_visibility_test_cmd.step);
+    // sort-test exercises std/sort on both backends.
+    m0_step.dependOn(&sort_test_cmd.step);
+    m0_step.dependOn(&llvm_sort_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);
