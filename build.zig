@@ -2602,6 +2602,19 @@ pub fn build(b: *std.Build) void {
     const llvm_cstr_test_step = b.step("llvm-cstr-test", "QuickJS-agent Phase 4 (LLVM): the all-MC mem/string core runs under QEMU");
     llvm_cstr_test_step.dependOn(&llvm_cstr_test_cmd.step);
 
+    // QuickJS-agent Phase 4: the all-MC ctype + integer parsing (user/libc/cnum.mc) — is*/to*,
+    // abs, strtol/strtoul/strtoll/strtoull/atoi (with endptr, sign, 0x/0 prefixes, wraparound),
+    // driven from a C runtime under QEMU on both backends.
+    const cnum_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/cnum-test.sh", "zig-out/bin/mcc", "c" });
+    cnum_test_cmd.step.dependOn(b.getInstallStep());
+    const cnum_test_step = b.step("cnum-test", "QuickJS-agent Phase 4: the all-MC ctype + integer parsing runs under QEMU");
+    cnum_test_step.dependOn(&cnum_test_cmd.step);
+
+    const llvm_cnum_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/cnum-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_cnum_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_cnum_test_step = b.step("llvm-cnum-test", "QuickJS-agent Phase 4 (LLVM): the all-MC ctype + integer parsing runs under QEMU");
+    llvm_cnum_test_step.dependOn(&llvm_cnum_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -3014,6 +3027,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_alloc_test_cmd.step);
     m0_step.dependOn(&cstr_test_cmd.step);
     m0_step.dependOn(&llvm_cstr_test_cmd.step);
+    m0_step.dependOn(&cnum_test_cmd.step);
+    m0_step.dependOn(&llvm_cnum_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);
