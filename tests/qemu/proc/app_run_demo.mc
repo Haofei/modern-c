@@ -18,7 +18,10 @@ const SATP_SV39: u64 = 0x8000_0000_0000_0000;
 const SYS_WRITE: usize = 0;
 const SYS_GETPID: usize = 2;
 const USER_BASE: usize = 0x10000;
-const USER_LIMIT: usize = 0x0010_0000; // covers the app's text/rodata/data/stack VAs
+// Upper bound for uaccess validation. Must cover the agent's whole VA span — for the QuickJS
+// agent that includes the multi-MiB heap arena + stack high in .bss, so a small app's 1 MiB is
+// far too low (SYS_WRITE buffers live above it). 16 MiB covers the confined-agent images.
+const USER_LIMIT: usize = 0x0100_0000;
 const KBUF: usize = 256;
 const AGENT_PID: u64 = 7;
 

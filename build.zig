@@ -2642,6 +2642,19 @@ pub fn build(b: *std.Build) void {
     const llvm_qjs_run_test_step = b.step("llvm-qjs-run-test", "QuickJS-agent Phase 4 (LLVM): build QuickJS freestanding and evaluate JS under QEMU");
     llvm_qjs_run_test_step.dependOn(&llvm_qjs_run_test_cmd.step);
 
+    // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
+    // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
+    // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.
+    const qjs_confined_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "c" });
+    qjs_confined_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_confined_test_step = b.step("qjs-confined-test", "QuickJS-agent Phase 6: evaluate JS in a CONFINED isolated U-mode Sv39 space under QEMU");
+    qjs_confined_test_step.dependOn(&qjs_confined_test_cmd.step);
+
+    const llvm_qjs_confined_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_qjs_confined_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_confined_test_step = b.step("llvm-qjs-confined-test", "QuickJS-agent Phase 6 (LLVM): evaluate JS confined in an isolated U-mode space under QEMU");
+    llvm_qjs_confined_test_step.dependOn(&llvm_qjs_confined_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -3060,6 +3073,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_stdio_test_cmd.step);
     m0_step.dependOn(&qjs_run_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_run_test_cmd.step);
+    m0_step.dependOn(&qjs_confined_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_confined_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);
