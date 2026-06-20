@@ -12,15 +12,58 @@ export const SYS_GETPID: u64 = 2; // () -> pid
 // SYS_EXIT is 3 to match the shared M-mode trap path (usermode_runtime.c handles a7==3
 // specially: it returns control to the kernel rather than back to U-mode).
 export const SYS_EXIT: u64 = 3; // (code) -> noreturn
-// Async I/O (Phase 7): SYS_SUBMIT queues a non-blocking op and returns a request id (or
-// -E_AGAIN when the kernel completion queue is full); SYS_POLL drains one completion ([id,
-// result]) into a user buffer, returning 1 / 0 (empty) / -E_FAULT (bad user pointer).
-export const SYS_SUBMIT: u64 = 4; // (op, arg) -> request id (>=0) | -E_AGAIN
-export const SYS_POLL: u64 = 5; // (buf) -> 1 (delivered) | 0 (empty) | -E_FAULT
+// Async Tool/Net I/O (Phase 7+): SYS_SUBMIT takes a POINTER to a ToolReq struct (copied in and
+// validated), starts a non-blocking op, and returns a request id (>=0) or -errno. SYS_POLL takes
+// a POINTER to a ToolEvent struct it fills for one ready completion, returning 1 (delivered) /
+// 0 (none ready) / -E_FAULT (bad pointer). The request struct carries variable-length in/out
+// payload buffers, so the real copy-in/copy-out + size-validation path is exercised even though
+// only mock ops exist today (the plan's compound Tool/Net calls slot straight in).
+export const SYS_SUBMIT: u64 = 4; // (req_ptr) -> request id (>=0) | -errno
+export const SYS_POLL: u64 = 5; // (event_ptr) -> 1 (delivered) | 0 (none) | -E_FAULT
 
 // Negative-errno results returned through the syscall ABI (Linux-compatible values).
-export const E_AGAIN: i64 = -11; // EAGAIN: no capacity right now (back-pressure)
-export const E_FAULT: i64 = -14; // EFAULT: a user pointer could not be accessed
+export const E_AGAIN: i64 = -11;     // EAGAIN: no capacity right now (back-pressure, retryable)
+export const E_DENIED: i64 = -13;    // EACCES: policy denied this op (not retryable)
+export const E_FAULT: i64 = -14;     // EFAULT: a user pointer could not be accessed
+export const E_NOCAP: i64 = -105;    // ENOBUFS: request exceeds a hard capacity bound (payload too big)
+export const E_CANCELED: i64 = -125; // ECANCELED: the request was cancelled before completion
+
+// Tool ABI quotas (per agent). Hard bounds on what one agent can have outstanding / move per
+// request; the kernel owns buffers of exactly these sizes, so a hostile agent cannot make the
+// kernel allocate or copy unbounded data.
+export const MAX_INFLIGHT: u32 = 8;    // max concurrent pending requests (== completion queue depth)
+export const MAX_REQ_BYTES: u32 = 256; // max request-payload bytes copied IN per request
+export const MAX_RES_BYTES: u32 = 256; // max result-payload bytes copied OUT per request
+
+// Tool op selectors. Only mock ops exist today; compound Tool/Net ops will append here.
+export const TOOL_OP_SUM: u32 = 1;    // result scalar = arg + 2 (deterministic smoke op)
+export const TOOL_OP_ECHO: u32 = 2;   // result payload = the in-payload, reversed-not; echoed back
+export const TOOL_OP_CANCEL: u32 = 3; // cancel the in-flight request whose id == arg (no completion enqueued)
+
+// ToolReq: a tool/net request, copied IN from user memory on SYS_SUBMIT (single snapshot, so it
+// is TOCTOU-safe). `in_ptr`/`in_len` point at a request payload (validated <= MAX_REQ_BYTES);
+// `out_ptr`/`out_cap` reserve where the result payload is copied OUT on poll (<= MAX_RES_BYTES).
+// Field order/sizes are mirrored byte-for-byte by the C host (examples/apps/qjs_host.c).
+struct ToolReq {
+    op: u32,      // +0  one of TOOL_OP_*
+    flags: u32,   // +4  reserved (0)
+    arg: u64,     // +8  scalar argument (and the target id for TOOL_OP_CANCEL)
+    in_ptr: u64,  // +16 user pointer to the request payload (may be 0 if in_len == 0)
+    in_len: u32,  // +24 request payload length
+    out_cap: u32, // +28 capacity reserved for the result payload
+    out_ptr: u64, // +32 user pointer to where the result payload is written on poll
+}
+
+// ToolEvent: one completion, copied OUT to user memory on SYS_POLL. `status` is 0 on success or
+// a negative errno; `result` is the scalar result; `out_len` is how many payload bytes were
+// written to the originating request's out_ptr.
+struct ToolEvent {
+    id: u64,       // +0  the request id this completes
+    status: i32,   // +8  0 | -errno
+    result: i32,   // +12 scalar result
+    out_len: u32,  // +16 result-payload bytes written to out_ptr
+    reserved: u32, // +20 reserved (0)
+}
 
 // Standard descriptors (a minimal, fixed set for the console channel).
 export const FD_STDOUT: u64 = 1;

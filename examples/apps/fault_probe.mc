@@ -41,9 +41,24 @@ export fn main() -> i32 {
         puts("FAULT-PROBE: read not E_FAULT\n", 30);
     }
 
-    // (3) SYS_SUBMIT a completion, then SYS_POLL into a bad DESTINATION — must return -E_FAULT,
-    //     and (per the copy-before-dequeue fix) the completion is NOT lost.
-    let id: i64 = submit(99);
+    // (3) SYS_SUBMIT with a bad ToolReq POINTER must return -E_FAULT (the struct copy-in fails).
+    let sbad: i64 = submit(bad);
+    if sbad != E_FAULT {
+        passed = false;
+        puts("FAULT-PROBE: submit not E_FAULT\n", 32);
+    }
+
+    // (4) Submit a VALID request (enqueues a completion), then SYS_POLL into a bad DESTINATION —
+    //     must return -E_FAULT, and (per copy-before-dequeue) the completion is NOT lost.
+    var req: ToolReq = uninit;
+    req.op = TOOL_OP_SUM;
+    req.flags = 0;
+    req.arg = 99;
+    req.in_ptr = 0;
+    req.in_len = 0;
+    req.out_cap = 0;
+    req.out_ptr = 0;
+    let id: i64 = submit((&req) as usize);
     if id < 0 {
         passed = false;
         puts("FAULT-PROBE: submit failed\n", 27);

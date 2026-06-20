@@ -8,10 +8,20 @@
 #include <stddef.h>
 
 extern long sys_write(unsigned long fd, const void *buf, unsigned long len);
-extern long sys_submit(uint64_t arg);
-extern long sys_poll(void *buf);
+extern long sys_submit(unsigned long req_ptr); // pointer to a ToolReq
+extern long sys_poll(unsigned long ev_ptr);    // pointer to a ToolEvent to fill
 size_t strlen(const char *s);
 int snprintf(char *, size_t, const char *, ...);
+
+// The tool ABI, mirrored byte-for-byte from user/abi.mc (ToolReq=40B, ToolEvent=24B).
+#define TOOL_OP_SUM 1u
+typedef struct {
+    uint32_t op; uint32_t flags; uint64_t arg;
+    uint64_t in_ptr; uint32_t in_len; uint32_t out_cap; uint64_t out_ptr;
+} ToolReq; // 40 bytes
+typedef struct {
+    uint64_t id; int32_t status; int32_t result; uint32_t out_len; uint32_t reserved;
+} ToolEvent; // 24 bytes
 
 static void emit(const char *s, unsigned long n) { sys_write(1, s, n); }
 
@@ -49,8 +59,16 @@ static JSValue js_host_async(JSContext *ctx, JSValueConst this_val, int argc, JS
         return promise;
     }
 
-    // Submit; kernel returns -errno (e.g. -E_AGAIN) under back-pressure — reject, don't register.
-    int64_t id = sys_submit((uint64_t)arg);
+    // Submit a ToolReq (SUM op). The kernel returns -errno under back-pressure/policy — reject.
+    ToolReq req;
+    req.op = TOOL_OP_SUM;
+    req.flags = 0;
+    req.arg = (uint64_t)arg;
+    req.in_ptr = 0;
+    req.in_len = 0;
+    req.out_cap = 0;
+    req.out_ptr = 0;
+    int64_t id = sys_submit((unsigned long)&req);
     if (id < 0) {
         reject_async(ctx, resolving, promise, (int32_t)id);
         return promise;
@@ -99,11 +117,11 @@ int main(void) {
                 rc = 1;
                 break;
             }
-            uint64_t comp[2]; // [id, result]
-            long got = sys_poll(comp);
+            ToolEvent ev;
+            long got = sys_poll((unsigned long)&ev);
             if (got > 0) {
-                int64_t id = (int64_t)comp[0];
-                int32_t val = (int32_t)comp[1];
+                int64_t id = (int64_t)ev.id;
+                int32_t val = ev.result;
                 for (int i = 0; i < g_inflight; i++) {
                     if (g_ids[i] == id) {
                         JSValue a = JS_NewInt32(ctx, val);

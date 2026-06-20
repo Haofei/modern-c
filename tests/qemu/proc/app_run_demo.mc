@@ -41,12 +41,24 @@ global g_kbuf: [KBUF]u8;
 global g_entry: u64;
 global g_load_status: u32; // last app_build outcome (LS_*), readable via app_build_status()
 
-// Completion queue (FIFO) for the async-I/O syscalls + a 16-byte staging buffer for SYS_POLL.
-global g_comp_id: [COMP_CAP]u64;
-global g_comp_val: [COMP_CAP]u64;
-global g_comp_count: usize;
-global g_next_req: u64;
-global g_pollbuf: [16]u8;
+// Result-payload buffer sizes (mirror MAX_REQ_BYTES / MAX_RES_BYTES; usize for array sizing).
+const REQ_BYTES: usize = 256;
+const RES_BYTES: usize = 256;
+
+// Pending-completion ring (FIFO via head + count, so dequeue never shifts the payload buffers).
+// Each slot owns a kernel-resident result payload buffer of exactly RES_BYTES — the kernel never
+// holds or copies more than the quota, so a hostile agent cannot make it move unbounded data.
+global g_pend_id: [COMP_CAP]u64;             // request id
+global g_pend_status: [COMP_CAP]i32;         // 0 | -errno
+global g_pend_result: [COMP_CAP]i32;         // scalar result
+global g_pend_outptr: [COMP_CAP]u64;         // where the result payload is copied OUT on poll
+global g_pend_outcap: [COMP_CAP]u32;         // capacity the agent reserved at out_ptr
+global g_pend_outlen: [COMP_CAP]u32;         // payload bytes actually produced
+global g_pend_res: [COMP_CAP][RES_BYTES]u8;  // per-slot result payload (kernel-owned, bounded)
+global g_pend_head: usize;                   // index of the oldest pending completion
+global g_pend_count: usize;                  // number of pending completions
+global g_next_req: u64;                      // monotonic request-id counter
+global g_reqbuf: [REQ_BYTES]u8;              // bounded copy-IN scratch for request payloads
 
 // Forge a UserPtr<u8> from a user-supplied integer address (the uaccess idiom): re-tagging
 // an int into the UserPtr class needs `unsafe`; copy_from_user_pt still validates it per-page.
@@ -108,58 +120,123 @@ fn sys_read(buf: u64, max: u64, c: u64) -> u64 {
     return n as u64;
 }
 
-// SYS_SUBMIT(op, arg): start a non-blocking op. Here the op is a toy compute (`arg + 2`) whose
-// completion is enqueued immediately; a real op would complete later off an IRQ/DMA event onto
-// the same queue. Returns the request id so the agent can match the completion to its Promise.
-//
-// Back-pressure: if the completion queue is FULL we must NOT hand back a request id — there is
-// nowhere to record its completion, so the caller would get a forever-pending Promise. Return
-// -E_AGAIN instead and enqueue nothing (the request id counter is left untouched). The host
-// observes the negative result and rejects the Promise without registering a resolver.
-fn sys_submit(op: u64, arg: u64, c: u64) -> u64 {
-    if g_comp_count >= COMP_CAP {
+// SYS_SUBMIT(req_ptr): start a non-blocking tool op described by a ToolReq the agent points at.
+// The struct is copied IN once (TOCTOU-safe snapshot), its payload sizes are validated against
+// the hard quotas, and its request payload is copied into a bounded kernel-owned buffer — so the
+// real copy-in / size-validation path runs even for the mock ops. The completion is computed and
+// enqueued immediately (the mock broker; delays/reordering arrive with the broker op). Returns
+// the request id (>=0), or a negative errno:
+//   -E_FAULT  the request struct or its payload pointer is unreadable
+//   -E_NOCAP  a payload size exceeds its hard quota (MAX_REQ_BYTES / MAX_RES_BYTES)
+//   -E_DENIED the op selector is not an allowed tool op (policy)
+//   -E_AGAIN  the completion ring is full (back-pressure, retryable)
+fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
+    // Copy the request struct in as a single kernel-owned snapshot.
+    var req: ToolReq = uninit;
+    let rsz: usize = sizeof(ToolReq);
+    switch copy_from_user_pt(&g_uas, pa((&req) as usize), uptr(req_ptr as usize), rsz) {
+        ok(v) => {}
+        err(e) => { return bitcast<u64>(E_FAULT); }
+    }
+
+    // Hard capacity bounds (ENOBUFS-class: not retryable, the agent must ask for less).
+    if req.in_len > MAX_REQ_BYTES {
+        return bitcast<u64>(E_NOCAP);
+    }
+    if req.out_cap > MAX_RES_BYTES {
+        return bitcast<u64>(E_NOCAP);
+    }
+
+    // Op policy: only the known mock ops are permitted (EACCES otherwise).
+    if req.op != TOOL_OP_SUM && req.op != TOOL_OP_ECHO {
+        return bitcast<u64>(E_DENIED);
+    }
+
+    // Back-pressure: no slot in the completion ring (EAGAIN, retryable) — enqueue nothing.
+    if g_pend_count >= (MAX_INFLIGHT as usize) {
         return bitcast<u64>(E_AGAIN);
     }
+
+    // Copy the request payload IN to the bounded scratch (size already validated <= REQ_BYTES).
+    let in_len: usize = req.in_len as usize;
+    if in_len > 0 {
+        switch copy_from_user_pt(&g_uas, pa((&g_reqbuf[0]) as usize), uptr(req.in_ptr as usize), in_len) {
+            ok(v) => {}
+            err(e) => { return bitcast<u64>(E_FAULT); }
+        }
+    }
+
+    // Allocate the request id + ring slot, then compute the completion (immediate, mock).
     let id: u64 = g_next_req;
     g_next_req = g_next_req + 1;
-    g_comp_id[g_comp_count] = id;
-    g_comp_val[g_comp_count] = arg + 2; // the op's result
-    g_comp_count = g_comp_count + 1;
+    let slot: usize = (g_pend_head + g_pend_count) % COMP_CAP;
+    g_pend_id[slot] = id;
+    g_pend_status[slot] = 0;
+    g_pend_outptr[slot] = req.out_ptr;
+    g_pend_outcap[slot] = req.out_cap;
+
+    if req.op == TOOL_OP_SUM {
+        // Deterministic smoke op: result = arg + 2 (masked low bits so a hostile arg can't trap).
+        let mask: u64 = 0x7FFF_FFFF;
+        let a32: u32 = (req.arg & mask) as u32;
+        g_pend_result[slot] = (a32 + 2) as i32;
+        g_pend_outlen[slot] = 0;
+    } else {
+        // ECHO: result payload = the request payload, truncated to out_cap; scalar = bytes echoed.
+        var n: usize = in_len;
+        if n > (req.out_cap as usize) {
+            n = req.out_cap as usize;
+        }
+        var i: usize = 0;
+        while i < n {
+            g_pend_res[slot][i] = g_reqbuf[i];
+            i = i + 1;
+        }
+        g_pend_outlen[slot] = n as u32;
+        g_pend_result[slot] = n as i32;
+    }
+
+    g_pend_count = g_pend_count + 1;
     return id;
 }
 
-// SYS_POLL(buf): drain ONE completion into the user buffer as two u64s [id, result]. Returns 1
-// if a completion was delivered, 0 if the queue is empty (the agent's loop then knows to stop
-// once nothing is in flight), or -E_FAULT if the user buffer is unwritable.
+// SYS_POLL(event_ptr): drain ONE ready completion. Copies the result payload OUT to the request's
+// reserved out_ptr (bounded by what was produced), then copies a ToolEvent OUT to event_ptr.
+// Returns 1 (delivered), 0 (nothing ready), or -E_FAULT (a destination is unwritable).
 //
-// Ordering matters: stage and COPY OUT first, and only dequeue (FIFO shift) AFTER the copy
-// succeeds. If the user pointer is bad we must leave the completion at the head of the queue —
-// dequeuing before the copy would destroy a completion the agent never received, stranding its
-// in-flight request forever.
-fn sys_poll(buf: u64, b: u64, c: u64) -> u64 {
-    if g_comp_count == 0 {
+// Both copies happen BEFORE the ring head advances: if either faults, the completion is left
+// intact at the head so it is not lost (a payload re-copy on a later retry is idempotent).
+fn sys_poll(ev_ptr: u64, b: u64, c: u64) -> u64 {
+    if g_pend_count == 0 {
         return 0;
     }
-    let id: u64 = g_comp_id[0];
-    let val: u64 = g_comp_val[0];
-    // stage [id, result] and copy out through the agent's page table BEFORE dequeuing
-    let base: PAddr = pa((&g_pollbuf[0]) as usize);
-    unsafe {
-        raw.store<u64>(base, id);
-        raw.store<u64>(pa_offset(base, 8), val);
+    let h: usize = g_pend_head;
+    let outlen: usize = g_pend_outlen[h] as usize;
+
+    // (1) result payload -> the originating request's out_ptr (only if the op produced bytes).
+    if outlen > 0 {
+        switch copy_to_user_pt(&g_uas, uptr(g_pend_outptr[h] as usize), pa((&g_pend_res[h][0]) as usize), outlen) {
+            ok(v) => {}
+            err(e) => { return bitcast<u64>(E_FAULT); }
+        }
     }
-    switch copy_to_user_pt(&g_uas, uptr(buf as usize), base, 16) {
+
+    // (2) the ToolEvent -> the poll buffer.
+    var ev: ToolEvent = uninit;
+    ev.id = g_pend_id[h];
+    ev.status = g_pend_status[h];
+    ev.result = g_pend_result[h];
+    ev.out_len = g_pend_outlen[h];
+    ev.reserved = 0;
+    let esz: usize = sizeof(ToolEvent);
+    switch copy_to_user_pt(&g_uas, uptr(ev_ptr as usize), pa((&ev) as usize), esz) {
         ok(v) => {}
-        err(e) => { return bitcast<u64>(E_FAULT); } // completion left intact at the head
+        err(e) => { return bitcast<u64>(E_FAULT); } // completion intact at the head
     }
-    // delivered — now FIFO shift-down to dequeue the head
-    var i: usize = 1;
-    while i < g_comp_count {
-        g_comp_id[i - 1] = g_comp_id[i];
-        g_comp_val[i - 1] = g_comp_val[i];
-        i = i + 1;
-    }
-    g_comp_count = g_comp_count - 1;
+
+    // delivered — advance the ring head (no payload shifting needed).
+    g_pend_head = (g_pend_head + 1) % COMP_CAP;
+    g_pend_count = g_pend_count - 1;
     return 1;
 }
 

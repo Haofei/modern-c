@@ -11,14 +11,15 @@ import "user/abi.mc";
 
 extern fn mc_ecall(number: u64, a0: u64, a1: u64, a2: u64) -> u64;
 
-// Async I/O (Phase 7): submit a non-blocking op (returns a request id); poll drains one
-// completion ([id, result]) into `buf` (returns 1 if delivered, 0 if none).
-export fn sys_submit(arg: u64) -> i64 {
-    return bitcast<i64>(mc_ecall(SYS_SUBMIT, 0, arg, 0));
+// Async tool I/O (Phase 7+): submit a non-blocking op described by a ToolReq at `req_ptr` (returns
+// a request id >=0, or -errno); poll fills a ToolEvent at `ev_ptr` for one ready completion
+// (returns 1 if delivered, 0 if none, -E_FAULT on a bad pointer).
+export fn sys_submit(req_ptr: usize) -> i64 {
+    return bitcast<i64>(mc_ecall(SYS_SUBMIT, req_ptr as u64, 0, 0));
 }
 
-export fn sys_poll(buf: usize) -> i64 {
-    return bitcast<i64>(mc_ecall(SYS_POLL, buf as u64, 0, 0));
+export fn sys_poll(ev_ptr: usize) -> i64 {
+    return bitcast<i64>(mc_ecall(SYS_POLL, ev_ptr as u64, 0, 0));
 }
 
 // write(2): the C-ABI used by qjs_agent. fd in a0, buffer address in a1, length in a2.

@@ -34,15 +34,15 @@ export fn read(buf: usize, max: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_READ, buf as u64, max as u64, 0));
 }
 
-// submit(arg): start a non-blocking op; returns a request id (>=0), or -E_AGAIN under
-// back-pressure. poll(buf): drain one completion ([id,result]) into `buf`; returns 1 (delivered),
-// 0 (empty), or -E_FAULT if `buf` is unwritable.
-export fn submit(arg: u64) -> i64 {
-    return bitcast<i64>(mc_ecall(SYS_SUBMIT, 0, arg, 0));
+// submit(req_ptr): start a non-blocking tool op described by a ToolReq at `req_ptr`; returns a
+// request id (>=0), or -errno (E_FAULT/E_NOCAP/E_DENIED/E_AGAIN). poll(ev_ptr): fill a ToolEvent
+// at `ev_ptr` for one ready completion; returns 1 (delivered), 0 (none), or -E_FAULT.
+export fn submit(req_ptr: usize) -> i64 {
+    return bitcast<i64>(mc_ecall(SYS_SUBMIT, req_ptr as u64, 0, 0));
 }
 
-export fn poll(buf: usize) -> i64 {
-    return bitcast<i64>(mc_ecall(SYS_POLL, buf as u64, 0, 0));
+export fn poll(ev_ptr: usize) -> i64 {
+    return bitcast<i64>(mc_ecall(SYS_POLL, ev_ptr as u64, 0, 0));
 }
 
 // sys_exit(code): terminate the agent. The kernel reclaims it and does not return; the

@@ -11,10 +11,30 @@
 #include <stddef.h>
 
 extern long sys_write(unsigned long fd, const void *buf, unsigned long len);
-extern long sys_submit(uint64_t arg);
-extern long sys_poll(void *buf);
+extern long sys_submit(unsigned long req_ptr); // pointer to a ToolReq
+extern long sys_poll(unsigned long ev_ptr);    // pointer to a ToolEvent to fill
 extern long sys_read(unsigned long buf, unsigned long max); // §0 ingress
 size_t strlen(const char *s);
+
+// The tool ABI, mirrored byte-for-byte from user/abi.mc (ToolReq=40B, ToolEvent=24B). host_async
+// builds a ToolReq and submits its address; the event loop polls completions into a ToolEvent.
+#define TOOL_OP_SUM 1u
+typedef struct {
+    uint32_t op;      // +0
+    uint32_t flags;   // +4
+    uint64_t arg;     // +8
+    uint64_t in_ptr;  // +16
+    uint32_t in_len;  // +24
+    uint32_t out_cap; // +28
+    uint64_t out_ptr; // +32
+} ToolReq; // 40 bytes
+typedef struct {
+    uint64_t id;       // +0
+    int32_t status;    // +8
+    int32_t result;    // +12
+    uint32_t out_len;  // +16
+    uint32_t reserved; // +20
+} ToolEvent; // 24 bytes
 
 // The agent source is NOT embedded in the host — the host SYS_READs it from the kernel at boot,
 // so this host ELF is a FIXED artifact: shipping a different agent changes only the JS.
@@ -71,8 +91,17 @@ static JSValue js_host_async(JSContext *ctx, JSValueConst this_val, int argc, JS
         return promise;
     }
 
-    // Submit; the kernel returns -errno (e.g. -E_AGAIN) under back-pressure — reject, don't register.
-    int64_t id = sys_submit((uint64_t)arg);
+    // Submit a ToolReq (SUM op). The kernel returns -errno (e.g. -E_AGAIN under back-pressure or
+    // -E_NOCAP/-E_DENIED on policy) — reject, don't register.
+    ToolReq req;
+    req.op = TOOL_OP_SUM;
+    req.flags = 0;
+    req.arg = (uint64_t)arg;
+    req.in_ptr = 0;
+    req.in_len = 0;
+    req.out_cap = 0;
+    req.out_ptr = 0;
+    int64_t id = sys_submit((unsigned long)&req);
     if (id < 0) {
         reject_async(ctx, resolving, promise, (int32_t)id);
         return promise;
@@ -126,11 +155,11 @@ int main(void) {
             }
             if (jerr < 0) { emit("host: job threw\n", 16); rc = 1; break; }
 
-            uint64_t comp[2];
-            long got = sys_poll(comp);
+            ToolEvent ev;
+            long got = sys_poll((unsigned long)&ev);
             if (got > 0) {
-                int64_t id = (int64_t)comp[0];
-                int32_t val = (int32_t)comp[1];
+                int64_t id = (int64_t)ev.id;
+                int32_t val = ev.result;
                 for (int i = 0; i < g_inflight; i++) {
                     if (g_ids[i] == id) {
                         JSValue a = JS_NewInt32(ctx, val);
