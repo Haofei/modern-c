@@ -18,6 +18,8 @@ const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const isCpuPauseCall = ast_query.isCpuPauseCall;
 const isRawLoadCall = ast_query.isRawLoadCall;
+const vaCallMember = ast_query.vaCallMember;
+const isVaStartCall = ast_query.isVaStartCall;
 const isRawPtrCall = ast_query.isRawPtrCall;
 const isRawStoreCall = ast_query.isRawStoreCall;
 const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
@@ -225,6 +227,9 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     try out.appendSlice(allocator, "declare void @mc_trap_Assert() noreturn\n\n");
     try out.appendSlice(allocator, "declare void @mc_trap_NullUnwrap() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_Unreachable() noreturn\n\n");
+    // C-ABI varargs intrinsics (for `va.start`/`va.end`; `va.arg` uses the `va_arg` instr).
+    try out.appendSlice(allocator, "declare void @llvm.va_start(ptr)\n");
+    try out.appendSlice(allocator, "declare void @llvm.va_end(ptr)\n\n");
     // Weak no-op `define`s for every sanitizer shadow hook so EVERY build links and behaves
     // identically when no sanitizer runtime is present. A linked runtime (the ksan/msan/csan
     // profiles) provides STRONG definitions that override these; a default build never calls
@@ -827,6 +832,12 @@ const LlvmEmitter = struct {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, "{s} %{s}", .{ try self.llvmType(param.ty), param.name.text });
         }
+        // C-ABI variadic tail: `define T @f(named..., ...)`. The body's `va.*` intrinsics
+        // (llvm.va_start / the va_arg instruction / llvm.va_end) read the extra args.
+        if (fn_decl.is_variadic) {
+            if (fn_decl.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.appendSlice(self.allocator, "...");
+        }
         // The naked path needs no entry-alloca buffering: its body is a single asm stmt.
         if (naked) {
             if (self.current_debug_scope) |scope| {
@@ -1208,6 +1219,12 @@ const LlvmEmitter = struct {
                     return;
                 }
                 if (try self.emitBuiltinVoidCall(call)) return;
+                // A `va.*` intrinsic as a statement (`va.end(&ap);`): route through emitCall,
+                // which emits the call/instruction; any result (none for va.end) is discarded.
+                if (vaCallMember(call.callee.*) != null) {
+                    _ = try self.emitCall(call, simpleType(expr.span, "void"));
+                    return;
+                }
                 if (self.callReturnType(call)) |ret_ty| {
                     // A `void` or `-> never` call statement produces no value, so it is emitted
                     // without a result name (a named void instruction is invalid LLVM).
@@ -1486,6 +1503,12 @@ const LlvmEmitter = struct {
         try self.emitAlloca(ptr, llvm_ty);
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
+        // `var ap: va_list = va.start();` — the slot IS the va_list cursor storage; initialize
+        // it in place with llvm.va_start (it has no value to store).
+        if (init.kind == .call and isVaStartCall(init.kind.call.callee.*)) {
+            try self.out.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{ptr});
+            return;
+        }
         if (isUninitExpr(init)) {
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, try self.zeroInitializer(ty), ptr, try self.debugCallSuffix() });
             return;
@@ -3039,6 +3062,26 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, llvm_ty, ptr, try self.debugCallSuffix() });
             return result;
         }
+        if (vaCallMember(call.callee.*)) |va_name| {
+            // The cursor argument is `&ap` (a pointer to the va_list slot); its lowered value
+            // is exactly the slot pointer the VAARG legalizer / llvm.va_end want.
+            if (call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const ap_ptr = switch (call.args[0].kind) {
+                .address_of => |inner| try self.emitAddressOf(inner.*),
+                else => try self.emitExpr(call.args[0], self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission),
+            };
+            if (std.mem.eql(u8, va_name, "arg")) {
+                if (call.type_args.len != 1) return error.UnsupportedLlvmEmission;
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = va_arg ptr {s}, {s}{s}\n", .{ result, ap_ptr, try self.llvmType(call.type_args[0]), try self.debugCallSuffix() });
+                return result;
+            }
+            if (std.mem.eql(u8, va_name, "end")) {
+                try self.out.print(self.allocator, "  call void @llvm.va_end(ptr {s})\n", .{ap_ptr});
+                return ""; // void
+            }
+            return error.UnsupportedLlvmEmission; // va.start only valid as a let initializer
+        }
         if (isRawPtrCall(call.callee.*)) {
             if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const addr = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "PAddr"));
@@ -4170,6 +4213,11 @@ const LlvmEmitter = struct {
                 "i8"
             else if (std.mem.eql(u8, name.text, "IrqOff"))
                 "i8"
+            // C-ABI varargs cursor. On the RISC-V lp64 ABI `va_list` is a single pointer
+            // (i8*), so the cursor storage is one `ptr`-sized slot. va.start/arg/end operate
+            // on a pointer TO this slot (the generic VAARG legalizer handles the ABI).
+            else if (std.mem.eql(u8, name.text, "va_list"))
+                "ptr"
             else if (std.mem.eql(u8, name.text, "bool"))
                 "i1"
             else if (std.mem.eql(u8, name.text, "f32"))

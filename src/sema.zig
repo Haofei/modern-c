@@ -3835,6 +3835,10 @@ pub const Checker = struct {
                     return .void;
                 }
                 if (rawLoadCallReturnType(node)) |ty| return classifyTypeCtx(ty, ctx);
+                if (vaCallName(node.callee.*)) |va_name| {
+                    if (vaCallReturnType(node)) |ty| return classifyTypeCtx(ty, ctx);
+                    if (std.mem.eql(u8, va_name, "end")) return .void;
+                }
                 if (isRawPtrCall(node.callee.*) and node.type_args.len == 1) {
                     const ptr_ty = ast.TypeExpr{ .span = node.type_args[0].span, .kind = .{ .pointer = .{ .mutability = .mut, .child = @constCast(&node.type_args[0]) } } };
                     return classifyTypeCtx(ptr_ty, ctx);
@@ -7847,6 +7851,28 @@ fn rawLoadCallReturnType(call: anytype) ?ast.TypeExpr {
     return call.type_args[0];
 }
 
+// `va.arg<T>(&ap)` yields a `T` (the next C-ABI variadic slot); `va.start()` yields a
+// `va_list`; `va.end(&ap)` yields void. These give the call its result type.
+fn vaCallName(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .member => |m| if (isIdentNamed(m.base.*, "va")) m.name.text else null,
+        .grouped => |inner| vaCallName(inner.*),
+        else => null,
+    };
+}
+
+fn vaCallReturnType(call: anytype) ?ast.TypeExpr {
+    const name = vaCallName(call.callee.*) orelse return null;
+    if (std.mem.eql(u8, name, "arg")) {
+        if (call.type_args.len != 1) return null;
+        return call.type_args[0];
+    }
+    if (std.mem.eql(u8, name, "start")) {
+        return ast.TypeExpr{ .span = call.callee.span, .kind = .{ .name = .{ .text = "va_list", .span = call.callee.span } } };
+    }
+    return null; // va.end -> void (no type)
+}
+
 // `raw.ptr<T>(addr)` mints a `*mut T` from a raw address — the typed-pointer companion
 // of raw.load/store (used to view an allocation as a typed object: Arc blocks, etc.).
 fn isRawPtrCall(callee: ast.Expr) bool {
@@ -8677,7 +8703,7 @@ fn qualifiedUnionConstructorReturnType(node: anytype, ctx: Context) ?ast.TypeExp
 
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse mathBuiltinReturnType(node.callee.*) orelse unwrapCallReturnType(node, ctx) orelse dynDispatchReturnType(node, ctx) orelse qualifiedUnionConstructorReturnType(node, ctx) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse vaCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse mathBuiltinReturnType(node.callee.*) orelse unwrapCallReturnType(node, ctx) orelse dynDispatchReturnType(node, ctx) orelse qualifiedUnionConstructorReturnType(node, ctx) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .try_expr => |inner| tryPayloadType(inner.operand.*, ctx),
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),
@@ -9554,6 +9580,9 @@ fn isUnsafeOperationCall(callee: ast.Expr) bool {
             // raw.ptr mints a typed pointer from an address (like phys() makes a PAddr);
             // it needs no unsafe block — dereferencing the result is the checked part.
             if (isIdentNamed(node.base.*, "mmio") and std.mem.eql(u8, node.name.text, "map")) return true;
+            // va.arg reads an untyped C-ABI slot (the only `va.*` that can read wrong/garbage
+            // if the format/type disagree); start/end are bookkeeping. Gate the read.
+            if (isIdentNamed(node.base.*, "va") and std.mem.eql(u8, node.name.text, "arg")) return true;
             return false;
         },
         .grouped => |inner| isUnsafeOperationCall(inner.*),
@@ -9571,6 +9600,10 @@ fn isBuiltinNamespaceMember(member: anytype) bool {
         else => return false,
     };
     if (std.mem.eql(u8, base, "raw")) return std.mem.eql(u8, member.name.text, "store") or std.mem.eql(u8, member.name.text, "load") or std.mem.eql(u8, member.name.text, "ptr");
+    // C-ABI varargs cursor intrinsics (the printf-family interop boundary): `va.start()`
+    // mints a cursor in a variadic fn, `va.arg<T>(&ap)` pulls the next typed argument,
+    // `va.end(&ap)` finalizes. Unchecked ABI ops, gated by `unsafe` (isUnsafeOperationCall).
+    if (std.mem.eql(u8, base, "va")) return std.mem.eql(u8, member.name.text, "start") or std.mem.eql(u8, member.name.text, "arg") or std.mem.eql(u8, member.name.text, "end");
     if (std.mem.eql(u8, base, "fence")) return std.mem.eql(u8, member.name.text, "full") or std.mem.eql(u8, member.name.text, "acquire") or std.mem.eql(u8, member.name.text, "release");
     if (std.mem.eql(u8, base, "mmio")) return std.mem.eql(u8, member.name.text, "map");
     if (std.mem.eql(u8, base, "unchecked")) return isUncheckedNoOverflowMember(member.name.text);
@@ -9825,6 +9858,8 @@ fn isKnownTypeName(name: []const u8, ctx: Context) bool {
     // `cs: IrqOff` parameter, so the operation cannot be written without one.
     if (std.mem.eql(u8, name, "IrqOff")) return true;
     if (std.mem.eql(u8, name, "c_void")) return true;
+    // `va_list` — the C-ABI varargs cursor type for the `va.*` interop intrinsics.
+    if (std.mem.eql(u8, name, "va_list")) return true;
     if (knownStructName(name, ctx)) return true;
     if (knownPackedBitsName(name, ctx)) return true;
     if (knownOverlayUnionName(name, ctx)) return true;

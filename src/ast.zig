@@ -142,6 +142,10 @@ pub const FnDecl = struct {
     body: ?Block,
     is_const: bool,
     exported: bool = false,
+    // C-ABI variadic: the parameter list ended with `...` (after the named params).
+    // Only meaningful for the C interop boundary (printf-family shims for QuickJS);
+    // the body reads the extra args via the `va.*` intrinsics. Mirrors C `...`.
+    is_variadic: bool = false,
     // `where T: Trait, ...` bounds on the function's comptime type parameters.
     bounds: []TraitBound = &.{},
 };

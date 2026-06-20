@@ -2563,6 +2563,19 @@ pub fn build(b: *std.Build) void {
     const llvm_trig_app_test_step = b.step("llvm-trig-app-test", "QuickJS-agent Phase 3 (LLVM kernel): a confined C app over the vendored openlibm transcendentals runs under QEMU");
     llvm_trig_app_test_step.dependOn(&llvm_trig_app_test_cmd.step);
 
+    // QuickJS-agent Phase 4: MC C-ABI varargs (the `va.*` intrinsics). A variadic MC function
+    // is driven from a C runtime under QEMU on both backends — the printf-family interop the
+    // (all-MC) libc needs so QuickJS can call our snprintf/printf shims.
+    const vararg_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "c" });
+    vararg_test_cmd.step.dependOn(b.getInstallStep());
+    const vararg_test_step = b.step("vararg-test", "QuickJS-agent Phase 4: a C-ABI variadic MC fn (va.start/va.arg/va.end) runs under QEMU");
+    vararg_test_step.dependOn(&vararg_test_cmd.step);
+
+    const llvm_vararg_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_vararg_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_vararg_test_step = b.step("llvm-vararg-test", "QuickJS-agent Phase 4 (LLVM): a C-ABI variadic MC fn runs under QEMU");
+    llvm_vararg_test_step.dependOn(&llvm_vararg_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -2969,6 +2982,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_math_app_test_cmd.step);
     m0_step.dependOn(&trig_app_test_cmd.step);
     m0_step.dependOn(&llvm_trig_app_test_cmd.step);
+    m0_step.dependOn(&vararg_test_cmd.step);
+    m0_step.dependOn(&llvm_vararg_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);

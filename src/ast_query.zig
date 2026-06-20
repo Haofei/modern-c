@@ -336,6 +336,20 @@ pub fn isRawLoadCall(callee: ast.Expr) bool {
     };
 }
 
+/// If `callee` is a `va.<name>` intrinsic (through grouping), return `<name>`; else null.
+pub fn vaCallMember(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .member => |member| if (isIdentNamed(member.base.*, "va")) member.name.text else null,
+        .grouped => |inner| vaCallMember(inner.*),
+        else => null,
+    };
+}
+
+/// True when `callee` names `va.start` (the only `va.*` valid as a let initializer).
+pub fn isVaStartCall(callee: ast.Expr) bool {
+    return if (vaCallMember(callee)) |name| std.mem.eql(u8, name, "start") else false;
+}
+
 /// True when `callee` names the `raw.ptr` intrinsic (through grouping).
 pub fn isRawPtrCall(callee: ast.Expr) bool {
     return switch (callee.kind) {

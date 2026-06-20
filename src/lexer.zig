@@ -40,7 +40,7 @@ pub const Lexer = struct {
             '^' => self.make(.caret, start),
             '+' => self.make(.plus, start),
             '%' => self.make(.percent, start),
-            '.' => if (self.match('.')) self.make(.dot_dot, start) else self.make(.dot, start),
+            '.' => if (self.match('.')) (if (self.match('.')) self.make(.dot_dot_dot, start) else self.make(.dot_dot, start)) else self.make(.dot, start),
             '-' => if (self.match('>')) self.make(.arrow, start) else self.make(.minus, start),
             '=' => if (self.match('=')) self.make(.equal_equal, start) else if (self.match('>')) self.make(.fat_arrow, start) else self.make(.equal, start),
             '!' => if (self.match('=')) self.make(.bang_equal, start) else self.make(.bang, start),

@@ -37,6 +37,8 @@ const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
 const isCpuPauseCall = ast_query.isCpuPauseCall;
 const isRawLoadCall = ast_query.isRawLoadCall;
+const vaCallMember = ast_query.vaCallMember;
+const isVaStartCall = ast_query.isVaStartCall;
 const isRawPtrCall = ast_query.isRawPtrCall;
 const isRawStoreCall = ast_query.isRawStoreCall;
 const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
@@ -1080,6 +1082,9 @@ const CEmitter = struct {
     // hook is not spliced into a context where the result must remain assignable.
     suppress_load_hook: bool = false,
     current_function: ?[]const u8 = null,
+    // For a variadic function body: the name of the last NAMED parameter, which C's
+    // `va_start(ap, last)` anchors on. Null outside a variadic function.
+    current_variadic_last: ?[]const u8 = null,
     temp_index: usize,
     indent: usize,
     // Stack of enclosing loop ids and a counter, for lowering `break`/`continue`
@@ -2210,6 +2215,13 @@ const CEmitter = struct {
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
 
+        const previous_variadic_last = self.current_variadic_last;
+        self.current_variadic_last = if (fn_decl.is_variadic and fn_decl.params.len > 0)
+            fn_decl.params[fn_decl.params.len - 1].name.text
+        else
+            null;
+        defer self.current_variadic_last = previous_variadic_last;
+
         var locals = std.StringHashMap(LocalInfo).init(self.allocator);
         defer locals.deinit();
         for (fn_decl.params) |param| try locals.put(param.name.text, try self.localInfoFromType(param.ty));
@@ -2251,12 +2263,17 @@ const CEmitter = struct {
             try self.out.print(self.allocator, "{s} {s}(", .{ ret, cname });
         }
         if (fn_decl.params.len == 0) {
-            try self.out.appendSlice(self.allocator, "void");
+            try self.out.appendSlice(self.allocator, if (fn_decl.is_variadic) "" else "void");
         } else {
             for (fn_decl.params, 0..) |param, i| {
                 if (i != 0) try self.out.appendSlice(self.allocator, ", ");
                 try self.emitParamDecl(param.ty, param.name.text);
             }
+        }
+        // C-ABI variadic tail: `T fn(named..., ...)`. The body reads the extra args via the
+        // `va.*` intrinsics, which lower to the __builtin_va_* macros.
+        if (fn_decl.is_variadic) {
+            try self.out.appendSlice(self.allocator, ", ...");
         }
         try self.out.appendSlice(self.allocator, ")");
         // `#[backend_name("Y")]`: rename the object symbol via a C asm label. C-level calls
@@ -2301,6 +2318,24 @@ const CEmitter = struct {
         var out: std.ArrayList(u8) = .empty;
         try self.appendType(&out, ty, style);
         return out.toOwnedSlice(self.scratch.allocator());
+    }
+
+    // `var ap: va_list = va.start();` -> declare the va_list cursor and initialize it with
+    // C's `va_start(ap, <last named param>)`. va_start is a statement (not a value), so it
+    // can only appear here, as a local initializer. Returns true when it handled the init.
+    fn emitVaStartLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr) !bool {
+        const node = switch (initializer.kind) {
+            .call => |c| c,
+            else => return false,
+        };
+        if (!isVaStartCall(node.callee.*)) return false;
+        const last = self.current_variadic_last orelse return error.UnsupportedCEmission;
+        try self.writeIndent();
+        try self.emitDeclarator(decl_ty, name);
+        try self.out.appendSlice(self.allocator, ";\n");
+        try self.writeIndent();
+        try self.out.print(self.allocator, "__builtin_va_start({s}, {s});\n", .{ try self.cIdent(name), try self.cIdent(last) });
+        return true;
     }
 
     fn appendType(self: *CEmitter, out: *std.ArrayList(u8), ty: ast.TypeExpr, style: StructTypeStyle) anyerror!void {
@@ -3163,6 +3198,7 @@ const CEmitter = struct {
                     if (local.names.len == 1) {
                         if (local.ty) |decl_ty| {
                             if (local.init) |initializer| {
+                                if (try self.emitVaStartLocalInit(name.text, decl_ty, initializer)) continue;
                                 if (try self.emitResultTryExprLocalInit(name.text, decl_ty, initializer, locals, return_ty)) continue;
                                 if (try self.emitNullableTryExprLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitResultTryLocalInit(name.text, decl_ty, initializer, locals, return_ty)) continue;
@@ -5239,6 +5275,29 @@ const CEmitter = struct {
                     try self.emitExpr(node.args[0], locals);
                     try self.out.appendSlice(self.allocator, ")");
                     return;
+                }
+                // `va.arg<T>(&ap)` -> __builtin_va_arg(*(&ap), Tc); `va.end(&ap)` ->
+                // __builtin_va_end(*(&ap)). The `*(...)` turns the &ap pointer back into the
+                // va_list lvalue the builtins require. (`va.start()` is handled at the
+                // declaration site; it cannot appear in arbitrary expression position.)
+                if (vaCallMember(node.callee.*)) |va_name| {
+                    if (std.mem.eql(u8, va_name, "arg")) {
+                        if (node.type_args.len != 1 or node.args.len != 1) return error.UnsupportedCEmission;
+                        try self.out.print(self.allocator, "__builtin_va_arg(*(", .{});
+                        try self.emitExpr(node.args[0], locals);
+                        try self.out.appendSlice(self.allocator, "), ");
+                        try self.out.appendSlice(self.allocator, try self.cTypeFor(node.type_args[0], .typedef_name));
+                        try self.out.appendSlice(self.allocator, ")");
+                        return;
+                    }
+                    if (std.mem.eql(u8, va_name, "end")) {
+                        if (node.args.len != 1) return error.UnsupportedCEmission;
+                        try self.out.appendSlice(self.allocator, "__builtin_va_end(*(");
+                        try self.emitExpr(node.args[0], locals);
+                        try self.out.appendSlice(self.allocator, "))");
+                        return;
+                    }
+                    return error.UnsupportedCEmission; // va.start only valid as a let initializer
                 }
                 if (try self.emitAtomicInitCall(node, locals)) return;
                 if (try self.emitAtomicCall(node, locals)) return;
@@ -12216,6 +12275,7 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return "uint8_t";
     if (std.mem.eql(u8, name, "ConversionError")) return "uint8_t";
     if (std.mem.eql(u8, name, "Overflow")) return "uint8_t";
+    if (std.mem.eql(u8, name, "va_list")) return "__builtin_va_list";
     return "void *";
 }
 
@@ -12362,6 +12422,9 @@ fn primitiveCTypeName(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "isize")) return "intptr_t";
     if (std.mem.eql(u8, name, "f32")) return "float";
     if (std.mem.eql(u8, name, "f64")) return "double";
+    // C-ABI varargs cursor (the `va.*` intrinsics operate on it). Maps to the
+    // compiler's native va_list so it is passed/used with the exact target ABI.
+    if (std.mem.eql(u8, name, "va_list")) return "__builtin_va_list";
     return null;
 }
 

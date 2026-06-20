@@ -503,8 +503,16 @@ pub const Parser = struct {
 
         var params: std.ArrayList(ast.Param) = .empty;
         errdefer params.deinit(self.allocator);
+        var is_variadic = false;
         if (self.current.kind != .r_paren) {
             while (true) {
+                // C-ABI variadic marker `...` — only valid as the final entry, after at
+                // least one named parameter (the named arg `va.start` anchors on).
+                if (self.current.kind == .dot_dot_dot) {
+                    _ = self.advance();
+                    is_variadic = true;
+                    break;
+                }
                 const is_comptime = self.match(.kw_comptime);
                 const param_name = try self.expectName("expected parameter name");
                 try self.expect(.colon, "expected ':' after parameter name");
@@ -512,6 +520,9 @@ pub const Parser = struct {
                 try params.append(self.allocator, .{ .name = param_name, .ty = ty, .is_comptime = is_comptime });
                 if (!self.match(.comma) or self.current.kind == .r_paren) break;
             }
+        }
+        if (is_variadic and params.items.len == 0) {
+            return self.fail("a variadic function needs at least one named parameter before `...`");
         }
         try self.expect(.r_paren, "expected ')' after parameters");
 
@@ -532,6 +543,7 @@ pub const Parser = struct {
             .body = body,
             .is_const = is_const,
             .exported = exported,
+            .is_variadic = is_variadic,
             .bounds = bounds,
         };
     }

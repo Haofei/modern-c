@@ -104,6 +104,7 @@ pub const Kind = enum {
     shift_left,
     shift_right,
     dot_dot,
+    dot_dot_dot,
 };
 
 pub fn keywordKind(text: []const u8) ?Kind {
