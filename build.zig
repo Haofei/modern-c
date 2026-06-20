@@ -2506,6 +2506,29 @@ pub fn build(b: *std.Build) void {
     const llvm_app_run_test_step = b.step("llvm-app-run-test", "QuickJS-agent Phase 1 (LLVM): build + run a confined MC app in an isolated U-mode space under QEMU");
     llvm_app_run_test_step.dependOn(&llvm_app_run_test_cmd.step);
 
+    // Direct syscall-ABI fault test (review item 2): a confined MC app hands bad user pointers to
+    // SYS_WRITE/SYS_READ/SYS_POLL and asserts -E_FAULT at runtime — proving the uaccess path fails
+    // closed, rather than relying on static review of the kernel. Both backends.
+    const fault_probe_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/fault-probe-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    fault_probe_test_cmd.step.dependOn(b.getInstallStep());
+    const fault_probe_test_step = b.step("fault-probe-test", "Syscall-ABI fault test: a confined app gets -E_FAULT from SYS_WRITE/READ/POLL on bad pointers under QEMU");
+    fault_probe_test_step.dependOn(&fault_probe_test_cmd.step);
+
+    const llvm_fault_probe_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/proc/fault-probe-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    llvm_fault_probe_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_fault_probe_test_step = b.step("llvm-fault-probe-test", "Syscall-ABI fault test (LLVM): bad pointers to SYS_WRITE/READ/POLL return -E_FAULT under QEMU");
+    llvm_fault_probe_test_step.dependOn(&llvm_fault_probe_test_cmd.step);
+
     // QuickJS-agent Phase 2: a confined C app (examples/apps/compute.c) over the freestanding
     // libc (user/libc: malloc arena + mem/str) — the C-app + libc path QuickJS (also C) uses.
     const compute_app_test_cmd = b.addSystemCommand(&.{
@@ -3163,6 +3186,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_qjs_agent_test_cmd.step);
     m0_step.dependOn(&qjs_async_agent_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_async_agent_test_cmd.step);
+    m0_step.dependOn(&fault_probe_test_cmd.step);
+    m0_step.dependOn(&llvm_fault_probe_test_cmd.step);
     m0_step.dependOn(&qjs_mc_host_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_mc_host_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);

@@ -28,6 +28,23 @@ export fn getpid() -> u64 {
     return mc_ecall(SYS_GETPID, 0, 0, 0);
 }
 
+// read(buf, max): copy up to `max` bytes of the kernel-held agent source into `buf` (the §0
+// ingress). Returns the byte count, or -E_FAULT (bitcast of negative) if `buf` is unwritable.
+export fn read(buf: usize, max: usize) -> i64 {
+    return bitcast<i64>(mc_ecall(SYS_READ, buf as u64, max as u64, 0));
+}
+
+// submit(arg): start a non-blocking op; returns a request id (>=0), or -E_AGAIN under
+// back-pressure. poll(buf): drain one completion ([id,result]) into `buf`; returns 1 (delivered),
+// 0 (empty), or -E_FAULT if `buf` is unwritable.
+export fn submit(arg: u64) -> i64 {
+    return bitcast<i64>(mc_ecall(SYS_SUBMIT, 0, arg, 0));
+}
+
+export fn poll(buf: usize) -> i64 {
+    return bitcast<i64>(mc_ecall(SYS_POLL, buf as u64, 0, 0));
+}
+
 // sys_exit(code): terminate the agent. The kernel reclaims it and does not return; the
 // returned `i64` is never actually observed (named `sys_exit`, not `exit`, to avoid clashing
 // with the C library's `exit` builtin in the emitted C).
