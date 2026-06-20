@@ -2544,6 +2544,25 @@ pub fn build(b: *std.Build) void {
     const llvm_math_app_test_step = b.step("llvm-math-app-test", "QuickJS-agent Phase 3 (LLVM kernel): a confined C app over the freestanding libm runs under QEMU");
     llvm_math_app_test_step.dependOn(&llvm_math_app_test_cmd.step);
 
+    // QuickJS-agent Phase 3 (complete): a confined C app over the vendored-openlibm
+    // transcendentals (pow/exp/log/sin/cos/tan/atan2/cbrt/hypot) — the full double libm JS
+    // Math needs, built freestanding into a cached archive and linked confined under FP.
+    const trig_app_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c",
+        "examples/apps/transcendental.c", "trig-ok", "trig-app",
+    });
+    trig_app_test_cmd.step.dependOn(b.getInstallStep());
+    const trig_app_test_step = b.step("trig-app-test", "QuickJS-agent Phase 3: a confined C app over the vendored openlibm transcendentals runs under QEMU");
+    trig_app_test_step.dependOn(&trig_app_test_cmd.step);
+
+    const llvm_trig_app_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm",
+        "examples/apps/transcendental.c", "trig-ok", "trig-app",
+    });
+    llvm_trig_app_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_trig_app_test_step = b.step("llvm-trig-app-test", "QuickJS-agent Phase 3 (LLVM kernel): a confined C app over the vendored openlibm transcendentals runs under QEMU");
+    llvm_trig_app_test_step.dependOn(&llvm_trig_app_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -2948,6 +2967,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_compute_app_test_cmd.step);
     m0_step.dependOn(&math_app_test_cmd.step);
     m0_step.dependOn(&llvm_math_app_test_cmd.step);
+    m0_step.dependOn(&trig_app_test_cmd.step);
+    m0_step.dependOn(&llvm_trig_app_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);

@@ -40,8 +40,13 @@ case "$APP" in
     *.c)
         "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$APP" -o "$WORK/app.o"
         "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$HERE/user/libc/libc.c" -o "$WORK/libc.o"
-        "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$HERE/user/libc/math.c" -o "$WORK/math.o"
-        APP_OBJS+=("$WORK/libc.o" "$WORK/math.o")
+        APP_OBJS+=("$WORK/libc.o")
+        # Full libm: build/reuse the vendored-openlibm archive and link it LAST (so the linker
+        # pulls only the math members the app references). Cached under zig-out (gitignored).
+        LIBM="$HERE/zig-out/lib/libopenlibm.a"
+        mkdir -p "$(dirname "$LIBM")"
+        CLANG="$CLANG" bash "$HERE/tools/user/build-openlibm.sh" "$LIBM"
+        APP_OBJS+=("$LIBM")
         ;;
     *)
         kernel_boot_compile_mc_object "$BACKEND" "$APP" "$WORK/app.o" "$WORK"

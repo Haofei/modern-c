@@ -14,7 +14,6 @@ double fmod(double, double);
 double sqrt(double);
 double copysign(double, double);
 double scalbn(double, int);
-int __signbit(double);
 size_t strlen(const char *);
 
 // Exact comparison: every case below has an exactly-representable double result.
@@ -38,7 +37,7 @@ int main(void) {
     ok &= eq(fmod(-7.0, 3.0), -1.0);
     ok &= eq(fmod(5.5, 2.0), 1.5);
     ok &= eq(copysign(3.0, -1.0), -3.0);
-    ok &= (__signbit(-0.0) == 1);
+    ok &= eq(copysign(1.0, -0.0), -1.0); // sign of -0
     ok &= eq(scalbn(1.5, 3), 12.0); // 1.5 * 2^3
 
     if (ok) {

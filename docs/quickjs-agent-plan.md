@@ -245,12 +245,18 @@ on the IEEE-754 double, no approximation) and `sqrt` (hardware `fsqrt.d`, correc
 Gated by `examples/apps/mathtest.c` (`math-app-test` / `llvm-math-app-test`, in m0): runs
 confined, computes on real doubles, asserts bit-exact results.
 
-**Remaining: transcendentals.** `pow exp log log2 log10 sin cos tan asin acos atan atan2 hypot
-cbrt sinh cosh tanh expm1 log1p` cannot be made exact by hand without a hack; **vendor
-openlibm `src/`** into `third_party/` and build freestanding (same path as BearSSL) — `nm` a
-QuickJS test build for the exact reference set.
+**Transcendentals via vendored openlibm (done).** openlibm (FreeBSD msun, the standalone
+libm) is vendored at `third_party/openlibm/` (BearSSL precedent). `tools/user/build-openlibm.sh`
+compiles every `src/*.c` that builds freestanding (`-march=rv64imafdc -mabi=lp64d`) into a
+cached `libopenlibm.a` (209 objects); the long-double/complex/Bessel/lgamma files that don't
+build are skipped — JS Math references none of them, and any real miss would surface as a loud
+undefined-symbol at app link, not a silent stub. The archive is linked LAST so the linker pulls
+only the referenced members. This supersedes the hand-rolled exact `user/libc/math.c`, which
+was removed (openlibm provides those exactly too). Gated by `examples/apps/transcendental.c`
+(`trig-app-test` / `llvm-trig-app-test`, in m0): `pow/exp/log/log2/log10/sin/cos/tan/atan2/
+cbrt/hypot` run confined and produce correct results.
 
-**Effort: remaining M** (openlibm vendoring + freestanding build of the referenced subset).
+**Phase 3 complete.** Full double libm (exact + transcendental) runs confined under hardware FP.
 
 ### Phase 4 — Vendor + build QuickJS
 - `third_party/quickjs/` — the engine core only: `quickjs.c libregexp.c libunicode.c
