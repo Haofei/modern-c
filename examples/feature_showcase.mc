@@ -152,7 +152,10 @@ fn make_pair(comptime T: type, x: T, y: T) -> Pair<T> {
 // 8. `impl` associated functions + a linear `move` resource (opaque)
 // -----------------------------------------------------------------------------
 // `opaque` makes the field private; `move` makes the value linear — it must be
-// consumed exactly once (use-after-consume / forgetting it are compile errors).
+// consumed exactly once (use-after-consume / forgetting it are compile errors). It
+// owns nothing external to release, so it is `#[trivial_drop]`: completing it is a no-op,
+// asserted once here, which makes `drop(t)` a SAFE final use — no per-call-site `unsafe`.
+#[trivial_drop]
 opaque move struct Ticket {
     id: u32,
 }
@@ -163,7 +166,7 @@ impl Ticket {
     }
     fn redeem(t: Ticket) -> u32 {
         let v: u32 = t.id;
-        unsafe { forget_unchecked(t); }  // the linear value's single consumption
+        drop(t); // safe linear completion (Ticket is #[trivial_drop])
         return v;
     }
 }

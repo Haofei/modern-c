@@ -69,3 +69,29 @@ export fn qualified_union_constructor() -> u32 {
     assert(token_value(Token.eof()) == 0);
     return 1;
 }
+
+// A linear `move` resource whose completion needs no release: `#[trivial_drop]` makes
+// `drop(t)` a safe final use (no `unsafe { forget_unchecked }`).
+#[trivial_drop]
+opaque move struct Ticket {
+    id: u32,
+}
+
+impl Ticket {
+    fn issue(n: u32) -> Ticket {
+        return .{ .id = n };
+    }
+    fn redeem(t: Ticket) -> u32 {
+        let v: u32 = t.id;
+        drop(t); // safe — Ticket is #[trivial_drop]
+        return v;
+    }
+}
+
+#[test]
+export fn trivial_drop_linear_resource() -> u32 {
+    let t: Ticket = Ticket.issue(7);
+    let v: u32 = Ticket.redeem(t); // consumes the linear Ticket (drop inside is safe)
+    assert(v == 7);
+    return 1;
+}

@@ -88,6 +88,12 @@ pub const Checker = struct {
     // duration of checkModule so the move/liveness pass (D.7) can classify
     // bindings. Empty for the common case (no move types → the pass is a no-op).
     move_types: ?*const std.StringHashMap(void) = null,
+    // Names of `move struct` types marked `#[trivial_drop]` (section 18.1): the author
+    // asserts, once at the declaration, that completing the resource needs no release, so
+    // `drop(x)` is a SAFE final use (no `unsafe { forget_unchecked }` at every call site).
+    // A resource's release obligation is not visible in its field types, so this cannot be
+    // inferred — it is an explicit author assertion, like `unsafe`, moved to the boundary.
+    trivial_drop_types: ?*const std.StringHashMap(void) = null,
     // A module-level Context used during the move pass to infer a switch subject's Result
     // type, so an arm binding (`ok(p)`) can be recognized as a linear `move` value.
     move_ctx: ?*const Context = null,
@@ -261,15 +267,30 @@ pub const Checker = struct {
 
         var move_types = std.StringHashMap(void).init(self.reporter.allocator);
         defer move_types.deinit();
+        var trivial_drop_types = std.StringHashMap(void).init(self.reporter.allocator);
+        defer trivial_drop_types.deinit();
         for (module.decls) |decl| {
             if (decl.kind == .struct_decl and decl.kind.struct_decl.is_move) {
                 move_types.put(decl.kind.struct_decl.name.text, {}) catch {
                     self.oom = true;
                 };
             }
+            if (declHasTrivialDrop(decl)) {
+                if (decl.kind == .struct_decl and decl.kind.struct_decl.is_move) {
+                    trivial_drop_types.put(decl.kind.struct_decl.name.text, {}) catch {
+                        self.oom = true;
+                    };
+                } else {
+                    // `#[trivial_drop]` asserts a linear resource's completion is a no-op; it
+                    // is meaningless on anything but a `move struct`.
+                    self.errorCode(decl.span, "E_TRIVIAL_DROP_NOT_MOVE", "#[trivial_drop] applies only to a `move struct` (it asserts the resource's completion needs no release)");
+                }
+            }
         }
         self.move_types = &move_types;
         defer self.move_types = null;
+        self.trivial_drop_types = &trivial_drop_types;
+        defer self.trivial_drop_types = null;
 
         for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
 
@@ -750,6 +771,29 @@ pub const Checker = struct {
             }
         }
         return false;
+    }
+
+    // The `move struct` type NAME a type denotes (resolving aliases), or null. Like
+    // isMoveTypeName but yields the name so it can be looked up in trivial_drop_types.
+    fn moveTypeNameOf(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+        const move_types = self.move_types orelse return null;
+        var cur = ty;
+        var guard: usize = 0;
+        while (guard < 64) : (guard += 1) {
+            switch (cur.kind) {
+                .name => |n| {
+                    if (move_types.contains(n.text)) return n.text;
+                    if (aliases.get(n.text)) |target| {
+                        cur = target;
+                        continue;
+                    }
+                    return null;
+                },
+                .generic => |g| return if (move_types.contains(g.base.text)) g.base.text else null,
+                else => return null,
+            }
+        }
+        return null;
     }
 
     // Whether `ty` embeds a linear `move` resource *by value* — directly, in an array, or
@@ -1464,8 +1508,11 @@ pub const Checker = struct {
                 // does not cascade into use-after-move noise.)
                 if (isDropCall(c.callee.*)) {
                     for (c.args) |arg| {
-                        if (self.exprIsMoveTyped(arg, state, aliases)) {
-                            self.errorCode(arg.span, "E_DROP_LINEAR_RESOURCE", "a linear `move` value cannot be `drop`ped (it frees nothing); release it with its free function, or `forget_unchecked` it in an unsafe block once its contents have been transferred");
+                        // `#[trivial_drop]` move types may be safely `drop`ped (the author has
+                        // asserted completion needs no release); every other linear resource
+                        // must be released by its free function or `forget_unchecked` in unsafe.
+                        if (self.exprIsMoveTyped(arg, state, aliases) and !self.exprIsTrivialDrop(arg, state, aliases)) {
+                            self.errorCode(arg.span, "E_DROP_LINEAR_RESOURCE", "a linear `move` value cannot be `drop`ped (it frees nothing); release it with its free function, `forget_unchecked` it in an unsafe block once its contents have been transferred, or mark the type `#[trivial_drop]` if completing it needs no release");
                         }
                     }
                     for (c.args) |arg| self.moveConsume(arg, state, aliases);
@@ -1634,6 +1681,29 @@ pub const Checker = struct {
             }
         }
         return false;
+    }
+
+    // Whether `drop(expr)` is a SAFE final use: expr's `move` type is `#[trivial_drop]`,
+    // so the author has asserted completing it needs no release. Looks the type up via the
+    // binding's recorded type (or the expression's inferred type).
+    fn exprIsTrivialDrop(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        const set = self.trivial_drop_types orelse return false;
+        const name = self.exprMoveTypeName(expr, state, aliases) orelse return false;
+        return set.contains(name);
+    }
+
+    fn exprMoveTypeName(self: *Checker, expr: ast.Expr, state: *const std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
+        switch (expr.kind) {
+            .ident => |id| if (state.get(id.text)) |slot| {
+                if (slot.ty) |t| return self.moveTypeNameOf(t, aliases);
+            },
+            .grouped => |inner| return self.exprMoveTypeName(inner.*, state, aliases),
+            else => {},
+        }
+        if (self.move_ctx) |mctx| {
+            if (exprResultType(expr, mctx.*)) |ty| return self.moveTypeNameOf(ty, aliases);
+        }
+        return null;
     }
 
     // T1.2: if `name`'s slot is a pointer alias DERIVED from a tracked `move` binding (`let
@@ -9901,6 +9971,18 @@ fn isTrapCall(callee: ast.Expr) bool {
 
 fn isDropCall(callee: ast.Expr) bool {
     return isIdentNamed(callee, "drop");
+}
+
+// Whether a declaration carries `#[trivial_drop]` (the author's assertion that a `move`
+// resource's completion needs no release, making `drop` of it a safe final use).
+fn declHasTrivialDrop(decl: ast.Decl) bool {
+    for (decl.attrs) |attr| {
+        switch (attr.kind) {
+            .named => |n| if (std.mem.eql(u8, n.text, "trivial_drop")) return true,
+            else => {},
+        }
+    }
+    return false;
 }
 
 // `forget_unchecked(x)` consumes a linear `move` value WITHOUT running any release —
