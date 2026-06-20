@@ -29,11 +29,11 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # RISC-V freestanding target — the boot-lib C-compile helper consumes this `CFLAGS` array.
-CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
+CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
-kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/alloc.o" "$WORK"
+MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/alloc.o" "$WORK"
 kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"

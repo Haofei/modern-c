@@ -2629,6 +2629,19 @@ pub fn build(b: *std.Build) void {
     const llvm_stdio_test_step = b.step("llvm-stdio-test", "QuickJS-agent Phase 4 (LLVM): the all-MC printf family runs under QEMU");
     llvm_stdio_test_step.dependOn(&llvm_stdio_test_cmd.step);
 
+    // QuickJS-agent Phase 4 KEYSTONE: build the vendored QuickJS engine freestanding against the
+    // all-MC libc + openlibm, link the confined qjs_agent, and EVALUATE JavaScript under QEMU
+    // (1 + 2*3 == 7). Both backends.
+    const qjs_run_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-run-test.sh", "zig-out/bin/mcc", "c" });
+    qjs_run_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_run_test_step = b.step("qjs-run-test", "QuickJS-agent Phase 4: build QuickJS freestanding against the all-MC libc and evaluate JS under QEMU");
+    qjs_run_test_step.dependOn(&qjs_run_test_cmd.step);
+
+    const llvm_qjs_run_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-run-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_qjs_run_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_run_test_step = b.step("llvm-qjs-run-test", "QuickJS-agent Phase 4 (LLVM): build QuickJS freestanding and evaluate JS under QEMU");
+    llvm_qjs_run_test_step.dependOn(&llvm_qjs_run_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -3045,6 +3058,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_cnum_test_cmd.step);
     m0_step.dependOn(&stdio_test_cmd.step);
     m0_step.dependOn(&llvm_stdio_test_cmd.step);
+    m0_step.dependOn(&qjs_run_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_run_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);

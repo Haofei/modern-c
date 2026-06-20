@@ -244,3 +244,84 @@ export fn strtoll(nptr: *const u8, endptr: *mut u8, base: i32) -> i64 {
 export fn atoi(nptr: *const u8) -> i32 {
     return strtol(nptr, lc_as_ptr(0), 10) as i32; // null `char**` endptr: don't report the end
 }
+
+// ---- string -> double ----
+
+// 10^n via openlibm (linked alongside the libc in the app). Reasonable accuracy for parsing.
+extern fn pow(base: f64, exp: f64) -> f64;
+
+export fn strtod(nptr: *const u8, endptr: *mut u8) -> f64 {
+    var p: usize = nptr as usize;
+    while isspace(lc_ld8(p) as i32) != 0 {
+        p = p + 1;
+    }
+    var neg: bool = false;
+    let sc: u8 = lc_ld8(p);
+    if sc == 43 {
+        p = p + 1;
+    } else if sc == 45 {
+        neg = true;
+        p = p + 1;
+    }
+
+    var value: f64 = 0.0;
+    var any: bool = false;
+    var exp10: i64 = 0;
+
+    while isdigit(lc_ld8(p) as i32) != 0 {
+        value = value * 10.0 + ((lc_ld8(p) - 48) as f64);
+        any = true;
+        p = p + 1;
+    }
+    if lc_ld8(p) == 46 { // '.'
+        p = p + 1;
+        while isdigit(lc_ld8(p) as i32) != 0 {
+            value = value * 10.0 + ((lc_ld8(p) - 48) as f64);
+            exp10 = exp10 - 1;
+            any = true;
+            p = p + 1;
+        }
+    }
+    if !any {
+        store_end(endptr as usize, nptr as usize);
+        return 0.0;
+    }
+
+    if lc_ld8(p) == 101 || lc_ld8(p) == 69 { // 'e'/'E'
+        var e: usize = p + 1;
+        var esign: bool = false;
+        let es: u8 = lc_ld8(e);
+        if es == 43 {
+            e = e + 1;
+        } else if es == 45 {
+            esign = true;
+            e = e + 1;
+        }
+        var eval: i64 = 0;
+        var edig: bool = false;
+        while isdigit(lc_ld8(e) as i32) != 0 {
+            if eval < 100000 {
+                eval = eval * 10 + ((lc_ld8(e) - 48) as i64);
+            }
+            edig = true;
+            e = e + 1;
+        }
+        if edig {
+            if esign {
+                exp10 = exp10 - eval;
+            } else {
+                exp10 = exp10 + eval;
+            }
+            p = e;
+        }
+    }
+
+    store_end(endptr as usize, p);
+    if exp10 != 0 && value != 0.0 {
+        value = value * pow(10.0, exp10 as f64);
+    }
+    if neg {
+        return -value;
+    }
+    return value;
+}

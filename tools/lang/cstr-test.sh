@@ -28,11 +28,11 @@ kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
+CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
-kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/cstr.o" "$WORK"
+MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/cstr.o" "$WORK"
 kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 # NOTE: no freestanding.o — cstr.mc IS the mem/str libc here.

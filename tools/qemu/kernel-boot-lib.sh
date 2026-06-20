@@ -47,10 +47,19 @@ kernel_boot_compile_mc_object() {
             "$CLANG" "${CFLAGS[@]}" -c "$work/module.c" -o "$out"
             ;;
         llvm)
+            # Default target is integer-only (rv64imac, lp64) to match the kernel. A caller that
+            # builds FP code (the all-MC libc: JS numbers / strtod are doubles) sets MC_FP=1 to
+            # select the hardware F/D unit + the lp64d ABI, matching its lp64d C objects.
+            local mc_mattr="+m,+a,+c"
+            local mc_abi="lp64"
+            if [ "${MC_FP:-0}" = 1 ]; then
+                mc_mattr="+m,+a,+f,+d,+c"
+                mc_abi="lp64d"
+            fi
             MC_CHECKS="$checks" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$src" -o "$out" \
                 -mtriple=riscv64-unknown-elf \
-                -mattr=+m,+a,+c \
-                -target-abi=lp64 \
+                -mattr="$mc_mattr" \
+                -target-abi="$mc_abi" \
                 -relocation-model=static \
                 -code-model=medium
             ;;

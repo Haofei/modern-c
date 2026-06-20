@@ -121,6 +121,47 @@ export fn strncmp(a: *const u8, b: *const u8, n: usize) -> i32 {
     return 0;
 }
 
+export fn strrchr(s: *const u8, c: i32) -> *mut u8 {
+    let base: usize = s as usize;
+    let target: u8 = c as u8;
+    var last: usize = 0; // 0 == not found yet (NULL)
+    var i: usize = 0;
+    while true {
+        let ch: u8 = lc_ld8(base + i);
+        if ch == target {
+            last = base + i + 1; // +1 so address 0 stays the not-found sentinel
+        }
+        if ch == 0 {
+            break;
+        }
+        i = i + 1;
+    }
+    if last == 0 {
+        return lc_as_ptr(0);
+    }
+    return lc_as_ptr(last - 1);
+}
+
+export fn strstr(haystack: *const u8, needle: *const u8) -> *mut u8 {
+    let h0: usize = haystack as usize;
+    let n0: usize = needle as usize;
+    if lc_ld8(n0) == 0 {
+        return lc_as_ptr(h0); // empty needle matches at the start
+    }
+    var i: usize = 0;
+    while lc_ld8(h0 + i) != 0 {
+        var j: usize = 0;
+        while lc_ld8(n0 + j) != 0 && lc_ld8(h0 + i + j) == lc_ld8(n0 + j) {
+            j = j + 1;
+        }
+        if lc_ld8(n0 + j) == 0 {
+            return lc_as_ptr(h0 + i);
+        }
+        i = i + 1;
+    }
+    return lc_as_ptr(0); // not found
+}
+
 export fn strchr(s: *const u8, c: i32) -> *mut u8 {
     let base: usize = s as usize;
     let target: u8 = c as u8;

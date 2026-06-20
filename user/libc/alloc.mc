@@ -22,9 +22,9 @@ import "std/addr.mc";
 import "std/mem.mc";
 import "user/libc/lcommon.mc";
 
-// Arena size. Lives in .bss, so the cost is page-table coverage, not file size. QuickJS will
-// want this larger (megabytes); kept at 1 MiB while bringing the allocator up.
-const ARENA_BYTES: usize = 1048576; // 1 MiB
+// Arena size. Lives in .bss, so the cost is page-table coverage, not file size. QuickJS runtime
+// init + evaluation needs several MiB.
+const ARENA_BYTES: usize = 8388608; // 8 MiB
 
 // 16-byte header in front of every user block: keeps the user pointer 16-aligned and stores
 // the total (header + payload) block size so free() can return it to the free-list.

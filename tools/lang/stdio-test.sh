@@ -30,14 +30,15 @@ kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
+CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
-kernel_boot_compile_mc_object "$BACKEND" "$LIBC" "$WORK/libc.o" "$WORK"
+MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$LIBC" "$WORK/libc.o" "$WORK"
 kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/libc.o" $SUPPORT_OBJ -o "$WORK/stdio.elf"
+bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
+"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/libc.o" $SUPPORT_OBJ "$WORK/libm.a" -o "$WORK/stdio.elf"
 
 OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
         -kernel "$WORK/stdio.elf" 2>/dev/null || true)"
