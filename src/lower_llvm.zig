@@ -285,6 +285,13 @@ const LlvmEmitter = struct {
     global_initializers: std.StringHashMap(ast.Expr) = undefined,
     local_types: std.StringHashMap(ast.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
+    // While a function body is being emitted, `entry_allocas` collects every `alloca`
+    // so they land at the TOP of the entry block (the LLVM rule: an alloca in a non-entry
+    // block — e.g. a loop body — is a DYNAMIC stack allocation that grows the stack every
+    // iteration and is never reclaimed until the function returns). Routing all allocas to
+    // the entry block makes them static, so the slot is reused across iterations. Null
+    // outside a function body, in which case `emitAlloca` falls back to streaming inline.
+    entry_allocas: ?*std.ArrayList(u8) = null,
     loop_stack: std.ArrayList(LoopLabels) = undefined,
     defer_stack: std.ArrayList(ast.Expr) = undefined,
     string_literals: std.ArrayList(StringLiteralGlobal) = undefined,
@@ -820,17 +827,37 @@ const LlvmEmitter = struct {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, "{s} %{s}", .{ try self.llvmType(param.ty), param.name.text });
         }
-        if (self.current_debug_scope) |scope| {
-            try self.out.print(self.allocator, "){s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, scope });
-        } else {
-            try self.out.print(self.allocator, "){s} {{\nbb_entry:\n", .{attr_str});
-        }
+        // The naked path needs no entry-alloca buffering: its body is a single asm stmt.
         if (naked) {
+            if (self.current_debug_scope) |scope| {
+                try self.out.print(self.allocator, "){s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, scope });
+            } else {
+                try self.out.print(self.allocator, "){s} {{\nbb_entry:\n", .{attr_str});
+            }
             self.temp_index = 0;
             try self.emitAsmStmt(ast_query.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
             try self.out.appendSlice(self.allocator, "  unreachable\n}\n\n");
             return;
         }
+
+        // Emit the body into a scratch buffer while routing every alloca to a separate
+        // entry-block buffer (see `entry_allocas`). After the body is built we splice them:
+        //   define …(…) {  bb_entry:  <all allocas>  <body>  }
+        // so each local slot is a STATIC entry-block alloca — reused across loop iterations
+        // rather than re-allocated each time (which would grow the stack without bound and
+        // eventually corrupt memory).
+        var body_buf: std.ArrayList(u8) = .empty;
+        defer body_buf.deinit(self.allocator);
+        var alloca_buf: std.ArrayList(u8) = .empty;
+        defer alloca_buf.deinit(self.allocator);
+        const real_out = self.out;
+        self.out = &body_buf;
+        self.entry_allocas = &alloca_buf;
+        defer {
+            self.out = real_out;
+            self.entry_allocas = null;
+        }
+
         self.temp_index = 0;
         self.trap_index = 0;
         self.local_types.clearRetainingCapacity();
@@ -840,7 +867,7 @@ const LlvmEmitter = struct {
             try self.local_types.put(param.name.text, param.ty);
             if (self.isAggregateType(param.ty) or self.atomicPayloadType(param.ty) != null) {
                 const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{param.name.text});
-                try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(param.ty) });
+                try self.emitAlloca(ptr, try self.llvmType(param.ty));
                 try self.out.print(self.allocator, "  store {s} %{s}, ptr {s}\n", .{ try self.llvmType(param.ty), param.name.text, ptr });
                 try self.local_slots.put(param.name.text, .{ .ty = param.ty, .ptr = ptr });
             }
@@ -855,6 +882,17 @@ const LlvmEmitter = struct {
                 return error.UnsupportedLlvmEmission;
             }
         }
+
+        // Splice signature + entry label + hoisted allocas + body into the real output.
+        self.out = real_out;
+        self.entry_allocas = null;
+        if (self.current_debug_scope) |scope| {
+            try self.out.print(self.allocator, "){s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, scope });
+        } else {
+            try self.out.print(self.allocator, "){s} {{\nbb_entry:\n", .{attr_str});
+        }
+        try self.out.appendSlice(self.allocator, alloca_buf.items);
+        try self.out.appendSlice(self.allocator, body_buf.items);
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
@@ -1190,11 +1228,25 @@ const LlvmEmitter = struct {
         }
     }
 
+    /// Emit a single `alloca` for a function-local slot. It is routed to the entry-block
+    /// buffer (`entry_allocas`) so the slot is a STATIC alloca regardless of where the
+    /// declaration textually appears — critical for declarations inside loops, where an
+    /// alloca emitted in the loop body would grow the stack every iteration (a real bug
+    /// that corrupts memory once the loop runs enough times). Falls back to inline emission
+    /// if used outside a function body (defensive; all real callers run inside one).
+    fn emitAlloca(self: *LlvmEmitter, ptr: []const u8, ty: []const u8) !void {
+        if (self.entry_allocas) |buf| {
+            try buf.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, ty });
+        } else {
+            try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, ty });
+        }
+    }
+
     /// Emit the common "allocate a slot then store a value into it" idiom:
-    ///   {ptr} = alloca {ty}
-    ///   store {ty} {value}, ptr {ptr}{dbg}
+    ///   {ptr} = alloca {ty}   (hoisted to the entry block)
+    ///   store {ty} {value}, ptr {ptr}{dbg}   (at the current position)
     fn emitAllocaStore(self: *LlvmEmitter, ptr: []const u8, ty: []const u8, value: []const u8) !void {
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, ty });
+        try self.emitAlloca(ptr, ty);
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ ty, value, ptr, try self.debugCallSuffix() });
     }
 
@@ -1431,7 +1483,7 @@ const LlvmEmitter = struct {
         const resolved_ty = self.resolveAliasType(ty);
         const name = local.names[0].text;
         const ptr = try self.nextBindingPtr(name);
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, llvm_ty });
+        try self.emitAlloca(ptr, llvm_ty);
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
         if (isUninitExpr(init)) {
@@ -1684,8 +1736,8 @@ const LlvmEmitter = struct {
 
         const index_ptr = try self.nextTemp();
         const binding_ptr = try self.nextBindingPtr(binding.text);
-        try self.out.print(self.allocator, "  {s} = alloca i64\n", .{index_ptr});
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ binding_ptr, element_llvm });
+        try self.emitAlloca(index_ptr, "i64");
+        try self.emitAlloca(binding_ptr, element_llvm);
         try self.out.print(self.allocator, "  store i64 0, ptr {s}\n", .{index_ptr});
 
         var iterable_slot: ?LocalSlot = null;
@@ -1694,7 +1746,7 @@ const LlvmEmitter = struct {
             .slice => {
                 const ptr = try self.nextTemp();
                 const value = try self.emitExpr(iterable, iterable_ty);
-                try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(iterable_ty) });
+                try self.emitAlloca(ptr, try self.llvmType(iterable_ty));
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}\n", .{ try self.llvmType(iterable_ty), value, ptr });
                 iterable_slot = .{ .ty = iterable_ty, .ptr = ptr };
                 iterable_ptr = ptr;
@@ -2569,7 +2621,7 @@ const LlvmEmitter = struct {
     fn emitArrayLiteralValue(self: *LlvmEmitter, array_ty: ast.TypeExpr, items: []const ast.Expr) ![]const u8 {
         if (array_ty.kind != .array) return error.UnsupportedLlvmEmission;
         const ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(array_ty) });
+        try self.emitAlloca(ptr, try self.llvmType(array_ty));
         try self.emitArrayLiteralStores(ptr, array_ty, items);
         const value = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ value, try self.llvmType(array_ty), ptr });
@@ -2579,7 +2631,7 @@ const LlvmEmitter = struct {
     fn emitStructLiteralValue(self: *LlvmEmitter, struct_ty: ast.TypeExpr, fields: []const ast.StructLiteralField) ![]const u8 {
         if (self.structDeclForType(struct_ty) == null) return error.UnsupportedLlvmEmission;
         const ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, try self.llvmType(struct_ty) });
+        try self.emitAlloca(ptr, try self.llvmType(struct_ty));
         try self.emitStructLiteralStores(ptr, struct_ty, fields);
         const value = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ value, try self.llvmType(struct_ty), ptr });
@@ -3154,7 +3206,7 @@ const LlvmEmitter = struct {
         if (!typeNameEql(left_ty, "bool") or !typeNameEql(right_ty, "bool")) return error.UnsupportedLlvmEmission;
 
         const result_ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = alloca i1\n", .{result_ptr});
+        try self.emitAlloca(result_ptr, "i1");
 
         const left = try self.emitExpr(node.left.*, left_ty);
         const rhs_label = try self.nextLabel(if (node.op == .logical_and) "logic_and_rhs" else "logic_or_rhs");
@@ -3397,8 +3449,8 @@ const LlvmEmitter = struct {
 
         const index_ptr = try self.nextTemp();
         const result_ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = alloca i64\n", .{index_ptr});
-        try self.out.print(self.allocator, "  {s} = alloca i1\n", .{result_ptr});
+        try self.emitAlloca(index_ptr, "i64");
+        try self.emitAlloca(result_ptr, "i1");
         try self.out.print(self.allocator, "  store i64 0, ptr {s}\n", .{index_ptr});
         try self.out.print(self.allocator, "  store i1 0, ptr {s}\n", .{result_ptr});
 
@@ -3724,7 +3776,7 @@ const LlvmEmitter = struct {
         const union_llvm = try self.llvmType(expected_ty);
         const ptr = try self.nextTemp();
         const tag_ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, union_llvm });
+        try self.emitAlloca(ptr, union_llvm);
         try self.out.print(self.allocator, "  store {s} zeroinitializer, ptr {s}{s}\n", .{ union_llvm, ptr, try self.debugCallSuffix() });
         try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, ptr });
         try self.out.print(self.allocator, "  store i32 {d}, ptr {s}{s}\n", .{ case_index, tag_ptr, try self.debugCallSuffix() });
@@ -3762,7 +3814,7 @@ const LlvmEmitter = struct {
         const union_llvm = try self.llvmType(union_ty);
         const ptr = try self.nextTemp();
         const tag_ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, union_llvm });
+        try self.emitAlloca(ptr, union_llvm);
         try self.out.print(self.allocator, "  store {s} zeroinitializer, ptr {s}{s}\n", .{ union_llvm, ptr, try self.debugCallSuffix() });
         try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, ptr });
         try self.out.print(self.allocator, "  store i32 {d}, ptr {s}{s}\n", .{ case_index, tag_ptr, try self.debugCallSuffix() });
@@ -3891,8 +3943,8 @@ const LlvmEmitter = struct {
 
         const index_ptr = try self.nextTemp();
         const acc_ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = alloca i64\n", .{index_ptr});
-        try self.out.print(self.allocator, "  {s} = alloca i128\n", .{acc_ptr});
+        try self.emitAlloca(index_ptr, "i64");
+        try self.emitAlloca(acc_ptr, "i128");
         try self.out.print(self.allocator, "  store i64 0, ptr {s}\n", .{index_ptr});
         try self.out.print(self.allocator, "  store i128 0, ptr {s}\n", .{acc_ptr});
 
@@ -3959,8 +4011,8 @@ const LlvmEmitter = struct {
 
         const index_ptr = try self.nextTemp();
         const acc_ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = alloca i64\n", .{index_ptr});
-        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ acc_ptr, element_llvm });
+        try self.emitAlloca(index_ptr, "i64");
+        try self.emitAlloca(acc_ptr, element_llvm);
         try self.out.print(self.allocator, "  store i64 0, ptr {s}\n", .{index_ptr});
         try self.out.print(self.allocator, "  store {s} 0.000000e+00, ptr {s}\n", .{ element_llvm, acc_ptr });
 
