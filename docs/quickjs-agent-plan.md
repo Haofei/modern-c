@@ -58,9 +58,11 @@ boundary").
 | Heap / allocator | partial | `std/alloc.mc` (alloc_bytes/free_bytes), kernel heap |
 | libc core | minimal | `std/libc.mc`: memeq/strlen/atoi |
 | libm | thin | `std/math.mc`: sqrt/sin/cos/exp/log/tanh only |
-| Threads: preemptive scheduling, SMP run queues + work stealing, context switch | done | `kernel/core/sched.mc` (sched_spawn/yield), `preempt_demo` (timer preemption), `kernel/core/smprq.mc`, `kernel/arch/riscv64/context.mc` |
-| Message passing (Worker postMessage) | done | `kernel/lib/mailbox.mc` (mailbox_post/take/take_from) |
-| Userspace thread spawn + multi-thread-per-confined-agent | NOT done — kernel threads exist; not exposed to a U-mode agent (Phase 7) | — |
+| Threads: a COOPERATIVE round-robin scheduler + context switch | done | `kernel/core/sched.mc` ("cooperative for now; timer-tick preemption is the next step"), `kernel/arch/riscv64/context.mc` |
+| Timer-tick preemption | demonstrated in a demo runtime, NOT in the core scheduler | `tests/qemu/proc/preempt_demo.mc` (timer → `sched_yield`) |
+| SMP per-core run-queue + work-steal | a PRIMITIVE only, not an integrated confined-U-mode SMP scheduler | `kernel/core/smprq.mc` |
+| Message passing (Worker postMessage) | primitive present, NO internal locking | `kernel/lib/mailbox.mc` (post/take; blocking layered by the caller) |
+| Userspace thread spawn + multi-thread-per-confined-agent + concurrency hardening | NOT done (Phase 7) | — |
 
 The two things people fear most — "can it run a big foreign C blob?" and "can it be
 truly contained?" — are **already proven** (BearSSL; agent_confined). The remaining work is
@@ -211,8 +213,9 @@ Options, in order of preference:
 - Build flags: riscv64 freestanding (`--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
   -nostdlib -ffreestanding -mcmodel=medany`).
 - Config: disable heavy/unsupported features — **no bignum** (`CONFIG_BIGNUM` off, drops
-  `__int128`), **no os/std modules** (replaced by our binding). **Workers ENABLED** — but
-  bound to kernel threads + mailboxes (Phase 7), not the stock pthread/os worker.
+  `__int128`), **no os/std modules** (replaced by our binding), and **Workers DISABLED in
+  Phase 4** — the `Worker` constructor stubs to `E_UNSUPPORTED`. Workers are flipped on in
+  Phase 7, once the spawn/mailbox substrate exists, so Phase 4 has no forward dependency.
 - **`quickjs-libc-mc.c`** replaces `quickjs-libc.c`: implement only the `js_*` hooks the
   agent exposes (a `print`/console binding, and a `Tool`/`fetch` binding) against
   `SYS_WRITE`/`SYS_TOOL`/`SYS_NET` — this is the actual "QuickJS-with-the-ABI" glue, and it
@@ -242,39 +245,60 @@ QuickJS wants MBs for non-trivial scripts.
 **Effort: M.** The hard parts (isolation, capability front door) are done; this is integration.
 
 ### Phase 7 — Threads / Workers (concurrency)
-Expose the kernel's existing preemptive/SMP threading to the agent, and enable QuickJS
-Workers on top. QuickJS is not thread-safe within one JS context, so the model is
+QuickJS has **no internal multithreading within one runtime**
+([QuickJS os module](https://bellard.org/quickjs/quickjs.html#os-module)), so the model is
 **Web-Worker-style**: each `Worker` is a SEPARATE `JS_Runtime` on its own kernel thread,
-communicating only by message-passing — no shared JS heap, no interpreter locking.
-- **User ABI:** `SYS_SPAWN(entry, arg) -> tid` (a new U-mode thread sharing the agent's
-  address space + page table + capabilities) and `SYS_MSG_SEND/RECV(chan, ptr, len)` over
-  `kernel/lib/mailbox.mc`. The scheduler (`sched_spawn`) already does preemptive multi-thread
-  scheduling and SMP work-stealing; the new work is letting multiple U-mode threads share one
-  confined address space (one page table, per-thread stack/context) and accounting them to the
-  one agent.
-- **QuickJS binding:** map `JS_NewRuntime`-per-worker → `SYS_SPAWN`; `postMessage` →
-  `SYS_MSG_SEND`; the worker event loop → `SYS_MSG_RECV` on its mailbox. Structured-clone the
-  message bytes through the kernel (copy_*_user_pt), so the two runtimes never share heap.
-- **Containment:** all worker threads share the agent's sandbox and capabilities; every
-  effect from any thread is attributed to the one agent pid, and the policy budget is shared
-  (spawning workers cannot widen authority or escape the quota). On SMP the agent's workers
-  may run in parallel on multiple cores.
-- **Sync (if shared memory is later added):** `SharedArrayBuffer`/atomics over the kernel's
-  `std/sync` (spinlock/rwlock/seqlock) + atomics. v0 stays message-passing-only (simpler,
-  safer).
-- Gate: `qjs-worker-test` — a fixed `agent.js` spawns a Worker, `postMessage`s a value, the
-  worker replies, the main runtime asserts the round-trip; under QEMU, both backends.
+communicating only by **cloned messages** — no shared JS heap, no interpreter locking. The
+kernel pieces (cooperative scheduler, context switch, run-queue primitive, mailbox) exist but
+are **not yet an integrated, concurrency-hardened, confined-U-mode SMP scheduler** — Phase 7
+builds that integration. Scoped in two steps:
 
-**Effort: M.** Threading/scheduler/mailbox exist; the work is the spawn ABI + multi-thread
-sharing of a confined address space + the QuickJS worker binding.
+**v0 — single-core, contained (the deliverable):**
+- **User ABI:** `SYS_SPAWN(entry, arg) -> tid` (a new U-mode thread sharing the agent's ONE
+  satp / page table + capabilities; per-thread stack/context) and `SYS_MSG_SEND/RECV` over a
+  per-worker mailbox.
+- **Scheduler integration (the real work):** make `sched`/`context` schedule **multiple U-mode
+  threads that share one satp**, switching only the saved register context (not the page
+  table) between an agent's threads, and accounting all of them to the one agent. The core
+  scheduler is **cooperative today**; v0 runs threads cooperatively (yield at the JS event
+  loop / message wait) on a single hart, with optional timer-tick preemption (the mechanism
+  `preempt_demo` shows) layered in.
+- **QuickJS binding:** `Worker` → `SYS_SPAWN`; `postMessage` → `SYS_MSG_SEND`; the worker
+  event loop → `SYS_MSG_RECV`. Structured-clone the message bytes through the kernel
+  (`copy_*_user_pt`), so the two runtimes never share heap.
+- **Worker source resolution (no host FS):** QuickJS's `Worker(module_filename)` expects a
+  filename; with no host filesystem, resolve it via either a **named-module registry** the
+  agent is granted (capability-FS read through `SYS_TOOL`) or a custom **`Worker.fromSource`**
+  that takes the module text directly. Pick `Worker.fromSource` for v0 (no FS dependency);
+  move to capability-FS named modules alongside the §0 script-ingress upgrade.
+- **Containment:** all worker threads share the agent's sandbox + capabilities; every effect
+  is attributed to the one agent pid, and the policy budget is **shared** (workers cannot
+  widen authority or escape the quota).
+- Gate: `qjs-worker-test` — a fixed `agent.js` `Worker.fromSource(...)`s a worker,
+  round-trips a `postMessage`, asserts the reply; **single-core**, under QEMU, both backends.
+
+**v1 — true SMP parallelism (deferred, explicitly gated on hardening):**
+Running an agent's workers on multiple harts in parallel requires concurrency-hardening that
+does NOT exist yet: `mailbox.mc` has **no internal lock**, and `kernel/core/uaccess.mc` notes
+that under preemption/SMP the address space must be **locked against concurrent unmap / TLB
+shootdown** during `copy_*_user_pt`. So v1 adds: mailbox locking, address-space/map locking,
+and SMP run-queue (`smprq`) integration — and only then claims parallel execution. Until then
+Worker concurrency is preemptive-on-one-core, which is correct and sufficient for an agent.
+
+**Sync (if shared memory is ever added):** `SharedArrayBuffer`/atomics over `std/sync`
+(spinlock/rwlock/seqlock) + atomics — a v1+ item; v0 is message-passing only (simpler, safer).
+
+**Effort: M (v0) / M–H (v1).** v0 is the spawn ABI + shared-satp scheduler integration + the
+worker binding; v1 is the concurrency-hardening (locks) before SMP-parallel.
 
 ## 5. Acceptance criteria
 - `examples/apps/hello.mc` builds and runs as a confined U-mode ELF (Phase 1 gate).
 - A trivial `agent.js` (`print(1+2)`) runs through QuickJS on the kernel and prints `3`.
 - `agent.js` doing fs/net effects: allowed ops succeed, forbidden ops are denied at the
   capability boundary it cannot bypass (kernel unmapped), all audited+attributed.
-- (Phase 7) `agent.js` spawns a Worker, `postMessage`s a value, the worker replies, and the
-  main runtime asserts the round-trip — proving real preemptive/SMP concurrency, contained.
+- (Phase 7 v0) `agent.js` `Worker.fromSource(...)`s a worker, `postMessage`s a value, the
+  worker replies, and the main runtime asserts the round-trip — contained, **single-core**
+  (true SMP-parallel execution is Phase 7 v1, gated on mailbox + address-space locking).
 - All gates pass on **both** backends under QEMU; joined to `m0`.
 
 ## 6. Risks & how to retire each (early)
@@ -315,3 +339,9 @@ sandboxed."
 - **F4 (front-end/argv):** §0 + Phase 4 — custom `qjs_agent.c` (no argv); script ingress defined.
 - **Open Q (script ingress):** §0 — SYS_READ staged channel for v0, capability FS path long-term.
 - **Open Q (network layer):** §3.4 — brokered `net_fetch` is the default (single audited fetch event); `net_egress_check` is the lower raw-connect primitive.
+
+### Threads/Workers review (2026-06-20)
+- **Worker config dependency:** Phase 4 keeps `Worker` stubbed `E_UNSUPPORTED`; enabled only in Phase 7 (no forward dependency).
+- **Scheduler reality:** §1 + Phase 7 corrected — the core scheduler is COOPERATIVE (`sched.mc`); timer preemption is a demo-runtime mechanism; `smprq` is a primitive. Phase 7 v0 explicitly builds the confined-U-mode (shared-satp) scheduler integration.
+- **SMP claim:** split into v0 (single-core, contained) and v1 (true SMP-parallel) which is explicitly gated on mailbox locking + address-space/TLB-shootdown locking (`uaccess.mc` note) — not claimed before that lands.
+- **Worker source w/o host FS:** §Phase 7 — `Worker.fromSource(text)` for v0, capability-FS named modules later; matches QuickJS's separate-runtime + cloned-message semantics.
