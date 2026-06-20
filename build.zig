@@ -1446,6 +1446,12 @@ pub fn build(b: *std.Build) void {
     const llvm_sbi_boot_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "llvm",
     });
+    const fdt_boot_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_fdt_boot_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "llvm",
+    });
     const e1000_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "c",
     });
@@ -1466,6 +1472,13 @@ pub fn build(b: *std.Build) void {
     llvm_sbi_boot_test_cmd.step.dependOn(b.getInstallStep());
     const llvm_sbi_boot_test_step = b.step("llvm-sbi-boot-test", "LLVM-lowered boot under OpenSBI (real firmware)");
     llvm_sbi_boot_test_step.dependOn(&llvm_sbi_boot_test_cmd.step);
+
+    fdt_boot_test_cmd.step.dependOn(b.getInstallStep());
+    const fdt_boot_test_step = b.step("fdt-boot-test", "Boot under OpenSBI + parse DTB /memory (FDT discovery)");
+    fdt_boot_test_step.dependOn(&fdt_boot_test_cmd.step);
+    llvm_fdt_boot_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_fdt_boot_test_step = b.step("llvm-fdt-boot-test", "LLVM-lowered boot under OpenSBI + parse DTB /memory");
+    llvm_fdt_boot_test_step.dependOn(&llvm_fdt_boot_test_cmd.step);
 
 
     liveupdate_test_cmd.step.dependOn(b.getInstallStep());
