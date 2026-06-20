@@ -7,6 +7,7 @@
 // primitive, provided by crt0 (the ELF entry runtime). SYS_WRITE = 0 (user/abi.mc).
 
 const SYS_WRITE: u64 = 0;
+const SYS_READ: u64 = 1;
 const SYS_SUBMIT: u64 = 4;
 const SYS_POLL: u64 = 5;
 
@@ -30,4 +31,10 @@ export fn sys_write(fd: u64, buf: usize, len: usize) -> i64 {
 // The stdio.mc console hook: always writes to fd 1 (stdout) via the same syscall.
 export fn mc_console_write(buf: usize, len: usize) -> void {
     let ignored: u64 = mc_ecall(SYS_WRITE, 1, buf as u64, len as u64);
+}
+
+// §0 ingress: read the agent source the kernel holds into `buf` (up to `max` bytes); returns the
+// number of bytes delivered. The host calls this at boot instead of embedding the agent.
+export fn sys_read(buf: usize, max: usize) -> i64 {
+    return bitcast<i64>(mc_ecall(SYS_READ, buf as u64, max as u64, 0));
 }

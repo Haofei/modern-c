@@ -18,6 +18,13 @@ uint32_t app_kernel_unmapped(uintptr_t kernel_va);
 extern const unsigned char app_image[];
 extern const unsigned int app_image_len;
 
+// Weak default for the §0 ingress (SYS_READ): no embedded agent source. A test that serves an
+// agent.js via SYS_READ links a STRONG mc_agent_source (its embedded JS) that overrides this.
+__attribute__((weak)) uintptr_t mc_agent_source(uintptr_t *out_len) {
+    *out_len = 0;
+    return 0;
+}
+
 #define KERNEL_VA 0x80000000ULL
 
 // Backing store for the agent's page tables + the per-page frames the loader allocates. QuickJS

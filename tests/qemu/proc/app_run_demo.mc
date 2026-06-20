@@ -16,6 +16,7 @@ import "std/addr.mc";
 
 const SATP_SV39: u64 = 0x8000_0000_0000_0000;
 const SYS_WRITE: usize = 0;
+const SYS_READ: usize = 1;
 const SYS_GETPID: usize = 2;
 // Async I/O (Phase 7): SYS_SUBMIT queues a non-blocking op and returns a request id; SYS_POLL
 // drains one completion ((id, result) written to a user buffer). The agent's event loop submits,
@@ -80,6 +81,30 @@ fn sys_getpid(a: u64, b: u64, c: u64) -> u64 {
     return AGENT_PID;
 }
 
+// The agent source the kernel holds (embedded by the harness): returns its kernel address and
+// length. A weak default in the kernel runtime returns nothing for tests that embed no agent.
+extern fn mc_agent_source(out_len: *mut usize) -> usize;
+
+// SYS_READ(buf, max): §0 ingress — copy the kernel-held agent source into the agent's buffer
+// (through its page table), capped at `max`. Returns bytes delivered. This is how the host gets
+// its agent.js without the host ELF embedding it.
+fn sys_read(buf: u64, max: u64, c: u64) -> u64 {
+    var src_len: usize = 0;
+    let src_addr: usize = mc_agent_source(&src_len);
+    if src_addr == 0 || src_len == 0 {
+        return 0;
+    }
+    var n: usize = src_len;
+    if n > (max as usize) {
+        n = max as usize;
+    }
+    switch copy_to_user_pt(&g_uas, uptr(buf as usize), pa(src_addr), n) {
+        ok(v) => {}
+        err(e) => { return 0; }
+    }
+    return n as u64;
+}
+
 // SYS_SUBMIT(op, arg): start a non-blocking op. Here the op is a toy compute (`arg + 2`) whose
 // completion is enqueued immediately; a real op would complete later off an IRQ/DMA event onto
 // the same queue. Returns the request id so the agent can match the completion to its Promise.
@@ -130,6 +155,7 @@ fn sys_poll(buf: u64, b: u64, c: u64) -> u64 {
 export fn syscall_setup() -> void {
     syscall_init(&g_syscalls);
     syscall_register(&g_syscalls, SYS_WRITE, sys_write);
+    syscall_register(&g_syscalls, SYS_READ, sys_read);
     syscall_register(&g_syscalls, SYS_GETPID, sys_getpid);
     syscall_register(&g_syscalls, SYS_SUBMIT, sys_submit);
     syscall_register(&g_syscalls, SYS_POLL, sys_poll);

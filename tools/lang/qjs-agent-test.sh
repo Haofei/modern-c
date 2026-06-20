@@ -46,14 +46,6 @@ done
 "$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/user/runtime/crt0.c" -o "$WORK/crt0.o"
 "$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/user/runtime/app_traps.c" -o "$WORK/traps.o"
 
-# Embed the PURE-JS agent as a NUL-terminated C string for the host to evaluate.
-{
-    printf 'const char agent_js[] = {'
-    od -An -v -tx1 "$AGENT_JS" | tr -s ' ' '\n' | grep -v '^$' | sed 's/^/0x/; s/$/,/' | tr '\n' ' '
-    printf '0x00};\n'
-} >"$WORK/agent_js.c"
-"$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/agent_js.c" -o "$WORK/agent_js.o"
-
 CFLAGS=("${APP_CFLAGS[@]}")
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/user/libc/libc.mc" "$WORK/libc.o" "$WORK"
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/user/libc/syscall_user.mc" "$WORK/sys.o" "$WORK"
@@ -61,7 +53,7 @@ APP_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/app-support.o"
 bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
 
 "$LLD" -T "$HERE/user/runtime/user_qjs.ld" \
-    "$WORK/crt0.o" "$WORK/host.o" "$WORK/agent_js.o" \
+    "$WORK/crt0.o" "$WORK/host.o" \
     "$WORK/dtoa.o" "$WORK/libunicode.o" "$WORK/libregexp.o" "$WORK/quickjs.o" \
     "$WORK/libc.o" "$WORK/sys.o" "$WORK/traps.o" $APP_SUPPORT "$WORK/libm.a" \
     -o "$WORK/agent.elf"
@@ -73,6 +65,18 @@ bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
     printf '};\nconst unsigned int app_image_len = %s;\n' "$(wc -c < "$WORK/agent.elf")"
 } >"$WORK/app_image.c"
 
+# §0 ingress: embed the PURE-JS agent into the KERNEL and serve it via SYS_READ. The host ELF
+# stays fixed/generic — shipping a new agent changes only this .js, never the host. A STRONG
+# mc_agent_source here overrides the weak default in qjs_confined_runtime.c.
+{
+    printf 'static const char agent_js[] = {'
+    od -An -v -tx1 "$AGENT_JS" | tr -s ' ' '\n' | grep -v '^$' | sed 's/^/0x/; s/$/,/' | tr '\n' ' '
+    printf '};\n'
+    printf 'unsigned long mc_agent_source(unsigned long *out_len) {\n'
+    printf '    *out_len = sizeof agent_js;\n'
+    printf '    return (unsigned long)agent_js;\n}\n'
+} >"$WORK/agent_src.c"
+
 KERNEL_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
                -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
                -Wno-unused-parameter -Wno-unused-function -fno-builtin)
@@ -82,10 +86,11 @@ kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
 kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
 kernel_boot_compile_c_object "$USERMODE" "$WORK/usermode.o"
 "$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/app_image.c" -o "$WORK/app_image.o"
+"$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/agent_src.c" -o "$WORK/agent_src.o"
 K_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/k-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/usermode.o" \
-    "$WORK/runtime.o" "$WORK/thread.o" "$WORK/app_image.o" $K_SUPPORT -o "$WORK/kernel.elf"
+    "$WORK/runtime.o" "$WORK/thread.o" "$WORK/app_image.o" "$WORK/agent_src.o" $K_SUPPORT -o "$WORK/kernel.elf"
 
 OUT="$(timeout 120 "$QEMU" -machine virt -bios none -nographic -m 256 \
         -kernel "$WORK/kernel.elf" 2>/dev/null || true)"

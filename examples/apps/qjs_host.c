@@ -1,7 +1,7 @@
 // qjs_host — the GENERIC, fixed agent host. It is written ONCE and never changes per agent: it
-// injects the host API (print, host_async) as JS globals, evaluates whatever agent source is
-// provided (here embedded as agent_js[]; the plan's §0 ingress would instead SYS_READ it), and
-// runs the event loop. The agent itself is PURE JAVASCRIPT (examples/agents/agent.js).
+// injects the host API (print, host_async) as JS globals, SYS_READs the agent source the kernel
+// holds (the §0 ingress — the host embeds NO agent), evaluates it, and runs the event loop. The
+// agent itself is PURE JAVASCRIPT (examples/agents/agent.js).
 //
 // host_async(n) is the non-blocking-I/O binding: SYS_SUBMIT starts the op and returns a PENDING
 // Promise; the event loop SYS_POLLs the completion and resolves it. The agent uses plain
@@ -13,10 +13,12 @@
 extern long sys_write(unsigned long fd, const void *buf, unsigned long len);
 extern long sys_submit(uint64_t arg);
 extern long sys_poll(void *buf);
+extern long sys_read(unsigned long buf, unsigned long max); // §0 ingress
 size_t strlen(const char *s);
 
-// The agent's JavaScript source, embedded by the build (NUL-terminated).
-extern const char agent_js[];
+// The agent source is NOT embedded in the host — the host SYS_READs it from the kernel at boot,
+// so this host ELF is a FIXED artifact: shipping a different agent changes only the JS.
+static char agent_src[262144]; // 256 KiB scratch for the agent JS
 
 static void emit(const char *s, unsigned long n) { sys_write(1, s, n); }
 
@@ -78,8 +80,17 @@ int main(void) {
     JS_SetPropertyStr(ctx, global, "host_async", JS_NewCFunction(ctx, js_host_async, "host_async", 1));
     JS_FreeValue(ctx, global);
 
-    // Run the pure-JS agent.
-    JSValue v = JS_Eval(ctx, agent_js, strlen(agent_js), "agent.js", JS_EVAL_TYPE_GLOBAL);
+    // §0 ingress: read the agent source from the kernel (SYS_READ), then run it.
+    long alen = sys_read((unsigned long)agent_src, sizeof agent_src - 1);
+    if (alen <= 0) {
+        emit("host: no agent source\n", 22);
+        JS_FreeContext(ctx);
+        JS_FreeRuntime(rt);
+        return 1;
+    }
+    agent_src[alen] = '\0';
+
+    JSValue v = JS_Eval(ctx, agent_src, (size_t)alen, "agent.js", JS_EVAL_TYPE_GLOBAL);
     int rc = 0;
     if (JS_IsException(v)) {
         emit("host: agent threw\n", 18);
