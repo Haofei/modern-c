@@ -189,8 +189,10 @@ int main(void) {
             if (got > 0) {
                 int64_t id = (int64_t)ev.id;
                 int32_t val = ev.result;
+                int found = 0;
                 for (int i = 0; i < g_inflight; i++) {
                     if (g_ids[i] == id) {
+                        found = 1;
                         JSValue a = JS_NewInt32(ctx, val);
                         JSValue ret = JS_Call(ctx, g_resolvers[i], JS_UNDEFINED, 1, &a);
                         JS_FreeValue(ctx, ret);
@@ -202,10 +204,30 @@ int main(void) {
                         break;
                     }
                 }
+                // An id with no matching resolver is a host/runtime invariant violation (the kernel
+                // emitted a completion the host never registered). Fail loudly — never silently drop.
+                if (!found) {
+                    emit("host: unknown completion id\n", 28);
+                    rc = 1;
+                    break;
+                }
+            } else if (got < 0) {
+                // SYS_POLL faulted (should not happen with a valid &ev) — fail rather than spin.
+                emit("host: poll fault\n", 17);
+                rc = 1;
+                break;
             } else if (g_inflight == 0) {
                 break;
             }
-            if (++guard > 1000000) break;
+            // Guard against a stuck loop. Expiring while requests are still in flight means a
+            // completion never arrived — surface it as a failure with a clear marker, not a hang.
+            if (++guard > 1000000) {
+                if (g_inflight > 0) {
+                    emit("host: event-loop guard expired with in-flight requests\n", 55);
+                    rc = 1;
+                }
+                break;
+            }
         }
         for (int i = 0; i < g_inflight; i++) JS_FreeValue(ctx, g_resolvers[i]);
         g_inflight = 0;
