@@ -62,8 +62,8 @@ boundary").
 | Timer-tick preemption | demonstrated in a demo runtime, NOT in the core scheduler | `tests/qemu/proc/preempt_demo.mc` (timer → `sched_yield`) |
 | SMP per-core run-queue + work-steal | a PRIMITIVE only, not an integrated confined-U-mode SMP scheduler | `kernel/core/smprq.mc` |
 | Message passing (Worker postMessage) | primitive present, NO internal locking | `kernel/lib/mailbox.mc` (post/take; blocking layered by the caller) |
-| Interrupt-driven networking (backs async I/O) | present (the kernel does real TCP/HTTP under QEMU) | kernel net stack |
-| Async I/O ABI: non-blocking submit + poll, submit→complete path, front-end event loop | NOT done (Phase 7 — the real-agent concurrency model) | — |
+| Real TCP/HTTP transport | present, but **SYNCHRONOUS / poll-mode + blocking** — `virtio_net` serves frames in "poll mode"; `net_fetch_tcp` blocks connect→send→recv | `kernel/drivers/virtio/virtio_net.mc:497`, `kernel/core/net_broker.mc` |
+| Async I/O ABI: non-blocking submit + poll + completion path + front-end event loop | NOT done (Phase 7 — the real-agent concurrency model; includes making net completion-driven) | — |
 | Userspace thread spawn + Workers (CPU-parallel) + concurrency hardening | NOT done (Phase 8 — optional) | — |
 
 The two things people fear most — "can it run a big foreign C blob?" and "can it be
@@ -161,6 +161,30 @@ kernel does the transport and returns the bytes as a **single audited fetch even
 gating raw connects. `net_egress_check` remains the lower-level primitive for a future
 raw-socket capability if one is ever granted.
 
+**Audit note (current reality):** FS/path-cap denials ARE audited (the `fs_toolserver`/
+`agent_fs` path records denied attempts), but the **brokered net path audits only ADMITTED
+egress** — `net_broker` states a denied destination "spends no budget, sends no packet, and
+is NOT audited as a real egress." So "every forbidden effect is audited" is true for FS today
+but NOT for brokered net. Phase 7 must add a **denied-at-submit audit record** for async
+broker calls (a deny event tagged to the agent) to make the claim uniform; until then the
+acceptance language distinguishes the two (see §5).
+
+### 3.5 Async memory ownership (no retained user pointers)
+A non-blocking `SYS_SUBMIT` opens a window between submit and completion during which the
+agent's JS thread keeps running — it may move (GC), free, reuse, or (in principle) unmap the
+buffers it named. **The kernel must therefore retain NO user pointer across that window:**
+- **At submit:** `copy_from_user_pt` **all** referenced input bytes (the request struct AND
+  every path/body it points at, each bounded by a max length) into **kernel-owned** buffers.
+  After `SYS_SUBMIT` returns, the kernel holds only kernel memory — the agent may do anything
+  to its own buffers.
+- **The result** lives in a **kernel-owned** completion buffer (bounded; oversize ⇒ `E_2BIG`
+  or a truncation flag).
+- **At poll:** `SYS_POLL` takes a **fresh user buffer supplied at poll time** and
+  `copy_to_user_pt`s the completed bytes into it then — never a pointer captured at submit.
+- A bad pointer at either step ⇒ `-E_FAULT`; the per-agent in-flight count and total async
+  buffer bytes are **bounded** (a quota, tied to the policy plane) so an agent can't pin
+  unbounded kernel memory by submitting and never polling.
+
 ## 4. Phases
 
 ### Phase 1 — Userspace SDK (QuickJS-agnostic; the spine)
@@ -257,25 +281,40 @@ single-threaded JS; concurrency comes from an **async event loop over non-blocki
 which is the standard model (Node/browser) and is what makes the agent actually work.
 - **Non-blocking ABI:** `SYS_SUBMIT(req)` queues a Tool/Net request and returns a handle
   immediately; `SYS_POLL(events, max, timeout)` returns the completed handles + results,
-  blocking the agent **only when it has nothing else to do**. (The existing blocking
-  `SYS_TOOL`/`SYS_NET` remain for simple synchronous use.)
-- **Kernel-side concurrency (this is where threading actually matters):** the kernel performs
-  the fetch/fs op concurrently — IRQ-driven networking + a kernel worker/queue — while the
-  agent's single JS thread keeps running, then posts the completion. The scheduler +
-  interrupt-driven net already exist; this wires submit→complete to them.
+  blocking the agent **only when it has nothing else to do**. (The blocking `SYS_TOOL`/
+  `SYS_NET` remain for simple synchronous use.) Memory ownership follows §3.5 — submit copies
+  all inputs into kernel-owned buffers, poll copies results into a poll-time user buffer; no
+  user pointer is retained across the async window.
+- **Kernel-side concurrency — what actually needs a thread, and what doesn't:**
+  - **Interrupt/DMA-backed I/O needs NO per-request thread** — record the pending request,
+    kick the device, return; a completion ISR (or the existing serve loop) posts the result;
+    `SYS_POLL` collects it (the `epoll`/`io_uring` model). While the agent has nothing to do,
+    the *scheduler* runs other agents — that is multitasking, not a per-I/O thread.
+  - **The current net path is NOT yet completion-driven.** `virtio_net` serves in **poll
+    mode** and `net_fetch_tcp` **blocks** connect→send→recv. So part of Phase 7 is making the
+    transport non-blocking: drive completion from the serve/poll loop (or add RX-IRQ) and turn
+    `net_fetch_tcp` into a submit→advance→complete state machine over the socket layer.
+  - **A kernel worker thread is needed ONLY for genuinely-blocking ops with no completion
+    event** (a slow synchronous device, heavy CPU). The in-memory capability FS is fast, so FS
+    tool calls just complete synchronously in the handler (mark complete immediately) — no
+    thread.
 - **Front-end event loop:** `qjs_agent` runs `JS_ExecutePendingJob` (QuickJS's Promise/async
   job queue) interleaved with `SYS_POLL`; an I/O completion resolves the JS Promise that
   `SYS_SUBMIT` returned. Now `await tool(...)` and `Promise.all([...])` work, and N tool calls
   run concurrently from one JS thread.
-- **Containment unchanged:** every submitted request still goes through the capability front
-  door, audited+attributed; async changes *when* the result returns, not *what is allowed*.
-- Gate: `qjs-async-test` — an `agent.js` that issues two concurrent allowed tool calls via
-  `Promise.all` and one denied call, asserting both results arrive and the denied one is
-  rejected, without blocking serially; under QEMU, both backends.
+- **Containment:** every submitted request still goes through the capability front door,
+  attributed; async changes *when* the result returns, not *what is allowed*. **Add the
+  denied-at-submit audit** for brokered net (per §3.4) so denied async egress is recorded +
+  attributed like FS denials — required for the §5 acceptance to hold uniformly.
+- Gate: `qjs-async-test` — proving REAL overlap, not a synchronous queue: `agent.js` submits
+  **two DELAYED tool calls** (deterministic mock tools that complete after a set tick, or two
+  real net fetches) via `Promise.all`, plus one denied call; the test asserts **both handles
+  were submitted before either completion is consumed**, both results then arrive, and the
+  denied one is recorded + rejected. Under QEMU, both backends.
 
-**Effort: M–H.** The ABI + event loop are moderate; the substantive part is the kernel
-submit/complete path over IRQ-driven I/O. **This phase, not Workers, is what a real agent
-needs** — do it before Phase 8.
+**Effort: M–H.** The ABI + event loop are moderate; the substantive part is making the net
+transport completion-driven (it is blocking/poll-mode today) and the async memory/quota
+bookkeeping. **This phase, not Workers, is what a real agent needs** — do it before Phase 8.
 
 ### Phase 8 — Threads / Workers (OPTIONAL — CPU-parallel subtasks)
 Workers are *not* the agent's concurrency model (that is Phase 7); they are an optional add
@@ -329,12 +368,16 @@ worker binding; v1 is the concurrency-hardening (locks) before SMP-parallel.
 ## 5. Acceptance criteria
 - `examples/apps/hello.mc` builds and runs as a confined U-mode ELF (Phase 1 gate).
 - A trivial `agent.js` (`print(1+2)`) runs through QuickJS on the kernel and prints `3`.
-- `agent.js` doing fs/net effects: allowed ops succeed, forbidden ops are denied at the
-  capability boundary it cannot bypass (kernel unmapped), all audited+attributed.
-- **(Phase 7 — the real-agent bar)** `agent.js` issues TWO concurrent allowed tool calls via
-  `Promise.all` + one denied call; both results arrive without serial blocking and the denied
-  one rejects — proving an async event loop over non-blocking I/O (the thing a sequential
-  blocking agent cannot do).
+- `agent.js` doing fs/net effects: allowed ops succeed; forbidden ops are denied at the
+  capability boundary it cannot bypass (kernel unmapped). **FS/path-cap denials are audited +
+  attributed today; brokered-net denials are audited only after Phase 7 adds the
+  denied-at-submit broker audit** (§3.4) — until then, assert net denials by their rejection,
+  not by an audit record.
+- **(Phase 7 — the real-agent bar)** `agent.js` submits TWO **independently-completing**
+  calls (deterministic delayed mock tools, or two real net fetches) via `Promise.all`, plus
+  one denied call; the test asserts **both handles were submitted before either completion is
+  consumed** (proving real overlap, not a synchronous queue), both results then arrive, and
+  the denied one is recorded + rejected.
 - (Phase 8 v0, optional) `agent.js` `Worker.fromSource(...)`s a worker, `postMessage`s a value, the
   worker replies, and the main runtime asserts the round-trip — contained, **single-core**
   (true SMP-parallel execution is Phase 8 v1, gated on mailbox + address-space locking).
@@ -389,3 +432,9 @@ sandboxed."
 - **SMP claim:** split into v0 (single-core, contained) and v1 (true SMP-parallel) which is explicitly gated on mailbox locking + address-space/TLB-shootdown locking (`uaccess.mc` note) — not claimed before that lands.
 - **Worker source w/o host FS:** §Phase 8 — `Worker.fromSource(text)` for v0, capability-FS named modules later; matches QuickJS's separate-runtime + cloned-message semantics.
 - **Real-agent concurrency (this review):** §3.2 + Phase 7 added an async-I/O event-loop model (non-blocking SYS_SUBMIT/SYS_POLL + front-end loop driving QuickJS jobs) as the REQUIRED concurrency for a real agent — single-JS-threaded, backed by kernel IRQ I/O. No JS engine supports shared-memory threads in one runtime, so "threads" for the agent means async I/O, not JS threads. Workers (shared-nothing, CPU-parallel) demoted to optional Phase 8.
+
+### Async I/O review (2026-06-20)
+- **Async memory lifetime (High):** §3.5 — submit copies all inputs into kernel-owned bounded buffers (no retained user pointer); result in a kernel buffer; `SYS_POLL` copies into a poll-time user buffer; in-flight count + async bytes are quota-bounded.
+- **Net is not interrupt-driven (Medium):** §1 + Phase 7 corrected — real TCP/HTTP exists but is **poll-mode/blocking** (`virtio_net.mc:497`, `net_fetch_tcp`); making the transport completion-driven is Phase 7 work. Also clarified that IRQ/DMA I/O needs no per-request thread; a kernel worker is only for blocking ops without a completion event.
+- **Async gate could pass synchronously (Medium):** Phase 7 + §5 — the gate now uses two **independently-completing** (delayed/real) calls and asserts **both submitted before either completion is consumed**, so a synchronous queue cannot pass it.
+- **Brokered-net denials unaudited (Medium):** §3.4 + §5 — `net_broker` audits only admitted egress (a denied destination "is NOT audited"). Phase 7 adds a denied-at-submit broker audit; until then acceptance distinguishes FS/path denials (audited) from brokered-net denials (asserted by rejection).
