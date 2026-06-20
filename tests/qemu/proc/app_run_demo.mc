@@ -25,12 +25,21 @@ const USER_LIMIT: usize = 0x0100_0000;
 const KBUF: usize = 256;
 const AGENT_PID: u64 = 7;
 
+// app_build status codes: the loader's typed LoadError, preserved across the u64-satp C ABI
+// boundary so callers (and tests) can tell WHY a load failed rather than seeing a bare 0.
+const LS_OK: u32 = 0;
+const LS_BADELF: u32 = 1;   // LoadError.BadElf — header / program-header table rejected
+const LS_TOOMANY: u32 = 2;  // LoadError.TooManyPages — a segment exceeds MAX_SEGMENT_PAGES
+const LS_NOFRAME: u32 = 3;  // LoadError.NoFrame — heap exhausted (root, leaf, or interior table)
+const LS_BADSEG: u32 = 4;   // LoadError.BadSegment — absurd/overlapping vaddr/memsz/filesz
+
 global g_heap: Heap;
 global g_pt: PageTable;
 global g_uas: UserAddrSpace;
 global g_syscalls: SyscallTable;
 global g_kbuf: [KBUF]u8;
 global g_entry: u64;
+global g_load_status: u32; // last app_build outcome (LS_*), readable via app_build_status()
 
 // Completion queue (FIFO) for the async-I/O syscalls + a 16-byte staging buffer for SYS_POLL.
 global g_comp_id: [COMP_CAP]u64;
@@ -173,20 +182,43 @@ export fn mc_syscall(number: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
 }
 
 // Build the agent's isolated address space from the app image, register the ABI, return the
-// satp to activate. Returns 0 on a malformed/hostile image.
+// satp to activate. Returns 0 on a malformed/hostile image — but records the SPECIFIC failure
+// class in g_load_status (readable via app_build_status), so a loader failure is no longer
+// collapsed indistinguishably to 0. Every allocation here is fallible: a hostile image cannot
+// trap the kernel, only produce a typed status.
 export fn app_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64 {
+    g_load_status = LS_OK;
     g_heap = heap_new(phys_range(pa(region_base), region_len));
-    g_pt = page_table_new(&g_heap);
+
+    // Root page table fallibly: even root-frame exhaustion is a typed NoFrame, not a trap.
+    switch page_table_try_new(&g_heap) {
+        ok(pt) => { g_pt = pt; }
+        err(e) => { g_load_status = LS_NOFRAME; return 0; }
+    }
 
     switch elf_load_image(image_base, image_len, &g_pt, &g_heap) {
         ok(e) => { g_entry = e; }
-        err(e) => { return 0; }
+        err(e) => {
+            switch e {
+                .BadElf => { g_load_status = LS_BADELF; }
+                .TooManyPages => { g_load_status = LS_TOOMANY; }
+                .NoFrame => { g_load_status = LS_NOFRAME; }
+                .BadSegment => { g_load_status = LS_BADSEG; }
+            }
+            return 0;
+        }
     }
 
     g_uas = user_addr_space(&g_pt, USER_BASE, USER_LIMIT);
 
     let root: PAddr = page_table_root(&g_pt);
     return SATP_SV39 | ((pa_value(root) >> 12) as u64);
+}
+
+// The typed outcome of the most recent app_build (LS_*). The C runtime prints this on a load
+// failure so the specific cause is visible, instead of a bare APP-LOAD-FAIL.
+export fn app_build_status() -> u32 {
+    return g_load_status;
 }
 
 export fn app_entry() -> u64 {

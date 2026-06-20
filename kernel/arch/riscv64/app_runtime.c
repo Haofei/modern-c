@@ -14,8 +14,20 @@ void usermode_setup(void);
 void enter_user(uintptr_t entry, uintptr_t user_sp);
 
 uint64_t app_build(uintptr_t image_base, uintptr_t image_len, uintptr_t region_base, uintptr_t region_len);
+uint32_t app_build_status(void); // typed LoadError class (LS_*) of the last app_build
 uint64_t app_entry(void);
 uint32_t app_kernel_unmapped(uintptr_t kernel_va);
+
+// Map app_build's typed status to a human marker, so a load failure says WHY (not a bare fail).
+static const char *load_status_str(uint32_t s) {
+    switch (s) {
+        case 1: return "APP-LOAD-FAIL: BadElf\n";
+        case 2: return "APP-LOAD-FAIL: TooManyPages\n";
+        case 3: return "APP-LOAD-FAIL: NoFrame\n";
+        case 4: return "APP-LOAD-FAIL: BadSegment\n";
+        default: return "APP-LOAD-FAIL: unknown\n";
+    }
+}
 
 // The app ELF bytes, embedded by the harness (od/xxd of build-app.sh's output).
 extern const unsigned char app_image[];
@@ -39,7 +51,7 @@ __attribute__((used)) void test_main(void) {
     uint64_t satp = app_build((uintptr_t)app_image, (uintptr_t)app_image_len,
                               (uintptr_t)region, (uintptr_t)sizeof(region));
     if (satp == 0) {
-        puts_("APP-LOAD-FAIL\n");
+        puts_(load_status_str(app_build_status()));
         mc_halt();
     }
 

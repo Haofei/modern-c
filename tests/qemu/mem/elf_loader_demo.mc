@@ -177,6 +177,61 @@ fn build_overlap_image() -> void {
     }
 }
 
+// A HOSTILE image with a corrupt ELF magic — the header parse must reject it (BadElf).
+fn build_badelf_image() -> void {
+    build_image();
+    img_u8(0, 0x00); // clobber the 0x7F magic byte
+}
+
+// A HOSTILE image whose single PT_LOAD claims a memsz spanning MORE than MAX_SEGMENT_PAGES
+// (4096) pages — the loader must reject it (TooManyPages) before allocating anything. filesz is
+// tiny so the image need not actually hold the bytes; the page-count check fires first.
+fn build_toomany_image() -> void {
+    var i: usize = 0;
+    while i < IMAGE_CAP {
+        g_image[i] = 0;
+        i = i + 1;
+    }
+    img_u8(0, 0x7F);
+    img_u8(1, 0x45);
+    img_u8(2, 0x4C);
+    img_u8(3, 0x46);
+    img_u8(4, 2);
+    img_u8(5, 1);
+    img_u8(6, 1);
+    img_u64(24, ENTRY);
+    img_u64(32, 64);
+    img_u16(54, 56);
+    img_u16(56, 1); // one program header
+    // memsz = 4097 pages = 0x100_1000 (> MAX_SEGMENT_PAGES * PAGE = 16 MiB). R|X, not W^X.
+    img_phdr(64, T_PT_LOAD, T_PF_R | T_PF_X, TEXT_OFF as u64, TEXT_VADDR as u64, 16, 0x0100_1000);
+}
+
+// Classify how `g_image` loads into a fresh heap over [pool_base, pool_base+pool_len): 0 = loaded
+// successfully, else the LoadError class as 1=BadElf, 2=TooManyPages, 3=NoFrame, 4=BadSegment.
+// Uses the fallible root allocation so even a pool too small for the root is a typed NoFrame.
+fn load_err_code(pool_base: usize, pool_len: usize) -> u32 {
+    var code: u32 = 0;
+    var heap: Heap = heap_new(phys_range(pa(pool_base), pool_len));
+    var p: PageTable = uninit;
+    switch page_table_try_new(&heap) {
+        ok(t) => { p = t; }
+        err(e) => { return 3; } // NoFrame: heap too small even for the root table
+    }
+    switch elf_load_image((&g_image[0]) as usize, IMAGE_CAP, &p, &heap) {
+        ok(e) => { code = 0; }
+        err(e) => {
+            switch e {
+                .BadElf => { code = 1; }
+                .TooManyPages => { code = 2; }
+                .NoFrame => { code = 3; }
+                .BadSegment => { code = 4; }
+            }
+        }
+    }
+    return code;
+}
+
 // Read a byte from a mapped VA by translating through the page table to its frame.
 fn read_va(pt: *PageTable, vaddr: usize) -> u8 {
     let phys: PAddr = page_table_translate(pt, va(vaddr));
@@ -261,28 +316,28 @@ export fn elf_loader_run() -> u32 {
         err(e) => { pass = 0; }
     }
 
-    // (f) HOSTILE-INPUT regression (review finding 5): a malformed ELF with OVERLAPPING PT_LOAD
-    //     segments must be REJECTED cleanly (the loader uses the non-trapping mapper and converts
-    //     the AlreadyMapped conflict into BadSegment) — it must NOT panic the kernel. A fresh
-    //     page table over the same pool; loading must fail (err), and we must reach this line.
+    // (f) TYPED LoadError classification (review item 1): each malformed/hostile image must map
+    //     to its SPECIFIC LoadError variant, and NONE may trap the kernel. This distinguishes the
+    //     four failure classes rather than collapsing them all to "did not load".
+    //   - overlapping PT_LOAD segments  -> BadSegment (4)  (non-trapping mapper -> AlreadyMapped)
     build_overlap_image();
-    var heap2: Heap = heap_new(phys_range(pa((&g_pool[0]) as usize), 262144));
-    var pt2: PageTable = page_table_new(&heap2);
-    switch elf_load_image((&g_image[0]) as usize, IMAGE_CAP, &pt2, &heap2) {
-        ok(e) => { pass = 0; } // overlapping segments must NOT load successfully
-        err(e) => {} // rejected (BadSegment) without panicking — correct
+    if load_err_code((&g_pool[0]) as usize, 262144) != 4 {
+        pass = 0;
     }
-
-    // (g) RESOURCE-EXHAUSTION regression (review finding 1): a well-formed image loaded into a
-    //     heap too small to hold its frames must fail with a TYPED error (NoFrame), not trap the
-    //     kernel via the bump allocator's exhaustion path. The 2-page pool covers the root table
-    //     but not the segment frames + interior tables, so the loader runs out mid-walk.
+    //   - corrupt ELF magic             -> BadElf (1)
+    build_badelf_image();
+    if load_err_code((&g_pool[0]) as usize, 262144) != 1 {
+        pass = 0;
+    }
+    //   - segment over MAX_SEGMENT_PAGES -> TooManyPages (2)
+    build_toomany_image();
+    if load_err_code((&g_pool[0]) as usize, 262144) != 2 {
+        pass = 0;
+    }
+    //   - heap too small for the frames  -> NoFrame (3)  (2-page pool; exhausts mid-walk)
     build_image();
-    var heap3: Heap = heap_new(phys_range(pa((&g_smallpool[0]) as usize), 8192));
-    var pt3: PageTable = page_table_new(&heap3);
-    switch elf_load_image((&g_image[0]) as usize, IMAGE_CAP, &pt3, &heap3) {
-        ok(e) => { pass = 0; } // a too-small heap must NOT yield a successful load
-        err(e) => {} // typed failure (NoFrame) without panicking — correct
+    if load_err_code((&g_smallpool[0]) as usize, 8192) != 3 {
+        pass = 0;
     }
 
     return pass;

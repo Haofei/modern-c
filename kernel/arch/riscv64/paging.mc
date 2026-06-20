@@ -103,9 +103,20 @@ export fn page_table_root(pt: *PageTable) -> PAddr {
     return pt.root;
 }
 
-// Create an empty page table (one zeroed root frame).
+// Create an empty page table (one zeroed root frame). Traps on heap exhaustion — for the
+// boot/init paths where a fresh heap that cannot yield one root frame is a kernel bug.
 export fn page_table_new(h: *mut Heap) -> PageTable {
     return .{ .root = alloc_table(h) };
+}
+
+// Non-trapping form: allocate the root frame fallibly, so a caller on a hostile-input path
+// (e.g. the ELF loader's app_build) can turn even root-table exhaustion into a typed error
+// rather than a kernel trap.
+export fn page_table_try_new(h: *mut Heap) -> Result<PageTable, HeapError> {
+    switch try_alloc_table(h) {
+        ok(root) => { return ok(.{ .root = root }); }
+        err(e) => { return err(e); }
+    }
 }
 
 // Why a mapping request was rejected.
