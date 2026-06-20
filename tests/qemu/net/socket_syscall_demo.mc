@@ -21,6 +21,15 @@ global g_syscalls: SyscallTable;
 global g_socks: SocketTable;
 global g_rxbuf: [RXBUF]u8;
 
+// Forge a UserPtr<u8> from a user-supplied integer address: re-tagging an int into
+// the UserPtr address class needs `unsafe` (kernel/core/uaccess.mc idiom). The audited
+// copy_to_user boundary still validates the range.
+fn uptr(a: usize) -> UserPtr<u8> {
+    var p: UserPtr<u8> = uninit;
+    unsafe { p = a as UserPtr<u8>; }
+    return p;
+}
+
 fn sys_putc(ch: u64, a: u64, b: u64) -> u64 {
     console_putc(ch as u8);
     return 0;
@@ -43,7 +52,7 @@ fn sys_recvfrom(sock: u64, buf: u64, len: u64) -> u64 {
     }
     var us: UserSpace = user_space(USER_BASE, USER_LIMIT);
     let src: PAddr = pa((&g_rxbuf[0]) as usize);
-    switch copy_to_user(&us, (buf as usize) as UserPtr<u8>, src, got) {
+    switch copy_to_user(&us, uptr(buf as usize), src, got) {
         ok(v) => {}
         err(e) => {
             return SYS_ERR;

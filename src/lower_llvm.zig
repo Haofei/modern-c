@@ -768,6 +768,9 @@ const LlvmEmitter = struct {
                 "zeroinitializer"
             else if (isPayloadDomainGenericName(node.base.text) and node.args.len == 1)
                 try self.zeroInitializer(node.args[0])
+            else if (isOpaqueAddressGenericName(node.base.text) and node.args.len == 1)
+                // UserPtr<T>/PhysPtr<T> lower to i64 (see llvmType); their zero is 0.
+                "0"
             else
                 error.UnsupportedLlvmEmission,
             else => error.UnsupportedLlvmEmission,
@@ -3267,6 +3270,14 @@ const LlvmEmitter = struct {
         if (self.integerBitsOf(source_ty) != null and typeNameEql(self.resolveAliasType(target_ty), "bool")) {
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = icmp ne {s} {s}, 0\n", .{ result, source_llvm, value });
+            return result;
+        }
+        // Float <-> float: widen f32->f64 (fpext) or narrow f64->f32 (fptrunc). Same-width
+        // float-to-float is already handled by the identical-llvm-type early return above.
+        if (self.isFloatTypeOf(source_ty) and self.isFloatTypeOf(target_ty)) {
+            const op = if (self.isF32TypeOf(source_ty)) "fpext" else "fptrunc";
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
             return result;
         }
         return error.UnsupportedLlvmEmission;

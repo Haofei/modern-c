@@ -17,6 +17,15 @@ const KERN_VA: usize = 0x2000_0000;     // a kernel-only page (no PTE_U)
 const UNMAPPED_VA: usize = 0x3000_0000; // never mapped
 const N: usize = 8;
 
+// Forge a UserPtr<u8> from a known test VA: re-tagging an integer into the
+// UserPtr address class needs `unsafe` (or a typed constructor), matching the
+// kernel/core/uaccess.mc idiom. The audited copy_*_user_pt boundary still checks it.
+fn uptr(a: usize) -> UserPtr<u8> {
+    var p: UserPtr<u8> = uninit;
+    unsafe { p = a as UserPtr<u8>; }
+    return p;
+}
+
 fn write_bytes(addr: PAddr, first: u8, n: usize) -> void {
     var i: usize = 0;
     while i < n {
@@ -56,13 +65,13 @@ export fn uaccess_pt_run() -> u32 {
     var uas: UserAddrSpace = user_addr_space(&pt, 0, 0x4000_0000);
 
     // copy_to_user: the bytes must land in the user frame.
-    switch copy_to_user_pt(&uas, USER_VA as UserPtr<u8>, ksrc, N) {
+    switch copy_to_user_pt(&uas, uptr(USER_VA), ksrc, N) {
         ok(v) => { if !bytes_are(uframe, 0xA0, N) { pass = 0; } }
         err(e) => { pass = 0; }
     }
 
     // copy_from_user: read the same bytes back into a kernel buffer.
-    switch copy_from_user_pt(&uas, kdst, USER_VA as UserPtr<u8>, N) {
+    switch copy_from_user_pt(&uas, kdst, uptr(USER_VA), N) {
         ok(v) => { if !bytes_are(kdst, 0xA0, N) { pass = 0; } }
         err(e) => { pass = 0; }
     }
@@ -74,13 +83,13 @@ export fn uaccess_pt_run() -> u32 {
 
     // A kernel-only page (no PTE_U) must be rejected (NotUserPage); its frame is not
     // written even though the source `ksrc` holds different bytes.
-    switch copy_to_user_pt(&uas, KERN_VA as UserPtr<u8>, ksrc, N) {
+    switch copy_to_user_pt(&uas, uptr(KERN_VA), ksrc, N) {
         ok(v) => { pass = 0; }
         err(e) => { if !bytes_are(kframe, 0x5A, N) { pass = 0; } } // rejected: kframe untouched
     }
 
     // An unmapped VA must be rejected (NotMapped); the kernel dst stays the sentinel.
-    switch copy_from_user_pt(&uas, kdst, UNMAPPED_VA as UserPtr<u8>, N) {
+    switch copy_from_user_pt(&uas, kdst, uptr(UNMAPPED_VA), N) {
         ok(v) => { pass = 0; }
         err(e) => { if !bytes_are(kdst, 0x5A, N) { pass = 0; } } // nothing copied in
     }
@@ -88,7 +97,7 @@ export fn uaccess_pt_run() -> u32 {
     // A range that starts in the mapped user page but runs off its end into the next
     // (unmapped) page must be rejected wholesale — nothing copied (the sentinel holds).
     let straddle: usize = USER_VA + 4096 - 4;
-    switch copy_from_user_pt(&uas, kdst, straddle as UserPtr<u8>, N) {
+    switch copy_from_user_pt(&uas, kdst, uptr(straddle), N) {
         ok(v) => { pass = 0; }
         err(e) => { if !bytes_are(kdst, 0x5A, N) { pass = 0; } }
     }

@@ -54,5 +54,10 @@ export fn entry() -> u32 {
     acc = (acc ^ ((q.pairs[0] as u64) << 9));
     acc = (acc ^ ((sizeof(WideWord) as u64) << 5));
 
-    return (acc & 0xFFFFFFFF) as u32;
+    // Check the folded overlay reads/writes + sizes against the known-correct snapshot.
+    // Both backends must agree on overlay storage size and byte aliasing, so any
+    // divergence or regression on EITHER backend makes entry() return 0. Returns 1 iff
+    // the overlay layout + member-read lowering are exactly as pinned.
+    if (acc & 0xFFFFFFFF) != 0x158E96C4 { return 0; }
+    return 1;
 }

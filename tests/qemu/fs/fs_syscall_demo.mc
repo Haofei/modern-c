@@ -25,6 +25,15 @@ global g_vfs: Vfs;
 global g_namebuf: [NAME_MAX]u8;
 global g_iobuf: [IO_MAX]u8;
 
+// Forge a UserPtr<u8> from a user-supplied integer address: re-tagging an int into
+// the UserPtr address class needs `unsafe` (kernel/core/uaccess.mc idiom). The audited
+// copy_*_user boundary still validates the range.
+fn uptr(a: usize) -> UserPtr<u8> {
+    var p: UserPtr<u8> = uninit;
+    unsafe { p = a as UserPtr<u8>; }
+    return p;
+}
+
 fn sys_putc(ch: u64, a: u64, b: u64) -> u64 {
     console_putc(ch as u8);
     return 0;
@@ -38,7 +47,7 @@ fn sys_open(name: u64, name_len: u64, a: u64) -> u64 {
     }
     var us: UserSpace = user_space(USER_BASE, USER_LIMIT);
     let dst: PAddr = pa((&g_namebuf[0]) as usize);
-    switch copy_from_user(&us, dst, (name as usize) as UserPtr<u8>, n) {
+    switch copy_from_user(&us, dst, uptr(name as usize), n) {
         ok(v) => {}
         err(e) => {
             return SYS_ERR;
@@ -62,7 +71,7 @@ fn sys_fwrite(fd: u64, buf: u64, len: u64) -> u64 {
     }
     var us: UserSpace = user_space(USER_BASE, USER_LIMIT);
     let dst: PAddr = pa((&g_iobuf[0]) as usize);
-    switch copy_from_user(&us, dst, (buf as usize) as UserPtr<u8>, n) {
+    switch copy_from_user(&us, dst, uptr(buf as usize), n) {
         ok(v) => {}
         err(e) => {
             return SYS_ERR;
@@ -95,7 +104,7 @@ fn sys_fread(fd: u64, buf: u64, len: u64) -> u64 {
     }
     var us: UserSpace = user_space(USER_BASE, USER_LIMIT);
     let src: PAddr = pa((&g_iobuf[0]) as usize);
-    switch copy_to_user(&us, (buf as usize) as UserPtr<u8>, src, nread) {
+    switch copy_to_user(&us, uptr(buf as usize), src, nread) {
         ok(v) => {}
         err(e) => {
             return SYS_ERR;

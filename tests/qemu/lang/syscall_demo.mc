@@ -21,6 +21,15 @@ global g_syscalls: SyscallTable;
 global g_kbuf: [KBUF_SIZE]u8;
 
 // sys_add(a, b) -> a + b
+// Forge a UserPtr<u8> from a user-supplied integer address: re-tagging an int into
+// the UserPtr address class needs `unsafe` (kernel/core/uaccess.mc idiom). The audited
+// copy_from_user boundary still validates the range.
+fn uptr(a: usize) -> UserPtr<u8> {
+    var p: UserPtr<u8> = uninit;
+    unsafe { p = a as UserPtr<u8>; }
+    return p;
+}
+
 fn sys_add(a: u64, b: u64, c: u64) -> u64 {
     return a + b;
 }
@@ -39,7 +48,7 @@ fn sys_write(ptr: u64, len: u64, unused: u64) -> u64 {
     if n > KBUF_SIZE {
         return SYS_ERR;
     }
-    let src: UserPtr<u8> = (ptr as usize) as UserPtr<u8>;
+    let src: UserPtr<u8> = uptr(ptr as usize);
     let dst: PAddr = pa((&g_kbuf[0]) as usize);
     var us: UserSpace = user_space(USER_BASE, USER_LIMIT);
     switch copy_from_user(&us, dst, src, n) {

@@ -2335,6 +2335,58 @@ pub fn build(b: *std.Build) void {
     const llvm_elf_run_test_step = b.step("llvm-elf-run-test", "Load an ELF64 from an LLVM-lowered kernel image and run it in U-mode under QEMU");
     llvm_elf_run_test_step.dependOn(&llvm_elf_run_test_cmd.step);
 
+    // The uaccess demos exercise kernel/core/uaccess.mc, which imports riscv paging.mc
+    // (sfence.vma) — not host-assemblable — so they run under QEMU on the real target,
+    // not on the host driver suite. One generic runtime+harness, parameterized by the
+    // fixture and its entry symbol.
+    const uaccess_pt_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c",
+        "tests/qemu/mem/uaccess_pt_demo.mc", "uaccess_pt_run", "uaccess-pt-test",
+    });
+    uaccess_pt_test_cmd.step.dependOn(b.getInstallStep());
+    const uaccess_pt_test_step = b.step("uaccess-pt-test", "Page-table-aware user copies under QEMU: Sv39 walk + per-page PTE_U/R/W checks; kernel-only page, unmapped hole, off-page straddle all rejected (imports riscv paging.mc, so QEMU-only)");
+    uaccess_pt_test_step.dependOn(&uaccess_pt_test_cmd.step);
+
+    const llvm_uaccess_pt_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm",
+        "tests/qemu/mem/uaccess_pt_demo.mc", "uaccess_pt_run", "uaccess-pt-test",
+    });
+    llvm_uaccess_pt_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_uaccess_pt_test_step = b.step("llvm-uaccess-pt-test", "Page-table-aware user copies under QEMU (LLVM backend): Sv39 walk + per-page PTE_U/R/W checks; kernel-only page, unmapped hole, off-page straddle all rejected");
+    llvm_uaccess_pt_test_step.dependOn(&llvm_uaccess_pt_test_cmd.step);
+
+    const uaccess_snapshot_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c",
+        "tests/qemu/mem/uaccess_snapshot_demo.mc", "uaccess_snapshot_run", "uaccess-snapshot-test",
+    });
+    uaccess_snapshot_test_cmd.step.dependOn(b.getInstallStep());
+    const uaccess_snapshot_test_step = b.step("uaccess-snapshot-test", "Single-snapshot uaccess (U2 double-fetch/TOCTOU defense) under QEMU: fetch_user freezes a user datum once; later user-byte flips don't change the snapshot");
+    uaccess_snapshot_test_step.dependOn(&uaccess_snapshot_test_cmd.step);
+
+    const llvm_uaccess_snapshot_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm",
+        "tests/qemu/mem/uaccess_snapshot_demo.mc", "uaccess_snapshot_run", "uaccess-snapshot-test",
+    });
+    llvm_uaccess_snapshot_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_uaccess_snapshot_test_step = b.step("llvm-uaccess-snapshot-test", "Single-snapshot uaccess (U2) under QEMU (LLVM backend): fetch_user freezes a user datum once; later user-byte flips don't change the snapshot");
+    llvm_uaccess_snapshot_test_step.dependOn(&llvm_uaccess_snapshot_test_cmd.step);
+
+    const uaccess_taint_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c",
+        "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test",
+    });
+    uaccess_taint_test_cmd.step.dependOn(b.getInstallStep());
+    const uaccess_taint_test_step = b.step("uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU: a user-derived scalar must pass checked_len/checked_index/validate_bound (fail closed) before driving a copy length or index");
+    uaccess_taint_test_step.dependOn(&uaccess_taint_test_cmd.step);
+
+    const llvm_uaccess_taint_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm",
+        "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test",
+    });
+    llvm_uaccess_taint_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_uaccess_taint_test_step = b.step("llvm-uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU (LLVM backend): a user-derived scalar must pass checked_len/checked_index/validate_bound before driving a copy length or index");
+    llvm_uaccess_taint_test_step.dependOn(&llvm_uaccess_taint_test_cmd.step);
+
     const agent_confined_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-test.sh",
@@ -2750,6 +2802,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_user_test_cmd.step);
     m0_step.dependOn(&llvm_process_test_cmd.step);
     m0_step.dependOn(&llvm_elf_run_test_cmd.step);
+    m0_step.dependOn(&llvm_uaccess_pt_test_cmd.step);
+    m0_step.dependOn(&llvm_uaccess_snapshot_test_cmd.step);
+    m0_step.dependOn(&llvm_uaccess_taint_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
@@ -3063,6 +3118,10 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&process_test_cmd.step);
     // elf-run-test loads an ELF64 and runs it in U-mode under QEMU.
     m0_step.dependOn(&elf_run_test_cmd.step);
+    // The uaccess demos run under QEMU (they import riscv paging.mc, so they can't run on the host suite).
+    m0_step.dependOn(&uaccess_pt_test_cmd.step);
+    m0_step.dependOn(&uaccess_snapshot_test_cmd.step);
+    m0_step.dependOn(&uaccess_taint_test_cmd.step);
     // agent-confined-test (step 0): separate ELF into an isolated address space, run confined in U-mode.
     m0_step.dependOn(&agent_confined_test_cmd.step);
     // agent-confined-tool-test (step 0 + M1): confined U-mode agent drives the capability front door.

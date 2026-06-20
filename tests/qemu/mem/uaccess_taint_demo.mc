@@ -16,6 +16,15 @@ import "std/addr.mc";
 
 global g_user: [256]u8; // stands in for the (identity-mapped) user region
 
+// Forge a UserPtr<u8> from a test address: re-tagging an integer into the UserPtr
+// address class needs `unsafe` (kernel/core/uaccess.mc idiom); the audited fetch_user
+// boundary still validates it.
+fn uptr(a: usize) -> UserPtr<u8> {
+    var p: UserPtr<u8> = uninit;
+    unsafe { p = a as UserPtr<u8>; }
+    return p;
+}
+
 fn store8(addr: PAddr, off: usize, v: u8) -> void {
     unsafe { raw.store<u8>(pa_offset(addr, off), v); }
 }
@@ -32,7 +41,7 @@ export fn uaccess_taint_run() -> u32 {
     // ---- SAFE length: user asks for 16 bytes, which fits ----
     store8(pa(ubase), 0, 16); // attacker-controlled "length" = 16
     var t_ok: Tainted<u8> = taint(u8, .{ .value = 0 });
-    switch fetch_user(u8, &us, ubase as UserPtr<u8>) {
+    switch fetch_user(u8, &us, uptr(ubase)) {
         ok(snap) => { t_ok = taint(u8, snap); }
         err(e) => { pass = 0; }
     }
@@ -47,7 +56,7 @@ export fn uaccess_taint_run() -> u32 {
     // ---- HOSTILE length: user asks for 200 bytes into a 64-byte buffer ----
     store8(pa(ubase), 1, 200); // attacker-controlled "length" = 200 (overflows KBUF_LEN)
     var t_bad: Tainted<u8> = taint(u8, .{ .value = 0 });
-    switch fetch_user(u8, &us, (ubase + 1) as UserPtr<u8>) {
+    switch fetch_user(u8, &us, uptr(ubase + 1)) {
         ok(snap) => { t_bad = taint(u8, snap); }
         err(e) => { pass = 0; }
     }
@@ -61,7 +70,7 @@ export fn uaccess_taint_run() -> u32 {
     // ---- INDEX: a user index into a 64-element array ----
     // In range (63 < 64): accepted.
     store8(pa(ubase), 2, 63);
-    switch fetch_user(u8, &us, (ubase + 2) as UserPtr<u8>) {
+    switch fetch_user(u8, &us, uptr(ubase + 2)) {
         ok(snap) => {
             switch checked_index(u8, taint(u8, snap), KBUF_LEN) {
                 ok(v) => { if v != 63 { pass = 0; } }
@@ -72,7 +81,7 @@ export fn uaccess_taint_run() -> u32 {
     }
     // Out of range (64 == 64, not < 64): rejected.
     store8(pa(ubase), 3, 64);
-    switch fetch_user(u8, &us, (ubase + 3) as UserPtr<u8>) {
+    switch fetch_user(u8, &us, uptr(ubase + 3)) {
         ok(snap) => {
             var idx_rejected: u32 = 0;
             switch checked_index(u8, taint(u8, snap), KBUF_LEN) {
@@ -86,7 +95,7 @@ export fn uaccess_taint_run() -> u32 {
 
     // ---- validate_bound: a non-zero floor [10, 20) ----
     store8(pa(ubase), 4, 5);  // below the floor -> rejected
-    switch fetch_user(u8, &us, (ubase + 4) as UserPtr<u8>) {
+    switch fetch_user(u8, &us, uptr(ubase + 4)) {
         ok(snap) => {
             switch validate_bound(u8, taint(u8, snap), 10, 20) {
                 ok(v) => { pass = 0; }
@@ -96,7 +105,7 @@ export fn uaccess_taint_run() -> u32 {
         err(e) => { pass = 0; }
     }
     store8(pa(ubase), 5, 15); // inside [10, 20) -> accepted
-    switch fetch_user(u8, &us, (ubase + 5) as UserPtr<u8>) {
+    switch fetch_user(u8, &us, uptr(ubase + 5)) {
         ok(snap) => {
             switch validate_bound(u8, taint(u8, snap), 10, 20) {
                 ok(v) => { if v != 15 { pass = 0; } }
