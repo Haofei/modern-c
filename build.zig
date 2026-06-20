@@ -2655,6 +2655,19 @@ pub fn build(b: *std.Build) void {
     const llvm_qjs_confined_test_step = b.step("llvm-qjs-confined-test", "QuickJS-agent Phase 6 (LLVM): evaluate JS confined in an isolated U-mode space under QEMU");
     llvm_qjs_confined_test_step.dependOn(&llvm_qjs_confined_test_cmd.step);
 
+    // QuickJS-agent Phase 7: the EVENT LOOP. The confined agent evaluates a Promise chain and
+    // drains the job queue (JS_ExecutePendingJob) — the microtask concurrency real agents need
+    // (Promise/async do nothing without it). ASYNC=42 after the loop runs. Both backends.
+    const qjs_async_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/qjs_async_agent.c", "ASYNC=42", "qjs-async" });
+    qjs_async_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_async_test_step = b.step("qjs-async-test", "QuickJS-agent Phase 7: the confined agent's Promise/microtask event loop under QEMU");
+    qjs_async_test_step.dependOn(&qjs_async_test_cmd.step);
+
+    const llvm_qjs_async_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/qjs_async_agent.c", "ASYNC=42", "qjs-async" });
+    llvm_qjs_async_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_async_test_step = b.step("llvm-qjs-async-test", "QuickJS-agent Phase 7 (LLVM): the confined agent's event loop under QEMU");
+    llvm_qjs_async_test_step.dependOn(&llvm_qjs_async_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -3075,6 +3088,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_qjs_run_test_cmd.step);
     m0_step.dependOn(&qjs_confined_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_confined_test_cmd.step);
+    m0_step.dependOn(&qjs_async_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_async_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);

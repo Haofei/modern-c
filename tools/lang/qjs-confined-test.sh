@@ -9,6 +9,9 @@ set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
 BACKEND="${2:-c}"
+AGENT_REL="${3:-examples/apps/qjs_agent.c}"  # the confined agent front-end
+EXPECT_JS="${4:-JS=7}"                        # the JS-result marker proving evaluation
+NAME_BASE="${5:-qjs-confined}"                # gate name base
 CLANG="${CLANG:-clang}"
 LLD="${LLD:-ld.lld}"
 LLC="${LLC:-llc}"
@@ -22,7 +25,7 @@ RUNTIME="$HERE/kernel/arch/riscv64/qjs_confined_runtime.c"
 SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
 USERMODE="$HERE/kernel/arch/riscv64/usermode_runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
-TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-qjs-confined-test" || echo "qjs-confined-test")
+TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-$NAME_BASE-test" || echo "$NAME_BASE-test")
 
 kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 
@@ -36,7 +39,7 @@ APP_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
 for f in dtoa libunicode libregexp quickjs; do
     "$CLANG" "${APP_CFLAGS[@]}" -c "$QJS/$f.c" -o "$WORK/$f.o"
 done
-"$CLANG" "${APP_CFLAGS[@]}" -I"$HERE" -c "$HERE/examples/apps/qjs_agent.c" -o "$WORK/agent.o"
+"$CLANG" "${APP_CFLAGS[@]}" -I"$HERE" -c "$HERE/$AGENT_REL" -o "$WORK/agent.o"
 "$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/user/runtime/crt0.c" -o "$WORK/crt0.o"
 "$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/user/runtime/app_traps.c" -o "$WORK/traps.o"
 
@@ -86,7 +89,7 @@ echo "--------------------------"
 # script (JS=7) — its output copied in through the agent page table by SYS_WRITE; and the agent
 # left U-mode via SYS_EXIT (reaching the kernel only through ecall).
 if printf '%s' "$OUT" | grep -q "CONFINED: kernel unmapped in agent space" \
-   && printf '%s' "$OUT" | grep -q "JS=7" \
+   && printf '%s' "$OUT" | grep -q "$EXPECT_JS" \
    && printf '%s' "$OUT" | grep -q "USER-EXIT from U"; then
     echo "PASS: $TEST_NAME — $BACKEND backend: QuickJS, built freestanding against the all-MC libc, evaluated JavaScript (1 + 2*3 == 7) CONFINED in an isolated U-mode Sv39 space under QEMU; the kernel is unmapped in the agent and it reached the kernel only via SYS_WRITE/SYS_EXIT"
     exit 0
