@@ -2529,6 +2529,25 @@ pub fn build(b: *std.Build) void {
     const llvm_fault_probe_test_step = b.step("llvm-fault-probe-test", "Syscall-ABI fault test (LLVM): bad pointers to SYS_WRITE/READ/POLL return -E_FAULT under QEMU");
     llvm_fault_probe_test_step.dependOn(&llvm_fault_probe_test_cmd.step);
 
+    // Tool-ABI quota test (review item 4): a confined MC app submits ToolReqs that breach each
+    // quota and asserts the SPECIFIC errno — payload>MAX_REQ_BYTES/cap>MAX_RES_BYTES => -E_NOCAP,
+    // unknown op => -E_DENIED, ring full => -E_AGAIN. Reuses app-run-test.sh (app+marker params).
+    const quota_probe_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c",
+        "examples/apps/quota_probe.mc", "QUOTA-PROBE: PASS", "quota-probe",
+    });
+    quota_probe_test_cmd.step.dependOn(b.getInstallStep());
+    const quota_probe_test_step = b.step("quota-probe-test", "Tool-ABI quota test: ToolReq quota breaches return -E_NOCAP/-E_DENIED/-E_AGAIN under QEMU");
+    quota_probe_test_step.dependOn(&quota_probe_test_cmd.step);
+
+    const llvm_quota_probe_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm",
+        "examples/apps/quota_probe.mc", "QUOTA-PROBE: PASS", "quota-probe",
+    });
+    llvm_quota_probe_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_quota_probe_test_step = b.step("llvm-quota-probe-test", "Tool-ABI quota test (LLVM): quota breaches return the specific errno under QEMU");
+    llvm_quota_probe_test_step.dependOn(&llvm_quota_probe_test_cmd.step);
+
     // QuickJS-agent Phase 2: a confined C app (examples/apps/compute.c) over the freestanding
     // libc (user/libc: malloc arena + mem/str) — the C-app + libc path QuickJS (also C) uses.
     const compute_app_test_cmd = b.addSystemCommand(&.{
@@ -2742,6 +2761,20 @@ pub fn build(b: *std.Build) void {
     llvm_qjs_async_agent_test_cmd.step.dependOn(b.getInstallStep());
     const llvm_qjs_async_agent_test_step = b.step("llvm-qjs-async-agent-test", "A pure-JS agent proves overlap + back-pressure/denial over async host I/O under QEMU (LLVM)");
     llvm_qjs_async_agent_test_step.dependOn(&llvm_qjs_async_agent_test_cmd.step);
+
+    // Structured-error surfacing (review item 4): a pure-JS agent bursts past the in-flight quota
+    // and asserts the rejections arrive as structured { code:-11, name:"EAGAIN", retryable:true }
+    // objects, not bare integers. Proves the host surfaces tool-ABI errno into JS as structured
+    // errors. Both backends.
+    const qjs_quota_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_quota.js", "quota-agent: reject code=-11 name=EAGAIN retryable=true", "qjs-quota-agent" });
+    qjs_quota_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_quota_agent_test_step = b.step("qjs-quota-agent-test", "A pure-JS agent proves tool-ABI back-pressure surfaces as a structured JS error under QEMU");
+    qjs_quota_agent_test_step.dependOn(&qjs_quota_agent_test_cmd.step);
+
+    const llvm_qjs_quota_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_quota.js", "quota-agent: reject code=-11 name=EAGAIN retryable=true", "qjs-quota-agent" });
+    llvm_qjs_quota_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_quota_agent_test_step = b.step("llvm-qjs-quota-agent-test", "A pure-JS agent proves tool-ABI back-pressure surfaces as a structured JS error under QEMU (LLVM)");
+    llvm_qjs_quota_agent_test_step.dependOn(&llvm_qjs_quota_agent_test_cmd.step);
 
     // The host ITSELF in MC (examples/apps/qjs_host.mc): MC drives the QuickJS C API directly —
     // JSValue (the 16-byte struct) by value, JS_Eval/JS_GetPropertyStr/JS_ToInt32 from MC —
@@ -3188,6 +3221,10 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_qjs_async_agent_test_cmd.step);
     m0_step.dependOn(&fault_probe_test_cmd.step);
     m0_step.dependOn(&llvm_fault_probe_test_cmd.step);
+    m0_step.dependOn(&quota_probe_test_cmd.step);
+    m0_step.dependOn(&llvm_quota_probe_test_cmd.step);
+    m0_step.dependOn(&qjs_quota_agent_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_quota_agent_test_cmd.step);
     m0_step.dependOn(&qjs_mc_host_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_mc_host_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);

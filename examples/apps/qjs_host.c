@@ -63,8 +63,11 @@ static JSValue g_resolvers[MAXREQ];
 static int64_t g_ids[MAXREQ];
 static int g_inflight = 0;
 
-// Reject `promise` with `code` (back-pressure/denial) and free the capability — the request was
-// never registered, so JS observes a rejection instead of a forever-pending Promise.
+// Reject `promise` with the raw integer errno and free the capability — the request was never
+// registered, so JS observes a rejection instead of a forever-pending Promise. The integer is
+// turned into a STRUCTURED error object by the JS prelude that wraps __host_async_raw (see
+// HOST_PRELUDE in main) — building the object in JS sidesteps C-API object construction and keeps
+// the structured shape { code, name, retryable } close to where agents consume it.
 static void reject_async(JSContext *ctx, JSValue *resolving, JSValue promise, int32_t code) {
     JSValue reason = JS_NewInt32(ctx, code);
     JSValue rr = JS_Call(ctx, resolving[1], JS_UNDEFINED, 1, &reason);
@@ -74,6 +77,20 @@ static void reject_async(JSContext *ctx, JSValue *resolving, JSValue promise, in
     JS_FreeValue(ctx, resolving[1]);
     (void)promise;
 }
+
+// The host prelude: a JS shim evaluated before the agent. It wraps the raw host binding
+// (__host_async_raw, which resolves to a number or rejects with an integer errno) into the
+// agent-facing host_async, which on rejection throws a STRUCTURED error { code, name, retryable }.
+// Built as a JS object literal (property reads on literals work in the freestanding engine).
+static const char *HOST_PRELUDE =
+    "globalThis.host_async = function (n) {"
+    "  return globalThis.__host_async_raw(n).then(function (v) { return v; },"
+    "    function (code) {"
+    "      var names = {'-1':'EBUSY','-11':'EAGAIN','-13':'EDENIED','-14':'EFAULT','-105':'ENOCAP','-125':'ECANCELED'};"
+    "      var name = names[String(code)] || 'EUNKNOWN';"
+    "      throw { code: code, name: name, retryable: code === -11 || code === -1 };"
+    "    });"
+    "};";
 
 static JSValue js_host_async(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     int32_t arg = 0;
@@ -120,11 +137,23 @@ int main(void) {
     JSContext *ctx = JS_NewContext(rt);
     if (!ctx) { emit("host: no context\n", 16); return 1; }
 
-    // Inject the host API.
+    // Inject the host API. host_async is exposed RAW as __host_async_raw; the prelude wraps it
+    // into the agent-facing host_async that surfaces structured errors.
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_print, "print", 1));
-    JS_SetPropertyStr(ctx, global, "host_async", JS_NewCFunction(ctx, js_host_async, "host_async", 1));
+    JS_SetPropertyStr(ctx, global, "__host_async_raw", JS_NewCFunction(ctx, js_host_async, "__host_async_raw", 1));
     JS_FreeValue(ctx, global);
+
+    // Evaluate the host prelude (defines host_async = structured-error wrapper over the raw call).
+    JSValue pv = JS_Eval(ctx, HOST_PRELUDE, strlen(HOST_PRELUDE), "host-prelude.js", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(pv)) {
+        emit("host: prelude threw\n", 20);
+        JS_FreeValue(ctx, pv);
+        JS_FreeContext(ctx);
+        JS_FreeRuntime(rt);
+        return 1;
+    }
+    JS_FreeValue(ctx, pv);
 
     // §0 ingress: read the agent source from the kernel (SYS_READ), then run it.
     long alen = sys_read((unsigned long)agent_src, sizeof agent_src - 1);
