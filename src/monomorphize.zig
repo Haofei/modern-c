@@ -444,6 +444,10 @@ fn cloneFnDeclCtx(ctx: *const CloneCtx, fn_decl: ast.FnDecl) !ast.FnDecl {
         .body = if (fn_decl.body) |body| try cloneBlock(ctx, body) else null,
         .is_const = fn_decl.is_const,
         .exported = fn_decl.exported,
+        // Preserve the C-ABI variadic marker + trait bounds across cloning; dropping
+        // is_variadic silently turned `snprintf(..., ...)` into a fixed-arity function.
+        .is_variadic = fn_decl.is_variadic,
+        .bounds = fn_decl.bounds,
     };
 }
 
