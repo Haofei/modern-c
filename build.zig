@@ -2506,6 +2506,24 @@ pub fn build(b: *std.Build) void {
     const llvm_app_run_test_step = b.step("llvm-app-run-test", "QuickJS-agent Phase 1 (LLVM): build + run a confined MC app in an isolated U-mode space under QEMU");
     llvm_app_run_test_step.dependOn(&llvm_app_run_test_cmd.step);
 
+    // QuickJS-agent Phase 2: a confined C app (examples/apps/compute.c) over the freestanding
+    // libc (user/libc: malloc arena + mem/str) — the C-app + libc path QuickJS (also C) uses.
+    const compute_app_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c",
+        "examples/apps/compute.c", "compute-ok", "compute-app",
+    });
+    compute_app_test_cmd.step.dependOn(b.getInstallStep());
+    const compute_app_test_step = b.step("compute-app-test", "QuickJS-agent Phase 2: a confined C app over the freestanding libc (malloc+string) runs in an isolated U-mode space under QEMU");
+    compute_app_test_step.dependOn(&compute_app_test_cmd.step);
+
+    const llvm_compute_app_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm",
+        "examples/apps/compute.c", "compute-ok", "compute-app",
+    });
+    llvm_compute_app_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_compute_app_test_step = b.step("llvm-compute-app-test", "QuickJS-agent Phase 2 (LLVM kernel): a confined C app over the freestanding libc runs under QEMU");
+    llvm_compute_app_test_step.dependOn(&llvm_compute_app_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -2907,6 +2925,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_uaccess_taint_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_test_cmd.step);
     m0_step.dependOn(&llvm_app_run_test_cmd.step);
+    m0_step.dependOn(&llvm_compute_app_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);
@@ -3238,6 +3257,7 @@ pub fn build(b: *std.Build) void {
     // agent-confined-test (step 0): separate ELF into an isolated address space, run confined in U-mode.
     m0_step.dependOn(&agent_confined_test_cmd.step);
     m0_step.dependOn(&app_run_test_cmd.step);
+    m0_step.dependOn(&compute_app_test_cmd.step);
     // agent-confined-tool-test (step 0 + M1): confined U-mode agent drives the capability front door.
     m0_step.dependOn(&agent_confined_tool_test_cmd.step);
     // driver-test runs the char-device driver framework (vtable dispatch) under QEMU.

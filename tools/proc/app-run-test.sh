@@ -11,6 +11,9 @@ set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
 BACKEND="${2:-c}"
+APP_REL="${3:-examples/apps/hello.mc}"   # the app source (.mc or .c)
+MARKER="${4:-hello}"                      # output substring proving the app ran
+NAME_BASE="${5:-app-run}"                 # gate name base
 CLANG="${CLANG:-clang}"
 LLD="${LLD:-ld.lld}"
 LLC="${LLC:-llc}"
@@ -21,9 +24,9 @@ HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/proc/app_run_demo.mc"
 RUNTIME="$HERE/kernel/arch/riscv64/app_runtime.c"
 SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
-APP="$HERE/examples/apps/hello.mc"
+APP="$HERE/$APP_REL"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
-TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-app-run-test" || echo "app-run-test")
+TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-$NAME_BASE-test" || echo "$NAME_BASE-test")
 
 kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 
@@ -70,7 +73,7 @@ echo "--------------------------"
 #     agent page table) — it could only do so at a VA valid through its isolated page table;
 #   - it exited from U-mode (SYS_EXIT), proving it reached the kernel only via ecall.
 if printf '%s' "$OUT" | grep -q "CONFINED: kernel unmapped in app space" \
-   && printf '%s' "$OUT" | grep -q "hello" \
+   && printf '%s' "$OUT" | grep -q "$MARKER" \
    && printf '%s' "$OUT" | grep -q "USER-EXIT from U"; then
     echo "PASS: $TEST_NAME — $BACKEND backend built an MC app into a multi-segment ELF, loaded it into an isolated Sv39 space (kernel unmapped), and ran it confined in U-mode; it printed via SYS_WRITE (buffer copied through the agent page table) and exited via syscall"
     exit 0
