@@ -26,6 +26,7 @@ export const E_AGAIN: i64 = -11;     // EAGAIN: no capacity right now (back-pres
 export const E_DENIED: i64 = -13;    // EACCES: policy denied this op (not retryable)
 export const E_FAULT: i64 = -14;     // EFAULT: a user pointer could not be accessed
 export const E_NOCAP: i64 = -105;    // ENOBUFS: request exceeds a hard capacity bound (payload too big)
+export const E_TIMEDOUT: i64 = -110; // ETIMEDOUT: the op did not complete within its deadline
 export const E_CANCELED: i64 = -125; // ECANCELED: the request was cancelled before completion
 
 // Tool ABI quotas (per agent). Hard bounds on what one agent can have outstanding / move per
@@ -35,10 +36,16 @@ export const MAX_INFLIGHT: u32 = 8;    // max concurrent pending requests (== co
 export const MAX_REQ_BYTES: u32 = 256; // max request-payload bytes copied IN per request
 export const MAX_RES_BYTES: u32 = 256; // max result-payload bytes copied OUT per request
 
-// Tool op selectors. Only mock ops exist today; compound Tool/Net ops will append here.
-export const TOOL_OP_SUM: u32 = 1;    // result scalar = arg + 2 (deterministic smoke op)
-export const TOOL_OP_ECHO: u32 = 2;   // result payload = the in-payload, reversed-not; echoed back
-export const TOOL_OP_CANCEL: u32 = 3; // cancel the in-flight request whose id == arg (no completion enqueued)
+// Tool op selectors. Only mock ops exist today; compound Tool/Net ops will append here. The mock
+// broker reads req.flags as a DELAY in virtual ticks, so completions can become ready out of
+// submit order (a small delay finishes before a large one submitted earlier) — exercising the
+// event loop's real out-of-order/overlap behavior, not just immediately-queued completions.
+export const TOOL_OP_SUM: u32 = 1;     // result scalar = arg + 2 (deterministic smoke op)
+export const TOOL_OP_ECHO: u32 = 2;    // result payload = the in-payload, echoed back (bounded by out_cap)
+export const TOOL_OP_CANCEL: u32 = 3;  // complete the in-flight request whose id == arg with -E_CANCELED
+export const TOOL_OP_TIMEOUT: u32 = 4; // completes (after its delay) with status -E_TIMEDOUT
+export const TOOL_OP_SPURIOUS: u32 = 5; // TEST-ONLY: completes carrying a BOGUS id (exercises the host's
+                                        // fatal "unknown completion id" path); submit still returns the real id
 
 // ToolReq: a tool/net request, copied IN from user memory on SYS_SUBMIT (single snapshot, so it
 // is TOCTOU-safe). `in_ptr`/`in_len` point at a request payload (validated <= MAX_REQ_BYTES);

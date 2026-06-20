@@ -45,20 +45,48 @@ global g_load_status: u32; // last app_build outcome (LS_*), readable via app_bu
 const REQ_BYTES: usize = 256;
 const RES_BYTES: usize = 256;
 
-// Pending-completion ring (FIFO via head + count, so dequeue never shifts the payload buffers).
-// Each slot owns a kernel-resident result payload buffer of exactly RES_BYTES — the kernel never
-// holds or copies more than the quota, so a hostile agent cannot make it move unbounded data.
-global g_pend_id: [COMP_CAP]u64;             // request id
-global g_pend_status: [COMP_CAP]i32;         // 0 | -errno
-global g_pend_result: [COMP_CAP]i32;         // scalar result
-global g_pend_outptr: [COMP_CAP]u64;         // where the result payload is copied OUT on poll
-global g_pend_outcap: [COMP_CAP]u32;         // capacity the agent reserved at out_ptr
-global g_pend_outlen: [COMP_CAP]u32;         // payload bytes actually produced
-global g_pend_res: [COMP_CAP][RES_BYTES]u8;  // per-slot result payload (kernel-owned, bounded)
-global g_pend_head: usize;                   // index of the oldest pending completion
-global g_pend_count: usize;                  // number of pending completions
-global g_next_req: u64;                      // monotonic request-id counter
-global g_reqbuf: [REQ_BYTES]u8;              // bounded copy-IN scratch for request payloads
+// Mock-broker completion slots. Each slot owns a kernel-resident result payload buffer of exactly
+// RES_BYTES — the kernel never holds or copies more than the quota. Unlike a FIFO ring, a slot
+// carries a `ready` tick: SYS_POLL advances a virtual clock and delivers the ready slot with the
+// smallest ready tick, so completions can arrive OUT OF submit order (delay-driven reordering).
+const DELAY_MAX: u64 = 64;                    // clamp on a request's delay, bounds the poll loop
+global g_slot_active: [COMP_CAP]bool;         // slot in use
+global g_slot_id: [COMP_CAP]u64;              // completion id REPORTED to the agent (bogus for SPURIOUS)
+global g_slot_status: [COMP_CAP]i32;          // 0 | -errno
+global g_slot_result: [COMP_CAP]i32;          // scalar result
+global g_slot_outptr: [COMP_CAP]u64;          // where the result payload is copied OUT on poll
+global g_slot_outcap: [COMP_CAP]u32;          // capacity the agent reserved at out_ptr
+global g_slot_outlen: [COMP_CAP]u32;          // payload bytes actually produced
+global g_slot_res: [COMP_CAP][RES_BYTES]u8;   // per-slot result payload (kernel-owned, bounded)
+global g_slot_ready: [COMP_CAP]u64;           // virtual tick at which this slot becomes pollable
+global g_clock: u64;                          // virtual broker clock (advances each SYS_POLL)
+global g_active_count: usize;                 // active slots
+global g_next_req: u64;                       // monotonic request-id counter
+global g_reqbuf: [REQ_BYTES]u8;               // bounded copy-IN scratch for request payloads
+
+// Find a free slot, or COMP_CAP if all are active.
+fn broker_free_slot() -> usize {
+    var i: usize = 0;
+    while i < COMP_CAP {
+        if !g_slot_active[i] {
+            return i;
+        }
+        i = i + 1;
+    }
+    return COMP_CAP;
+}
+
+// Find the active slot whose REPORTED id == target, or COMP_CAP if none.
+fn broker_slot_by_id(target: u64) -> usize {
+    var i: usize = 0;
+    while i < COMP_CAP {
+        if g_slot_active[i] && g_slot_id[i] == target {
+            return i;
+        }
+        i = i + 1;
+    }
+    return COMP_CAP;
+}
 
 // Forge a UserPtr<u8> from a user-supplied integer address (the uaccess idiom): re-tagging
 // an int into the UserPtr class needs `unsafe`; copy_from_user_pt still validates it per-page.
@@ -122,14 +150,13 @@ fn sys_read(buf: u64, max: u64, c: u64) -> u64 {
 
 // SYS_SUBMIT(req_ptr): start a non-blocking tool op described by a ToolReq the agent points at.
 // The struct is copied IN once (TOCTOU-safe snapshot), its payload sizes are validated against
-// the hard quotas, and its request payload is copied into a bounded kernel-owned buffer — so the
-// real copy-in / size-validation path runs even for the mock ops. The completion is computed and
-// enqueued immediately (the mock broker; delays/reordering arrive with the broker op). Returns
-// the request id (>=0), or a negative errno:
+// the hard quotas, and its request payload is copied into a bounded kernel-owned buffer. The mock
+// broker assigns the completion a `ready` tick = now + req.flags(delay), so completions can become
+// ready out of submit order. Returns the request id (>=0), or a negative errno:
 //   -E_FAULT  the request struct or its payload pointer is unreadable
 //   -E_NOCAP  a payload size exceeds its hard quota (MAX_REQ_BYTES / MAX_RES_BYTES)
-//   -E_DENIED the op selector is not an allowed tool op (policy)
-//   -E_AGAIN  the completion ring is full (back-pressure, retryable)
+//   -E_DENIED the op selector is not an allowed tool op (policy), or CANCEL's target is unknown
+//   -E_AGAIN  all completion slots are active (back-pressure, retryable)
 fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
     // Copy the request struct in as a single kernel-owned snapshot.
     var req: ToolReq = uninit;
@@ -147,13 +174,28 @@ fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
         return bitcast<u64>(E_NOCAP);
     }
 
-    // Op policy: only the known mock ops are permitted (EACCES otherwise).
-    if req.op != TOOL_OP_SUM && req.op != TOOL_OP_ECHO {
+    // CANCEL: complete the in-flight request whose reported id == arg with -E_CANCELED, ready now.
+    // It enqueues NO new request (returns 0 = accepted), or -E_DENIED if the target is unknown.
+    if req.op == TOOL_OP_CANCEL {
+        let s: usize = broker_slot_by_id(req.arg);
+        if s == COMP_CAP {
+            return bitcast<u64>(E_DENIED);
+        }
+        g_slot_status[s] = E_CANCELED as i32;
+        g_slot_result[s] = 0;
+        g_slot_outlen[s] = 0;
+        g_slot_ready[s] = g_clock; // ready immediately so the cancellation is observed promptly
+        return 0;
+    }
+
+    // Op policy: only the known mock request ops are permitted (EACCES otherwise).
+    if req.op != TOOL_OP_SUM && req.op != TOOL_OP_ECHO && req.op != TOOL_OP_TIMEOUT && req.op != TOOL_OP_SPURIOUS {
         return bitcast<u64>(E_DENIED);
     }
 
-    // Back-pressure: no slot in the completion ring (EAGAIN, retryable) — enqueue nothing.
-    if g_pend_count >= (MAX_INFLIGHT as usize) {
+    // Back-pressure: no free completion slot (EAGAIN, retryable) — enqueue nothing.
+    let slot: usize = broker_free_slot();
+    if slot == COMP_CAP {
         return bitcast<u64>(E_AGAIN);
     }
 
@@ -166,22 +208,28 @@ fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
         }
     }
 
-    // Allocate the request id + ring slot, then compute the completion (immediate, mock).
+    // Allocate the request id and arm the slot. The delay (req.flags, clamped) drives reordering.
     let id: u64 = g_next_req;
     g_next_req = g_next_req + 1;
-    let slot: usize = (g_pend_head + g_pend_count) % COMP_CAP;
-    g_pend_id[slot] = id;
-    g_pend_status[slot] = 0;
-    g_pend_outptr[slot] = req.out_ptr;
-    g_pend_outcap[slot] = req.out_cap;
+    var delay: u64 = req.flags as u64;
+    if delay > DELAY_MAX {
+        delay = DELAY_MAX;
+    }
+    g_slot_active[slot] = true;
+    g_slot_id[slot] = id;
+    g_slot_status[slot] = 0;
+    g_slot_outptr[slot] = req.out_ptr;
+    g_slot_outcap[slot] = req.out_cap;
+    g_slot_outlen[slot] = 0;
+    g_slot_ready[slot] = g_clock + delay;
+    g_active_count = g_active_count + 1;
 
     if req.op == TOOL_OP_SUM {
         // Deterministic smoke op: result = arg + 2 (masked low bits so a hostile arg can't trap).
         let mask: u64 = 0x7FFF_FFFF;
         let a32: u32 = (req.arg & mask) as u32;
-        g_pend_result[slot] = (a32 + 2) as i32;
-        g_pend_outlen[slot] = 0;
-    } else {
+        g_slot_result[slot] = (a32 + 2) as i32;
+    } else if req.op == TOOL_OP_ECHO {
         // ECHO: result payload = the request payload, truncated to out_cap; scalar = bytes echoed.
         var n: usize = in_len;
         if n > (req.out_cap as usize) {
@@ -189,33 +237,58 @@ fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
         }
         var i: usize = 0;
         while i < n {
-            g_pend_res[slot][i] = g_reqbuf[i];
+            g_slot_res[slot][i] = g_reqbuf[i];
             i = i + 1;
         }
-        g_pend_outlen[slot] = n as u32;
-        g_pend_result[slot] = n as i32;
+        g_slot_outlen[slot] = n as u32;
+        g_slot_result[slot] = n as i32;
+    } else if req.op == TOOL_OP_TIMEOUT {
+        // Completes (after its delay) with a timeout status — the agent's promise rejects.
+        g_slot_status[slot] = E_TIMEDOUT as i32;
+        g_slot_result[slot] = 0;
+    } else {
+        // SPURIOUS (test-only): the completion carries a BOGUS id so the host hits its fatal
+        // "unknown completion id" path. submit still returns the REAL id (what the host registers).
+        g_slot_result[slot] = 0;
+        g_slot_id[slot] = id + 1000000;
     }
 
-    g_pend_count = g_pend_count + 1;
     return id;
 }
 
-// SYS_POLL(event_ptr): drain ONE ready completion. Copies the result payload OUT to the request's
-// reserved out_ptr (bounded by what was produced), then copies a ToolEvent OUT to event_ptr.
-// Returns 1 (delivered), 0 (nothing ready), or -E_FAULT (a destination is unwritable).
+// SYS_POLL(event_ptr): advance the virtual clock, then deliver the READY completion with the
+// smallest ready tick (out-of-order delivery — a short-delay op finishes before an earlier
+// long-delay one). Copies the result payload OUT to the request's reserved out_ptr, then a
+// ToolEvent OUT to event_ptr. Returns 1 (delivered), 0 (nothing ready yet), or -E_FAULT.
 //
-// Both copies happen BEFORE the ring head advances: if either faults, the completion is left
-// intact at the head so it is not lost (a payload re-copy on a later retry is idempotent).
+// Both copies happen BEFORE the slot is freed: if either faults, the slot stays active so the
+// completion is not lost (a payload re-copy on a later retry is idempotent).
 fn sys_poll(ev_ptr: u64, b: u64, c: u64) -> u64 {
-    if g_pend_count == 0 {
+    g_clock = g_clock + 1; // virtual time progresses, so every armed slot eventually becomes ready
+    if g_active_count == 0 {
         return 0;
     }
-    let h: usize = g_pend_head;
-    let outlen: usize = g_pend_outlen[h] as usize;
+
+    // Pick the ready slot with the smallest ready tick (tie-break by id -> FIFO for equal delays).
+    var best: usize = COMP_CAP;
+    var i: usize = 0;
+    while i < COMP_CAP {
+        if g_slot_active[i] && g_slot_ready[i] <= g_clock {
+            if best == COMP_CAP || g_slot_ready[i] < g_slot_ready[best] || (g_slot_ready[i] == g_slot_ready[best] && g_slot_id[i] < g_slot_id[best]) {
+                best = i;
+            }
+        }
+        i = i + 1;
+    }
+    if best == COMP_CAP {
+        return 0; // active slots exist but none ready this tick; the host keeps polling
+    }
+
+    let outlen: usize = g_slot_outlen[best] as usize;
 
     // (1) result payload -> the originating request's out_ptr (only if the op produced bytes).
     if outlen > 0 {
-        switch copy_to_user_pt(&g_uas, uptr(g_pend_outptr[h] as usize), pa((&g_pend_res[h][0]) as usize), outlen) {
+        switch copy_to_user_pt(&g_uas, uptr(g_slot_outptr[best] as usize), pa((&g_slot_res[best][0]) as usize), outlen) {
             ok(v) => {}
             err(e) => { return bitcast<u64>(E_FAULT); }
         }
@@ -223,20 +296,20 @@ fn sys_poll(ev_ptr: u64, b: u64, c: u64) -> u64 {
 
     // (2) the ToolEvent -> the poll buffer.
     var ev: ToolEvent = uninit;
-    ev.id = g_pend_id[h];
-    ev.status = g_pend_status[h];
-    ev.result = g_pend_result[h];
-    ev.out_len = g_pend_outlen[h];
+    ev.id = g_slot_id[best];
+    ev.status = g_slot_status[best];
+    ev.result = g_slot_result[best];
+    ev.out_len = g_slot_outlen[best];
     ev.reserved = 0;
     let esz: usize = sizeof(ToolEvent);
     switch copy_to_user_pt(&g_uas, uptr(ev_ptr as usize), pa((&ev) as usize), esz) {
         ok(v) => {}
-        err(e) => { return bitcast<u64>(E_FAULT); } // completion intact at the head
+        err(e) => { return bitcast<u64>(E_FAULT); } // slot stays active
     }
 
-    // delivered — advance the ring head (no payload shifting needed).
-    g_pend_head = (g_pend_head + 1) % COMP_CAP;
-    g_pend_count = g_pend_count - 1;
+    // delivered — free the slot.
+    g_slot_active[best] = false;
+    g_active_count = g_active_count - 1;
     return 1;
 }
 

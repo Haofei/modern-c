@@ -2548,6 +2548,48 @@ pub fn build(b: *std.Build) void {
     const llvm_quota_probe_test_step = b.step("llvm-quota-probe-test", "Tool-ABI quota test (LLVM): quota breaches return the specific errno under QEMU");
     llvm_quota_probe_test_step.dependOn(&llvm_quota_probe_test_cmd.step);
 
+    // Mock-broker cancellation/timeout (review item 3): a confined MC app submits a delayed request
+    // and cancels it (-E_CANCELED), and a TIMEOUT op (-E_TIMEDOUT), asserting the completion status.
+    const broker_probe_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c",
+        "examples/apps/broker_probe.mc", "BROKER-PROBE: PASS", "broker-probe",
+    });
+    broker_probe_test_cmd.step.dependOn(b.getInstallStep());
+    const broker_probe_test_step = b.step("broker-probe-test", "Mock-broker cancellation/timeout: completions carry -E_CANCELED / -E_TIMEDOUT under QEMU");
+    broker_probe_test_step.dependOn(&broker_probe_test_cmd.step);
+
+    const llvm_broker_probe_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm",
+        "examples/apps/broker_probe.mc", "BROKER-PROBE: PASS", "broker-probe",
+    });
+    llvm_broker_probe_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_broker_probe_test_step = b.step("llvm-broker-probe-test", "Mock-broker cancellation/timeout (LLVM) under QEMU");
+    llvm_broker_probe_test_step.dependOn(&llvm_broker_probe_test_cmd.step);
+
+    // Out-of-order delivery (review item 3): a pure-JS agent submits a slow (delay 5) then a fast
+    // (delay 1) request; the broker delivers fast first, so the resolve order is "FS". Both backends.
+    const qjs_broker_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_broker.js", "broker-agent: order=FS", "qjs-broker-agent" });
+    qjs_broker_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_broker_agent_test_step = b.step("qjs-broker-agent-test", "A pure-JS agent proves out-of-order broker completion (Promise reorder) under QEMU");
+    qjs_broker_agent_test_step.dependOn(&qjs_broker_agent_test_cmd.step);
+
+    const llvm_qjs_broker_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_broker.js", "broker-agent: order=FS", "qjs-broker-agent" });
+    llvm_qjs_broker_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_broker_agent_test_step = b.step("llvm-qjs-broker-agent-test", "A pure-JS agent proves out-of-order broker completion under QEMU (LLVM)");
+    llvm_qjs_broker_agent_test_step.dependOn(&llvm_qjs_broker_agent_test_cmd.step);
+
+    // Unknown completion id is fatal (review item 6): a pure-JS agent drives the spurious op, whose
+    // completion carries a bogus id; the host must fail loudly ("host: unknown completion id").
+    const qjs_spurious_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_spurious.js", "host: unknown completion id", "qjs-spurious-agent" });
+    qjs_spurious_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_spurious_agent_test_step = b.step("qjs-spurious-agent-test", "An unknown completion id is a fatal host error under QEMU");
+    qjs_spurious_agent_test_step.dependOn(&qjs_spurious_agent_test_cmd.step);
+
+    const llvm_qjs_spurious_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_spurious.js", "host: unknown completion id", "qjs-spurious-agent" });
+    llvm_qjs_spurious_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_spurious_agent_test_step = b.step("llvm-qjs-spurious-agent-test", "An unknown completion id is a fatal host error under QEMU (LLVM)");
+    llvm_qjs_spurious_agent_test_step.dependOn(&llvm_qjs_spurious_agent_test_cmd.step);
+
     // QuickJS-agent Phase 2: a confined C app (examples/apps/compute.c) over the freestanding
     // libc (user/libc: malloc arena + mem/str) — the C-app + libc path QuickJS (also C) uses.
     const compute_app_test_cmd = b.addSystemCommand(&.{
@@ -3225,6 +3267,12 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_quota_probe_test_cmd.step);
     m0_step.dependOn(&qjs_quota_agent_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_quota_agent_test_cmd.step);
+    m0_step.dependOn(&broker_probe_test_cmd.step);
+    m0_step.dependOn(&llvm_broker_probe_test_cmd.step);
+    m0_step.dependOn(&qjs_broker_agent_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_broker_agent_test_cmd.step);
+    m0_step.dependOn(&qjs_spurious_agent_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_spurious_agent_test_cmd.step);
     m0_step.dependOn(&qjs_mc_host_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_mc_host_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);

@@ -19,6 +19,7 @@ size_t strlen(const char *s);
 // The tool ABI, mirrored byte-for-byte from user/abi.mc (ToolReq=40B, ToolEvent=24B). host_async
 // builds a ToolReq and submits its address; the event loop polls completions into a ToolEvent.
 #define TOOL_OP_SUM 1u
+#define TOOL_OP_SPURIOUS 5u
 typedef struct {
     uint32_t op;      // +0
     uint32_t flags;   // +4
@@ -83,20 +84,19 @@ static void reject_async(JSContext *ctx, JSValue *resolving, JSValue promise, in
 // agent-facing host_async, which on rejection throws a STRUCTURED error { code, name, retryable }.
 // Built as a JS object literal (property reads on literals work in the freestanding engine).
 static const char *HOST_PRELUDE =
-    "globalThis.host_async = function (n) {"
-    "  return globalThis.__host_async_raw(n).then(function (v) { return v; },"
+    "globalThis.host_async = function (n, delay) {"
+    "  return globalThis.__host_async_raw(n, delay).then(function (v) { return v; },"
     "    function (code) {"
     "      var names = {'-1':'EBUSY','-11':'EAGAIN','-13':'EDENIED','-14':'EFAULT','-105':'ENOCAP','-125':'ECANCELED'};"
     "      var name = names[String(code)] || 'EUNKNOWN';"
     "      throw { code: code, name: name, retryable: code === -11 || code === -1 };"
     "    });"
-    "};";
+    "};"
+    "globalThis.host_spurious = function () { return globalThis.__host_spurious_raw(); };";
 
-static JSValue js_host_async(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    int32_t arg = 0;
-    if (argc > 0) JS_ToInt32(ctx, &arg, argv[0]);
-
-    // Create the Promise FIRST so failure here submits nothing to the kernel.
+// Start a tool request: create the Promise first, check local capacity, submit a ToolReq, and
+// register the resolver (or reject on saturation / kernel -errno). Shared by the host bindings.
+static JSValue start_request(JSContext *ctx, uint32_t op, int32_t arg, int32_t delay) {
     JSValue resolving[2]; // [0] = resolve, [1] = reject
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise)) return promise;
@@ -108,11 +108,11 @@ static JSValue js_host_async(JSContext *ctx, JSValueConst this_val, int argc, JS
         return promise;
     }
 
-    // Submit a ToolReq (SUM op). The kernel returns -errno (e.g. -E_AGAIN under back-pressure or
+    // Submit the ToolReq. The kernel returns -errno (e.g. -E_AGAIN under back-pressure or
     // -E_NOCAP/-E_DENIED on policy) — reject, don't register.
     ToolReq req;
-    req.op = TOOL_OP_SUM;
-    req.flags = 0;
+    req.op = op;
+    req.flags = (uint32_t)delay; // the mock broker reads flags as a completion delay (ticks)
     req.arg = (uint64_t)arg;
     req.in_ptr = 0;
     req.in_len = 0;
@@ -131,6 +131,20 @@ static JSValue js_host_async(JSContext *ctx, JSValueConst this_val, int argc, JS
     return promise;
 }
 
+// host_async(arg [, delay]): a SUM op completing after `delay` virtual ticks (default 0).
+static JSValue js_host_async(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    int32_t arg = 0, delay = 0;
+    if (argc > 0) JS_ToInt32(ctx, &arg, argv[0]);
+    if (argc > 1) JS_ToInt32(ctx, &delay, argv[1]);
+    return start_request(ctx, TOOL_OP_SUM, arg, delay);
+}
+
+// host_spurious(): a TEST-ONLY op whose completion carries a bogus id, exercising the host event
+// loop's fatal "unknown completion id" path.
+static JSValue js_host_spurious(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return start_request(ctx, TOOL_OP_SPURIOUS, 0, 0);
+}
+
 int main(void) {
     JSRuntime *rt = JS_NewRuntime();
     if (!rt) { emit("host: no runtime\n", 16); return 1; }
@@ -141,7 +155,8 @@ int main(void) {
     // into the agent-facing host_async that surfaces structured errors.
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_print, "print", 1));
-    JS_SetPropertyStr(ctx, global, "__host_async_raw", JS_NewCFunction(ctx, js_host_async, "__host_async_raw", 1));
+    JS_SetPropertyStr(ctx, global, "__host_async_raw", JS_NewCFunction(ctx, js_host_async, "__host_async_raw", 2));
+    JS_SetPropertyStr(ctx, global, "__host_spurious_raw", JS_NewCFunction(ctx, js_host_spurious, "__host_spurious_raw", 0));
     JS_FreeValue(ctx, global);
 
     // Evaluate the host prelude (defines host_async = structured-error wrapper over the raw call).
