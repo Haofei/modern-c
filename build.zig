@@ -2576,6 +2576,19 @@ pub fn build(b: *std.Build) void {
     const llvm_vararg_test_step = b.step("llvm-vararg-test", "QuickJS-agent Phase 4 (LLVM): a C-ABI variadic MC fn runs under QEMU");
     llvm_vararg_test_step.dependOn(&llvm_vararg_test_cmd.step);
 
+    // QuickJS-agent Phase 4: the all-MC C-ABI allocator (user/libc/alloc.mc), reusing
+    // kernel/core/heap.mc's free-list. Driven via malloc/free/calloc/realloc from a C runtime
+    // under QEMU on both backends — the heap QuickJS allocates against.
+    const alloc_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/alloc-test.sh", "zig-out/bin/mcc", "c" });
+    alloc_test_cmd.step.dependOn(b.getInstallStep());
+    const alloc_test_step = b.step("alloc-test", "QuickJS-agent Phase 4: the all-MC C-ABI allocator (reusing heap.mc) runs under QEMU");
+    alloc_test_step.dependOn(&alloc_test_cmd.step);
+
+    const llvm_alloc_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/alloc-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_alloc_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_alloc_test_step = b.step("llvm-alloc-test", "QuickJS-agent Phase 4 (LLVM): the all-MC C-ABI allocator runs under QEMU");
+    llvm_alloc_test_step.dependOn(&llvm_alloc_test_cmd.step);
+
     const agent_confined_tool_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/agent-confined-tool-test.sh",
@@ -2984,6 +2997,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_trig_app_test_cmd.step);
     m0_step.dependOn(&vararg_test_cmd.step);
     m0_step.dependOn(&llvm_vararg_test_cmd.step);
+    m0_step.dependOn(&alloc_test_cmd.step);
+    m0_step.dependOn(&llvm_alloc_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_tool_test_cmd.step);
     m0_step.dependOn(&llvm_fs_syscall_test_cmd.step);
     m0_step.dependOn(&llvm_socket_syscall_test_cmd.step);
