@@ -2589,6 +2589,8 @@ const LlvmEmitter = struct {
     fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
         if (isDropCall(call.callee.*)) return error.UnsupportedLlvmEmission;
         if (isBindCallByNode(call)) return try self.emitBindValue(call, expected_ty);
+        // `Union.variant(...)` qualified constructor — self-typed from the owner (no target).
+        if (try self.emitQualifiedUnionConstructor(call)) |value| return value;
         if (try self.emitTaggedUnionConstructor(call, expected_ty)) |value| return value;
         if (try self.emitBuiltinValueCall(call, expected_ty)) |value| return value;
         if (self.directCallName(call.callee.*)) |callee| {
@@ -3739,6 +3741,44 @@ const LlvmEmitter = struct {
         return result;
     }
 
+    // The union type of a qualified constructor `Union.variant(...)` (its owner), for
+    // emit-time type inference (e.g. an untyped `let t = Token.number(9)`); null otherwise.
+    fn qualifiedUnionConstructorType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+        const q = ast_query.qualifiedMemberCallee(call.callee.*) orelse return null;
+        const union_decl = self.tagged_unions.get(q.owner) orelse return null;
+        if (self.taggedUnionCaseIndex(union_decl, q.member.text) == null) return null;
+        return ast.TypeExpr{ .span = call.callee.*.span, .kind = .{ .name = .{ .text = q.owner, .span = call.callee.*.span } } };
+    }
+
+    // `Union.variant(...)` — qualified, self-typed tagged-union constructor. The union is
+    // the callee owner (not a target type). Returns null when the owner is not a known
+    // tagged union (an inherent/associated call, or an intrinsic).
+    fn emitQualifiedUnionConstructor(self: *LlvmEmitter, call: anytype) !?[]const u8 {
+        const q = ast_query.qualifiedMemberCallee(call.callee.*) orelse return null;
+        const union_decl = self.tagged_unions.get(q.owner) orelse return null;
+        const case_index = self.taggedUnionCaseIndex(union_decl, q.member.text) orelse return null;
+        const case = union_decl.cases[case_index];
+        const union_ty = ast.TypeExpr{ .span = call.callee.*.span, .kind = .{ .name = .{ .text = q.owner, .span = call.callee.*.span } } };
+        const union_llvm = try self.llvmType(union_ty);
+        const ptr = try self.nextTemp();
+        const tag_ptr = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = alloca {s}\n", .{ ptr, union_llvm });
+        try self.out.print(self.allocator, "  store {s} zeroinitializer, ptr {s}{s}\n", .{ union_llvm, ptr, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, union_llvm, ptr });
+        try self.out.print(self.allocator, "  store i32 {d}, ptr {s}{s}\n", .{ case_index, tag_ptr, try self.debugCallSuffix() });
+        if (case.ty) |payload_ty| {
+            if (call.args.len != 1) return error.UnsupportedLlvmEmission;
+            const payload = try self.emitExpr(call.args[0], payload_ty);
+            const payload_ptr = try self.taggedUnionPayloadPtr(ptr, union_ty, payload_ty);
+            try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(payload_ty), payload, payload_ptr, try self.debugCallSuffix() });
+        } else if (call.args.len != 0) {
+            return error.UnsupportedLlvmEmission;
+        }
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, union_llvm, ptr, try self.debugCallSuffix() });
+        return result;
+    }
+
     fn taggedUnionPayloadPtr(self: *LlvmEmitter, union_ptr: []const u8, union_ty: ast.TypeExpr, payload_ty: ast.TypeExpr) ![]const u8 {
         const union_decl = self.taggedUnionForType(union_ty) orelse return error.UnsupportedLlvmEmission;
         const layout = self.taggedUnionLayout(union_decl, 0) orelse return error.UnsupportedLlvmEmission;
@@ -4168,7 +4208,9 @@ const LlvmEmitter = struct {
             .int_literal => null,
             .float_literal => null,
             .grouped => |inner| self.exprType(inner.*),
-            .call => |call| if (isAssumeNoaliasCall(call))
+            .call => |call| if (self.qualifiedUnionConstructorType(call)) |ty|
+                ty
+            else if (isAssumeNoaliasCall(call))
                 if (call.args.len == 2) self.exprType(call.args[0]) else null
             else if (isDeclassifyCall(call))
                 // declassify/reveal yields the Secret<T> argument's inner T.

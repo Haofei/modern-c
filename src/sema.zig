@@ -3512,6 +3512,9 @@ pub const Checker = struct {
                 return target;
             },
             .call => |node| {
+                // `Union.variant(...)` qualified constructor — self-typed, validated here;
+                // skip the generic call machinery (which would treat the union name as a value).
+                if (self.checkQualifiedUnionConstructor(expr, node, ctx)) |class| return class;
                 const trap_call = isTrapCall(node.callee.*);
                 if (ctx.no_lang_trap and isTrapCall(node.callee.*)) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "explicit trap emits a language trap in #[no_lang_trap]");
@@ -5708,6 +5711,34 @@ pub const Checker = struct {
         if (taggedUnionConstructorIsFunction(call.name.text, ctx)) return false;
         self.errorCode(expr.span, code, message);
         return true;
+    }
+
+    // `Union.variant(...)` — a qualified, self-typed tagged-union constructor (the
+    // collision-proof namespaced form alongside the bare, target-typed `variant(...)`).
+    // The owner names the union, so no target type is needed. Validates the variant and
+    // its payload and yields the value's TypeClass (`unknown`, like any union value).
+    // Returns null when the callee owner is not a known union — then the call is something
+    // else (an inherent/associated `impl` call, or an intrinsic) and resolves normally.
+    fn checkQualifiedUnionConstructor(self: *Checker, expr: ast.Expr, node: anytype, ctx: Context) ?TypeClass {
+        const q = ast_query.qualifiedMemberCallee(node.callee.*) orelse return null;
+        const tagged = ctx.tagged_unions orelse return null;
+        const info = tagged.get(q.owner) orelse return null;
+        // The owner IS a tagged union: this is unambiguously a constructor attempt.
+        const case_payload = info.cases.get(q.member.text) orelse {
+            self.errorCode(q.member.span, "E_UNKNOWN_UNION_CASE", "union has no case with this name");
+            return .unknown;
+        };
+        if (case_payload) |payload_ty| {
+            if (node.args.len != 1) {
+                self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match union case payload");
+                return .unknown;
+            }
+            const source = self.checkExpr(node.args[0], ctx);
+            self.checkCallArgument(payload_ty, node.args[0], source, ctx);
+        } else if (node.args.len != 0) {
+            self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match union case payload");
+        }
+        return .unknown;
     }
 
     fn checkEnumValueCompatibility(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
@@ -8495,9 +8526,21 @@ fn globalClass(name: []const u8, ctx: Context) ?TypeClass {
     return classifyTypeCtx(ty, ctx);
 }
 
+// A qualified tagged-union constructor `Union.variant(...)` is self-typed: its result
+// type is `Union`, taken from the callee's owner (no target type needed). null when the
+// callee owner is not a known tagged union or the member is not one of its cases — then
+// the call is something else (an impl/associated call, an intrinsic) and resolves normally.
+fn qualifiedUnionConstructorReturnType(node: anytype, ctx: Context) ?ast.TypeExpr {
+    const q = ast_query.qualifiedMemberCallee(node.callee.*) orelse return null;
+    const tagged = ctx.tagged_unions orelse return null;
+    const info = tagged.get(q.owner) orelse return null;
+    if (!info.cases.contains(q.member.text)) return null;
+    return ast.TypeExpr{ .span = node.callee.*.span, .kind = .{ .name = .{ .text = q.owner, .span = q.member.span } } };
+}
+
 fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse mathBuiltinReturnType(node.callee.*) orelse unwrapCallReturnType(node, ctx) orelse dynDispatchReturnType(node, ctx) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
+        .call => |node| constGetReturnType(node, ctx) orelse rawManyOffsetReturnType(node, ctx) orelse byteViewCallReturnType(node) orelse atomicCallReturnType(node.callee.*, ctx) orelse maybeUninitCallReturnType(node.callee.*, ctx) orelse bitcastCallReturnType(node) orelse mathBuiltinReturnType(node.callee.*) orelse unwrapCallReturnType(node, ctx) orelse dynDispatchReturnType(node, ctx) orelse qualifiedUnionConstructorReturnType(node, ctx) orelse if (node.type_args.len == 0) directCallReturnType(node.callee.*, ctx) else null,
         .try_expr => |inner| tryPayloadType(inner.operand.*, ctx),
         .cast => |node| node.ty.*,
         .deref => |inner| derefResultType(inner.*, ctx),

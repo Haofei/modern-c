@@ -4352,6 +4352,15 @@ const CEmitter = struct {
     fn taggedUnionReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
             .call => |node| blk: {
+                // A qualified constructor `Union.variant(...)` is self-typed to its owner,
+                // so an untyped `let t = Token.number(9)` infers `Token`.
+                if (ast_query.qualifiedMemberCallee(node.callee.*)) |q| {
+                    if (self.tagged_unions.get(q.owner)) |ud| {
+                        if (taggedUnionCase(ud, q.member.text) != null) {
+                            break :blk ast.TypeExpr{ .span = node.callee.*.span, .kind = .{ .name = .{ .text = q.owner, .span = node.callee.*.span } } };
+                        }
+                    }
+                }
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
                 const ret_ty = info.return_type orelse break :blk null;
@@ -5176,6 +5185,8 @@ const CEmitter = struct {
                     try self.out.print(self.allocator, "{s}()", .{helper});
                     return;
                 }
+                // `Union.variant(...)` qualified constructor — self-typed from the owner.
+                if (try self.emitQualifiedUnionConstructor(node, locals)) return;
                 // `drop(x)` consumes its argument and yields void; emit a cast to
                 // void so the value is evaluated and discarded (linearity is
                 // erased — it was a compile-time check).
@@ -6681,6 +6692,32 @@ const CEmitter = struct {
 
         if (call.args.len != 0) return error.UnsupportedCEmission;
         try self.out.print(self.allocator, "(({s}){{ .tag = {s}Tag_{s} }})", .{ c_union_ty, union_name, tag });
+        return true;
+    }
+
+    // `Union.variant(...)` — qualified, self-typed tagged-union constructor. The union is
+    // the callee owner (not a target type), so this lowers the same in any position. Returns
+    // false when the owner is not a known union (an inherent/associated call, an intrinsic).
+    fn emitQualifiedUnionConstructor(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+        const q = ast_query.qualifiedMemberCallee(call.callee.*) orelse return false;
+        const union_decl = self.tagged_unions.get(q.owner) orelse return false;
+        const case = taggedUnionCase(union_decl, q.member.text) orelse return false;
+        const union_ty = ast.TypeExpr{ .span = call.callee.*.span, .kind = .{ .name = .{ .text = q.owner, .span = call.callee.*.span } } };
+        const c_union_ty = try self.cTypeFor(union_ty, .typedef_name);
+        if (case.ty) |payload_ty| {
+            if (call.args.len != 1) return error.UnsupportedCEmission;
+            try self.out.print(self.allocator, "(({s}){{ .tag = {s}Tag_{s}, .payload.{s} = ", .{
+                c_union_ty,
+                q.owner,
+                q.member.text,
+                try self.cPayloadFieldName(q.member.text),
+            });
+            try self.emitExprWithTarget(call.args[0], locals, payload_ty);
+            try self.out.appendSlice(self.allocator, " })");
+            return true;
+        }
+        if (call.args.len != 0) return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s}){{ .tag = {s}Tag_{s} }})", .{ c_union_ty, q.owner, q.member.text });
         return true;
     }
 

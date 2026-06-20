@@ -299,6 +299,25 @@ pub fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
     };
 }
 
+/// A `Type.member(...)` callee, decomposed into its owner name and member ident.
+/// This is the syntactic shape of a qualified tagged-union constructor
+/// (`Token.number(11)`) — the caller decides whether `owner` is actually a union.
+/// It is purely syntactic; an inherent/associated `impl` call (`Guarded.lock`) and
+/// an intrinsic namespace (`atomic.load`) share the same shape and are told apart by
+/// the caller's type tables.
+pub const QualifiedCallee = struct { owner: []const u8, member: ast.Ident };
+
+pub fn qualifiedMemberCallee(expr: ast.Expr) ?QualifiedCallee {
+    return switch (expr.kind) {
+        .member => |node| switch (node.base.*.kind) {
+            .ident => |base_ident| QualifiedCallee{ .owner = base_ident.text, .member = node.name },
+            else => null,
+        },
+        .grouped => |inner| qualifiedMemberCallee(inner.*),
+        else => null,
+    };
+}
+
 /// True when `callee` names the `cpu.pause` intrinsic (through grouping).
 pub fn isCpuPauseCall(callee: ast.Expr) bool {
     return switch (callee.kind) {

@@ -346,11 +346,12 @@ export fn showcase_run() -> u32 {
     if state_from(2) != 2 { pass = 0; }
 
     // 5. tagged unions + expression switch
-    if token_value(number(11)) != 11 { pass = 0; }     // u32 payload
+    if token_value(number(11)) != 11 { pass = 0; }     // bare constructor, u32 payload
+    if token_value(Token.number(11)) != 11 { pass = 0; } // qualified constructor (namespaced)
     var abc: [3]u8 = .{ 0x61, 0x62, 0x63 };            // "abc"
     let abc_slice: []mut u8 = abc[0..3];
     if token_value(ident(abc_slice)) != 3 { pass = 0; } // slice payload: s.len
-    if token_value(eof()) != 0 { pass = 0; }           // no-payload case
+    if token_value(Token.eof()) != 0 { pass = 0; }     // qualified, no-payload case
     if color_rank(.Blue) != 3 { pass = 0; }
 
     // 6. Result / ? / ? else / if let
