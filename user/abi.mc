@@ -7,8 +7,10 @@
 // docs/quickjs-agent-plan.md §3.
 
 export const SYS_WRITE: u64 = 0; // (fd, buf, len) -> bytes written (>=0) | -errno
-export const SYS_EXIT: u64 = 1; // (code) -> noreturn
 export const SYS_GETPID: u64 = 2; // () -> pid
+// SYS_EXIT is 3 to match the shared M-mode trap path (usermode_runtime.c handles a7==3
+// specially: it returns control to the kernel rather than back to U-mode).
+export const SYS_EXIT: u64 = 3; // (code) -> noreturn
 
 // Standard descriptors (a minimal, fixed set for the console channel).
 export const FD_STDOUT: u64 = 1;
