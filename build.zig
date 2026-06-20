@@ -2412,6 +2412,24 @@ pub fn build(b: *std.Build) void {
     const llvm_uaccess_pt_test_step = b.step("llvm-uaccess-pt-test", "Page-table-aware user copies under QEMU (LLVM backend): Sv39 walk + per-page PTE_U/R/W checks; kernel-only page, unmapped hole, off-page straddle all rejected");
     llvm_uaccess_pt_test_step.dependOn(&llvm_uaccess_pt_test_cmd.step);
 
+    // kernel/core/elf_loader: real multi-segment ELF loader (Phase 1 of the QuickJS-agent
+    // plan / review F3) — maps every PT_LOAD at its vaddr with per-segment perms, zeroes bss.
+    const elf_loader_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c",
+        "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test",
+    });
+    elf_loader_test_cmd.step.dependOn(b.getInstallStep());
+    const elf_loader_test_step = b.step("elf-loader-test", "Multi-segment ELF64 loader under QEMU: maps every PT_LOAD at its vaddr with per-segment R/W/X perms, copies file bytes, zeroes bss; synthetic 2-segment image, asserts mappings/content/bss/perms");
+    elf_loader_test_step.dependOn(&elf_loader_test_cmd.step);
+
+    const llvm_elf_loader_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm",
+        "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test",
+    });
+    llvm_elf_loader_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_elf_loader_test_step = b.step("llvm-elf-loader-test", "Multi-segment ELF64 loader under QEMU (LLVM backend): per-segment perms, file copy, bss zero");
+    llvm_elf_loader_test_step.dependOn(&llvm_elf_loader_test_cmd.step);
+
     const uaccess_snapshot_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c",
         "tests/qemu/mem/uaccess_snapshot_demo.mc", "uaccess_snapshot_run", "uaccess-snapshot-test",
@@ -2860,6 +2878,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_process_test_cmd.step);
     m0_step.dependOn(&llvm_elf_run_test_cmd.step);
     m0_step.dependOn(&llvm_uaccess_pt_test_cmd.step);
+    m0_step.dependOn(&llvm_elf_loader_test_cmd.step);
     m0_step.dependOn(&llvm_uaccess_snapshot_test_cmd.step);
     m0_step.dependOn(&llvm_uaccess_taint_test_cmd.step);
     m0_step.dependOn(&llvm_agent_confined_test_cmd.step);
@@ -3188,6 +3207,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&elf_run_test_cmd.step);
     // The uaccess demos run under QEMU (they import riscv paging.mc, so they can't run on the host suite).
     m0_step.dependOn(&uaccess_pt_test_cmd.step);
+    m0_step.dependOn(&elf_loader_test_cmd.step);
     m0_step.dependOn(&uaccess_snapshot_test_cmd.step);
     m0_step.dependOn(&uaccess_taint_test_cmd.step);
     // agent-confined-test (step 0): separate ELF into an isolated address space, run confined in U-mode.

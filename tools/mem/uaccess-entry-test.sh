@@ -57,7 +57,7 @@ echo "------------------"
 
 if printf '%s' "$OUT" | grep -q "UACCESS-OK" \
     && ! printf '%s' "$OUT" | grep -qE "UACCESS-(BAD|TRAP)"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend: $ENTRY returned all-pass under QEMU (riscv uaccess fixture, sfence-bearing, so QEMU-only)"
+    echo "PASS: $TEST_NAME — $BACKEND backend: $ENTRY returned all-pass under QEMU (riscv entry fixture (imports paging/uaccess; sfence-bearing), so QEMU-only)"
     exit 0
 fi
 echo "FAIL: $TEST_NAME — missing UACCESS-OK or saw UACCESS-BAD/TRAP"
