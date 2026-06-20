@@ -56,6 +56,10 @@ global g_image: [IMAGE_CAP]u8;
 // table frames). 256 KiB is ample.
 global g_pool: [262144]u8;
 
+// A deliberately TINY pool (2 pages) for the OOM regression: enough for the root table but
+// nowhere near the ~5 pages a full load needs, so loading must fail with NoFrame, not trap.
+global g_smallpool: [8192]u8;
+
 // ----- little-endian writers into the global image buffer -----
 
 fn img_u8(off: usize, v: u8) -> void {
@@ -267,6 +271,18 @@ export fn elf_loader_run() -> u32 {
     switch elf_load_image((&g_image[0]) as usize, IMAGE_CAP, &pt2, &heap2) {
         ok(e) => { pass = 0; } // overlapping segments must NOT load successfully
         err(e) => {} // rejected (BadSegment) without panicking — correct
+    }
+
+    // (g) RESOURCE-EXHAUSTION regression (review finding 1): a well-formed image loaded into a
+    //     heap too small to hold its frames must fail with a TYPED error (NoFrame), not trap the
+    //     kernel via the bump allocator's exhaustion path. The 2-page pool covers the root table
+    //     but not the segment frames + interior tables, so the loader runs out mid-walk.
+    build_image();
+    var heap3: Heap = heap_new(phys_range(pa((&g_smallpool[0]) as usize), 8192));
+    var pt3: PageTable = page_table_new(&heap3);
+    switch elf_load_image((&g_image[0]) as usize, IMAGE_CAP, &pt3, &heap3) {
+        ok(e) => { pass = 0; } // a too-small heap must NOT yield a successful load
+        err(e) => {} // typed failure (NoFrame) without panicking — correct
     }
 
     return pass;

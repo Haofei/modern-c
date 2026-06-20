@@ -281,8 +281,16 @@ export fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
     return user;
 }
 
-// Core aligned allocator (no redzone). The original `heap_alloc` body.
-fn heap_alloc_raw(h: *mut Heap, size: usize, align: usize) -> PAddr {
+// Why a non-trapping allocation could not be satisfied.
+enum HeapError {
+    Exhausted, // no free block fit and the bump frontier is out of space
+}
+
+// Non-trapping core aligned allocator (no redzone): returns Exhausted instead of
+// trapping when the heap is full. This is the body shared by the infallible
+// `heap_alloc_raw` (which traps) and the fallible `heap_try_alloc` (which callers on
+// hostile-input paths — e.g. the ELF loader — use to turn OOM into a typed LoadError).
+fn heap_try_alloc_raw(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, HeapError> {
     // First-fit over the free list: pick the first block whose aligned start still
     // leaves `size` bytes inside the block.
     var i: usize = 0;
@@ -305,7 +313,7 @@ fn heap_alloc_raw(h: *mut Heap, size: usize, align: usize) -> PAddr {
                     if pa_lt(aend, fend) {
                         heap_release(h, aend, pa_diff(aend, fend));
                     }
-                    return astart;
+                    return ok(astart);
                 }
             }
         }
@@ -316,7 +324,7 @@ fn heap_alloc_raw(h: *mut Heap, size: usize, align: usize) -> PAddr {
     let start: PAddr = pa_align_up(h.next, align);
     let next: PAddr = pa_offset(start, size); // checked: traps on overflow
     if pa_lt(pr_end(&h.range), next) {
-        unreachable; // heap exhausted
+        return err(.Exhausted); // heap exhausted — caller decides (trap or recover)
     }
     // The alignment gap [h.next, start) is unused tail; once we advance past it, it
     // can never be reached by the frontier again, so return it to the free list.
@@ -325,10 +333,31 @@ fn heap_alloc_raw(h: *mut Heap, size: usize, align: usize) -> PAddr {
         let gstart: PAddr = h.next;
         h.next = next;
         heap_release(h, gstart, gap);
-        return start;
+        return ok(start);
     }
     h.next = next;
-    return start;
+    return ok(start);
+}
+
+// Core aligned allocator (no redzone). The original `heap_alloc` body: traps on
+// exhaustion, for the infallible callers that treat OOM as a kernel bug.
+fn heap_alloc_raw(h: *mut Heap, size: usize, align: usize) -> PAddr {
+    switch heap_try_alloc_raw(h, size, align) {
+        ok(p) => { return p; }
+        err(e) => { unreachable; } // heap exhausted on an infallible path
+    }
+}
+
+// Public non-trapping frame allocator. Used by the ELF loader (and any other
+// hostile-input path) so a malformed image that exhausts the loader heap surfaces as
+// a typed error rather than a kernel trap. The loader heap is non-redzoned, so this is
+// the raw allocator directly; redzoned heaps must use the infallible `heap_alloc`.
+#[may_sleep]
+export fn heap_try_alloc(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, HeapError> {
+    if h.redzone != 0 {
+        unreachable; // fallible allocation is only wired for non-redzoned heaps
+    }
+    return heap_try_alloc_raw(h, size, align);
 }
 
 // Verify the redzones fencing the user allocation `[addr, addr+size)` are intact.

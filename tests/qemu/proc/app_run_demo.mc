@@ -50,8 +50,9 @@ fn uptr(a: usize) -> UserPtr<u8> {
 }
 
 // SYS_WRITE(fd, buf, len): copy the user buffer in through the agent's page table, then emit
-// it to the console. Capped at the kernel staging buffer. Returns bytes written (0 on a bad
-// user pointer — copy_from_user_pt fails closed, writing nothing).
+// it to the console. Capped at the kernel staging buffer. Returns bytes written, or -E_FAULT
+// on a bad user pointer (copy_from_user_pt fails closed, writing nothing) — distinct from a
+// legitimate 0-byte write, per the ABI's negative-errno convention.
 fn sys_write(fd: u64, buf: u64, len: u64) -> u64 {
     var n: usize = len as usize;
     if n > KBUF {
@@ -60,7 +61,7 @@ fn sys_write(fd: u64, buf: u64, len: u64) -> u64 {
     let dst: PAddr = pa((&g_kbuf[0]) as usize);
     switch copy_from_user_pt(&g_uas, dst, uptr(buf as usize), n) {
         ok(v) => {}
-        err(e) => { return 0; }
+        err(e) => { return bitcast<u64>(E_FAULT); }
     }
     var i: usize = 0;
     while i < n {
@@ -93,7 +94,7 @@ fn sys_read(buf: u64, max: u64, c: u64) -> u64 {
     }
     switch copy_to_user_pt(&g_uas, uptr(buf as usize), pa(src_addr), n) {
         ok(v) => {}
-        err(e) => { return 0; }
+        err(e) => { return bitcast<u64>(E_FAULT); } // bad user buffer, distinct from 0-byte EOF
     }
     return n as u64;
 }

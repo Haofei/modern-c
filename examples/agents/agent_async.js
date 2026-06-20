@@ -14,8 +14,13 @@
 async function main() {
   print("async-agent: start");
 
-  // (1) Four overlapping requests, awaited together. Order is preserved by Promise.all.
+  // (1) Four overlapping requests, awaited together. Order is preserved by Promise.all, and the
+  // kernel op is arg+2, so the RESULT must be exactly [3,4,5,6] — assert it (a wrong-but-settled
+  // value must fail the test, not merely settle). The gated print is reached only if correct.
   const xs = await Promise.all([host_async(1), host_async(2), host_async(3), host_async(4)]);
+  if (xs.join(",") !== "3,4,5,6") {
+    throw new Error("async-agent: overlap result wrong: [" + xs.join(",") + "]");
+  }
   print("async-agent: all=" + JSON.stringify(xs)); // [3,4,5,6]
 
   // (2) Burst 12 at once — past the kernel's 8-deep completion queue. The first 8 are accepted
@@ -29,6 +34,11 @@ async function main() {
   for (const s of settled) {
     if (s.status === "fulfilled") ok++;
     else rejected++;
+  }
+  // Assert the exact back-pressure split BEFORE printing the gated line, so any drift (silent
+  // drop, wrong denial count) throws and the test fails instead of passing on a mere count print.
+  if (!(ok === 8 && rejected === 4)) {
+    throw new Error("async-agent: backpressure split wrong ok=" + ok + " rejected=" + rejected);
   }
   print("async-agent: backpressure ok=" + ok + " rejected=" + rejected); // ok=8 rejected=4
   print("async-agent: done");

@@ -82,6 +82,18 @@ fn alloc_table(h: *mut Heap) -> PAddr {
     return frame;
 }
 
+// Non-trapping interior-table allocation: returns OutOfFrames-able heap exhaustion as a
+// typed error instead of trapping, for the dynamic map path used on hostile-input loads.
+fn try_alloc_table(h: *mut Heap) -> Result<PAddr, HeapError> {
+    switch heap_try_alloc(h, PAGE_SIZE, PAGE_SIZE) {
+        ok(frame) => {
+            zero_table(frame);
+            return ok(frame);
+        }
+        err(e) => { return err(e); }
+    }
+}
+
 struct PageTable {
     root: PAddr,
 }
@@ -96,12 +108,12 @@ export fn page_table_new(h: *mut Heap) -> PageTable {
     return .{ .root = alloc_table(h) };
 }
 
-// Why a mapping request was rejected. (Heap exhaustion while allocating an interior
-// table is fatal — `heap_alloc` traps — so it is not a recoverable variant here.)
+// Why a mapping request was rejected.
 enum MapError {
     MisalignedAddress,   // `virt`/`phys` are not aligned to the mapping granularity
     AlreadyMapped,       // a valid leaf PTE already covers this VA (unmap it first)
     ConflictWithLargePage, // a larger leaf mapping already spans this VA
+    OutOfFrames,         // heap exhausted while allocating an interior table
 }
 
 // Map `virt` (page-aligned) to `phys` with permission `flags` (R/W/X/U; V is added),
@@ -122,7 +134,11 @@ export fn page_table_try_map(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys
         let idx: usize = vpn(virt, level);
         let pte: u64 = pte_load(table, idx);
         if (pte & PTE_V) == 0 {
-            let next: PAddr = alloc_table(h);
+            var next: PAddr = uninit;
+            switch try_alloc_table(h) {
+                ok(frame) => { next = frame; }
+                err(e) => { return err(.OutOfFrames); } // heap exhausted mid-walk
+            }
             pte_store(table, idx, pte_for(next, PTE_V)); // pointer PTE: V, no R/W/X
             table = next;
         } else {

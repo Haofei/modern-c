@@ -50,7 +50,7 @@ const MAX_SEGMENT_PAGES: usize = 4096;
 enum LoadError {
     BadElf,        // the parser rejected the header / program-header table
     TooManyPages,  // a segment covers more than MAX_SEGMENT_PAGES pages
-    NoFrame,       // (reserved) frame allocation could not satisfy the request
+    NoFrame,       // heap exhausted allocating a page frame or interior page table
     BadSegment,    // a segment's vaddr/memsz/filesz is absurd or overflows
 }
 
@@ -152,17 +152,30 @@ fn load_segment(elf: *ByteReader, pt: *mut PageTable, h: *mut Heap, p: *ProgramH
 
         // Allocate a fresh frame and zero it: the bss tail and any leading/trailing
         // gap within this page are zero by construction, so the copy below need only
-        // place the file bytes.
-        let frame: PAddr = heap_alloc(h, PAGE, PAGE);
+        // place the file bytes. The NON-trapping allocator turns heap exhaustion (a
+        // hostile image can stay under MAX_SEGMENT_PAGES per segment yet drain the loader
+        // heap across segments) into a typed NoFrame rather than a kernel trap.
+        var frame: PAddr = uninit;
+        switch heap_try_alloc(h, PAGE, PAGE) {
+            ok(f) => { frame = f; }
+            err(e) => { return err(.NoFrame); }
+        }
         mem_set(frame, 0, PAGE);
 
         // Map this page with the NON-trapping variant: a hostile ELF can present PT_LOAD
-        // segments whose page ranges OVERLAP, which surfaces here as AlreadyMapped (or a
-        // large-page conflict). That is a malformed-input condition, not a loader bug, so
-        // convert any map failure into a clean BadSegment instead of panicking the kernel.
+        // segments whose page ranges OVERLAP (AlreadyMapped / large-page conflict) or
+        // exhaust the heap allocating interior tables (OutOfFrames). Neither is a loader
+        // bug — convert overlap into BadSegment and exhaustion into NoFrame, never panic.
         switch page_table_try_map(pt, h, va(page_vaddr), frame, pte_flags_for(p.flags)) {
             ok(v) => {}
-            err(e) => { return err(.BadSegment); }
+            err(e) => {
+                switch e {
+                    .OutOfFrames => { return err(.NoFrame); }
+                    .MisalignedAddress => { return err(.BadSegment); }
+                    .AlreadyMapped => { return err(.BadSegment); }
+                    .ConflictWithLargePage => { return err(.BadSegment); }
+                }
+            }
         }
 
         // Intersect this page's VA window [page_vaddr, page_vaddr+PAGE) with the file-byte
