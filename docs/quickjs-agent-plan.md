@@ -7,13 +7,37 @@ the risk people fear is already retired.
 
 ## 0. End state
 
+The agent is an isolated U-mode ELF — a QuickJS engine plus a **custom non-CLI front-end**
+(`qjs_agent.c`, NOT the stock `qjs.c`, which expects `argc/argv` and a host filesystem). It
+has no command line; it obtains its script through a **defined ingress** (§3.5) and runs:
+
 ```
-$ qjs-agent agent.js                 # an MC-kernel "app": QuickJS in an isolated U-mode ELF
-  └─ runs JS, reaches the kernel ONLY through ecall syscalls
-  └─ kernel is UNMAPPED in its address space (the MMU is the boundary)
-  └─ all effects (fs/net/tools) go through the capability front door (PathCap/NetCap/
-     tool allowlist + budget), audited to the ipc_trace ring, attributed to the agent
+[kernel] loads qjs-agent ELF into an isolated Sv39 space (kernel UNMAPPED)
+   └─ qjs_agent _start -> JS_NewRuntime -> obtain script bytes (ingress) -> JS_Eval
+   └─ JS reaches the kernel ONLY through ecall syscalls
+   └─ all effects (fs/net/tools) go through the capability front door (PathCap/NetCap/
+      tool allowlist + budget), audited to the ipc_trace ring, attributed to the agent
+   └─ JS_FreeRuntime -> SYS_EXIT(rc)
 ```
+
+There is no host shell on the kernel, so "`qjs-agent agent.js`" is conceptual; the script is
+delivered by the ingress below, not an argv path.
+
+### Script ingress (resolves "how does agent.js get in?")
+Three options, in rising order of capability-integration:
+1. **SYS_READ from a kernel-staged input channel (v0 default).** The kernel stages the
+   script bytes (embedded in the boot image / a fixed input buffer) and the agent
+   `SYS_READ`s them on fd 0 until EOF. Simplest; good enough to prove the spine.
+2. **Capability FS path.** The agent is granted a read-only `PathCap` to a script file and
+   reads it via `SYS_TOOL(op=READ)`. Goes through the same audited front door as every other
+   effect — the right long-term answer.
+3. **Host-side wrapper embeds it** at build time (a generated C array). Fine for fixtures/CI.
+
+Pick (1) for the first running agent; move to (2) once the capability FS path is in. No
+`argv`/`envp`/CLI parsing is needed in any of these — the front-end calls `JS_Eval` on the
+ingested bytes directly. (If a stock `qjs.c` were ever used instead, the loader would have to
+synthesize an initial stack with `argc/argv/envp` and an `auxv`; the custom front-end avoids
+all of that.)
 
 QuickJS sits **outside** the kernel trust boundary by construction (it is the contained
 agent, not kernel code) — which is exactly the agent-sandbox design intent ("speak MCP /
@@ -26,7 +50,9 @@ boundary").
 |---|---|---|
 | Drop to U-mode, ecall trap path, PMP | done | `kernel/arch/riscv64/usermode_runtime.c` |
 | Syscall dispatch (fn-ptr table, bounds/ENOSYS) | done | `kernel/core/syscall.mc` |
-| Load a SEPARATE ELF into an ISOLATED Sv39 space (kernel unmapped), run confined | done | `agent_confined_runtime.c` + `tests/qemu/proc/agent_confined_demo.mc` |
+| ISOLATION mechanism: a separate ELF in an isolated Sv39 space (kernel unmapped), entered confined | done | `agent_confined_runtime.c` + `tests/qemu/proc/agent_confined_demo.mc` |
+| Multi-segment ELF LOADER (text/rodata/data/bss, per-segment perms, stack+arena) | **NOT done** — current loader copies one flat `PT_LOAD` and returns (Phase 1 / F3) | `elf_load_run` in `agent_confined_demo.mc` |
+| Page-table-aware uaccess (copy_from/to_user_pt over a UserAddrSpace) | primitive done, **not wired into the app runtime** (Phase 1 / F2) | `kernel/core/uaccess.mc` |
 | Confined agent drives a capability tool front door (allow/deny, audited) | done | `agent_confined_tool_demo.mc` + the M1–M6 substrate (treefs/fs_toolserver/agent_fs/policy/netcap/mcp) |
 | Vendor + freestanding-build a large third-party C library | done | `third_party/bearssl/` compiled with the riscv freestanding toolchain (`bearssl_smoke_runtime.c`) |
 | Heap / allocator | partial | `std/alloc.mc` (alloc_bytes/free_bytes), kernel heap |
@@ -61,23 +87,69 @@ capability-checked handler.
 ## 3. The syscall ABI (stable, versioned)
 
 A single shared header of numbers + signatures, consumed by the kernel (registers
-handlers) and the user runtime (wrappers). Start minimal; everything QuickJS needs:
+handlers) and the user runtime (wrappers).
+
+### 3.1 Register/arity convention (constraint, not assumption)
+The current handler type is `fn(u64, u64, u64) -> u64` and the trap forwards only the
+syscall number + three args: `mc_syscall(a7, a0, a1, a2)`
+(`kernel/core/syscall.mc`, `kernel/arch/riscv64/usermode_runtime.c:80`). The trap frame
+*saves* a0..a7, so widening is a small change, but the ABI is designed to **fit three args**
+rather than depend on a widening:
+- **Simple syscalls fit in ≤3 args** and use the table as-is.
+- **Compound syscalls (tool/net) take ONE arg: a pointer to a request struct** in user
+  memory, copied in by the kernel (see §3.3). This sidesteps the arity limit *and* gives one
+  uniform place to do checked copy-in.
+- Optional alternative: widen `mc_syscall`/`syscall_dispatch`/the handler type to a0..a5
+  (the frame already has them). Prefer the request-struct form — it also solves §3.3.
+
+### 3.2 Calls
 
 ```
-SYS_WRITE   (fd, ptr, len)            -> bytes written            // console / output channel
-SYS_READ    (fd, ptr, len)            -> bytes read               // script / agent input
+SYS_WRITE   (fd, ptr, len)            -> isize  (>=0 bytes, <0 = -errno)   // 3 args, fits
+SYS_READ    (fd, ptr, len)            -> isize                              // 3 args, fits
 SYS_EXIT    (code)                    -> noreturn
-SYS_GETPID  ()                        -> pid                      // agent identity
-SYS_CLOCK   ()                        -> monotonic ns             // Date / timers (optional)
-SYS_SBRK    (delta)                   -> old break                // heap growth (or: static arena)
-// capability tools (reuse the M1–M6 surface), one entry, op-coded:
-SYS_TOOL    (op, path_ptr, path_len, buf, n, cap)  -> Result      // fs_tool_*/agent_fs_call
-SYS_NET     (op, addr, port, buf, n, cap)          -> Result      // net_egress_check
+SYS_GETPID  ()                        -> u64
+SYS_CLOCK   ()                        -> u64 (monotonic ns)                 // Date / timers
+SYS_SBRK    (delta)                   -> usize (old break) | (usize)-1 err  // heap growth
+SYS_TOOL    (req_ptr)                 -> isize  (>=0 result, <0 = -errno)   // req = ToolReq*
+SYS_NET     (req_ptr)                 -> isize                              // req = NetReq*
 ```
 
-`kernel/core/syscall.mc`'s table is `SYS_MAX = 16`, enough for this. Each handler is the
-EXISTING capability path — `agent_fs_call`, `net_egress_check`, `mcp_call` — so the agent
-gets no authority the kernel hasn't granted, and every call is audited+attributed.
+**Return/error convention:** every value-returning syscall returns an `isize` in a0; a
+non-negative value is the result (bytes, pid, …), a negative value is `-errno` from a fixed
+enum (`E_DENIED`, `E_NOCAP`, `E_FAULT` (bad user pointer), `E_INVAL`, `E_AGAIN`, …). The user
+wrappers map this back to a `Result`.
+
+### 3.3 User pointers go through page-table-aware uaccess (NOT raw)
+`agent_confined_tool_demo` deliberately passes a kernel-resolved `path_id` to **avoid** raw
+user pointers. The real ABI must accept user-named paths/buffers, so the kernel must copy
+them in/out through the agent's page table — never dereference a user pointer directly. The
+primitive already exists: `kernel/core/uaccess.mc`'s `UserAddrSpace` +
+`copy_from_user_pt`/`copy_to_user_pt`/`fetch_user_pt` (page-table-aware; validates PTE_U/R/W
+per page; fails closed on an unmapped/kernel page). The confined app runtime must:
+1. build a `UserAddrSpace` over the agent's page table at load time, and
+2. for `SYS_TOOL`/`SYS_NET`, `copy_from_user_pt` the request struct, then `copy_from_user_pt`
+   each path/input buffer it references (bounded by a max length), and `copy_to_user_pt`
+   results back. A bad pointer ⇒ `-E_FAULT`, never a kernel fault.
+
+```
+struct ToolReq { op: u32, cap: u32, path_ptr: u64, path_len: u32, buf_ptr: u64, n: u32 }
+struct NetReq  { op: u32, cap: u32, host_ptr: u64, host_len: u32, port: u16, buf_ptr: u64, n: u32 }
+```
+
+Each compound handler is the EXISTING capability path — `agent_fs_call` / `net_fetch` /
+`mcp_call` — fed copied-in (kernel-owned) bytes, so the agent gets no authority the kernel
+hasn't granted, and every call is audited + attributed to the agent pid. `SYS_MAX = 16` is
+enough for this set.
+
+### 3.4 Network: brokered, not raw egress (resolves the audit question)
+Two layers exist: `net_egress_check` (a raw connect allow/deny gate, for when the agent
+holds a socket) and a brokered request the kernel performs on the agent's behalf. For a JS
+agent, **default to brokered** `SYS_NET(op=FETCH)`: the agent never holds a raw socket; the
+kernel does the transport and returns the bytes as a **single audited fetch event**
+(host+port+size, attributed). This is stronger containment and cleaner audit semantics than
+gating raw connects. `net_egress_check` remains the lower-level primitive for a future
+raw-socket capability if one is ever granted.
 
 ## 4. Phases
 
@@ -87,15 +159,26 @@ Goal: write `fn main() -> i32`, build it into a confined U-mode ELF, run it. Mak
 - `user/abi.mc` — the stable `SYS_*` numbers (shared kernel↔user).
 - `user/sys.mc` — typed ecall wrappers (`write`, `read`, `exit`, `getpid`, …) via MC inline asm.
 - `user/start.*` — `crt0`: set sp, call `main()`, `exit(rc)`.
-- `kernel/arch/riscv64/app_runtime.c` — ONE reusable kernel-side runtime: U-mode setup +
-  registers the ABI handlers (wired to the capability front door) + loads/enters the app ELF
-  (reuse `agent_confined` isolation).
+- **A real ELF loader** (replaces the toy). `elf_load_run` today copies the *first* `PT_LOAD`
+  to one flat `dst` and returns (`tests/qemu/proc/agent_confined_demo.mc`). The SDK loader
+  must: iterate **every** `PT_LOAD`; map each at its own `p_vaddr` with **per-segment
+  permissions** (text R|X, rodata R, data R|W) in the agent's isolated page table; **zero bss**
+  (`p_memsz > p_filesz`); and map a **stack** and an initial **heap arena** region. Honor
+  alignment; reject overlaps/out-of-range. This is the gating prerequisite for any real
+  binary (QuickJS has text/rodata/data/bss).
+- `kernel/arch/riscv64/app_runtime.c` — ONE reusable kernel-side runtime: isolated-Sv39 setup
+  (kernel unmapped, reuse `agent_confined`), the real ELF loader above, a **`UserAddrSpace`
+  built over the agent's page table** (so every user pointer is copied via
+  `copy_from_user_pt`/`copy_to_user_pt` per §3.3 — no raw deref), the ABI-handler registrations
+  (wired to the capability front door), and `enter_user` at the ELF entry.
 - `tools/user/build-app.sh <app.mc>` — compile app + user runtime → isolated U-mode ELF, run
   under QEMU. No per-app C glue.
 - `examples/apps/hello.mc` — `fn main() { write(1, "hello\n"); return 0; }`.
 - Gate: `app-hello-test` / `llvm-app-hello-test` (both backends, QEMU).
 
-**Effort: M.** Mostly factoring the existing bespoke `*_user_runtime.c` glue into one reusable runtime.
+**Effort: M–H.** Factoring the bespoke `*_user_runtime.c` glue into one runtime is easy; the
+real multi-segment loader + UserAddrSpace wiring is the substantive new work (and it pays off
+for every app, not just QuickJS).
 
 ### Phase 2 — Freestanding libc shim (`user/libc/`)
 Provide exactly what C programs need, backed by the SDK syscalls:
@@ -117,16 +200,21 @@ Options, in order of preference:
 **Effort: M–H.** This is the largest single chunk; the BearSSL vendoring pattern applies.
 
 ### Phase 4 — Vendor + build QuickJS
-- `third_party/quickjs/` — `quickjs.c libregexp.c libunicode.c cutils.c` (+ `qjs.c` front-end).
+- `third_party/quickjs/` — the engine core only: `quickjs.c libregexp.c libunicode.c
+  cutils.c`. **Do NOT use the stock `qjs.c`** (CLI/argv/host-FS front-end).
+- `qjs_agent.c` — a small **custom front-end**: `JS_NewRuntime`/`JS_NewContext` → obtain
+  script bytes via the §0 ingress (SYS_READ or capability FS) → `JS_Eval` → drain pending
+  jobs → `SYS_EXIT(rc)`. No argv, no host FS.
 - Build flags: riscv64 freestanding (`--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
-  -nostdlib -ffreestanding -mcmodel=medany`), `-DCONFIG_VERSION` etc.
-- Config: disable the heavy/unsupported features — **no bignum** (drops `__int128`), **no
-  worker threads**, **no os/std modules** (replaced by our binding). `CONFIG_BIGNUM` off.
-- Replace `quickjs-libc.c` with **`quickjs-libc-mc.c`**: implement `js_std_*` console/eval
-  hooks against `SYS_WRITE/READ/CLOCK` and the capability tools — this is the actual
-  "QuickJS-with-the-ABI" glue, and it's small.
+  -nostdlib -ffreestanding -mcmodel=medany`).
+- Config: disable heavy/unsupported features — **no bignum** (`CONFIG_BIGNUM` off, drops
+  `__int128`), **no worker threads**, **no os/std modules** (replaced by our binding).
+- **`quickjs-libc-mc.c`** replaces `quickjs-libc.c`: implement only the `js_*` hooks the
+  agent exposes (a `print`/console binding, and a `Tool`/`fetch` binding) against
+  `SYS_WRITE`/`SYS_TOOL`/`SYS_NET` — this is the actual "QuickJS-with-the-ABI" glue, and it
+  is small. The JS-visible effect surface is exactly what the capabilities permit.
 
-**Effort: M.** Bounded by config-flag tuning + the binding file. Precedent: BearSSL builds clean.
+**Effort: M.** Bounded by config-flag tuning + the binding + front-end. Precedent: BearSSL builds clean.
 
 ### Phase 5 — Memory provisioning
 QuickJS wants MBs for non-trivial scripts.
@@ -164,6 +252,10 @@ QuickJS wants MBs for non-trivial scripts.
 | `setjmp`/`longjmp` | QuickJS uses its own exception machinery; provide a minimal setjmp if anything in libc needs it |
 | heap pressure / runaway script | static arena bound first; then SYS_SBRK + per-agent quota via the policy plane |
 | binary size of the ELF | confinement holds at any size; only the static-arena RAM budget matters |
+| multi-segment ELF layout (text/rodata/data/bss) | Phase 1 real loader (per-segment vaddr+perms+bss); gate on `hello` before QuickJS |
+| raw user pointers faulting the kernel | Phase 1 wires `UserAddrSpace` + `copy_*_user_pt`; a bad pointer is `-E_FAULT`, never a kernel fault |
+| syscall arity (>3 args) | compound calls take one request-struct pointer (§3.1); no trap widening needed |
+| script ingress / no argv | custom non-CLI front-end + SYS_READ/capability-FS ingress (§0); no initial-stack/auxv synthesis |
 
 ## 7. Sequencing
 **1 → 2 → 3 → 4 → 5 → 6.** Phase 1 (the SDK) is the highest-leverage and unblocks
@@ -180,3 +272,11 @@ already built and gated; it has been driven so far by hand-built confined ELFs. 
 the real untrusted *interpreter* those capabilities were designed to contain. Finishing this
 plan turns the substrate from "demonstrated with a toy agent" into "runs an actual JS agent,
 sandboxed."
+
+## 9. Review findings folded in (2026-06-20)
+- **F1 (syscall arity):** §3.1 — table stays 3-arg; tool/net take one request-struct pointer (widening to a0..a5 noted as the alternative).
+- **F2 (raw user pointers):** §3.3 — all user pointers go through `copy_*_user_pt` over a per-agent `UserAddrSpace`; wired in Phase 1's `app_runtime.c`.
+- **F3 (toy loader):** §1 + Phase 1 — a real multi-segment loader (per-segment perms, bss, stack/arena) is an explicit Phase-1 deliverable, `hello`-gated before QuickJS.
+- **F4 (front-end/argv):** §0 + Phase 4 — custom `qjs_agent.c` (no argv); script ingress defined.
+- **Open Q (script ingress):** §0 — SYS_READ staged channel for v0, capability FS path long-term.
+- **Open Q (network layer):** §3.4 — brokered `net_fetch` is the default (single audited fetch event); `net_egress_check` is the lower raw-connect primitive.
