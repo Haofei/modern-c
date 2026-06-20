@@ -9,7 +9,7 @@ the risk people fear is already retired.
 
 The agent is an isolated U-mode ELF — a QuickJS engine plus a **custom non-CLI front-end**
 (`qjs_agent.c`, NOT the stock `qjs.c`, which expects `argc/argv` and a host filesystem). It
-has no command line; it obtains its script through a **defined ingress** (§3.5) and runs:
+has no command line; it obtains its script through a **defined ingress** (§0) and runs:
 
 ```
 [kernel] loads qjs-agent ELF into an isolated Sv39 space (kernel UNMAPPED)
@@ -62,7 +62,9 @@ boundary").
 | Timer-tick preemption | demonstrated in a demo runtime, NOT in the core scheduler | `tests/qemu/proc/preempt_demo.mc` (timer → `sched_yield`) |
 | SMP per-core run-queue + work-steal | a PRIMITIVE only, not an integrated confined-U-mode SMP scheduler | `kernel/core/smprq.mc` |
 | Message passing (Worker postMessage) | primitive present, NO internal locking | `kernel/lib/mailbox.mc` (post/take; blocking layered by the caller) |
-| Userspace thread spawn + multi-thread-per-confined-agent + concurrency hardening | NOT done (Phase 7) | — |
+| Interrupt-driven networking (backs async I/O) | present (the kernel does real TCP/HTTP under QEMU) | kernel net stack |
+| Async I/O ABI: non-blocking submit + poll, submit→complete path, front-end event loop | NOT done (Phase 7 — the real-agent concurrency model) | — |
+| Userspace thread spawn + Workers (CPU-parallel) + concurrency hardening | NOT done (Phase 8 — optional) | — |
 
 The two things people fear most — "can it run a big foreign C blob?" and "can it be
 truly contained?" — are **already proven** (BearSSL; agent_confined). The remaining work is
@@ -116,8 +118,11 @@ SYS_EXIT    (code)                    -> noreturn
 SYS_GETPID  ()                        -> u64
 SYS_CLOCK   ()                        -> u64 (monotonic ns)                 // Date / timers
 SYS_SBRK    (delta)                   -> usize (old break) | (usize)-1 err  // heap growth
-SYS_TOOL    (req_ptr)                 -> isize  (>=0 result, <0 = -errno)   // req = ToolReq*
-SYS_NET     (req_ptr)                 -> isize                              // req = NetReq*
+SYS_TOOL    (req_ptr)                 -> isize  (>=0 result, <0 = -errno)   // req = ToolReq* (blocking)
+SYS_NET     (req_ptr)                 -> isize                              // req = NetReq*  (blocking)
+// --- async I/O (Phase 7; the concurrency a real agent needs) ---
+SYS_SUBMIT  (req_ptr)                 -> handle | <0 err   // non-blocking submit of a Tool/Net request
+SYS_POLL    (events_ptr, max, timeout)-> n_ready           // completed handles + results; blocks only if idle
 ```
 
 **Return/error convention:** every value-returning syscall returns an `isize` in a0; a
@@ -215,7 +220,7 @@ Options, in order of preference:
 - Config: disable heavy/unsupported features — **no bignum** (`CONFIG_BIGNUM` off, drops
   `__int128`), **no os/std modules** (replaced by our binding), and **Workers DISABLED in
   Phase 4** — the `Worker` constructor stubs to `E_UNSUPPORTED`. Workers are flipped on in
-  Phase 7, once the spawn/mailbox substrate exists, so Phase 4 has no forward dependency.
+  Phase 8, once the spawn/mailbox substrate exists, so Phase 4 has no forward dependency.
 - **`quickjs-libc-mc.c`** replaces `quickjs-libc.c`: implement only the `js_*` hooks the
   agent exposes (a `print`/console binding, and a `Tool`/`fetch` binding) against
   `SYS_WRITE`/`SYS_TOOL`/`SYS_NET` — this is the actual "QuickJS-with-the-ABI" glue, and it
@@ -244,13 +249,43 @@ QuickJS wants MBs for non-trivial scripts.
 
 **Effort: M.** The hard parts (isolation, capability front door) are done; this is integration.
 
-### Phase 7 — Threads / Workers (concurrency)
-QuickJS has **no internal multithreading within one runtime**
+### Phase 7 — Async I/O + event loop (REQUIRED — the real-agent concurrency model)
+A real agent is I/O-bound (think → call tools → wait → think), fires **concurrent** tool/fetch
+calls, and streams — a sequential *blocking* loop is too weak. No JS engine supports
+shared-memory threads inside one runtime (QuickJS included), so the agent's logic stays
+single-threaded JS; concurrency comes from an **async event loop over non-blocking I/O**,
+which is the standard model (Node/browser) and is what makes the agent actually work.
+- **Non-blocking ABI:** `SYS_SUBMIT(req)` queues a Tool/Net request and returns a handle
+  immediately; `SYS_POLL(events, max, timeout)` returns the completed handles + results,
+  blocking the agent **only when it has nothing else to do**. (The existing blocking
+  `SYS_TOOL`/`SYS_NET` remain for simple synchronous use.)
+- **Kernel-side concurrency (this is where threading actually matters):** the kernel performs
+  the fetch/fs op concurrently — IRQ-driven networking + a kernel worker/queue — while the
+  agent's single JS thread keeps running, then posts the completion. The scheduler +
+  interrupt-driven net already exist; this wires submit→complete to them.
+- **Front-end event loop:** `qjs_agent` runs `JS_ExecutePendingJob` (QuickJS's Promise/async
+  job queue) interleaved with `SYS_POLL`; an I/O completion resolves the JS Promise that
+  `SYS_SUBMIT` returned. Now `await tool(...)` and `Promise.all([...])` work, and N tool calls
+  run concurrently from one JS thread.
+- **Containment unchanged:** every submitted request still goes through the capability front
+  door, audited+attributed; async changes *when* the result returns, not *what is allowed*.
+- Gate: `qjs-async-test` — an `agent.js` that issues two concurrent allowed tool calls via
+  `Promise.all` and one denied call, asserting both results arrive and the denied one is
+  rejected, without blocking serially; under QEMU, both backends.
+
+**Effort: M–H.** The ABI + event loop are moderate; the substantive part is the kernel
+submit/complete path over IRQ-driven I/O. **This phase, not Workers, is what a real agent
+needs** — do it before Phase 8.
+
+### Phase 8 — Threads / Workers (OPTIONAL — CPU-parallel subtasks)
+Workers are *not* the agent's concurrency model (that is Phase 7); they are an optional add
+for **CPU-parallel** subtasks (e.g. heavy parsing/crypto in the background). QuickJS has **no
+internal multithreading within one runtime**
 ([QuickJS os module](https://bellard.org/quickjs/quickjs.html#os-module)), so the model is
 **Web-Worker-style**: each `Worker` is a SEPARATE `JS_Runtime` on its own kernel thread,
 communicating only by **cloned messages** — no shared JS heap, no interpreter locking. The
 kernel pieces (cooperative scheduler, context switch, run-queue primitive, mailbox) exist but
-are **not yet an integrated, concurrency-hardened, confined-U-mode SMP scheduler** — Phase 7
+are **not yet an integrated, concurrency-hardened, confined-U-mode SMP scheduler** — Phase 8
 builds that integration. Scoped in two steps:
 
 **v0 — single-core, contained (the deliverable):**
@@ -296,9 +331,13 @@ worker binding; v1 is the concurrency-hardening (locks) before SMP-parallel.
 - A trivial `agent.js` (`print(1+2)`) runs through QuickJS on the kernel and prints `3`.
 - `agent.js` doing fs/net effects: allowed ops succeed, forbidden ops are denied at the
   capability boundary it cannot bypass (kernel unmapped), all audited+attributed.
-- (Phase 7 v0) `agent.js` `Worker.fromSource(...)`s a worker, `postMessage`s a value, the
+- **(Phase 7 — the real-agent bar)** `agent.js` issues TWO concurrent allowed tool calls via
+  `Promise.all` + one denied call; both results arrive without serial blocking and the denied
+  one rejects — proving an async event loop over non-blocking I/O (the thing a sequential
+  blocking agent cannot do).
+- (Phase 8 v0, optional) `agent.js` `Worker.fromSource(...)`s a worker, `postMessage`s a value, the
   worker replies, and the main runtime asserts the round-trip — contained, **single-core**
-  (true SMP-parallel execution is Phase 7 v1, gated on mailbox + address-space locking).
+  (true SMP-parallel execution is Phase 8 v1, gated on mailbox + address-space locking).
 - All gates pass on **both** backends under QEMU; joined to `m0`.
 
 ## 6. Risks & how to retire each (early)
@@ -315,11 +354,13 @@ worker binding; v1 is the concurrency-hardening (locks) before SMP-parallel.
 | script ingress / no argv | custom non-CLI front-end + SYS_READ/capability-FS ingress (§0); no initial-stack/auxv synthesis |
 
 ## 7. Sequencing
-**1 → 2 → 3 → 4 → 5 → 6 → 7.** Phases 1–6 deliver a single-threaded JS agent; Phase 7
-(threads/Workers) is additive on top — the scheduler/context/mailbox PRIMITIVES exist (the
-hard kernel work), so v0 is integration (shared-satp scheduling) not new foundations, and it
-can land independently once a single agent runs; true SMP-parallel (v1) waits on the locking
-hardening called out in Phase 7. Phase 1 (the SDK) is the highest-leverage and unblocks
+**1 → 2 → 3 → 4 → 5 → 6 → 7, then optionally → 8.** Phases 1–6 deliver a single-threaded
+*blocking* JS agent (runs a script, sequential tool calls). **Phase 7 (async I/O + event
+loop) is what makes it a *real* agent** — concurrent tool calls, streaming, responsiveness —
+and is REQUIRED, not optional; it stays single-JS-threaded and leans on the kernel's existing
+interrupt-driven I/O + scheduler. **Phase 8 (Workers) is optional**, for CPU-parallel
+subtasks, and its true-SMP-parallel half (v1) waits on the locking hardening it calls out.
+Phase 1 (the SDK) is the highest-leverage and unblocks
 everything after it: once apps are confined ELFs built from a reusable runtime, QuickJS is
 not a special case — it is the largest app, dropped onto the same spine. Phases 2–3 (libc/
 libm) are the bulk of the porting effort and are independently testable (build a tiny C
@@ -343,7 +384,8 @@ sandboxed."
 - **Open Q (network layer):** §3.4 — brokered `net_fetch` is the default (single audited fetch event); `net_egress_check` is the lower raw-connect primitive.
 
 ### Threads/Workers review (2026-06-20)
-- **Worker config dependency:** Phase 4 keeps `Worker` stubbed `E_UNSUPPORTED`; enabled only in Phase 7 (no forward dependency).
-- **Scheduler reality:** §1 + Phase 7 corrected — the core scheduler is COOPERATIVE (`sched.mc`); timer preemption is a demo-runtime mechanism; `smprq` is a primitive. Phase 7 v0 explicitly builds the confined-U-mode (shared-satp) scheduler integration.
+- **Worker config dependency:** Phase 4 keeps `Worker` stubbed `E_UNSUPPORTED`; enabled only in Phase 8 (no forward dependency).
+- **Scheduler reality:** §1 + Phase 8 corrected — the core scheduler is COOPERATIVE (`sched.mc`); timer preemption is a demo-runtime mechanism; `smprq` is a primitive. Phase 8 v0 explicitly builds the confined-U-mode (shared-satp) scheduler integration.
 - **SMP claim:** split into v0 (single-core, contained) and v1 (true SMP-parallel) which is explicitly gated on mailbox locking + address-space/TLB-shootdown locking (`uaccess.mc` note) — not claimed before that lands.
-- **Worker source w/o host FS:** §Phase 7 — `Worker.fromSource(text)` for v0, capability-FS named modules later; matches QuickJS's separate-runtime + cloned-message semantics.
+- **Worker source w/o host FS:** §Phase 8 — `Worker.fromSource(text)` for v0, capability-FS named modules later; matches QuickJS's separate-runtime + cloned-message semantics.
+- **Real-agent concurrency (this review):** §3.2 + Phase 7 added an async-I/O event-loop model (non-blocking SYS_SUBMIT/SYS_POLL + front-end loop driving QuickJS jobs) as the REQUIRED concurrency for a real agent — single-JS-threaded, backed by kernel IRQ I/O. No JS engine supports shared-memory threads in one runtime, so "threads" for the agent means async I/O, not JS threads. Workers (shared-nothing, CPU-parallel) demoted to optional Phase 8.
