@@ -17,6 +17,12 @@ import "std/addr.mc";
 const SATP_SV39: u64 = 0x8000_0000_0000_0000;
 const SYS_WRITE: usize = 0;
 const SYS_GETPID: usize = 2;
+// Async I/O (Phase 7): SYS_SUBMIT queues a non-blocking op and returns a request id; SYS_POLL
+// drains one completion ((id, result) written to a user buffer). The agent's event loop submits,
+// keeps running, and resolves the matching JS Promise when the completion arrives.
+const SYS_SUBMIT: usize = 4;
+const SYS_POLL: usize = 5;
+const COMP_CAP: usize = 8;
 const USER_BASE: usize = 0x10000;
 // Upper bound for uaccess validation. Must cover the agent's whole VA span — for the QuickJS
 // agent that includes the multi-MiB heap arena + stack high in .bss, so a small app's 1 MiB is
@@ -31,6 +37,13 @@ global g_uas: UserAddrSpace;
 global g_syscalls: SyscallTable;
 global g_kbuf: [KBUF]u8;
 global g_entry: u64;
+
+// Completion queue (FIFO) for the async-I/O syscalls + a 16-byte staging buffer for SYS_POLL.
+global g_comp_id: [COMP_CAP]u64;
+global g_comp_val: [COMP_CAP]u64;
+global g_comp_count: usize;
+global g_next_req: u64;
+global g_pollbuf: [16]u8;
 
 // Forge a UserPtr<u8> from a user-supplied integer address (the uaccess idiom): re-tagging
 // an int into the UserPtr class needs `unsafe`; copy_from_user_pt still validates it per-page.
@@ -67,6 +80,50 @@ fn sys_getpid(a: u64, b: u64, c: u64) -> u64 {
     return AGENT_PID;
 }
 
+// SYS_SUBMIT(op, arg): start a non-blocking op. Here the op is a toy compute (`arg + 2`) whose
+// completion is enqueued immediately; a real op would complete later off an IRQ/DMA event onto
+// the same queue. Returns the request id so the agent can match the completion to its Promise.
+fn sys_submit(op: u64, arg: u64, c: u64) -> u64 {
+    let id: u64 = g_next_req;
+    g_next_req = g_next_req + 1;
+    if g_comp_count < COMP_CAP {
+        g_comp_id[g_comp_count] = id;
+        g_comp_val[g_comp_count] = arg + 2; // the op's result
+        g_comp_count = g_comp_count + 1;
+    }
+    return id;
+}
+
+// SYS_POLL(buf): drain ONE completion into the user buffer as two u64s [id, result]. Returns 1
+// if a completion was delivered, 0 if the queue is empty (the agent's loop then knows to stop
+// once nothing is in flight). The buffer is written through the agent's page table (copy_to_user).
+fn sys_poll(buf: u64, b: u64, c: u64) -> u64 {
+    if g_comp_count == 0 {
+        return 0;
+    }
+    let id: u64 = g_comp_id[0];
+    let val: u64 = g_comp_val[0];
+    // FIFO shift-down
+    var i: usize = 1;
+    while i < g_comp_count {
+        g_comp_id[i - 1] = g_comp_id[i];
+        g_comp_val[i - 1] = g_comp_val[i];
+        i = i + 1;
+    }
+    g_comp_count = g_comp_count - 1;
+    // stage [id, result] and copy out through the agent's page table
+    let base: PAddr = pa((&g_pollbuf[0]) as usize);
+    unsafe {
+        raw.store<u64>(base, id);
+        raw.store<u64>(pa_offset(base, 8), val);
+    }
+    switch copy_to_user_pt(&g_uas, uptr(buf as usize), base, 16) {
+        ok(v) => {}
+        err(e) => { return 0; }
+    }
+    return 1;
+}
+
 // Register the userspace ABI handlers. Called by usermode_setup() (the shared C trap
 // bring-up) before the app runs; the handlers reference g_uas, which app_build sets before
 // any ecall can occur.
@@ -74,6 +131,8 @@ export fn syscall_setup() -> void {
     syscall_init(&g_syscalls);
     syscall_register(&g_syscalls, SYS_WRITE, sys_write);
     syscall_register(&g_syscalls, SYS_GETPID, sys_getpid);
+    syscall_register(&g_syscalls, SYS_SUBMIT, sys_submit);
+    syscall_register(&g_syscalls, SYS_POLL, sys_poll);
 }
 
 // Called by the C trap for each ecall (number a7, args a0..a2). SYS_EXIT is handled by the
