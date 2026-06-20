@@ -1253,6 +1253,22 @@ pub fn build(b: *std.Build) void {
     const llvm_mc_test_step = b.step("llvm-mc-test", "Run the native #[test] functions through the LLVM backend, each process-isolated, via tools/test/mc-test-runner.sh");
     llvm_mc_test_step.dependOn(&llvm_mc_test_cmd.step);
 
+    // Opt-in module visibility (`pub`): a strict module's pub surface is reachable across
+    // files, its private items are not (E_PRIVATE_IMPORT). Checks both directions.
+    const mod_visibility_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/test/module-visibility-test.sh", "zig-out/bin/mcc", "c",
+    });
+    mod_visibility_test_cmd.step.dependOn(b.getInstallStep());
+    const mod_visibility_test_step = b.step("mod-visibility-test", "Opt-in `pub` module visibility (emit-c): a strict module's pub API is reachable across files; cross-file use of a private item is E_PRIVATE_IMPORT");
+    mod_visibility_test_step.dependOn(&mod_visibility_test_cmd.step);
+
+    const llvm_mod_visibility_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/test/module-visibility-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    llvm_mod_visibility_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_mod_visibility_test_step = b.step("llvm-mod-visibility-test", "Opt-in `pub` module visibility (LLVM backend): pub API reachable across files; private cross-file use is E_PRIVATE_IMPORT");
+    llvm_mod_visibility_test_step.dependOn(&llvm_mod_visibility_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -3030,6 +3046,9 @@ pub fn build(b: *std.Build) void {
     // mc-test runs the native #[test] facility (process-isolated) on both backends.
     m0_step.dependOn(&mc_test_cmd.step);
     m0_step.dependOn(&llvm_mc_test_cmd.step);
+    // mod-visibility-test checks opt-in `pub` module boundaries on both backends.
+    m0_step.dependOn(&mod_visibility_test_cmd.step);
+    m0_step.dependOn(&llvm_mod_visibility_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);

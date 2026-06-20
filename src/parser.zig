@@ -370,6 +370,16 @@ pub const Parser = struct {
     }
 
     fn parseDecl(self: *Parser, attrs: []ast.Attr) anyerror!ast.Decl {
+        // `pub` (opt-in module visibility) precedes the declaration's leading keyword,
+        // after any `#[...]` attributes. It stamps the parsed declaration; the rest of the
+        // grammar is unchanged.
+        const is_pub = self.match(.kw_pub);
+        var decl = try self.parseDeclBody(attrs);
+        decl.is_pub = is_pub;
+        return decl;
+    }
+
+    fn parseDeclBody(self: *Parser, attrs: []ast.Attr) anyerror!ast.Decl {
         const start = if (attrs.len > 0) attrs[0].span else self.current.span;
 
         // `move` is a contextual qualifier (section 18.1) on a struct declaration

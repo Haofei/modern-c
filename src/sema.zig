@@ -126,6 +126,11 @@ pub const Checker = struct {
     // live in the SAME file as the type's definition. Null for single-file/standalone checks
     // (no imports, nothing cross-file to forge), where the orphan rule is a no-op.
     file_boundaries: ?[]const loader.FileBoundary = null,
+    // Opt-in module visibility (§30): names that are file-private — a non-`pub` top-level
+    // declaration in a "strict" file (one that has at least one `pub` declaration). Maps the
+    // name to its defining file; a reference from a DIFFERENT file is E_PRIVATE_IMPORT. Empty
+    // when no file is strict (every existing module stays fully visible) or single-file.
+    private_items: ?*const std.StringHashMap([]const u8) = null,
     // Tier 2 trait-object tables, populated by checkTraits and read while checking
     // bodies (object-safety of `*dyn Trait`, dispatch type-checking). Set for the
     // duration of checkModule.
@@ -291,6 +296,37 @@ pub const Checker = struct {
         defer self.move_types = null;
         self.trivial_drop_types = &trivial_drop_types;
         defer self.trivial_drop_types = null;
+
+        // Opt-in module visibility: a file with >= 1 `pub` declaration is "strict"; its
+        // non-`pub`/non-`export` top-level items are private to it (E_PRIVATE_IMPORT when
+        // referenced from another file). No strict file -> the map stays empty and every
+        // module is fully visible, so existing code is unaffected.
+        var private_items = std.StringHashMap([]const u8).init(self.reporter.allocator);
+        defer private_items.deinit();
+        if (self.file_boundaries != null) {
+            var strict_files = std.StringHashMap(void).init(self.reporter.allocator);
+            defer strict_files.deinit();
+            for (module.decls) |decl| {
+                if (decl.is_pub) {
+                    if (self.originFile(decl.span.offset)) |f| strict_files.put(f, {}) catch {
+                        self.oom = true;
+                    };
+                }
+            }
+            if (strict_files.count() > 0) {
+                for (module.decls) |decl| {
+                    if (decl.kind == .impl_trait) continue; // no own importable name
+                    if (declIsPublic(decl)) continue;
+                    const file = self.originFile(decl.span.offset) orelse continue;
+                    if (!strict_files.contains(file)) continue;
+                    private_items.put(declName(decl).text, file) catch {
+                        self.oom = true;
+                    };
+                }
+            }
+        }
+        self.private_items = &private_items;
+        defer self.private_items = null;
 
         for (module.decls) |decl| self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
 
@@ -3909,6 +3945,9 @@ pub const Checker = struct {
         if (ctx.scope) |scope| {
             if (scope.get(ident.text)) |binding| return binding.class;
         }
+        // A local binding (above) shadows and is exempt; a cross-file reference to a private
+        // top-level global / function used as a value is rejected.
+        self.checkImportVisibility(ident.text, ident.span);
         if (globalClass(ident.text, ctx)) |class| return class;
         // A top-level function name used as a value is a function pointer.
         if (ctx.functions) |fns| {
@@ -3923,6 +3962,7 @@ pub const Checker = struct {
             .ident => |ident| {
                 if (isBuiltinFunctionName(ident.text)) return;
                 if (isKnownTaggedUnionConstructorName(ident.text, ctx)) return;
+                self.checkImportVisibility(ident.text, ident.span);
                 if (ctx.functions != null and ctx.functions.?.contains(ident.text)) return;
                 if (ctx.scope != null and ctx.scope.?.contains(ident.text)) return;
                 if (globalType(ident.text, ctx)) |ty| {
@@ -3955,6 +3995,8 @@ pub const Checker = struct {
                     self.errorCode(name.span, "E_NEVER_STORAGE", "never is a control-flow type and cannot be used for storage");
                 } else if (!isKnownTypeName(name.text, ctx)) {
                     self.errorCode(name.span, "E_UNKNOWN_TYPE", "unknown type name");
+                } else {
+                    self.checkImportVisibility(name.text, name.span);
                 }
             },
             .enum_literal => {},
@@ -6252,6 +6294,19 @@ pub const Checker = struct {
         return origin;
     }
 
+    // Opt-in module visibility (§30): reject a reference to a name that is private to a
+    // strict module (declared without `pub`) from a DIFFERENT file. A use within the same
+    // file, a `pub`/`export` item, or any name in a non-strict module is allowed (the name
+    // is simply absent from `private_items`).
+    fn checkImportVisibility(self: *Checker, name: []const u8, use_span: diagnostics.Span) void {
+        const private = self.private_items orelse return;
+        const def_file = private.get(name) orelse return;
+        const use_file = self.originFile(use_span.offset) orelse return;
+        if (!std.mem.eql(u8, use_file, def_file)) {
+            self.errorCode(use_span, "E_PRIVATE_IMPORT", "this name is private to its module (declared without `pub` in a module that marks its public surface); only `pub`/`export` items are visible to importing files");
+        }
+    }
+
     // Orphan rule (closes the name-keyed opacity bypass). MC's field-privacy for an
     // `opaque struct` is decided purely on the symbol name (`opaqueAccessAllowed`): a function
     // named `Owner__member` may read `Owner`'s private fields. Because the loader flattens all
@@ -7000,6 +7055,18 @@ fn copyScope(source: *const Scope, dest: *Scope) !void {
     while (it.next()) |entry| {
         try dest.put(entry.key_ptr.*, entry.value_ptr.*);
     }
+}
+
+// Whether a declaration is part of its module's PUBLIC surface: explicitly `pub`, an
+// `export fn` (external linkage), or an `extern` declaration (an external symbol). Anything
+// else in a strict module is file-private.
+fn declIsPublic(decl: ast.Decl) bool {
+    if (decl.is_pub) return true;
+    return switch (decl.kind) {
+        .fn_decl => |f| f.exported,
+        .extern_fn => true,
+        else => false,
+    };
 }
 
 fn declName(decl: ast.Decl) ast.Ident {

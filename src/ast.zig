@@ -53,6 +53,12 @@ pub const Decl = struct {
     span: Span,
     attrs: []Attr,
     kind: Kind,
+    // `pub` — opt-in module visibility (§30). A file with at least one `pub` declaration
+    // is "strict": only its `pub` (and `export`) items are visible to importing files;
+    // the rest are file-private (E_PRIVATE_IMPORT on cross-file use). A file with no `pub`
+    // declaration is unrestricted (every top-level item visible), so existing code is
+    // unaffected — a module opts into the boundary by marking its public surface.
+    is_pub: bool = false,
 
     pub const Kind = union(enum) {
         fn_decl: FnDecl,
