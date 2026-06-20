@@ -1237,6 +1237,22 @@ pub fn build(b: *std.Build) void {
     const showcase_test_step = b.step("showcase-test", "Language feature showcase (examples/feature_showcase.mc): one self-verifying program touring MC's features; returns 1 iff every feature's result is exactly right");
     showcase_test_step.dependOn(&showcase_test_cmd.step);
 
+    // Native `#[test]` facility: discover #[test] functions (mcc list-tests) and run each
+    // process-isolated, reporting pass/fail by name. emit-c here, emit-llvm below.
+    const mc_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/test/mc-test-runner.sh", "zig-out/bin/mcc", "c", "tests/test/lang_tests.mc",
+    });
+    mc_test_cmd.step.dependOn(b.getInstallStep());
+    const mc_test_step = b.step("mc-test", "Run the native #[test] functions in tests/test/lang_tests.mc, each process-isolated (a failing assert -> named FAIL), via tools/test/mc-test-runner.sh (emit-c)");
+    mc_test_step.dependOn(&mc_test_cmd.step);
+
+    const llvm_mc_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/test/mc-test-runner.sh", "zig-out/bin/mcc", "llvm", "tests/test/lang_tests.mc",
+    });
+    llvm_mc_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_mc_test_step = b.step("llvm-mc-test", "Run the native #[test] functions through the LLVM backend, each process-isolated, via tools/test/mc-test-runner.sh");
+    llvm_mc_test_step.dependOn(&llvm_mc_test_cmd.step);
+
     const fdspace_test_cmd = b.addSystemCommand(&.{
         "sh", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test",
     });
@@ -3011,6 +3027,9 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&mcp_test_cmd.step);
     // showcase-test links + runs the language feature showcase (emit-c); LLVM side via llvm-host-suite-test.
     m0_step.dependOn(&showcase_test_cmd.step);
+    // mc-test runs the native #[test] facility (process-isolated) on both backends.
+    m0_step.dependOn(&mc_test_cmd.step);
+    m0_step.dependOn(&llvm_mc_test_cmd.step);
     m0_step.dependOn(&fdspace_test_cmd.step);
     m0_step.dependOn(&snapshot_test_cmd.step);
     m0_step.dependOn(&waitqueue_test_cmd.step);

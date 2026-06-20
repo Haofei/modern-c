@@ -258,6 +258,8 @@ pub fn main(init: std.process.Init) !void {
         try runEmitMap(allocator, path, source, profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
         try runEmitLlvm(allocator, path, source, checks);
+    } else if (std.mem.eql(u8, command, "list-tests")) {
+        try runListTests(allocator, path, source);
     } else if (is_emit_layout) {
         try runEmitLayout(allocator, path, source, structs_flag.?);
     } else if (is_emit_c_struct) {
@@ -459,6 +461,51 @@ fn runCheck(allocator: std.mem.Allocator, path: []const u8, source: []const u8) 
     }
 
     std.debug.print("parsed {d} top-level declarations\n", .{module.decls.len});
+}
+
+// `mcc list-tests <file>` prints, one per line, the name of every `#[test]`-attributed
+// function in the file. A test is an ordinary `fn name() -> u32 { ...; return 1; }`
+// whose `assert(...)`s trap on failure; the harness (tools/test/mc-test-runner.sh) runs
+// each in its own process (a trap => fail) and reports pass/fail per name. This is the
+// language-side discovery hook — no codegen change, so a `#[test]` function lowers like
+// any other on both backends.
+fn runListTests(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var diag = diagnostics.Reporter.init(allocator, path, source);
+    defer diag.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parse_allocator = arena.allocator();
+
+    const module = try parseModuleOrReport(source, parse_allocator, &diag);
+    defer module.deinit(parse_allocator);
+
+    if (diag.has_errors) {
+        diag.render();
+        return error.CheckFailed;
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    for (module.decls) |decl| {
+        var is_test = false;
+        for (decl.attrs) |attr| {
+            switch (attr.kind) {
+                .named => |n| if (std.mem.eql(u8, n.text, "test")) {
+                    is_test = true;
+                },
+                else => {},
+            }
+        }
+        if (!is_test) continue;
+        const name = switch (decl.kind) {
+            .fn_decl => |fd| fd.name.text,
+            else => continue,
+        };
+        try out.appendSlice(allocator, name);
+        try out.append(allocator, '\n');
+    }
+    try writeStdout(out.items);
 }
 
 fn runFacts(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
