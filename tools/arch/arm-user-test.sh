@@ -50,7 +50,8 @@ esac
 # Freestanding mem*: both backends emit memset/memcpy for aggregate init/copy. The pure-MC
 # usermain links the shared arch-neutral freestanding object (-fno-builtin so the loops are not
 # rewritten into self-calls), matching the arm-vm-test flow.
-"$CLANG" "${CFLAGS[@]}" -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
+"$MCC" emit-c "$HERE/kernel/lib/freestanding.mc" > "$WORK/freestanding_gen.c" # freestanding mem* is now pure MC
+"$CLANG" "${CFLAGS[@]}" -fno-builtin -c "$WORK/freestanding_gen.c" -o "$WORK/freestanding.o"
 SUPPORT_OBJ=$([ "$BACKEND" = llvm ] && printf '%s' "$WORK/llvm-support.o" || true)
 "$LLD" -T "$HERE/tests/arm/aarch64-user.ld" "$WORK/user.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/k.elf"
 OUT="$(timeout 30 "$QEMU" -machine virt -cpu cortex-a72 -nographic -kernel "$WORK/k.elf" 2>/dev/null || true)"

@@ -54,7 +54,8 @@ esac
 $CLANG --target=x86_64-unknown-elf -ffreestanding -c "$ARCH/boot.S" -o "$WORK/boot.o"
 # Freestanding mem*: the backends emit memset/memcpy for aggregate init/copy (the old runtime.c
 # carried local copies); link the shared arch-neutral freestanding object instead.
-$CLANG $CF -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
+"$MCC" emit-c "$HERE/kernel/lib/freestanding.mc" > "$WORK/freestanding_gen.c" # freestanding mem* is now pure MC
+$CLANG $CF -fno-builtin -c "$WORK/freestanding_gen.c" -o "$WORK/freestanding.o"
 SUPPORT_OBJ=$([ "$BACKEND" = llvm ] && printf '%s' "$WORK/llvm-support.o" || true)
 $LLD -T "$HERE/tests/x86/x86-multiboot.ld" "$WORK/boot.o" "$WORK/user_runtime.o" "$WORK/user.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/kernel.elf"
 $OBJCOPY -O binary "$WORK/kernel.elf" "$WORK/kernel.bin"

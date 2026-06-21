@@ -156,7 +156,8 @@ $CLANG $KCF -c "$WORK/app_image.c" -o "$WORK/app_image.o"
 $CLANG $KCF -c "$WORK/agent_src.c" -o "$WORK/agent_src.o"
 # Freestanding mem*: the pure-MC runtime's emit-c lowering calls memset/memcpy for aggregate
 # init/copy (the old C runtime had clang inline them); link the shared arch-neutral object.
-$CLANG $KCF -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
+"$MCC" emit-c "$HERE/kernel/lib/freestanding.mc" > "$WORK/freestanding_gen.c" # freestanding mem* is now pure MC
+$CLANG $KCF -fno-builtin -c "$WORK/freestanding_gen.c" -o "$WORK/freestanding.o"
 $LLD -T "$HERE/tests/x86/x86-multiboot.ld" \
     "$WORK/boot.o" "$WORK/qjs_runtime.o" "$WORK/fixture.o" \
     "$WORK/app_image.o" "$WORK/agent_src.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/kernel.elf"

@@ -139,5 +139,12 @@ kernel_boot_compile_llvm_support() {
 # each per-image runtime .c. Add the resulting object to every ld.lld line.
 kernel_boot_compile_rt() {
     local out="$1"
-    kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/freestanding.c" "$out"
+    # The freestanding mem*/str* lib is now PURE MC (kernel/lib/freestanding.mc). Lower it via
+    # emit-c and compile with -fno-builtin so clang does NOT rewrite the explicit byte loops back
+    # into calls to themselves (the same guarantee the C version relied on). emit-c is arch-neutral,
+    # and these scalar loops carry no target specifics, so the caller's $CFLAGS target applies.
+    local dir
+    dir="$(dirname "$out")"
+    "$MCC" emit-c "$HERE/kernel/lib/freestanding.mc" > "$dir/freestanding.c"
+    "$CLANG" "${CFLAGS[@]}" -fno-builtin -c "$dir/freestanding.c" -o "$out"
 }
