@@ -1705,6 +1705,15 @@ pub fn build(b: *std.Build) void {
     const llvm_x86_vm_test_step = b.step("llvm-x86-vm-test", "LLVM-lowered x86-64 4-level page-table VM: build, CR3 reload, translation-only readback under QEMU");
     llvm_x86_vm_test_step.dependOn(&llvm_x86_vm_test_cmd.step);
 
+    const x86_user_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-user-test.sh", "zig-out/bin/mcc", "c" });
+    const llvm_x86_user_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-user-test.sh", "zig-out/bin/mcc", "llvm" });
+    x86_user_test_cmd.step.dependOn(b.getInstallStep());
+    const x86_user_test_step = b.step("x86-user-test", "x86-64 ring-3 user hello: SYS_WRITE via int 0x80, bad user ptr -> -EFAULT via a software page-table walk (no #PF), clean SYS_EXIT");
+    x86_user_test_step.dependOn(&x86_user_test_cmd.step);
+    llvm_x86_user_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_x86_user_test_step = b.step("llvm-x86-user-test", "LLVM-lowered x86-64 ring-3 user hello: ring-3 syscall round-trip + bad-ptr -EFAULT software walk under QEMU");
+    llvm_x86_user_test_step.dependOn(&llvm_x86_user_test_cmd.step);
+
 
     shell_test_cmd.step.dependOn(b.getInstallStep());
     const shell_test_step = b.step("shell-test", "Minimal shell");
@@ -3657,6 +3666,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_x86_qemu_test_cmd.step);
     m0_step.dependOn(&x86_vm_test_cmd.step);
     m0_step.dependOn(&llvm_x86_vm_test_cmd.step);
+    m0_step.dependOn(&x86_user_test_cmd.step);
+    m0_step.dependOn(&llvm_x86_user_test_cmd.step);
     m0_step.dependOn(&slotmap_test_cmd.step);
     m0_step.dependOn(&mask_test_cmd.step);
     m0_step.dependOn(&rights_test_cmd.step);
