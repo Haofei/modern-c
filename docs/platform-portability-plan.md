@@ -1182,7 +1182,12 @@ order:
    start/stop + inter-hart IPIs); and the **`s_trap_vector` SPP/nested-trap rework** on the
    shared confinement vector (`smode_usermode_runtime.c`) so the confined-agent path can ALSO
    take interrupts (the timer proof uses a standalone pure-S-mode vector that needs no swap).
-6. **Re-run the `kernel/net/` TLS gates under S-mode** (virtio-blk/net already revalidated).
+6. ~~**Re-run the `kernel/net/` TLS gates under S-mode.**~~ **Done.** `bearssl-smode-test`
+   (BearSSL SHA-256 vector + live virtio-rng entropy) and `https-smode-test` (a full BearSSL
+   TLS 1.2 handshake — ECDHE-RSA-AES256-GCM — with X.509 cert-chain validation against the
+   embedded trust anchor, decrypting a token over HTTP 200) both run under REAL OpenSBI in
+   S-mode (boot-seam port: `rdtime` for time, goldfish-RTC reachable for X.509 validity).
+   Both deterministic and in m0.
 7. **UART console driver (R6)** as a first-class device rather than per-runtime SBI console.
 
 The sequencing principle still holds: the agent ABI stays stable while each architecture
