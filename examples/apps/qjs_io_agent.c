@@ -9,7 +9,9 @@
 
 extern long sys_write(unsigned long fd, const void *buf, unsigned long len);
 extern long sys_submit(unsigned long req_ptr); // pointer to a ToolReq
-extern long sys_poll(unsigned long ev_ptr);    // pointer to a ToolEvent to fill
+// Vector poll: (events_ptr, max, timeout) -> count delivered (0..max) | -E_FAULT. This agent uses
+// the single-event form (max=1, timeout=0): fill ONE ToolEvent, returns 1 (delivered) / 0 (none).
+extern long sys_poll(unsigned long events_ptr, unsigned long max, unsigned long timeout);
 size_t strlen(const char *s);
 int snprintf(char *, size_t, const char *, ...);
 
@@ -118,7 +120,7 @@ int main(void) {
                 break;
             }
             ToolEvent ev;
-            long got = sys_poll((unsigned long)&ev);
+            long got = sys_poll((unsigned long)&ev, 1, 0);
             if (got > 0) {
                 int64_t id = (int64_t)ev.id;
                 int32_t val = ev.result;

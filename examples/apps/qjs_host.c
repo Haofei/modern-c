@@ -12,7 +12,9 @@
 
 extern long sys_write(unsigned long fd, const void *buf, unsigned long len);
 extern long sys_submit(unsigned long req_ptr); // pointer to a ToolReq
-extern long sys_poll(unsigned long ev_ptr);    // pointer to a ToolEvent to fill
+// Vector poll: drain up to `max` completions into a ToolEvent[] at events_ptr, advancing the
+// broker clock up to `timeout` extra ticks. Returns the count delivered (0..max) or -E_FAULT.
+extern long sys_poll(unsigned long events_ptr, unsigned long max, unsigned long timeout);
 extern long sys_read(unsigned long buf, unsigned long max); // §0 ingress
 size_t strlen(const char *s);
 
@@ -199,35 +201,43 @@ int main(void) {
             }
             if (jerr < 0) { emit("host: job threw\n", 16); rc = 1; break; }
 
-            ToolEvent ev;
-            long got = sys_poll((unsigned long)&ev);
+            // Vector drain: poll up to POLL_BATCH completions in ONE syscall, then dispatch each.
+            // The kernel writes the i-th ToolEvent at evbuf[i]; `got` is how many it delivered.
+            #define POLL_BATCH 4
+            ToolEvent evbuf[POLL_BATCH];
+            long got = sys_poll((unsigned long)evbuf, POLL_BATCH, 0);
             if (got > 0) {
-                int64_t id = (int64_t)ev.id;
-                int32_t val = ev.result;
-                int found = 0;
-                for (int i = 0; i < g_inflight; i++) {
-                    if (g_ids[i] == id) {
-                        found = 1;
-                        JSValue a = JS_NewInt32(ctx, val);
-                        JSValue ret = JS_Call(ctx, g_resolvers[i], JS_UNDEFINED, 1, &a);
-                        JS_FreeValue(ctx, ret);
-                        JS_FreeValue(ctx, a);
-                        JS_FreeValue(ctx, g_resolvers[i]);
-                        g_resolvers[i] = g_resolvers[g_inflight - 1];
-                        g_ids[i] = g_ids[g_inflight - 1];
-                        g_inflight--;
+                int drained = 0;
+                for (long k = 0; k < got; k++) {
+                    int64_t id = (int64_t)evbuf[k].id;
+                    int32_t val = evbuf[k].result;
+                    int found = 0;
+                    for (int i = 0; i < g_inflight; i++) {
+                        if (g_ids[i] == id) {
+                            found = 1;
+                            JSValue a = JS_NewInt32(ctx, val);
+                            JSValue ret = JS_Call(ctx, g_resolvers[i], JS_UNDEFINED, 1, &a);
+                            JS_FreeValue(ctx, ret);
+                            JS_FreeValue(ctx, a);
+                            JS_FreeValue(ctx, g_resolvers[i]);
+                            g_resolvers[i] = g_resolvers[g_inflight - 1];
+                            g_ids[i] = g_ids[g_inflight - 1];
+                            g_inflight--;
+                            break;
+                        }
+                    }
+                    // An id with no matching resolver is a host/runtime invariant violation (the kernel
+                    // emitted a completion the host never registered). Fail loudly — never silently drop.
+                    if (!found) {
+                        emit("host: unknown completion id\n", 28);
+                        rc = 1;
+                        drained = -1;
                         break;
                     }
                 }
-                // An id with no matching resolver is a host/runtime invariant violation (the kernel
-                // emitted a completion the host never registered). Fail loudly — never silently drop.
-                if (!found) {
-                    emit("host: unknown completion id\n", 28);
-                    rc = 1;
-                    break;
-                }
+                if (drained < 0) break; // unknown id surfaced above
             } else if (got < 0) {
-                // SYS_POLL faulted (should not happen with a valid &ev) — fail rather than spin.
+                // SYS_POLL faulted (should not happen with a valid evbuf) — fail rather than spin.
                 emit("host: poll fault\n", 17);
                 rc = 1;
                 break;

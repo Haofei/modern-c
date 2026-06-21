@@ -256,61 +256,94 @@ fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
     return id;
 }
 
-// SYS_POLL(event_ptr): advance the virtual clock, then deliver the READY completion with the
-// smallest ready tick (out-of-order delivery — a short-delay op finishes before an earlier
-// long-delay one). Copies the result payload OUT to the request's reserved out_ptr, then a
-// ToolEvent OUT to event_ptr. Returns 1 (delivered), 0 (nothing ready yet), or -E_FAULT.
+// SYS_POLL(events_ptr, max_arg, timeout): the VECTOR completion drain. Advances the virtual clock
+// up to (1 + timeout) times, and on each advance delivers every READY completion (smallest ready
+// tick first — out-of-order delivery, a short-delay op finishes before an earlier long-delay one)
+// into the ToolEvent[] at events_ptr (the i-th event at offset i*sizeof(ToolEvent)), up to `max`.
+// Each delivery copies the result payload OUT to the request's reserved out_ptr, then the ToolEvent
+// OUT. Returns the count delivered (0..max), or -E_FAULT if the FIRST event copy faults (count==0).
 //
-// Both copies happen BEFORE the slot is freed: if either faults, the slot stays active so the
-// completion is not lost (a payload re-copy on a later retry is idempotent).
-fn sys_poll(ev_ptr: u64, b: u64, c: u64) -> u64 {
-    g_clock = g_clock + 1; // virtual time progresses, so every armed slot eventually becomes ready
-    if g_active_count == 0 {
-        return 0;
+// max_arg==0 is treated as 1 (single-event back-compat). With (max==1, timeout==0) the result is
+// identical to the original single-event form: one clock tick, deliver at most one ready slot.
+//
+// Both copies for a delivery happen BEFORE the slot is freed: on a fault, the slot stays active so
+// the completion is not lost. If a fault happens after some events were already delivered, we keep
+// them — return the partial count rather than -E_FAULT (already-delivered events are not retracted).
+fn sys_poll(events_ptr: u64, max_arg: u64, timeout: u64) -> u64 {
+    var want: usize = max_arg as usize;
+    if max_arg == 0 {
+        want = 1; // back-compat: a1==0 means a single event
     }
+    var count: usize = 0;
 
-    // Pick the ready slot with the smallest ready tick (tie-break by id -> FIFO for equal delays).
-    var best: usize = COMP_CAP;
-    var i: usize = 0;
-    while i < COMP_CAP {
-        if g_slot_active[i] && g_slot_ready[i] <= g_clock {
-            if best == COMP_CAP || g_slot_ready[i] < g_slot_ready[best] || (g_slot_ready[i] == g_slot_ready[best] && g_slot_id[i] < g_slot_id[best]) {
-                best = i;
+    // Outer loop: advance the clock at most (1 + timeout) times, draining each tick fully.
+    var steps: u64 = 0;
+    let max_steps: u64 = 1 + timeout;
+    while steps < max_steps {
+        steps = steps + 1;
+        g_clock = g_clock + 1; // virtual time progresses, so every armed slot eventually becomes ready
+
+        // Inner drain: deliver ready slots (smallest ready tick, tie-break by id) until `want` is
+        // reached or none are ready at this clock value.
+        while count < want {
+            if g_active_count == 0 {
+                break;
             }
+            var best: usize = COMP_CAP;
+            var i: usize = 0;
+            while i < COMP_CAP {
+                if g_slot_active[i] && g_slot_ready[i] <= g_clock {
+                    if best == COMP_CAP || g_slot_ready[i] < g_slot_ready[best] || (g_slot_ready[i] == g_slot_ready[best] && g_slot_id[i] < g_slot_id[best]) {
+                        best = i;
+                    }
+                }
+                i = i + 1;
+            }
+            if best == COMP_CAP {
+                break; // active slots exist but none ready at this clock value
+            }
+
+            let outlen: usize = g_slot_outlen[best] as usize;
+
+            // (1) result payload -> the originating request's out_ptr (only if the op produced bytes).
+            if outlen > 0 {
+                switch copy_to_user_pt(&g_uas, uptr(g_slot_outptr[best] as usize), pa((&g_slot_res[best][0]) as usize), outlen) {
+                    ok(v) => {}
+                    err(e) => {
+                        if count > 0 { return count as u64; } // keep already-delivered events
+                        return bitcast<u64>(E_FAULT);
+                    }
+                }
+            }
+
+            // (2) the ToolEvent -> events_ptr + count*sizeof(ToolEvent) (the count-th slot in the array).
+            var ev: ToolEvent = uninit;
+            ev.id = g_slot_id[best];
+            ev.status = g_slot_status[best];
+            ev.result = g_slot_result[best];
+            ev.out_len = g_slot_outlen[best];
+            ev.reserved = 0;
+            let esz: usize = sizeof(ToolEvent);
+            switch copy_to_user_pt(&g_uas, uptr((events_ptr as usize) + count * esz), pa((&ev) as usize), esz) {
+                ok(v) => {}
+                err(e) => {
+                    if count > 0 { return count as u64; } // slot stays active; keep delivered events
+                    return bitcast<u64>(E_FAULT);
+                }
+            }
+
+            // delivered — free the slot.
+            g_slot_active[best] = false;
+            g_active_count = g_active_count - 1;
+            count = count + 1;
         }
-        i = i + 1;
-    }
-    if best == COMP_CAP {
-        return 0; // active slots exist but none ready this tick; the host keeps polling
-    }
 
-    let outlen: usize = g_slot_outlen[best] as usize;
-
-    // (1) result payload -> the originating request's out_ptr (only if the op produced bytes).
-    if outlen > 0 {
-        switch copy_to_user_pt(&g_uas, uptr(g_slot_outptr[best] as usize), pa((&g_slot_res[best][0]) as usize), outlen) {
-            ok(v) => {}
-            err(e) => { return bitcast<u64>(E_FAULT); }
+        if count == want || g_active_count == 0 {
+            break; // satisfied the batch, or nothing left to wait for
         }
     }
 
-    // (2) the ToolEvent -> the poll buffer.
-    var ev: ToolEvent = uninit;
-    ev.id = g_slot_id[best];
-    ev.status = g_slot_status[best];
-    ev.result = g_slot_result[best];
-    ev.out_len = g_slot_outlen[best];
-    ev.reserved = 0;
-    let esz: usize = sizeof(ToolEvent);
-    switch copy_to_user_pt(&g_uas, uptr(ev_ptr as usize), pa((&ev) as usize), esz) {
-        ok(v) => {}
-        err(e) => { return bitcast<u64>(E_FAULT); } // slot stays active
-    }
-
-    // delivered — free the slot.
-    g_slot_active[best] = false;
-    g_active_count = g_active_count - 1;
-    return 1;
+    return count as u64;
 }
 
 // Register the userspace ABI handlers. Called by usermode_setup() (the shared C trap

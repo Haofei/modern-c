@@ -12,14 +12,16 @@ import "user/abi.mc";
 extern fn mc_ecall(number: u64, a0: u64, a1: u64, a2: u64) -> u64;
 
 // Async tool I/O (Phase 7+): submit a non-blocking op described by a ToolReq at `req_ptr` (returns
-// a request id >=0, or -errno); poll fills a ToolEvent at `ev_ptr` for one ready completion
-// (returns 1 if delivered, 0 if none, -E_FAULT on a bad pointer).
+// a request id >=0, or -errno). poll is the VECTOR drain: fill up to `max` ToolEvents at
+// `events_ptr` (i-th event at offset i*sizeof(ToolEvent)) for ready completions, advancing the
+// broker clock up to `timeout` extra ticks; returns the count delivered (0..max), or -E_FAULT.
+// The C host (examples/apps/qjs_host.c) calls this directly via `extern long sys_poll(...)`.
 export fn sys_submit(req_ptr: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_SUBMIT, req_ptr as u64, 0, 0));
 }
 
-export fn sys_poll(ev_ptr: usize) -> i64 {
-    return bitcast<i64>(mc_ecall(SYS_POLL, ev_ptr as u64, 0, 0));
+export fn sys_poll(events_ptr: usize, max: usize, timeout: usize) -> i64 {
+    return bitcast<i64>(mc_ecall(SYS_POLL, events_ptr as u64, max as u64, timeout as u64));
 }
 
 // write(2): the C-ABI used by qjs_agent. fd in a0, buffer address in a1, length in a2.

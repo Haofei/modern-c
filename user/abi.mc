@@ -13,13 +13,18 @@ export const SYS_GETPID: u64 = 2; // () -> pid
 // specially: it returns control to the kernel rather than back to U-mode).
 export const SYS_EXIT: u64 = 3; // (code) -> noreturn
 // Async Tool/Net I/O (Phase 7+): SYS_SUBMIT takes a POINTER to a ToolReq struct (copied in and
-// validated), starts a non-blocking op, and returns a request id (>=0) or -errno. SYS_POLL takes
-// a POINTER to a ToolEvent struct it fills for one ready completion, returning 1 (delivered) /
-// 0 (none ready) / -E_FAULT (bad pointer). The request struct carries variable-length in/out
-// payload buffers, so the real copy-in/copy-out + size-validation path is exercised even though
-// only mock ops exist today (the plan's compound Tool/Net calls slot straight in).
+// validated), starts a non-blocking op, and returns a request id (>=0) or -errno. SYS_POLL is the
+// VECTOR completion drain: (events_ptr, max, timeout) fills up to `max` ToolEvent structs at
+// events_ptr (the i-th event at offset i*sizeof(ToolEvent)) for ready completions, returning the
+// count delivered (0..max) or -E_FAULT (bad pointer). `max` >= 1 (max==0 is treated as 1 for
+// back-compat with the single-event form). `timeout` is the number of EXTRA virtual-clock ticks
+// the broker may advance while seeking ready completions (timeout==0 advances the clock once).
+// The single-event caller passes (event_ptr, 1, 0) and observes the original 1/0/-E_FAULT result.
+// The request struct carries variable-length in/out payload buffers, so the real copy-in/copy-out
+// + size-validation path is exercised even though only mock ops exist today (the plan's compound
+// Tool/Net calls slot straight in).
 export const SYS_SUBMIT: u64 = 4; // (req_ptr) -> request id (>=0) | -errno
-export const SYS_POLL: u64 = 5; // (event_ptr) -> 1 (delivered) | 0 (none) | -E_FAULT
+export const SYS_POLL: u64 = 5; // (events_ptr, max, timeout) -> count delivered (0..max) | -E_FAULT
 
 // Negative-errno results returned through the syscall ABI (Linux-compatible values).
 export const E_AGAIN: i64 = -11;     // EAGAIN: no capacity right now (back-pressure, retryable)

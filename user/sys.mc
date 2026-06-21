@@ -41,8 +41,17 @@ export fn submit(req_ptr: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_SUBMIT, req_ptr as u64, 0, 0));
 }
 
+// poll_many(events_ptr, max, timeout): drain up to `max` ready completions into a user array
+// of ToolEvent[max] at `events_ptr`, advancing the broker's virtual clock up to `timeout` extra
+// ticks while looking for ready completions. Returns the count delivered (0..max), or -E_FAULT.
+export fn poll_many(events_ptr: usize, max: usize, timeout: usize) -> i64 {
+    return bitcast<i64>(mc_ecall(SYS_POLL, events_ptr as u64, max as u64, timeout as u64));
+}
+
+// poll(ev_ptr): single-event back-compat form — fill ONE ToolEvent at `ev_ptr`. Returns 1
+// (delivered), 0 (none ready), or -E_FAULT. Delegates to poll_many with max=1, timeout=0.
 export fn poll(ev_ptr: usize) -> i64 {
-    return bitcast<i64>(mc_ecall(SYS_POLL, ev_ptr as u64, 0, 0));
+    return poll_many(ev_ptr, 1, 0);
 }
 
 // sys_exit(code): terminate the agent. The kernel reclaims it and does not return; the

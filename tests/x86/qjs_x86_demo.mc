@@ -255,53 +255,80 @@ fn qx_sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
     return id;
 }
 
-// SYS_POLL(event_ptr): advance the virtual clock, deliver the READY completion with the
-// smallest ready tick (out-of-order delivery), copy the result payload OUT then a ToolEvent
-// OUT. Returns 1 (delivered), 0 (nothing ready), or -E_FAULT.
-fn qx_sys_poll(ev_ptr: u64, b: u64, c: u64) -> u64 {
-    qx_clock = qx_clock + 1;
-    if qx_active_count == 0 {
-        return 0;
+// SYS_POLL(events_ptr, max_arg, timeout): the VECTOR completion drain. Advances the virtual clock
+// up to (1 + timeout) times, delivering every READY completion (smallest ready tick first —
+// out-of-order delivery) into the ToolEvent[] at events_ptr (i-th event at offset i*sizeof(ToolEvent)),
+// up to `max`. Returns the count delivered (0..max), or -E_FAULT if the FIRST event copy faults.
+// max_arg==0 is treated as 1 (single-event back-compat); (max==1, timeout==0) matches the original.
+fn qx_sys_poll(events_ptr: u64, max_arg: u64, timeout: u64) -> u64 {
+    var want: usize = max_arg as usize;
+    if max_arg == 0 {
+        want = 1; // back-compat: a1==0 means a single event
     }
+    var count: usize = 0;
 
-    var best: usize = QX_COMP_CAP;
-    var i: usize = 0;
-    while i < QX_COMP_CAP {
-        if qx_slot_active[i] && qx_slot_ready[i] <= qx_clock {
-            if best == QX_COMP_CAP || qx_slot_ready[i] < qx_slot_ready[best] || (qx_slot_ready[i] == qx_slot_ready[best] && qx_slot_id[i] < qx_slot_id[best]) {
-                best = i;
+    var steps: u64 = 0;
+    let max_steps: u64 = 1 + timeout;
+    while steps < max_steps {
+        steps = steps + 1;
+        qx_clock = qx_clock + 1;
+
+        while count < want {
+            if qx_active_count == 0 {
+                break;
             }
+            var best: usize = QX_COMP_CAP;
+            var i: usize = 0;
+            while i < QX_COMP_CAP {
+                if qx_slot_active[i] && qx_slot_ready[i] <= qx_clock {
+                    if best == QX_COMP_CAP || qx_slot_ready[i] < qx_slot_ready[best] || (qx_slot_ready[i] == qx_slot_ready[best] && qx_slot_id[i] < qx_slot_id[best]) {
+                        best = i;
+                    }
+                }
+                i = i + 1;
+            }
+            if best == QX_COMP_CAP {
+                break;
+            }
+
+            let outlen: usize = qx_slot_outlen[best] as usize;
+
+            if outlen > 0 {
+                switch copy_to_user_pt(&qx_uas, qx_uptr(qx_slot_outptr[best] as usize), pa((&qx_slot_res[best][0]) as usize), outlen) {
+                    ok(v) => {}
+                    err(e) => {
+                        if count > 0 { return count as u64; }
+                        return bitcast<u64>(E_FAULT);
+                    }
+                }
+            }
+
+            var ev: ToolEvent = uninit;
+            ev.id = qx_slot_id[best];
+            ev.status = qx_slot_status[best];
+            ev.result = qx_slot_result[best];
+            ev.out_len = qx_slot_outlen[best];
+            ev.reserved = 0;
+            let esz: usize = sizeof(ToolEvent);
+            switch copy_to_user_pt(&qx_uas, qx_uptr((events_ptr as usize) + count * esz), pa((&ev) as usize), esz) {
+                ok(v) => {}
+                err(e) => {
+                    if count > 0 { return count as u64; }
+                    return bitcast<u64>(E_FAULT);
+                }
+            }
+
+            qx_slot_active[best] = false;
+            qx_active_count = qx_active_count - 1;
+            count = count + 1;
         }
-        i = i + 1;
-    }
-    if best == QX_COMP_CAP {
-        return 0;
-    }
 
-    let outlen: usize = qx_slot_outlen[best] as usize;
-
-    if outlen > 0 {
-        switch copy_to_user_pt(&qx_uas, qx_uptr(qx_slot_outptr[best] as usize), pa((&qx_slot_res[best][0]) as usize), outlen) {
-            ok(v) => {}
-            err(e) => { return bitcast<u64>(E_FAULT); }
+        if count == want || qx_active_count == 0 {
+            break;
         }
     }
 
-    var ev: ToolEvent = uninit;
-    ev.id = qx_slot_id[best];
-    ev.status = qx_slot_status[best];
-    ev.result = qx_slot_result[best];
-    ev.out_len = qx_slot_outlen[best];
-    ev.reserved = 0;
-    let esz: usize = sizeof(ToolEvent);
-    switch copy_to_user_pt(&qx_uas, qx_uptr(ev_ptr as usize), pa((&ev) as usize), esz) {
-        ok(v) => {}
-        err(e) => { return bitcast<u64>(E_FAULT); }
-    }
-
-    qx_slot_active[best] = false;
-    qx_active_count = qx_active_count - 1;
-    return 1;
+    return count as u64;
 }
 
 // Register the userspace ABI handlers. Called by the C trap bring-up before the app runs.
