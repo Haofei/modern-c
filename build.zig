@@ -1558,6 +1558,12 @@ pub fn build(b: *std.Build) void {
     const llvm_bootinfo_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/arch/bootinfo-test.sh", "zig-out/bin/mcc", "llvm",
     });
+    const uart_driver_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/uart-driver-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_uart_driver_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/uart-driver-test.sh", "zig-out/bin/mcc", "llvm",
+    });
     const smode_user_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "c",
     });
@@ -1605,6 +1611,13 @@ pub fn build(b: *std.Build) void {
     llvm_bootinfo_test_cmd.step.dependOn(b.getInstallStep());
     const llvm_bootinfo_test_step = b.step("llvm-bootinfo-test", "LLVM-lowered boot under OpenSBI + normalize FDT into the arch-neutral BootInfo");
     llvm_bootinfo_test_step.dependOn(&llvm_bootinfo_test_cmd.step);
+
+    uart_driver_test_cmd.step.dependOn(b.getInstallStep());
+    const uart_driver_test_step = b.step("uart-driver-test", "Boot under OpenSBI + discover UART base from FDT + drive first-class LSR-polled NS16550 driver");
+    uart_driver_test_step.dependOn(&uart_driver_test_cmd.step);
+    llvm_uart_driver_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_uart_driver_test_step = b.step("llvm-uart-driver-test", "LLVM-lowered boot under OpenSBI + FDT-discovered first-class NS16550 driver");
+    llvm_uart_driver_test_step.dependOn(&llvm_uart_driver_test_cmd.step);
 
     smode_user_test_cmd.step.dependOn(b.getInstallStep());
     const smode_user_test_step = b.step("smode-user-test", "S-mode U-mode hello under OpenSBI (SYS_WRITE + bad-ptr -EFAULT)");
@@ -3918,6 +3931,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_smode_user_test_cmd.step);
     m0_step.dependOn(&bootinfo_test_cmd.step);
     m0_step.dependOn(&llvm_bootinfo_test_cmd.step);
+    m0_step.dependOn(&uart_driver_test_cmd.step);
+    m0_step.dependOn(&llvm_uart_driver_test_cmd.step);
     m0_step.dependOn(&e1000_test_cmd.step);
     m0_step.dependOn(&grant_test_cmd.step);
     m0_step.dependOn(&ipc_test_cmd.step);
