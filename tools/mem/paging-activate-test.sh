@@ -17,8 +17,9 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-SRC="$HERE/tests/qemu/mem/paging_activate_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/paging_runtime.c"
+# PURE-MC M-mode kernel: the runtime imports tests/qemu/mem/paging_activate_demo.mc for
+# the work; the boot seam, bare-UART console, and M->S privilege drop are all MC now (no .c).
+SRC="$HERE/tests/qemu/mem/paging_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-paging-activate-test" || echo "paging-activate-test")
 
@@ -27,15 +28,15 @@ kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# The C backend lowers the MC kernel to C, then clang assembles it for bare riscv64.
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/thread.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/thread.o" $SUPPORT_OBJ -o "$WORK/thread.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/thread.o" $SUPPORT_OBJ -o "$WORK/thread.elf"
 
 OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
         -kernel "$WORK/thread.elf" 2>/dev/null || true)"
