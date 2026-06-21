@@ -18,10 +18,9 @@ kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/tests/qemu/arch/smode_user_demo.mc" "$WORK/mc.o" "$WORK"
-kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/smode_user_runtime.c" "$WORK/boot.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$HERE/tests/qemu/sbi.ld" "$WORK/freestanding.o" "$WORK/boot.o" "$WORK/mc.o" $SUPPORT_OBJ -o "$WORK/k.elf"
+"$LLD" -T "$HERE/tests/qemu/sbi.ld" "$WORK/freestanding.o" "$WORK/mc.o" $SUPPORT_OBJ -o "$WORK/k.elf"
 # NOTE: no '-bios none' -> QEMU loads OpenSBI (the real firmware) which boots our kernel in S-mode.
 OUT="$(timeout 30 "$QEMU" -machine virt -m 256M -nographic -kernel "$WORK/k.elf" 2>/dev/null || true)"
 echo "--- OpenSBI + kernel output ---"; printf '%s\n' "$OUT" | tail -16; echo "-------------------------------"
