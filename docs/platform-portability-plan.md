@@ -1167,8 +1167,13 @@ order:
    when the harnesses emit `user/libc/libc.mc`. High regression surface (vararg/llvm-trap/
    host-llvm + the riscv qjs gates that pass *because* of the simple-pointer model) — verify
    against the full `fast` corpus.
-4. **x86 device-level (X4/X5).** APIC/timer interrupts and virtio-pci so x86 uses real
-   device paths rather than software-only paths.
+4. ~~**x86 device-level (X4/X5).**~~ **Done.** X4: the Local APIC timer fires real,
+   non-polled interrupts (8259 PIC masked) at IDT vec 0x20 — `x86-timer-test`
+   (`X86-TIMER TICKS=3`). X5: x86 PCI config-space enumeration via the legacy CAM port-I/O
+   mechanism (`0xCF8`/`0xCFC`) discovers the QEMU virtio-blk-pci device
+   (`vendor=1af4 device=1001 class=01`) and completes a legacy virtio handshake
+   (`status=03`, capacity read) — `x86-pci-test`. Both gates pass on C + LLVM backends, in
+   m0. (A full virtio-pci data path — virtqueue sector read over PCI — remains a follow-up.)
 5. **Finish the SBI service layer** (HSM/IPI) and **S-mode PLIC interrupt integration**.
 6. **Re-run the `kernel/net/` TLS gates under S-mode** (virtio-blk/net already revalidated).
 7. **UART console driver (R6)** as a first-class device rather than per-runtime SBI console.
