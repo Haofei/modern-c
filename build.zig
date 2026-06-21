@@ -2778,6 +2778,20 @@ pub fn build(b: *std.Build) void {
     const llvm_qjs_confined_test_step = b.step("llvm-qjs-confined-test", "QuickJS-agent Phase 6 (LLVM): evaluate JS confined in an isolated U-mode space under QEMU");
     llvm_qjs_confined_test_step.dependOn(&llvm_qjs_confined_test_cmd.step);
 
+    // M3a (first half): the SAME confined QuickJS agent, but the KERNEL runs in S-mode under REAL
+    // OpenSBI (no `-bios none`) instead of M-mode. The agent's space additionally maps the kernel
+    // as a supervisor-only gigapage (satp is effective in S-mode) + the UART MMIO page; JS is
+    // evaluated in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.
+    const qjs_smode_confined_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/qjs-smode-confined-test.sh", "zig-out/bin/mcc", "c" });
+    qjs_smode_confined_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_smode_confined_test_step = b.step("qjs-smode-confined-test", "M3a: evaluate JS in a CONFINED isolated U-mode Sv39 space under REAL OpenSBI (S-mode)");
+    qjs_smode_confined_test_step.dependOn(&qjs_smode_confined_test_cmd.step);
+
+    const llvm_qjs_smode_confined_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/qjs-smode-confined-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_qjs_smode_confined_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_smode_confined_test_step = b.step("llvm-qjs-smode-confined-test", "M3a (LLVM): evaluate JS confined in an isolated U-mode space under REAL OpenSBI (S-mode)");
+    llvm_qjs_smode_confined_test_step.dependOn(&llvm_qjs_smode_confined_test_cmd.step);
+
     // QuickJS-agent Phase 7: the EVENT LOOP. The confined agent evaluates a Promise chain and
     // drains the job queue (JS_ExecutePendingJob) — the microtask concurrency real agents need
     // (Promise/async do nothing without it). ASYNC=42 after the loop runs. Both backends.
@@ -3297,6 +3311,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_qjs_run_test_cmd.step);
     m0_step.dependOn(&qjs_confined_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_confined_test_cmd.step);
+    m0_step.dependOn(&qjs_smode_confined_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_smode_confined_test_cmd.step);
     m0_step.dependOn(&qjs_async_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_async_test_cmd.step);
     m0_step.dependOn(&qjs_io_test_cmd.step);
