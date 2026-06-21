@@ -1133,10 +1133,11 @@ The §10 milestone chain is delivered and gated, **except M5 is partial** (singl
 broker ABI ships; vector poll/timeout/real broker is M5b). What remains, in recommended
 order:
 
-1. **R0b — arch-selection seam.** Collapse the three near-identical `elf_loader`/`uaccess`
-   per-arch copies behind one arch-dispatch boundary and remove core's hard imports of
-   `kernel/arch/riscv64/context.mc`. Highest-leverage cleanup; the duplication created by
-   M6/M8 is exactly what this resolves.
+1. ~~**R0b — arch-selection seam.**~~ **Done.** A compiler `--arch` flag rewrites
+   `import "kernel/arch/active/..."` to the chosen arch (default riscv64). One generic
+   `uaccess_pt.mc` and one generic `elf_loader.mc` (arch PTE bits via each paging module's
+   `pte_flags_for_user` hook) now serve all three arches; the per-arch `elf_loader_*`/
+   `uaccess_*` copies are deleted and `kernel/core/` no longer imports `kernel/arch/riscv64`.
 2. **M5b — vector poll + real broker.** Add the `SYS_POLL(events_ptr, max, timeout)` form
    and replace the mock ops with real tool/net integration through the structured ABI.
 3. **Root-cause the three ungated LLVM-backend QuickJS gates** (`llvm-x86-qjs-async-test`,
