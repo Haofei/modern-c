@@ -79,7 +79,8 @@ kernel_boot_compile_mc_object "$BACKEND" "$WORK/epoch.mc" "$WORK/epoch.o" "$WORK
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 
 # Shared virtio-rng entropy driver (single source of truth, also used by https-get).
-"$CLANG" "${CFLAGS[@]}" -c "$HERE/kernel/drivers/virtio/virtio_rng.c" -o "$WORK/virtio_rng.o"
+"$MCC" emit-c "$HERE/kernel/drivers/virtio/virtio_rng.mc" > "$WORK/virtio_rng_gen.c" # virtio-rng driver is now pure MC
+"$CLANG" "${CFLAGS[@]}" -c "$WORK/virtio_rng_gen.c" -o "$WORK/virtio_rng.o"
 
 kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/epoch.o" "$WORK/virtio_rng.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/smoke.elf"

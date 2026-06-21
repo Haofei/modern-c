@@ -84,7 +84,8 @@ SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o
 kernel_boot_emit_virtq_structs_header "$WORK"
 "$CLANG" "${RUNTIME_FLAGS[@]}" -I"$WORK" -c "$RUNTIME" -o "$WORK/runtime.o"
 # Shared virtio-rng entropy driver (single source of truth).
-"$CLANG" "${RUNTIME_FLAGS[@]}" -c "$HERE/kernel/drivers/virtio/virtio_rng.c" -o "$WORK/virtio_rng.o"
+"$MCC" emit-c "$HERE/kernel/drivers/virtio/virtio_rng.mc" > "$WORK/virtio_rng_gen.c" # virtio-rng driver is now pure MC
+"$CLANG" "${RUNTIME_FLAGS[@]}" -c "$WORK/virtio_rng_gen.c" -o "$WORK/virtio_rng.o"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/virtio_rng.o" "$WORK/tls.o" "$WORK/time.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/google.elf"
 
