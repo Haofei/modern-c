@@ -24,7 +24,20 @@ case "$BACKEND" in
         exit 2
         ;;
 esac
-"$CLANG" -std=c11 -O1 -Wall -Wextra -Wno-unused-parameter -c "$HERE/kernel/arch/x86_64/context_runtime.c" -o "$WORK/ctx.o"
+# The context-switch primitives are now PURE MC (kernel/arch/x86_64/context_runtime.mc): naked
+# mc_switch_context / mc_switch_context_vm / first-switch trampoline + mc_thread_init. Compile
+# that MC module to a native object the same way as the scheduler demo above. The old
+# context_runtime.c is deleted.
+case "$BACKEND" in
+    c)
+        MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/kernel/arch/x86_64/context_runtime.mc" -o "$WORK/ctx.o" -Wno-switch-bool >/dev/null
+        ;;
+    llvm)
+        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/kernel/arch/x86_64/context_runtime.mc" -o "$WORK/ctx.o" \
+            -mtriple=x86_64-unknown-linux-gnu \
+            -relocation-model=pic
+        ;;
+esac
 cat >"$WORK/driver.c" <<'EOF'
 #include <stdint.h>
 #include <stdio.h>
