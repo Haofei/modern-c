@@ -27,7 +27,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-RUNTIME="$HERE/kernel/drivers/virtio/bearssl_smoke_runtime.c"
+RUNTIME="$HERE/tests/qemu/tls/bearssl_smoke_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 BEARSSL="$HERE/third_party/bearssl"
 TEST_NAME="bearssl-smoke-test"
@@ -60,15 +60,20 @@ while IFS= read -r f; do
 done < <(find "$BEARSSL/src" -name '*.c' | sort)
 echo "Compiled $NBEAR BearSSL .c files."
 
-# The runtime carries the entry point, virtio-rng driver, SHA-256 check and the
-# clock seam; pass the build epoch in.
-"$CLANG" "${CFLAGS[@]}" -DMC_BUILD_EPOCH="$EPOCH" -c "$RUNTIME" -o "$WORK/runtime.o"
+# The runtime (boot seam, SHA-256 check, clock seam, virtio-rng glue) is now PURE MC
+# (reuses kernel/core/mmio_console.mc; declares BearSSL + virtio_rng extern). MC has no
+# -D, so the build epoch is a generated MC fn linked alongside.
+echo "export fn mc_build_epoch_fn() -> u64 { return $EPOCH; }" > "$WORK/epoch.mc"
+mkdir -p "$WORK/rt" "$WORK/ep"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK/rt"
+kernel_boot_compile_mc_object "$BACKEND" "$WORK/epoch.mc" "$WORK/epoch.o" "$WORK/ep"
+SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 
 # Shared virtio-rng entropy driver (single source of truth, also used by https-get).
 "$CLANG" "${CFLAGS[@]}" -c "$HERE/kernel/drivers/virtio/virtio_rng.c" -o "$WORK/virtio_rng.o"
 
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/virtio_rng.o" "${BEARSSL_OBJS[@]}" -o "$WORK/smoke.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/epoch.o" "$WORK/virtio_rng.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/smoke.elf"
 
 # Rough .text size added by BearSSL (for the report).
 TEXT_SIZE="$("$CLANG" -print-prog-name=llvm-size >/dev/null 2>&1; command -v llvm-size >/dev/null 2>&1 && llvm-size "$WORK/smoke.elf" 2>/dev/null | tail -1 | awk '{print $1}' || echo '?')"
