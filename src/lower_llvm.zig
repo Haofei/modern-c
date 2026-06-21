@@ -6031,12 +6031,31 @@ fn llvmPreciseAsmTemplate(allocator: std.mem.Allocator, templates: []const []con
     var converted: std.ArrayList(u8) = .empty;
     var i: usize = 0;
     while (i < template.len) {
+        // `%N` operand reference -> LLVM `$N`. The MC/GCC-extended-asm spelling of a
+        // positional operand becomes LLVM IR inline-asm's `$N` form.
         if (template[i] == '%' and i + 1 < template.len and std.ascii.isDigit(template[i + 1])) {
             try converted.append(allocator, '$');
             i += 1;
             while (i < template.len and std.ascii.isDigit(template[i])) : (i += 1) {
                 try converted.append(allocator, template[i]);
             }
+            continue;
+        }
+        // `%%` literal-percent (GCC-extended-asm escaping, used before a hard register
+        // name such as `%%rax`) -> a single `%` in LLVM IR inline asm, whose literal
+        // percent is unescaped. Without this, a template-mov into a fixed register
+        // (`mov %0, %%rax`) — the only way to pin an operand to a specific x86 register
+        // given that precise-asm operands lower to generic `r` — would reach the
+        // assembler as `%%rax` and be rejected as an invalid register name.
+        if (template[i] == '%' and i + 1 < template.len and template[i + 1] == '%') {
+            try converted.append(allocator, '%');
+            i += 2;
+            continue;
+        }
+        // A literal `$` must be escaped as `$$` in LLVM IR inline-asm templates.
+        if (template[i] == '$') {
+            try converted.appendSlice(allocator, "$$");
+            i += 1;
             continue;
         }
         try converted.append(allocator, template[i]);

@@ -21,13 +21,17 @@ command -v "$OBJCOPY" >/dev/null 2>&1 || skip "llvm-objcopy not found"
 command -v "$QEMU"    >/dev/null 2>&1 || skip "$QEMU not found"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 CF="--target=x86_64-unknown-elf -ffreestanding -fno-pic -fno-pie -mno-red-zone -nostdlib -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function"
+# The kmain runtime is now PURE MC (tests/x86/vm_x86_runtime.mc), which imports the MC paging
+# demo (vm_x86_build): one MC compilation unit yields both `kmain` and `vm_x86_build`. boot.S
+# (the genuine 32-bit multiboot header + long-mode trampoline MC cannot target) still links
+# first and `call kmain`s into the MC object. The old vm_runtime.c is deleted.
 case "$BACKEND" in
   c)
-    "$MCC" emit-c "$HERE/tests/x86/vm_x86_demo.mc" > "$WORK/vm.c"
+    "$MCC" emit-c "$HERE/tests/x86/vm_x86_runtime.mc" > "$WORK/vm.c"
     $CLANG $CF -Wno-switch-bool -c "$WORK/vm.c" -o "$WORK/vm.o"
     ;;
   llvm)
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/vm_x86_demo.mc" -o "$WORK/vm.o" \
+    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/vm_x86_runtime.mc" -o "$WORK/vm.o" \
       -mtriple=x86_64-unknown-elf \
       -relocation-model=static \
       -code-model=kernel
@@ -38,10 +42,14 @@ case "$BACKEND" in
     exit 2
     ;;
 esac
-$CLANG $CF -c "$ARCH/vm_runtime.c" -o "$WORK/vm_runtime.o"
 $CLANG --target=x86_64-unknown-elf -ffreestanding -c "$ARCH/boot.S" -o "$WORK/boot.o"
+# Freestanding mem*: the backends emit memset/memcpy calls for aggregate init/copy. The old
+# vm_runtime.c carried local copies; now that the kmain is pure MC we link the shared
+# freestanding libc object (arch-neutral C; -fno-builtin so the loops are not rewritten into
+# calls to themselves), exactly as the riscv kernel images do via kernel_boot_compile_rt.
+$CLANG $CF -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
 SUPPORT_OBJ=$([ "$BACKEND" = llvm ] && printf '%s' "$WORK/llvm-support.o" || true)
-$LLD -T "$HERE/tests/x86/x86-multiboot.ld" "$WORK/boot.o" "$WORK/vm_runtime.o" "$WORK/vm.o" $SUPPORT_OBJ -o "$WORK/kernel.elf"
+$LLD -T "$HERE/tests/x86/x86-multiboot.ld" "$WORK/boot.o" "$WORK/vm.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/kernel.elf"
 $OBJCOPY -O binary "$WORK/kernel.elf" "$WORK/kernel.bin"
 OUT="$(timeout 30 "$QEMU" -kernel "$WORK/kernel.bin" -nographic -no-reboot \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 2>/dev/null || true)"
