@@ -1142,8 +1142,14 @@ order:
    gate. `cow.mc`/`demand.mc` remain **RISC-V-specific** (Sv39 gigapage + satp encoding) and
    import the riscv paging module directly, marked as such; making them portable needs
    arch-neutral large-page + address-space-encode hooks (a follow-up).
-2. **M5b — vector poll + real broker.** Add the `SYS_POLL(events_ptr, max, timeout)` form
-   and replace the mock ops with real tool/net integration through the structured ABI.
+2. ~~**M5b — vector poll + real broker.**~~ **Done.** `SYS_POLL(events_ptr, max, timeout)`
+   drains up to `max` ToolEvents/call with a virtual-clock timeout (`poll_many`; the C host
+   batches 4/poll); and the RISC-V reference broker now dispatches real `TOOL_OP_FS_WRITE/
+   READ/MKDIR` ops through `agent_fs_call` (capability front door: allowlist → budget →
+   path-cap, audited) against a kernel treefs — a pure-JS agent writes/reads a file back and
+   is denied an un-allowlisted op (`fs: read=hi`, `fs: mkdir denied EDENIED`). Gated by
+   `qjs-realtool-test`/`llvm-` in m0. (Net `net_fetch` through `net_broker.mc` and applying
+   the same op family on x86/arm — the broker is still duplicated 3× — remain follow-ups.)
 3. **Fix the three ungated LLVM-backend QuickJS gates** (`llvm-x86-qjs-async-test`,
    `llvm-arm-qjs-test`, `llvm-arm-qjs-async-test`). **Root-caused:** `mcc emit-llvm` models C
    `va_list` as a single `ptr` and emits the LLVM `va_arg` instruction — correct only for the
