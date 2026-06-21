@@ -703,6 +703,25 @@ pub fn build(b: *std.Build) void {
     const llvm_blk_smode_test_step = b.step("llvm-blk-smode-test", "Build and run the LLVM-lowered virtio-blk driver under REAL OpenSBI in S-mode");
     llvm_blk_smode_test_step.dependOn(&llvm_blk_smode_test_cmd.step);
 
+    const net_smode_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/net-smode-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_net_smode_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/net-smode-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    net_smode_test_cmd.step.dependOn(b.getInstallStep());
+    const net_smode_test_step = b.step("net-smode-test", "Build and run the virtio-net RX/TX ARP+ping exchange under REAL OpenSBI in S-mode");
+    net_smode_test_step.dependOn(&net_smode_test_cmd.step);
+    llvm_net_smode_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_net_smode_test_step = b.step("llvm-net-smode-test", "Build and run the LLVM-lowered virtio-net RX/TX exchange under REAL OpenSBI in S-mode");
+    llvm_net_smode_test_step.dependOn(&llvm_net_smode_test_cmd.step);
+
     const udp_net_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/net/udp-net-test.sh",
@@ -3447,6 +3466,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_udp_net_test_cmd.step);
     m0_step.dependOn(&llvm_blk_test_cmd.step);
     m0_step.dependOn(&llvm_blk_smode_test_cmd.step);
+    m0_step.dependOn(&llvm_net_smode_test_cmd.step);
     m0_step.dependOn(&llvm_net_test_cmd.step);
     m0_step.dependOn(&llvm_nic_test_cmd.step);
     m0_step.dependOn(&llvm_e1000_test_cmd.step);
@@ -3510,6 +3530,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&blk_test_cmd.step);
     // blk-smode-test revalidates the same virtio-blk driver under REAL OpenSBI in S-mode.
     m0_step.dependOn(&blk_smode_test_cmd.step);
+    m0_step.dependOn(&net_smode_test_cmd.step);
     // udp-net-test transmits a real UDP datagram over virtio-net (pcap-verified).
     m0_step.dependOn(&udp_net_test_cmd.step);
     // smp-test boots multiple harts synchronizing on a shared atomic under QEMU.
