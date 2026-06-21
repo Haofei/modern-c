@@ -7,6 +7,14 @@ SECTIONS {
 
     .text : {
         *(.text.start)
+        /* RISC-V mtvec encodes the trap MODE in the low 2 bits, so the trap
+           vector base MUST be 4-byte aligned. With compressed instructions the
+           toolchain only aligns functions to 2 bytes, and MC has no function
+           alignment attribute, so pin any `.text.mtrap` vector to a 4-byte
+           boundary here. Empty (and thus a no-op) for every image that does not
+           emit a `.text.mtrap` section. */
+        . = ALIGN(4);
+        *(.text.mtrap)
         *(.text .text.*)
     }
 
