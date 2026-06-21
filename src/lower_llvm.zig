@@ -79,7 +79,7 @@ pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: 
     try out.print(allocator, "source_filename = \"{s}\"\n", .{escaped_source_path});
     try out.appendSlice(allocator, "; MC LLVM IR backend v0\n");
     try out.appendSlice(allocator, "; semantic source: verified MC MIR\n\n");
-    try emitTrapDecl(allocator, out);
+    try emitTrapDecl(allocator, out, module);
 
     var ctx = LlvmEmitter{
         .allocator = allocator,
@@ -218,7 +218,21 @@ const sanitizer_hooks = [_][]const u8{
     "mc_csan_write",
 };
 
-fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
+// True if the MODULE ITSELF provides a `fn` definition (a body) whose name is `hook`. A pure-MC
+// sanitizer runtime does `export fn mc_ksan_check(...) {...}`; in that case we must NOT also emit
+// our auto weak no-op `define`, or the symbol would be doubly-defined (invalid IR). Only a body
+// counts — an `extern fn` declaration (handled by `isKsanHook`) does not provide a definition.
+fn moduleDefinesHook(module: ast.Module, hook: []const u8) bool {
+    for (module.decls) |decl| {
+        if (decl.kind == .fn_decl) {
+            const fn_decl = decl.kind.fn_decl;
+            if (fn_decl.body != null and std.mem.eql(u8, fn_decl.name.text, hook)) return true;
+        }
+    }
+    return false;
+}
+
+fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: ast.Module) !void {
     try out.appendSlice(allocator, "declare void @mc_trap_IntegerOverflow() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_DivideByZero() noreturn\n");
     try out.appendSlice(allocator, "declare void @mc_trap_InvalidShift() noreturn\n\n");
@@ -235,6 +249,10 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
     // profiles) provides STRONG definitions that override these; a default build never calls
     // them. See `sanitizer_hooks`.
     for (sanitizer_hooks) |hook| {
+        // If the module defines this hook itself (a pure-MC sanitizer runtime), yield to that
+        // definition: its `export fn` is emitted through normal MIR emission. Emitting the auto
+        // weak `define` here too would doubly-define the symbol.
+        if (moduleDefinesHook(module, hook)) continue;
         try out.print(allocator, "define weak void @{s}(i64 %a, i64 %b) {{\n  ret void\n}}\n", .{hook});
     }
     try out.appendSlice(allocator, "\n");

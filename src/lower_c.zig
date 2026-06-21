@@ -181,6 +181,31 @@ pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast.Module, out: 
     try emitter.appendLayoutAssertsForImpl(struct_names, false);
 }
 
+// The sanitizer shadow-hook symbols (mirrors `sanitizer_hooks` in lower_llvm.zig). Each gets a
+// weak no-op `define` in the C preamble that a linked sanitizer runtime overrides — UNLESS the
+// module itself defines the hook in MC, in which case the weak stub is suppressed to avoid a C
+// `redefinition` error.
+const sanitizer_hooks = [_][]const u8{
+    "mc_ksan_poison",
+    "mc_ksan_unpoison",
+    "mc_ksan_check",
+    "mc_ksan_store",
+    "mc_csan_read",
+    "mc_csan_write",
+};
+
+// True if the MODULE provides a `fn` definition (a body) named `hook` — a pure-MC sanitizer
+// runtime. An `extern fn` declaration (no body) does not count as a definition.
+fn moduleDefinesHook(module: ast.Module, hook: []const u8) bool {
+    for (module.decls) |decl| {
+        if (decl.kind == .fn_decl) {
+            const fn_decl = decl.kind.fn_decl;
+            if (fn_decl.body != null and std.mem.eql(u8, fn_decl.name.text, hook)) return true;
+        }
+    }
+    return false;
+}
+
 pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
     return appendCProfileWithSourcePath(allocator, module, out, profile, null, .{});
 }
@@ -257,21 +282,19 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         \\#else
         \\#define MC_WEAK
         \\#endif
-        \\MC_WEAK void mc_ksan_poison(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
-        \\MC_WEAK void mc_ksan_unpoison(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
-        \\MC_WEAK void mc_ksan_check(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
-        \\/* KMSAN init-tracking hook (D2.2). Weak no-op by default, so the KASAN runtime and
-        \\   non-msan builds are byte-for-byte unaffected. The msan shadow runtime provides the
-        \\   strong definition that marks the written bytes initialized. */
-        \\MC_WEAK void mc_ksan_store(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
-        \\/* KCSAN data-race watchpoint hooks (D2.3). Weak no-op by default, so the KASAN/KMSAN
-        \\   runtimes and non-csan builds are byte-for-byte unaffected. The csan watchpoint
-        \\   runtime provides the strong definitions: each instrumented unsynchronized access
-        \\   briefly sets a watchpoint on the shadow for [addr,addr+size); a concurrent access
-        \\   (one of which is a write) that finds a live watchpoint on an overlapping range is a
-        \\   data race and traps. The synchronized `mc_race_*` accessors do NOT call these. */
-        \\MC_WEAK void mc_csan_read(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
-        \\MC_WEAK void mc_csan_write(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
+        \\
+    );
+    // Weak no-op `define`s for every sanitizer shadow hook. A pure-MC sanitizer runtime instead
+    // DEFINES one of these (`export fn mc_ksan_check(...)`); for any hook the module itself
+    // defines we must SKIP the weak stub here, or the C compiler errors with `redefinition`.
+    // KMSAN init-tracking is `mc_ksan_store` (D2.2); KCSAN watchpoints are `mc_csan_read`/
+    // `mc_csan_write` (D2.3). Only module-defined hooks are suppressed; all others keep the
+    // weak no-op the linked sanitizer runtime overrides with a strong definition.
+    for (sanitizer_hooks) |hook| {
+        if (moduleDefinesHook(module, hook)) continue;
+        try out.print(allocator, "MC_WEAK void {s}(uintptr_t addr, uintptr_t size) {{ (void)addr; (void)size; }}\n", .{hook});
+    }
+    try out.appendSlice(allocator,
         \\
         \\#define MC_DEFINE_CHECKED_UNSIGNED(NAME, TYPE, MAXV) \
         \\MC_UNUSED static inline TYPE mc_checked_add_##NAME(TYPE a, TYPE b) { \

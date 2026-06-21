@@ -37,7 +37,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/proc/csan_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/csan_runtime.c"
+RUNTIME="$HERE/tests/qemu/proc/csan_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-kcsan-test" || echo "kcsan-test")
 
@@ -50,24 +50,32 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
-# MC object (shared by both scenarios), built with the KCSAN watchpoint instrumentation,
-# plus the LLVM-backend support object if needed.
+# MC demo object (shared by both scenarios), built WITH the KCSAN watchpoint instrumentation
+# (--checks=csan), plus the LLVM-backend support object if needed.
 MC_CHECKS=csan kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/demo.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 
-# Build + boot one scenario; echo the UART output. $1 = extra cflag macro, $2 = tag.
+# The PURE-MC KCSAN watchpoint runtime — built UN-instrumented (no MC_CHECKS) in its own work
+# subdir, so its own watchpoint-table reads/writes never recurse through mc_csan_*. It DEFINES
+# mc_csan_read / mc_csan_write (the compiler now yields its weak no-op stubs to these strong
+# definitions). A single runtime object serves both scenarios; the scenario is selected per-LINK
+# via a linker-defined `mc_scenario` symbol (the MC runtime reads its address with `la`).
+mkdir -p "$WORK/rt"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/rt/runtime.o" "$WORK/rt"
+
+# Build + boot one scenario; echo the UART output. $1 = scenario id (mc_scenario), $2 = tag.
 run_scenario() {
-    local macro="$1" tag="$2"
-    "$CLANG" "${CFLAGS[@]}" ${macro:+"$macro"} -c "$RUNTIME" -o "$WORK/runtime_$tag.o"
-    "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime_$tag.o" "$WORK/demo.o" \
+    local scenario="$1" tag="$2"
+    "$LLD" -T "$LDSCRIPT" --defsym=mc_scenario="$scenario" \
+        "$WORK/freestanding.o" "$WORK/rt/runtime.o" "$WORK/demo.o" \
         $SUPPORT_OBJ -o "$WORK/csan_$tag.elf"
     timeout 30 "$QEMU" -machine virt -bios none -nographic \
         -kernel "$WORK/csan_$tag.elf" 2>/dev/null || true
 }
 
-RACE="$(run_scenario "-DRACE_SCENARIO=1" race)"
-CLEAN="$(run_scenario "" clean)"
+RACE="$(run_scenario 2 race)"
+CLEAN="$(run_scenario 1 clean)"
 
 echo "--- RACE scenario UART ---"
 printf '%s\n' "$RACE"

@@ -32,7 +32,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/mem/ksan_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/ksan_runtime.c"
+RUNTIME="$HERE/tests/qemu/mem/ksan_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-ksan-test" || echo "ksan-test")
 
@@ -45,44 +45,51 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
-# MC object (shared by both scenarios), built with the KASAN access instrumentation, plus
-# the LLVM-backend support object if needed.
+# MC demo object (shared by all scenarios), built WITH the KASAN access instrumentation
+# (--checks=ksan), plus the LLVM-backend support object if needed.
 MC_CHECKS=ksan kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/demo.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 
-# Build + boot one scenario; echo the UART output. $1 = extra cflag macro, $2 = tag.
+# The PURE-MC KASAN shadow runtime — built UN-instrumented (no MC_CHECKS) in its own work
+# subdir, so its own shadow loads/stores never recurse through mc_ksan_check. It DEFINES the
+# sanitizer hooks (the compiler now yields its weak no-op stubs to these strong definitions).
+# A single runtime object serves every scenario; the scenario is selected per-LINK via a
+# linker-defined `mc_scenario` symbol (the MC runtime reads its address with `la`).
+mkdir -p "$WORK/rt"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/rt/runtime.o" "$WORK/rt"
+
+# Build + boot one scenario; echo the UART output. $1 = scenario id (mc_scenario), $2 = tag.
 run_scenario() {
-    local macro="$1" tag="$2"
-    "$CLANG" "${CFLAGS[@]}" ${macro:+"$macro"} -c "$RUNTIME" -o "$WORK/runtime_$tag.o"
-    "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime_$tag.o" "$WORK/demo.o" \
+    local scenario="$1" tag="$2"
+    "$LLD" -T "$LDSCRIPT" --defsym=mc_scenario="$scenario" \
+        "$WORK/freestanding.o" "$WORK/rt/runtime.o" "$WORK/demo.o" \
         $SUPPORT_OBJ -o "$WORK/ksan_$tag.elf"
     timeout 30 "$QEMU" -machine virt -bios none -nographic \
         -kernel "$WORK/ksan_$tag.elf" 2>/dev/null || true
 }
 
-UAF="$(run_scenario "" uaf)"
-OOB="$(run_scenario "-DOOB_SCENARIO=1" oob)"
-# New coverage (this change): a UAF reached through a STRUCT FIELD — NOT a raw.load — is now
-# instrumented and must trap. Before the field instrumentation this load bypassed mc_ksan_check
-# entirely and the UAF was silently MISSED.
-FIELD="$(run_scenario "-DFIELD_SCENARIO=1" field)"
+UAF="$(run_scenario 2 uaf)"
+OOB="$(run_scenario 3 oob)"
+# New coverage: a UAF reached through a STRUCT FIELD — NOT a raw.load — is instrumented and must
+# trap. Before the field instrumentation this load bypassed mc_ksan_check and the UAF was MISSED.
+FIELD="$(run_scenario 4 field)"
 
 # ---- empirical per-access-path coverage audit (verify each claim by EXECUTION) ----
 # DETECT-claimed paths (must trap): scalar global LOAD, scalar global STORE.
-GLOAD="$(run_scenario "-DGLOBAL_LOAD_SCENARIO=1" gload)"
-GSTORE="$(run_scenario "-DGLOBAL_STORE_SCENARIO=1" gstore)"
+GLOAD="$(run_scenario 8 gload)"
+GSTORE="$(run_scenario 9 gstore)"
 # Struct-field array LOAD (`a.cells[3]`): DETECTS on the C backend (the `.cells` member load is
 # wrapped with mc_ksan_check over the whole array, so the element read traps) but MISSES on the
 # LLVM backend (emitIndexLoad only hooks a GLOBAL array base, not a struct-field array). This is a
 # real C-vs-LLVM coverage divergence — gate the DETECT only where it holds (C).
-ARRLOAD="$(run_scenario "-DARR_LOAD_SCENARIO=1" arrload)"
+ARRLOAD="$(run_scenario 6 arrload)"
 # MISS-claimed paths (documented gaps — must NOT trap; recorded, not gated as failures):
 #   pointer struct-field STORE, array-index STORE, stack local, access outside the armed pool.
-FSTORE="$(run_scenario "-DFIELD_STORE_SCENARIO=1" fstore)"
-ARRSTORE="$(run_scenario "-DARR_STORE_SCENARIO=1" arrstore)"
-STACK="$(run_scenario "-DSTACK_LOCAL_SCENARIO=1" stack)"
-OUTSIDE="$(run_scenario "-DOUTSIDE_POOL_SCENARIO=1" outside)"
+FSTORE="$(run_scenario 5 fstore)"
+ARRSTORE="$(run_scenario 7 arrstore)"
+STACK="$(run_scenario 10 stack)"
+OUTSIDE="$(run_scenario 11 outside)"
 
 echo "--- use-after-free scenario UART ---"
 printf '%s\n' "$UAF"

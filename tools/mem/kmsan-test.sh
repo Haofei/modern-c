@@ -32,7 +32,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/mem/kmsan_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/kmsan_runtime.c"
+RUNTIME="$HERE/tests/qemu/mem/kmsan_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-kmsan-test" || echo "kmsan-test")
 
@@ -45,31 +45,39 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
-# MC object (shared by both scenarios), built with the KMSAN init-tracking instrumentation,
-# plus the LLVM-backend support object if needed.
+# MC demo object (shared by all scenarios), built WITH the KMSAN init-tracking instrumentation
+# (--checks=msan), plus the LLVM-backend support object if needed.
 MC_CHECKS=msan kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/demo.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 
-# Build + boot one scenario; echo the UART output. $1 = extra cflag macro, $2 = tag.
+# The PURE-MC KMSAN shadow runtime — built UN-instrumented (no MC_CHECKS) in its own work subdir,
+# so its own shadow loads/stores never recurse through the hooks. It DEFINES mc_ksan_check /
+# mc_ksan_store (the compiler now yields its weak no-op stubs to these strong definitions). A
+# single runtime object serves every scenario; the scenario is selected per-LINK via a linker-
+# defined `mc_scenario` symbol (the MC runtime reads its address with `la`).
+mkdir -p "$WORK/rt"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/rt/runtime.o" "$WORK/rt"
+
+# Build + boot one scenario; echo the UART output. $1 = scenario id (mc_scenario), $2 = tag.
 run_scenario() {
-    local macro="$1" tag="$2"
-    "$CLANG" "${CFLAGS[@]}" ${macro:+"$macro"} -c "$RUNTIME" -o "$WORK/runtime_$tag.o"
-    "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime_$tag.o" "$WORK/demo.o" \
+    local scenario="$1" tag="$2"
+    "$LLD" -T "$LDSCRIPT" --defsym=mc_scenario="$scenario" \
+        "$WORK/freestanding.o" "$WORK/rt/runtime.o" "$WORK/demo.o" \
         $SUPPORT_OBJ -o "$WORK/kmsan_$tag.elf"
     timeout 30 "$QEMU" -machine virt -bios none -nographic \
         -kernel "$WORK/kmsan_$tag.elf" 2>/dev/null || true
 }
 
-CLEAN="$(run_scenario "" clean)"
-UNINIT="$(run_scenario "-DUNINIT_SCENARIO=1" uninit)"
+CLEAN="$(run_scenario 1 clean)"
+UNINIT="$(run_scenario 2 uninit)"
 # ---- empirical per-access-path coverage audit (verify each claim by EXECUTION) ----
 # DETECT-claimed (must trap): pointer struct-field LOAD of UNINIT, scalar global LOAD of poison.
-FLOAD="$(run_scenario "-DFIELD_LOAD_SCENARIO=1" fload)"
-GLOAD="$(run_scenario "-DGLOBAL_LOAD_SCENARIO=1" gload)"
+FLOAD="$(run_scenario 3 fload)"
+GLOAD="$(run_scenario 4 gload)"
 # MISS-claimed (documented gap — recorded, not gated): freed-WRITE under msan (the store path
 # uses mc_ksan_store only, no mc_ksan_check, so a write to freed/poisoned memory is not caught).
-FWRITE="$(run_scenario "-DFREED_WRITE_SCENARIO=1" fwrite)"
+FWRITE="$(run_scenario 5 fwrite)"
 
 echo "--- clean (write-before-read) scenario UART ---"
 printf '%s\n' "$CLEAN"
