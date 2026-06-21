@@ -1481,6 +1481,12 @@ pub fn build(b: *std.Build) void {
     const llvm_arm_vm_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/arch/arm-vm-test.sh", "zig-out/bin/mcc", "llvm",
     });
+    const arm_user_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/arm-user-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_arm_user_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/arch/arm-user-test.sh", "zig-out/bin/mcc", "llvm",
+    });
     const liveupdate_test_cmd = b.addSystemCommand(&.{
         "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "liveupdate-test",
     });
@@ -1582,6 +1588,12 @@ pub fn build(b: *std.Build) void {
     llvm_arm_vm_test_cmd.step.dependOn(b.getInstallStep());
     const llvm_arm_vm_test_step = b.step("llvm-arm-vm-test", "LLVM-lowered AArch64 stage-1 page-table VM + MMU enable");
     llvm_arm_vm_test_step.dependOn(&llvm_arm_vm_test_cmd.step);
+    arm_user_test_cmd.step.dependOn(b.getInstallStep());
+    const arm_user_test_step = b.step("arm-user-test", "AArch64 EL0 user hello: SYS_WRITE via svc #0, bad user ptr -> -EFAULT via a software page-table walk (no data abort), clean SYS_EXIT");
+    arm_user_test_step.dependOn(&arm_user_test_cmd.step);
+    llvm_arm_user_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_arm_user_test_step = b.step("llvm-arm-user-test", "LLVM-lowered AArch64 EL0 user hello: EL0 syscall round-trip + bad-ptr -EFAULT software walk under QEMU");
+    llvm_arm_user_test_step.dependOn(&llvm_arm_user_test_cmd.step);
 
 
     dynlink_test_cmd.step.dependOn(b.getInstallStep());
@@ -3734,6 +3746,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_aarch64_test_cmd.step);
     m0_step.dependOn(&arm_vm_test_cmd.step);
     m0_step.dependOn(&llvm_arm_vm_test_cmd.step);
+    m0_step.dependOn(&arm_user_test_cmd.step);
+    m0_step.dependOn(&llvm_arm_user_test_cmd.step);
     m0_step.dependOn(&liveupdate_test_cmd.step);
     m0_step.dependOn(&sbi_boot_test_cmd.step);
     m0_step.dependOn(&llvm_sbi_boot_test_cmd.step);
