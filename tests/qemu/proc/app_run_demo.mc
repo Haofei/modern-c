@@ -14,6 +14,14 @@ import "kernel/core/uaccess.mc";
 import "kernel/core/console.mc";
 import "std/addr.mc";
 import "user/abi.mc"; // SYS_* numbers + E_AGAIN/E_FAULT — the single ABI source of truth
+// M5b.2: the REAL capability-checked FS tool path. The same app_run_demo broker that drives the
+// mock ops also dispatches the three FS ops through the kernel's capability front door, proving
+// allow/deny/audit end-to-end from pure JS.
+import "kernel/fs/agent_fs.mc";     // agent_fs_call (allowlist -> budget -> path cap), TOOL_FS_*
+import "kernel/fs/treefs.mc";       // Tree + tree_init / tree_mkdir
+import "kernel/fs/fs_toolserver.mc"; // PathCap, pathcap_root, FS_WRITE/FS_READ
+import "kernel/core/ipc_trace.mc";  // IpcTrace audit sink (allow + deny verdicts)
+import "std/mask.mc";               // Mask32 allowlist (mask32_zero/mask32_set)
 
 const SATP_SV39: u64 = 0x8000_0000_0000_0000;
 const COMP_CAP: usize = 8;
@@ -63,6 +71,20 @@ global g_clock: u64;                          // virtual broker clock (advances 
 global g_active_count: usize;                 // active slots
 global g_next_req: u64;                       // monotonic request-id counter
 global g_reqbuf: [REQ_BYTES]u8;               // bounded copy-IN scratch for request payloads
+
+// ----- M5b.2: the REAL capability-checked FS tool world (kernel-side authority) -----
+// A confined agent has NO authority of its own; the kernel mints it here, before the agent runs.
+// The workspace dir "/ws" is the only writable/readable subtree (a path cap rooted at it); the
+// allowlist permits ONLY FS_WRITE + FS_READ — NOT FS_MKDIR — so a JS mkdir is Denied at the front
+// door (allowlist), proving the deny path. agent_fs_call enforces allowlist -> budget -> path-cap
+// and audits every verdict (allow + deny) into g_audit.
+const FS_PATH_MAX: usize = 128; // bound on a tool path (kernel-resident copy)
+global g_tree: Tree;            // the tool filesystem (kernel-owned)
+global g_audit: IpcTrace;       // the capability audit sink (allow + deny verdicts)
+global g_agent: AgentFs;        // the agent's FS authority: allowlist + budget + path cap
+global g_fs_path: [FS_PATH_MAX]u8;  // kernel copy of the request path (agent_fs_call takes a kaddr)
+global g_fs_data: [RES_BYTES]u8;    // kernel copy of the write data / staging for read bytes
+global g_fs_ready: bool;        // app_build set up the broker world (defensive: deny if not)
 
 // Find a free slot, or COMP_CAP if all are active.
 fn broker_free_slot() -> usize {
@@ -148,6 +170,143 @@ fn sys_read(buf: u64, max: u64, c: u64) -> u64 {
     return n as u64;
 }
 
+// Map a capability-front-door error to the syscall ABI's negative-errno convention. Denied and
+// NoRight (a policy/authority refusal) -> E_DENIED; Exhausted (budget spent) -> E_AGAIN
+// (retryable, like back-pressure); NotFound -> -2 (ENOENT); everything else -> E_INVAL (-22).
+fn fs_err_to_errno(e: AgentToolError) -> i32 {
+    switch e {
+        .Denied => { return E_DENIED as i32; }
+        .NoRight => { return E_DENIED as i32; }
+        .Exhausted => { return E_AGAIN as i32; }
+        .NotFound => { return -2; } // ENOENT
+        .NoSuchTool => { return -22; }
+        .NotDir => { return -22; }
+        .Exists => { return -22; }
+        .TooLarge => { return -22; }
+        .NoSpace => { return -22; }
+        .IsDir => { return -22; }
+        .Invalid => { return -22; }
+    }
+}
+
+// Is `op` one of the REAL capability-checked FS ops?
+fn is_fs_op(op: u32) -> bool {
+    return op == TOOL_OP_FS_WRITE || op == TOOL_OP_FS_READ || op == TOOL_OP_FS_MKDIR;
+}
+
+// SYS_SUBMIT helper for the REAL FS ops (M5b.2). The ToolReq has already been copied in and its
+// hard size bounds checked. We copy the request payload (path[+data]) into kernel buffers, map the
+// op to a TOOL_FS_* id, and call agent_fs_call — the capability front door (allowlist -> budget ->
+// path cap). The completion slot is armed READY IMMEDIATELY (ready tick = g_clock), so the first
+// SYS_POLL delivers it. On ok(n): status=0, result=n; for FS_READ the read bytes are staged into
+// the slot result payload (out_len=n) so sys_poll copies them to out_ptr. On err(e): status = the
+// mapped negative errno, no payload. Returns the request id (>=0), or -errno on a copy fault.
+fn fs_submit(req: *ToolReq) -> u64 {
+    if !g_fs_ready {
+        return bitcast<u64>(E_DENIED);
+    }
+
+    // arg = path length; in_payload = path[0..arg] then data[arg..in_len] (write only).
+    let path_len: usize = req.arg as usize;
+    let in_len: usize = req.in_len as usize;
+    // Validate: the path fits its kernel buffer, the path is within the in-payload, and the data
+    // tail fits its kernel buffer. A malformed split is E_INVAL (not retryable).
+    if path_len == 0 || path_len > FS_PATH_MAX || path_len > in_len {
+        let einval: i64 = -22; // EINVAL: malformed path/payload split
+        return bitcast<u64>(einval);
+    }
+    let data_len: usize = in_len - path_len;
+    if data_len > RES_BYTES {
+        return bitcast<u64>(E_NOCAP);
+    }
+
+    // Copy the request payload IN once (TOCTOU-safe snapshot), then split it into the kernel
+    // path/data buffers — agent_fs_call/fs_tool_* take KERNEL addresses, never user pointers.
+    if in_len > 0 {
+        switch copy_from_user_pt(&g_uas, pa((&g_reqbuf[0]) as usize), uptr(req.in_ptr as usize), in_len) {
+            ok(v) => {}
+            err(e) => { return bitcast<u64>(E_FAULT); }
+        }
+    }
+    var i: usize = 0;
+    while i < path_len {
+        g_fs_path[i] = g_reqbuf[i];
+        i = i + 1;
+    }
+    var j: usize = 0;
+    while j < data_len {
+        g_fs_data[j] = g_reqbuf[path_len + j];
+        j = j + 1;
+    }
+
+    // Back-pressure: no free completion slot (retryable). Take it BEFORE dispatch so an FS call's
+    // result has a home; agent_fs_call has no side effect that leaks if we then fail (it hasn't run).
+    let slot: usize = broker_free_slot();
+    if slot == COMP_CAP {
+        return bitcast<u64>(E_AGAIN);
+    }
+
+    // Map op -> TOOL_FS_* id. For FS_READ, `n`/capacity is the agent's out_cap (read up to that);
+    // for FS_WRITE it is data_len (bytes to write) with capacity = path's reserve.
+    var tool_id: u32 = TOOL_FS_WRITE;
+    var n_arg: usize = data_len;          // bytes to write (write) / read budget (read)
+    var capacity: usize = RES_BYTES;      // file reserve on create (write) / unused (read/mkdir)
+    let data_kaddr: usize = (&g_fs_data[0]) as usize;
+    let path_kaddr: usize = (&g_fs_path[0]) as usize;
+    if req.op == TOOL_OP_FS_READ {
+        tool_id = TOOL_FS_READ;
+        n_arg = req.out_cap as usize; // read at most what the agent reserved at out_ptr
+        if n_arg > RES_BYTES {
+            n_arg = RES_BYTES;
+        }
+    } else if req.op == TOOL_OP_FS_MKDIR {
+        tool_id = TOOL_FS_MKDIR;
+        n_arg = 0;
+    }
+
+    let id: u64 = g_next_req;
+    g_next_req = g_next_req + 1;
+    g_slot_active[slot] = true;
+    g_slot_id[slot] = id;
+    g_slot_status[slot] = 0;
+    g_slot_result[slot] = 0;
+    g_slot_outptr[slot] = req.out_ptr;
+    g_slot_outcap[slot] = req.out_cap;
+    g_slot_outlen[slot] = 0;
+    g_slot_ready[slot] = g_clock; // READY NOW — the first poll delivers the FS completion
+    g_active_count = g_active_count + 1;
+
+    switch agent_fs_call(&g_tree, &g_audit, &g_agent, tool_id, path_kaddr, path_len, 0, data_kaddr, n_arg, capacity) {
+        ok(got) => {
+            g_slot_status[slot] = 0;
+            g_slot_result[slot] = got as i32;
+            // FS_READ: the bytes the server read live in g_fs_data; stage them into the slot's
+            // result payload so sys_poll copies them OUT to the request's out_ptr.
+            if req.op == TOOL_OP_FS_READ {
+                var n: usize = got;
+                if n > RES_BYTES {
+                    n = RES_BYTES;
+                }
+                if n > (req.out_cap as usize) {
+                    n = req.out_cap as usize;
+                }
+                var k: usize = 0;
+                while k < n {
+                    g_slot_res[slot][k] = g_fs_data[k];
+                    k = k + 1;
+                }
+                g_slot_outlen[slot] = n as u32;
+            }
+        }
+        err(e) => {
+            g_slot_status[slot] = fs_err_to_errno(e);
+            g_slot_result[slot] = 0;
+            g_slot_outlen[slot] = 0;
+        }
+    }
+    return id;
+}
+
 // SYS_SUBMIT(req_ptr): start a non-blocking tool op described by a ToolReq the agent points at.
 // The struct is copied IN once (TOCTOU-safe snapshot), its payload sizes are validated against
 // the hard quotas, and its request payload is copied into a bounded kernel-owned buffer. The mock
@@ -186,6 +345,11 @@ fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
         g_slot_outlen[s] = 0;
         g_slot_ready[s] = g_clock; // ready immediately so the cancellation is observed promptly
         return 0;
+    }
+
+    // REAL FS ops (M5b.2): dispatch through the capability front door. These complete READY NOW.
+    if is_fs_op(req.op) {
+        return fs_submit(&req);
     }
 
     // Op policy: only the known mock request ops are permitted (EACCES otherwise).
@@ -393,6 +557,27 @@ export fn app_build(image_base: usize, image_len: usize, region_base: usize, reg
     }
 
     g_uas = user_addr_space(&g_pt, USER_BASE, USER_LIMIT);
+
+    // M5b.2: stand up the REAL capability-checked FS tool world before the agent can issue any
+    // SYS_SUBMIT. The agent gets a path cap rooted at "/ws" with read+write rights, and an
+    // allowlist of {FS_WRITE, FS_READ} ONLY — so an FS_MKDIR op is Denied at the front door
+    // (allowlist) without spending budget, and that denial is audited. Budget 16 calls.
+    tree_init(&g_tree);
+    ipc_trace_init(&g_audit);
+    var ws_idx: usize = 0;
+    // "/ws" = 0x2F 0x77 0x73
+    g_fs_path[0] = 0x2F;
+    g_fs_path[1] = 0x77;
+    g_fs_path[2] = 0x73;
+    switch tree_mkdir(&g_tree, (&g_fs_path[0]) as usize, 3) {
+        ok(i) => { ws_idx = i; }
+        err(e) => {}
+    }
+    var allow: Mask32 = mask32_zero();
+    mask32_set(&allow, TOOL_FS_WRITE);
+    mask32_set(&allow, TOOL_FS_READ); // NOT TOOL_FS_MKDIR — mkdir is the deny case
+    g_agent = agent_fs_new(allow, 16, pathcap_root(AGENT_PID as u32, ws_idx, FS_WRITE | FS_READ));
+    g_fs_ready = true;
 
     let root: PAddr = page_table_root(&g_pt);
     return SATP_SV39 | ((pa_value(root) >> 12) as u64);

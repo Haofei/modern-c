@@ -2973,6 +2973,22 @@ pub fn build(b: *std.Build) void {
     const llvm_qjs_smode_async_agent_test_step = b.step("llvm-qjs-smode-async-agent-test", "M3 (LLVM): a pure-JS agent proves overlap + back-pressure/denial over async host I/O under REAL OpenSBI (S-mode)");
     llvm_qjs_smode_async_agent_test_step.dependOn(&llvm_qjs_smode_async_agent_test_cmd.step);
 
+    // M5b.2: a pure-JS agent drives the REAL, capability-checked FS tool path through the SAME
+    // async ABI (SYS_SUBMIT/SYS_POLL). The shared app_run_demo broker dispatches host_fs_write /
+    // host_fs_read / host_fs_mkdir through agent_fs_call (allowlist -> budget -> path cap), so the
+    // agent proves allow (read=hi), deny (mkdir not allowlisted -> structured error), and audit
+    // end-to-end from JS. EXPECT "fs: ok" is reached only AFTER both the read-back and the denied
+    // mkdir, so the gate fails if the real capability checks did not run.
+    const qjs_realtool_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
+    qjs_realtool_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_realtool_test_step = b.step("qjs-realtool-test", "M5b.2: a pure-JS agent drives the REAL capability-checked FS tool path (allow/deny/audit) over the async ABI under REAL OpenSBI (S-mode)");
+    qjs_realtool_test_step.dependOn(&qjs_realtool_test_cmd.step);
+
+    const llvm_qjs_realtool_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
+    llvm_qjs_realtool_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_realtool_test_step = b.step("llvm-qjs-realtool-test", "M5b.2 (LLVM): a pure-JS agent drives the REAL capability-checked FS tool path over the async ABI under REAL OpenSBI (S-mode)");
+    llvm_qjs_realtool_test_step.dependOn(&llvm_qjs_realtool_test_cmd.step);
+
     // QuickJS-agent Phase 7: the EVENT LOOP. The confined agent evaluates a Promise chain and
     // drains the job queue (JS_ExecutePendingJob) — the microtask concurrency real agents need
     // (Promise/async do nothing without it). ASYNC=42 after the loop runs. Both backends.
@@ -3500,6 +3516,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_qjs_smode_agent_test_cmd.step);
     m0_step.dependOn(&qjs_smode_async_agent_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_smode_async_agent_test_cmd.step);
+    m0_step.dependOn(&qjs_realtool_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_realtool_test_cmd.step);
     m0_step.dependOn(&qjs_async_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_async_test_cmd.step);
     m0_step.dependOn(&qjs_io_test_cmd.step);
