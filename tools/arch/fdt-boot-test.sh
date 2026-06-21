@@ -18,11 +18,11 @@ TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-fdt-boot-test" || echo "fdt-boot
 kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra)
+# PURE-MC kernel: `_start` is `#[naked]` MC and every accessor is MC — no .c runtime.
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/tests/qemu/arch/fdt_boot_demo.mc" "$WORK/mc.o" "$WORK"
-kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/fdt_boot_runtime.c" "$WORK/boot.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$HERE/tests/qemu/sbi.ld" "$WORK/freestanding.o" "$WORK/boot.o" "$WORK/mc.o" $SUPPORT_OBJ -o "$WORK/k.elf"
+"$LLD" -T "$HERE/tests/qemu/sbi.ld" "$WORK/freestanding.o" "$WORK/mc.o" $SUPPORT_OBJ -o "$WORK/k.elf"
 # NOTE: no '-bios none' -> QEMU loads OpenSBI (the real firmware) which boots our kernel.
 # Deterministic '-m 256M' so the expected /memory size (0x10000000) is exact.
 OUT="$(timeout 30 "$QEMU" -machine virt -m 256M -nographic -kernel "$WORK/k.elf" 2>/dev/null || true)"
