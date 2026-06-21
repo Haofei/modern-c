@@ -18,7 +18,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/lang/symbols_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/backtrace_runtime.c"
+RUNTIME="$HERE/tests/qemu/lang/backtrace_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-backtrace-test" || echo "backtrace-test")
 
@@ -32,7 +32,13 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/thread.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+# The pure-MC backtrace runtime needs the frame pointer (s0) retained so its
+# `#[noinline]` level1/level2/level3 functions each keep a walkable frame. The C
+# path gets this from -fno-omit-frame-pointer in CFLAGS (above); the LLVM path gets
+# it from -frame-pointer=all forwarded to llc via MC_LLC_EXTRA.
+mkdir -p "$WORK/rt"
+MC_LLC_EXTRA="-frame-pointer=all" \
+    kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK/rt"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/thread.o" $SUPPORT_OBJ -o "$WORK/thread.elf"

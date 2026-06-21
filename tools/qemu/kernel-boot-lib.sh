@@ -63,12 +63,19 @@ kernel_boot_compile_mc_object() {
                 mc_mattr="+m,+a,+f,+d,+c"
                 mc_abi="lp64d"
             fi
+            # MC_LLC_EXTRA: optional extra llc flags (space-separated). Used by the
+            # backtrace gate to pass -frame-pointer=all so the level functions keep s0
+            # as the frame pointer for the unwind walk (the LLVM analogue of the C
+            # path's -fno-omit-frame-pointer in CFLAGS).
+            local llc_extra=()
+            [ -n "${MC_LLC_EXTRA:-}" ] && read -r -a llc_extra <<<"${MC_LLC_EXTRA}"
             MC_CHECKS="$checks" MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$src" -o "$out" \
                 -mtriple=riscv64-unknown-elf \
                 -mattr="$mc_mattr" \
                 -target-abi="$mc_abi" \
                 -relocation-model=static \
-                -code-model=medium
+                -code-model=medium \
+                ${llc_extra[@]+"${llc_extra[@]}"}
             ;;
         *)
             echo "unknown kernel backend: $backend" >&2
