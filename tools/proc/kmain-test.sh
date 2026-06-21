@@ -18,7 +18,10 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/proc/kmain_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/kmain_runtime.c"
+# The boot entry is now PURE MC (no .c): it owns the 256 KiB heap region, calls
+# kmain, and reports the stage bitmask. The context-switch primitives, `_start`, and
+# `mc_halt` still come from the shared C bring-up runtime, linked beside it.
+RUNTIME="$HERE/tests/qemu/proc/kmain_runtime.mc"
 SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-kmain-test" || echo "kmain-test")
@@ -38,7 +41,7 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -fno-strict-aliasing -fno-delete-null-pointer-checks -fwrapv)
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/thread.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
