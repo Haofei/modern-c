@@ -2124,14 +2124,25 @@ spills, no `ret` synthesis). It is constrained accordingly:
 - Control must leave via the asm (a jump or a `-> never` divergence); a naked
   function does not fall through to a synthesized return, so it returns `-> never`
   (or `void` only if the asm itself performs the ABI-correct return).
-- `#[naked]` composes with `#[no_lang_trap]` (boot entry emits no trap edges) and
-  with `export` (a fixed linker symbol for the reset/boot vector).
+- `#[naked]` composes with `#[no_lang_trap]` (boot entry emits no trap edges),
+  with `export` (a fixed linker symbol for the reset/boot vector), and with
+  `#[section("…")]` (placement at a fixed load address — see below).
 ```
 
 `#[naked]` is for reset vectors, trap/interrupt entry stubs, and context-switch
 trampolines — the handful of places where the compiler's calling convention must
 not intervene. Everywhere else, an ordinary function with an inline `asm` block
 (section 23) is the right tool.
+
+**`#[section("name")]`** places the declaration's object symbol in the named
+linker section (the C/LLVM `section` attribute). It is needed for bare-metal entry
+points whose linker script pins a section to a fixed load address — e.g. the
+OpenSBI S-mode payload's `_start`, which must land at `0x80200000` because the
+firmware jumps there regardless of the ELF entry symbol; the payload linker script
+does `KEEP(*(.text.boot))` first, and the entry is written
+`#[naked] #[section(".text.boot")] export fn _start() -> void { … }`. Both backends
+honor it (C: `__attribute__((section("…")))`; LLVM: a `section "…"` clause on the
+`define`).
 
 Distinction:
 

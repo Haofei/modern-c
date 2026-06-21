@@ -2200,6 +2200,14 @@ const CEmitter = struct {
         // frame setup; the body must be a single *basic* asm statement (extended asm with
         // operands/clobbers is ill-formed in a naked function), so the asm owns the whole
         // calling convention. Sema (E_NAKED_BODY/E_NAKED_RETURN) guarantees the shape.
+        // `#[section("...")]`: place the function's object symbol in a named linker section.
+        // Needed for bare-metal entry points pinned to a fixed load address by the linker
+        // script (e.g. OpenSBI's `_start` at 0x80200000 via `KEEP(*(.text.boot))`).
+        if (sectionAttr(attrs)) |sec| {
+            try self.out.appendSlice(self.allocator, "__attribute__((section(\"");
+            try self.out.appendSlice(self.allocator, sec);
+            try self.out.appendSlice(self.allocator, "\"))) ");
+        }
         if (hasNakedAttr(attrs)) {
             try self.out.appendSlice(self.allocator, "__attribute__((naked)) ");
             try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
@@ -11042,6 +11050,14 @@ fn hasNakedAttr(attrs: []const ast.Attr) bool {
         if (std.meta.activeTag(attr.kind) == .naked) return true;
     }
     return false;
+}
+
+// The `#[section("...")]` target name, or null if the declaration has no section attribute.
+fn sectionAttr(attrs: []const ast.Attr) ?[]const u8 {
+    for (attrs) |attr| {
+        if (attr.kind == .section) return attr.kind.section;
+    }
+    return null;
 }
 
 fn isNumericStorageType(ty: ast.TypeExpr) bool {

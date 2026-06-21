@@ -1133,7 +1133,7 @@ fn exprIsSat(expr: ast.Expr, ctx: Context) bool {
 fn writeContractBoundary(kind: FactKind, attr: ast.Attr, line: usize, column: usize, writer: anytype, ctx: Context) anyerror!void {
     const contract_name = switch (attr.kind) {
         .unsafe_contract => |contract| contract.name.text,
-        .no_lang_trap, .naked, .named, .backend_name, .origin => "",
+        .no_lang_trap, .naked, .named, .backend_name, .origin, .section => "",
     };
     try writer.print(
         "fact {s} fn={s} contract={s} unsafe_contract_depth={} line={} column={}\n",
@@ -1541,7 +1541,7 @@ fn uncheckedCalleeName(callee: ast.Expr) ?[]const u8 {
 fn contractName(attr: ast.Attr) []const u8 {
     return switch (attr.kind) {
         .unsafe_contract => |contract| contract.name.text,
-        .no_lang_trap, .naked, .named, .backend_name, .origin => "unknown",
+        .no_lang_trap, .naked, .named, .backend_name, .origin, .section => "unknown",
     };
 }
 

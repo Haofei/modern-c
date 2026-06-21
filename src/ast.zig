@@ -40,6 +40,11 @@ pub const Attr = struct {
         // `#[origin("generated"|"copied"|...)]` — FFI/autogen boundary classification so
         // tooling can tell ported source from bound/generated/copied-runtime declarations.
         origin: []const u8,
+        // `#[section(".text.boot")]` — place the declaration's object symbol in the named
+        // linker section (the `section` function attribute). Needed for bare-metal entry
+        // points whose linker script pins a section to a fixed load address (e.g. the
+        // OpenSBI S-mode payload `_start` at 0x80200000 via `KEEP(*(.text.boot))`).
+        section: []const u8,
         named: Ident,
     };
 };

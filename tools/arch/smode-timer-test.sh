@@ -2,14 +2,15 @@
 # Item (4): REAL S-mode timer-interrupt delivery under OpenSBI — the RISC-V
 # analogue of the x86 X4 LAPIC-timer proof.
 #
-# Builds the flat S-mode kernel (kernel/arch/riscv64/smode_timer_runtime.c) with
-# the OpenSBI payload linker script (sbi.ld) and runs it WITHOUT `-bios none`, so
-# QEMU loads the REAL OpenSBI firmware which boots our kernel in S-mode at
-# 0x80200000. The kernel programs the SBI TIME extension, enables S-mode timer
-# interrupts (sie.STIE + sstatus.SIE), and counts ticks in its trap handler —
-# re-arming each time and parking in `wfi` between ticks. PASS requires the
-# OpenSBI banner + `SMODE-TIMER-OK` + `TICKS` >= 3 (3 real S-mode timer
-# interrupts delivered by the SBI timer and serviced).
+# Builds the flat S-mode kernel — now PURE MC (tests/qemu/arch/smode_timer_demo.mc,
+# NO C: `_start` and the trap vector are `#[naked]` MC; the SBI seam, CSR access,
+# rdtime and wfi are MC inline asm) — with the OpenSBI payload linker script
+# (sbi.ld) and runs it WITHOUT `-bios none`, so QEMU loads the REAL OpenSBI
+# firmware which boots our kernel in S-mode at 0x80200000. The kernel programs the
+# SBI TIME extension, enables S-mode timer interrupts (sie.STIE + sstatus.SIE), and
+# counts ticks in its trap handler — re-arming each time and parking in `wfi`
+# between ticks. PASS requires the OpenSBI banner + `SMODE-TIMER-OK` + `TICKS` >= 3
+# (3 real S-mode timer interrupts delivered by the SBI timer and serviced).
 #
 # Usage: tools/arch/smode-timer-test.sh <path-to-mcc> [c|llvm]
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.
@@ -24,7 +25,10 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-RUNTIME="$HERE/kernel/arch/riscv64/smode_timer_runtime.c"
+# The flat S-mode timer kernel is now PURE MC — no .c runtime, no boot.S: `_start`
+# and the trap vector are `#[naked]` MC functions, and the SBI/CSR seam is MC
+# inline asm.
+RUNTIME="$HERE/tests/qemu/arch/smode_timer_demo.mc"
 LDSCRIPT="$HERE/tests/qemu/sbi.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-smode-timer-test" || echo "smode-timer-test")
 
@@ -37,7 +41,10 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-function -fno-builtin)
 
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+# Compile the PURE-MC kernel on the selected backend (c: emit-c -> clang; llvm:
+# emit-llvm -> llc). The LLVM object references the safety-check trap symbols
+# (mc_trap_*) that llvm_kernel_support.c provides; the C object inlines them.
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" $SUPPORT_OBJ -o "$WORK/timer.elf"

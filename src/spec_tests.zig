@@ -812,6 +812,7 @@ fn isAcceptanceCheck(check: []const u8) bool {
         "traits-tier1-irq-accept",
         "traits-tier2-dyn-accept",
         "traits-tier2-nullable-dyn",
+        "section-attr-accept",
     };
     return matchesAny(check, &names);
 }

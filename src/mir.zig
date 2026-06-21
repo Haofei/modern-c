@@ -3590,7 +3590,7 @@ fn hasAttr(attrs: []const ast.Attr, name: []const u8) bool {
         .no_lang_trap => if (std.mem.eql(u8, name, "no_lang_trap")) return true,
         .naked => if (std.mem.eql(u8, name, "naked")) return true,
         .named => |ident| if (std.mem.eql(u8, ident.text, name)) return true,
-        .unsafe_contract, .backend_name, .origin => {},
+        .unsafe_contract, .backend_name, .origin, .section => {},
     };
     return false;
 }

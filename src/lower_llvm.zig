@@ -827,6 +827,15 @@ const LlvmEmitter = struct {
         // `unreachable` because the asm — not a synthesized `ret` — transfers control.
         const naked = hasNakedAttr(attrs);
         const attr_str: []const u8 = if (naked) " naked" else "";
+        // `#[section("...")]`: emit an LLVM `section "..."` clause so the symbol lands in the
+        // named linker section (bare-metal entry points pinned by the linker script, e.g.
+        // OpenSBI's `_start` at 0x80200000 via `KEEP(*(.text.boot))`).
+        var section_buf: std.ArrayList(u8) = .empty;
+        defer section_buf.deinit(self.allocator);
+        if (sectionAttr(attrs)) |sec| {
+            try section_buf.print(self.allocator, " section \"{s}\"", .{sec});
+        }
+        const section_str: []const u8 = section_buf.items;
         try self.out.print(self.allocator, "define {s} @{s}(", .{ ret_llvm, fn_decl.name.text });
         for (fn_decl.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
@@ -841,9 +850,9 @@ const LlvmEmitter = struct {
         // The naked path needs no entry-alloca buffering: its body is a single asm stmt.
         if (naked) {
             if (self.current_debug_scope) |scope| {
-                try self.out.print(self.allocator, "){s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, scope });
+                try self.out.print(self.allocator, "){s}{s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, section_str, scope });
             } else {
-                try self.out.print(self.allocator, "){s} {{\nbb_entry:\n", .{attr_str});
+                try self.out.print(self.allocator, "){s}{s} {{\nbb_entry:\n", .{ attr_str, section_str });
             }
             self.temp_index = 0;
             try self.emitAsmStmt(ast_query.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
@@ -898,9 +907,9 @@ const LlvmEmitter = struct {
         self.out = real_out;
         self.entry_allocas = null;
         if (self.current_debug_scope) |scope| {
-            try self.out.print(self.allocator, "){s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, scope });
+            try self.out.print(self.allocator, "){s}{s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, section_str, scope });
         } else {
-            try self.out.print(self.allocator, "){s} {{\nbb_entry:\n", .{attr_str});
+            try self.out.print(self.allocator, "){s}{s} {{\nbb_entry:\n", .{ attr_str, section_str });
         }
         try self.out.appendSlice(self.allocator, alloca_buf.items);
         try self.out.appendSlice(self.allocator, body_buf.items);
@@ -2273,6 +2282,9 @@ const LlvmEmitter = struct {
             .ident => |ident| {
                 if (self.local_slots.get(ident.text)) |slot| return slot.ptr;
                 if (self.global_types.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
+                // `&f` where f is a function: the function's address IS the symbol `@f`
+                // (a code pointer). Used for installing trap/entry vectors by address.
+                if (self.fn_sigs.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
                 return error.UnsupportedLlvmEmission;
             },
             .grouped => |inner| return self.emitAddressOf(inner.*),
@@ -4332,7 +4344,12 @@ const LlvmEmitter = struct {
             else
                 self.callReturnType(call),
             .cast => |node| node.ty.*,
-            .address_of => |inner| if (self.exprType(inner.*)) |ty| self.pointerTypeFor(ty) catch null else null,
+            // `&f` where f is a function is already a code pointer (the fn_pointer type);
+            // do NOT wrap it in another pointer. `&x` for a value x is `*x`'s type.
+            .address_of => |inner| if (self.exprType(inner.*)) |ty|
+                (if (self.resolveAliasType(ty).kind == .fn_pointer) ty else self.pointerTypeFor(ty) catch null)
+            else
+                null,
             .deref => |inner| self.derefPointeeType(inner.*),
             .index => |node| self.indexElementType(node.base.*),
             .slice => |node| if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null,
@@ -5576,7 +5593,9 @@ const LlvmEmitter = struct {
         const source = self.resolveAliasType(source_ty);
         const target = self.resolveAliasType(target_ty);
         return switch (source.kind) {
-            .pointer, .raw_many_pointer, .nullable => switch (target.kind) {
+            // `.fn_pointer` (a code pointer, e.g. `&trap_vector`) coerces to a pointer-width
+            // integer just like a data pointer — needed to install a vector by address.
+            .pointer, .raw_many_pointer, .nullable, .fn_pointer => switch (target.kind) {
                 .name => |name| isOpaqueAddressTypeName(name.text) or isPointerWidthIntegerTypeName(name.text),
                 else => false,
             },
@@ -5866,6 +5885,14 @@ fn hasNakedAttr(attrs: []const ast.Attr) bool {
         if (std.meta.activeTag(attr.kind) == .naked) return true;
     }
     return false;
+}
+
+// The `#[section("...")]` target name, or null if the declaration has no section attribute.
+fn sectionAttr(attrs: []const ast.Attr) ?[]const u8 {
+    for (attrs) |attr| {
+        if (attr.kind == .section) return attr.kind.section;
+    }
+    return null;
 }
 
 fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {

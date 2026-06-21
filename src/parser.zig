@@ -709,8 +709,8 @@ pub const Parser = struct {
                 .kind = .{ .unsafe_contract = .{ .name = contract_name, .args = try args.toOwnedSlice(self.allocator) } },
             };
         }
-        if (std.mem.eql(u8, name.text, "backend_name") or std.mem.eql(u8, name.text, "origin")) {
-            const is_origin = std.mem.eql(u8, name.text, "origin");
+        if (std.mem.eql(u8, name.text, "backend_name") or std.mem.eql(u8, name.text, "origin") or std.mem.eql(u8, name.text, "section")) {
+            const which = name.text;
             try self.expect(.l_paren, "expected '(' after attribute name");
             if (self.current.kind != .string_literal) return self.fail("expected a string argument");
             const raw = self.current.lexeme;
@@ -720,7 +720,7 @@ pub const Parser = struct {
             const value = stripStringQuotes(raw);
             return .{
                 .span = joinSpan(start, end.span),
-                .kind = if (is_origin) .{ .origin = value } else .{ .backend_name = value },
+                .kind = if (std.mem.eql(u8, which, "origin")) .{ .origin = value } else if (std.mem.eql(u8, which, "section")) .{ .section = value } else .{ .backend_name = value },
             };
         }
         const end = try self.expectTok(.r_bracket, "expected ']' after attribute");
