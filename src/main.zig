@@ -130,8 +130,23 @@ pub fn main(init: std.process.Init) !void {
     var check_fmt = false;
     // `emit-layout --structs=A,B,C`: the comma-separated structs whose MC layout is asserted.
     var structs_flag: ?[]const u8 = null;
+    // Arch-selection seam (R0b): `--arch=riscv64|x86_64|aarch64` picks which arch a
+    // `import "kernel/arch/active/..."` resolves to. Null => loader default (riscv64), so the
+    // existing riscv builds need no flag; only x86/aarch64 builds pass it.
+    var arch_flag: ?[]const u8 = null;
+    var saw_arch_flag = false;
     while (args.next()) |flag| {
-        if (std.mem.startsWith(u8, flag, "--structs=")) {
+        if (std.mem.startsWith(u8, flag, "--arch=")) {
+            saw_arch_flag = true;
+            const value = flag["--arch=".len..];
+            if (std.mem.eql(u8, value, "riscv64") or std.mem.eql(u8, value, "x86_64") or
+                std.mem.eql(u8, value, "aarch64"))
+            {
+                arch_flag = value;
+            } else {
+                return failUsage();
+            }
+        } else if (std.mem.startsWith(u8, flag, "--structs=")) {
             structs_flag = flag["--structs=".len..];
         } else if (std.mem.startsWith(u8, flag, "--profile=")) {
             saw_profile_flag = true;
@@ -190,6 +205,10 @@ pub fn main(init: std.process.Init) !void {
     const needs_structs = is_emit_layout or is_emit_c_struct;
     if (saw_profile_flag and !is_c_artifact_command) return failUsage();
     if (saw_checks_flag and !accepts_checks) return failUsage();
+    // `--arch` affects import resolution, so it is meaningful on any command that flattens
+    // imports through the loader (the same set that accepts `--checks`, which are the compile
+    // commands). Reject it elsewhere rather than silently ignoring it.
+    if (saw_arch_flag and !accepts_checks) return failUsage();
     // The sanitizer profiles are not all independently combinable: a single raw.load/
     // raw.store wraps exactly one shadow protocol. msan implies ksan (composable), but
     // csan is mutually exclusive with ksan/msan — `--checks=ksan,csan` (or `msan,csan`)
@@ -225,7 +244,7 @@ pub fn main(init: std.process.Init) !void {
         for (boundaries.items) |b| allocator.free(b.path);
         boundaries.deinit(allocator);
     }
-    const source = try loader.loadCombinedSourceWithBoundaries(allocator, init.io, path, root_source, &boundaries);
+    const source = try loader.loadCombinedSourceWithBoundaries(allocator, init.io, path, root_source, &boundaries, arch_flag);
     defer allocator.free(source);
     combined_boundaries = boundaries.items;
     defer combined_boundaries = null;

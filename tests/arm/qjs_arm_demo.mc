@@ -26,7 +26,7 @@ import "kernel/core/elf_loader_aarch64.mc";
 import "kernel/arch/aarch64/paging.mc";
 import "kernel/core/heap.mc";
 import "kernel/core/syscall.mc";
-import "kernel/core/uaccess_aarch64.mc";
+import "kernel/core/uaccess_pt.mc"; // arch-neutral page-table uaccess (resolves aarch64 paging via --arch)
 import "std/addr.mc";
 import "user/abi.mc"; // SYS_* numbers + E_* + ToolReq/ToolEvent — the single ABI source of truth
 

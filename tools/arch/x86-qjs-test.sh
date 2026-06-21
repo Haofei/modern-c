@@ -126,12 +126,13 @@ done
 KCF="--target=x86_64-unknown-elf -ffreestanding -fno-pic -fno-pie -mno-red-zone -nostdlib -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function"
 case "$BACKEND" in
   c)
-    "$MCC" emit-c "$HERE/tests/x86/qjs_x86_demo.mc" > "$WORK/fixture.c"
+    # --arch=x86_64 resolves the fixture's `kernel/arch/active/...` (uaccess_pt) to x86 paging.
+    "$MCC" emit-c "$HERE/tests/x86/qjs_x86_demo.mc" --arch=x86_64 > "$WORK/fixture.c"
     $CLANG $KCF -Wno-switch-bool -c "$WORK/fixture.c" -o "$WORK/fixture.o"
     SUPPORT_OBJ=
     ;;
   llvm)
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/qjs_x86_demo.mc" -o "$WORK/fixture.o" \
+    MC_ARCH=x86_64 MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/qjs_x86_demo.mc" -o "$WORK/fixture.o" \
       -mtriple=x86_64-unknown-elf -relocation-model=static -code-model=kernel
     $CLANG $KCF -c "$HERE/kernel/arch/riscv64/llvm_kernel_support.c" -o "$WORK/llvm-support.o"
     SUPPORT_OBJ="$WORK/llvm-support.o"

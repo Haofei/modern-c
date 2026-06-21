@@ -129,12 +129,13 @@ done
 KCF=(--target=aarch64-unknown-elf -march=armv8-a -ffreestanding -nostdlib -fno-pic -fno-pie -mgeneral-regs-only -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
 case "$BACKEND" in
   c)
-    "$MCC" emit-c "$HERE/tests/arm/qjs_arm_demo.mc" > "$WORK/fixture.c"
+    # --arch=aarch64 resolves the fixture's `kernel/arch/active/...` (uaccess_pt) to ARM paging.
+    "$MCC" emit-c "$HERE/tests/arm/qjs_arm_demo.mc" --arch=aarch64 > "$WORK/fixture.c"
     $CLANG "${KCF[@]}" -Wno-switch-bool -c "$WORK/fixture.c" -o "$WORK/fixture.o"
     SUPPORT_OBJ=
     ;;
   llvm)
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/qjs_arm_demo.mc" -o "$WORK/fixture.o" \
+    MC_ARCH=aarch64 MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/qjs_arm_demo.mc" -o "$WORK/fixture.o" \
       -mtriple=aarch64-unknown-elf -relocation-model=static -code-model=small
     $CLANG "${KCF[@]}" -c "$HERE/kernel/arch/riscv64/llvm_kernel_support.c" -o "$WORK/llvm-support.o"
     SUPPORT_OBJ="$WORK/llvm-support.o"

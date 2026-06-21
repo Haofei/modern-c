@@ -44,5 +44,9 @@ LL="$TMP_DIR/module.ll"
 # MC_CHECKS=elide-proven (RELEASE) elides only the optimizer-proven-dead ones (annex E.4).
 CHECKS_FLAG=()
 [ "${MC_CHECKS:-all}" != "all" ] && CHECKS_FLAG=(--checks="${MC_CHECKS}")
-"$MCC" emit-llvm "$INPUT" ${CHECKS_FLAG[@]+"${CHECKS_FLAG[@]}"} > "$LL"
+# Arch-selection seam (R0b): MC_ARCH picks which arch a `kernel/arch/active/...` import
+# resolves to (default riscv64 in the compiler). Mirrors MC_CHECKS.
+ARCH_FLAG=()
+[ -n "${MC_ARCH:-}" ] && ARCH_FLAG=(--arch="${MC_ARCH}")
+"$MCC" emit-llvm "$INPUT" ${CHECKS_FLAG[@]+"${CHECKS_FLAG[@]}"} ${ARCH_FLAG[@]+"${ARCH_FLAG[@]}"} > "$LL"
 "$LLC" -filetype=obj "$LL" -o "$OUT" "${LLC_ARGS[@]}"

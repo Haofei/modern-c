@@ -1,30 +1,33 @@
-// kernel/core/uaccess_aarch64 — the AArch64 sibling of kernel/core/uaccess_x86.mc
-// (page-table-aware path only).
+// kernel/core/uaccess_pt — the page-table-aware user/kernel copy path, arch-neutral.
 //
-// Identical in shape and contract to uaccess_x86.mc, but importing the AArch64 paging module
-// (kernel/arch/aarch64/paging.mc) instead of the x86-64 one. The two paging modules expose the
-// same API (PageTable / page_table_lookup / mapping_is_user / mapping_is_writable /
-// page_table_translate). On AArch64, as on x86, a present EL0-accessible page is always readable
-// (there is no separate "readable" leaf bit in the AP encoding), so the read side needs only
-// mapping_is_user. Only the page-table-aware (UserAddrSpace) path is ported — the QuickJS agent
-// never uses a numeric UserSpace path, and the snapshot/taint helpers are not needed here.
+// This is the single shared implementation of the `UserAddrSpace` copy contract used by the
+// confined agents on every architecture. It is ARCH-NEUTRAL: it only calls the uniform paging
+// interface (page_table_lookup / mapping_is_user / mapping_is_writable / page_table_translate)
+// that each `kernel/arch/<arch>/paging.mc` exposes identically. It imports that paging module
+// through the arch-selection seam (`kernel/arch/active/...`, plan R0b): the per-arch kernel
+// binary is produced by compiling with `--arch=<arch>` (default riscv64), so x86_64 and
+// aarch64 no longer need their own copies of this file (the former uaccess_x86.mc /
+// uaccess_aarch64.mc, now deleted).
 //
-// Why a copy rather than swapping the import in uaccess.mc / _x86.mc: those files hardcode a
-// different arch's paging import and feed their own kernel build. emit-c flattens the import
-// tree per binary, so the aarch64 kernel includes only THIS module's aarch64 paging — no
-// two-paging-modules clash, and riscv/x86 stay untouched.
+// Scope: only the page-table path. The full kernel/core/uaccess.mc additionally carries the
+// numeric `UserSpace` bring-up path and the snapshot/taint generics; the confined QuickJS
+// agent uses only the `UserAddrSpace` path here.
+//
+// Read side: a present, user-accessible page is readable on x86-64 (no separate readable bit)
+// and aarch64 (EL0 AP implies read), so the read check needs only `mapping_is_user` — present
+// is implied by a successful lookup. Writes additionally require `mapping_is_writable`.
 
 import "std/addr.mc";
 import "std/mem.mc";
-import "kernel/arch/aarch64/paging.mc";
+import "kernel/arch/active/paging.mc";
 
 const UA_PAGE_SIZE: usize = 4096;
 
 enum UaccessError {
     OutOfRange,   // [addr, addr+len) is not wholly inside the user region
     NotMapped,    // a page in the range has no valid user mapping
-    NotUserPage,  // a page is mapped but not user-accessible (no EL0 AP at every level)
-    NotWritable,  // a destination page is not writable (AP read-only)
+    NotUserPage,  // a page is mapped but not user-accessible at every level
+    NotWritable,  // a destination page is not writable
 }
 
 // A target address space: the process page table plus its [base, limit) user-region bound.
@@ -38,9 +41,9 @@ export fn user_addr_space(pt: *PageTable, base: usize, limit: usize) -> UserAddr
     return .{ .pt = pt, .base = base, .limit = limit };
 }
 
-// Validate one user page: mapped, user-accessible (EL0 AP at every level), and — when writing —
-// writable. On AArch64 a present, EL0-accessible page is always readable, so the read side needs
-// no separate readable check.
+// Validate one user page: mapped, user-accessible at every level, and — when writing —
+// writable. A present, user-accessible page is always readable on the targeted arches, so the
+// read side needs no separate readable check.
 fn validate_page(uas: *UserAddrSpace, page: usize, need_write: bool) -> Result<bool, UaccessError> {
     switch page_table_lookup(uas.pt, va(page)) {
         ok(m) => {

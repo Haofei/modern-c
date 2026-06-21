@@ -44,24 +44,34 @@ pub const FileBoundary = struct {
     path: []const u8, // owned by the caller's allocator
 };
 
+// The virtual arch directory: an `import "kernel/arch/active/<x>"` is rewritten to
+// `import "kernel/arch/<arch>/<x>"` where <arch> is the `--arch` selection (default
+// "riscv64"). This is the arch-selection seam (plan R0b): ONE generic core module (e.g.
+// kernel/core/uaccess.mc, elf_loader.mc) imports `active`, and the per-arch kernel binary
+// is produced by picking the arch at compile time — no duplicated per-arch source copies.
+pub const arch_active_prefix = "kernel/arch/active/";
+pub const default_arch = "riscv64";
+
 pub fn loadCombinedSource(
     allocator: std.mem.Allocator,
     io: std.Io,
     root_path: []const u8,
     root_source: []const u8,
 ) LoadError![]u8 {
-    return loadCombinedSourceWithBoundaries(allocator, io, root_path, root_source, null);
+    return loadCombinedSourceWithBoundaries(allocator, io, root_path, root_source, null, null);
 }
 
 // As `loadCombinedSource`, but if `boundaries` is non-null it is filled (appended) with one
 // `FileBoundary` per contributing file. The boundary `path` strings are allocated with
-// `allocator` and owned by the caller (free each `.path`, then the list).
+// `allocator` and owned by the caller (free each `.path`, then the list). `arch` selects the
+// `kernel/arch/active/` alias target (null => default_arch).
 pub fn loadCombinedSourceWithBoundaries(
     allocator: std.mem.Allocator,
     io: std.Io,
     root_path: []const u8,
     root_source: []const u8,
     boundaries: ?*std.ArrayList(FileBoundary),
+    arch: ?[]const u8,
 ) LoadError![]u8 {
     var visited = std.StringHashMap(void).init(allocator);
     defer {
@@ -73,7 +83,7 @@ pub fn loadCombinedSourceWithBoundaries(
     errdefer out.deinit(allocator);
     const canon_root = std.fs.path.resolve(allocator, &.{root_path}) catch try allocator.dupe(u8, root_path);
     defer allocator.free(canon_root);
-    try expand(allocator, io, canon_root, root_source, &visited, &out, boundaries);
+    try expand(allocator, io, canon_root, root_source, &visited, &out, boundaries, arch orelse default_arch);
     return out.toOwnedSlice(allocator);
 }
 
@@ -85,6 +95,7 @@ fn expand(
     visited: *std.StringHashMap(void),
     out: *std.ArrayList(u8),
     boundaries: ?*std.ArrayList(FileBoundary),
+    arch: []const u8,
 ) LoadError!void {
     if (visited.contains(path)) return;
     try visited.put(try allocator.dupe(u8, path), {});
@@ -96,7 +107,7 @@ fn expand(
     defer arena.deinit();
     const a = arena.allocator();
 
-    const imports = try scanImports(a, io, path, source);
+    const imports = try scanImports(a, io, path, source, arch);
 
     // Append this file's source with its import statements blanked out.
     const blanked = try allocator.dupe(u8, source);
@@ -117,13 +128,13 @@ fn expand(
             return error.ImportNotFound;
         };
         defer allocator.free(imp_source);
-        try expand(allocator, io, imp.path, imp_source, visited, out, boundaries);
+        try expand(allocator, io, imp.path, imp_source, visited, out, boundaries, arch);
     }
 }
 
 // Find top-level `import "path";` statements by lexing. Returns the resolved
 // path and the byte range (start of `import` .. end of `;`) for each.
-fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: []const u8) LoadError![]ImportRef {
+fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: []const u8, arch: []const u8) LoadError![]ImportRef {
     var refs: std.ArrayList(ImportRef) = .empty;
     var reporter = diagnostics.Reporter.init(arena, path, source);
     var lx = lexer.Lexer.init(source, &reporter);
@@ -143,7 +154,11 @@ fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: [
             const str = lx.next();
             const semi = lx.next();
             if (str.kind == .string_literal and semi.kind == .semicolon) {
-                const rel = std.mem.trim(u8, str.lexeme, "\"");
+                var rel = std.mem.trim(u8, str.lexeme, "\"");
+                // Arch-selection seam: rewrite `kernel/arch/active/<x>` to the chosen arch.
+                if (std.mem.startsWith(u8, rel, arch_active_prefix)) {
+                    rel = try std.fmt.allocPrint(arena, "kernel/arch/{s}/{s}", .{ arch, rel[arch_active_prefix.len..] });
+                }
                 const resolved = try resolveImportPath(arena, io, path, rel);
                 try refs.append(arena, .{
                     .path = resolved,
