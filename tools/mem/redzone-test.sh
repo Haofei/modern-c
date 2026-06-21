@@ -26,7 +26,12 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/mem/redzone_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/redzone_runtime.c"
+# The bare M-mode runtime + the two scenario units are now PURE MC (no C). The runtime
+# (boot seam + 4-byte-aligned trap vector + clean path) is built once and shared; each
+# scenario unit defines the `rt_scenario_run` the runtime calls.
+RUNTIME_MC="$HERE/tests/qemu/mem/redzone_runtime.mc"
+SCEN_OVF="$HERE/tests/qemu/mem/redzone_scenario_overflow.mc"
+SCEN_CAN="$HERE/tests/qemu/mem/redzone_scenario_canary.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-redzone-test" || echo "redzone-test")
 
@@ -39,23 +44,30 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
-# MC object (shared by both scenarios) + the LLVM-backend support object if needed.
-kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/demo.o" "$WORK"
+# MC objects (each in its own subdir so the per-object emit-c `module.c` doesn't clash):
+# the shared demo, the shared runtime, and each scenario unit. Plus the LLVM support +
+# freestanding mem* objects.
+mkdir -p "$WORK/demo" "$WORK/rt" "$WORK/ovf" "$WORK/can"
+kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/demo.o" "$WORK/demo"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME_MC" "$WORK/runtime.o" "$WORK/rt"
+kernel_boot_compile_mc_object "$BACKEND" "$SCEN_OVF" "$WORK/scen_overflow.o" "$WORK/ovf"
+kernel_boot_compile_mc_object "$BACKEND" "$SCEN_CAN" "$WORK/scen_canary.o" "$WORK/can"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 
-# Build + boot one scenario; echo the UART output. $1 = extra cflag macro, $2 = tag.
+# Build + boot one scenario; echo the UART output. $1 = the scenario object, $2 = tag.
+# Scenario selection is now LINK-time (which `rt_scenario_run` object is linked), not a
+# compile-time `-D` — the runtime object is identical across both.
 run_scenario() {
-    local macro="$1" tag="$2"
-    "$CLANG" "${CFLAGS[@]}" ${macro:+"$macro"} -c "$RUNTIME" -o "$WORK/runtime_$tag.o"
-    "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime_$tag.o" "$WORK/demo.o" \
+    local scen_obj="$1" tag="$2"
+    "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$scen_obj" "$WORK/demo.o" \
         $SUPPORT_OBJ -o "$WORK/redzone_$tag.elf"
     timeout 30 "$QEMU" -machine virt -bios none -nographic \
         -kernel "$WORK/redzone_$tag.elf" 2>/dev/null || true
 }
 
-OVF="$(run_scenario "" overflow)"
-CAN="$(run_scenario "-DCANARY_SCENARIO=1" canary)"
+OVF="$(run_scenario "$WORK/scen_overflow.o" overflow)"
+CAN="$(run_scenario "$WORK/scen_canary.o" canary)"
 
 echo "--- heap-overflow scenario UART ---"
 printf '%s\n' "$OVF"
