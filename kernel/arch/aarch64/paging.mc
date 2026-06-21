@@ -382,6 +382,19 @@ export fn mapping_is_user(m: *LeafMapping) -> bool { return (m.flags & ATTR_AP_L
 // Writable iff the high AP bit is clear (AP == 0bx0 => RW; AP == 0bx1 => RO).
 export fn mapping_is_writable(m: *LeafMapping) -> bool { return (m.flags & 0x80) == 0; }
 
+// Arch hook for the generic ELF loader (kernel/core/elf_loader.mc): translate a user segment's
+// R/W/X intent into stage-1 leaf attributes. An executable segment is EL0-fetchable (UXN clear,
+// PXN set so EL1 cannot fetch user pages); a non-executable segment is plain user RW data
+// (FLAGS_USER_RW sets UXN). AF/SH/page-type bits are added by page_table_try_map. Both forms use
+// EL0 RW (ATTR_AP_URW); the loader's W^X check rejects a W&X segment, so a writable code page
+// never occurs. (r is implied: an EL0-accessible page is always readable.)
+export fn pte_flags_for_user(r: bool, w: bool, x: bool) -> u64 {
+    if x {
+        return ATTR_AP_URW | ATTR_PXN; // EL0 R|X (ATTR_ATTRIDX0 is 0; UXN clear => EL0-executable)
+    }
+    return FLAGS_USER_RW; // EL0 R|W data (UXN set)
+}
+
 // Translate `virt` to its mapped physical address (including the page offset). Traps if the
 // address is not mapped — callers verify a mapping exists first (or use lookup).
 export fn page_table_translate(pt: *PageTable, virt: VAddr) -> PAddr {

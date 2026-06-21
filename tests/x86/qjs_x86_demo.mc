@@ -4,9 +4,10 @@
 // composition the S-mode fixture is — a real multi-segment ELF loader + the QuickJS syscall
 // ABI (SYS_WRITE / SYS_READ §0 ingress / SYS_GETPID / SYS_SUBMIT / SYS_POLL + the mock
 // broker) + a confinement proof — but built on the x86-64 paging stack rather than RISC-V:
-//   - the loader is elf_loader_x86 (x86 leaf PTE bits), uaccess is uaccess_x86, paging is the
-//     x86-64 4-level module. These are byte-for-byte the riscv loader/uaccess with the paging
-//     import swapped (the two paging modules share an API);
+//   - the loader is the GENERIC kernel/core/elf_loader.mc and user-copy is the GENERIC
+//     kernel/core/uaccess_pt.mc; both resolve x86-64 paging via the arch-selection seam
+//     (compiled with --arch=x86_64, R0b). Arch-specific leaf-PTE bits come from the paging
+//     module's pte_flags_for_user hook;
 //   - console output goes through an EXTERN mc_console_putc the x86 C runtime provides over
 //     COM1 port-IO (the riscv path writes the 16550 UART MMIO via console.mc); since COM1 is
 //     port-IO, the agent's user CR3 needs NO MMIO page (unlike the riscv S-mode fixture);
@@ -21,7 +22,7 @@
 // fixture-local consts/symbols are prefixed (QX_/qx_/app_*_x86) to avoid emit-c const-flatten
 // collisions; there is no riscv app_run_demo imported here, so the names are fully disjoint.
 
-import "kernel/core/elf_loader_x86.mc";
+import "kernel/core/elf_loader.mc"; // generic loader; arch PTE flags via --arch=x86_64
 import "kernel/arch/x86_64/paging.mc";
 import "kernel/core/heap.mc";
 import "kernel/core/syscall.mc";
@@ -333,7 +334,7 @@ export fn app_build_x86(image_base: usize, image_len: usize, region_base: usize,
         err(e) => { qx_load_status = QX_LS_NOFRAME; return 0; }
     }
 
-    switch elf_load_image_x86(image_base, image_len, &qx_pt, &qx_heap) {
+    switch elf_load_image(image_base, image_len, &qx_pt, &qx_heap) {
         ok(e) => { qx_entry = e; }
         err(e) => {
             switch e {

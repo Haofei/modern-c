@@ -4,9 +4,10 @@
 // (RISC-V M3). It is the same composition the x86 fixture is — a real multi-segment ELF loader +
 // the QuickJS syscall ABI (SYS_WRITE / SYS_READ §0 ingress / SYS_GETPID / SYS_SUBMIT / SYS_POLL +
 // the mock broker) + a confinement proof — but built on the AArch64 stage-1 paging stack:
-//   - the loader is elf_loader_aarch64 (AArch64 user leaf attrs), uaccess is uaccess_aarch64,
-//     paging is the AArch64 4 KiB-granule module. These are the x86 loader/uaccess with the
-//     paging import swapped (the modules share an API);
+//   - the loader is the GENERIC kernel/core/elf_loader.mc and user-copy is the GENERIC
+//     kernel/core/uaccess_pt.mc; both resolve AArch64 paging via the arch-selection seam
+//     (compiled with --arch=aarch64, R0b). Arch-specific leaf attributes come from the paging
+//     module's pte_flags_for_user hook;
 //   - console output goes through an EXTERN mc_console_putc the AArch64 C runtime provides over
 //     the PL011 UART MMIO. Unlike x86's port-IO COM1, the UART is MMIO, so the agent's TTBR0
 //     maps the UART page as a Device EL1-only page (EL0 never touches it; only the kernel's
@@ -22,7 +23,7 @@
 // prefixed (QA_/qa_/app_*_aarch64) to avoid emit-c const-flatten collisions; there is no riscv/
 // x86 fixture imported here, so the names are fully disjoint.
 
-import "kernel/core/elf_loader_aarch64.mc";
+import "kernel/core/elf_loader.mc"; // generic loader; arch PTE flags via --arch=aarch64
 import "kernel/arch/aarch64/paging.mc";
 import "kernel/core/heap.mc";
 import "kernel/core/syscall.mc";
@@ -340,7 +341,7 @@ export fn app_build_aarch64(image_base: usize, image_len: usize, region_base: us
         err(e) => { qa_load_status = QA_LS_NOFRAME; return 0; }
     }
 
-    switch elf_load_image_aarch64(image_base, image_len, &qa_pt, &qa_heap) {
+    switch elf_load_image(image_base, image_len, &qa_pt, &qa_heap) {
         ok(e) => { qa_entry = e; }
         err(e) => {
             switch e {

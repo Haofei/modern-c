@@ -26,7 +26,7 @@
 // freshly-zeroed frame. This handles the first and last partial pages uniformly.
 
 import "kernel/core/elf.mc";
-import "kernel/arch/riscv64/paging.mc";
+import "kernel/arch/active/paging.mc"; // arch-selection seam (R0b): --arch picks the paging module
 import "kernel/core/heap.mc";
 import "std/bytes.mc";
 import "std/addr.mc";
@@ -77,21 +77,12 @@ fn seg_max(a: usize, b: usize) -> usize {
     return b;
 }
 
-// Translate the ELF p_flags of a segment into PTE permission bits. A loaded image is
-// user code, so PTE_U is always set; R/W/X follow the segment's declared flags. (V is
-// added by page_table_map itself.)
+// Translate a segment's ELF p_flags into arch leaf-PTE permission bits. The ELF->R/W/X
+// decoding lives here (arch-neutral); the arch-specific bit translation is the paging
+// module's `pte_flags_for_user` hook (resolved per --arch). W^X is enforced separately
+// below by rejecting a segment that is both writable and executable.
 fn pte_flags_for(p_flags: u32) -> u64 {
-    var flags: u64 = PTE_U;
-    if (p_flags & PF_R) != 0 {
-        flags = flags | PTE_R;
-    }
-    if (p_flags & PF_W) != 0 {
-        flags = flags | PTE_W;
-    }
-    if (p_flags & PF_X) != 0 {
-        flags = flags | PTE_X;
-    }
-    return flags;
+    return pte_flags_for_user((p_flags & PF_R) != 0, (p_flags & PF_W) != 0, (p_flags & PF_X) != 0);
 }
 
 // Materialize one PT_LOAD segment into `pt`: allocate+zero+map one frame per covered
