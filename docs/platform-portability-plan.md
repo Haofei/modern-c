@@ -1188,7 +1188,21 @@ order:
    embedded trust anchor, decrypting a token over HTTP 200) both run under REAL OpenSBI in
    S-mode (boot-seam port: `rdtime` for time, goldfish-RTC reachable for X.509 validity).
    Both deterministic and in m0.
-7. **UART console driver (R6)** as a first-class device rather than per-runtime SBI console.
+7. ~~**UART console driver (R6).**~~ **Done.** `kernel/drivers/uart/ns16550.mc` — an
+   arch-neutral, first-class NS16550 driver: base taken from the FDT-discovered
+   `bootinfo_console_pa` (not a hardcoded constant), proper init (8N1 + FIFO), and an
+   LSR-THRE-polled `putc` (the correctness win over the old hardcoded, unpolled `console.mc`,
+   which stays as the panic-safe fallback). `uart-driver-test` boots under OpenSBI, reads the
+   base from the DTB, and emits through the driver. Both backends, in m0.
+
+---
+
+**Beyond §12 (follow-ups surfaced this round):** the agent async broker is still duplicated
+3× across the arch fixtures (consolidating it is the natural next first-principles cleanup);
+net `net_fetch` through `net_broker.mc` and the real FS op family on x86/arm; the full
+virtio-pci data path (virtqueue sector read over PCI); S-mode PLIC + SBI HSM/IPI + the shared
+`s_trap_vector` SPP/nested-trap rework; the target-aware LLVM varargs fix (item 3 above); and
+cow/demand portability (deferred until an x86/ARM kernel needs COW/demand paging).
 
 The sequencing principle still holds: the agent ABI stays stable while each architecture
 learns how to boot, trap, map memory, copy user buffers, and drive devices.
