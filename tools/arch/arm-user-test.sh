@@ -24,14 +24,19 @@ command -v "$QEMU" >/dev/null 2>&1 || skip "no qemu-system-aarch64"
 if [ "$BACKEND" = llvm ]; then command -v "$LLC" >/dev/null 2>&1 || skip "no llc"; fi
 "$CLANG" --print-targets 2>/dev/null | grep -q aarch64 || skip "clang has no aarch64 target"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-CFLAGS=(--target=aarch64-unknown-elf -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
+# NOTE: NO -mgeneral-regs-only. usermain is now PURE MC (tests/arm/user_arm_runtime.mc), which
+# imports the MC fixture (user_arm_demo.mc): ONE MC compilation unit yields usermain + the EL0
+# program assembler + the syscall dispatcher + user_arm_build, plus the naked `_start` (EL2->EL1
+# drop) and the EL1 vector table. There is no boot.S. The LLVM backend may emit SIMD/FP for
+# struct init/copy, so usermain enables CPACR_EL1.FPEN. The old user_runtime.c is deleted.
+CFLAGS=(--target=aarch64-unknown-elf -ffreestanding -nostdlib -fno-pic -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
 case "$BACKEND" in
     c)
-        "$MCC" emit-c "$HERE/tests/arm/user_arm_demo.mc" >"$WORK/user.c"
+        "$MCC" emit-c "$HERE/tests/arm/user_arm_runtime.mc" >"$WORK/user.c"
         "$CLANG" "${CFLAGS[@]}" -Wno-switch-bool -c "$WORK/user.c" -o "$WORK/user.o"
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/user_arm_demo.mc" -o "$WORK/user.o" \
+        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/user_arm_runtime.mc" -o "$WORK/user.o" \
             -mtriple=aarch64-unknown-elf \
             -relocation-model=static \
             -code-model=small
@@ -42,9 +47,12 @@ case "$BACKEND" in
         exit 2
         ;;
 esac
-"$CLANG" "${CFLAGS[@]}" -c "$ARCH/user_runtime.c" -o "$WORK/user_runtime.o"
+# Freestanding mem*: both backends emit memset/memcpy for aggregate init/copy. The pure-MC
+# usermain links the shared arch-neutral freestanding object (-fno-builtin so the loops are not
+# rewritten into self-calls), matching the arm-vm-test flow.
+"$CLANG" "${CFLAGS[@]}" -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
 SUPPORT_OBJ=$([ "$BACKEND" = llvm ] && printf '%s' "$WORK/llvm-support.o" || true)
-"$LLD" -T "$HERE/tests/arm/aarch64-user.ld" "$WORK/user_runtime.o" "$WORK/user.o" $SUPPORT_OBJ -o "$WORK/k.elf"
+"$LLD" -T "$HERE/tests/arm/aarch64-user.ld" "$WORK/user.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/k.elf"
 OUT="$(timeout 30 "$QEMU" -machine virt -cpu cortex-a72 -nographic -kernel "$WORK/k.elf" 2>/dev/null || true)"
 echo "--- aarch64 USER kernel UART ---"; printf '%s\n' "$OUT" | grep -aE "boot|CurrentEL|VBAR|MAIR|program assembled|address space|ttbr0|CONFINED|LEAK|MMU|entering EL0|HELLO-FROM-EL0|EFAULT-OK|USER-EXIT|ARM64-USER-BAD|BAD-SYSCALL"
 echo "--------------------------------"

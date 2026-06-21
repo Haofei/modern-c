@@ -17,14 +17,19 @@ command -v "$QEMU" >/dev/null 2>&1 || skip "no qemu-system-aarch64"
 if [ "$BACKEND" = llvm ]; then command -v "$LLC" >/dev/null 2>&1 || skip "no llc"; fi
 "$CLANG" --print-targets 2>/dev/null | grep -q aarch64 || skip "clang has no aarch64 target"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-CFLAGS=(--target=aarch64-unknown-elf -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -O1 -Wall -Wextra)
+# NOTE: NO -mgeneral-regs-only. The boot runtime is now PURE MC (tests/arm/boot_arm_runtime.mc),
+# which imports the arch-neutral MC computation (arch_demo.mc): ONE MC compilation unit yields
+# cmain + arch_compute, plus the naked `_start` (EL2->EL1 drop). There is no boot.S. The LLVM
+# backend may emit SIMD/FP for aggregate ops, so we let the assembler use SIMD registers. The
+# old boot_runtime.c is deleted.
+CFLAGS=(--target=aarch64-unknown-elf -ffreestanding -nostdlib -fno-pic -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
 case "$BACKEND" in
     c)
-        "$MCC" emit-c "$HERE/tests/qemu/arch/arch_demo.mc" >"$WORK/c.c"
-        "$CLANG" "${CFLAGS[@]}" -c "$WORK/c.c" -o "$WORK/mc.o"
+        "$MCC" emit-c "$HERE/tests/arm/boot_arm_runtime.mc" >"$WORK/c.c"
+        "$CLANG" "${CFLAGS[@]}" -Wno-switch-bool -c "$WORK/c.c" -o "$WORK/mc.o"
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/qemu/arch/arch_demo.mc" -o "$WORK/mc.o" \
+        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/boot_arm_runtime.mc" -o "$WORK/mc.o" \
             -mtriple=aarch64-unknown-elf \
             -relocation-model=static \
             -code-model=small
@@ -35,9 +40,10 @@ case "$BACKEND" in
         exit 2
         ;;
 esac
-"$CLANG" "${CFLAGS[@]}" -c "$HERE/kernel/arch/aarch64/boot_runtime.c" -o "$WORK/boot.o"
+# Freestanding mem*: both backends may emit memset/memcpy for aggregate init/copy.
+"$CLANG" "${CFLAGS[@]}" -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
 SUPPORT_OBJ=$([ "$BACKEND" = llvm ] && printf '%s' "$WORK/llvm-support.o" || true)
-"$LLD" -T "$HERE/tests/qemu/aarch64.ld" "$WORK/boot.o" "$WORK/mc.o" $SUPPORT_OBJ -o "$WORK/k.elf"
+"$LLD" -T "$HERE/tests/qemu/aarch64.ld" "$WORK/mc.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/k.elf"
 OUT="$(timeout 30 "$QEMU" -machine virt -cpu cortex-a53 -nographic -kernel "$WORK/k.elf" 2>/dev/null || true)"
 echo "--- aarch64 UART ---"; printf '%s\n' "$OUT"; echo "--------------------"
 if printf '%s' "$OUT" | grep -q "ARM64-OK"; then
