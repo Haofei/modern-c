@@ -1174,7 +1174,14 @@ order:
    (`vendor=1af4 device=1001 class=01`) and completes a legacy virtio handshake
    (`status=03`, capacity read) — `x86-pci-test`. Both gates pass on C + LLVM backends, in
    m0. (A full virtio-pci data path — virtqueue sector read over PCI — remains a follow-up.)
-5. **Finish the SBI service layer** (HSM/IPI) and **S-mode PLIC interrupt integration**.
+5. **S-mode interrupts.** *Core done:* real S-mode **timer-interrupt delivery** under OpenSBI
+   via the SBI TIME extension (`sie.STIE`+`sstatus.SIE`, `rdtime`, re-armed per tick,
+   `wfi`-parked) — `smode-timer-test` (`SMODE-TIMER TICKS=3`, both backends, in m0), proving
+   genuine non-polled IRQ delivery (`MIDELEG` bit 5 confirms S-timer delegation). *Remaining:*
+   **S-mode PLIC** external-interrupt integration; the **SBI HSM/IPI** service layer (SMP hart
+   start/stop + inter-hart IPIs); and the **`s_trap_vector` SPP/nested-trap rework** on the
+   shared confinement vector (`smode_usermode_runtime.c`) so the confined-agent path can ALSO
+   take interrupts (the timer proof uses a standalone pure-S-mode vector that needs no swap).
 6. **Re-run the `kernel/net/` TLS gates under S-mode** (virtio-blk/net already revalidated).
 7. **UART console driver (R6)** as a first-class device rather than per-runtime SBI console.
 
