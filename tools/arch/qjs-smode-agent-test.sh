@@ -31,7 +31,7 @@ source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kern
 HERE="$(kernel_boot_repo_root)"
 QJS="$HERE/third_party/quickjs"
 SRC="$HERE/tests/qemu/arch/qjs_smode_demo.mc"                     # kernel side (S-mode): loader/ABI + supervisor gigapage + UART page
-RUNTIME="$HERE/kernel/arch/riscv64/qjs_smode_confined_runtime.c"  # S-mode bring-up under OpenSBI
+RUNTIME="$HERE/tests/qemu/arch/qjs_smode_confined_runtime.mc"  # S-mode bring-up under OpenSBI, now PURE MC
 USERMODE="$HERE/kernel/arch/riscv64/smode_usermode_runtime.c"     # S-mode trap vector + syscall dispatch
 HOST="$HERE/examples/apps/qjs_host.c"        # the FIXED generic host (never changes per agent)
 AGENT_JS="$HERE/$AGENT_JS_REL"               # the agent: PURE JS
@@ -93,7 +93,7 @@ KERNEL_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
                -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 CFLAGS=("${KERNEL_CFLAGS[@]}")
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/thread.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 kernel_boot_compile_c_object "$USERMODE" "$WORK/usermode.o"
 "$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/app_image.c" -o "$WORK/app_image.o"
 "$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/agent_src.c" -o "$WORK/agent_src.o"
