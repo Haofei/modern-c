@@ -25,8 +25,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-SRC="$HERE/kernel/main.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/net_smode_runtime.c"
+SRC="$HERE/tests/qemu/arch/net_smode_demo.mc"
 LDSCRIPT="$HERE/tests/qemu/sbi.ld"
 EXPECT="NET-PING-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-net-smode-test" || echo "net-smode-test")
@@ -40,11 +39,17 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-function -fno-builtin)
 
+# PURE-MC kernel: `_start` + boot seam are `#[naked]` MC; the SBI seam and the
+# virtio-mmio probe are MC (sbi.mc / sbi_virtio_probe.mc); the virtio-net driver +
+# net stack are the same MC as the M-mode path (kernel_main) — no .c runtime. The
+# std/dma + std/time platform primitives (rdtime time source + bump DMA pool) are
+# MC too (sbi_dma_time.mc), compiled as a SEPARATE object and linked so its
+# definitions bind the std `extern fn` seam by name.
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/net.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/arch/riscv64/sbi_dma_time.mc" "$WORK/platform.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/net.o" $SUPPORT_OBJ -o "$WORK/net.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/net.o" "$WORK/platform.o" $SUPPORT_OBJ -o "$WORK/net.elf"
 
 # Run under QEMU with a virtio-net device on user networking (pcap capture). NO
 # '-bios none' -> QEMU loads OpenSBI (the real firmware) which boots our kernel

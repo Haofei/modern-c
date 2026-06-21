@@ -5583,15 +5583,43 @@ const LlvmEmitter = struct {
             else
                 null,
             .pointer, .raw_many_pointer, .nullable, .slice, .fn_pointer => 64,
-            .generic => |node| if (isOpaqueAddressGenericName(node.base.text) and node.args.len == 1) 64 else null,
+            .generic => |node| if ((isOpaqueAddressGenericName(node.base.text) or std.mem.eql(u8, node.base.text, "MmioPtr")) and node.args.len == 1) 64 else null,
             .qualified => |node| self.fixedLayoutBitsOf(node.child.*),
             else => null,
+        };
+    }
+
+    // `MmioPtr<T>` is the typed device-register pointer (lowers to `ptr`). The
+    // audited unsafe boundary mints it from a pointer-width integer / opaque address
+    // (a probed MMIO base) and extracts it back to an integer; both are pointer
+    // <-> address coercions, lowered as inttoptr/ptrtoint by emitBitcastValue.
+    fn isMmioPtrType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .generic => |node| std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1,
+            else => false,
         };
     }
 
     fn pointerAddressCoercion(self: *LlvmEmitter, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) bool {
         const source = self.resolveAliasType(source_ty);
         const target = self.resolveAliasType(target_ty);
+        // MmioPtr<T> <-> pointer-width integer / opaque address (the device-register
+        // mint/extract boundary). MmioPtr lowers to `ptr`, so this is inttoptr/ptrtoint.
+        if (self.isMmioPtrType(source)) {
+            return switch (target.kind) {
+                .name => |name| isOpaqueAddressTypeName(name.text) or isPointerWidthIntegerTypeName(name.text),
+                .pointer, .raw_many_pointer, .nullable => true,
+                else => false,
+            };
+        }
+        if (self.isMmioPtrType(target)) {
+            return switch (source.kind) {
+                .name => |name| isOpaqueAddressTypeName(name.text) or isPointerWidthIntegerTypeName(name.text),
+                .pointer, .raw_many_pointer, .nullable, .fn_pointer => true,
+                else => false,
+            };
+        }
         return switch (source.kind) {
             // `.fn_pointer` (a code pointer, e.g. `&trap_vector`) coerces to a pointer-width
             // integer just like a data pointer — needed to install a vector by address.
