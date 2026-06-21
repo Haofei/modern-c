@@ -28,8 +28,9 @@ HOSTNAME="google.com"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-SRC="$HERE/tests/qemu/net/dns_http_demo.mc"
-RUNTIME="$HERE/kernel/drivers/virtio/dns_runtime.c"
+# Boot seam now PURE MC (imports dns_http_demo.mc + shared probe); platform = mmode_dma_time.mc.
+SRC="$HERE/tests/qemu/net/dns_http_mmode_demo.mc"
+PLATFORM="$HERE/kernel/arch/riscv64/mmode_dma_time.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME="google-http-test"
 
@@ -43,17 +44,22 @@ trap 'rm -rf "$WORK"' EXIT
 REQ='GET / HTTP/1.1\r\nHost: google.com\r\nConnection: close\r\n\r\n'
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
-        -Wno-unused-function -fno-builtin
-        -DDNS_SERVER_IP=0x0A000203u
-        -DHTTP_PORT=80
-        '-DDNS_HOSTNAME="'"$HOSTNAME"'"'
-        "-DHTTP_REQUEST=\"$REQ\"")
+        -Wno-unused-function -fno-builtin)
+# Per-invocation config the C runtime took via -D, threaded in as a generated MC unit
+# (MC has no -D). The \r\n in REQ are literal backslash sequences MC's lexer interprets.
+cat > "$WORK/dnscfg.mc" <<EOF
+export fn mc_dns_server_ip() -> u32 { return 0x0A000203; }
+export fn mc_http_port() -> u16 { return 80; }
+export fn mc_dns_hostname() -> *const u8 { return "$HOSTNAME"; }
+export fn mc_http_request() -> *const u8 { return "$REQ"; }
+EOF
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/dns.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$PLATFORM" "$WORK/platform.o" "$WORK"
+kernel_boot_compile_mc_object "$BACKEND" "$WORK/dnscfg.mc" "$WORK/dnscfg.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/dns.o" $SUPPORT_OBJ -o "$WORK/dns.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/dns.o" "$WORK/platform.o" "$WORK/dnscfg.o" $SUPPORT_OBJ -o "$WORK/dns.elf"
 
 # Boot with plain slirp user networking (real upstream resolver + internet egress, if
 # the sandbox permits it). Capture a pcap for the honest report.

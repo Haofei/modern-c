@@ -33,8 +33,9 @@ DNS_FWD_HEX="0x0A000203u"          # 10.0.2.3 as a host-order u32
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-SRC="$HERE/tests/qemu/net/dns_http_demo.mc"
-RUNTIME="$HERE/kernel/drivers/virtio/dns_runtime.c"
+# Boot seam now PURE MC (imports dns_http_demo.mc + shared probe); platform = mmode_dma_time.mc.
+SRC="$HERE/tests/qemu/net/dns_http_mmode_demo.mc"
+PLATFORM="$HERE/kernel/arch/riscv64/mmode_dma_time.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="DNS-HTTP-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-dns-test" || echo "dns-test")
@@ -135,16 +136,24 @@ done
 #    IP (10.0.2.2 -> host HTTP server) on PORT_H.
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
-        -Wno-unused-function -fno-builtin
-        -DDNS_SERVER_IP=$DNS_FWD_HEX
-        -DHTTP_PORT=$PORT_H
-        '-DDNS_HOSTNAME="'"$HOSTNAME"'"')
+        -Wno-unused-function -fno-builtin)
+
+# Per-invocation config the C runtime took via -D, threaded in as a generated MC unit
+# (MC has no -D). Strip C's trailing 'u' from the hex IP; no HTTP request override here.
+DNS_IP_MC="${DNS_FWD_HEX%u}"
+cat > "$WORK/dnscfg.mc" <<EOF
+export fn mc_dns_server_ip() -> u32 { return $DNS_IP_MC; }
+export fn mc_http_port() -> u16 { return $PORT_H; }
+export fn mc_dns_hostname() -> *const u8 { return "$HOSTNAME"; }
+export fn mc_http_request() -> *const u8 { return ""; }
+EOF
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/dns.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$PLATFORM" "$WORK/platform.o" "$WORK"
+kernel_boot_compile_mc_object "$BACKEND" "$WORK/dnscfg.mc" "$WORK/dnscfg.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/dns.o" $SUPPORT_OBJ -o "$WORK/dns.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/dns.o" "$WORK/platform.o" "$WORK/dnscfg.o" $SUPPORT_OBJ -o "$WORK/dns.elf"
 
 # 5. Boot under QEMU with virtio-net user networking + pcap. The guest's DNS A-query to
 #    10.0.2.3:53 hits slirp's built-in forwarder, which relays it to our local responder
