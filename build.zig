@@ -160,6 +160,16 @@ pub fn build(b: *std.Build) void {
     const taint_audit_step = b.step("taint-audit", "Audit user-derived (tainted) values: flag a value from copy_from_user/fetch_user used as a length/index/loop-bound without passing checked_len/checked_index/validate_bound (U3)");
     taint_audit_step.dependOn(&taint_audit_cmd.step);
 
+    // ABI consistency: the confined-agent syscall numbers in user/abi.mc are the single source
+    // of truth; the C agent userspace (crt0/usys/app_traps) + agent dispatchers must hardcode the
+    // same numbers. Pure source scan (no mcc), so it always runs and never silently skips.
+    const abi_consistency_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/check/abi-consistency-test.sh",
+    });
+    const abi_consistency_step = b.step("abi-consistency-test", "Check the C agent-ABI #defines (crt0/usys/app_traps + agent dispatchers) match user/abi.mc");
+    abi_consistency_step.dependOn(&abi_consistency_cmd.step);
+
     const fuzz_cmd = b.addSystemCommand(&.{
         "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--mcc", "zig-out/bin/mcc",
     });
@@ -3404,6 +3414,7 @@ pub fn build(b: *std.Build) void {
     preflight_step.dependOn(&preflight_cmd.step);
 
     const m0_step = b.step("m0", "Run M0 conformance gates");
+    m0_step.dependOn(&abi_consistency_cmd.step);
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);
     m0_step.dependOn(&sweep_cmd.step);

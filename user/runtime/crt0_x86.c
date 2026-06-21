@@ -29,7 +29,8 @@ uint64_t mc_ecall(uint64_t number, uint64_t a0, uint64_t a1, uint64_t a2) {
 // The host entry point (examples/apps/qjs_host.c — `int main(void)`).
 int main(void);
 
-// SYS_EXIT = 3 (see user/abi.mc; the same ABI the RISC-V crt0.c uses). Keep in sync.
+// SYS_EXIT = 3 (see user/abi.mc; the same ABI the RISC-V crt0.c uses). The abi-consistency
+// gate (tools/check/abi-consistency-test.sh) fails the build if this drifts from abi.mc.
 #define SYS_EXIT 3
 
 // crt0: the ELF entry. __user_stack_top is defined by the link script (user_qjs_x86.ld) at the

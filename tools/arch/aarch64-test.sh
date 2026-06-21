@@ -7,7 +7,10 @@ BACKEND="${2:-c}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"; LLD="${LLD:-ld.lld}"; LLC="${LLC:-llc}"; QEMU="${QEMU:-qemu-system-aarch64}"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-aarch64-test" || echo "aarch64-test")
-skip(){ echo "SKIP: $TEST_NAME ($1)"; exit 0; }
+# CI-aware skip: in CI / MC_REQUIRE_TOOLS a missing toolchain FAILS (a gate must not look green
+# because qemu/clang/lld were absent); locally it still skips. Same policy as the riscv gates.
+source "$HERE/tools/qemu/kernel-boot-lib.sh"
+skip() { kernel_boot_skip "$TEST_NAME" "$1"; }
 command -v "$CLANG" >/dev/null 2>&1 || skip "no clang"
 command -v "$LLD" >/dev/null 2>&1 || skip "no ld.lld"
 command -v "$QEMU" >/dev/null 2>&1 || skip "no qemu-system-aarch64"

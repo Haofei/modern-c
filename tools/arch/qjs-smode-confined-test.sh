@@ -92,7 +92,7 @@ echo "------------------------------------"
 # (JS=7), its output copied in through the agent page table by SYS_WRITE; and the agent left
 # U-mode via SYS_EXIT (reaching the kernel only through ecall).
 if printf '%s' "$OUT" | grep -qi "OpenSBI" \
-   && printf '%s' "$OUT" | grep -q "CONFINED: kernel unmapped in agent space" \
+   && printf '%s' "$OUT" | grep -q "CONFINED: kernel not user-accessible in agent space" \
    && printf '%s' "$OUT" | grep -q "$EXPECT_JS" \
    && printf '%s' "$OUT" | grep -q "USER-EXIT from U"; then
     echo "PASS: $TEST_NAME — $BACKEND backend: QuickJS, built freestanding against the all-MC libc, evaluated JavaScript (1 + 2*3 == 7) CONFINED in an isolated U-mode Sv39 space under REAL OpenSBI in S-mode; the kernel is mapped supervisor-only (unreachable from U) and the agent reached the kernel only via SYS_WRITE/SYS_EXIT"

@@ -33,8 +33,12 @@ uint64_t mc_ecall(uint64_t number, uint64_t a0, uint64_t a1, uint64_t a2) {
 // The host entry point (examples/apps/qjs_host.c — `int main(void)`).
 int main(void);
 
-// SYS_EXIT = 3 (see user/abi.mc; the same ABI the RISC-V/x86 crt0 use). Keep in sync.
+// SYS_EXIT = 3 (see user/abi.mc; the same ABI the RISC-V/x86 crt0 use). The abi-consistency
+// gate (tools/check/abi-consistency-test.sh) fails the build if this drifts from abi.mc.
 #define SYS_EXIT 3
+// Stringify so the `svc` immediate below is the SAME macro, not a second hardcoded literal.
+#define MC_STR_(x) #x
+#define MC_STR(x) MC_STR_(x)
 
 // crt0: the ELF entry. __user_stack_top is defined by the link script (user_qjs_aarch64.ld) at
 // the top of the app's in-image stack (a NOBITS region the loader maps EL0 R|W and zeroes). Set
@@ -48,7 +52,7 @@ __attribute__((naked, used, section(".text.start"))) void _start(void) {
         "mov x30, #0\n"          // terminate the return chain
         "bl main\n"              // int main(void) -> w0
         "sxtw x0, w0\n"          // exit code = sign-extended main() return
-        "mov x8, #" "3" "\n"     // SYS_EXIT
+        "mov x8, #" MC_STR(SYS_EXIT) "\n" // SYS_EXIT (stringified from the macro above)
         "svc #0\n"
         "1: wfe\n b 1b\n");
 }

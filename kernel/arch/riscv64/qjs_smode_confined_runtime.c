@@ -76,7 +76,7 @@ __attribute__((used)) void s_entry(void) {
     // Confinement proof (S-mode): the kernel is mapped (so the trap path survives satp) but
     // is NOT user-accessible — a direct kernel touch from U-mode would fault.
     if (qjs_smode_kernel_not_user(satp, (uintptr_t)KERNEL_VA))
-        sbi_puts("CONFINED: kernel unmapped in agent space\n");
+        sbi_puts("CONFINED: kernel not user-accessible in agent space\n");
     else
         sbi_puts("LEAK: kernel user-accessible in agent space\n");
 

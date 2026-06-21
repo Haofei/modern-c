@@ -26,7 +26,11 @@ HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "
 ARCH="$HERE/kernel/arch/x86_64"
 QJS="$HERE/third_party/quickjs"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-$NAME_BASE-test" || echo "$NAME_BASE-test")
-skip() { echo "SKIP: $TEST_NAME ($1)"; exit 0; }
+# CI-aware skip: in CI / MC_REQUIRE_TOOLS a missing toolchain FAILS (a gate must not look green
+# because qemu/clang/lld were absent); locally it still skips. Same policy as the riscv gates.
+# (kernel-boot-lib is also re-sourced below for its compile helpers; sourcing twice is harmless.)
+source "$HERE/tools/qemu/kernel-boot-lib.sh"
+skip() { kernel_boot_skip "$TEST_NAME" "$1"; }
 command -v "$CLANG"   >/dev/null 2>&1 || skip "clang not found"
 command -v "$LLD"     >/dev/null 2>&1 || skip "ld.lld not found"
 if [ "$BACKEND" = llvm ]; then command -v "$LLC" >/dev/null 2>&1 || skip "llc not found"; fi

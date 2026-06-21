@@ -27,7 +27,8 @@ uint64_t mc_ecall(uint64_t number, uint64_t a0, uint64_t a1, uint64_t a2) {
 // The MC entry point (an `export fn main() -> i32`).
 int32_t main(void);
 
-// SYS_EXIT = 3 (see user/abi.mc; matches the shared M-mode trap handler). Keep in sync.
+// SYS_EXIT = 3 (see user/abi.mc; matches the shared M-mode trap handler). The abi-consistency
+// gate (tools/check/abi-consistency-test.sh) fails the build if this drifts from abi.mc.
 #define SYS_EXIT 3
 
 // crt0: the ELF entry. __user_stack_top is defined by user/runtime/user.ld at the top of

@@ -1,0 +1,1152 @@
+# Plan: S-mode RISC-V platform and multi-architecture kernel support
+
+Status: **milestone chain M1–M9 delivered, except M5 is partial** (see *Implementation
+status* below). This was the concrete path from the original RISC-V M-mode/QEMU kernel and
+agent prototype to a portable OS substrate; the prototype path is now implemented and
+Docker-gated across three architectures. M5 ships a single-event structured broker ABI;
+its vector-poll/timeout/real-broker form is split out as M5b. Remaining work is
+parity/cleanup, tracked in §12.
+
+```
+RV64GC + S-mode + OpenSBI + QEMU virt + Sv39 + virtio
+then x86_64 and AArch64 QEMU targets
+then real board ports
+```
+
+The QuickJS agent work remains valid. The platform work below changes the layer below it:
+boot, privilege mode, traps, timers, interrupts, device discovery, and device drivers.
+
+## Implementation status (milestone chain M1–M9, M5 partial)
+
+The §10 milestone chain is delivered and Docker-gated. Each item below corresponds to a
+gate in `build.zig`. The phase sections further down (§3–§7) describe the original design;
+read them as the rationale for code that now exists, not as outstanding work.
+
+**Implemented and gated:**
+
+- RISC-V S-mode under real OpenSBI: FDT `/memory` + device discovery (`kernel/core/fdt.mc`,
+  `kernel/core/bootinfo.mc`), supervisor trap path, `SYS_WRITE` + bad-pointer `-E_FAULT`
+  U-mode hello (`kernel/arch/riscv64/smode_user_runtime.c`), confined QuickJS agent
+  sync+async (`qjs_smode_confined_runtime.c`), virtio-blk and virtio-net revalidated under
+  OpenSBI (`blk_smode_runtime.c`, `net_smode_runtime.c`).
+- x86_64 multiboot→long mode: 4-level paging (`kernel/arch/x86_64/paging.mc`), ring-3 user
+  hello + `-E_FAULT` (`user_runtime.c`), confined QuickJS agent (`qjs_user_runtime.c`).
+- AArch64 EL1/EL0: stage-1 4 KB paging (`kernel/arch/aarch64/paging.mc`), EL0 user hello +
+  `-E_FAULT` (`user_runtime.c`), confined QuickJS agent (`qjs_user_runtime.c`).
+- The confined QuickJS agent runs on all three architectures with one identical syscall ABI
+  and the same confinement model (kernel is mapped but supervisor/privileged-only — no user
+  PTE permission — so it is not user-accessible).
+- Structured single-event broker ABI (M5): `SYS_SUBMIT(req_ptr)`/`SYS_POLL(ev_ptr)` carry
+  real `ToolReq`/`ToolEvent` structs (copy-in/out + size validation), Promise-based in JS.
+  Mock ops only; vector poll/timeout/real-broker integration is M5b (not delivered).
+- Arch-neutralization started: opaque `AddressSpace` (`kernel/core/aspace.mc`),
+  arch-neutral `panic_trap` (`kernel/core/panic.mc`), `BootInfo` contract.
+- A genuine compiler fix landed: `va_list` argument copy emits `__builtin_va_copy`
+  (`src/lower_c.zig`), required by the x86-64 SysV array-typed `va_list`.
+
+**Known-incomplete / not yet gated:**
+
+- Three LLVM-backend tracking gates (`llvm-x86-qjs-async-test`, `llvm-arm-qjs-test`,
+  `llvm-arm-qjs-async-test`) hit a codegen divergence in the heavy QuickJS+libc workload;
+  left ungated with inline notes (C backend passes on all three arches; LLVM passes fully
+  on RISC-V).
+- The arch-selection seam (R0b) is not finished: `elf_loader`/`uaccess` exist as three
+  near-identical per-arch copies. Core still hard-imports some `kernel/arch/riscv64` paths.
+- x86 device-level interrupts (APIC/timer) and virtio-pci are not done; x86 user/VM/QuickJS
+  use software paths, RISC-V/ARM use virtio-mmio.
+
+## 0. Current implementation snapshot
+
+The current codebase is best understood as a **working RISC-V M-mode/QEMU kernel** with
+strong agent-sandbox substrate. It is not a thin blank slate. The main missing piece is the
+privilege/platform migration to a normal S-mode kernel under OpenSBI.
+
+Already present:
+
+- U-mode entry/exit exists.
+- Syscalls from U-mode into the kernel exist.
+- Sv39 page tables and isolated user address spaces exist.
+- The kernel is intentionally not user-accessible from the agent address space (mapped
+  supervisor/privileged-only — no user PTE permission).
+- User buffers go through page-table-aware `copy_from_user_pt` / `copy_to_user_pt`.
+- A real multi-segment ELF loader exists for confined user apps.
+- QuickJS can be built freestanding and run as a confined U-mode ELF.
+- A fixed C host can load pure JavaScript through `SYS_READ`.
+- JS can call `print(...)` and `host_async(...)`.
+- `host_async(...)` maps to the original toy `SYS_SUBMIT` / `SYS_POLL` path (since replaced
+  by the structured single-event ABI — see *Implementation status*).
+- `kernel/core/`, `kernel/arch/riscv64/`, `kernel/platform/qemu_virt/`, and driver
+  directories already provide a partial core/arch/platform split.
+- `kernel/core/fdt.mc` already provides FDT parsing primitives.
+- `kernel/drivers/virtio/virtio_blk.mc` and `kernel/drivers/virtio/virtio_net.mc` already
+  exist, along with virtio RNG support.
+- `kernel/net/` already contains Ethernet/ARP/IPv4/ICMP/UDP/TCP/DNS pieces, and BearSSL
+  is used for TLS-oriented demos.
+- `kernel/drivers/pci.mc`, `kernel/drivers/e1000.mc`, PLIC, CLINT, and QEMU-oriented
+  virtio drivers exist.
+- `kernel/arch/x86_64/` contains boot/context scaffolding. `kernel/arch/aarch64/` has a
+  minimal boot runtime stub. These are not full ports, but they are not zero.
+- Multi-hart/SMP-related pieces exist in demo form (`hart.mc`, SMP runtimes,
+  `tlb_shootdown.mc`, IPI runtime).
+
+> **Note (historical):** the snapshot above and the list below describe the *starting
+> point* before the M1–M9 milestone chain. Several items are now done — see *Implementation
+> status* above for the current state. Kept here as the design's point of departure.
+
+What was **not** present at the start, and where it stands now:
+
+- ~~A full S-mode kernel entry under OpenSBI.~~ **Done** (S-mode boot, traps, U-mode hello).
+- A general SBI wrapper layer for timer, reset, IPI/HSM, and firmware services — partial
+  (console + shutdown + `rdtime`; full HSM/IPI layer still pending).
+- ~~Integrated supervisor trap handling for the U-mode syscall/fault path.~~ **Done.**
+- ~~FDT-driven S-mode boot memory/device discovery.~~ **Done** (`fdt.mc` + `BootInfo`).
+- S-mode PLIC/ACLINT/SBI-timer integration for the interrupt/timer model — partial
+  (timer via `rdtime`; PLIC interrupt integration still pending).
+- ~~Revalidation of virtio-blk and virtio-net under S-mode.~~ **Done** (network-stack TLS
+  gates not yet re-run under S-mode).
+- x86_64 and AArch64 user-mode/VM/QuickJS parity — **done at the user/VM/agent level**;
+  device-level interrupts (APIC) and virtio-pci still pending on x86.
+- A finished architecture-neutral boundary — **started** (opaque `AddressSpace`, neutral
+  `panic_trap`, `BootInfo`); the R0b arch-selection seam is not finished.
+
+## 1. Target architecture
+
+### 1.1 RISC-V target
+
+Initial real platform target:
+
+```
+CPU:        RV64GC
+Firmware:   OpenSBI in M-mode
+Kernel:     S-mode
+Agents:     U-mode
+VM:         Sv39
+Machine:    QEMU virt first
+Devices:    UART, PLIC, SBI timer, virtio-mmio blk/net
+Later:      real board port
+```
+
+Boot chain:
+
+```
+QEMU / hardware
+  -> OpenSBI, M-mode
+      -> kernel, S-mode
+          -> user apps / QuickJS agent, U-mode
+```
+
+M-mode should become firmware territory. The kernel should not own machine traps, machine
+timer CSRs, or machine interrupt routing in the final RISC-V platform.
+
+### 1.2 Multi-architecture target
+
+Long-term QEMU-supported matrix:
+
+| Architecture | First platform | Kernel mode | Firmware/interface | Interrupts | Devices |
+|---|---|---|---|---|---|
+| riscv64 | QEMU `virt` | S-mode | OpenSBI + FDT | PLIC + SBI timer | virtio-mmio |
+| x86_64 | QEMU `q35` or `pc` | long mode ring 0 | Limine/UEFI or Multiboot2 + ACPI | APIC/x2APIC | PCI + virtio-pci |
+| aarch64 | QEMU `virt` | EL1 | PSCI + FDT/UEFI | GICv3 | virtio-mmio or virtio-pci |
+
+The agent ABI should be identical on all targets:
+
+```
+syscall number + fixed register arguments -> isize return
+negative values are -errno
+```
+
+Only the architecture trap entry changes.
+
+### 1.3 Migration safety rule
+
+The current M-mode/QEMU target is the working system. Keep it green while S-mode lands.
+Until the S-mode path reaches QuickJS-agent parity, every platform phase must preserve:
+
+- existing M-mode QEMU gates,
+- existing QuickJS confined-agent gates,
+- existing driver/network gates,
+- existing emit-c / emit-llvm parity.
+
+S-mode is an additional target during the migration, not a flag day replacement.
+
+## 2. Core design rule
+
+Split the system into two layers:
+
+```
+kernel/core
+  scheduler, VM objects, ELF loader, syscall ABI, VFS, broker, agent runtime,
+  capability checks, audit, generic virtio core
+
+kernel/arch + kernel/platform
+  boot, trap entry, context switch, page-table format, CSR/register details,
+  interrupt controller, timer source, device discovery, early console
+```
+
+`kernel/core` must not know about:
+
+- RISC-V `satp`, `sstatus`, `stvec`, `scause`, `sepc`, PLIC, SBI.
+- x86_64 `cr3`, IDT, GDT, MSRs, APIC, ACPI.
+- AArch64 `TTBR`, `TCR`, `MAIR`, `SCTLR`, `VBAR`, `ESR`, GIC.
+
+The core should speak in generic concepts:
+
+- `AddressSpace`
+- `VmFlags`
+- `TrapFrame`
+- `ThreadContext`
+- `IrqLine`
+- `ClockDeadline`
+- `BootInfo`
+- `Device`
+- `UserCopy`
+
+## 3. Platform abstraction contracts
+
+### 3.1 BootInfo
+
+Every architecture should normalize firmware input into one structure:
+
+```
+BootInfo {
+  memory_map
+  kernel_image_range
+  initrd_or_modules
+  fdt_pointer
+  acpi_pointer
+  command_line
+  boot_cpu_id
+  cpu_count
+  platform_name
+}
+```
+
+RISC-V and AArch64 QEMU `virt` can populate this from FDT. x86_64 can populate it from
+Limine/UEFI/Multiboot2 and ACPI.
+
+Acceptance:
+
+- Kernel can print parsed memory ranges.
+- Kernel can identify usable RAM without hardcoded ranges.
+- Kernel can find console and virtio devices from firmware tables.
+
+### 3.2 ArchOps
+
+Minimum architecture API:
+
+```
+arch_early_init(boot_info)
+arch_trap_init()
+arch_irq_enable()
+arch_irq_disable()
+arch_wait_for_interrupt()
+arch_current_cpu()
+arch_enter_user(user_entry, user_sp, address_space)
+arch_context_switch(old, new)
+arch_start_secondary(cpu_id, entry, stack)   // optional after single-hart S-mode works
+arch_tlb_flush_all()
+arch_tlb_flush_addr(address_space, va)
+arch_shutdown_or_reboot()
+```
+
+Trap entry must normalize into:
+
+```
+Trap {
+  kind: syscall | page_fault | illegal_instruction | timer | external_irq | unknown
+  user_pc
+  fault_addr
+  syscall_number
+  args[6]
+  raw_cause
+}
+```
+
+The syscall dispatcher should not care whether the trap came from RISC-V `ecall`, x86_64
+`syscall`, or AArch64 `svc`.
+
+Initial S-mode migration scope is **single-hart**. Existing M-mode SMP/IPI/TLB-shootdown
+demos must remain green, but S-mode secondary-hart bring-up can follow after the S-mode
+user/agent path works. When enabled, RISC-V should use SBI HSM for secondary harts; AArch64
+should use PSCI `CPU_ON`.
+
+### 3.3 VM interface
+
+Core VM flags:
+
+```
+VM_READ
+VM_WRITE
+VM_EXEC
+VM_USER
+VM_GLOBAL
+VM_DEVICE
+VM_UNCACHED
+```
+
+Architecture backends translate these to hardware PTE bits:
+
+- RISC-V: `V/R/W/X/U/G/A/D` under Sv39/Sv48.
+- x86_64: `P/RW/US/NX/G/PCD/PWT` under 4-level or 5-level paging.
+- AArch64: AP bits, UXN/PXN, AttrIndx, SH, AF under TTBR/TCR/MAIR.
+
+Minimum VM API:
+
+```
+vm_space_new()
+vm_map(space, va, pa, len, flags)
+vm_unmap(space, va, len)
+vm_translate(space, va)
+vm_is_mapped(space, va)
+vm_activate(space)
+vm_destroy(space)
+```
+
+RISC-V already has useful Sv39 pieces. The work is to wrap them behind a portable VM
+contract instead of letting core call RISC-V-specific page-table functions directly.
+
+### 3.4 User copy
+
+Keep the existing design principle:
+
+- Never dereference user pointers directly in kernel code.
+- Resolve every user pointer through the target address space.
+- Return `-E_FAULT` on bad user memory.
+
+Generic contract:
+
+```
+copy_from_user(space, kernel_dst, user_src, len) -> Result
+copy_to_user(space, user_dst, kernel_src, len) -> Result
+copy_string_from_user(space, user_src, max_len) -> Result
+```
+
+RISC-V can initially keep the current page-table-walk implementation. x86_64 and AArch64
+can implement equivalent software page walks or temporary safe mappings.
+
+## 4. RISC-V S-mode migration plan
+
+### Phase R0: prepare boundaries in current code
+
+Goal: make the existing mostly-separated M-mode code easier to port without changing
+behavior. This is targeted cleanup, not a greenfield split.
+
+Tasks:
+
+- Move any remaining direct RISC-V CSR/trap concepts behind `kernel/arch/riscv64`.
+- Replace architecture-specific trap naming in core APIs with normalized names. Concrete
+  example: `kernel/core/panic.mc` exposes `panic_trap(mcause, mepc, mtval)`, which should
+  become a generic trap report (`cause`, `pc`, `fault_addr`) before S-mode/x86/AArch64 use
+  the same path.
+- Keep `kernel/core` free of `mstatus`, `mtvec`, `mcause`, `mepc`, `satp`, PLIC, SBI,
+  `cr3`, APIC, GIC, and TTBR concepts.
+- Define `BootInfo`, `Trap`, `VmFlags`, and syscall argument structs.
+- Keep current QEMU tests passing.
+
+Acceptance:
+
+- No direct `mstatus`, `mtvec`, `mcause`, `mepc`, `mtval`, `satp`, or PLIC references from
+  architecture-independent core code or core API names.
+- Existing QuickJS confined tests still build.
+
+### Phase R1: OpenSBI S-mode boot
+
+Goal: grow the existing SBI boot smoke path into a real S-mode kernel entry under OpenSBI
+on QEMU `virt`.
+
+Tasks:
+
+- Reuse or replace the current `sbi_boot_runtime.c` smoke path with the real kernel entry.
+- Accept OpenSBI-provided boot hart id and FDT pointer.
+- Set up early stack.
+- Add a reusable SBI call wrapper:
+
+```
+sbi_call(ext, fid, arg0..arg5)
+sbi_console_putchar()       // early only, if available
+sbi_set_timer()
+sbi_system_reset()
+```
+
+- Print a boot banner through SBI console or UART.
+
+Acceptance:
+
+- `qemu-system-riscv64 -machine virt -bios default -kernel kernel.elf` reaches S-mode
+  kernel code.
+- Kernel prints hart id, FDT pointer, and memory summary.
+- Existing M-mode boot gates remain green.
+
+### Phase R2: supervisor traps
+
+Goal: replace M-mode trap assumptions with S-mode trap handling.
+
+Tasks:
+
+- Install `stvec`.
+- Handle `ecall from U-mode`.
+- Handle illegal instruction and page fault traps.
+- Preserve/restore user registers in a supervisor trap frame.
+- Return syscall values in the correct user return register.
+- Advance `sepc` after syscalls.
+
+Acceptance:
+
+- A tiny U-mode hello app can call `SYS_WRITE`.
+- Bad user pointers return `-E_FAULT`, not a kernel trap.
+- Illegal user instruction terminates only the user task.
+
+### Phase R3: Sv39 kernel/user mapping
+
+Goal: run kernel and user spaces with a clean Sv39 model in S-mode.
+
+Tasks:
+
+- Build kernel address-space mapping.
+- Map kernel text read/execute, rodata read-only, data/bss read/write.
+- Map MMIO regions as device memory.
+- Keep user address spaces separate.
+- Ensure kernel is not mapped into user page tables unless deliberately using a trampoline,
+  and if a trampoline exists, keep it minimal and non-writable.
+- Add `sfence.vma` paths behind `arch_tlb_flush_*`.
+- Add `page_table_try_new()` or equivalent so root page-table allocation can fail with a
+  typed error on hostile/low-memory paths.
+
+Acceptance:
+
+- Kernel runs with paging enabled.
+- U-mode app runs in its own page table.
+- Kernel-not-user-accessible confinement check passes (supervisor-only, no user PTE).
+
+### Phase R4: timer and interrupts
+
+Goal: add scheduler-ready timer and external interrupt handling.
+
+Tasks:
+
+- Use SBI timer for supervisor timer events.
+- Add supervisor external interrupt path.
+- Add PLIC driver for QEMU `virt`.
+- Route UART/virtio interrupts through PLIC.
+- Keep a polling fallback for early bring-up.
+
+Acceptance:
+
+- Periodic timer interrupt fires in S-mode.
+- External interrupt can be acknowledged/complete through PLIC.
+- A timer-driven yield demo works under S-mode.
+
+### Phase R5: FDT and platform discovery
+
+Goal: wire the existing FDT parser into the S-mode boot path and remove hardcoded QEMU
+memory/device addresses from that path.
+
+Tasks:
+
+- Extend/use `kernel/core/fdt.mc`.
+- Parse `/memory`.
+- Parse `/chosen`.
+- Discover UART.
+- Discover PLIC.
+- Discover virtio-mmio nodes.
+- Build a platform device list.
+
+Acceptance:
+
+- Kernel can boot with memory/device addresses taken from FDT.
+- Device list is printed at boot.
+
+### Phase R6: UART console
+
+Goal: replace SBI console dependency for normal operation.
+
+Tasks:
+
+- Add NS16550A UART driver for QEMU `virt`.
+- Support polling output first.
+- Add interrupt-driven input later if needed.
+- Keep SBI console as early fallback only.
+
+Acceptance:
+
+- Kernel console works through UART.
+- Panic path can print after normal console initialization.
+
+### Phase R7: virtio-mmio core
+
+Goal: port and revalidate the existing virtio transport/device code under the S-mode
+interrupt, FDT, and DMA path.
+
+Tasks:
+
+- Discover virtio-mmio devices from FDT.
+- Reuse the existing virtio initialization, feature negotiation, descriptor rings, and
+  used/available ring handling where possible.
+- Keep polling mode as the first S-mode validation path.
+- Add interrupt mode once the S-mode PLIC path is stable.
+- Keep the M-mode virtio gates green while adding S-mode equivalents.
+
+Acceptance:
+
+- Existing virtio smoke/self-tests pass under the S-mode target.
+- Existing M-mode virtio gates still pass.
+
+### Phase R8: virtio-blk
+
+Goal: revalidate the existing virtio-blk driver under S-mode and then use it for script
+ingress, logs, and future FS work.
+
+Tasks:
+
+- Reuse `kernel/drivers/virtio/virtio_blk.mc`.
+- Revalidate read/write sector requests under S-mode.
+- Keep the synchronous block API first.
+- Add async request completion later.
+- Add simple smoke test reading a known sector.
+
+Acceptance:
+
+- Kernel reads a block from QEMU virtio-blk under S-mode.
+- A staged agent script can come from a block-backed source instead of a compiled array.
+- Existing M-mode block gates still pass.
+
+### Phase R9: virtio-net
+
+Goal: revalidate existing virtio-net and `kernel/net/` under S-mode as the transport for
+future brokered `net_fetch`.
+
+Tasks:
+
+- Reuse `kernel/drivers/virtio/virtio_net.mc` for TX/RX.
+- Reuse `kernel/net/` for Ethernet, ARP, IPv4, UDP, TCP, DNS, and broker integration.
+- Swap only the bottom driver/interrupt/timer path where possible.
+- Start with polling under S-mode, then move to interrupt/completion driven operation.
+
+Acceptance:
+
+- Kernel sends and receives basic packets under QEMU.
+- Existing network-stack gates can run over the S-mode virtio-net path.
+- Brokered network tests can use virtio-net instead of a mock path.
+- Existing M-mode network gates still pass.
+
+### Phase R10: port QuickJS agent to S-mode substrate
+
+Goal: run the existing confined QuickJS agent unchanged at the JS/syscall level.
+
+Tasks:
+
+- Reuse ELF loader.
+- Reuse user address-space setup.
+- Reuse `SYS_READ`, `SYS_WRITE`, `SYS_SUBMIT`, `SYS_POLL`.
+- Move trap entry from M-mode user trap to S-mode user trap.
+- Keep the fixed C host and pure JS agent unchanged where possible.
+
+Acceptance:
+
+- `qjs-agent-test` equivalent passes on S-mode/OpenSBI.
+- `qjs-async-agent-test` equivalent passes on S-mode/OpenSBI.
+- Kernel remains not user-accessible from the agent (supervisor-only, no user PTE).
+
+## 5. Agent runtime evolution on the real platform
+
+The current async syscall path is a mechanism test. The production-shaped version should
+be request/event based.
+
+> **Status:** the broker/policy/audit/capability substrates referenced by phases A1/A2
+> already exist (`kernel/fs/agent_fs.mc`, `kernel/core/mcp.mc`, `kernel/core/policy.mc`,
+> `kernel/core/net_broker.mc`). The remaining A1/A2 work is adapting that existing code to
+> the structured async request/event ABI, not building it from scratch.
+
+### Phase A0: structured async ABI — **delivered (single-event)**
+
+Replaced toy `SYS_SUBMIT(op, arg)` with request structs (`ToolReq`/`ToolEvent`, copy-in/out
++ size validation):
+
+```
+SYS_SUBMIT(req_ptr) -> handle | -errno
+SYS_POLL(ev_ptr)    -> 1 (delivered) | 0 (none) | -E_FAULT   # one completion per call
+```
+
+### Phase A0b: vector poll + timeout — **not delivered (= M5b)**
+
+Add the draining/blocking form on top of the delivered single-event ABI:
+
+```
+SYS_POLL(events_ptr, max, timeout) -> n_ready | -errno
+```
+
+Request examples:
+
+```
+ToolReq {
+  op
+  input_ptr
+  input_len
+  output_cap
+  flags
+}
+
+ToolEvent {
+  handle
+  status
+  output_ptr_or_id
+  output_len
+}
+```
+
+Rules:
+
+- Submit copies all request data into kernel-owned bounded buffers.
+- Kernel retains no user pointer after submit returns.
+- Poll copies result metadata into fresh poll-time user buffers.
+- Bad user pointer returns `-E_FAULT`.
+- Full queue returns `-E_AGAIN`.
+- Policy denial returns `-E_DENIED`.
+
+### Phase A1: brokered tools
+
+Tasks (adapt existing substrate — `kernel/core/mcp.mc`, `policy.mc`, `agent_fs.mc` — to the
+structured async ABI; do not rebuild):
+
+- Wire the existing mock deterministic tool broker to the `SYS_SUBMIT`/`SYS_POLL` path.
+- Apply the existing allow/deny policy at submit time.
+- Emit an audit event per submitted request and completion.
+- Enforce per-agent quotas:
+  - max in-flight requests
+  - max request bytes
+  - max result bytes
+  - max CPU/event-loop ticks
+
+Acceptance:
+
+- JS can call `tool(name, input)` and receive a Promise.
+- Denied tools reject with a structured JS error.
+- Audit log records allow/deny/complete.
+
+### Phase A2: brokered network fetch
+
+Tasks (route through the existing `kernel/core/net_broker.mc` + `NetCap`, not a new stack):
+
+- Expose the existing `net_fetch` broker as a structured-ABI operation.
+- Do not expose raw sockets to JS by default.
+- Enforce destination policy through `NetCap`.
+- Attribute all network events to agent id.
+- Use virtio-net backend once available.
+
+Acceptance:
+
+- JS can perform an allowed fetch.
+- Disallowed destination rejects.
+- Audit log contains request metadata and result status.
+
+### Phase A3: script ingress
+
+Progression:
+
+1. Kernel-staged JS buffer through `SYS_READ`.
+2. Read-only capability FS path.
+3. Block-backed script store through virtio-blk.
+
+Acceptance:
+
+- Fixed C host remains unchanged.
+- Changing agent JS does not require changing host C.
+- Script source is covered by capabilities/audit in the long-term path.
+
+## 6. x86_64 support plan
+
+> **Status:** the user/VM/agent path is **implemented** via multiboot→long mode (4-level
+> paging, ring-3 hello + `-E_FAULT`, confined QuickJS agent). The boot protocol below
+> proposes Limine; the shipped path uses multiboot. Device-level X4/X5 (APIC, virtio-pci)
+> remain. Read the phases as design rationale.
+
+### Phase X0: choose boot protocol
+
+Recommended: Limine first, Multiboot2 as optional later.
+
+Tasks:
+
+- Add x86_64 cross build target.
+- Add Limine boot files and linker script.
+- Normalize Limine memory map/modules into `BootInfo`.
+
+Acceptance:
+
+- QEMU x86_64 boots kernel and prints through early console.
+
+### Phase X1: long mode platform
+
+Tasks:
+
+- Set up GDT/TSS if bootloader does not provide final layout.
+- Install IDT.
+- Add exception handlers.
+- Add basic serial console.
+- Add panic backtrace if practical.
+
+Acceptance:
+
+- Divide-by-zero/invalid-op/page-fault exceptions are handled and reported.
+
+### Phase X2: x86_64 VM
+
+Tasks:
+
+- Implement 4-level page table backend.
+- Map kernel high-half or chosen direct-map layout.
+- Implement `vm_map`, `vm_unmap`, `vm_translate`.
+- Implement TLB flush with `invlpg` / CR3 reload.
+
+Acceptance:
+
+- Kernel runs with its own x86_64 page tables.
+- A software page-table walk can support user-copy validation.
+
+### Phase X3: syscall/user mode
+
+Tasks:
+
+- Enter ring 3 with an initial user app.
+- Add syscall entry via `syscall/sysret` or `int 0x80` first for simplicity.
+- Normalize syscall args into the shared dispatcher.
+- Add user pointer validation.
+
+Acceptance:
+
+- Same user hello app syscall ABI works on x86_64.
+- Bad user pointer returns `-E_FAULT`.
+
+### Phase X4: interrupts and time
+
+Tasks:
+
+- Add local APIC or x2APIC.
+- Add timer source: APIC timer, HPET, or PIT initially.
+- Parse ACPI MADT.
+- Add interrupt routing.
+
+Acceptance:
+
+- Periodic timer interrupt works.
+- Scheduler tick works.
+
+### Phase X5: PCI and virtio-pci
+
+Tasks:
+
+- Parse PCI ECAM via ACPI MCFG or use legacy config IO for QEMU first.
+- Enumerate virtio-pci devices.
+- Implement virtio PCI transport.
+- Reuse generic virtqueue and blk/net drivers.
+
+Acceptance:
+
+- virtio-blk works on x86_64 through virtio-pci.
+- virtio-net works on x86_64 through virtio-pci.
+
+### Phase X6: QuickJS agent
+
+Tasks:
+
+- Build freestanding QuickJS for x86_64 user mode.
+- Reuse same host C and JS.
+- Reuse syscall ABI.
+
+Acceptance:
+
+- Pure JS agent test passes on x86_64 QEMU.
+
+## 7. AArch64 support plan
+
+> **Status:** the user/VM/agent path is **implemented** on QEMU virt — stage-1 4 KB paging
+> + MMU enable, EL0 hello + `-E_FAULT`, confined QuickJS agent. Read the phases as design
+> rationale for the shipped code.
+
+### Phase ARM0: QEMU virt boot
+
+Tasks:
+
+- Add AArch64 cross build target.
+- Boot at EL1 under QEMU `virt`, or transition to EL1 if entered higher.
+- Accept FDT pointer.
+- Add early console.
+
+Acceptance:
+
+- Kernel boots on `qemu-system-aarch64 -machine virt`.
+- Kernel prints FDT and memory summary.
+
+### Phase ARM1: EL1 traps
+
+Tasks:
+
+- Set `VBAR_EL1`.
+- Handle sync exceptions, IRQ, SVC.
+- Normalize trap frame into shared `Trap`.
+- Add PSCI calls for reset/shutdown and later SMP.
+
+Acceptance:
+
+- User SVC reaches shared syscall dispatcher.
+- Faulting user program does not kill kernel.
+
+### Phase ARM2: AArch64 VM
+
+Tasks:
+
+- Configure `TCR_EL1`, `MAIR_EL1`, `SCTLR_EL1`.
+- Implement TTBR0/TTBR1 split or a simpler first-stage layout.
+- Implement PTE backend for `VmFlags`.
+- Implement TLB invalidation.
+
+Acceptance:
+
+- Kernel runs with MMU enabled.
+- User app runs in separate address space.
+- User-copy validation works.
+
+### Phase ARM3: GICv3 and timer
+
+Tasks:
+
+- Add architectural timer.
+- Add GICv3 distributor/redistributor setup.
+- Route virtio interrupts.
+
+Acceptance:
+
+- Timer tick works.
+- External IRQ from virtio device is received.
+
+### Phase ARM4: virtio
+
+Tasks:
+
+- Reuse FDT discovery.
+- Reuse virtio-mmio transport from RISC-V where possible.
+- Reuse virtio-blk/net core.
+
+Acceptance:
+
+- virtio-blk and virtio-net pass the same smoke tests as RISC-V.
+
+### Phase ARM5: QuickJS agent
+
+Tasks:
+
+- Build freestanding QuickJS for AArch64 user mode.
+- Reuse host C, JS, syscall ABI, and broker model.
+
+Acceptance:
+
+- Pure JS agent test passes on AArch64 QEMU.
+
+## 8. Shared driver model
+
+### 8.1 Discovery
+
+Discovery is platform-specific:
+
+- RISC-V: FDT.
+- AArch64: FDT first, UEFI/ACPI later if needed.
+- x86_64: ACPI + PCI.
+
+Normalize discovered devices into:
+
+```
+Device {
+  kind
+  mmio_base
+  mmio_len
+  irq
+  pci_bdf
+  dma_constraints
+  compatible_string
+}
+```
+
+### 8.2 Board-profile strategy
+
+This kernel should not chase Linux-style hardware breadth. Edge products usually have a
+fixed board and fixed bill of materials, so the right model is:
+
+```
+small common driver framework
++ board profile / BSP
++ selected vendor backend
+```
+
+The kernel should provide common interfaces:
+
+- interrupt abstraction
+- timer abstraction
+- DMA buffer API
+- MMIO helpers
+- `NetIf`
+- `BlockDevice`
+- `WifiOps`
+- `BtOps`
+- firmware object loader
+- driver lifecycle (`init`, `start`, `stop`, `suspend`, `resume`)
+
+The board profile selects the tiny hardware set:
+
+```
+board/qemu-riscv64-virt
+  uart0 = ns16550a
+  irq0 = plic
+  timer0 = sbi-timer
+  blk0 = virtio-blk-mmio
+  net0 = virtio-net-mmio
+
+board/router-x
+  uart0 = ...
+  eth0 = ...
+  wifi0 = vendor-backend
+```
+
+Rules:
+
+- Only drivers selected by the board profile are included for a product image.
+- Unsupported hardware is invisible.
+- Agents cannot enumerate or open arbitrary hardware.
+- Wi-Fi/BT are board backends behind `NetCap`/`DeviceCap`, not agent-visible raw drivers.
+- Prefer Ethernet or virtio-net for first real hardware.
+- Prefer Wi-Fi/BT vendors with RTOS/bare-metal SDKs, documented host protocols, or clean
+  OS abstraction layers.
+- Avoid Linux-only `.ko` drivers as a board-selection failure, not a kernel feature request.
+- If a vendor SDK must be ported, wrap it behind `WifiOps`/`BtOps`; do not build a general
+  Linux driver compatibility promise.
+
+### 8.3 virtio layering
+
+Use three layers:
+
+```
+virtio core
+  feature negotiation helpers
+  virtqueue
+  descriptor allocation
+  available/used ring handling
+
+virtio transport
+  mmio transport
+  pci transport
+
+virtio device drivers
+  blk
+  net
+  rng later
+```
+
+Only the transport should know whether the device came from MMIO or PCI.
+
+### 8.4 DMA safety
+
+Initial QEMU path can use identity/direct DMA mappings. Long-term:
+
+- Add DMA allocation API.
+- Track physical ranges safe for devices.
+- Add bounce buffers if needed.
+- Prepare for IOMMU later, but do not require it for QEMU bring-up.
+
+## 9. Testing strategy
+
+### 9.1 Per-architecture smoke tests
+
+Every architecture target should have:
+
+- boot prints banner
+- trap smoke test
+- timer smoke test
+- VM map/translate test
+- user hello syscall test
+- bad user pointer test
+- ELF loader test
+- QuickJS smoke test
+- async agent test
+
+### 9.2 Cross-architecture conformance tests
+
+These should run the same logical test on all supported architectures:
+
+- syscall ABI numbers and return convention
+- `SYS_WRITE` / `SYS_READ` / `SYS_SUBMIT` / `SYS_POLL`
+- `-E_FAULT` on bad user buffers
+- ELF loader hostile inputs
+- user/kernel isolation
+- JS `Promise.all` overlap
+- async backpressure rejection
+
+### 9.3 CI requirements
+
+Required local/CI tools:
+
+- `qemu-system-riscv64`
+- `qemu-system-x86_64`
+- `qemu-system-aarch64`
+- `clang`
+- `ld.lld`
+- `lld`
+- `zig`
+
+Milestone gates should not silently pass when toolchain pieces are missing. Local developer
+targets may skip, but CI milestone targets should fail with a clear missing-tool message.
+
+## 10. Milestones
+
+### M1: RISC-V S-mode hello
+
+Done when:
+
+- OpenSBI boots the real kernel entry in S-mode, not only the SBI smoke runtime.
+- Kernel prints through early console.
+- FDT memory is parsed.
+- Existing M-mode boot gates remain green.
+
+### M2: RISC-V S-mode user hello
+
+Done when:
+
+- S-mode traps work.
+- U-mode app calls `SYS_WRITE`.
+- Bad user pointer returns `-E_FAULT`.
+
+### M3: RISC-V S-mode QuickJS
+
+Done when:
+
+- Existing QuickJS confined agent runs under S-mode.
+- Kernel remains not user-accessible from agent (supervisor-only, no user PTE).
+- Existing M-mode QuickJS confined-agent gates remain green.
+- Async-agent backpressure test passes.
+
+### M4: RISC-V virtio storage/network
+
+Done when:
+
+- Existing virtio-blk driver passes under S-mode.
+- Existing virtio-net driver passes under S-mode.
+- Existing `kernel/net/` stack gates pass over the S-mode net path.
+- Agent script ingress can come from a block-backed path.
+- Existing M-mode driver/network gates remain green.
+
+### M5: structured broker ABI — **partially delivered**
+
+**Delivered (single-event ABI):**
+
+- `SYS_SUBMIT(req_ptr)` / `SYS_POLL(ev_ptr)` replace the toy op — both carry real
+  `ToolReq`/`ToolEvent` structs copied in/out and size-validated (`user/abi.mc`,
+  `user/sys.mc`). One ready completion per `poll`, returning 1 / 0 / -E_FAULT.
+- JS tool calls are Promise based.
+
+### M5b: vector poll + real broker — **not delivered**
+
+Done when:
+
+- `SYS_POLL` gains a vector/timeout form (`events_ptr, max, timeout`) draining multiple
+  completions per call.
+- The mock broker is replaced by real tool/net integration (today only mock ops exist).
+- Deny/allow/completion are audited end-to-end through the structured path.
+
+### M6: x86_64 user hello
+
+Done when:
+
+- x86_64 QEMU boots.
+- VM/traps/syscalls work.
+- Same user hello ABI passes.
+
+### M7: x86_64 QuickJS
+
+Done when:
+
+- Same pure JS agent runs under x86_64 QEMU.
+
+### M8: AArch64 user hello
+
+Done when:
+
+- AArch64 QEMU boots.
+- VM/traps/SVC/syscalls work.
+- Same user hello ABI passes.
+
+### M9: AArch64 QuickJS
+
+Done when:
+
+- Same pure JS agent runs under AArch64 QEMU.
+
+## 11. Main risks
+
+### Risk: M-mode assumptions leak into S-mode
+
+Mitigation:
+
+- Audit all CSR access.
+- Keep machine-mode code out of core.
+- Add build-time arch separation.
+
+### Risk: page-table abstractions become too generic
+
+Mitigation:
+
+- Keep generic VM flags small.
+- Let each architecture own its real PTE format.
+- Avoid designing for every page-size feature at first.
+
+### Risk: virtio transport and driver logic get tangled
+
+Mitigation:
+
+- Separate virtqueue core, transport, and device driver.
+- Test virtio-mmio and virtio-pci against the same block/net driver code.
+- Treat the S-mode work as revalidation of existing virtio drivers, not a rewrite.
+
+### Risk: driver breadth turns the project into a Linux clone
+
+Mitigation:
+
+- Use board profiles and fixed BSPs.
+- Include only selected drivers per product image.
+- Keep Wi-Fi/BT behind broker/backend interfaces.
+- Prefer open or RTOS-friendly wireless modules.
+- Use a small vendor shim or sidecar before considering broad Linux compatibility.
+
+### Risk: QuickJS port hides kernel bugs
+
+Mitigation:
+
+- Keep small user hello and syscall-fault tests.
+- Do not rely on QuickJS as the first test for a new architecture.
+
+### Risk: CI skips look like success
+
+Mitigation:
+
+- Add explicit toolchain preflight.
+- Make milestone gates fail on missing required tools in CI.
+
+## 12. Remaining next actions
+
+The §10 milestone chain is delivered and gated, **except M5 is partial** (single-event
+broker ABI ships; vector poll/timeout/real broker is M5b). What remains, in recommended
+order:
+
+1. **R0b — arch-selection seam.** Collapse the three near-identical `elf_loader`/`uaccess`
+   per-arch copies behind one arch-dispatch boundary and remove core's hard imports of
+   `kernel/arch/riscv64/context.mc`. Highest-leverage cleanup; the duplication created by
+   M6/M8 is exactly what this resolves.
+2. **M5b — vector poll + real broker.** Add the `SYS_POLL(events_ptr, max, timeout)` form
+   and replace the mock ops with real tool/net integration through the structured ABI.
+3. **Root-cause the three ungated LLVM-backend QuickJS gates** (`llvm-x86-qjs-async-test`,
+   `llvm-arm-qjs-test`, `llvm-arm-qjs-async-test`). Codegen divergence in the heavy
+   QuickJS+libc workload; C backend and LLVM-on-RISC-V pass, so this is backend-specific.
+4. **x86 device-level (X4/X5).** APIC/timer interrupts and virtio-pci so x86 uses real
+   device paths rather than software-only paths.
+5. **Finish the SBI service layer** (HSM/IPI) and **S-mode PLIC interrupt integration**.
+6. **Re-run the `kernel/net/` TLS gates under S-mode** (virtio-blk/net already revalidated).
+7. **UART console driver (R6)** as a first-class device rather than per-runtime SBI console.
+
+The sequencing principle still holds: the agent ABI stays stable while each architecture
+learns how to boot, trap, map memory, copy user buffers, and drive devices.

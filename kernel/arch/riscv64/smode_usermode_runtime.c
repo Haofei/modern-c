@@ -80,6 +80,14 @@ __attribute__((used)) void s_trap_entry(Frame *f) {
 // S-mode trap vector: swap to the kernel stack via sscratch, save a full integer frame,
 // dispatch, restore, sret. (Port of usermode_runtime.c's trap_vector — mscratch->sscratch,
 // mret->sret.)
+//
+// LIMITATION (U-mode-trap only): the `csrrw sp, sscratch, sp` below UNCONDITIONALLY swaps to
+// the kernel stack, which is correct ONLY for traps taken from U-mode (sstatus.SPP=0) — the
+// current polled syscall/fault path. It does NOT handle a trap taken while already in S-mode
+// (SPP=1): a nested kernel fault or an asynchronous interrupt arriving in kernel context would
+// swap sp the wrong way and corrupt the kernel stack. Before enabling real timer/PLIC
+// interrupts this must branch on SPP (swap only when SPP==0) and keep a separate nested-trap
+// stack — tracked in docs/platform-portability-plan.md §12 (S-mode PLIC interrupt integration).
 __attribute__((naked, aligned(4))) void s_trap_vector(void) {
     __asm__ volatile(
         "csrrw sp, sscratch, sp\n"

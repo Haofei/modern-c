@@ -115,7 +115,7 @@ echo "------------------------------------"
 # pure-JS agent ran in U-mode and printed its EXPECT line (host I/O over SYS_SUBMIT/SYS_POLL);
 # and the agent left U-mode via SYS_EXIT.
 if printf '%s' "$OUT" | grep -qi "OpenSBI" \
-   && printf '%s' "$OUT" | grep -q "CONFINED: kernel unmapped in agent space" \
+   && printf '%s' "$OUT" | grep -q "CONFINED: kernel not user-accessible in agent space" \
    && printf '%s' "$OUT" | grep -q "$EXPECT" \
    && printf '%s' "$OUT" | grep -q "USER-EXIT from U"; then
     echo "PASS: $TEST_NAME — $BACKEND backend ran a PURE-JS agent (the C host is fixed/generic) confined in an isolated U-mode Sv39 space under REAL OpenSBI in S-mode, with async host I/O over SYS_SUBMIT/SYS_POLL; the kernel is mapped supervisor-only (unreachable from U) and the agent reached it only via ecall"
