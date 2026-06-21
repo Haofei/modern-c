@@ -20,14 +20,20 @@ command -v "$QEMU" >/dev/null 2>&1 || skip "no qemu-system-aarch64"
 if [ "$BACKEND" = llvm ]; then command -v "$LLC" >/dev/null 2>&1 || skip "no llc"; fi
 "$CLANG" --print-targets 2>/dev/null | grep -q aarch64 || skip "clang has no aarch64 target"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-CFLAGS=(--target=aarch64-unknown-elf -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
+# NOTE: NO -mgeneral-regs-only. The kmain is now PURE MC (tests/arm/vm_arm_runtime.mc), which
+# imports the MC paging demo (vm_arm_build): ONE MC compilation unit yields both `kmain` and
+# `vm_arm_build`, plus the naked `_start` (EL2->EL1 drop) and the EL1 vector table. There is no
+# boot.S — the whole boot seam is MC. The LLVM backend may emit SIMD/FP for struct init/copy, so
+# kmain enables CPACR_EL1.FPEN and we let the assembler use SIMD registers. The old vm_runtime.c
+# is deleted.
+CFLAGS=(--target=aarch64-unknown-elf -ffreestanding -nostdlib -fno-pic -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
 case "$BACKEND" in
     c)
-        "$MCC" emit-c "$HERE/tests/arm/vm_arm_demo.mc" >"$WORK/vm.c"
+        "$MCC" emit-c "$HERE/tests/arm/vm_arm_runtime.mc" >"$WORK/vm.c"
         "$CLANG" "${CFLAGS[@]}" -Wno-switch-bool -c "$WORK/vm.c" -o "$WORK/vm.o"
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/vm_arm_demo.mc" -o "$WORK/vm.o" \
+        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/vm_arm_runtime.mc" -o "$WORK/vm.o" \
             -mtriple=aarch64-unknown-elf \
             -relocation-model=static \
             -code-model=small
@@ -38,9 +44,12 @@ case "$BACKEND" in
         exit 2
         ;;
 esac
-"$CLANG" "${CFLAGS[@]}" -c "$ARCH/vm_runtime.c" -o "$WORK/vm_runtime.o"
+# Freestanding mem*: both backends emit memset/memcpy for aggregate init/copy. The old
+# vm_runtime.c carried local copies; the pure-MC kmain links the shared arch-neutral
+# freestanding object instead (-fno-builtin so the loops are not rewritten into self-calls).
+"$CLANG" "${CFLAGS[@]}" -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
 SUPPORT_OBJ=$([ "$BACKEND" = llvm ] && printf '%s' "$WORK/llvm-support.o" || true)
-"$LLD" -T "$HERE/tests/arm/aarch64-vm.ld" "$WORK/vm_runtime.o" "$WORK/vm.o" $SUPPORT_OBJ -o "$WORK/k.elf"
+"$LLD" -T "$HERE/tests/arm/aarch64-vm.ld" "$WORK/vm.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/k.elf"
 OUT="$(timeout 30 "$QEMU" -machine virt -cpu cortex-a72 -nographic -kernel "$WORK/k.elf" 2>/dev/null || true)"
 echo "--- aarch64 VM kernel UART ---"; printf '%s\n' "$OUT" | grep -aE "boot|CurrentEL|VBAR|MAIR|table built|ttbr0|MMU|readback|ARM64-VM"
 echo "------------------------------"
