@@ -1769,6 +1769,17 @@ pub fn build(b: *std.Build) void {
     const llvm_x86_vm_test_step = b.step("llvm-x86-vm-test", "LLVM-lowered x86-64 4-level page-table VM: build, CR3 reload, translation-only readback under QEMU");
     llvm_x86_vm_test_step.dependOn(&llvm_x86_vm_test_cmd.step);
 
+    // X4: x86-64 Local-APIC timer — REAL, non-polled interrupt delivery. PICs masked, LAPIC timer
+    // periodic at IDT vec 0x20, sti + hlt-spin until ticks fire.
+    const x86_timer_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-timer-test.sh", "zig-out/bin/mcc", "c" });
+    const llvm_x86_timer_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-timer-test.sh", "zig-out/bin/mcc", "llvm" });
+    x86_timer_test_cmd.step.dependOn(b.getInstallStep());
+    const x86_timer_test_step = b.step("x86-timer-test", "x86-64 Local-APIC timer fires real interrupts (PICs masked) at IDT vec 0x20; sti + hlt-spin until ticks>=3 under QEMU");
+    x86_timer_test_step.dependOn(&x86_timer_test_cmd.step);
+    llvm_x86_timer_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_x86_timer_test_step = b.step("llvm-x86-timer-test", "LLVM-lowered x86-64 Local-APIC timer: real periodic interrupts at vec 0x20, hlt-spin until ticks>=3 under QEMU");
+    llvm_x86_timer_test_step.dependOn(&llvm_x86_timer_test_cmd.step);
+
     const x86_user_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-user-test.sh", "zig-out/bin/mcc", "c" });
     const llvm_x86_user_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-user-test.sh", "zig-out/bin/mcc", "llvm" });
     x86_user_test_cmd.step.dependOn(b.getInstallStep());
@@ -3769,6 +3780,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_x86_qemu_test_cmd.step);
     m0_step.dependOn(&x86_vm_test_cmd.step);
     m0_step.dependOn(&llvm_x86_vm_test_cmd.step);
+    m0_step.dependOn(&x86_timer_test_cmd.step);
+    m0_step.dependOn(&llvm_x86_timer_test_cmd.step);
     m0_step.dependOn(&x86_user_test_cmd.step);
     m0_step.dependOn(&llvm_x86_user_test_cmd.step);
     m0_step.dependOn(&x86_qjs_test_cmd.step);
