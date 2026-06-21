@@ -2366,6 +2366,33 @@ pub fn build(b: *std.Build) void {
     const bearssl_smoke_test_step = b.step("bearssl-smoke-test", "Compute a SHA-256 vector via freestanding BearSSL and pull live virtio-rng entropy in a bare-metal riscv64 kernel under QEMU (Phase 1 TLS de-risking)");
     bearssl_smoke_test_step.dependOn(&bearssl_smoke_test_cmd.step);
 
+    // bearssl-smode-test revalidates the SAME freestanding BearSSL SHA-256 vector +
+    // live virtio-rng entropy under REAL OpenSBI in S-mode (boot seam only: SBI
+    // console/shutdown, sbi.ld, rdtime CSR; no `-bios none`). Deterministic — no
+    // network egress — so it is gated in m0.
+    const bearssl_smode_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/bearssl-smode-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    bearssl_smode_test_cmd.step.dependOn(b.getInstallStep());
+    const bearssl_smode_test_step = b.step("bearssl-smode-test", "Revalidate the freestanding BearSSL SHA-256 vector + live virtio-rng entropy under REAL OpenSBI in S-mode (TLS crypto stack on the OpenSBI boot seam)");
+    bearssl_smode_test_step.dependOn(&bearssl_smode_test_cmd.step);
+
+    // https-smode-test revalidates the SAME deterministic in-kernel REAL BearSSL
+    // TLS 1.2 handshake + HTTPS GET (against the LOCAL self-signed python server
+    // over slirp loopback — no internet egress) under REAL OpenSBI in S-mode.
+    const https_smode_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/https-smode-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    https_smode_test_cmd.step.dependOn(b.getInstallStep());
+    const https_smode_test_step = b.step("https-smode-test", "Revalidate the in-kernel REAL BearSSL TLS 1.2 handshake + HTTPS GET (local server over slirp) under REAL OpenSBI in S-mode");
+    https_smode_test_step.dependOn(&https_smode_test_cmd.step);
+
     // https-get-test: a REAL BearSSL TLS 1.2 handshake over the kernel's TCP, validating
     // a self-signed trust anchor and decrypting an HTTPS GET from a local python HTTPS
     // server under QEMU (Phase 2 of in-kernel TLS; deterministic CI gate).
@@ -3701,6 +3728,15 @@ pub fn build(b: *std.Build) void {
     // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
     m0_step.dependOn(&smode_timer_test_cmd.step);
     m0_step.dependOn(&net_smode_test_cmd.step);
+    // bearssl-smode-test revalidates the freestanding BearSSL SHA-256 + virtio-rng
+    // entropy (the TLS crypto stack) under REAL OpenSBI in S-mode. Deterministic (no
+    // network egress), so gated in m0.
+    m0_step.dependOn(&bearssl_smode_test_cmd.step);
+    // https-smode-test revalidates the in-kernel REAL BearSSL TLS 1.2 handshake +
+    // HTTPS GET under REAL OpenSBI in S-mode. Deterministic — the TLS peer is a
+    // LOCAL python server over slirp loopback (no internet egress) — so gated in m0
+    // (mirrors the M-mode https-get-test, which is also in m0).
+    m0_step.dependOn(&https_smode_test_cmd.step);
     // udp-net-test transmits a real UDP datagram over virtio-net (pcap-verified).
     m0_step.dependOn(&udp_net_test_cmd.step);
     // smp-test boots multiple harts synchronizing on a shared atomic under QEMU.
