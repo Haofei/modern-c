@@ -142,14 +142,26 @@ case "$BACKEND" in
     ;;
   *) echo "unknown kernel backend: $BACKEND" >&2; exit 2 ;;
 esac
-# The kernel C bring-up uses general regs only (no FP at EL1) but DOES emit the EL0 vector save
-# asm; build it with the same KCF as M8's user_runtime.c.
-$CLANG "${KCF[@]}" -c "$ARCH/qjs_user_runtime.c" -o "$WORK/qjs_runtime.o"
+# The kernel-side runtime is now PURE MC (tests/arm/qjs_user_arm_runtime.mc); lower it through
+# the selected backend with the aarch64 triple, exactly like the fixture above.
+case "$BACKEND" in
+  c)
+    "$MCC" emit-c "$HERE/tests/arm/qjs_user_arm_runtime.mc" > "$WORK/qjs_runtime.c"
+    $CLANG "${KCF[@]}" -Wno-switch-bool -c "$WORK/qjs_runtime.c" -o "$WORK/qjs_runtime.o"
+    ;;
+  llvm)
+    MC_ARCH=aarch64 MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/qjs_user_arm_runtime.mc" -o "$WORK/qjs_runtime.o" \
+      -mtriple=aarch64-unknown-elf -relocation-model=static -code-model=small
+    ;;
+esac
 $CLANG "${KCF[@]}" -c "$WORK/app_image.c" -o "$WORK/app_image.o"
 $CLANG "${KCF[@]}" -c "$WORK/agent_src.c" -o "$WORK/agent_src.o"
+# Freestanding mem*: the pure-MC runtime's emit-c lowering calls memset/memcpy for aggregate
+# init/copy (the old C runtime had clang inline them); link the shared arch-neutral object.
+$CLANG "${KCF[@]}" -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
 $LLD -T "$HERE/tests/arm/aarch64-user.ld" \
     "$WORK/qjs_runtime.o" "$WORK/fixture.o" \
-    "$WORK/app_image.o" "$WORK/agent_src.o" $SUPPORT_OBJ -o "$WORK/k.elf"
+    "$WORK/app_image.o" "$WORK/agent_src.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/k.elf"
 
 OUT="$(timeout 120 "$QEMU" -machine virt -cpu cortex-a72 -nographic -kernel "$WORK/k.elf" 2>/dev/null || true)"
 
