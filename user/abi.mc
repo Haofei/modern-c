@@ -21,8 +21,8 @@ export const SYS_EXIT: u64 = 3; // (code) -> noreturn
 // the broker may advance while seeking ready completions (timeout==0 advances the clock once).
 // The single-event caller passes (event_ptr, 1, 0) and observes the original 1/0/-E_FAULT result.
 // The request struct carries variable-length in/out payload buffers, so the real copy-in/copy-out
-// + size-validation path is exercised even though only mock ops exist today (the plan's compound
-// Tool/Net calls slot straight in).
+// + size-validation path is exercised by BOTH the mock smoke ops AND the real capability-checked
+// FS ops (below); future compound Tool/Net calls slot straight in.
 export const SYS_SUBMIT: u64 = 4; // (req_ptr) -> request id (>=0) | -errno
 export const SYS_POLL: u64 = 5; // (events_ptr, max, timeout) -> count delivered (0..max) | -E_FAULT
 
@@ -41,8 +41,9 @@ export const MAX_INFLIGHT: u32 = 8;    // max concurrent pending requests (== co
 export const MAX_REQ_BYTES: u32 = 256; // max request-payload bytes copied IN per request
 export const MAX_RES_BYTES: u32 = 256; // max result-payload bytes copied OUT per request
 
-// Tool op selectors. Only mock ops exist today; compound Tool/Net ops will append here. The mock
-// broker reads req.flags as a DELAY in virtual ticks, so completions can become ready out of
+// Tool op selectors. Two families exist today: the MOCK smoke ops (1..5, below) and the REAL
+// capability-checked FS ops (6..8, further below); net/other compound ops will append here. The
+// mock broker reads req.flags as a DELAY in virtual ticks, so completions can become ready out of
 // submit order (a small delay finishes before a large one submitted earlier) — exercising the
 // event loop's real out-of-order/overlap behavior, not just immediately-queued completions.
 export const TOOL_OP_SUM: u32 = 1;     // result scalar = arg + 2 (deterministic smoke op)

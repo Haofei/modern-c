@@ -11,25 +11,39 @@
 // an `await`-bearing script (see agent_quota.js), so the callback style keeps every structured
 // read in a plain function the compiler handles correctly.
 
+// The gate's success sentinel is `fs: ok`. It is printed ONLY on the fully-correct path:
+// the write/read round-trip returns "hi" AND the un-allowlisted mkdir is denied with the
+// expected structured error name "EDENIED". Any deviation (wrong read-back, mkdir wrongly
+// ALLOWED, or a denial with the wrong errno) prints a loud `fs: FAIL ...` and never `fs: ok`,
+// so the gate fails — a broken capability path can no longer slip through.
+
 print("fs: start");
 
 function onMkdirReject(e) {
   // EXPECTED: mkdir is not in the allowlist, so the front door denies it. Read the structured
   // error fields in this plain callback (safe; no `await` in scope).
-  print("fs: mkdir denied " + e.name);
-  print("fs: ok");
+  if (e.name === "EDENIED") {
+    print("fs: mkdir denied " + e.name);
+    print("fs: ok"); // only reached when read-back AND denial are both correct
+  } else {
+    // Denied, but with the WRONG errno — the path cap / mapping is broken.
+    print("fs: FAIL mkdir denied wrong errno " + e.name);
+  }
 }
 
 function onMkdirResolve(v) {
-  // UNEXPECTED: the deny gate failed.
-  print("fs: mkdir UNEXPECTED ok");
-  print("fs: ok");
+  // UNEXPECTED: mkdir was ALLOWED — the deny gate (allowlist) is broken. Do NOT print `fs: ok`.
+  print("fs: FAIL mkdir UNEXPECTED ok");
 }
 
 function afterRead(value) {
-  // The real FS tool returned the bytes we wrote.
+  // The real FS tool must return exactly the bytes we wrote.
   print("fs: read=" + value);
-  // Now probe the denied op: mkdir is not allowlisted.
+  if (value !== "hi") {
+    print("fs: FAIL read mismatch"); // do NOT proceed to `fs: ok`
+    return;
+  }
+  // Now probe the denied op: mkdir is not allowlisted -> must reject with EDENIED.
   host_fs_mkdir("/ws/sub").then(onMkdirResolve, onMkdirReject);
 }
 

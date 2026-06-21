@@ -1,11 +1,11 @@
 # Plan: S-mode RISC-V platform and multi-architecture kernel support
 
-Status: **milestone chain M1–M9 delivered, except M5 is partial** (see *Implementation
-status* below). This was the concrete path from the original RISC-V M-mode/QEMU kernel and
-agent prototype to a portable OS substrate; the prototype path is now implemented and
-Docker-gated across three architectures. M5 ships a single-event structured broker ABI;
-its vector-poll/timeout/real-broker form is split out as M5b. Remaining work is
-parity/cleanup, tracked in §12.
+Status: **milestone chain M1–M9 delivered** (see *Implementation status* below), plus
+several §12 follow-ups since landed (R0b arch seam, M5b vector-poll + real broker, x86
+X4/X5 devices, S-mode timer interrupts, TLS-under-S-mode, the UART driver). This was the
+concrete path from the original RISC-V M-mode/QEMU kernel and agent prototype to a portable
+OS substrate; it is implemented and Docker-gated across three architectures. **§12 is the
+authoritative list of what is done vs. still open.**
 
 ```
 RV64GC + S-mode + OpenSBI + QEMU virt + Sv39 + virtio
@@ -16,11 +16,14 @@ then real board ports
 The QuickJS agent work remains valid. The platform work below changes the layer below it:
 boot, privilege mode, traps, timers, interrupts, device discovery, and device drivers.
 
-## Implementation status (milestone chain M1–M9, M5 partial)
+## Implementation status (milestone chain M1–M9 + R0b + M5b + x86/S-mode device layer)
 
-The §10 milestone chain is delivered and Docker-gated. Each item below corresponds to a
-gate in `build.zig`. The phase sections further down (§3–§7) describe the original design;
-read them as the rationale for code that now exists, not as outstanding work.
+The §10 milestone chain is delivered and Docker-gated, and several §12 follow-ups have since
+landed (R0b arch seam, M5b vector-poll + real broker, x86 X4/X5 devices, S-mode timer
+interrupts, TLS-under-S-mode, the UART driver). **§12 is the authoritative remaining-work
+list** — consult it for what is done vs. open. Each item below corresponds to a gate in
+`build.zig`. The phase sections further down (§3–§7) describe the original design; read them
+as the rationale for code that now exists, not as outstanding work.
 
 **Implemented and gated:**
 
@@ -36,24 +39,41 @@ read them as the rationale for code that now exists, not as outstanding work.
 - The confined QuickJS agent runs on all three architectures with one identical syscall ABI
   and the same confinement model (kernel is mapped but supervisor/privileged-only — no user
   PTE permission — so it is not user-accessible).
-- Structured single-event broker ABI (M5): `SYS_SUBMIT(req_ptr)`/`SYS_POLL(ev_ptr)` carry
-  real `ToolReq`/`ToolEvent` structs (copy-in/out + size validation), Promise-based in JS.
-  Mock ops only; vector poll/timeout/real-broker integration is M5b (not delivered).
-- Arch-neutralization started: opaque `AddressSpace` (`kernel/core/aspace.mc`),
-  arch-neutral `panic_trap` (`kernel/core/panic.mc`), `BootInfo` contract.
+- Structured broker ABI **(M5 + M5b, delivered):** `SYS_SUBMIT(req_ptr)` +
+  `SYS_POLL(events_ptr, max, timeout)` (vector drain) carry real `ToolReq`/`ToolEvent`
+  structs (copy-in/out + size validation), Promise-based in JS. Both the mock smoke ops AND a
+  REAL capability-checked FS op family (`agent_fs_call`: allowlist→budget→path-cap, audited)
+  run end-to-end from pure JS — `qjs-realtool-test` (`fs: read=hi`, `fs: mkdir denied
+  EDENIED`).
+- **Arch-selection seam (R0b, delivered):** a compiler `--arch` flag resolves
+  `kernel/arch/active/...` imports; one generic `elf_loader.mc`/`uaccess_pt.mc` serve all
+  three arches (per-arch PTE bits via each paging module's `pte_flags_for_user` hook); core
+  no longer hard-imports `kernel/arch/riscv64`. `arch-emit-test` machine-checks portability.
+  Plus opaque `AddressSpace`, arch-neutral `panic_trap`, `BootInfo`.
+- **x86 device layer (X4/X5):** real LAPIC timer interrupts (`x86-timer-test`, PIC-masked)
+  and PCI-CAM enumeration → virtio-blk-pci discovery + legacy handshake (`x86-pci-test`).
+- **S-mode interrupts:** real S-mode timer-interrupt delivery under OpenSBI via the SBI TIME
+  extension (`smode-timer-test`).
+- **TLS under S-mode:** BearSSL SHA-256 + a full TLS 1.2 handshake with cert-chain validation
+  under real OpenSBI (`bearssl-smode-test`, `https-smode-test`).
+- **First-class UART driver:** FDT-discovered, LSR-polled NS16550 (`uart-driver-test`).
 - A genuine compiler fix landed: `va_list` argument copy emits `__builtin_va_copy`
-  (`src/lower_c.zig`), required by the x86-64 SysV array-typed `va_list`.
+  (`src/lower_c.zig`), required by the x86-64 SysV array-typed `va_list` (the C backend; the
+  analogous LLVM-backend fix is open — §12 item 3).
 
-**Known-incomplete / not yet gated:**
+**Known-incomplete / open (see §12 for the authoritative list):**
 
 - Three LLVM-backend tracking gates (`llvm-x86-qjs-async-test`, `llvm-arm-qjs-test`,
-  `llvm-arm-qjs-async-test`) hit a codegen divergence in the heavy QuickJS+libc workload;
-  left ungated with inline notes (C backend passes on all three arches; LLVM passes fully
-  on RISC-V).
-- The arch-selection seam (R0b) is not finished: `elf_loader`/`uaccess` exist as three
-  near-identical per-arch copies. Core still hard-imports some `kernel/arch/riscv64` paths.
-- x86 device-level interrupts (APIC/timer) and virtio-pci are not done; x86 user/VM/QuickJS
-  use software paths, RISC-V/ARM use virtio-mmio.
+  `llvm-arm-qjs-async-test`) — **root-caused** (RISC-V-only `va_list`/`va_arg` model in
+  `emit-llvm`; garbage across the QuickJS FFI on x86/arm) but the target-aware varargs fix is
+  not yet landed (§12 item 3). C backend passes on all three arches; LLVM passes fully on
+  RISC-V.
+- The agent async broker is still duplicated 3× across the arch fixtures; the real FS op
+  family + `net_fetch` are wired on the RISC-V reference path only.
+- Device depth: the full virtio-pci data path (virtqueue sector read over PCI) on x86; and on
+  RISC-V S-mode the PLIC external-interrupt path, SBI HSM/IPI, and the shared `s_trap_vector`
+  SPP/nested-trap rework (the timer-interrupt core is done).
+- `cow.mc`/`demand.mc` remain RISC-V-only (deferred until an x86/ARM kernel needs them).
 
 ## 0. Current implementation snapshot
 
@@ -106,8 +126,9 @@ What was **not** present at the start, and where it stands now:
   gates not yet re-run under S-mode).
 - x86_64 and AArch64 user-mode/VM/QuickJS parity — **done at the user/VM/agent level**;
   device-level interrupts (APIC) and virtio-pci still pending on x86.
-- A finished architecture-neutral boundary — **started** (opaque `AddressSpace`, neutral
-  `panic_trap`, `BootInfo`); the R0b arch-selection seam is not finished.
+- A finished architecture-neutral boundary — **done** (opaque `AddressSpace`, neutral
+  `panic_trap`, `BootInfo`, and the R0b `--arch` seam: generic `elf_loader`/`uaccess_pt`,
+  core no longer hard-imports `kernel/arch/riscv64`).
 
 ## 1. Target architecture
 
@@ -567,12 +588,12 @@ SYS_SUBMIT(req_ptr) -> handle | -errno
 SYS_POLL(ev_ptr)    -> 1 (delivered) | 0 (none) | -E_FAULT   # one completion per call
 ```
 
-### Phase A0b: vector poll + timeout — **not delivered (= M5b)**
+### Phase A0b: vector poll + timeout — **delivered (= M5b)**
 
-Add the draining/blocking form on top of the delivered single-event ABI:
+The draining form is implemented on top of the single-event ABI:
 
 ```
-SYS_POLL(events_ptr, max, timeout) -> n_ready | -errno
+SYS_POLL(events_ptr, max, timeout) -> count delivered (0..max) | -E_FAULT
 ```
 
 Request examples:
@@ -1031,23 +1052,22 @@ Done when:
 - Agent script ingress can come from a block-backed path.
 - Existing M-mode driver/network gates remain green.
 
-### M5: structured broker ABI — **partially delivered**
+### M5: structured broker ABI — **delivered** (with M5b below)
 
-**Delivered (single-event ABI):**
-
-- `SYS_SUBMIT(req_ptr)` / `SYS_POLL(ev_ptr)` replace the toy op — both carry real
+- `SYS_SUBMIT(req_ptr)` / `SYS_POLL(...)` replace the toy op — both carry real
   `ToolReq`/`ToolEvent` structs copied in/out and size-validated (`user/abi.mc`,
-  `user/sys.mc`). One ready completion per `poll`, returning 1 / 0 / -E_FAULT.
+  `user/sys.mc`).
 - JS tool calls are Promise based.
 
-### M5b: vector poll + real broker — **not delivered**
+### M5b: vector poll + real broker — **delivered**
 
-Done when:
+Done:
 
-- `SYS_POLL` gains a vector/timeout form (`events_ptr, max, timeout`) draining multiple
+- `SYS_POLL` gained the vector/timeout form (`events_ptr, max, timeout`) draining multiple
   completions per call.
-- The mock broker is replaced by real tool/net integration (today only mock ops exist).
-- Deny/allow/completion are audited end-to-end through the structured path.
+- A REAL capability-checked FS op family runs alongside the mock ops, dispatched through
+  `agent_fs_call`; deny/allow/audit are exercised end-to-end from pure JS (`qjs-realtool-test`).
+  (Net `net_fetch` and applying the op family on x86/arm remain follow-ups — §12.)
 
 ### M6: x86_64 user hello
 
@@ -1129,9 +1149,10 @@ Mitigation:
 
 ## 12. Remaining next actions
 
-The §10 milestone chain is delivered and gated, **except M5 is partial** (single-event
-broker ABI ships; vector poll/timeout/real broker is M5b). What remains, in recommended
-order:
+The §10 milestone chain is delivered and gated, and items 1–7 below (R0b, M5b, the LLVM
+root-cause, x86 X4/X5, the S-mode timer-interrupt core, TLS-under-S-mode, and the UART
+driver) have since landed. What remains is captured in the marked-up items and the
+"beyond §12" note at the end:
 
 1. ~~**R0b — arch-selection seam.**~~ **Done.** A compiler `--arch` flag rewrites
    `import "kernel/arch/active/..."` to the chosen arch (default riscv64). One generic
