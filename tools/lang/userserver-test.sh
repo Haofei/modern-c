@@ -18,7 +18,10 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/lang/userserver_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/userserver_runtime.c"
+# PURE-MC test entry (test_main + U-mode server_main + user stack); `_start`/
+# `mc_halt`/`puts_` from context_runtime.c, `usermode_setup`/`enter_user`/`do_ecall`
+# from the shared usermode_runtime.c.
+RUNTIME="$HERE/tests/qemu/lang/userserver_runtime.mc"
 SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
 USERMODE="$HERE/kernel/arch/riscv64/usermode_runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
@@ -34,7 +37,7 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/thread.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
 kernel_boot_compile_c_object "$USERMODE" "$WORK/usermode.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
