@@ -724,6 +724,29 @@ pub fn build(b: *std.Build) void {
     const llvm_blk_smode_test_step = b.step("llvm-blk-smode-test", "Build and run the LLVM-lowered virtio-blk driver under REAL OpenSBI in S-mode");
     llvm_blk_smode_test_step.dependOn(&llvm_blk_smode_test_cmd.step);
 
+    // Item (4): REAL S-mode timer-interrupt delivery under OpenSBI — a flat
+    // S-mode kernel arms the SBI TIME extension, enables S-mode timer
+    // interrupts, and counts ticks in its trap handler (re-arming each tick,
+    // wfi-parked). The RISC-V analogue of the x86 X4 LAPIC-timer proof.
+    const smode_timer_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/smode-timer-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_smode_timer_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/smode-timer-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    smode_timer_test_cmd.step.dependOn(b.getInstallStep());
+    const smode_timer_test_step = b.step("smode-timer-test", "Build and run the flat S-mode kernel taking REAL S-mode timer interrupts under REAL OpenSBI");
+    smode_timer_test_step.dependOn(&smode_timer_test_cmd.step);
+    llvm_smode_timer_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_smode_timer_test_step = b.step("llvm-smode-timer-test", "Build and run the LLVM-lowered flat S-mode timer-interrupt kernel under REAL OpenSBI");
+    llvm_smode_timer_test_step.dependOn(&llvm_smode_timer_test_cmd.step);
+
     const net_smode_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/arch/net-smode-test.sh",
@@ -3610,6 +3633,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_udp_net_test_cmd.step);
     m0_step.dependOn(&llvm_blk_test_cmd.step);
     m0_step.dependOn(&llvm_blk_smode_test_cmd.step);
+    m0_step.dependOn(&llvm_smode_timer_test_cmd.step);
     m0_step.dependOn(&llvm_net_smode_test_cmd.step);
     m0_step.dependOn(&llvm_net_test_cmd.step);
     m0_step.dependOn(&llvm_nic_test_cmd.step);
@@ -3674,6 +3698,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&blk_test_cmd.step);
     // blk-smode-test revalidates the same virtio-blk driver under REAL OpenSBI in S-mode.
     m0_step.dependOn(&blk_smode_test_cmd.step);
+    // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
+    m0_step.dependOn(&smode_timer_test_cmd.step);
     m0_step.dependOn(&net_smode_test_cmd.step);
     // udp-net-test transmits a real UDP datagram over virtio-net (pcap-verified).
     m0_step.dependOn(&udp_net_test_cmd.step);
