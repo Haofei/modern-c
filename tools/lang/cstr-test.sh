@@ -18,7 +18,10 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/user/libc/cstr.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/cstr_runtime.c"
+# The boot seam + driver is now PURE MC (no .c runtime): `_start` is `#[naked]` MC, the
+# console is mmio_console over the bare 16550, and the mem/str symbols under test are
+# declared `extern fn` and driven directly. Linked as a SECOND MC object alongside cstr.mc.
+RUNTIME="$HERE/tests/qemu/arch/cstr_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="CSTR-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-cstr-test" || echo "cstr-test")
@@ -33,7 +36,7 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/cstr.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 # NOTE: no freestanding.o — cstr.mc IS the mem/str libc here.
 "$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/cstr.o" $SUPPORT_OBJ -o "$WORK/cstr.elf"

@@ -18,7 +18,11 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/lang/vararg_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/vararg_runtime.c"
+# The boot seam + driver is now PURE MC (no .c runtime): `_start` is `#[naked]` MC, the
+# console is mmio_console over the bare 16550, and `sum_args` is bound through a fixed
+# C-ABI prototype (see the runtime's header). Linked as a SECOND MC object alongside the
+# variadic unit under test, exactly as the old vararg_runtime.c object was.
+RUNTIME="$HERE/tests/qemu/arch/vararg_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="VARARG-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-vararg-test" || echo "vararg-test")
@@ -34,7 +38,7 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/vararg.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/vararg.o" $SUPPORT_OBJ -o "$WORK/vararg.elf"
