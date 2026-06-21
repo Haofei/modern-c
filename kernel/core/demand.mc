@@ -5,7 +5,7 @@
 // handler calls `dp_handle_fault`, which — only for a fault inside that region — allocates a
 // frame and maps it at the faulting page, and the faulting instruction is retried.
 
-import "kernel/arch/riscv64/paging.mc";
+import "kernel/arch/active/paging.mc"; // arch-selection seam (R0b); --arch picks paging, default riscv64
 import "kernel/core/heap.mc";
 import "std/addr.mc";
 

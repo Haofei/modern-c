@@ -5,7 +5,7 @@
 // and the platform idle hook live in kernel/core/process.mc; this module builds
 // scheduling on top of them. Split out of process.mc verbatim (pure move).
 
-import "kernel/arch/riscv64/context.mc";
+import "kernel/arch/active/context.mc"; // arch-selection seam (R0b); --arch picks context, default riscv64
 import "std/mask.mc";
 import "kernel/core/process.mc";
 

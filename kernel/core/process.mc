@@ -6,7 +6,7 @@
 // bootstrap (the kernel); when every spawned process has exited, control returns
 // there. Cooperative for now (processes yield/exit); preemption is orthogonal.
 
-import "kernel/arch/riscv64/context.mc";
+import "kernel/arch/active/context.mc"; // arch-selection seam (R0b); --arch picks context, default riscv64
 import "kernel/core/aspace.mc";
 import "kernel/core/ipc.mc";
 import "std/math.mc";

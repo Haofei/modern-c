@@ -6,7 +6,7 @@
 // copies the bytes, and remaps it writable in the faulting space — so the writer diverges
 // while the other still sees the original.
 
-import "kernel/arch/riscv64/paging.mc";
+import "kernel/arch/active/paging.mc"; // arch-selection seam (R0b); --arch picks paging, default riscv64
 import "kernel/core/heap.mc";
 import "std/mem.mc";
 import "std/addr.mc";

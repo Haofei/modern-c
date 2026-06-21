@@ -7,7 +7,7 @@
 // `fn() -> void` function pointers — no raw addresses here. Cooperative for now
 // (threads yield); timer-tick preemption is the next step.
 
-import "kernel/arch/riscv64/context.mc";
+import "kernel/arch/active/context.mc"; // arch-selection seam (R0b); --arch picks context, default riscv64
 
 const MAX_THREADS: usize = 8;
 

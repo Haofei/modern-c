@@ -3,7 +3,7 @@
 // RAM; `munmap` removes the mapping. This is the kernel mechanism a process/VM server
 // uses to grow address spaces on demand (vs the eager identity mapping).
 
-import "kernel/arch/riscv64/paging.mc";
+import "kernel/arch/active/paging.mc"; // arch-selection seam (R0b); --arch picks paging, default riscv64
 import "kernel/core/heap.mc";
 import "std/addr.mc";
 

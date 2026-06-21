@@ -17,7 +17,7 @@
 
 import "std/addr.mc";
 import "std/mem.mc";
-import "kernel/arch/riscv64/paging.mc";
+import "kernel/arch/active/paging.mc"; // arch-selection seam (R0b); --arch picks paging, default riscv64
 
 const UA_PAGE_SIZE: usize = 4096;
 
