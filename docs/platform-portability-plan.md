@@ -596,33 +596,32 @@ The draining form is implemented on top of the single-event ABI:
 SYS_POLL(events_ptr, max, timeout) -> count delivered (0..max) | -E_FAULT
 ```
 
-Request examples:
+Request structs (the actual fields — see `user/abi.mc`; the C host mirrors them byte-for-byte):
 
 ```
-ToolReq {
-  op
-  input_ptr
-  input_len
-  output_cap
-  flags
-}
-
-ToolEvent {
-  handle
-  status
-  output_ptr_or_id
-  output_len
+ToolReq {            ToolEvent {
+  op:      u32          id:       u64   // request id this completes
+  flags:   u32          status:   i32   // 0 | -errno
+  arg:     u64          result:   i32   // scalar result
+  in_ptr:  u64          out_len:  u32   // result-payload bytes written to out_ptr
+  in_len:  u32          reserved: u32
+  out_cap: u32        }
+  out_ptr: u64
 }
 ```
 
 Rules:
 
-- Submit copies all request data into kernel-owned bounded buffers.
-- Kernel retains no user pointer after submit returns.
-- Poll copies result metadata into fresh poll-time user buffers.
-- Bad user pointer returns `-E_FAULT`.
-- Full queue returns `-E_AGAIN`.
-- Policy denial returns `-E_DENIED`.
+- Submit snapshot-copies the `ToolReq` and all `in_ptr`/`in_len` request data into
+  kernel-owned bounded buffers (`<= MAX_REQ_BYTES`), so the request is TOCTOU-safe.
+- The kernel never dereferences a user pointer it holds. It may RETAIN `out_ptr` (and
+  `out_cap`) as **opaque data** — an output address to deliver the result to later — but it is
+  validated per-page through the agent's page table and copied via `copy_to_user_pt` at POLL
+  time, never trusted or touched at submit time.
+- Poll copies the result payload (`<= out_cap`) to `out_ptr` and the `ToolEvent` metadata into
+  poll-time-validated user buffers; a copy fault keeps the completion (it is re-deliverable).
+- Bad user pointer returns `-E_FAULT`; full queue returns `-E_AGAIN`; policy denial returns
+  `-E_DENIED`.
 
 ### Phase A1: brokered tools
 
