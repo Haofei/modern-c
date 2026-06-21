@@ -1144,9 +1144,23 @@ order:
    arch-neutral large-page + address-space-encode hooks (a follow-up).
 2. **M5b — vector poll + real broker.** Add the `SYS_POLL(events_ptr, max, timeout)` form
    and replace the mock ops with real tool/net integration through the structured ABI.
-3. **Root-cause the three ungated LLVM-backend QuickJS gates** (`llvm-x86-qjs-async-test`,
-   `llvm-arm-qjs-test`, `llvm-arm-qjs-async-test`). Codegen divergence in the heavy
-   QuickJS+libc workload; C backend and LLVM-on-RISC-V pass, so this is backend-specific.
+3. **Fix the three ungated LLVM-backend QuickJS gates** (`llvm-x86-qjs-async-test`,
+   `llvm-arm-qjs-test`, `llvm-arm-qjs-async-test`). **Root-caused:** `mcc emit-llvm` models C
+   `va_list` as a single `ptr` and emits the LLVM `va_arg` instruction — correct only for the
+   RISC-V lp64 ABI (which is why LLVM-on-RISC-V passes). On AArch64/x86-64 `va_list` is a
+   multi-field register-save-area aggregate and `llc`'s `va_arg` lowering ignores the
+   `__gr_offs`/`__gr_top` walk, so every `va_list` crossing the C-FFI boundary (QuickJS calls
+   the mcc-emitted `vsnprintf`/`vfprintf` constantly) reads garbage → near-null deref → data
+   abort (`ESR=0x92000006`, `FAR=0x1` on ARM). Proven with a minimal `vsum(n, ap)` reproducer
+   (C backend = correct, LLVM backend = garbage) and a hand-written correct-IR fix.
+   **Fix (in `src/lower_llvm.zig`, target-aware varargs):** thread the target arch into the
+   emitter (emit `target triple`); emit the target's real `va_list` aggregate type (riscv
+   `ptr`; aarch64 `{ptr,ptr,ptr,i32,i32}`; x86-64 `[1 x {i32,i32,ptr,ptr}]`); copy a `va_list`
+   with `llvm.va_copy` (not `store ptr`); and on aarch64/x86-64 expand `va.arg` inline as the
+   AAPCS/SysV register-save-area walk instead of the `va_arg` instruction. Also pass the arch
+   when the harnesses emit `user/libc/libc.mc`. High regression surface (vararg/llvm-trap/
+   host-llvm + the riscv qjs gates that pass *because* of the simple-pointer model) — verify
+   against the full `fast` corpus.
 4. **x86 device-level (X4/X5).** APIC/timer interrupts and virtio-pci so x86 uses real
    device paths rather than software-only paths.
 5. **Finish the SBI service layer** (HSM/IPI) and **S-mode PLIC interrupt integration**.
