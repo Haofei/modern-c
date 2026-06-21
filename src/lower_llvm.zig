@@ -496,6 +496,11 @@ const LlvmEmitter = struct {
     fn emitGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
         const ty = global.ty orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(ty);
+        // `extern global NAME: T;` — a declaration only; storage lives in another unit.
+        if (global.is_extern) {
+            try self.out.print(self.allocator, "@{s} = external global {s}\n", .{ global.name.text, llvm_ty });
+            return;
+        }
         const linkage: []const u8 = if (global.is_const) "constant" else "global";
         const init = if (global.init) |expr| try self.emitGlobalInitializer(expr, ty) else try self.zeroInitializer(ty);
         try self.out.print(self.allocator, "@{s} = {s} {s} {s}\n", .{ global.name.text, linkage, llvm_ty, init });
@@ -863,7 +868,10 @@ const LlvmEmitter = struct {
             try section_buf.print(self.allocator, " section \"{s}\"", .{sec});
         }
         const section_str: []const u8 = section_buf.items;
-        try self.out.print(self.allocator, "define {s} @{s}(", .{ ret_llvm, fn_decl.name.text });
+        // `#[weak]`: weak linkage (a linkage specifier, before the return type) so a strong
+        // definition in another unit overrides this default.
+        const weak_str: []const u8 = if (hasWeakAttr(attrs)) "weak " else "";
+        try self.out.print(self.allocator, "define {s}{s} @{s}(", .{ weak_str, ret_llvm, fn_decl.name.text });
         for (fn_decl.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, "{s} %{s}", .{ try self.llvmType(param.ty), param.name.text });
@@ -5938,6 +5946,13 @@ fn structLiteralField(fields: []const ast.StructLiteralField, field_name: []cons
 fn hasNakedAttr(attrs: []const ast.Attr) bool {
     for (attrs) |attr| {
         if (std.meta.activeTag(attr.kind) == .naked) return true;
+    }
+    return false;
+}
+
+fn hasWeakAttr(attrs: []const ast.Attr) bool {
+    for (attrs) |attr| {
+        if (std.meta.activeTag(attr.kind) == .weak) return true;
     }
     return false;
 }

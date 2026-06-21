@@ -37,6 +37,10 @@ pub const Attr = struct {
         // `#[noinline]` — forbid inlining the function. Needed where distinct physical
         // call frames must exist (e.g. a frame-pointer backtrace walking nested frames).
         @"noinline",
+        // `#[weak]` — emit the symbol with WEAK linkage so a strong definition in another
+        // compilation unit overrides it. Lets a platform runtime ship an overridable default
+        // (e.g. `mc_agent_source` returning "no source" that a source-serving test replaces).
+        weak,
         // `#[backend_name("Y")]` — override the object/backend symbol of a declaration
         // (RSS namespace isolation: source symbol X lowers as backend symbol Y).
         backend_name: []const u8,
@@ -211,6 +215,10 @@ pub const GlobalDecl = struct {
     // other compilation units (e.g. a platform runtime providing `stdout`/`stderr` data
     // symbols a vendored C engine links against). Plain `global` stays module-private.
     exported: bool = false,
+    // `extern global NAME: T;` — a DECLARATION (no storage) of a data symbol defined in
+    // another compilation unit (e.g. a harness-generated `app_image[]` blob). Read it, or
+    // take its address, like any global; the linker binds it to the real definition.
+    is_extern: bool = false,
 };
 
 pub const EnumDecl = struct {

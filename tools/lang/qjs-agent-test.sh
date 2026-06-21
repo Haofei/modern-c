@@ -22,7 +22,7 @@ source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kern
 HERE="$(kernel_boot_repo_root)"
 QJS="$HERE/third_party/quickjs"
 SRC="$HERE/tests/qemu/proc/app_run_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/qjs_confined_runtime.c"
+RUNTIME="$HERE/tests/qemu/lang/qjs_confined_runtime.mc"  # kernel-side loader is now PURE MC (its mc_agent_source is #[weak]; agent_src.o below overrides it)
 SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
 USERMODE="$HERE/kernel/arch/riscv64/usermode_runtime.c"
 HOST="$HERE/examples/apps/qjs_host.c"        # the FIXED generic host (never changes per agent)
@@ -82,7 +82,7 @@ KERNEL_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
                -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 CFLAGS=("${KERNEL_CFLAGS[@]}")
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/thread.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
 kernel_boot_compile_c_object "$USERMODE" "$WORK/usermode.o"
 "$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/app_image.c" -o "$WORK/app_image.o"

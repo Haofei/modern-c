@@ -419,7 +419,15 @@ pub const Parser = struct {
                 struct_decl.is_move = is_move;
                 return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
             }
-            return self.fail("expected extern fn or extern struct");
+            if (self.matchIdentifierText("global")) {
+                if (is_move) return self.fail("'move' applies only to struct declarations");
+                const name = try self.expectName("expected global name");
+                try self.expect(.colon, "expected ':' in extern global declaration");
+                const ty = try self.parseType();
+                const semi = try self.expectTok(.semicolon, "expected ';' after extern global declaration");
+                return .{ .span = joinSpan(start, semi.span), .attrs = attrs, .kind = .{ .global_decl = .{ .name = name, .ty = ty, .init = null, .is_extern = true } } };
+            }
+            return self.fail("expected extern fn, extern struct, or extern global");
         }
 
         if (self.match(.kw_open)) {
@@ -726,7 +734,7 @@ pub const Parser = struct {
         const end = try self.expectTok(.r_bracket, "expected ']' after attribute");
         return .{
             .span = joinSpan(start, end.span),
-            .kind = if (std.mem.eql(u8, name.text, "no_lang_trap")) .no_lang_trap else if (std.mem.eql(u8, name.text, "naked")) .naked else if (std.mem.eql(u8, name.text, "noinline")) .@"noinline" else .{ .named = name },
+            .kind = if (std.mem.eql(u8, name.text, "no_lang_trap")) .no_lang_trap else if (std.mem.eql(u8, name.text, "naked")) .naked else if (std.mem.eql(u8, name.text, "noinline")) .@"noinline" else if (std.mem.eql(u8, name.text, "weak")) .weak else .{ .named = name },
         };
     }
 

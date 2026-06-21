@@ -1365,6 +1365,18 @@ const CEmitter = struct {
 
     fn emitGlobal(self: *CEmitter, global: ast.GlobalDecl) !void {
         try self.writeLineDirective(global.name.span);
+        // `extern global NAME: T;` — a declaration only (storage lives in another unit).
+        if (global.is_extern) {
+            try self.out.print(self.allocator, "#undef {s}\n", .{global.name.text});
+            try self.out.appendSlice(self.allocator, "extern ");
+            if (global.ty) |global_ty| {
+                try self.emitDeclarator(global_ty, global.name.text);
+            } else {
+                try self.out.print(self.allocator, "uint32_t {s}", .{global.name.text});
+            }
+            try self.out.appendSlice(self.allocator, ";\n\n");
+            return;
+        }
         // A user global is a real definition and must win over any same-named macro a
         // system header leaked on hosted builds (e.g. ARG_MAX / PATH_MAX / NAME_MAX from
         // <limits.h>) — otherwise its declaration and every read expand the macro and
@@ -2229,6 +2241,10 @@ const CEmitter = struct {
         // `#[section("...")]`: place the function's object symbol in a named linker section.
         // Needed for bare-metal entry points pinned to a fixed load address by the linker
         // script (e.g. OpenSBI's `_start` at 0x80200000 via `KEEP(*(.text.boot))`).
+        // `#[weak]`: weak linkage so a strong definition elsewhere overrides this default.
+        if (hasWeakAttr(attrs)) {
+            try self.out.appendSlice(self.allocator, "MC_WEAK ");
+        }
         if (sectionAttr(attrs)) |sec| {
             try self.out.appendSlice(self.allocator, "__attribute__((section(\"");
             try self.out.appendSlice(self.allocator, sec);
@@ -11079,6 +11095,13 @@ fn numericExprType(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.
 fn hasNakedAttr(attrs: []const ast.Attr) bool {
     for (attrs) |attr| {
         if (std.meta.activeTag(attr.kind) == .naked) return true;
+    }
+    return false;
+}
+
+fn hasWeakAttr(attrs: []const ast.Attr) bool {
+    for (attrs) |attr| {
+        if (std.meta.activeTag(attr.kind) == .weak) return true;
     }
     return false;
 }
