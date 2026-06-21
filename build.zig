@@ -2792,6 +2792,35 @@ pub fn build(b: *std.Build) void {
     const llvm_qjs_smode_confined_test_step = b.step("llvm-qjs-smode-confined-test", "M3a (LLVM): evaluate JS confined in an isolated U-mode space under REAL OpenSBI (S-mode)");
     llvm_qjs_smode_confined_test_step.dependOn(&llvm_qjs_smode_confined_test_cmd.step);
 
+    // M3 (M3b): the PURE-JS AGENT under REAL OpenSBI (S-mode). The S-mode analogue of
+    // qjs-agent-test: same fixed generic C host + embedded JS agent doing async host I/O over
+    // SYS_SUBMIT/SYS_POLL with back-pressure, but the kernel runs in S-mode under the real OpenSBI
+    // firmware (no `-bios none`) and the kernel is mapped supervisor-only (unreachable from U). The
+    // async agent is purely polled (no interrupts), so M3a's S-mode syscall dispatch already serves
+    // it. Default agent.js -> "agent: done".
+    const qjs_smode_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c" });
+    qjs_smode_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_smode_agent_test_step = b.step("qjs-smode-agent-test", "M3: run a PURE-JS agent (fixed generic C host) confined under REAL OpenSBI (S-mode), with async host I/O");
+    qjs_smode_agent_test_step.dependOn(&qjs_smode_agent_test_cmd.step);
+
+    const llvm_qjs_smode_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_qjs_smode_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_smode_agent_test_step = b.step("llvm-qjs-smode-agent-test", "M3 (LLVM): run a PURE-JS agent confined under REAL OpenSBI (S-mode), with async host I/O");
+    llvm_qjs_smode_agent_test_step.dependOn(&llvm_qjs_smode_agent_test_cmd.step);
+
+    // M3 (M3b) async-under-load: the same agent_async.js + EXPECT the M-mode qjs-async-agent-test
+    // uses, now under REAL OpenSBI (S-mode). Proves Promise overlap + back-pressure/denial over
+    // async host I/O while the kernel stays unmapped (supervisor-only) from the agent.
+    const qjs_smode_async_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "qjs-smode-async-agent" });
+    qjs_smode_async_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_smode_async_agent_test_step = b.step("qjs-smode-async-agent-test", "M3: a pure-JS agent proves overlap + back-pressure/denial over async host I/O under REAL OpenSBI (S-mode)");
+    qjs_smode_async_agent_test_step.dependOn(&qjs_smode_async_agent_test_cmd.step);
+
+    const llvm_qjs_smode_async_agent_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "qjs-smode-async-agent" });
+    llvm_qjs_smode_async_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_smode_async_agent_test_step = b.step("llvm-qjs-smode-async-agent-test", "M3 (LLVM): a pure-JS agent proves overlap + back-pressure/denial over async host I/O under REAL OpenSBI (S-mode)");
+    llvm_qjs_smode_async_agent_test_step.dependOn(&llvm_qjs_smode_async_agent_test_cmd.step);
+
     // QuickJS-agent Phase 7: the EVENT LOOP. The confined agent evaluates a Promise chain and
     // drains the job queue (JS_ExecutePendingJob) — the microtask concurrency real agents need
     // (Promise/async do nothing without it). ASYNC=42 after the loop runs. Both backends.
@@ -3313,6 +3342,10 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_qjs_confined_test_cmd.step);
     m0_step.dependOn(&qjs_smode_confined_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_smode_confined_test_cmd.step);
+    m0_step.dependOn(&qjs_smode_agent_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_smode_agent_test_cmd.step);
+    m0_step.dependOn(&qjs_smode_async_agent_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_smode_async_agent_test_cmd.step);
     m0_step.dependOn(&qjs_async_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_async_test_cmd.step);
     m0_step.dependOn(&qjs_io_test_cmd.step);
