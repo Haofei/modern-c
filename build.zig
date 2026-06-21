@@ -170,6 +170,17 @@ pub fn build(b: *std.Build) void {
     const abi_consistency_step = b.step("abi-consistency-test", "Check the C agent-ABI #defines (crt0/usys/app_traps + agent dispatchers) match user/abi.mc");
     abi_consistency_step.dependOn(&abi_consistency_cmd.step);
 
+    // Arch-selection seam (R0b): emit-c the portable core modules under every --arch. Pure host
+    // (no ld.lld/QEMU), so it catches active-import regressions the x86/ARM QEMU gates would miss
+    // when their cross toolchain is absent. Depends on the installed mcc.
+    const arch_emit_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/check/arch-emit-test.sh",
+    });
+    arch_emit_cmd.step.dependOn(b.getInstallStep());
+    const arch_emit_step = b.step("arch-emit-test", "emit-c the portable core modules (elf_loader/uaccess_pt/uaccess/mmap) under --arch=riscv64|x86_64|aarch64");
+    arch_emit_step.dependOn(&arch_emit_cmd.step);
+
     const fuzz_cmd = b.addSystemCommand(&.{
         "python3", "tools/fuzz/mcfuzz.py", "run", "--oracle", "differential", "--mcc", "zig-out/bin/mcc",
     });
@@ -3415,6 +3426,7 @@ pub fn build(b: *std.Build) void {
 
     const m0_step = b.step("m0", "Run M0 conformance gates");
     m0_step.dependOn(&abi_consistency_cmd.step);
+    m0_step.dependOn(&arch_emit_cmd.step);
     m0_step.dependOn(&test_cmd.step);
     m0_step.dependOn(&c_test_cmd.step);
     m0_step.dependOn(&sweep_cmd.step);

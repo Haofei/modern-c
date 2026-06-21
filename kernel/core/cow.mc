@@ -6,7 +6,12 @@
 // copies the bytes, and remaps it writable in the faulting space — so the writer diverges
 // while the other still sees the original.
 
-import "kernel/arch/active/paging.mc"; // arch-selection seam (R0b); --arch picks paging, default riscv64
+// RISC-V-specific: this demo uses Sv39 gigapage mapping (page_table_map_gigapage), the satp
+// AddressSpace encoding (riscv_aspace_of), and active-AS remap + sfence — none of which are in
+// the arch-neutral paging interface. So it imports the RISC-V paging module directly rather
+// than the kernel/arch/active seam. (A portable COW subsystem would need arch-neutral
+// large-page + AS-encode hooks first.)
+import "kernel/arch/riscv64/paging.mc";
 import "kernel/core/heap.mc";
 import "std/mem.mc";
 import "std/addr.mc";

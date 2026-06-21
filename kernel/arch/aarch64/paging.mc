@@ -381,6 +381,10 @@ export fn mapping_phys(m: *LeafMapping) -> PAddr { return m.phys; }
 export fn mapping_is_user(m: *LeafMapping) -> bool { return (m.flags & ATTR_AP_LOW) != 0; }
 // Writable iff the high AP bit is clear (AP == 0bx0 => RW; AP == 0bx1 => RO).
 export fn mapping_is_writable(m: *LeafMapping) -> bool { return (m.flags & 0x80) == 0; }
+// Part of the uniform paging interface (used by kernel/core/uaccess.mc). AArch64 AP has no
+// read-disable encoding — every valid leaf (RW or RO, EL0 or EL1) is readable — and a
+// LeafMapping only exists for a valid descriptor, so this is unconditionally true.
+export fn mapping_is_readable(m: *LeafMapping) -> bool { return true; }
 
 // Arch hook for the generic ELF loader (kernel/core/elf_loader.mc): translate a user segment's
 // R/W/X intent into stage-1 leaf attributes. An executable segment is EL0-fetchable (UXN clear,

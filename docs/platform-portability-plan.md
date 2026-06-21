@@ -1137,7 +1137,11 @@ order:
    `import "kernel/arch/active/..."` to the chosen arch (default riscv64). One generic
    `uaccess_pt.mc` and one generic `elf_loader.mc` (arch PTE bits via each paging module's
    `pte_flags_for_user` hook) now serve all three arches; the per-arch `elf_loader_*`/
-   `uaccess_*` copies are deleted and `kernel/core/` no longer imports `kernel/arch/riscv64`.
+   `uaccess_*` copies are deleted. The portable core modules (`elf_loader`, `uaccess_pt`,
+   `uaccess`, `mmap`) compile under all three arches — enforced by the `arch-emit-test` host
+   gate. `cow.mc`/`demand.mc` remain **RISC-V-specific** (Sv39 gigapage + satp encoding) and
+   import the riscv paging module directly, marked as such; making them portable needs
+   arch-neutral large-page + address-space-encode hooks (a follow-up).
 2. **M5b — vector poll + real broker.** Add the `SYS_POLL(events_ptr, max, timeout)` form
    and replace the mock ops with real tool/net integration through the structured ABI.
 3. **Root-cause the three ungated LLVM-backend QuickJS gates** (`llvm-x86-qjs-async-test`,

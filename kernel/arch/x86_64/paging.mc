@@ -336,6 +336,10 @@ export fn mapping_phys(m: *LeafMapping) -> PAddr { return m.phys; }
 export fn mapping_is_user(m: *LeafMapping) -> bool { return m.us_all && (m.flags & PTE_US) != 0; }
 export fn mapping_is_writable(m: *LeafMapping) -> bool { return (m.flags & PTE_W) != 0; }
 export fn mapping_is_present(m: *LeafMapping) -> bool { return (m.flags & PTE_P) != 0; }
+// Part of the uniform paging interface (used by kernel/core/uaccess.mc). On x86-64 a leaf has
+// no separate readable bit — a present page is readable (NX governs execute, not read) — so
+// readability is just presence. A LeafMapping only exists for a present page, so this is true.
+export fn mapping_is_readable(m: *LeafMapping) -> bool { return (m.flags & PTE_P) != 0; }
 
 // Arch hook for the generic ELF loader (kernel/core/elf_loader.mc): translate a user segment's
 // R/W/X intent into leaf-PTE bits. On x86-64 a leaf has no separate R/X bits — a present,
