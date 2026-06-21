@@ -2208,6 +2208,11 @@ const CEmitter = struct {
             try self.out.appendSlice(self.allocator, sec);
             try self.out.appendSlice(self.allocator, "\"))) ");
         }
+        // `#[noinline]`: forbid inlining so the function keeps a distinct physical call frame
+        // (e.g. a frame-pointer backtrace must be able to walk nested frames).
+        if (hasNoinlineAttr(attrs)) {
+            try self.out.appendSlice(self.allocator, "__attribute__((noinline)) ");
+        }
         if (hasNakedAttr(attrs)) {
             try self.out.appendSlice(self.allocator, "__attribute__((naked)) ");
             try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
@@ -11048,6 +11053,13 @@ fn numericExprType(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.
 fn hasNakedAttr(attrs: []const ast.Attr) bool {
     for (attrs) |attr| {
         if (std.meta.activeTag(attr.kind) == .naked) return true;
+    }
+    return false;
+}
+
+fn hasNoinlineAttr(attrs: []const ast.Attr) bool {
+    for (attrs) |attr| {
+        if (std.meta.activeTag(attr.kind) == .@"noinline") return true;
     }
     return false;
 }

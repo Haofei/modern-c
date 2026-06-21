@@ -826,7 +826,16 @@ const LlvmEmitter = struct {
         // ABI-correct jump/return itself; we terminate the entry block with
         // `unreachable` because the asm — not a synthesized `ret` — transfers control.
         const naked = hasNakedAttr(attrs);
-        const attr_str: []const u8 = if (naked) " naked" else "";
+        // `#[noinline]`: the LLVM `noinline` function attribute keeps a distinct physical call
+        // frame (e.g. a frame-pointer backtrace must walk nested frames). Composes with naked.
+        const attr_str: []const u8 = if (naked and hasNoinlineAttr(attrs))
+            " naked noinline"
+        else if (naked)
+            " naked"
+        else if (hasNoinlineAttr(attrs))
+            " noinline"
+        else
+            "";
         // `#[section("...")]`: emit an LLVM `section "..."` clause so the symbol lands in the
         // named linker section (bare-metal entry points pinned by the linker script, e.g.
         // OpenSBI's `_start` at 0x80200000 via `KEEP(*(.text.boot))`).
@@ -5911,6 +5920,13 @@ fn structLiteralField(fields: []const ast.StructLiteralField, field_name: []cons
 fn hasNakedAttr(attrs: []const ast.Attr) bool {
     for (attrs) |attr| {
         if (std.meta.activeTag(attr.kind) == .naked) return true;
+    }
+    return false;
+}
+
+fn hasNoinlineAttr(attrs: []const ast.Attr) bool {
+    for (attrs) |attr| {
+        if (std.meta.activeTag(attr.kind) == .@"noinline") return true;
     }
     return false;
 }

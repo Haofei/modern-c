@@ -34,6 +34,9 @@ pub const Attr = struct {
         // `#[naked]` — emit no prologue/epilogue; the body is a single `asm` block that
         // owns the whole calling convention (reset vectors, trap stubs, trampolines).
         naked,
+        // `#[noinline]` — forbid inlining the function. Needed where distinct physical
+        // call frames must exist (e.g. a frame-pointer backtrace walking nested frames).
+        @"noinline",
         // `#[backend_name("Y")]` — override the object/backend symbol of a declaration
         // (RSS namespace isolation: source symbol X lowers as backend symbol Y).
         backend_name: []const u8,

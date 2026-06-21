@@ -26,3 +26,12 @@ export fn boot_entry() -> void {
 export fn hot_path(x: u32) -> u32 {
     return x + 1;
 }
+
+// Accept: `#[noinline]` forbids inlining so the function keeps a distinct physical call
+// frame (needed e.g. by a frame-pointer backtrace walking nested frames). Both backends
+// honor it (C `__attribute__((noinline))`; LLVM the `noinline` function attribute). It
+// composes with `#[section]`.
+#[noinline]
+export fn never_inlined(x: u32) -> u32 {
+    return x + 1;
+}

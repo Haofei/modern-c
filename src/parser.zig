@@ -726,7 +726,7 @@ pub const Parser = struct {
         const end = try self.expectTok(.r_bracket, "expected ']' after attribute");
         return .{
             .span = joinSpan(start, end.span),
-            .kind = if (std.mem.eql(u8, name.text, "no_lang_trap")) .no_lang_trap else if (std.mem.eql(u8, name.text, "naked")) .naked else .{ .named = name },
+            .kind = if (std.mem.eql(u8, name.text, "no_lang_trap")) .no_lang_trap else if (std.mem.eql(u8, name.text, "naked")) .naked else if (std.mem.eql(u8, name.text, "noinline")) .@"noinline" else .{ .named = name },
         };
     }
 
