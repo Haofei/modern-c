@@ -1780,6 +1780,18 @@ pub fn build(b: *std.Build) void {
     const llvm_x86_timer_test_step = b.step("llvm-x86-timer-test", "LLVM-lowered x86-64 Local-APIC timer: real periodic interrupts at vec 0x20, hlt-spin until ticks>=3 under QEMU");
     llvm_x86_timer_test_step.dependOn(&llvm_x86_timer_test_cmd.step);
 
+    // X5: x86-64 PCI / virtio-pci device discovery — REAL config-space enumeration via the legacy
+    // CAM port-I/O mechanism (0xCF8/0xCFC). Scans bus 0, finds the QEMU virtio-blk-pci device
+    // (vendor 0x1AF4), reports its identity over COM1 (the analogue of RISC-V FDT/ECAM discovery).
+    const x86_pci_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-pci-test.sh", "zig-out/bin/mcc", "c" });
+    const llvm_x86_pci_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-pci-test.sh", "zig-out/bin/mcc", "llvm" });
+    x86_pci_test_cmd.step.dependOn(b.getInstallStep());
+    const x86_pci_test_step = b.step("x86-pci-test", "x86-64 enumerates PCI bus 0 via legacy CAM port I/O (0xCF8/0xCFC), discovers the QEMU virtio-pci device (vendor 0x1AF4) under QEMU");
+    x86_pci_test_step.dependOn(&x86_pci_test_cmd.step);
+    llvm_x86_pci_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_x86_pci_test_step = b.step("llvm-x86-pci-test", "LLVM-lowered x86-64 PCI discovery: legacy CAM port-I/O enumeration of the QEMU virtio-pci device under QEMU");
+    llvm_x86_pci_test_step.dependOn(&llvm_x86_pci_test_cmd.step);
+
     const x86_user_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-user-test.sh", "zig-out/bin/mcc", "c" });
     const llvm_x86_user_test_cmd = b.addSystemCommand(&.{ "bash", "tools/arch/x86-user-test.sh", "zig-out/bin/mcc", "llvm" });
     x86_user_test_cmd.step.dependOn(b.getInstallStep());
@@ -3782,6 +3794,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_x86_vm_test_cmd.step);
     m0_step.dependOn(&x86_timer_test_cmd.step);
     m0_step.dependOn(&llvm_x86_timer_test_cmd.step);
+    m0_step.dependOn(&x86_pci_test_cmd.step);
+    m0_step.dependOn(&llvm_x86_pci_test_cmd.step);
     m0_step.dependOn(&x86_user_test_cmd.step);
     m0_step.dependOn(&llvm_x86_user_test_cmd.step);
     m0_step.dependOn(&x86_qjs_test_cmd.step);
