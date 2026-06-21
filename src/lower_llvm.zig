@@ -1176,7 +1176,7 @@ const LlvmEmitter = struct {
     fn emitAsmStmt(self: *LlvmEmitter, asm_stmt: ast.AsmStmt) !void {
         if (asm_stmt.form == .precise) return self.emitPreciseAsmStmt(asm_stmt);
         if (asm_stmt.form != .@"opaque" or asm_stmt.inputs.len != 0 or asm_stmt.outputs.len != 0) return error.UnsupportedLlvmEmission;
-        const template = try llvmAsmTemplate(self.scratch.allocator(), asm_stmt.templates);
+        const template = try llvmOpaqueAsmTemplate(self.scratch.allocator(), asm_stmt.templates);
         const constraints = try llvmAsmClobbers(self.scratch.allocator(), asm_stmt.clobbers);
         const sideeffect: []const u8 = if (asm_stmt.is_volatile) " sideeffect" else "";
         try self.out.print(self.allocator, "  call void asm{s} \"{s}\", \"{s}\"(){s}\n", .{ sideeffect, template, constraints, try self.debugCallSuffix() });
@@ -6024,6 +6024,38 @@ fn llvmAsmTemplate(allocator: std.mem.Allocator, templates: []const []const u8) 
         try appendLlvmStringLiteralBody(allocator, &escaped, template, null);
     }
     return escaped.toOwnedSlice(allocator);
+}
+
+// Opaque (operand-less, incl. `#[naked]`) asm: like `llvmAsmTemplate`, but a literal `$` — e.g.
+// a `$0x23` immediate or `$$0x202` — must be escaped to `$$` for LLVM IR inline asm, where a
+// single `$` introduces an operand reference. There are no operands, so `%reg` register names
+// (and `%%` if any) pass through unchanged. (The precise path does its own `$` escaping inline,
+// so this is only for the opaque/naked path.)
+fn llvmOpaqueAsmTemplate(allocator: std.mem.Allocator, templates: []const []const u8) ![]const u8 {
+    const template = try llvmAsmTemplate(allocator, templates);
+    var converted: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < template.len) {
+        // `%%reg` (GCC-extended-asm escaping, emitted by emit-c for a clobber-bearing opaque
+        // block) -> a single `%reg` in LLVM IR inline asm. Without this, `%%ax` reaches the
+        // assembler as `%%ax` and is rejected as an invalid register name. Naked basic-asm
+        // blocks already use a single `%reg`, which passes through unchanged.
+        if (template[i] == '%' and i + 1 < template.len and template[i + 1] == '%') {
+            try converted.append(allocator, '%');
+            i += 2;
+            continue;
+        }
+        // A literal `$` (e.g. a `$0x23` immediate in basic/naked asm) -> `$$`, since a single
+        // `$` introduces an operand reference in LLVM IR inline asm (opaque asm has none).
+        if (template[i] == '$') {
+            try converted.appendSlice(allocator, "$$");
+            i += 1;
+            continue;
+        }
+        try converted.append(allocator, template[i]);
+        i += 1;
+    }
+    return converted.toOwnedSlice(allocator);
 }
 
 fn llvmPreciseAsmTemplate(allocator: std.mem.Allocator, templates: []const []const u8) ![]const u8 {

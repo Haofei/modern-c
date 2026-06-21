@@ -24,13 +24,23 @@ command -v "$OBJCOPY" >/dev/null 2>&1 || skip "llvm-objcopy not found"
 command -v "$QEMU"    >/dev/null 2>&1 || skip "$QEMU not found"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 CF="--target=x86_64-unknown-elf -ffreestanding -fno-pic -fno-pie -mno-red-zone -nostdlib -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function"
+# The kmain runtime is now PURE MC (tests/x86/user_x86_runtime.mc); it imports port_io.mc and
+# declares the user_x86_demo fixture's functions extern (demo built as a separate object below).
+# boot.S (the 32-bit multiboot header + long-mode trampoline MC cannot target) still links first
+# and `call kmain`s into the MC object. The old user_runtime.c is deleted.
 case "$BACKEND" in
   c)
     "$MCC" emit-c "$HERE/tests/x86/user_x86_demo.mc" > "$WORK/user.c"
     $CLANG $CF -Wno-switch-bool -c "$WORK/user.c" -o "$WORK/user.o"
+    "$MCC" emit-c "$HERE/tests/x86/user_x86_runtime.mc" > "$WORK/runtime.c"
+    $CLANG $CF -Wno-switch-bool -c "$WORK/runtime.c" -o "$WORK/user_runtime.o"
     ;;
   llvm)
     MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/user_x86_demo.mc" -o "$WORK/user.o" \
+      -mtriple=x86_64-unknown-elf \
+      -relocation-model=static \
+      -code-model=kernel
+    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/user_x86_runtime.mc" -o "$WORK/user_runtime.o" \
       -mtriple=x86_64-unknown-elf \
       -relocation-model=static \
       -code-model=kernel
@@ -41,10 +51,12 @@ case "$BACKEND" in
     exit 2
     ;;
 esac
-$CLANG $CF -c "$ARCH/user_runtime.c" -o "$WORK/user_runtime.o"
 $CLANG --target=x86_64-unknown-elf -ffreestanding -c "$ARCH/boot.S" -o "$WORK/boot.o"
+# Freestanding mem*: the backends emit memset/memcpy for aggregate init/copy (the old runtime.c
+# carried local copies); link the shared arch-neutral freestanding object instead.
+$CLANG $CF -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
 SUPPORT_OBJ=$([ "$BACKEND" = llvm ] && printf '%s' "$WORK/llvm-support.o" || true)
-$LLD -T "$HERE/tests/x86/x86-multiboot.ld" "$WORK/boot.o" "$WORK/user_runtime.o" "$WORK/user.o" $SUPPORT_OBJ -o "$WORK/kernel.elf"
+$LLD -T "$HERE/tests/x86/x86-multiboot.ld" "$WORK/boot.o" "$WORK/user_runtime.o" "$WORK/user.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/kernel.elf"
 $OBJCOPY -O binary "$WORK/kernel.elf" "$WORK/kernel.bin"
 OUT="$(timeout 30 "$QEMU" -kernel "$WORK/kernel.bin" -nographic -no-reboot \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 2>/dev/null || true)"
