@@ -2338,6 +2338,30 @@ const CEmitter = struct {
         return true;
     }
 
+    // `var local_ap: va_list = ap;` -> copy one va_list cursor into another. On targets where
+    // __builtin_va_list is an ARRAY type (x86-64 SysV: `struct __va_list_tag[1]`), a plain `T x
+    // = y;` is ill-formed ("array initializer must be an initializer list"), so the copy MUST go
+    // through __builtin_va_copy, which is also correct on targets where va_list is a scalar
+    // pointer (riscv/aarch64). Handles only the bare-identifier source — the one shape the libc's
+    // v*printf wrappers use (`var local_ap = ap;`). Returns true when it handled the init.
+    fn emitVaListCopyLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr) !bool {
+        const dst_named = switch (decl_ty.kind) {
+            .name => |n| n,
+            else => return false,
+        };
+        if (!std.mem.eql(u8, dst_named.text, "va_list")) return false;
+        const src_ident = switch (initializer.kind) {
+            .ident => |n| n,
+            else => return false,
+        };
+        try self.writeIndent();
+        try self.emitDeclarator(decl_ty, name);
+        try self.out.appendSlice(self.allocator, ";\n");
+        try self.writeIndent();
+        try self.out.print(self.allocator, "__builtin_va_copy({s}, {s});\n", .{ try self.cIdent(name), try self.cIdent(src_ident.text) });
+        return true;
+    }
+
     fn appendType(self: *CEmitter, out: *std.ArrayList(u8), ty: ast.TypeExpr, style: StructTypeStyle) anyerror!void {
         if (self.aliasTargetType(ty)) |target| return self.appendType(out, target, style);
         switch (ty.kind) {
@@ -3199,6 +3223,7 @@ const CEmitter = struct {
                         if (local.ty) |decl_ty| {
                             if (local.init) |initializer| {
                                 if (try self.emitVaStartLocalInit(name.text, decl_ty, initializer)) continue;
+                                if (try self.emitVaListCopyLocalInit(name.text, decl_ty, initializer)) continue;
                                 if (try self.emitResultTryExprLocalInit(name.text, decl_ty, initializer, locals, return_ty)) continue;
                                 if (try self.emitNullableTryExprLocalInit(name.text, decl_ty, initializer, locals)) continue;
                                 if (try self.emitResultTryLocalInit(name.text, decl_ty, initializer, locals, return_ty)) continue;
@@ -8726,6 +8751,24 @@ const CEmitter = struct {
             else => {},
         }
 
+        // A va_list argument materialized into a temp must be COPIED with __builtin_va_copy, not
+        // `=`: on x86-64 SysV __builtin_va_list is an array type, so `T t = arg;` is ill-formed.
+        // This fires for e.g. vfprintf forwarding its `ap` to vprintf. __builtin_va_copy is also
+        // correct where va_list is a scalar pointer (riscv/aarch64).
+        if (isVaListType(target_ty)) {
+            const va_temp = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
+            self.temp_index += 1;
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s} {s};\n", .{ try self.cTypeFor(target_ty, .typedef_name), va_temp });
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "__builtin_va_copy(");
+            try self.out.appendSlice(self.allocator, va_temp);
+            try self.out.appendSlice(self.allocator, ", ");
+            try self.emitExpr(arg, locals);
+            try self.out.appendSlice(self.allocator, ");\n");
+            return .{ .name = va_temp, .ty = target_ty };
+        }
+
         const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
         self.temp_index += 1;
         try self.writeIndent();
@@ -12277,6 +12320,15 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "Overflow")) return "uint8_t";
     if (std.mem.eql(u8, name, "va_list")) return "__builtin_va_list";
     return "void *";
+}
+
+// Is `ty` the `va_list` named type? (Used to copy va_list temps with __builtin_va_copy rather
+// than `=`, which is ill-formed for x86-64's array-typed __builtin_va_list.)
+fn isVaListType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .name => |n| std.mem.eql(u8, n.text, "va_list"),
+        else => false,
+    };
 }
 
 fn checkedTypeSuffix(name: []const u8) ?[]const u8 {
