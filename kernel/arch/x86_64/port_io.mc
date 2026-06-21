@@ -57,6 +57,43 @@ export fn inb(port: u16) -> u8 {
     return (r & 0xFF) as u8;
 }
 
+// Write a 32-bit dword `val` to I/O `port` (`outl %eax, %dx`). Used by PCI CAM (0xCF8).
+export fn outl(port: u16, val: u32) -> void {
+    let p: u64 = port as u64;
+    let v: u64 = val as u64;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm precise volatile {
+                "mov %0, %%rax\n mov %1, %%rdx\n outl %%eax, %%dx"
+                in("r") v: u64,
+                in("r") p: u64,
+                clobber("rax"),
+                clobber("rdx"),
+                clobber("memory")
+            }
+        }
+    }
+}
+
+// Read a 32-bit dword from I/O `port` (`inl %dx, %eax`). Used by PCI CAM (0xCFC).
+export fn inl(port: u16) -> u32 {
+    let p: u64 = port as u64;
+    var r: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm precise volatile {
+                "xor %%rax, %%rax\n mov %1, %%rdx\n inl %%dx, %%eax\n mov %%rax, %0"
+                out("r") r: u64,
+                in("r") p: u64,
+                clobber("rax"),
+                clobber("rdx"),
+                clobber("memory")
+            }
+        }
+    }
+    return (r & 0xFFFF_FFFF) as u32;
+}
+
 // ---- COM1 serial console (the x86 analogue of mmio_console, over outb/inb) ----
 
 // Bring COM1 up: 8N1, divisor 1, FIFOs on, IRQs off (we poll the LSR).

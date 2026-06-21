@@ -23,13 +23,17 @@ command -v "$OBJCOPY" >/dev/null 2>&1 || skip "llvm-objcopy not found"
 command -v "$QEMU"    >/dev/null 2>&1 || skip "$QEMU not found"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 CF="--target=x86_64-unknown-elf -ffreestanding -fno-pic -fno-pie -mno-red-zone -nostdlib -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function"
+# The kmain runtime is now PURE MC (tests/x86/pci_x86_runtime.mc), which imports the MC enumerator
+# (pci_x86_scan, whose config read is now pure-MC outl/inl) and the pure-MC port_io console: one MC
+# compilation unit yields kmain + the scan. boot.S links first and `call kmain`s into the MC
+# object. The old pci_runtime.c (and its C pci_x86_cfg_read32) is deleted.
 case "$BACKEND" in
   c)
-    "$MCC" emit-c "$HERE/tests/x86/pci_x86_demo.mc" > "$WORK/pci.c"
+    "$MCC" emit-c "$HERE/tests/x86/pci_x86_runtime.mc" > "$WORK/pci.c"
     $CLANG $CF -Wno-switch-bool -c "$WORK/pci.c" -o "$WORK/pci.o"
     ;;
   llvm)
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/pci_x86_demo.mc" -o "$WORK/pci.o" \
+    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/pci_x86_runtime.mc" -o "$WORK/pci.o" \
       -mtriple=x86_64-unknown-elf \
       -relocation-model=static \
       -code-model=kernel
@@ -40,10 +44,13 @@ case "$BACKEND" in
     exit 2
     ;;
 esac
-$CLANG $CF -c "$ARCH/pci_runtime.c" -o "$WORK/pci_runtime.o"
 $CLANG --target=x86_64-unknown-elf -ffreestanding -c "$ARCH/boot.S" -o "$WORK/boot.o"
+# Freestanding mem*: the backends emit memset/memcpy calls for aggregate init/copy. The shared
+# freestanding libc object supplies them (arch-neutral C; -fno-builtin so the loops are not
+# rewritten into calls to themselves), exactly as the riscv kernel images do.
+$CLANG $CF -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
 SUPPORT_OBJ=$([ "$BACKEND" = llvm ] && printf '%s' "$WORK/llvm-support.o" || true)
-$LLD -T "$HERE/tests/x86/x86-multiboot.ld" "$WORK/boot.o" "$WORK/pci_runtime.o" "$WORK/pci.o" $SUPPORT_OBJ -o "$WORK/kernel.elf"
+$LLD -T "$HERE/tests/x86/x86-multiboot.ld" "$WORK/boot.o" "$WORK/pci.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/kernel.elf"
 $OBJCOPY -O binary "$WORK/kernel.elf" "$WORK/kernel.bin"
 # A tiny raw disk with a known first sector, so a virtio-blk-pci device is actually present on the
 # PCI bus for the kernel to discover (mirrors the RISC-V blk test's disk image).

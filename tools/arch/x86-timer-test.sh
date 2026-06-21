@@ -22,13 +22,17 @@ command -v "$OBJCOPY" >/dev/null 2>&1 || skip "llvm-objcopy not found"
 command -v "$QEMU"    >/dev/null 2>&1 || skip "$QEMU not found"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 CF="--target=x86_64-unknown-elf -ffreestanding -fno-pic -fno-pie -mno-red-zone -nostdlib -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function"
+# The kmain runtime is now PURE MC (tests/x86/timer_x86_runtime.mc), which imports the MC timer
+# fixture (timer_target/timer_ok) and the pure-MC port_io console: one MC compilation unit yields
+# kmain + the fixture. boot.S (the 32-bit multiboot header + long-mode trampoline MC cannot target)
+# links first and `call kmain`s into the MC object. The old timer_runtime.c is deleted.
 case "$BACKEND" in
   c)
-    "$MCC" emit-c "$HERE/tests/x86/timer_x86_demo.mc" > "$WORK/timer.c"
+    "$MCC" emit-c "$HERE/tests/x86/timer_x86_runtime.mc" > "$WORK/timer.c"
     $CLANG $CF -Wno-switch-bool -c "$WORK/timer.c" -o "$WORK/timer.o"
     ;;
   llvm)
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/timer_x86_demo.mc" -o "$WORK/timer.o" \
+    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/timer_x86_runtime.mc" -o "$WORK/timer.o" \
       -mtriple=x86_64-unknown-elf \
       -relocation-model=static \
       -code-model=kernel
@@ -39,10 +43,13 @@ case "$BACKEND" in
     exit 2
     ;;
 esac
-$CLANG $CF -c "$ARCH/timer_runtime.c" -o "$WORK/timer_runtime.o"
 $CLANG --target=x86_64-unknown-elf -ffreestanding -c "$ARCH/boot.S" -o "$WORK/boot.o"
+# Freestanding mem*: the backends emit memset/memcpy calls for aggregate init/copy. The shared
+# freestanding libc object supplies them (arch-neutral C; -fno-builtin so the loops are not
+# rewritten into calls to themselves), exactly as the riscv kernel images do.
+$CLANG $CF -fno-builtin -c "$HERE/kernel/arch/riscv64/freestanding.c" -o "$WORK/freestanding.o"
 SUPPORT_OBJ=$([ "$BACKEND" = llvm ] && printf '%s' "$WORK/llvm-support.o" || true)
-$LLD -T "$HERE/tests/x86/x86-multiboot.ld" "$WORK/boot.o" "$WORK/timer_runtime.o" "$WORK/timer.o" $SUPPORT_OBJ -o "$WORK/kernel.elf"
+$LLD -T "$HERE/tests/x86/x86-multiboot.ld" "$WORK/boot.o" "$WORK/timer.o" "$WORK/freestanding.o" $SUPPORT_OBJ -o "$WORK/kernel.elf"
 $OBJCOPY -O binary "$WORK/kernel.elf" "$WORK/kernel.bin"
 OUT="$(timeout 30 "$QEMU" -kernel "$WORK/kernel.bin" -nographic -no-reboot \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 2>/dev/null || true)"

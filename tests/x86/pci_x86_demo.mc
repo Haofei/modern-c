@@ -1,12 +1,12 @@
 // tests/x86/pci_x86_demo — x86-64 PCI device-discovery proof.
 //
 // Real PCI config-space enumeration on x86-64 via the legacy port-I/O CAM mechanism. The ONE
-// arch-specific dependency is the config-space read primitive (x86 needs port I/O on 0xCF8/0xCFC,
-// which MC cannot express directly — it has no `in`/`out` and `raw` ops are MMIO-only); the C
-// runtime (kernel/arch/x86_64/pci_runtime.c) supplies it as `pci_x86_cfg_read32`, mirroring how
-// console_putc is an extern. EVERYTHING ELSE — the bus scan, the vendor match, the field decode —
-// is arch-neutral MC here, mirroring the ENUMERATION shape of the RISC-V ECAM driver
-// (kernel/drivers/pci.mc): pci_cfg_read32 / pci_find / pci_bar0.
+// arch-specific dependency is the config-space read primitive (x86 needs port I/O on 0xCF8/0xCFC),
+// now expressed in PURE MC via outl/inl (kernel/arch/x86_64/port_io.mc) — MC reaches the x86 I/O
+// ports through inline `out`/`in` exactly as it reaches MMIO through `raw`. EVERYTHING ELSE — the
+// bus scan, the vendor match, the field decode — is arch-neutral MC here, mirroring the
+// ENUMERATION shape of the RISC-V ECAM driver (kernel/drivers/pci.mc): pci_cfg_read32 / pci_find /
+// pci_bar0.
 //
 // The runtime calls pci_x86_scan(out_vendor,out_device,out_class,out_bar0): we scan bus 0
 // functions for the FIRST device whose vendor id is 0x1AF4 (virtio — the virtio-blk-pci QEMU
@@ -15,14 +15,30 @@
 // backends — same convention as vm_x86_build). Returns 1 iff a real virtio device was found
 // (NOT an all-ones absent-device read), else 0.
 
+import "kernel/arch/x86_64/port_io.mc";
+
 // Prefixed consts to avoid emit-c const-flatten collisions with other fixtures sharing a TU.
 const PCI_X86_VENDOR_VIRTIO: u32 = 0x1AF4;
 const PCI_X86_INVALID: u32 = 0xFFFF_FFFF; // the bus returns all-ones for an absent device/register
 
-// The arch-specific config-space read primitive (legacy CAM port I/O), supplied by the C runtime.
+const PCI_CONFIG_ADDRESS: u16 = 0xCF8;
+const PCI_CONFIG_DATA: u16 = 0xCFC;
+
+// The arch-specific config-space read primitive (legacy CAM port I/O), in PURE MC over outl/inl.
+// CONFIG_ADDRESS (0xCF8): bit 31 = enable; bits 23..16 = bus; 15..11 = device; 10..8 = function;
+// 7..2 = register (dword-aligned). CONFIG_DATA (0xCFC) then exposes the selected dword. This is
+// the canonical x86 PCI configuration mechanism #1; it works on both `pc` (i440FX) and `q35`.
 // (bus,dev,func) select the device; `off` is the 32-bit-aligned register offset within its
 // 256-byte config space. Returns the 32-bit register value (all-ones if absent).
-extern fn pci_x86_cfg_read32(bus: u32, dev: u32, func: u32, off: u32) -> u32;
+export fn pci_x86_cfg_read32(bus: u32, dev: u32, func: u32, off: u32) -> u32 {
+    let addr: u32 = 0x8000_0000
+                  | ((bus & 0xFF) << 16)
+                  | ((dev & 0x1F) << 11)
+                  | ((func & 0x07) << 8)
+                  | (off & 0xFC);
+    outl(PCI_CONFIG_ADDRESS, addr);
+    return inl(PCI_CONFIG_DATA);
+}
 
 // 32-bit config read for bus 0, function 0 of device `dev`, register `off` — mirrors the riscv
 // pci_cfg_read32 shape, but the underlying mechanism is x86 port I/O (the C extern), not MMIO.
