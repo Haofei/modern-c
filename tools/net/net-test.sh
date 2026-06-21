@@ -22,8 +22,11 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-SRC="$HERE/kernel/main.mc"
-RUNTIME="$HERE/kernel/drivers/virtio/net_runtime.c"
+# The boot seam is now PURE MC (tests/qemu/arch/net_mmode_demo.mc imports kernel/main.mc
+# for kernel_main + the shared MMIO probe; does the Virtq setup + entry). The std/dma +
+# std/time platform primitives (CLINT mtime + bump DMA pool) are a SEPARATE MC object.
+SRC="$HERE/tests/qemu/arch/net_mmode_demo.mc"
+PLATFORM="$HERE/kernel/arch/riscv64/mmode_dma_time.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="NET-PING-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-net-test" || echo "net-test")
@@ -38,10 +41,10 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -Wno-unused-function -fno-builtin)
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/net.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$PLATFORM" "$WORK/platform.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/net.o" $SUPPORT_OBJ -o "$WORK/net.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/net.o" "$WORK/platform.o" $SUPPORT_OBJ -o "$WORK/net.elf"
 
 # 3. Run under QEMU with a virtio-net device on user networking (pcap capture).
 OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \

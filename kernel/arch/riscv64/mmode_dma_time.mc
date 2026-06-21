@@ -46,10 +46,12 @@ export fn mc_udelay(us: u32) -> void {
 // ----- std/dma platform primitives: a 16-byte-aligned bump pool -----
 //
 // The blk request chain holds three buffers (header/data/status) outstanding at
-// once. A bump allocator never aliases live buffers; `free` is a no-op (the pool is
-// one-shot for this smoke test). Exhaustion traps rather than overruns.
-const DMA_POOL_LEN: usize = 4096;
-global g_dma_pool: [4096]u8;
+// once; the net path holds far more (an RX ring of receive buffers + TX frames), so
+// the pool matches the 64 KiB the C net_runtime carried. A bump allocator never
+// aliases live buffers; `free` is a no-op (the pool is one-shot for this smoke test).
+// Exhaustion traps rather than overruns.
+const DMA_POOL_LEN: usize = 65536;
+global g_dma_pool: [65536]u8;
 global g_dma_off: usize = 0;
 
 export fn mc_dma_alloc_base(len: usize) -> usize {
