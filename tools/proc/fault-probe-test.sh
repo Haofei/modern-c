@@ -22,7 +22,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/proc/app_run_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/app_runtime.c"
+RUNTIME="$HERE/tests/qemu/proc/app_runtime.mc"
 SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
 APP="$HERE/examples/apps/fault_probe.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
@@ -41,11 +41,14 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
 MCC="$MCC" CLANG="$CLANG" LLC="$LLC" LLD="$LLD" \
     bash "$HERE/tools/user/build-app.sh" "$APP" "$BACKEND" "$WORK/app.elf" >/dev/null
 
-# 2. Embed the app ELF bytes for the kernel to load.
+# 2. Embed the app ELF bytes as a generated C data array, with accessors the pure-MC
+#    app_runtime.mc reads (MC has no `extern` data-symbol form, only `extern fn`).
 {
     printf 'const unsigned char app_image[] = {'
     od -An -v -tx1 "$WORK/app.elf" | tr -s ' ' '\n' | grep -v '^$' | sed 's/^/0x/; s/$/,/' | tr '\n' ' '
     printf '};\nconst unsigned int app_image_len = %s;\n' "$(wc -c < "$WORK/app.elf")"
+    printf 'unsigned long mc_app_image(void) { return (unsigned long)app_image; }\n'
+    printf 'unsigned long mc_app_image_len(void) { return (unsigned long)app_image_len; }\n'
 } >"$WORK/app_image.c"
 
 # 3. A STRONG mc_agent_source so SYS_READ reaches its copy-out (and then faults on the bad ptr).
@@ -59,7 +62,8 @@ MCC="$MCC" CLANG="$CLANG" LLC="$LLC" LLD="$LLD" \
 # 4. Build the kernel image: MC loader/ABI + app_runtime + shared/usermode + embedded app +
 #    strong agent source + freestanding boot.
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/thread.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+mkdir -p "$WORK/rt"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK/rt"
 kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
 kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/usermode_runtime.c" "$WORK/usermode.o"
 "$CLANG" "${CFLAGS[@]}" -c "$WORK/app_image.c" -o "$WORK/app_image.o"

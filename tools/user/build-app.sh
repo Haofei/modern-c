@@ -22,7 +22,8 @@ MCC="${MCC:-$HERE/zig-out/bin/mcc}"
 
 # RISC-V freestanding target for the APP — the boot-lib compile helpers consume this `CFLAGS`.
 # Apps are built with the F/D float extension (rv64imafdc, lp64d ABI) because JS numbers (and
-# libm) are doubles; the kernel enables mstatus.FS before entering the app (app_runtime.c).
+# libm) are doubles; the kernel enables mstatus.FS before entering the app (enter_user in
+# usermode_runtime.c).
 # The app is a SEPARATE ELF from the (integer-only) kernel, so the ABIs don't link together;
 # the syscall boundary (mc_ecall) passes only integers, unaffected by lp64d.
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
