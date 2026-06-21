@@ -27,8 +27,9 @@ AGENT_FILES=(
     kernel/arch/riscv64/smode_usermode_runtime.c
     kernel/arch/riscv64/usermode_runtime.c
     kernel/arch/aarch64/qjs_user_runtime.c
-    kernel/arch/x86_64/qjs_user_runtime.c
 )
+# NB: the x86-64 qjs user runtime is now pure MC (tests/x86/qjs_user_x86_runtime.mc); it uses
+# `const SYS_EXIT: u64 = 3` (not a C #define), so it is checked by the MC type system, not here.
 
 # abi_num NAME -> the canonical number from abi.mc, or empty if NAME is not a canonical
 # agent-ABI constant. (No associative arrays: portable to macOS bash 3.2 and Docker bash.)
