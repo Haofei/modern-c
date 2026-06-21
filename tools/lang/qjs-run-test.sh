@@ -19,7 +19,7 @@ HERE="$(kernel_boot_repo_root)"
 QJS="$HERE/third_party/quickjs"
 LIBC="$HERE/user/libc/libc.mc"
 AGENT="$HERE/examples/apps/qjs_agent.c"
-RUNTIME="$HERE/kernel/arch/riscv64/qjs_runtime.c"
+RUNTIME="$HERE/tests/qemu/lang/qjs_runtime.mc"  # platform glue is now PURE MC
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="JS=7"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-qjs-run-test" || echo "qjs-run-test")
@@ -46,7 +46,9 @@ MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$LIBC" "$WORK/libc.o" "$WORK"
 
 # 3. openlibm (the transcendentals) + the platform runtime.
 bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+# Platform runtime is pure MC; build it with the same hardware-FP ABI (lp64d) as the libc
+# so it links with the FP objects (it does no FP itself but must share the ABI).
+MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 
 # 4. Link the bare-metal image.

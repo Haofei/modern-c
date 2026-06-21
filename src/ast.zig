@@ -207,6 +207,10 @@ pub const GlobalDecl = struct {
     // A `const NAME: T = <comptime constant>` declaration: a named compile-time
     // constant (section 22), usable in array lengths and comptime asserts.
     is_const: bool = false,
+    // `export global NAME: T = ...` — a data symbol with EXTERNAL linkage, visible to
+    // other compilation units (e.g. a platform runtime providing `stdout`/`stderr` data
+    // symbols a vendored C engine links against). Plain `global` stays module-private.
+    exported: bool = false,
 };
 
 pub const EnumDecl = struct {

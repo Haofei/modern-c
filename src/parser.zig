@@ -486,7 +486,7 @@ pub const Parser = struct {
             const ty = if (self.match(.colon)) try self.parseType() else null;
             const initializer = if (self.match(.equal)) try self.parseExpr(0) else null;
             const semi = try self.expectTok(.semicolon, "expected ';' after global declaration");
-            return .{ .span = joinSpan(start, semi.span), .attrs = attrs, .kind = .{ .global_decl = .{ .name = name, .ty = ty, .init = initializer } } };
+            return .{ .span = joinSpan(start, semi.span), .attrs = attrs, .kind = .{ .global_decl = .{ .name = name, .ty = ty, .init = initializer, .exported = exported } } };
         }
 
         if (self.match(.kw_enum)) {

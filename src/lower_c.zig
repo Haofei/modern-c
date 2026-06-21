@@ -1371,7 +1371,10 @@ const CEmitter = struct {
         // fail to compile. `#undef` of a non-macro is a legal no-op, so this is safe for
         // the common (non-colliding) case.
         try self.out.print(self.allocator, "#undef {s}\n", .{global.name.text});
-        try self.out.appendSlice(self.allocator, "static MC_UNUSED ");
+        // `export global` gets EXTERNAL linkage (no `static`) so other compilation units —
+        // e.g. a vendored C engine linking against `stdout`/`stderr` data symbols this
+        // runtime provides — resolve it by name. Plain `global` stays file-local `static`.
+        try self.out.appendSlice(self.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
         if (global.ty) |global_ty| {
             try self.emitDeclarator(global_ty, global.name.text);
         } else {
