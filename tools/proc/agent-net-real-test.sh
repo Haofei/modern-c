@@ -30,8 +30,13 @@ TOKEN="MC-AGENT-NET-REAL-OK"       # the unique body token we verify over UART
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-SRC="$HERE/tests/qemu/proc/agent_net_real_demo.mc"
-RUNTIME="$HERE/kernel/drivers/virtio/agent_net_real_runtime.c"
+# Boot seam now PURE MC (agent_net_real_mmode_demo.mc imports agent_net_real_demo.mc + the
+# shared MMIO probe; provides test_main, no _start). The std/dma+std/time platform is the
+# shared mmode_dma_time.mc (8 MiB pool); the green-thread context switch + the .text.start
+# _start that calls test_main are the shared context_runtime.c (C), linked alongside.
+SRC="$HERE/tests/qemu/proc/agent_net_real_mmode_demo.mc"
+PLATFORM="$HERE/kernel/arch/riscv64/mmode_dma_time.mc"
+SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="AGENT-NET-REAL-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-agent-net-real-test" || echo "agent-net-real-test")
@@ -72,10 +77,11 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -Wno-unused-function -fno-builtin)
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/agent.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$PLATFORM" "$WORK/platform.o" "$WORK"
+kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/agent.o" $SUPPORT_OBJ -o "$WORK/agent.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/agent.o" "$WORK/platform.o" $SUPPORT_OBJ -o "$WORK/agent.elf"
 
 # 4. Boot under QEMU with virtio-net user networking + pcap capture. The guest's brokered agent
 #    connects to the slirp gateway 10.0.2.2:PORT, redirected to the host loopback where python listens.
