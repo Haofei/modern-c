@@ -26,8 +26,11 @@ TOKEN="MC-KERNEL-HTTP-OK"       # the unique body token we verify
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-SRC="$HERE/tests/qemu/net/http_get_demo.mc"
-RUNTIME="$HERE/kernel/drivers/virtio/http_get_runtime.c"
+# The boot seam is now PURE MC (http_get_mmode_demo.mc imports http_get_demo.mc for
+# http_get_drive + the shared MMIO probe). The std/dma + std/time platform primitives
+# (CLINT mtime + 8 MiB bump pool) are the separate mmode_dma_time.mc object.
+SRC="$HERE/tests/qemu/net/http_get_mmode_demo.mc"
+PLATFORM="$HERE/kernel/arch/riscv64/mmode_dma_time.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="HTTP-GET-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-http-get-test" || echo "http-get-test")
@@ -69,10 +72,10 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -Wno-unused-function -fno-builtin)
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/http.o" "$WORK"
-kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_mc_object "$BACKEND" "$PLATFORM" "$WORK/platform.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/http.o" $SUPPORT_OBJ -o "$WORK/http.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/http.o" "$WORK/platform.o" $SUPPORT_OBJ -o "$WORK/http.elf"
 
 # 4. Boot under QEMU with virtio-net user networking + pcap capture. The guest
 #    connects to the slirp gateway 10.0.2.2:PORT, redirected to the host loopback.
