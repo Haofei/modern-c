@@ -18,7 +18,20 @@
 // Context layout (must match `struct Context` in context.mc):
 //   rsp@0  rbx@8  rbp@16  r12@24  r13@32  r14@40  r15@48.
 
-import "kernel/arch/x86_64/context.mc";
+// IMPORT-FREE unit: context.mc DECLARES these three as `extern fn` (the typed surface), so
+// importing it here — where we DEFINE them — would collide (E_DUPLICATE_DECLARATION; MC is
+// one-name-per-unit). We therefore replicate the `struct Context` layout locally (a pointer is
+// ABI-identical, and the link resolves by symbol name), exactly like the other extern-seam
+// provider units (mmode_platform.mc, mmode_dma_time.mc).
+struct Context {
+    rsp: u64, // saved stack pointer (the return address is at [rsp])
+    rbx: u64,
+    rbp: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+}
 
 // System V x86-64: arg0=rdi (old), arg1=rsi (new). Save the callee-saved regs + rsp into *old,
 // load them from *new, then `ret` — which pops the return address off new's (now current) stack
