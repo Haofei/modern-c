@@ -27,7 +27,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/$FIXTURE"
-RUNTIME="$HERE/kernel/arch/riscv64/uaccess_entry_runtime.c"
+RUNTIME="$HERE/tests/qemu/mem/uaccess_entry_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-$BASE" || echo "$BASE")
 
@@ -44,8 +44,23 @@ kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/demo.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 
-"$CLANG" "${CFLAGS[@]}" "-DMC_ENTRY=$ENTRY" -c "$RUNTIME" -o "$WORK/runtime.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/demo.o" \
+# The generic MC runtime calls the fixed-name `rt_uaccess_entry`. MC has no -D, so a
+# tiny generated shim forwards rt_uaccess_entry -> this gate's fixture entry ($ENTRY)
+# — the all-MC analogue of the C runtime's -DMC_ENTRY=<fn>.
+SHIM="$WORK/uaccess_shim.mc"
+cat >"$SHIM" <<EOF
+// Generated per-gate shim: forward rt_uaccess_entry -> $ENTRY (the fixture entry).
+extern fn $ENTRY() -> u32;
+export fn rt_uaccess_entry() -> u32 {
+    return $ENTRY();
+}
+EOF
+
+mkdir -p "$WORK/rt"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK/rt"
+mkdir -p "$WORK/shim"
+kernel_boot_compile_mc_object "$BACKEND" "$SHIM" "$WORK/shim.o" "$WORK/shim"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/shim.o" "$WORK/demo.o" \
     $SUPPORT_OBJ -o "$WORK/uaccess.elf"
 
 OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \

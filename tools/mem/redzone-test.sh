@@ -26,7 +26,9 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/mem/redzone_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/redzone_runtime.c"
+RUNTIME="$HERE/tests/qemu/mem/redzone_runtime.mc"
+SCEN_OVERFLOW="$HERE/tests/qemu/mem/redzone_scenario_overflow.mc"
+SCEN_CANARY="$HERE/tests/qemu/mem/redzone_scenario_canary.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-redzone-test" || echo "redzone-test")
 
@@ -39,23 +41,30 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
         -Wno-unused-parameter -Wno-unused-function -fno-builtin)
 
-# MC object (shared by both scenarios) + the LLVM-backend support object if needed.
+# MC demo object + the shared MC runtime object (common boot/trap/clean-path, builds
+# once) + per-scenario MC objects + the LLVM-backend support object if needed. Each
+# MC object is built in its own $WORK subdir.
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/demo.o" "$WORK"
+mkdir -p "$WORK/rt"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK/rt"
+mkdir -p "$WORK/ovf"
+kernel_boot_compile_mc_object "$BACKEND" "$SCEN_OVERFLOW" "$WORK/scen_overflow.o" "$WORK/ovf"
+mkdir -p "$WORK/can"
+kernel_boot_compile_mc_object "$BACKEND" "$SCEN_CANARY" "$WORK/scen_canary.o" "$WORK/can"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 
-# Build + boot one scenario; echo the UART output. $1 = extra cflag macro, $2 = tag.
+# Build + boot one scenario; echo the UART output. $1 = scenario object, $2 = tag.
 run_scenario() {
-    local macro="$1" tag="$2"
-    "$CLANG" "${CFLAGS[@]}" ${macro:+"$macro"} -c "$RUNTIME" -o "$WORK/runtime_$tag.o"
-    "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime_$tag.o" "$WORK/demo.o" \
+    local scen="$1" tag="$2"
+    "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$scen" "$WORK/demo.o" \
         $SUPPORT_OBJ -o "$WORK/redzone_$tag.elf"
     timeout 30 "$QEMU" -machine virt -bios none -nographic \
         -kernel "$WORK/redzone_$tag.elf" 2>/dev/null || true
 }
 
-OVF="$(run_scenario "" overflow)"
-CAN="$(run_scenario "-DCANARY_SCENARIO=1" canary)"
+OVF="$(run_scenario "$WORK/scen_overflow.o" overflow)"
+CAN="$(run_scenario "$WORK/scen_canary.o" canary)"
 
 echo "--- heap-overflow scenario UART ---"
 printf '%s\n' "$OVF"
