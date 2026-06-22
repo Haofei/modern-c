@@ -35,9 +35,12 @@ echo "[LLVM backend]"
 {
   echo '#include <stdio.h>'
   echo '#include <stdlib.h>'
-  # The IR declares `mc_trap_*` helpers (bounds/overflow/...); none are taken here, but they
-  # must be defined to link. Abort if any ever fires.
-  grep -oE 'declare void @mc_trap_[A-Za-z]+' "$TMP/prog.ll" | sed 's/declare void @//' | sort -u \
+  # The IR references `mc_trap_*` helpers (bounds/overflow/...); none are taken here. Emit a strong
+  # abort-with-message override for each so a fired trap is diagnosed (it wins over the IR's own weak
+  # self-provided `define weak ... { call @llvm.trap }`). Match the symbol name wherever it appears
+  # (a `define weak`/`declare` decl or a `call` site); `|| true` keeps the no-trap case from tripping
+  # `set -o pipefail` when grep finds nothing.
+  { grep -oE '@mc_trap_[A-Za-z]+' "$TMP/prog.ll" || true; } | sed 's/@//' | sort -u \
     | while read -r t; do echo "void ${t}(void){ fprintf(stderr, \"TRAP: ${t}\n\"); abort(); }"; done
   main_c
 } > "$TMP/harness.c"
