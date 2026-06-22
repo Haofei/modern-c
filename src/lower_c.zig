@@ -9968,8 +9968,21 @@ const CEmitter = struct {
             },
             .grouped, .address_of, .deref => |inner| return try self.collectMmioReadHoistsForExpr(inner.*, locals, replacements),
             .unary => |node| return try self.collectMmioReadHoistsForExpr(node.expr.*, locals, replacements),
-            .binary => |node| return (try self.collectMmioReadHoistsForExpr(node.left.*, locals, replacements)) or (try self.collectMmioReadHoistsForExpr(node.right.*, locals, replacements)),
-            .index => |node| return (try self.collectMmioReadHoistsForExpr(node.base.*, locals, replacements)) or (try self.collectMmioReadHoistsForExpr(node.index.*, locals, replacements)),
+            .binary => |node| {
+                // Both operands must be visited for their side effect (registering each
+                // mmio read as a hoist replacement). A short-circuiting `or` would skip the
+                // right operand once the left registered a read — leaving the right read
+                // un-hoisted and lowered through the generic path, which cannot emit the
+                // `.read(.acquire)` ordering arg (e.g. `a.r.read(.x) == K && b.r.read(.x) == J`).
+                const left_found = try self.collectMmioReadHoistsForExpr(node.left.*, locals, replacements);
+                const right_found = try self.collectMmioReadHoistsForExpr(node.right.*, locals, replacements);
+                return left_found or right_found;
+            },
+            .index => |node| {
+                const base_found = try self.collectMmioReadHoistsForExpr(node.base.*, locals, replacements);
+                const index_found = try self.collectMmioReadHoistsForExpr(node.index.*, locals, replacements);
+                return base_found or index_found;
+            },
             .member => |node| return try self.collectMmioReadHoistsForExpr(node.base.*, locals, replacements),
             .cast => |node| return try self.collectMmioReadHoistsForExpr(node.value.*, locals, replacements),
             else => return false,
