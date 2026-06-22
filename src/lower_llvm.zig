@@ -55,7 +55,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    try appendLlvmChecked(allocator, module, out, opts.source_path orelse "input.mc", opts.checks);
+    try appendLlvmChecked(allocator, module, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -63,10 +63,10 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
 }
 
 pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool) !void {
-    try appendLlvmChecked(allocator, module, out, source_path, .{ .optimize = optimize });
+    try appendLlvmChecked(allocator, module, out, source_path, .{ .optimize = optimize }, false);
 }
 
-pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks) !void {
+pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool) !void {
     const optimize = checks.optimize;
     const ksan = checks.ksan;
     const msan = checks.msan;
@@ -119,6 +119,7 @@ pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: 
         .ksan = ksan,
         .msan = msan,
         .csan = csan,
+        .stub_asm = stub_asm,
     };
     defer ctx.deinit();
     for (module.decls) |decl| {
@@ -347,6 +348,11 @@ const LlvmEmitter = struct {
     // watchpoint hook. Mutually exclusive with ksan/msan (main.zig enforces this). The C
     // backend's csan path is mirrored here so KCSAN is sound on the LLVM backend too.
     csan: bool = false,
+    // `--stub-asm` (test-only): replace each inline-asm block with a host-neutral stub so an
+    // arch module's portable logic can be compiled/run host-natively (where the host assembler
+    // cannot encode the target ISA). Default false → asm is emitted verbatim. Mirrors the C
+    // backend so llvm-* host-native logic tests behave identically.
+    stub_asm: bool = false,
 
     fn deinit(self: *LlvmEmitter) void {
         self.need_uadd.deinit();
@@ -1202,6 +1208,14 @@ const LlvmEmitter = struct {
     fn emitAsmStmt(self: *LlvmEmitter, asm_stmt: ast.AsmStmt) !void {
         if (asm_stmt.form == .precise) return self.emitPreciseAsmStmt(asm_stmt);
         if (asm_stmt.form != .@"opaque" or asm_stmt.inputs.len != 0 or asm_stmt.outputs.len != 0) return error.UnsupportedLlvmEmission;
+        // `--stub-asm` (host-native logic test): opaque asm is operand-less; preserve only the
+        // memory barrier (an empty asm string with a `~{memory}` clobber) so the host backend
+        // never emits the arch instruction while memory ordering is kept.
+        if (self.stub_asm) {
+            const sideeffect: []const u8 = if (asm_stmt.is_volatile) " sideeffect" else "";
+            try self.out.print(self.allocator, "  call void asm{s} \"\", \"~{{memory}}\"(){s}\n", .{ sideeffect, try self.debugCallSuffix() });
+            return;
+        }
         const template = try llvmOpaqueAsmTemplate(self.scratch.allocator(), asm_stmt.templates);
         const constraints = try llvmAsmClobbers(self.scratch.allocator(), asm_stmt.clobbers);
         const sideeffect: []const u8 = if (asm_stmt.is_volatile) " sideeffect" else "";
@@ -1209,6 +1223,19 @@ const LlvmEmitter = struct {
     }
 
     fn emitPreciseAsmStmt(self: *LlvmEmitter, asm_stmt: ast.AsmStmt) !void {
+        // `--stub-asm` (host-native logic test): replace the arch instruction with a neutral
+        // stub — evaluate each input (preserving any side effect) and define each output as
+        // zero. The portable logic under test must not depend on the instruction's effect.
+        if (self.stub_asm) {
+            for (asm_stmt.inputs) |input| {
+                _ = try self.emitExpr(input.value, input.ty);
+            }
+            for (asm_stmt.outputs) |output| {
+                const slot = self.local_slots.get(output.name.text) orelse return error.UnsupportedLlvmEmission;
+                try self.out.print(self.allocator, "  store {s} 0, ptr {s}{s}\n", .{ try self.llvmType(output.ty), slot.ptr, try self.debugCallSuffix() });
+            }
+            return;
+        }
         const template = try llvmPreciseAsmTemplate(self.scratch.allocator(), asm_stmt.templates);
         const constraints = try llvmPreciseAsmConstraints(self.scratch.allocator(), asm_stmt);
         const ret_ty = try self.preciseAsmReturnType(asm_stmt.outputs);

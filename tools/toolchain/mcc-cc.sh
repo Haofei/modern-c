@@ -62,6 +62,11 @@ EMIT_CMD=("$MCC" emit-c "$INPUT")
 if [ "${#PROFILE_ARGS[@]}" -gt 0 ]; then
     EMIT_CMD+=("${PROFILE_ARGS[@]}")
 fi
+# Host-native logic tests of arch modules set MC_STUB_ASM=1 so inline asm lowers to a
+# host-neutral stub (the target ISA's mnemonics can't be assembled on the host).
+if [ -n "${MC_STUB_ASM:-}" ]; then
+    EMIT_CMD+=(--stub-asm)
+fi
 # UB-defining defensive flags (S0.3; see docs/c-ub-matrix.md). MC's own checks/forbids
 # cover signed overflow, OOB, shifts, div, null-unwrap and aliasing in the emitted C, so
 # these are *defense in depth*, not the semantic foundation — but they harden the inherited

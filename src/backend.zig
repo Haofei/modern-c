@@ -49,6 +49,14 @@ pub const LowerOptions = struct {
     /// The `--checks=` instrumentation axis (optimize + the ksan/msan/csan
     /// sanitizer profiles), threaded as one value rather than four loose bools.
     checks: Checks = .{},
+    /// `--stub-asm` (test-only): lower every inline-`asm`/`asm precise` block to a
+    /// semantically-neutral host stub (a compiler memory barrier for opaque asm;
+    /// consume-inputs/zero-outputs for precise asm) instead of the real
+    /// instruction(s). This lets an arch module's PORTABLE logic be compiled and
+    /// run host-natively (where the host assembler cannot encode the target ISA's
+    /// mnemonics) without the arch asm. OFF by default, so kernel/bare-metal builds
+    /// are byte-for-byte unchanged; only host-native logic tests pass it.
+    stub_asm: bool = false,
 };
 
 /// A code-generation backend: the seam at which `main.zig` selects a target and

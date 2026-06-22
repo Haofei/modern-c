@@ -48,5 +48,9 @@ CHECKS_FLAG=()
 # resolves to (default riscv64 in the compiler). Mirrors MC_CHECKS.
 ARCH_FLAG=()
 [ -n "${MC_ARCH:-}" ] && ARCH_FLAG=(--arch="${MC_ARCH}")
-"$MCC" emit-llvm "$INPUT" ${CHECKS_FLAG[@]+"${CHECKS_FLAG[@]}"} ${ARCH_FLAG[@]+"${ARCH_FLAG[@]}"} > "$LL"
+# Host-native logic tests of arch modules set MC_STUB_ASM=1 so inline asm lowers to a
+# host-neutral stub (the target ISA's mnemonics can't be assembled on the host).
+STUB_FLAG=()
+[ -n "${MC_STUB_ASM:-}" ] && STUB_FLAG=(--stub-asm)
+"$MCC" emit-llvm "$INPUT" ${CHECKS_FLAG[@]+"${CHECKS_FLAG[@]}"} ${ARCH_FLAG[@]+"${ARCH_FLAG[@]}"} ${STUB_FLAG[@]+"${STUB_FLAG[@]}"} > "$LL"
 "$LLC" -filetype=obj "$LL" -o "$OUT" "${LLC_ARGS[@]}"

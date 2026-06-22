@@ -40,9 +40,9 @@ const usage =
     \\  mcc verify <file.mc> [--checks=all|elide-proven]
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
-    \\  mcc emit-c <file.mc> [--profile=kernel|hosted] [--checks=all|elide-proven]
+    \\  mcc emit-c <file.mc> [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm]
     \\  mcc emit-map <file.mc> [--profile=kernel|hosted]
-    \\  mcc emit-llvm <file.mc> [--checks=all|elide-proven]
+    \\  mcc emit-llvm <file.mc> [--checks=all|elide-proven] [--stub-asm]
     \\  mcc emit-layout <file.mc> --structs=A,B,C
     \\  mcc emit-c-struct <file.mc> --structs=A,B,C
     \\  mcc fmt <file.mc> [--check]
@@ -140,6 +140,11 @@ pub fn main(init: std.process.Init) !void {
     // (qemu_virt), so existing builds need no flag; only alternate boards pass it.
     var platform_flag: ?[]const u8 = null;
     var saw_platform_flag = false;
+    // `--stub-asm` (test-only): lower inline asm to a host-neutral stub so an arch
+    // module's portable logic can be built/run host-natively. Only the emit commands
+    // accept it; kernel builds never pass it (so their asm is emitted unchanged).
+    var stub_asm = false;
+    var saw_stub_asm_flag = false;
     while (args.next()) |flag| {
         if (std.mem.startsWith(u8, flag, "--arch=")) {
             saw_arch_flag = true;
@@ -202,6 +207,9 @@ pub fn main(init: std.process.Init) !void {
             optimize = true;
         } else if (std.mem.eql(u8, flag, "--check")) {
             check_fmt = true;
+        } else if (std.mem.eql(u8, flag, "--stub-asm")) {
+            saw_stub_asm_flag = true;
+            stub_asm = true;
         } else {
             return failUsage();
         }
@@ -218,6 +226,10 @@ pub fn main(init: std.process.Init) !void {
     const needs_structs = is_emit_layout or is_emit_c_struct;
     if (saw_profile_flag and !is_c_artifact_command) return failUsage();
     if (saw_checks_flag and !accepts_checks) return failUsage();
+    // `--stub-asm` only affects code emission, so it is meaningful solely on the two
+    // emit commands. Reject it elsewhere rather than silently ignoring it.
+    const is_emit_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
+    if (saw_stub_asm_flag and !is_emit_command) return failUsage();
     // `--arch` affects import resolution, so it is meaningful on any command that flattens
     // imports through the loader (the same set that accepts `--checks`, which are the compile
     // commands). Reject it elsewhere rather than silently ignoring it.
@@ -288,11 +300,11 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        try runEmitC(allocator, path, source, profile, checks);
+        try runEmitC(allocator, path, source, profile, checks, stub_asm);
     } else if (std.mem.eql(u8, command, "emit-map")) {
         try runEmitMap(allocator, path, source, profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source, checks);
+        try runEmitLlvm(allocator, path, source, checks, stub_asm);
     } else if (std.mem.eql(u8, command, "list-tests")) {
         try runListTests(allocator, path, source);
     } else if (is_emit_layout) {
@@ -648,7 +660,7 @@ fn runLowerC(allocator: std.mem.Allocator, path: []const u8, source: []const u8)
     try writeStdout(output.items);
 }
 
-fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks) !void {
+fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool) !void {
     const optimize = checks.optimize;
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
@@ -683,7 +695,7 @@ fn runEmitC(allocator: std.mem.Allocator, path: []const u8, source: []const u8, 
     const be = backend.byName("c").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = profile, .source_path = path, .checks = checks });
+    try be.lower(allocator, module, &output, .{ .profile = profile, .source_path = path, .checks = checks, .stub_asm = stub_asm });
     try writeStdout(output.items);
 }
 
@@ -724,7 +736,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     try writeStdout(output.items);
 }
 
-fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks) !void {
+fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool) !void {
     const optimize = checks.optimize;
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
@@ -759,7 +771,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     const be = backend.byName("llvm").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = .kernel, .source_path = path, .checks = checks });
+    try be.lower(allocator, module, &output, .{ .profile = .kernel, .source_path = path, .checks = checks, .stub_asm = stub_asm });
     try writeStdout(output.items);
 }
 

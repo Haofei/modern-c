@@ -88,7 +88,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    return appendCProfileWithSourcePath(allocator, module, out, opts.profile, opts.source_path, opts.checks);
+    return appendCProfileWithSourcePath(allocator, module, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm);
 }
 
 fn backendEmitMap(
@@ -207,10 +207,10 @@ fn moduleDefinesHook(module: ast.Module, hook: []const u8) bool {
 }
 
 pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
-    return appendCProfileWithSourcePath(allocator, module, out, profile, null, .{});
+    return appendCProfileWithSourcePath(allocator, module, out, profile, null, .{}, false);
 }
 
-pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks) anyerror!void {
+pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool) anyerror!void {
     const optimize = checks.optimize;
     const ksan = checks.ksan;
     const msan = checks.msan;
@@ -658,13 +658,14 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
     emitter.ksan = ksan;
     emitter.msan = msan;
     emitter.csan = csan;
+    emitter.stub_asm = stub_asm;
     try emitter.emitModule(module);
 }
 
 pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: []const u8, generated_c_path: ?[]const u8) anyerror!void {
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path, .{});
+    try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path, .{}, false);
 
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
@@ -1101,6 +1102,10 @@ const CEmitter = struct {
     ksan: bool = false,
     msan: bool = false,
     csan: bool = false,
+    // `--stub-asm` (test-only): replace each inline-asm block with a host-neutral stub so an
+    // arch module's portable logic can be compiled/run host-natively. Default false → asm is
+    // emitted verbatim (kernel/bare-metal builds unchanged).
+    stub_asm: bool = false,
     // Set while emitting an assignment LHS (a store target / lvalue), so the field-LOAD shadow
     // hook is not spliced into a context where the result must remain assignable.
     suppress_load_hook: bool = false,
@@ -3545,6 +3550,15 @@ const CEmitter = struct {
 
     fn emitAsmStmt(self: *CEmitter, asm_stmt: ast.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
         if (asm_stmt.form == .precise) return self.emitPreciseAsmStmt(asm_stmt, locals);
+        // `--stub-asm` (host-native logic tests): opaque asm is a barrier/operand-less
+        // instruction sequence whose effect is irrelevant to the portable logic under test.
+        // Emit only a compiler memory barrier (no target instructions) so the host assembler
+        // never sees the arch mnemonic, while ordering w.r.t. surrounding memory is preserved.
+        if (self.stub_asm) {
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "__asm__ __volatile__(\"\" ::: \"memory\");\n");
+            return;
+        }
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
         try self.writeIndent();
@@ -3589,6 +3603,23 @@ const CEmitter = struct {
     /// provenance comment, since the operand registers are an unsafe-contract
     /// fact the compiler trusts rather than verifies.
     fn emitPreciseAsmStmt(self: *CEmitter, asm_stmt: ast.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
+        // `--stub-asm` (host-native logic tests): replace the arch instruction with a neutral
+        // stub the host compiler can build — consume each input (so `-Werror` sees it used) and
+        // zero each output (so it is defined). The portable logic under test must not depend on
+        // the instruction's effect (e.g. a TLB fence is a no-op for single-threaded host logic).
+        if (self.stub_asm) {
+            for (asm_stmt.inputs) |input| {
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "(void)(");
+                try self.emitExprWithTarget(input.value, locals, input.ty);
+                try self.out.appendSlice(self.allocator, ");\n");
+            }
+            for (asm_stmt.outputs) |output| {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "{s} = 0;\n", .{try self.cIdent(output.name.text)});
+            }
+            return;
+        }
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
 
@@ -13889,7 +13920,7 @@ test "path-aware C emission writes source line hints" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc", .{});
+    try appendCProfileWithSourcePath(std.testing.allocator, module, &output, .kernel, "debug\"map\\case.mc", .{}, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 1 \"debug\\\"map\\\\case.mc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "#line 3 \"debug\\\"map\\\\case.mc\"") != null);

@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Sv39 page-table test: compile kernel/arch/riscv64/paging.mc through the
-# selected backend, link a C driver that builds a page table over a real pool,
-# maps virtual->physical pages, and checks translation. Only the table frames
-# (in the pool) are touched; the mapped targets are PTE values, not memory.
+# Sv39 page-table test: compile the MC driver (tests/mem/paging_host_driver.mc, which
+# imports kernel/arch/riscv64/paging.mc) through the selected backend, link a tiny C
+# harness that supplies a real physical pool + the trap/shadow stubs, and run it.
+#
+# The driver logic lives in MC, so there is NO C-side mirroring of the Heap/PageTable
+# structs (whose layout drifts as the allocator/page-table evolve) — the C harness only
+# sees `paging_host_test(pool_start, pool_len) -> u32`. The riscv `sfence.vma` inside
+# paging.mc's `sfence_vma_page` is the one non-portable instruction; MC_STUB_ASM=1 lowers
+# it to a host-neutral stub (a TLB fence is a no-op for this single-threaded host test),
+# so the portable page-table math compiles and runs host-natively on any dev arch.
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
@@ -19,12 +25,13 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+DRIVER="$HERE/tests/mem/paging_host_driver.mc"
 case "$BACKEND" in
     c)
-        MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/kernel/arch/riscv64/paging.mc" -o "$WORK/paging.o" >/dev/null
+        MC_STUB_ASM=1 MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$DRIVER" -o "$WORK/paging.o" >/dev/null
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/kernel/arch/riscv64/paging.mc" -o "$WORK/paging.o" >/dev/null
+        MC_STUB_ASM=1 MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$DRIVER" -o "$WORK/paging.o" >/dev/null
         ;;
     *)
         echo "unknown backend: $BACKEND" >&2
@@ -32,9 +39,8 @@ case "$BACKEND" in
         ;;
 esac
 
-cat >"$WORK/driver.c" <<'EOF'
+cat >"$WORK/harness.c" <<'EOF'
 #include <stdint.h>
-#include <stdbool.h>
 
 void mc_trap_Assert(void) { __builtin_trap(); }
 void mc_trap_Bounds(void) { __builtin_trap(); }
@@ -45,62 +51,25 @@ void mc_trap_InvalidShift(void) { __builtin_trap(); }
 void mc_trap_NullUnwrap(void) { __builtin_trap(); }
 void mc_trap_Unreachable(void) { __builtin_trap(); }
 
-struct PhysRange { uintptr_t start; uintptr_t end; };
-struct Heap { struct PhysRange range; uintptr_t next; };
-struct PageTable { uintptr_t root; };
-extern struct Heap heap_new(struct PhysRange r);
-extern struct PageTable page_table_new(struct Heap *h);
-extern void page_table_map(struct PageTable *pt, struct Heap *h, uintptr_t va, uintptr_t pa, uint64_t flags);
-extern uintptr_t page_table_translate(struct PageTable *pt, uintptr_t va);
-extern bool page_table_is_mapped(struct PageTable *pt, uintptr_t va);
-extern void page_table_unmap(struct PageTable *pt, uintptr_t va);
+/* KASAN shadow hooks: referenced by the heap's (never-taken) ksan branch in a default
+   non-ksan heap, so they must link but are never called here. */
+void mc_ksan_poison(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
+void mc_ksan_unpoison(uintptr_t addr, uintptr_t size) { (void)addr; (void)size; }
 
-#define CHECK(c) do { if (!(c)) return __LINE__; } while (0)
-#define R 2u
-#define W 4u
-#define X 8u
+extern uint32_t paging_host_test(uintptr_t pool_start, uintptr_t pool_len);
+
+/* A page-aligned pool standing in for the physical region the page table carves its
+   table frames from. 64 pages is ample for the handful of interior tables the checks
+   build. */
 static uint8_t pool[64 * 4096] __attribute__((aligned(4096)));
 
 int main(void) {
-    struct PhysRange rng = { (uintptr_t)pool, (uintptr_t)pool + sizeof(pool) };
-#ifdef MC_LLVM_BACKEND
-    // TODO: cover heap_new once LLVM aggregate-return ABI matches the C ABI.
-    struct Heap h = { rng, rng.start };
-#else
-    struct Heap h = heap_new(rng);
-#endif
-    struct PageTable pt = page_table_new(&h);
-
-    uintptr_t va = 0x10000000, pa = 0x80200000;
-    page_table_map(&pt, &h, va, pa, R | W | X);
-    CHECK(page_table_translate(&pt, va) == pa);
-    CHECK(page_table_translate(&pt, va + 0x123) == pa + 0x123); // page offset preserved
-
-    // A second mapping in a different top-level region (new interior tables).
-    page_table_map(&pt, &h, 0x40000000, 0x80300000, R);
-    CHECK(page_table_translate(&pt, 0x40000000) == 0x80300000);
-    CHECK(page_table_translate(&pt, va) == pa); // first mapping still valid
-
-    // An adjacent page in the same region (shares the interior tables).
-    page_table_map(&pt, &h, va + 0x1000, pa + 0x5000, R | W);
-    CHECK(page_table_translate(&pt, va + 0x1000) == pa + 0x5000);
-    CHECK(page_table_translate(&pt, va) == pa);
-
-    // Unmap one page; its neighbour (sharing interior tables) stays mapped.
-    CHECK(page_table_is_mapped(&pt, va));
-    page_table_unmap(&pt, va);
-    CHECK(!page_table_is_mapped(&pt, va));
-    CHECK(page_table_is_mapped(&pt, va + 0x1000));
-    CHECK(page_table_translate(&pt, va + 0x1000) == pa + 0x5000);
-    return 0;
+    uint32_t rc = paging_host_test((uintptr_t)pool, sizeof(pool));
+    return (int)rc; /* 0 = all checks passed; nonzero = id of the first failed check */
 }
 EOF
 
-DRIVER_CFLAGS=(-std=c11 -Wall -Wextra -Werror)
-if [ "$BACKEND" = llvm ]; then
-    DRIVER_CFLAGS+=(-DMC_LLVM_BACKEND=1)
-fi
-"$CLANG" "${DRIVER_CFLAGS[@]}" "$WORK/driver.c" "$WORK/paging.o" -o "$WORK/app"
+"$CLANG" -std=c11 -Wall -Wextra -Werror "$WORK/harness.c" "$WORK/paging.o" -o "$WORK/app"
 set +e
 "$WORK/app"
 rc=$?
@@ -109,5 +78,5 @@ if [ "$rc" -eq 0 ]; then
     echo "PASS: $TEST_NAME — $BACKEND backend Sv39 map + translate (multi-level, shared interior tables, page offsets) computes correctly"
     exit 0
 fi
-echo "FAIL: $TEST_NAME — driver returned non-zero (failing CHECK line or signal, rc=$rc)"
+echo "FAIL: $TEST_NAME — driver returned non-zero (failed check id or signal, rc=$rc)"
 exit 1
