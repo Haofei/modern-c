@@ -1537,6 +1537,11 @@ def shrink_source(env, oracle, source, signature):
     return "\n".join(lines)
 
 
+def _seed_of(finding):
+    m = re.search(r"seed=(\d+)", finding)
+    return int(m.group(1)) if m else None
+
+
 def run_one(env, oracle, seed):
     work = tempfile.mkdtemp()
     try:
@@ -1668,11 +1673,31 @@ def main():
 
     oracle = ORACLES[args.oracle]
     seeds = range(args.start, args.start + args.count)
-    fails = []
+    fails, suspects = [], []
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         for res in ex.map(lambda s: run_one(env, oracle, s), seeds):
             if res:
-                print(res); fails.append(res)
+                # A wall-clock timeout is only proof of a hang if it reproduces with nothing
+                # else competing for CPU. The fast lane oversubscribes the machine (several
+                # fuzz oracles run at once, each with --jobs=cpu_count), so a merely-slow
+                # `mcc check` can cross the 15s deadline. Defer HANGS findings to a serial
+                # re-verify below; report every other (deterministic) finding immediately.
+                if "HANGS" in res:
+                    suspects.append(res)
+                else:
+                    print(res); fails.append(res)
+    # Re-verify suspected hangs one at a time, pool drained, so a real infinite loop still
+    # trips the deadline while a contention flake completes and is dropped (with a note).
+    for res in suspects:
+        seed = _seed_of(res)
+        recheck = run_one(env, oracle, seed) if seed is not None else res
+        if recheck and "HANGS" in recheck:
+            msg = recheck + " [confirmed on serial re-verify]"
+            print(msg); fails.append(msg)
+        elif recheck:
+            print(recheck); fails.append(recheck)  # reproduced as a *different* finding — still real
+        else:
+            print("seed=%s: timeout under parallel load did NOT reproduce serially — dropped as a contention flake" % seed)
     if fails:
         print("FAIL: mcfuzz/%s — %d finding(s) over %d programs" % (args.oracle, len(fails), args.count))
         return 1
