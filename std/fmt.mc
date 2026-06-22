@@ -1,6 +1,14 @@
-// MC standard library — `fmt`: integer formatting. Kernels need to render
-// numbers without libc; these are pure `const fn`s (fold at comptime, link as
-// runtime symbols) that produce a fixed-size digit buffer plus its length.
+// MC standard library — `fmt`: integer formatting, buffer-producing layer.
+// Kernels need to render numbers without libc; these are pure `const fn`s (fold at
+// comptime, link as runtime symbols) that produce a fixed-size digit buffer plus
+// its length.
+//
+// For *streaming* a value byte-by-byte into a console `putc` (no buffer, no struct
+// return — and so no `memcpy`, which a by-value struct return like `format_u32`'s
+// forces on the C backend), use the sibling `std/fmt_sink` (`fmt_put_dec`/
+// `fmt_put_hex*`/`fmt_put_str`). The two layers are kept in separate modules on
+// purpose: a minimal freestanding image that has only a console can import
+// `fmt_sink` without dragging in `format_u32`'s `memcpy` dependency.
 
 // A formatted decimal: `digits[0 .. len]` are the ASCII digits, most
 // significant first. u32 needs at most 10 digits.

@@ -7,6 +7,7 @@
 // the `kernel/platform/active/` seam; this file stays free of any MMIO address so it never
 // needs editing to retarget a board.
 import "kernel/platform/active/console_hw.mc";
+import "std/fmt_sink.mc";
 
 export fn console_putc(c: u8) -> void {
     plat_console_putc(c);
@@ -17,18 +18,8 @@ export fn console_newline() -> void {
 }
 
 // Print a 64-bit value as `0x` followed by 16 hex digits (fixed width, no buffer).
+// The nibble arithmetic is the shared sink renderer (std/fmt_sink); this stays a
+// named entry so the panic path keeps calling `console_puthex64` unchanged.
 export fn console_puthex64(v: u64) -> void {
-    console_putc('0');
-    console_putc('x');
-    var i: u32 = 0;
-    while i < 16 {
-        let shift: u32 = 60 - i * 4;
-        let nibble: u8 = ((v >> shift) & 0xF) as u8;
-        if nibble < 10 {
-            console_putc(nibble + '0');
-        } else {
-            console_putc((nibble - 10) + 'a');
-        }
-        i = i + 1;
-    }
+    fmt_put_hex64(console_putc, v);
 }
