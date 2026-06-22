@@ -18,36 +18,26 @@
 // (`mc_build_epoch`). The RTC is the PRIMARY source; the build epoch is only a
 // safety net so TLS still has a plausible clock on RTC-less hardware.
 //
-// `phys` and `raw.load` are MC builtins, so this module deliberately imports
-// nothing — it can be compiled to a standalone object and linked into any image
-// (e.g. the TLS HTTPS-GET bridge) without dragging in std/addr's exported symbols
-// and causing duplicate-symbol link errors against modules that already import it.
+// The fixed RTC register block address and the latching-read sequence live in the board
+// backend (kernel/platform/<board>/rtc_hw.mc), reached here through the
+// `kernel/platform/active/` seam — so this file carries no MMIO address and never needs
+// editing to retarget a board. The backend imports nothing but the `phys`/`raw.load`
+// builtins, preserving this module's standalone-object property: it still links into the
+// TLS HTTPS-GET bridge without dragging in std/addr's symbols.
+import "kernel/platform/active/rtc_hw.mc";
 
-const RTC_BASE: usize = 0x10_1000; // goldfish-rtc MMIO base (riscv64 virt)
-const RTC_TIME_LOW: usize = 0x00;
-const RTC_TIME_HIGH: usize = 0x04;
 const NS_PER_SEC: u64 = 1_000_000_000;
 
 // Low 32 bits of the nanosecond counter (also latches the high half). Kept for the
 // original advancing-clock smoke check.
 export fn rtc_time_low() -> u32 {
-    var v: u32 = 0;
-    unsafe {
-        v = raw.load<u32>(phys(RTC_BASE + RTC_TIME_LOW));
-    }
-    return v;
+    return plat_rtc_read_low();
 }
 
 // Full 64-bit nanoseconds-since-epoch. Reads LOW (latches) then HIGH, per the
 // goldfish-rtc contract.
 export fn rtc_time_ns() -> u64 {
-    var lo: u32 = 0;
-    var hi: u32 = 0;
-    unsafe {
-        lo = raw.load<u32>(phys(RTC_BASE + RTC_TIME_LOW));
-        hi = raw.load<u32>(phys(RTC_BASE + RTC_TIME_HIGH));
-    }
-    return ((hi as u64) << 32) | (lo as u64);
+    return plat_rtc_read_ns();
 }
 
 // Wall-clock UNIX time in whole seconds, read from the goldfish-rtc. Returns 0 when
