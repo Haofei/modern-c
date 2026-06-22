@@ -19,7 +19,8 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/net/kmain_net_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/kmain_net_runtime.c"
+RUNTIME="$HERE/kernel/arch/riscv64/kmain_net_runtime.mc"
+SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="KERNEL-NET-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-kmain-net-test" || echo "kmain-net-test")
@@ -31,13 +32,14 @@ trap 'rm -rf "$WORK"' EXIT
 
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
-        -Wno-unused-function -fno-builtin)
+        -Wno-unused-function -Wno-unused-parameter -fno-builtin)
 
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/virtio.o" "$WORK"
 kernel_boot_compile_c_object "$RUNTIME" "$WORK/runtime.o"
+kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/virtio.o" $SUPPORT_OBJ -o "$WORK/virtio.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/runtime.o" "$WORK/virtio.o" $SUPPORT_OBJ -o "$WORK/virtio.elf"
 
 OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
         -global virtio-mmio.force-legacy=false \

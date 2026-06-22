@@ -22,7 +22,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/proc/agent_net_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/agent_net_runtime.c"
+RUNTIME="$HERE/kernel/arch/riscv64/agent_net_runtime.mc"
 SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-agent-net-test" || echo "agent-net-test")
