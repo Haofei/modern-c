@@ -10,9 +10,16 @@ MCC="${1:-zig-out/bin/mcc}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: demo-test (clang not found)"; exit 0; }
+"$CLANG" --print-targets 2>/dev/null | grep -q riscv64 || { echo "SKIP: demo-test (no riscv64 target)"; exit 0; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+# The demos are freestanding RISC-V kernel drivers (virtio-net boots under QEMU-riscv
+# via virtio-test) and one carries RISC-V inline asm (_start's `la sp,_stack_top`), so
+# they must be compile-checked for riscv64 — NOT the host default, which cannot assemble
+# that asm. Portable demos compile for riscv64 just as well.
+CFLAGS="--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -std=c11 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -Wall -Wextra -Wno-unused-parameter -Wno-unused-function"
 
 # 1. Positive demos must lower to compilable C.
 count=0
@@ -24,8 +31,7 @@ for src in "$HERE"/demo/*/*.mc; do
         cat "$WORK/err"
         exit 1
     fi
-    if ! "$CLANG" -std=c11 -ffreestanding -Wall -Wextra -Wno-unused-parameter \
-            -Wno-unused-function -c "$WORK/out.c" -o /dev/null 2>"$WORK/cerr"; then
+    if ! "$CLANG" $CFLAGS -c "$WORK/out.c" -o /dev/null 2>"$WORK/cerr"; then
         echo "FAIL: demo-test — $name produced C that does not compile"
         head "$WORK/cerr"
         exit 1
