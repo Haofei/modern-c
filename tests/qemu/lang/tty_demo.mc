@@ -1,4 +1,4 @@
-import "kernel/core/tty.mc";
+import "kernel/lib/tty.mc";
 import "std/addr.mc";
 global g_tty: Tty;
 global g_out: [64]u8;

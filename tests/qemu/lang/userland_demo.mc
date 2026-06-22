@@ -1,5 +1,5 @@
 import "kernel/core/userland.mc";
-import "kernel/core/args.mc";
+import "kernel/lib/args.mc";
 import "std/addr.mc";
 global g_args: Args;
 global g_out: [32]u8;

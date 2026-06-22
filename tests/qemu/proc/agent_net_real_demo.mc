@@ -20,7 +20,7 @@
 // Boot scaffolding (virtio-net discovery, the bump DMA + vrings) lives in the C runtime
 // (agent_net_real_runtime.c), which calls agent_net_real_main and prints the response + final token.
 
-import "kernel/core/net_broker.mc";  // net_fetch_tcp + registry + NetCap (pulls agent/process/ipc_trace/mask/tcp_socket/virtio_net/ethernet)
+import "kernel/net/net_broker.mc";  // net_fetch_tcp + registry + NetCap (pulls agent/process/ipc_trace/mask/tcp_socket/virtio_net/ethernet)
 import "std/bytes.mc";
 
 const UART_BASE: usize = 0x1000_0000;

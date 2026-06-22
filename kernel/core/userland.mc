@@ -3,7 +3,7 @@
 // and returning the byte count — a real utility program over the same primitives a shell
 // would exec.
 
-import "kernel/core/args.mc";
+import "kernel/lib/args.mc";
 import "std/addr.mc";
 
 export fn util_echo(a: *mut Args, out: PAddr, max: usize) -> usize {

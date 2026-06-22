@@ -6,7 +6,7 @@
 
 import "std/libc.mc";
 import "std/addr.mc";
-import "kernel/core/args.mc";
+import "kernel/lib/args.mc";
 
 const SH_NOTFOUND: u32 = 127; // POSIX "command not found" exit status
 const SH_OUT: usize = 128;

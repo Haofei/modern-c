@@ -7,7 +7,7 @@
 
 import "kernel/core/heap.mc";
 import "kernel/core/device.mc";
-import "kernel/core/log.mc";
+import "kernel/lib/log.mc";
 import "kernel/fs/vfs.mc";
 import "kernel/core/process.mc";
 import "kernel/arch/riscv64/idle.mc";

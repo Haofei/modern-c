@@ -1,7 +1,7 @@
 // Test wrappers around the leveled logger for the host driver. Levels cross the
 // boundary as small integers (0=Debug, 1=Info, 2=Warn, 3=Error).
 
-import "kernel/core/log.mc";
+import "kernel/lib/log.mc";
 
 global g_log: Logger;
 

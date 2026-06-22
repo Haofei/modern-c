@@ -5,7 +5,7 @@
 // the user shell layer (not baked into the generic parser), and reads the real ProcTable.
 
 import "kernel/core/shell.mc";
-import "kernel/core/tty.mc";
+import "kernel/lib/tty.mc";
 import "kernel/core/syscall.mc";
 import "kernel/core/process.mc";
 import "kernel/arch/riscv64/idle.mc";

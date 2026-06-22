@@ -26,7 +26,7 @@
 // Boot scaffolding (heap init, UART-as-console bring-up, the `export fn` entry the runtime calls,
 // stage markers over the console, the returned success bitmask) mirrors agent_e2e_demo.mc exactly.
 
-import "kernel/core/net_broker.mc";  // net_fetch + registry + NetCap (pulls agent/process/ipc_trace/mask)
+import "kernel/net/net_broker.mc";  // net_fetch + registry + NetCap (pulls agent/process/ipc_trace/mask)
 import "kernel/core/heap.mc";
 import "kernel/core/device.mc";
 import "std/addr.mc";

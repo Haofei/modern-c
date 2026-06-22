@@ -19,7 +19,7 @@
 
 import "std/addr.mc";
 import "kernel/core/heap.mc";
-import "kernel/core/canary.mc";
+import "std/canary.mc";
 
 // ---- 1. clean path: in-bounds use of a redzoned allocation ----
 export fn redzone_clean(region: usize, len: usize) -> u32 {

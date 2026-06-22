@@ -1,4 +1,4 @@
-import "kernel/core/args.mc";
+import "kernel/lib/args.mc";
 global g_args: Args;
 export fn args_run() -> u32 {
     var pass: u32 = 1;
