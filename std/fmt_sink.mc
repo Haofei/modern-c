@@ -9,9 +9,15 @@
 // stack array, and — unlike `std/fmt`'s buffer-returning `format_u32` — no struct
 // return, so the C backend emits no `memcpy`: these link into the most minimal
 // freestanding image (no libc) that has a console but nothing else.
+//
+// These are plain (non-`export`) fns on purpose. A module's source is inlined into
+// every importer's compilation unit, so an `export fn` becomes a GLOBAL symbol in
+// each importing object; two objects in one link that both import this module would
+// then collide (`ld.lld: duplicate symbol fmt_put_str`). Internal linkage emits a
+// per-object `static` copy — safe to co-link, still callable across the import.
 
 // Print a NUL-terminated byte string (read from raw memory) through `sink`.
-export fn fmt_put_str(sink: fn(u8) -> void, s: *const u8) -> void {
+fn fmt_put_str(sink: fn(u8) -> void, s: *const u8) -> void {
     let base: usize = s as usize;
     var i: usize = 0;
     while true {
@@ -27,7 +33,7 @@ export fn fmt_put_str(sink: fn(u8) -> void, s: *const u8) -> void {
 
 // Print an unsigned 64-bit value in decimal through `sink` (no leading zeros;
 // "0" for zero).
-export fn fmt_put_dec(sink: fn(u8) -> void, v: u64) -> void {
+fn fmt_put_dec(sink: fn(u8) -> void, v: u64) -> void {
     if v == 0 {
         sink(48); // '0'
         return;
@@ -68,11 +74,11 @@ fn fmt_put_hex_from(sink: fn(u8) -> void, v: u64, top_shift: i32) -> void {
 }
 
 // Print an unsigned 32-bit value as `0x` + 8 fixed-width hex nibbles through `sink`.
-export fn fmt_put_hex32(sink: fn(u8) -> void, v: u32) -> void {
+fn fmt_put_hex32(sink: fn(u8) -> void, v: u32) -> void {
     fmt_put_hex_from(sink, v as u64, 28);
 }
 
 // Print an unsigned 64-bit value as `0x` + 16 fixed-width hex nibbles through `sink`.
-export fn fmt_put_hex64(sink: fn(u8) -> void, v: u64) -> void {
+fn fmt_put_hex64(sink: fn(u8) -> void, v: u64) -> void {
     fmt_put_hex_from(sink, v, 60);
 }

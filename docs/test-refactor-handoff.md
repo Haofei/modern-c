@@ -14,7 +14,7 @@ All landed on `master`, each verified in Docker (`docker compose run --rm dev zi
   in `fast`, `m0`, `c0`, `c1`).
 - **~15 pre-existing red gates fixed** (the host-triple class, per-arch CFLAGS, irq_context
   MIR verifier gap, `zeroInitializer` C/LLVM parity, demo riscv pin, sweep `OUT_OF_SCOPE`
-  soundness). See [[memory: test-suite-refactor]] for the per-gate detail.
+  soundness). See the per-gate detail in the git history for this refactor.
 - **Host-independent spec sweep**: `spec-emit-sweep.py` pins `--target=x86_64-unknown-none
   -ffreestanding` (was host-dependent → broke `fast` on macOS/Mach-O).
 - **Sound reject contract**: `check-generated-c.sh` / `kernel-test.sh` / `demo-test.sh` now

@@ -28,8 +28,8 @@ export fn console_putc(c: u8) -> void {
     unsafe { raw.store<u8>(phys(PL011_DR), c); }
 }
 
-// The digit/nibble arithmetic lives once in `std/fmt` (`fmt_put_*`); the renderers
-// below are the thin binding of those to this PL011 `console_putc` sink.
+// The digit/nibble arithmetic lives once in `std/fmt_sink` (`fmt_put_*`); the
+// renderers below are the thin binding of those to this PL011 `console_putc` sink.
 
 // Print a NUL-terminated byte string read from raw memory.
 export fn put_str(s: *const u8) -> void {

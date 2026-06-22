@@ -13,14 +13,20 @@ import "std/fmt_sink.mc";
 
 const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
 
+// `uputc`/`uputs` are plain (non-`export`) fns on purpose: a module's source is
+// inlined into every importer's compilation unit, so an `export fn` becomes a
+// GLOBAL symbol in each importing object and two such objects in one link collide
+// (`ld.lld: duplicate symbol`). Internal linkage emits a per-object `static` copy,
+// which is safe to co-link and still callable across the import.
+
 // Write one byte to the bare 16550 UART transmit register.
-export fn uputc(c: u8) -> void {
+fn uputc(c: u8) -> void {
     unsafe {
         raw.store<u8>(phys(RT_UART_THR), c);
     }
 }
 
 // Write a NUL-terminated string over the bare UART.
-export fn uputs(s: *const u8) -> void {
+fn uputs(s: *const u8) -> void {
     fmt_put_str(uputc, s);
 }
