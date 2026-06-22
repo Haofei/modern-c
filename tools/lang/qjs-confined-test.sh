@@ -22,7 +22,7 @@ HERE="$(kernel_boot_repo_root)"
 QJS="$HERE/third_party/quickjs"
 SRC="$HERE/tests/qemu/proc/app_run_demo.mc"          # kernel side: ELF load + SYS_WRITE + confine
 RUNTIME="$HERE/tests/qemu/lang/qjs_confined_runtime.mc"  # kernel-side loader is now PURE MC
-SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
+SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 USERMODE="$HERE/tests/qemu/proc/usermode_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-$NAME_BASE-test" || echo "$NAME_BASE-test")

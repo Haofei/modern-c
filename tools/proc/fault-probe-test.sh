@@ -23,7 +23,7 @@ source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kern
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/proc/app_run_demo.mc"
 RUNTIME="$HERE/tests/qemu/proc/app_runtime.mc"
-SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
+SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 APP="$HERE/examples/apps/fault_probe.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-fault-probe-test" || echo "fault-probe-test")

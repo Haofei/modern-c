@@ -19,7 +19,7 @@ source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kern
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/proc/cap_demo.mc"
 RUNTIME="$HERE/tests/qemu/proc/cap_runtime.mc"
-SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
+SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-cap-test" || echo "cap-test")
 

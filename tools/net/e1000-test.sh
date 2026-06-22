@@ -21,7 +21,7 @@ SRC="$HERE/tests/qemu/net/e1000_demo.mc"
 # PURE-MC test entry (test_main + bare-UART reporting); `_start`/`mc_halt` come from
 # the shared M-mode bring-up runtime (context_runtime.c).
 RUNTIME="$HERE/tests/qemu/net/e1000_runtime.mc"
-SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
+SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-e1000-test" || echo "e1000-test")
 

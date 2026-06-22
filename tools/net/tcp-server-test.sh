@@ -20,7 +20,7 @@ HERE="$(kernel_boot_repo_root)"
 # Boot seam now PURE MC (imports tcp_server_demo.mc; provides test_main). context_runtime.c
 # (the green-thread context switch) stays C and provides the .text.start _start that calls it.
 SRC="$HERE/tests/qemu/net/tcp_server_mmode_demo.mc"
-SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
+SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-tcp-server-test" || echo "tcp-server-test")
 

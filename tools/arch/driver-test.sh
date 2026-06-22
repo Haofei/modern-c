@@ -22,7 +22,7 @@ SRC="$HERE/tests/qemu/arch/driver_demo.mc"
 # (which writes "DRV" through the registered driver), reports the device id, and halts.
 # `_start`/`mc_halt` still come from the shared C bring-up runtime, linked beside it.
 RUNTIME="$HERE/tests/qemu/arch/driver_runtime.mc"
-SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
+SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-driver-test" || echo "driver-test")
 

@@ -14,7 +14,7 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffree
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/tests/qemu/lang/shell_user_demo.mc" "$W/mc.o" "$W"
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/tests/qemu/lang/shell_user_runtime.mc" "$W/rt.o" "$W"
 kernel_boot_compile_c_object "$HERE/tests/qemu/proc/usermode_runtime.mc" "$W/um.o"
-kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/context_runtime.c" "$W/ctx.o"
+kernel_boot_compile_c_object "$HERE/tests/qemu/proc/context_runtime.mc" "$W/ctx.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$W/llvm-support.o")"
 kernel_boot_compile_rt "$W/freestanding.o"
 "$LLD" -T "$HERE/tests/qemu/virt.ld" "$W/freestanding.o" "$W/ctx.o" "$W/um.o" "$W/rt.o" "$W/mc.o" $SUPPORT_OBJ -o "$W/shell.elf"

@@ -23,7 +23,7 @@ SRC="$HERE/tests/qemu/lang/syscall_demo.mc"
 # mc_syscall, issues a few ecalls, and checks the results. `_start`/`mc_halt` still
 # come from the shared C bring-up runtime, linked beside it.
 RUNTIME="$HERE/tests/qemu/lang/syscall_runtime.mc"
-SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
+SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-syscall-test" || echo "syscall-test")
 

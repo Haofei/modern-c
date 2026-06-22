@@ -36,7 +36,7 @@ HERE="$(kernel_boot_repo_root)"
 # _start that calls test_main are the shared context_runtime.c (C), linked alongside.
 SRC="$HERE/tests/qemu/proc/agent_net_real_mmode_demo.mc"
 PLATFORM="$HERE/kernel/arch/riscv64/mmode_dma_time.mc"
-SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
+SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="AGENT-NET-REAL-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-agent-net-real-test" || echo "agent-net-real-test")
