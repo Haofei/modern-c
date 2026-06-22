@@ -5570,8 +5570,19 @@ pub const Checker = struct {
             else => return null,
         };
         const base_ty = exprDeclaredType(member.base.*, ctx) orelse return null;
-        const dyn = switch (resolveAliasType(base_ty, ctx).kind) {
+        const resolved_base = resolveAliasType(base_ty, ctx);
+        // The receiver may be the trait object itself (`dyn Trait`) OR a pointer to it
+        // (`*dyn Trait` / `*mut dyn Trait`, the common form — a method dispatch auto-derefs the
+        // pointer). Resolving the trait method here (BEFORE the free-function fallback below) makes
+        // `recv.method()` dispatch to the trait method even when a same-named free function is in
+        // scope — e.g. a `*mut dyn Allocator`'s `.alloc()` must be Allocator.alloc, not a free
+        // `alloc()` that another imported module happens to export.
+        const dyn = switch (resolved_base.kind) {
             .dyn_trait => |d| d,
+            .pointer => |p| switch (resolveAliasType(p.child.*, ctx).kind) {
+                .dyn_trait => |d| d,
+                else => return null,
+            },
             else => return null,
         };
         const td = self.trait_decls orelse return null;

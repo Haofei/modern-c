@@ -2159,7 +2159,13 @@ const FunctionBuilder = struct {
                     .call
                 else
                     .indirect_call;
-                const call_ty = if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
+                // A `*dyn Trait` method call is a virtual dispatch — its return type is the trait
+                // method's, not a same-named free function's. The verifier carries no trait sigs,
+                // so leave it `.unknown` rather than mis-binding to `summaries[method_name]`.
+                const is_dyn_dispatch = self.isDynDispatchMember(node.callee.*);
+                const call_ty: ValueType = if (is_dyn_dispatch)
+                    .unknown
+                else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
                 if (!self.active_unsafe and isUnsafeOperationCall(node.callee.*)) {
                     try self.addInstr(.unsafe_check, callee_name, .unknown, expr.span);
@@ -2178,14 +2184,16 @@ const FunctionBuilder = struct {
                         try self.addInstrWithValue(.representation_check, representationTypeName(call_ty), call_ty, expr.span, callee_name);
                     }
                 }
-                if (self.summaries.get(callee_name)) |summary| {
-                    const checked_len = @min(node.args.len, summary.params.len);
-                    for (node.args[0..checked_len], summary.params[0..checked_len]) |arg, param| {
-                        const param_ty = valueTypeFromTypeAlias(param.ty, self.enums, self.structs, self.packed_bits, self.aliases);
-                        try self.addConversionCheck(param_ty, arg, .call_arg, arg.span);
-                        try self.addResultPayloadConversionCheck(param_ty, arg, arg.span);
-                        try self.addTargetRepresentationCheck(param_ty, arg, arg.span);
-                        try self.addAggregateConversionChecks(param.ty, arg, .call_arg);
+                if (!is_dyn_dispatch) {
+                    if (self.summaries.get(callee_name)) |summary| {
+                        const checked_len = @min(node.args.len, summary.params.len);
+                        for (node.args[0..checked_len], summary.params[0..checked_len]) |arg, param| {
+                            const param_ty = valueTypeFromTypeAlias(param.ty, self.enums, self.structs, self.packed_bits, self.aliases);
+                            try self.addConversionCheck(param_ty, arg, .call_arg, arg.span);
+                            try self.addResultPayloadConversionCheck(param_ty, arg, arg.span);
+                            try self.addTargetRepresentationCheck(param_ty, arg, arg.span);
+                            try self.addAggregateConversionChecks(param.ty, arg, .call_arg);
+                        }
                     }
                 }
                 if (instr_kind == .unchecked_assume) try self.addRangeFactForUncheckedCall(callee_name, node.args, expr.span);
@@ -2322,6 +2330,21 @@ const FunctionBuilder = struct {
         if (directCalleeName(callee) == null) return false;
         if (self.summaries.contains(callee_name)) return true;
         return !self.calleeMayResolveToValue(callee);
+    }
+
+    // A method call dispatched through a `*dyn Trait` receiver (`a.alloc()` on `a: *mut dyn
+    // Allocator`). The MIR verifier holds no trait method signatures, so it must NOT type such a
+    // call from `summaries[method_name]` — a free function of the same name (e.g. `std/dma.alloc`)
+    // would otherwise hijack the return/arg types. Callers treat these as `.unknown` (unverified).
+    fn isDynDispatchMember(self: *FunctionBuilder, callee: ast.Expr) bool {
+        return switch (callee.kind) {
+            .member => |node| if (self.typeExprForExpr(node.base.*)) |base_ty|
+                isDynTraitTypeAlias(base_ty, self.aliases)
+            else
+                false,
+            .grouped => |inner| self.isDynDispatchMember(inner.*),
+            else => false,
+        };
     }
 
     fn calleeName(self: *FunctionBuilder, callee: ast.Expr) []const u8 {
@@ -3182,7 +3205,10 @@ const FunctionBuilder = struct {
                 reduceCallReturnTypeExpr(node) orelse
                 self.constGetCallTypeExpr(node) orelse
                 self.ptrOffsetReceiverTypeExpr(node.callee.*) orelse
-                if (self.summaries.get(self.calleeName(node.callee.*))) |summary| summary.return_type_expr else null,
+                // A `*dyn Trait` method call dispatches virtually to the trait method; its return
+                // type is the trait's, which the verifier does not carry. Resolve to `null`
+                // (unknown) rather than a same-named free function's summary return type.
+                (if (self.isDynDispatchMember(node.callee.*)) null else if (self.summaries.get(self.calleeName(node.callee.*))) |summary| summary.return_type_expr else null),
             .deref => |inner| if (self.typeExprForExpr(inner.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
             .index => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| storageElementTypeAlias(base_ty, self.aliases) else null,
             .slice => |node| if (self.typeExprForExpr(node.base.*)) |base_ty| sliceTypeForBaseAlias(base_ty, node.base.*.span, self.aliases) else null,
@@ -3208,6 +3234,8 @@ const FunctionBuilder = struct {
                 .{ .nullable_pointer = .{ .kind = .single, .mutability = .none, .child = typeText(ty) } }
             else if (reduceCallReturnTypeExpr(node)) |ty|
                 valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases)
+            else if (self.isDynDispatchMember(node.callee.*))
+                .unknown
             else if (directCalleeName(node.callee.*)) |callee|
                 if (self.summaries.get(callee)) |summary| summary.return_ty else .unknown
             else
@@ -4649,6 +4677,28 @@ fn structTypeNameAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(
         // path (memberType) which already handles `.pointer`.
         .pointer => |node| structTypeNameAliasDepth(node.child.*, aliases, depth + 1),
         else => null,
+    };
+}
+
+// True if `ty` is a trait-object type `*dyn Trait` / `*mut dyn Trait` (the leading `*` is folded
+// into the `.dyn_trait` node, ast.zig §dyn_trait), resolving through aliases / nullable / pointer
+// wrappers. A method call whose receiver is dyn is a VIRTUAL dispatch: its return type is the trait
+// method's, which the MIR verifier does not carry. Used to keep such a call's type `.unknown`
+// instead of mis-binding to a same-named free function's summary (e.g. `a.alloc()` on
+// `*mut dyn Allocator` vs the free `std/dma.alloc -> CpuBuffer`).
+fn isDynTraitTypeAlias(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    return isDynTraitTypeAliasDepth(ty, aliases, 0);
+}
+
+fn isDynTraitTypeAliasDepth(ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+    if (depth > 64) return false;
+    return switch (ty.kind) {
+        .dyn_trait => true,
+        .name => |name| if (aliases.get(name.text)) |resolved| isDynTraitTypeAliasDepth(resolved, aliases, depth + 1) else false,
+        .qualified => |node| isDynTraitTypeAliasDepth(node.child.*, aliases, depth + 1),
+        .nullable => |child| isDynTraitTypeAliasDepth(child.*, aliases, depth + 1),
+        .pointer => |node| isDynTraitTypeAliasDepth(node.child.*, aliases, depth + 1),
+        else => false,
     };
 }
 
