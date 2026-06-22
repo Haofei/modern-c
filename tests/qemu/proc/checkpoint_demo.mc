@@ -10,7 +10,7 @@
 // Returns 1 only if every check passes.
 
 import "kernel/core/process.mc";
-import "kernel/core/checkpoint.mc";
+import "kernel/lib/checkpoint.mc";
 import "kernel/lib/fdspace.mc";
 import "kernel/lib/resacct.mc";
 import "kernel/fs/blobstore.mc";

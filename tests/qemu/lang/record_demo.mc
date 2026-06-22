@@ -1,6 +1,6 @@
 import "kernel/core/ipc_trace.mc";
 import "kernel/fs/blobstore.mc";
-import "kernel/core/record.mc";
+import "kernel/lib/record.mc";
 
 global g_tr: IpcTrace;
 global g_store: BlobStore;
