@@ -5253,6 +5253,20 @@ const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .binary => |node| {
+                // Universal guard for the MMIO-read short-circuit hazard. Every path that emits
+                // a logical `&&`/`||` ultimately delegates here (the generic binary sink), so the
+                // check belongs on the emission path — not only in collectMmioReadHoistsForExpr,
+                // which the literal/argument/generic paths can bypass. A logical operand holding
+                // two or more MMIO reads would render them inline via non-sequencing C operators
+                // with unspecified order (MC guarantees left-to-right; docs/c-ub-matrix.md row 8).
+                // A single read per operand is sequencing-safe inline; reject the rest.
+                if ((node.op == .logical_and or node.op == .logical_or)) {
+                    if (locals) |local_set| {
+                        if (self.countMmioReads(node.left.*, local_set) > 1 or self.countMmioReads(node.right.*, local_set) > 1) {
+                            return error.UnsupportedCEmission;
+                        }
+                    }
+                }
                 if (isCheckedBinaryOp(node.op) and !self.binaryIsFloat(node, locals)) {
                     // A checked integer op used where no target type is supplied
                     // (e.g. an operand of a comparison: `(a + b) == c`). Recover
@@ -16893,6 +16907,82 @@ test "C emission rejects non-static global initializers instead of zeroing" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, appendC(std.testing.allocator, module, &output));
+}
+
+test "C emission rejects two MMIO reads in one short-circuit operand (eval-order hazard)" {
+    // Two MMIO reads in a single `&&` operand would render inline as C function-call
+    // arguments, whose evaluation order is unspecified — MC guarantees left-to-right. emit-c
+    // must reject this rather than silently reorder device reads. Guards both the hoist
+    // collector AND the generic binary emission path, so any context that reaches the logical
+    // operator is covered.
+    const source =
+        \\extern mmio struct ProbeMmio {
+        \\    magic: Reg<u32, .read>      @offset(0x000),
+        \\    device_id: Reg<u32, .read>  @offset(0x008),
+        \\}
+        \\fn both(a: u32, b: u32) -> bool { return a == b; }
+        \\fn probe(slot: MmioPtr<ProbeMmio>) -> bool {
+        \\    return both(slot.magic.read(.acquire), slot.device_id.read(.acquire)) && true;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_reject_mmio_seq.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var checker = sema.Checker.init(&reporter);
+    checker.checkModule(module);
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, appendC(std.testing.allocator, module, &output));
+}
+
+test "C emission keeps a single MMIO read per short-circuit operand (no over-rejection)" {
+    // The companion to the hazard test: one read per `&&` operand is sequencing-safe and must
+    // still lower — each read renders inline at its syntactic position, so the right read is
+    // emitted INSIDE the `&&` (short-circuit), after the left.
+    const source =
+        \\extern mmio struct ProbeMmio {
+        \\    magic: Reg<u32, .read>      @offset(0x000),
+        \\    device_id: Reg<u32, .read>  @offset(0x008),
+        \\}
+        \\fn probe(slot: MmioPtr<ProbeMmio>) -> bool {
+        \\    return slot.magic.read(.acquire) == 1 && slot.device_id.read(.acquire) == 2;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_single_mmio_seq.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var checker = sema.Checker.init(&reporter);
+    checker.checkModule(module);
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+    // The device_id read appears AFTER the `&&` in the emitted text (inside the right operand),
+    // confirming short-circuit order rather than a hoist before the expression.
+    const amp = std.mem.indexOf(u8, output.items, "&&") orelse return error.TestUnexpectedResult;
+    const devid = std.mem.indexOf(u8, output.items, "device_id") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(devid > amp);
 }
 
 test "C emission uses type-directed helpers for fixed-width checked arithmetic" {
