@@ -28,6 +28,9 @@ All landed on `master`, each verified in Docker (`docker compose run --rm dev zi
   build host-native.
 - **Phase 4 (slice)**: one shared runner `tools/lib/host-mc-logic-test.sh` for those host
   MC-driver logic tests; per-test scripts are ~10-line wrappers.
+- **Phase 7 (high-leverage portion)**: shared `kernel_boot_link_run` + 24 single-marker
+  riscv64 boot gates migrated to it (see the Phase 7 entry under "Remaining work" for the
+  principled boundary on what stays custom).
 - **DRY**: shared `tools/toolchain/spec_sweep_lib.py` (sweep parser); `virtio-test` /
   `mcfuzz` flaky-timeout mitigations.
 
@@ -67,10 +70,20 @@ belongs on CI, but the long-tail is in good shape — not a backlog of reds.
   mostly QEMU boots that legitimately need their own harness. A full consolidation is a large,
   design-heavy refactor (gate-name preservation, per-test QEMU args, backend split) — scope it
   deliberately, slice by category (the host-MC-logic slice above is the template).
-- **Phase 7 — QEMU-tier unification** — fold the per-test QEMU boot scripts onto a shared
-  boot/run harness (analogous to `host-mc-logic-test.sh` but for `tools/qemu/kernel-boot-lib.sh`
-  consumers). Large; needs a quiet host to verify the boot matrix. Recommend: do it as slices
-  per arch (riscv64 first, then x86/aarch64), each verified before the next.
+- **Phase 7 — QEMU-tier unification** — the high-leverage portion is **done**: a shared
+  `kernel_boot_link_run` (in `kernel-boot-lib.sh`) collapses the link + boot + UART-dump +
+  marker-grep + PASS/FAIL tail, and **all 24 cleanly-uniform single-marker riscv64 `-bios none`
+  boot gates** now use it (cow/demand/mmap/paging-activate/contain/isolation/ipc2/privilege/
+  alloc/backtrace/block-server/cnum/cstr/fs-server/registry/sched-vm/signal/stdio/timeout/
+  usched/vararg/vm-switch/vmctx/vmspace — each verified ×c/llvm under QEMU).
+  The **remaining ~70 boot scripts stay custom by design** — consolidating them would *lose
+  assertions or diagnostics*, which is a regression, not a cleanup. Their breakdown:
+  multi-marker field assertions (~37, e.g. bootinfo checks 7 BootInfo fields), networked
+  (~25, need `-netdev`/`-device`/pcap), multi-arch/s-mode (~8, different emulator/`-m`/`-smp`),
+  dynamic diagnostics (~4, e.g. rtc's EPOCH extraction). These are the irreducible per-test
+  variation; the shared compile primitives (`kernel_boot_compile_*`) already factor out the
+  common build. Any future extension (a marker-list / qemu-args-parameterized variant) should
+  be added only when a *new* clean group appears that would otherwise duplicate it.
 
 ## Proven fix patterns (reuse these)
 
