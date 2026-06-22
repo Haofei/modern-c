@@ -16978,11 +16978,21 @@ test "C emission keeps a single MMIO read per short-circuit operand (no over-rej
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendC(std.testing.allocator, module, &output);
-    // The device_id read appears AFTER the `&&` in the emitted text (inside the right operand),
-    // confirming short-circuit order rather than a hoist before the expression.
-    const amp = std.mem.indexOf(u8, output.items, "&&") orelse return error.TestUnexpectedResult;
-    const devid = std.mem.indexOf(u8, output.items, "device_id") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(devid > amp);
+    // Prove short-circuit order by anchoring on the two actual register READS, which are the
+    // only occurrences of `slot->magic` / `slot->device_id` (the bare `magic`/`device_id`
+    // struct-field declarators don't carry the `slot->` receiver), and on the `&&` that
+    // follows the left read (not some earlier `&&` in generated helper code). Order must be:
+    //   left read (slot->magic)  <  the `&&`  <  right read (slot->device_id)
+    // i.e. the device_id read is emitted INSIDE the `&&` right operand, after the left read.
+    const magic_read = std.mem.indexOf(u8, output.items, "slot->magic") orelse return error.TestUnexpectedResult;
+    const amp = std.mem.indexOfPos(u8, output.items, magic_read, "&&") orelse return error.TestUnexpectedResult;
+    const devid_read = std.mem.indexOf(u8, output.items, "slot->device_id") orelse return error.TestUnexpectedResult;
+    // exactly one of each read (no accidental duplication / hoist), and the device_id read is
+    // not the struct-field declarator (which has no `slot->`).
+    try std.testing.expect(std.mem.indexOfPos(u8, output.items, magic_read + 1, "slot->magic") == null);
+    try std.testing.expect(std.mem.indexOfPos(u8, output.items, devid_read + 1, "slot->device_id") == null);
+    try std.testing.expect(magic_read < amp);
+    try std.testing.expect(amp < devid_read);
 }
 
 test "C emission uses type-directed helpers for fixed-width checked arithmetic" {
