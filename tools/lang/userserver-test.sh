@@ -23,7 +23,7 @@ SRC="$HERE/tests/qemu/lang/userserver_demo.mc"
 # from the shared usermode_runtime.c.
 RUNTIME="$HERE/tests/qemu/lang/userserver_runtime.mc"
 SHARED="$HERE/kernel/arch/riscv64/context_runtime.c"
-USERMODE="$HERE/kernel/arch/riscv64/usermode_runtime.c"
+USERMODE="$HERE/tests/qemu/proc/usermode_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-userserver-test" || echo "userserver-test")
 

@@ -13,7 +13,7 @@ W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wno-switch-bool -Wno-parentheses-equality)
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/tests/qemu/lang/shell_user_demo.mc" "$W/mc.o" "$W"
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/tests/qemu/lang/shell_user_runtime.mc" "$W/rt.o" "$W"
-kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/usermode_runtime.c" "$W/um.o"
+kernel_boot_compile_c_object "$HERE/tests/qemu/proc/usermode_runtime.mc" "$W/um.o"
 kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/context_runtime.c" "$W/ctx.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$W/llvm-support.o")"
 kernel_boot_compile_rt "$W/freestanding.o"
