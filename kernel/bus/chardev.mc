@@ -1,4 +1,4 @@
-// kernel/core/device — a char-device driver registry.
+// kernel/bus/chardev — a char-device driver registry.
 //
 // A driver conforms to the `CharDevice` trait (docs/spec/MC_0.7_Final_Design.md §32),
 // supplying a `putc` operation; the kernel writes characters through the registry,

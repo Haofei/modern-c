@@ -14,7 +14,7 @@
 // panic_trap and HALT the kernel (the fail-closed default of the timer handler).
 
 import "kernel/core/heap.mc";
-import "kernel/core/device.mc";
+import "kernel/bus/chardev.mc";
 import "kernel/core/process.mc";
 import "kernel/lib/resacct.mc";
 import "kernel/lib/fdspace.mc";

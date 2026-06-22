@@ -6,7 +6,7 @@
 // of the stages that succeeded (0x1F = all five).
 
 import "kernel/core/heap.mc";
-import "kernel/core/device.mc";
+import "kernel/bus/chardev.mc";
 import "kernel/lib/log.mc";
 import "kernel/fs/vfs.mc";
 import "kernel/core/process.mc";

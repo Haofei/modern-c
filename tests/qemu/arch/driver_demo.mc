@@ -2,7 +2,7 @@
 // "DRV" to the console *through the registry* — each byte dispatches through the
 // driver's function-pointer `putc`, decoupled from the concrete device.
 
-import "kernel/core/device.mc";
+import "kernel/bus/chardev.mc";
 
 const UART_BASE: usize = 0x1000_0000;
 

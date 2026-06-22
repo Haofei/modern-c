@@ -23,7 +23,7 @@
 
 import "kernel/core/agent.mc";      // pulls process.mc + ipc_trace.mc + std/mask.mc
 import "kernel/core/heap.mc";
-import "kernel/core/device.mc";
+import "kernel/bus/chardev.mc";
 import "std/addr.mc";
 
 const UART_BASE: usize = 0x1000_0000;
