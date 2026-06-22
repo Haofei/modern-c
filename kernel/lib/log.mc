@@ -1,4 +1,4 @@
-// kernel/core/log — leveled, named tracepoints over the trace ring buffer.
+// kernel/lib/log — leveled, named tracepoints over the trace ring buffer.
 //
 // Each event carries a severity (Debug/Info/Warn/Error) and a tracepoint id. A
 // runtime-settable threshold filters events below it (counted as `dropped`, never

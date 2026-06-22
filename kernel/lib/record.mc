@@ -1,4 +1,4 @@
-// kernel/core/record — a first-cut durable recorder for the IPC provenance event stream.
+// kernel/lib/record — a first-cut durable recorder for the IPC provenance event stream.
 //
 // P3.1 (deterministic record, first cut). Full deterministic replay — re-running an agent
 // with the SAME scheduling order and the SAME external inputs — is future work and NOT what
@@ -16,7 +16,7 @@
 // the foundation the replay reader iterates.
 //
 // BLOB LAYOUT (a single framed byte run, all sub-regions copied verbatim as raw struct bytes,
-// the same backend-independent raw-struct-byte approach kernel/core/checkpoint uses):
+// the same backend-independent raw-struct-byte approach kernel/lib/checkpoint uses):
 //
 //     offset                  size                       contents
 //     ------                  ----                       --------

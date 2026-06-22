@@ -1,4 +1,4 @@
-// kernel/core/args — argv/envp passed to a program: NUL-terminated strings packed into
+// kernel/lib/args — argv/envp passed to a program: NUL-terminated strings packed into
 // a buffer with per-arg offsets, so exec can hand a process its argument vector.
 //
 // Capacity-safe: argc never exceeds ARG_MAX and the buffer never overflows. When input

@@ -1,4 +1,4 @@
-// kernel/core/perm — POSIX-style permission checks: a credential (uid/gid) against a
+// kernel/lib/perm — POSIX-style permission checks: a credential (uid/gid) against a
 // file's owner/group and 9-bit rwx mode (owner<<6 | group<<3 | other). uid 0 (root)
 // bypasses. This is the access-control the VFS/PM consult on open.
 

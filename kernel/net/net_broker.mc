@@ -1,4 +1,4 @@
-// kernel/core/net_broker — the AGENT-OS NETWORK EGRESS BROKER. A sandboxed agent NEVER touches a
+// kernel/net/net_broker — the AGENT-OS NETWORK EGRESS BROKER. A sandboxed agent NEVER touches a
 // raw socket. To reach the network it calls this broker, which on its behalf:
 //   * CAPABILITY-GATES the destination against the agent's per-agent EGRESS ALLOWLIST (the exfil
 //     block — an agent may reach only the endpoint ids it was granted, e.g. the LLM/inference

@@ -1,4 +1,4 @@
-// kernel/core/mcp — the MCP-compatible façade (M4): speak MCP, enforce with MC
+// kernel/agent/mcp — the MCP-compatible façade (M4): speak MCP, enforce with MC
 // capabilities.
 //
 // The strategy is "speak MCP, don't RUN MCP": MC does not host arbitrary foreign

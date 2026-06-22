@@ -1,4 +1,4 @@
-// kernel/core/canary — a lightweight stack-frame guard (D2.4, stack-overflow half).
+// std/canary — a lightweight stack-frame guard (D2.4, stack-overflow half).
 //
 // A function that wants overflow protection places a `StackGuard` at the top of its
 // frame (the boundary a downward-growing overflow would smash first), then calls

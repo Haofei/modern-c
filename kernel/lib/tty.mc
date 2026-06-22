@@ -1,4 +1,4 @@
-// kernel/core/tty — terminal line discipline in canonical mode: input bytes are
+// kernel/lib/tty — terminal line discipline in canonical mode: input bytes are
 // assembled into a line, backspace erases the last byte, and a newline completes the
 // line so it can be read as a unit. This is the core of a TTY server (cooked input).
 

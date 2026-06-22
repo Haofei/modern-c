@@ -1,4 +1,4 @@
-// kernel/core/pipe — an in-kernel byte pipe (FIFO): a bounded ring buffer with
+// kernel/lib/pipe — an in-kernel byte pipe (FIFO): a bounded ring buffer with
 // write/read, the primitive behind POSIX pipes and FIFOs. Backpressure is explicit:
 // a write to a full pipe fails, a read of an empty pipe reports empty (no blocking
 // here — a PM/VFS server layers blocking semantics on top).

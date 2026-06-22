@@ -1,4 +1,4 @@
-// kernel/core/pgroup — process groups & sessions (job control bookkeeping a PM owns).
+// kernel/lib/pgroup — process groups & sessions (job control bookkeeping a PM owns).
 // Each pid maps to a process-group id and a session id; setsid starts a new session
 // (pgid = sid = pid), setpgid joins/creates a group within the session.
 

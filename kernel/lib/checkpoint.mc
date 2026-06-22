@@ -1,4 +1,4 @@
-// kernel/core/checkpoint — a first-cut agent checkpoint/restore over the durable BlobStore.
+// kernel/lib/checkpoint — a first-cut agent checkpoint/restore over the durable BlobStore.
 //
 // An "agent" here is a process whose interesting durable state is the two rich per-process
 // resources the kernel already models: its file-descriptor space (`FdSpace`, via proc_fds)
