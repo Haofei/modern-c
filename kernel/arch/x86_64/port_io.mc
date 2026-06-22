@@ -16,6 +16,8 @@
 // the instruction demands. This is the x86 equivalent of the C `"a"(val)`/`"Nd"(port)` the
 // inline asm this replaces used, expressed through MC's generic-operand model.
 
+import "std/fmt_sink.mc";
+
 const COM1: u16 = 0x3F8;        // base port of the legacy 16550 UART
 const COM1_LSR: u16 = 0x3FD;    // line-status register (COM1 + 5)
 const LSR_THRE: u8 = 0x20;      // transmit-holding-register-empty bit
@@ -114,70 +116,25 @@ export fn console_putc(c: u8) -> void {
     outb(COM1, c);
 }
 
+// The digit/nibble arithmetic lives once in `std/fmt_sink` (`fmt_put_*`); the renderers
+// below are the thin binding of those to this COM1 `console_putc` sink.
+
 // Print a NUL-terminated byte string read from raw memory.
 export fn put_str(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 {
-            break;
-        }
-        console_putc(b);
-        i = i + 1;
-    }
+    fmt_put_str(console_putc, s);
 }
 
 // Print an unsigned 32-bit value as `0x` + 8 fixed-width hex nibbles.
 export fn put_hex(v: u32) -> void {
-    console_putc(48);  // '0'
-    console_putc(120); // 'x'
-    var s: i32 = 28;
-    while s >= 0 {
-        let nib: u32 = (v >> (s as u32)) & 0xF;
-        if nib < 10 {
-            console_putc((48 + nib) as u8);   // '0'..'9'
-        } else {
-            console_putc((87 + nib) as u8);   // 'a'..'f'
-        }
-        s = s - 4;
-    }
+    fmt_put_hex32(console_putc, v);
 }
 
 // Print an unsigned 64-bit value as `0x` + 16 fixed-width hex nibbles.
 export fn put_hex64(v: u64) -> void {
-    console_putc(48);  // '0'
-    console_putc(120); // 'x'
-    var s: i32 = 60;
-    while s >= 0 {
-        let nib: u64 = (v >> (s as u64)) & 0xF;
-        if nib < 10 {
-            console_putc((48 + nib) as u8);
-        } else {
-            console_putc((87 + nib) as u8);
-        }
-        s = s - 4;
-    }
+    fmt_put_hex64(console_putc, v);
 }
 
 // Print an unsigned 64-bit value in decimal (no leading zeros; "0" for zero).
 export fn put_dec(v: u64) -> void {
-    if v == 0 {
-        console_putc(48);
-        return;
-    }
-    var buf: [20]u8 = .{ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
-    var n: u64 = v;
-    var i: usize = 0;
-    while n > 0 {
-        let d: u64 = n % 10;
-        buf[i] = (48 + d) as u8;
-        n = n / 10;
-        i = i + 1;
-    }
-    while i > 0 {
-        i = i - 1;
-        console_putc(buf[i]);
-    }
+    fmt_put_dec(console_putc, v);
 }
