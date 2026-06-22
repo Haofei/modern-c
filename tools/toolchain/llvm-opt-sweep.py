@@ -40,10 +40,52 @@ FORBIDDEN_ASSUMPTIONS = (
 FORBIDDEN_RE = re.compile(r"(^|[ ,(])(" + "|".join(FORBIDDEN_ASSUMPTIONS) + r")([ ,)]|$)")
 REASSOC_RE = re.compile(r"(^|[ ,(])reassoc([ ,)]|$)")
 
+# emit-llvm emits no target triple, so llc would inherit the host default (aarch64 in
+# the arm64 dev container) and fail to assemble the precise-asm fixtures' inline asm.
+# Pin one deterministic triple (their valid asm is x86-64; non-asm IR is neutral).
+OBJ_TRIPLE = "x86_64-unknown-none"
+
+# Same contract as spec-llvm-sweep.py's OUT_OF_SCOPE (kept in parity): phase=sema
+# DIAGNOSTIC spec fixtures (check= is an E_* code, never a lower-* fact) owned by
+# src/spec_tests.zig, not by codegen. A fixture with a real lower-* check may never be
+# added here. (Only spec fixtures match these names; c_emit fixtures are never keyed.)
+OUT_OF_SCOPE = {
+    "soundness_address_class_cast.mc": "checker-only address-class cast has no IR lowering (phase=sema; owned by spec_tests.zig)",
+    "soundness_use_after_move.mc": "accept/reject cases share move-typed defs the strip cannot isolate (phase=sema; owned by spec_tests.zig)",
+    "soundness_conservative_overrejection.mc": "shared move-typed defs across accept/reject (phase=sema; owned by spec_tests.zig)",
+    "soundness_opaque_declassify.mc": "accept/reject cases share opaque defs (phase=sema; owned by spec_tests.zig)",
+    "soundness_guard_opaque_reject.mc": "opaque private-field reject fixture; positive impl cannot be chunk-isolated (phase=sema; owned by spec_tests.zig)",
+    "soundness_orphan_impl_reject.mc": "orphan-impl reject fixture (phase=sema; owned by spec_tests.zig)",
+    "traits_effect_sleep_in_atomic.mc": "effect-typed callees are EXPECT_ERROR-stripped, leaving dangling refs (phase=parse,sema; owned by spec_tests.zig)",
+}
+
 
 def split_top_level(src):
+    """Comment/string-aware split into top-level chunks by brace/semicolon at depth 0:
+    punctuation inside a `//` or `/* */` comment or a string/char literal is literal
+    text. Kept identical to spec-emit-sweep.py."""
     chunks, buf, depth = [], "", 0
-    for c in src:
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = src.find("\n", i)
+            j = n if j == -1 else j + 1
+            buf += src[i:j]; i = j; continue
+        if c == "/" and nxt == "*":
+            j = src.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            buf += src[i:j]; i = j; continue
+        if c == '"' or c == "'":
+            q = c; buf += c; i += 1
+            while i < n:
+                d = src[i]; buf += d; i += 1
+                if d == "\\" and i < n:
+                    buf += src[i]; i += 1; continue
+                if d == q:
+                    break
+            continue
         buf += c
         if c == "{":
             depth += 1
@@ -55,6 +97,7 @@ def split_top_level(src):
         elif c == ";" and depth == 0:
             chunks.append(buf)
             buf = ""
+        i += 1
     if buf.strip():
         chunks.append(buf)
     return chunks
@@ -107,7 +150,7 @@ def run_llc_object(ir):
     obj_path = f"{ll_path}.o"
     try:
         lowered = subprocess.run(
-            ["llc", "-filetype=obj", ll_path, "-o", obj_path],
+            ["llc", "-mtriple=" + OBJ_TRIPLE, "-filetype=obj", ll_path, "-o", obj_path],
             capture_output=True,
             text=True,
         )
@@ -204,12 +247,19 @@ def main():
             if failure:
                 kind, message = failure
                 failures.append((name, kind, message))
+    oos_failures = [f for f in failures if f[0] in OUT_OF_SCOPE]
+    failures = [f for f in failures if f[0] not in OUT_OF_SCOPE]
     failures.sort()
+    oos_failures.sort()
 
     print(
         f"LLVM optimizer sweep: spec fixtures {len(spec_fixtures)} "
         f"({spec_functions} valid functions), c_emit fixtures {len(c_emit_fixtures)}"
     )
+    if oos_failures:
+        print("known out-of-scope fixtures (allowlisted, not failing the gate):")
+        for name, kind, message in oos_failures:
+            print(f"  [{kind}] {name}: {message}\n        reason: {OUT_OF_SCOPE[name]}")
     if failures:
         print(f"FAIL: {len(failures)} LLVM module(s) failed optimizer verification:")
         for name, kind, message in failures:

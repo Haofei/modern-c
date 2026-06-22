@@ -42,6 +42,7 @@ SWEEP_FILES = [
     "tools/toolchain/spec-emit-sweep.py",
     "tools/toolchain/spec-llvm-sweep.py",
     "tools/toolchain/spec-llvm-obj-sweep.py",
+    "tools/toolchain/llvm-opt-sweep.py",
 ]
 
 
