@@ -54,8 +54,12 @@ for f in dtoa libunicode libregexp quickjs; do
     "$CLANG" "${APP_CFLAGS[@]}" -c "$QJS/$f.c" -o "$WORK/$f.o"
 done
 "$CLANG" "${APP_CFLAGS[@]}" -I"$HERE" -c "$HOST" -o "$WORK/host.o"
-"$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/user/runtime/crt0_x86.c" -o "$WORK/crt0.o"
-"$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/user/runtime/app_traps_x86.c" -o "$WORK/traps.o"
+# crt0 + app_traps are PURE MC: emit-c then compile with the app CFLAGS (app_traps.mc is the
+# arch-neutral stdout/stderr/stdin shim, shared across all arches).
+"$MCC" emit-c "$HERE/user/runtime/crt0_x86.mc" > "$WORK/crt0_gen.c"
+"$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/crt0_gen.c" -o "$WORK/crt0.o"
+"$MCC" emit-c "$HERE/user/runtime/app_traps.mc" > "$WORK/traps_gen.c"
+"$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/traps_gen.c" -o "$WORK/traps.o"
 # openlibm's amd64 lrint/rint-family reaches out-of-line fenv ops (feholdexcept/feupdateenv/...)
 # whose amd64 source was not vendored; provide freestanding SSE-MXCSR stubs (JS Math needs no FP
 # exception semantics). On riscv these were inline in the header, so no equivalent file existed.
