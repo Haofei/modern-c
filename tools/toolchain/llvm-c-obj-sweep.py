@@ -43,8 +43,13 @@ def main():
             failures.append((name, "CHECK", first_error(check.stderr)))
             continue
 
+        # emit-llvm embeds no target triple, so llc would otherwise inherit the host
+        # default (aarch64 in the arm64 dev container) and fail to assemble the inline asm
+        # the precise-asm fixtures carry — a host-dependent result. Pin one deterministic
+        # triple; the fixtures' valid asm is x86-64 and non-asm fixtures emit neutral IR.
+        # (Same fix as spec-llvm-obj-sweep.py.)
         compile_obj = subprocess.run(
-            ["tools/toolchain/mcc-llvm-cc.sh", path, "-o", out_path],
+            ["tools/toolchain/mcc-llvm-cc.sh", path, "-o", out_path, "-mtriple=x86_64-unknown-none"],
             env={**os.environ, "MCC": mcc},
             capture_output=True,
             text=True,
