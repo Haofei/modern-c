@@ -760,6 +760,25 @@ pub fn build(b: *std.Build) void {
     const llvm_smode_timer_test_step = b.step("llvm-smode-timer-test", "Build and run the LLVM-lowered flat S-mode timer-interrupt kernel under REAL OpenSBI");
     llvm_smode_timer_test_step.dependOn(&llvm_smode_timer_test_cmd.step);
 
+    const smode_plic_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/smode-plic-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_smode_plic_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/smode-plic-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    smode_plic_test_cmd.step.dependOn(b.getInstallStep());
+    const smode_plic_test_step = b.step("smode-plic-test", "Build and run the flat S-mode kernel taking REAL S-mode EXTERNAL interrupts through the PLIC under REAL OpenSBI");
+    smode_plic_test_step.dependOn(&smode_plic_test_cmd.step);
+    llvm_smode_plic_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_smode_plic_test_step = b.step("llvm-smode-plic-test", "Build and run the LLVM-lowered flat S-mode external-interrupt (PLIC) kernel under REAL OpenSBI");
+    llvm_smode_plic_test_step.dependOn(&llvm_smode_plic_test_cmd.step);
+
     const net_smode_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/arch/net-smode-test.sh",
