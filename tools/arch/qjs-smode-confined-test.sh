@@ -23,7 +23,7 @@ HERE="$(kernel_boot_repo_root)"
 QJS="$HERE/third_party/quickjs"
 SRC="$HERE/tests/qemu/arch/qjs_smode_demo.mc"            # kernel side (S-mode): ELF load + ABI + supervisor gigapage
 RUNTIME="$HERE/tests/qemu/arch/qjs_smode_confined_runtime.mc"  # S-mode bring-up under OpenSBI, now PURE MC
-USERMODE="$HERE/kernel/arch/riscv64/smode_usermode_runtime.c"     # S-mode trap vector + syscall dispatch
+USERMODE="$HERE/tests/qemu/arch/smode_usermode_runtime.mc"     # S-mode trap vector + syscall dispatch
 LDSCRIPT="$HERE/tests/qemu/sbi.ld"                       # OpenSBI payload @ 0x80200000
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-$NAME_BASE-test" || echo "$NAME_BASE-test")
 

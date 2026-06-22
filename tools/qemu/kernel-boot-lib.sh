@@ -122,6 +122,16 @@ kernel_boot_compile_c_object() {
     # instead of hand-mirroring); virtq_layout_assert.h holds the standalone A1 layout asserts.
     kernel_boot_emit_virtq_layout_header "$dir"
     kernel_boot_emit_virtq_structs_header "$dir"
+    # A `.mc` source is a converted shared runtime: lower it via emit-c first (arch-neutral),
+    # then compile the generated C exactly like a native C object. Lets a caller pass an MC
+    # file (e.g. the now-pure-MC context/usermode bring-up) through the same $SHARED/$USERMODE
+    # seam with no other harness change.
+    if [ "${src##*.}" = mc ]; then
+        local gen="$dir/$(basename "${src%.mc}")_gen.c"
+        "$MCC" emit-c "$src" > "$gen"
+        "$CLANG" "${CFLAGS[@]}" -I"$dir" -fno-builtin -c "$gen" -o "$out"
+        return
+    fi
     "$CLANG" "${CFLAGS[@]}" -I"$dir" -c "$src" -o "$out"
 }
 

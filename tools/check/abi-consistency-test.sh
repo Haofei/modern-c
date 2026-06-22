@@ -24,7 +24,6 @@ AGENT_FILES=(
     user/runtime/app_traps.c
     user/runtime/app_traps_x86.c
     user/runtime/app_traps_aarch64.c
-    kernel/arch/riscv64/smode_usermode_runtime.c
     kernel/arch/riscv64/usermode_runtime.c
 )
 # NB: the x86-64 and aarch64 qjs user runtimes are now pure MC (tests/x86/qjs_user_x86_runtime.mc,
