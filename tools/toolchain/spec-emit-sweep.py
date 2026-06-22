@@ -14,6 +14,7 @@ Defaults: zig-out/bin/mcc, tests/spec. Exit status is non-zero if any valid
 fixture fails to emit or compile.
 """
 import sys, os, re, glob, subprocess, tempfile, concurrent.futures
+from spec_sweep_lib import strip_expect_error  # shared comment-aware negative-fixture stripping
 
 # Fixtures excluded from the C-emit sweep, each mapped to the reason it is not a
 # C-emission fixture in the first place. Every entry is a phase=sema / phase=parse
@@ -54,58 +55,6 @@ CLANG = ["clang", "--target=" + SWEEP_TRIPLE, "-ffreestanding",
          # The harness keeps unused valid functions, so silence those two only.
          "-Wno-unused-parameter", "-Wno-unused-variable",
          "-fsyntax-only", "-x", "c", "-"]
-
-
-def split_top_level(src):
-    """Split source into top-level chunks by brace/semicolon at depth 0.
-
-    Comment- and string-aware: a `{`, `}`, or `;` inside a `//` line comment, a
-    `/* */` block comment, or a string/char literal is literal text, NOT a
-    structural delimiter. (A comment-blind split mis-chunks any fixture that
-    writes punctuation in prose, orphaning the EXPECT_ERROR marker from the
-    declaration it annotates so the negative case is never stripped.)
-    """
-    chunks, buf, depth = [], "", 0
-    i, n = 0, len(src)
-    while i < n:
-        c = src[i]
-        nxt = src[i + 1] if i + 1 < n else ""
-        if c == "/" and nxt == "/":
-            j = src.find("\n", i)
-            j = n if j == -1 else j + 1
-            buf += src[i:j]; i = j; continue
-        if c == "/" and nxt == "*":
-            j = src.find("*/", i + 2)
-            j = n if j == -1 else j + 2
-            buf += src[i:j]; i = j; continue
-        if c == '"' or c == "'":
-            q = c; buf += c; i += 1
-            while i < n:
-                d = src[i]; buf += d; i += 1
-                if d == "\\" and i < n:
-                    buf += src[i]; i += 1; continue
-                if d == q:
-                    break
-            continue
-        buf += c
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                chunks.append(buf)
-                buf = ""
-        elif c == ";" and depth == 0:
-            chunks.append(buf)
-            buf = ""
-        i += 1
-    if buf.strip():
-        chunks.append(buf)
-    return chunks
-
-
-def strip_expect_error(src):
-    return "".join(ch for ch in split_top_level(src) if "EXPECT_ERROR" not in ch)
 
 
 # Emit + clang-check one fixture's valid (non-EXPECT_ERROR) declarations. Returns

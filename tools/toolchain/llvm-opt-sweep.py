@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from spec_sweep_lib import valid_program  # shared comment-aware negative-fixture stripping
 
 FORBIDDEN_ASSUMPTIONS = (
     "nuw",
@@ -58,61 +59,6 @@ OUT_OF_SCOPE = {
     "soundness_orphan_impl_reject.mc": "orphan-impl reject fixture (phase=sema; owned by spec_tests.zig)",
     "traits_effect_sleep_in_atomic.mc": "effect-typed callees are EXPECT_ERROR-stripped, leaving dangling refs (phase=parse,sema; owned by spec_tests.zig)",
 }
-
-
-def split_top_level(src):
-    """Comment/string-aware split into top-level chunks by brace/semicolon at depth 0:
-    punctuation inside a `//` or `/* */` comment or a string/char literal is literal
-    text. Kept identical to spec-emit-sweep.py."""
-    chunks, buf, depth = [], "", 0
-    i, n = 0, len(src)
-    while i < n:
-        c = src[i]
-        nxt = src[i + 1] if i + 1 < n else ""
-        if c == "/" and nxt == "/":
-            j = src.find("\n", i)
-            j = n if j == -1 else j + 1
-            buf += src[i:j]; i = j; continue
-        if c == "/" and nxt == "*":
-            j = src.find("*/", i + 2)
-            j = n if j == -1 else j + 2
-            buf += src[i:j]; i = j; continue
-        if c == '"' or c == "'":
-            q = c; buf += c; i += 1
-            while i < n:
-                d = src[i]; buf += d; i += 1
-                if d == "\\" and i < n:
-                    buf += src[i]; i += 1; continue
-                if d == q:
-                    break
-            continue
-        buf += c
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                chunks.append(buf)
-                buf = ""
-        elif c == ";" and depth == 0:
-            chunks.append(buf)
-            buf = ""
-        i += 1
-    if buf.strip():
-        chunks.append(buf)
-    return chunks
-
-
-def normalize_valid_chunk(chunk):
-    if "EXPECT_ERROR" in chunk:
-        return ""
-    if chunk.strip().endswith(";") and re.search(r"(?m)^\s*fn\s+\w+\s*\(", chunk):
-        return re.sub(r"(?m)^(\s*)fn\s+", r"\1extern fn ", chunk, count=1)
-    return chunk
-
-
-def valid_program(src):
-    return "".join(normalize_valid_chunk(ch) for ch in split_top_level(src))
 
 
 def first_error(stderr):
