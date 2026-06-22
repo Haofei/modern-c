@@ -18,13 +18,14 @@ ABI="$HERE/user/abi.mc"
 # Files that share the canonical agent ABI with abi.mc (C side, which must hardcode it).
 AGENT_FILES=(
     user/runtime/usys.h
-    user/runtime/crt0.c
     user/runtime/crt0_x86.c
     user/runtime/crt0_aarch64.c
-    user/runtime/app_traps.c
     user/runtime/app_traps_x86.c
     user/runtime/app_traps_aarch64.c
 )
+# NB: the riscv crt0/app_traps are now pure MC (user/runtime/crt0.mc, app_traps.mc); crt0.mc
+# hardcodes SYS_EXIT=3 in its naked _start (an MC `li a7, 3`, not a C #define), so it is excluded
+# from this C-side grep — like the x86/aarch64 qjs user runtimes noted below.
 # NB: the x86-64 and aarch64 qjs user runtimes are now pure MC (tests/x86/qjs_user_x86_runtime.mc,
 # tests/arm/qjs_user_arm_runtime.mc); they use `const SYS_EXIT: u64 = 3` (not a C #define), so they
 # are checked by the MC type system, not here.

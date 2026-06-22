@@ -43,8 +43,11 @@ for f in dtoa libunicode libregexp quickjs; do
     "$CLANG" "${APP_CFLAGS[@]}" -c "$QJS/$f.c" -o "$WORK/$f.o"
 done
 "$CLANG" "${APP_CFLAGS[@]}" -I"$HERE" -c "$HOST" -o "$WORK/host.o"
-"$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/user/runtime/crt0.c" -o "$WORK/crt0.o"
-"$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/user/runtime/app_traps.c" -o "$WORK/traps.o"
+# crt0 + app_traps are PURE MC: emit-c then compile with the app CFLAGS.
+"$MCC" emit-c "$HERE/user/runtime/crt0.mc" > "$WORK/crt0_gen.c"
+"$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/crt0_gen.c" -o "$WORK/crt0.o"
+"$MCC" emit-c "$HERE/user/runtime/app_traps.mc" > "$WORK/traps_gen.c"
+"$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/traps_gen.c" -o "$WORK/traps.o"
 
 CFLAGS=("${APP_CFLAGS[@]}")
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/user/libc/libc.mc" "$WORK/libc.o" "$WORK"

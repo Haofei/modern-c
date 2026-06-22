@@ -64,8 +64,8 @@ case "$APP" in
         ;;
 esac
 
-# crt0 + ecall shim.
-kernel_boot_compile_c_object "$HERE/user/runtime/crt0.c" "$WORK/crt0.o"
+# crt0 + ecall shim (pure MC; kernel_boot_compile_c_object emit-c's the .mc with the app CFLAGS).
+kernel_boot_compile_c_object "$HERE/user/runtime/crt0.mc" "$WORK/crt0.o"
 
 # Link the user ELF: crt0 (entry) first, then the app (+ libc for C), with the user layout.
 "$LLD" -T "$HERE/user/runtime/user.ld" "$WORK/crt0.o" "${APP_OBJS[@]}" $SUPPORT_OBJ -o "$OUT"

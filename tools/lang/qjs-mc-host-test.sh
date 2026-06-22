@@ -39,8 +39,11 @@ APP_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
 for f in dtoa libunicode libregexp quickjs; do
     "$CLANG" "${APP_CFLAGS[@]}" -c "$QJS/$f.c" -o "$WORK/$f.o"
 done
-"$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/user/runtime/crt0.c" -o "$WORK/crt0.o"
-"$CLANG" "${APP_CFLAGS[@]}" -c "$HERE/user/runtime/app_traps.c" -o "$WORK/traps.o"
+# crt0 + app_traps are PURE MC: emit-c then compile with the app CFLAGS.
+"$MCC" emit-c "$HERE/user/runtime/crt0.mc" > "$WORK/crt0_gen.c"
+"$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/crt0_gen.c" -o "$WORK/crt0.o"
+"$MCC" emit-c "$HERE/user/runtime/app_traps.mc" > "$WORK/traps_gen.c"
+"$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/traps_gen.c" -o "$WORK/traps.o"
 
 # The MC HOST (not C!) + the all-MC libc + the U-mode syscall shim, through the selected backend
 # with hardware FP. CFLAGS must be the app's FP flags for the emit-c -> clang path.
