@@ -22,7 +22,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/demo/virtio-net/virtio_net.mc"
-RUNTIME="$HERE/demo/virtio-net/runtime.c"
+RUNTIME="$HERE/demo/virtio-net/runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="VIRTIO-TX-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-virtio-test" || echo "virtio-test")
