@@ -9997,9 +9997,21 @@ const CEmitter = struct {
                 // when the left does not already decide the result) must NOT have either
                 // operand's mmio reads hoisted out of the expression — hoisting executes them
                 // unconditionally, which is wrong for device registers that ack/pop/clear on
-                // read. Leave them to render inline (emitInlineMmioReadCall) at their syntactic
-                // position, where C's `&&`/`||` preserves the short-circuit.
-                if (node.op == .logical_and or node.op == .logical_or) return false;
+                // read. Each operand instead renders inline (emitInlineMmioReadCall) at its
+                // syntactic position, where C's `&&`/`||` preserves the short-circuit.
+                //
+                // Inline rendering relies on C sequence points, so it is only safe when an
+                // operand holds a SINGLE mmio read: with two or more, the inline
+                // non-sequencing operators (call arguments, arithmetic, comparison) leave the
+                // read order unspecified, whereas MC guarantees left-to-right (docs/c-ub-
+                // matrix.md). Reject that case rather than silently reorder device reads —
+                // refactor to nested `if`s or read each register into a `let` first.
+                if (node.op == .logical_and or node.op == .logical_or) {
+                    if (self.countMmioReads(node.left.*, locals) > 1 or self.countMmioReads(node.right.*, locals) > 1) {
+                        return error.UnsupportedCEmission;
+                    }
+                    return false;
+                }
                 // Non-logical binaries evaluate BOTH operands, so both must be visited for their
                 // side effect (registering each mmio read as a hoist replacement). A
                 // short-circuiting `or` here would skip the right operand once the left
@@ -10729,6 +10741,31 @@ const CEmitter = struct {
             if (self.exprContainsMmioRead(arg, locals)) return true;
         }
         return false;
+    }
+
+    // Count the MMIO register reads in an expression. Used to detect a sequencing hazard in a
+    // short-circuiting `&&` / `||` operand: a single read renders inline safely, but two or
+    // more reads in one operand would be combined by non-sequencing C operators (function-call
+    // arguments, arithmetic, comparison) whose evaluation order is unspecified — which would
+    // silently reorder device reads.
+    fn countMmioReads(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) usize {
+        switch (expr.kind) {
+            .call => |node| {
+                if (self.mmioAccess(node.callee.*, node.args, locals)) |access| {
+                    if (std.mem.eql(u8, access.kind, "read")) return 1;
+                }
+                var n: usize = 0;
+                for (node.args) |arg| n += self.countMmioReads(arg, locals);
+                return n;
+            },
+            .grouped, .address_of, .deref => |inner| return self.countMmioReads(inner.*, locals),
+            .unary => |node| return self.countMmioReads(node.expr.*, locals),
+            .binary => |node| return self.countMmioReads(node.left.*, locals) + self.countMmioReads(node.right.*, locals),
+            .index => |node| return self.countMmioReads(node.base.*, locals) + self.countMmioReads(node.index.*, locals),
+            .member => |node| return self.countMmioReads(node.base.*, locals),
+            .cast => |node| return self.countMmioReads(node.value.*, locals),
+            else => return 0,
+        }
     }
 
     fn localIndexElementType(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {

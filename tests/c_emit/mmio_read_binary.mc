@@ -17,6 +17,14 @@
 // the left did not already decide the result. For NON-logical binaries (both operands always
 // evaluate) the reads are still hoisted to sequenced temps. This is exactly a virtio device
 // probe scan: `slot.magic.read(.acquire) == MAGIC && slot.device_id.read(.acquire) == ID`.
+//
+// LIMIT: inline rendering is only sequencing-safe with a SINGLE read per logical operand.
+// Two or more reads in one `&&`/`||` operand (e.g. `f(a.r.read(.x), b.r.read(.x)) && ...`, or
+// `a.r.read(.x) == b.r.read(.x) && ...`) would be combined by non-sequencing C operators, so
+// emit-c REJECTS that with UnsupportedCEmission rather than reorder device reads — write it as
+// nested `if`s or read each register into a `let` first. (All cases below are single-read per
+// logical operand, except probe_eq, whose two reads are in a NON-logical `==` that hoists and
+// sequences them.)
 
 extern mmio struct ProbeMmio {
     magic: Reg<u32, .read>      @offset(0x000),
