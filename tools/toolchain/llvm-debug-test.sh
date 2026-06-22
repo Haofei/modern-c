@@ -21,7 +21,11 @@ compile_fixture() {
     local rel="$1"
     local stem="$2"
     local obj="$WORK/$stem.o"
-    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/$rel" -o "$obj" >/dev/null
+    # Pin the triple: emit-llvm emits none, so llc would inherit the host default (aarch64
+    # in the dev container) whose line-table column attribution differs from the line/column
+    # rows asserted below — those were calibrated for x86-64/riscv64. Without this the gate is
+    # host-dependent (the expected `<line> <col> 1` DWARF rows simply do not appear on aarch64).
+    MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/$rel" -o "$obj" -mtriple=x86_64-unknown-none >/dev/null
 
     "$READELF" -S "$obj" >"$WORK/$stem.sections.txt"
     grep -q '\.debug_info' "$WORK/$stem.sections.txt"
