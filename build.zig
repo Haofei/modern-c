@@ -867,6 +867,18 @@ pub fn build(b: *std.Build) void {
     const demo_test_step = b.step("demo-test", "Lower every demo/ driver to C and compile-check it");
     demo_test_step.dependOn(&demo_test_cmd.step);
 
+    // Conformance-tier variant: MC_REQUIRE_TARGET=1 makes a missing clang/riscv64 target a
+    // hard FAILURE instead of a skip, so a conformance tier (m0/c0) cannot pass vacuously
+    // when the riscv64 compile never ran. The standalone `demo-test` step stays lenient
+    // (host dev without a riscv64 clang skips). Used by the tiers below, not exposed as a step.
+    const demo_test_strict_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/demo-test.sh",
+        "zig-out/bin/mcc",
+    });
+    demo_test_strict_cmd.setEnvironmentVariable("MC_REQUIRE_TARGET", "1");
+    demo_test_strict_cmd.step.dependOn(b.getInstallStep());
+
     const net_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/net/net-test.sh",
@@ -894,6 +906,16 @@ pub fn build(b: *std.Build) void {
     kernel_test_cmd.step.dependOn(b.getInstallStep());
     const kernel_test_step = b.step("kernel-test", "Compile-check kernel/ for riscv64 and verify typestate rejects");
     kernel_test_step.dependOn(&kernel_test_cmd.step);
+
+    // Conformance-tier variant (see demo_test_strict_cmd): skip-on-missing-riscv64 becomes a
+    // hard failure under MC_REQUIRE_TARGET=1 so m0/c1 cannot pass without the riscv64 compile.
+    const kernel_test_strict_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/toolchain/kernel-test.sh",
+        "zig-out/bin/mcc",
+    });
+    kernel_test_strict_cmd.setEnvironmentVariable("MC_REQUIRE_TARGET", "1");
+    kernel_test_strict_cmd.step.dependOn(b.getInstallStep());
 
     const page_test_cmd = b.addSystemCommand(&.{
         "bash",
@@ -3540,6 +3562,10 @@ pub fn build(b: *std.Build) void {
     preflight_step.dependOn(&preflight_cmd.step);
 
     const m0_step = b.step("m0", "Run M0 conformance gates");
+    // Fixture-contract lint guards the test corpus itself (reject EXPECT lines, sweep
+    // OUT_OF_SCOPE soundness, host-tests.tsv well-formedness). It belongs in every
+    // conformance tier, not only `fast`, so a contract regression can't slip into m0/c0/c1.
+    m0_step.dependOn(&test_lint_cmd.step);
     m0_step.dependOn(&abi_consistency_cmd.step);
     m0_step.dependOn(&arch_emit_cmd.step);
     m0_step.dependOn(&test_cmd.step);
@@ -3772,11 +3798,11 @@ pub fn build(b: *std.Build) void {
     // ipi-test sends a CLINT software interrupt between harts under QEMU.
     m0_step.dependOn(&ipi_test_cmd.step);
     // demo-test compile-checks the whole demo/ suite (needs clang).
-    m0_step.dependOn(&demo_test_cmd.step);
+    m0_step.dependOn(&demo_test_strict_cmd.step);
     // net-test runs the kernel virtio-net RX/TX ARP exchange under QEMU.
     m0_step.dependOn(&net_test_cmd.step);
     // kernel-test compile-checks kernel/ for riscv64 + typestate rejects.
-    m0_step.dependOn(&kernel_test_cmd.step);
+    m0_step.dependOn(&kernel_test_strict_cmd.step);
     // page-test links + runs the physical frame allocator (needs clang).
     m0_step.dependOn(&page_test_cmd.step);
     // heap-test links + runs the kernel heap (needs clang).
@@ -4107,12 +4133,15 @@ pub fn build(b: *std.Build) void {
     // (§L.3 MC-C2 is intentionally beyond this repo's backend finish line, so it is
     // not gated here.)
     const c0_step = b.step("c0", "Spec §L.1 MC-C0 baseline-language gates: fixtures + spec coverage, emit-C sweep, demo lowering");
+    c0_step.dependOn(&test_lint_cmd.step); // contract lint guards the corpus; c1 inherits it
     c0_step.dependOn(&test_cmd.step);
     c0_step.dependOn(&c_test_cmd.step);
     c0_step.dependOn(&sweep_cmd.step);
-    c0_step.dependOn(&demo_test_cmd.step);
+    // Strict variant: a missing riscv64 toolchain FAILS the conformance tier (the demo
+    // lowering must actually run), rather than skipping and passing vacuously.
+    c0_step.dependOn(&demo_test_strict_cmd.step);
 
     const c1_step = b.step("c1", "Spec §L.2 MC-C1 kernel-profile gates: c0 + kernel suite (MMIO, DMA, move checking, address-space lowering)");
     c1_step.dependOn(c0_step);
-    c1_step.dependOn(&kernel_test_cmd.step);
+    c1_step.dependOn(&kernel_test_strict_cmd.step); // strict: skip-on-missing-riscv64 is a failure here
 }

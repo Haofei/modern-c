@@ -112,8 +112,19 @@ def check_host_tests():
         n += 1
         if not os.path.exists(os.path.join(ROOT, fixture)):
             errors.append(f"host-tests.tsv: row '{name}' points at missing fixture '{fixture}'")
-        if mode == "entry" and not spec.strip():
+        # `mode` must be one the harness (tools/lib/host-harness.sh) knows; anything else is
+        # rejected there at runtime as "unknown manifest mode", so catch it statically here.
+        if mode not in ("entry", "driver"):
+            errors.append(f"host-tests.tsv: row '{name}' has invalid mode '{mode}' (must be 'entry' or 'driver')")
+        elif mode == "entry" and not spec.strip():
             errors.append(f"host-tests.tsv: entry-mode row '{name}' has no entry fn in its spec column")
+        elif mode == "driver":
+            # driver-mode rows are wired by the harness to a bespoke C driver at
+            # tools/lib/host-drivers/<name>.c (host-harness.sh copies that exact path); a
+            # missing file fails the run, so require it to exist up front.
+            driver_c = os.path.join(ROOT, "tools/lib/host-drivers", f"{name}.c")
+            if not os.path.exists(driver_c):
+                errors.append(f"host-tests.tsv: driver-mode row '{name}' needs tools/lib/host-drivers/{name}.c, which does not exist")
     return n, errors
 
 

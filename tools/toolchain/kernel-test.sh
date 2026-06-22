@@ -12,8 +12,21 @@ MCC="${1:-zig-out/bin/mcc}"
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 CLANG="${CLANG:-clang}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
-command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: kernel-test (clang not found)"; exit 0; }
-"$CLANG" --print-targets 2>/dev/null | grep -q riscv64 || { echo "SKIP: kernel-test (no riscv64 target)"; exit 0; }
+
+# A missing toolchain/target normally SKIPs (so host dev without a riscv64 clang stays
+# green), but a CONFORMANCE tier (c1) requires the riscv64 compile to actually run — there
+# a skip is a FAILURE, not a pass. `MC_REQUIRE_TARGET=1` (set by the conformance tiers in
+# build.zig) flips skip into a hard failure so the tier cannot pass vacuously.
+unavailable() { # $1 = reason
+    if [ -n "${MC_REQUIRE_TARGET:-}" ]; then
+        echo "FAIL: kernel-test — $1 (required by this conformance tier; set MC_REQUIRE_TARGET only where the riscv64 toolchain is present)"
+        exit 1
+    fi
+    echo "SKIP: kernel-test ($1)"
+    exit 0
+}
+command -v "$CLANG" >/dev/null 2>&1 || unavailable "clang not found"
+"$CLANG" --print-targets 2>/dev/null | grep -q riscv64 || unavailable "no riscv64 target"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
