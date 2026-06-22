@@ -810,6 +810,15 @@ const LlvmEmitter = struct {
             .qualified => |node| try self.zeroInitializer(node.child.*),
             .generic => |node| if (self.resultInfo(resolved_ty)) |_|
                 "zeroinitializer"
+            else if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1)
+                // MmioPtr<T> lowers to `ptr` (see llvmType); its zero is a null pointer.
+                "null"
+            else if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2)
+                // DmaBuf<T,U> lowers to i64 (an opaque DMA address); its zero is 0.
+                "0"
+            else if ((std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits")) and node.args.len >= 1)
+                // Reg<T,..>/RegBits<T,..> lower to their payload T (see llvmType).
+                try self.zeroInitializer(node.args[0])
             else if (isPayloadDomainGenericName(node.base.text) and node.args.len == 1)
                 try self.zeroInitializer(node.args[0])
             else if (isOpaqueAddressGenericName(node.base.text) and node.args.len == 1)
