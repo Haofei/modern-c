@@ -81,6 +81,18 @@ pub fn build(b: *std.Build) void {
     const sweep_step = b.step("sweep", "Emit C for every valid spec-corpus function and compile-check it with clang");
     sweep_step.dependOn(&sweep_cmd.step);
 
+    // Contract lint: fast, tool-free static check that every fixture's declared
+    // contract (reject EXPECT: lines, sweep OUT_OF_SCOPE entries, host-tests.tsv rows)
+    // is well-formed — see docs/test-architecture.md. Keeps the fixture-semantics
+    // invariant from rotting back in. No mcc/clang/QEMU, so it joins the inner loop.
+    const test_lint_cmd = b.addSystemCommand(&.{
+        "python3",
+        "tools/test/contract-lint.py",
+        ".",
+    });
+    const test_lint_step = b.step("test-lint", "Lint fixture contracts (reject EXPECT lines, sweep OUT_OF_SCOPE, host-tests.tsv)");
+    test_lint_step.dependOn(&test_lint_cmd.step);
+
     const sanitize_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/toolchain/sanitize-test.sh",
@@ -4071,6 +4083,7 @@ pub fn build(b: *std.Build) void {
     // those. Pair it with `-j` oversubscription (e.g. `zig build fast -j28`).
     const fast_step = b.step("fast", "Inner-loop gate: host-only unit + spec-coverage tests, emit-C sweep, C/LLVM differential, and the fuzz family — no QEMU");
     fast_step.dependOn(&test_cmd.step);
+    fast_step.dependOn(&test_lint_cmd.step);
     fast_step.dependOn(&c_test_cmd.step);
     fast_step.dependOn(&sweep_cmd.step);
     fast_step.dependOn(&diff_backend_cmd.step);
