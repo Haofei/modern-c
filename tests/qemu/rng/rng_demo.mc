@@ -1,10 +1,10 @@
 // virtio-rng demo entry for the QEMU/host test: bring the entropy device up via the
-// std/rand entropy service and fill a caller buffer with live device randomness,
+// kernel/drivers/rng entropy service and fill a caller buffer with live device randomness,
 // returning the byte count (or a sentinel on error) so the C runtime can verify the
 // bytes are non-zero. Mirrors tests/qemu/fs/blk_demo.mc — a thin typed entry over
 // the driver so the freestanding runtime stays in C.
 
-import "std/rand.mc";
+import "kernel/drivers/rng/rng.mc";
 
 const RNG_OPEN_ERR: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 const RNG_FILL_ERR: u64 = 0xFFFF_FFFF_FFFF_FFFE;

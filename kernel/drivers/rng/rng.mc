@@ -1,10 +1,15 @@
-// MC standard library — `rand`: the system entropy seam. A single virtio-rng
-// (virtio device-id 4) driver plus a clean `rng_fill(buf, len)` API, built on the
-// shared transport (std/virtio: scan / handshake), the split virtqueue
-// (std/virtqueue: submit / kick / wait / complete) and DMA ownership (std/dma) —
-// the same layering virtio_net / virtio_blk use. This is where in-kernel callers
-// (TLS today; tokens / nonces later) get real device entropy, instead of every
-// caller re-walking the mmio window and hand-rolling the queue cycle.
+// kernel/drivers/rng — the system entropy driver. A single virtio-rng (virtio
+// device-id 4) driver plus a clean `rng_fill(buf, len)` API, built on the shared
+// transport (std/virtio: scan / handshake), the split virtqueue (std/virtqueue:
+// submit / kick / wait / complete) and DMA ownership (std/dma) — the same layering
+// virtio_net / virtio_blk use. This is where in-kernel callers (TLS today; tokens /
+// nonces later) get real device entropy, instead of every caller re-walking the mmio
+// window and hand-rolling the queue cycle.
+//
+// This lives under kernel/drivers (not std) because it is a board-touching device
+// driver, not a freestanding language primitive: the virtio-mmio discovery window is a
+// board fact, pulled from kernel/platform/active/ rather than hardcoded here, so std/
+// never has to import a platform backend (which would invert the layering).
 //
 // The C runtimes (bearssl_smoke_runtime.c, https_get_runtime.c) share the *same*
 // probe via kernel/drivers/virtio/virtio_rng.c; this module is the MC-world twin
@@ -14,18 +19,13 @@ import "std/virtio.mc";
 import "std/virtqueue.mc";
 import "std/dma.mc";
 import "std/time.mc";
+import "kernel/platform/active/virtio_mmio_hw.mc";
 
 const VIRTIO_RNG_DEVICE_ID: u32 = 4;
 const RNG_TIMEOUT_TICKS: u64 = 50_000_000; // ~5s at the CLINT's 10 MHz (real-time bound)
 const RNG_CHUNK: usize = 256;              // bytes requested from the device per round
-
-// The QEMU `virt` virtio-mmio discovery window: 8 device slots at 0x1000_1000,
-// stride 0x1000. (A richer platform would pass this window in; here it is the same
-// fixed map the freestanding C runtimes scan.)
-const VIRTIO_MMIO_BASE: usize = 0x1000_1000;
-const VIRTIO_MMIO_STRIDE: usize = 0x1000;
-const VIRTIO_MMIO_COUNT: u32 = 8;
-// (VIRTIO_MAGIC comes from std/virtio.mc.)
+// The virtio-mmio discovery window (base / stride / count) is a board fact, read from the
+// platform backend via plat_virtio_mmio_*(). (VIRTIO_MAGIC comes from std/virtio.mc.)
 
 
 // Why an entropy read failed — a typed error, like the rest of the virtio drivers.
@@ -49,35 +49,35 @@ struct RngDevice {
 // `vq` is caller-owned storage for the one queue (as with blk/net).
 export fn rng_open(vq: *mut Virtq) -> Result<RngDevice, RngError> {
     // Scan the mmio window for the entropy device (device-id 4). The MC twin of the
-    // inline C slot scan; kept local so the net/blk drivers don't inherit it.
-    var regs: MmioPtr<VirtioMmio> = uninit;
-    var found: bool = false;
+    // inline C slot scan; kept local so the net/blk drivers don't inherit it. The matching
+    // slot is brought up and returned from inside the loop, so there is no carry-out `regs`
+    // variable to leave conditionally-uninitialized — a fall-through past the loop means no
+    // device was found. The window geometry comes from the platform backend.
+    let mmio_base: usize = plat_virtio_mmio_base();
+    let mmio_stride: usize = plat_virtio_mmio_stride();
+    let mmio_count: u32 = plat_virtio_mmio_count();
     var i: u32 = 0;
-    while i < VIRTIO_MMIO_COUNT {
-        let addr: usize = VIRTIO_MMIO_BASE + (i as usize) * VIRTIO_MMIO_STRIDE;
+    while i < mmio_count {
+        let addr: usize = mmio_base + (i as usize) * mmio_stride;
         var slot: MmioPtr<VirtioMmio> = uninit;
         unsafe { slot = mmio.map<VirtioMmio>(phys(addr))?; }
         if slot.magic.read(.acquire) == VIRTIO_MAGIC && slot.device_id.read(.acquire) == VIRTIO_RNG_DEVICE_ID {
-            regs = slot;
-            found = true;
-            i = VIRTIO_MMIO_COUNT; // stop the scan
-        } else {
-            i = i + 1;
+            // Found the entropy device: run the virtio 1.x handshake (virtio-rng requires
+            // no feature bits), set up the request queue, and go live.
+            switch virtio_init(slot, VIRTIO_RNG_DEVICE_ID, 0, 0) {
+                ok(up) => {}
+                err(e) => { return err(.DeviceInitFailed); }
+            }
+            switch vq_setup(slot, 0, vq) {
+                ok(up) => {}
+                err(e) => { return err(.QueueUnavailable); }
+            }
+            virtio_driver_ok(slot);
+            return ok(.{ .regs = slot, .vq = vq });
         }
+        i = i + 1;
     }
-    if !found {
-        return err(.NoDevice);
-    }
-    switch virtio_init(regs, VIRTIO_RNG_DEVICE_ID, 0, 0) {
-        ok(up) => {}
-        err(e) => { return err(.DeviceInitFailed); }
-    }
-    switch vq_setup(regs, 0, vq) {
-        ok(up) => {}
-        err(e) => { return err(.QueueUnavailable); }
-    }
-    virtio_driver_ok(regs);
-    return ok(.{ .regs = regs, .vq = vq });
+    return err(.NoDevice);
 }
 
 // Pull one round of entropy from the device into `dst` (up to `max` bytes). Posts a
