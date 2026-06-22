@@ -123,7 +123,8 @@ groundwork before it.**
   blob (block region / simple object store). **Where:** reuse `kernel/fs/blockdev` or a
   new minimal store. **Test:** write blob → read back identical across a remount.
 - [x] **P1.8 — Checkpoint.** (DONE — 8710acd) Serialize an agent (context, fds, caps, mailbox, accounted
-  pages) to the sink. **Where:** new `kernel/core/checkpoint.mc`. **Test:** checkpoint a
+  pages) to the sink. **Where:** originally created under `kernel/core`; now relocated to
+  `kernel/lib/checkpoint.mc`. **Test:** checkpoint a
   live agent; blob is self-describing.
 - [x] **P1.9 — Restore.** (DONE — 8710acd) Rebuild an agent from a checkpoint into a fresh slot, caps
   re-validated. **Test:** checkpoint → exit → restore → state matches.

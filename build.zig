@@ -36,9 +36,10 @@ pub fn build(b: *std.Build) void {
         "zig-out/bin/mcc",
         "tests/c_emit/*.mc",
         "zig-out/c-test",
+        "tests/c_emit/bad/*.mc",
     });
     c_test_cmd.step.dependOn(b.getInstallStep());
-    const c_test_step = b.step("c-test", "Emit C for smoke fixture and compile-check it with clang");
+    const c_test_step = b.step("c-test", "Emit-C compile-check the pass corpus and diagnostic-check the bad/ reject corpus");
     c_test_step.dependOn(&c_test_cmd.step);
 
     const llvm_test_cmd = b.addSystemCommand(&.{

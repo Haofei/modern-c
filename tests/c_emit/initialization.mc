@@ -25,10 +25,11 @@ fn explicit_uninit_array() -> u8 {
     return buf[0];
 }
 
-fn read_materialized_uninit_scalar() -> u32 {
-    var x: u32 = uninit;
-    return x;
-}
+// NOTE: the scalar read-before-assign negative case (`var x: u32 = uninit; return x;`) is a
+// compile error (E_USE_BEFORE_INIT), so it lives in the reject corpus, not here:
+//   tests/c_emit/bad/use_before_init_scalar.mc
+// Reading an uninit *array element* below is NOT flagged — aggregates are the programmer's
+// obligation (c-ub-matrix row 7) — so it stays a valid must-compile fixture.
 
 fn read_materialized_uninit_byte() -> u8 {
     var buf: [4]u8 = uninit;

@@ -50,9 +50,9 @@ boundary").
 |---|---|---|
 | Drop to U-mode, ecall trap path, PMP | done | `kernel/arch/riscv64/usermode_runtime.c` |
 | Syscall dispatch (fn-ptr table, bounds/ENOSYS) | done | `kernel/core/syscall.mc` |
-| ISOLATION mechanism: a separate ELF in an isolated Sv39 space (kernel unmapped), entered confined | done | `agent_confined_runtime.c` + `tests/qemu/proc/agent_confined_demo.mc` |
-| Multi-segment ELF LOADER (text/rodata/data/bss, per-segment perms, stack+arena) | **NOT done** — current loader copies one flat `PT_LOAD` and returns (Phase 1 / F3) | `elf_load_run` in `agent_confined_demo.mc` |
-| Page-table-aware uaccess (copy_from/to_user_pt over a UserAddrSpace) | primitive done, **not wired into the app runtime** (Phase 1 / F2) | `kernel/core/uaccess.mc` |
+| ISOLATION mechanism: a separate ELF in an isolated Sv39 space (kernel unmapped), entered confined | done | `agent_confined_runtime.mc` + `tests/qemu/proc/agent_confined_demo.mc` |
+| Multi-segment ELF LOADER (text/rodata/data/bss, per-segment perms, stack+arena) | **DONE — gated.** The real loader maps every `PT_LOAD` at its vaddr with per-segment R/W/X perms, copies file bytes, zeroes bss | `elf-loader-test` (synthetic 2-segment image); `app-run-test` loads a real multi-segment app ELF |
+| Page-table-aware uaccess (copy_from/to_user_pt over a UserAddrSpace) | **DONE — wired into the app runtime.** A loaded app runs confined in an isolated U-mode space and its `SYS_WRITE` goes through `copy_from_user_pt` over a per-agent `UserAddrSpace` | `kernel/core/uaccess_pt.mc` + `app-run-test` |
 | Confined agent drives a capability tool front door (allow/deny, audited) | done | `agent_confined_tool_demo.mc` + the M1–M6 substrate (treefs/fs_toolserver/agent_fs/policy/netcap/mcp) |
 | Vendor + freestanding-build a large third-party C library | done | `third_party/bearssl/` compiled with the riscv freestanding toolchain (`bearssl_smoke_runtime.c`) |
 | Heap / allocator | partial | `std/alloc.mc` (alloc_bytes/free_bytes), kernel heap |
@@ -62,8 +62,8 @@ boundary").
 | Timer-tick preemption | demonstrated in a demo runtime, NOT in the core scheduler | `tests/qemu/proc/preempt_demo.mc` (timer → `sched_yield`) |
 | SMP per-core run-queue + work-steal | a PRIMITIVE only, not an integrated confined-U-mode SMP scheduler | `kernel/core/smprq.mc` |
 | Message passing (Worker postMessage) | primitive present, NO internal locking | `kernel/lib/mailbox.mc` (post/take; blocking layered by the caller) |
-| Real TCP/HTTP transport | present, but **SYNCHRONOUS / poll-mode + blocking** — `virtio_net` serves frames in "poll mode"; `net_fetch_tcp` blocks connect→send→recv | `kernel/drivers/virtio/virtio_net.mc:497`, `kernel/core/net_broker.mc` |
-| Async I/O ABI: non-blocking submit + poll + completion path + front-end event loop | NOT done (Phase 7 — the real-agent concurrency model; includes making net completion-driven) | — |
+| Real TCP/HTTP transport | present, but **SYNCHRONOUS / poll-mode + blocking** — `virtio_net` serves frames in "poll mode"; `net_fetch_tcp` blocks connect→send→recv | `kernel/drivers/virtio/virtio_net.mc:497`, `kernel/net/net_broker.mc` |
+| Async I/O ABI: non-blocking submit + poll + completion path + front-end event loop | **PARTIAL (Phase 7)** — delivered: the JS event loop, the `SYS_SUBMIT`/`SYS_POLL` async ABI, Promise completion, backpressure/quotas, structured JS errors, and the real capability-checked FS broker from JS. PENDING: making **net-fetch completion-driven** (TCP/HTTP is still blocking poll-mode). | `qjs-async-test`, `qjs-io-test`, `qjs-agent-test`, `qjs-async-agent-test`, `qjs-realtool-test` |
 | Userspace thread spawn + Workers (CPU-parallel) + concurrency hardening | NOT done (Phase 8 — optional) | — |
 
 The two things people fear most — "can it run a big foreign C blob?" and "can it be
@@ -189,20 +189,22 @@ buffers it named. **The kernel must therefore retain NO user pointer across that
 
 ## 4. Phases
 
-### Phase 1 — Userspace SDK (QuickJS-agnostic; the spine)
+### Phase 1 — Userspace SDK (QuickJS-agnostic; the spine) — **DELIVERED & GATED**
 Goal: write `fn main() -> i32`, build it into a confined U-mode ELF, run it. Makes QuickJS
-"just another app."
+"just another app." Done end-to-end and gated by `elf-loader-test` + `app-run-test`
+(both backends); the items below describe what was built.
 - `user/abi.mc` — the stable `SYS_*` numbers (shared kernel↔user).
 - `user/sys.mc` — typed ecall wrappers (`write`, `read`, `exit`, `getpid`, …) via MC inline asm.
 - `user/start.*` — `crt0`: set sp, call `main()`, `exit(rc)`.
-- **A real ELF loader** (replaces the toy). `elf_load_run` today copies the *first* `PT_LOAD`
-  to one flat `dst` and returns (`tests/qemu/proc/agent_confined_demo.mc`). The SDK loader
-  must: iterate **every** `PT_LOAD`; map each at its own `p_vaddr` with **per-segment
-  permissions** (text R|X, rodata R, data R|W) in the agent's isolated page table; **zero bss**
-  (`p_memsz > p_filesz`); and map a **stack** and an initial **heap arena** region. Honor
-  alignment; reject overlaps/out-of-range. This is the gating prerequisite for any real
-  binary (QuickJS has text/rodata/data/bss).
-- `kernel/arch/riscv64/app_runtime.c` — ONE reusable kernel-side runtime: isolated-Sv39 setup
+- **A real ELF loader** (replaced the toy). The loader iterates **every** `PT_LOAD`; maps each
+  at its own `p_vaddr` with **per-segment permissions** (text R|X, rodata R, data R|W) in the
+  agent's isolated page table; **zeroes bss** (`p_memsz > p_filesz`); and maps a **stack** and
+  an initial **heap arena** region; honoring alignment and rejecting overlaps/out-of-range.
+  The gating prerequisite for any real binary (QuickJS has text/rodata/data/bss) — done, gated
+  by `elf-loader-test` (synthetic 2-segment image) and `app-run-test` (real app ELF). (The
+  earlier flat-`PT_LOAD` `elf_load_run` in `tests/qemu/proc/agent_confined_demo.mc` was the toy
+  it replaced.)
+- `tests/qemu/proc/app_runtime.mc` — ONE reusable kernel-side runtime: isolated-Sv39 setup
   (kernel unmapped, reuse `agent_confined`), the real ELF loader above, a **`UserAddrSpace`
   built over the agent's page table** (so every user pointer is copied via
   `copy_from_user_pt`/`copy_to_user_pt` per §3.3 — no raw deref), the ABI-handler registrations
@@ -210,11 +212,11 @@ Goal: write `fn main() -> i32`, build it into a confined U-mode ELF, run it. Mak
 - `tools/user/build-app.sh <app.mc>` — compile app + user runtime → isolated U-mode ELF, run
   under QEMU. No per-app C glue.
 - `examples/apps/hello.mc` — `fn main() { write(1, "hello\n"); return 0; }`.
-- Gate: `app-hello-test` / `llvm-app-hello-test` (both backends, QEMU).
+- Gate: `app-run-test` / `llvm-app-run-test` (both backends, QEMU; `tests/qemu/proc/app_run_demo.mc`).
 
-**Effort: M–H.** Factoring the bespoke `*_user_runtime.c` glue into one runtime is easy; the
-real multi-segment loader + UserAddrSpace wiring is the substantive new work (and it pays off
-for every app, not just QuickJS).
+**Status: DELIVERED.** The bespoke `*_user_runtime` glue is factored into one runtime, and the
+real multi-segment loader + `UserAddrSpace` wiring (the substantive work) is done and gated by
+`elf-loader-test` + `app-run-test` — it pays off for every app, not just QuickJS.
 
 ### Phase 2 — Freestanding libc shim (`user/libc/`)
 Provide exactly what C programs need, backed by the SDK syscalls:
@@ -418,8 +420,8 @@ worker binding; v1 is the concurrency-hardening (locks) before SMP-parallel.
 | `setjmp`/`longjmp` | QuickJS uses its own exception machinery; provide a minimal setjmp if anything in libc needs it |
 | heap pressure / runaway script | static arena bound first; then SYS_SBRK + per-agent quota via the policy plane |
 | binary size of the ELF | confinement holds at any size; only the static-arena RAM budget matters |
-| multi-segment ELF layout (text/rodata/data/bss) | Phase 1 real loader (per-segment vaddr+perms+bss); gate on `hello` before QuickJS |
-| raw user pointers faulting the kernel | Phase 1 wires `UserAddrSpace` + `copy_*_user_pt`; a bad pointer is `-E_FAULT`, never a kernel fault |
+| multi-segment ELF layout (text/rodata/data/bss) | **DONE** — real loader (per-segment vaddr+perms+bss), gated by `elf-loader-test` + `app-run-test` |
+| raw user pointers faulting the kernel | **DONE** — `UserAddrSpace` + `copy_*_user_pt` wired (`app-run-test`); a bad pointer is `-E_FAULT`, never a kernel fault |
 | syscall arity (>3 args) | compound calls take one request-struct pointer (§3.1); no trap widening needed |
 | script ingress / no argv | custom non-CLI front-end + SYS_READ/capability-FS ingress (§0); no initial-stack/auxv synthesis |
 
@@ -447,8 +449,8 @@ sandboxed."
 
 ## 9. Review findings folded in (2026-06-20)
 - **F1 (syscall arity):** §3.1 — table stays 3-arg; tool/net take one request-struct pointer (widening to a0..a5 noted as the alternative).
-- **F2 (raw user pointers):** §3.3 — all user pointers go through `copy_*_user_pt` over a per-agent `UserAddrSpace`; wired in Phase 1's `app_runtime.c`.
-- **F3 (toy loader):** §1 + Phase 1 — a real multi-segment loader (per-segment perms, bss, stack/arena) is an explicit Phase-1 deliverable, `hello`-gated before QuickJS.
+- **F2 (raw user pointers):** §3.3 — all user pointers go through `copy_*_user_pt` over a per-agent `UserAddrSpace`. **DELIVERED:** wired in `tests/qemu/proc/app_runtime.mc`, gated by `app-run-test` (a loaded app's `SYS_WRITE` copies through `copy_from_user_pt`).
+- **F3 (toy loader):** §1 + Phase 1 — a real multi-segment loader (per-segment perms, bss, stack/arena). **DELIVERED:** gated by `elf-loader-test` (synthetic 2-segment image) + `app-run-test` (real multi-segment app ELF).
 - **F4 (front-end/argv):** §0 + Phase 4 — custom `qjs_agent.c` (no argv); script ingress defined.
 - **Open Q (script ingress):** §0 — SYS_READ staged channel for v0, capability FS path long-term.
 - **Open Q (network layer):** §3.4 — brokered `net_fetch` is the default (single audited fetch event); `net_egress_check` is the lower raw-connect primitive.

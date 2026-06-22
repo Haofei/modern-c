@@ -574,9 +574,14 @@ The current async syscall path is a mechanism test. The production-shaped versio
 be request/event based.
 
 > **Status:** the broker/policy/audit/capability substrates referenced by phases A1/A2
-> already exist (`kernel/fs/agent_fs.mc`, `kernel/core/mcp.mc`, `kernel/core/policy.mc`,
-> `kernel/core/net_broker.mc`). The remaining A1/A2 work is adapting that existing code to
-> the structured async request/event ABI, not building it from scratch.
+> already exist (`kernel/fs/agent_fs.mc`, `kernel/agent/mcp.mc`, `kernel/core/policy.mc`,
+> `kernel/net/net_broker.mc`). **A1 (brokered FS/tools) seed is delivered:** a pure-JS agent
+> already drives real FS ops through `agent_fs_call` over the structured async ABI
+> (`qjs-realtool-test`; see the gate notes above). **Still pending:** A2 — making
+> **`net_fetch` completion-driven** over the same ABI (today's transport is blocking
+> poll-mode) — and **native tool-catalog breadth** (`grep/find/edit/exec`). That remaining
+> work is adapting the existing code to the structured request/event ABI, not building it
+> from scratch.
 
 ### Phase A0: structured async ABI — **delivered (single-event)**
 
@@ -625,7 +630,7 @@ Rules:
 
 ### Phase A1: brokered tools
 
-Tasks (adapt existing substrate — `kernel/core/mcp.mc`, `policy.mc`, `agent_fs.mc` — to the
+Tasks (adapt existing substrate — `kernel/agent/mcp.mc`, `policy.mc`, `agent_fs.mc` — to the
 structured async ABI; do not rebuild):
 
 - Wire the existing mock deterministic tool broker to the `SYS_SUBMIT`/`SYS_POLL` path.
@@ -645,7 +650,7 @@ Acceptance:
 
 ### Phase A2: brokered network fetch
 
-Tasks (route through the existing `kernel/core/net_broker.mc` + `NetCap`, not a new stack):
+Tasks (route through the existing `kernel/net/net_broker.mc` + `NetCap`, not a new stack):
 
 - Expose the existing `net_fetch` broker as a structured-ABI operation.
 - Do not expose raw sockets to JS by default.
