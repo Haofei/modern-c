@@ -40,7 +40,14 @@ SUPPORT_OBJ=""
 case "$APP" in
     *.c)
         "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$APP" -o "$WORK/app.o"
-        "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$HERE/user/libc/libc.c" -o "$WORK/libc.o"
+        # The freestanding libc is PURE MC (user/libc/libc_core.mc — the single-unit alloc+cstr
+        # core, exporting the C ABI via #[backend_name]). This matches what the old C libc.c
+        # supplied (malloc/free + mem/str); it omits stdio (whose formatter needs a host
+        # mc_console_write hook these standalone apps don't provide). Lower via emit-c and compile
+        # with the app's CFLAGS (which include -fno-builtin, so clang does not rewrite the MC
+        # mem*/str* byte loops back into calls to themselves).
+        "$MCC" emit-c "$HERE/user/libc/libc_core.mc" > "$WORK/libc_mc.c"
+        "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$WORK/libc_mc.c" -o "$WORK/libc.o"
         APP_OBJS+=("$WORK/libc.o")
         # Full libm: build/reuse the vendored-openlibm archive and link it LAST (so the linker
         # pulls only the math members the app references). Cached under zig-out (gitignored).

@@ -19,9 +19,12 @@ const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold registe
 const RT_KERNEL_VA: usize = 0x8000_0000;
 
 // Backing store for the agent's page tables + the per-page frames the loader
-// allocates: 1 MiB, page-aligned. A `[N]u8` global is .bss-resident; the loader
+// allocates, page-aligned. A `[N]u8` global is .bss-resident (no file cost); the loader
 // only needs a 4 KiB-aligned base, which app_build derives from the region pointer.
-const RT_REGION_LEN: usize = 1048576; // 1 MiB
+// Sized to 12 MiB so it can back a confined C app whose freestanding libc (user/libc, shared
+// with the QuickJS host) carries an 8 MiB malloc arena in .bss — the loader maps the whole
+// PT_LOAD memsz, so the region must exceed the app's largest segment plus its page tables.
+const RT_REGION_LEN: usize = 12582912; // 12 MiB
 
 // Write one byte to the bare 16550 UART transmit register.
 fn uputc(c: u8) -> void {
@@ -69,7 +72,7 @@ extern fn mc_app_image() -> usize;
 extern fn mc_app_image_len() -> usize;
 
 // 1 MiB physical region the kernel carves the agent's page tables + frames from.
-global g_region: [1048576]u8;
+global g_region: [12582912]u8;
 
 // Map app_build's typed status (LS_*) to a human marker, so a load failure says WHY
 // (not a bare fail).
