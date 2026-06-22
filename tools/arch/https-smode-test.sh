@@ -40,7 +40,7 @@ TOKEN="MC-KERNEL-HTTPS-OK"         # the unique decrypted body token we verify
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/tls/tls_demo.mc"
-RUNTIME="$HERE/kernel/arch/riscv64/https_get_smode_runtime.c"
+RUNTIME="$HERE/tests/qemu/tls/https_get_smode_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/sbi.ld"
 BEARSSL="$HERE/third_party/bearssl"
 TA_DIR="$HERE/third_party/trust-anchors"
@@ -121,37 +121,42 @@ while IFS= read -r f; do
     BEARSSL_OBJS+=("$obj")
 done < <(find "$BEARSSL/src" -name '*.c' | sort)
 
-# 4. Lower the MC transport + compile the runtime (embeds local_ta.c via -I the TA dir).
+# 4. The S-mode runtime is now PURE MC (tests/qemu/tls/https_get_smode_runtime.mc); it imports
+# tls_demo.mc, reads its config from a generated MC unit, gets the trust-anchor pointer from a
+# 2-line C accessor over the vendored local_ta.c, and takes its DMA pool + rdtime clock from
+# sbi_dma_time.mc (the CLINT is not PMP-mapped into S-mode under OpenSBI). time.mc still provides
+# the goldfish-RTC wall clock for X.509 validity.
+CFLAGS_BEARSSL=("${CFLAGS[@]}")
 MCFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
          -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
          -Wno-unused-function -fno-builtin)
-# The S-mode runtime lives in kernel/arch/riscv64/, so it needs the virtio driver
-# dir on the include path for virtio_rng.h (the M-mode runtime resolves it as a
-# sibling).
-RUNTIME_FLAGS=("${CFLAGS[@]}"
-        -I"$TA_DIR"
-        -I"$VIRTIO_DIR"
-        -DMC_BUILD_EPOCH="$EPOCH"
-        -DHTTPS_PORT="$PORT"
-        "-DTLS_SERVERNAME=\"$SERVERNAME\""
-        "-DTLS_HOSTHDR=\"$SERVERNAME\"")
 
-# MC object built with the MC backend flags; runtime + bearssl with the BearSSL flags.
+cat > "$WORK/cfg.mc" <<EOF
+export fn mc_https_port() -> u16 { return $PORT; }
+export fn mc_servername() -> *const u8 { return "$SERVERNAME"; }
+export fn mc_hosthdr() -> *const u8 { return "$SERVERNAME"; }
+export fn mc_build_epoch_fn() -> u64 { return $EPOCH; }
+export fn mc_tls_google() -> u32 { return 0; }
+export fn mc_dnshost() -> *const u8 { return ""; }
+export fn mc_dns_server_ip() -> u32 { return 0; }
+EOF
+
 CFLAGS=("${MCFLAGS[@]}")
-kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/tls.o" "$WORK"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
+kernel_boot_compile_mc_object "$BACKEND" "$WORK/cfg.mc" "$WORK/cfg.o" "$WORK"
+kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/arch/riscv64/sbi_dma_time.mc" "$WORK/platform.o" "$WORK"
 # The real wall-clock seam (goldfish-RTC) — provides time_now_epoch() for X.509 validity.
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/core/time.mc" "$WORK/time.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
-# A2: the runtime #includes the generated virtq_structs.h (single source of truth);
-# this script direct-compiles the runtime (custom BearSSL flags), so generate it here.
-kernel_boot_emit_virtq_structs_header "$WORK"
-"$CLANG" "${RUNTIME_FLAGS[@]}" -I"$WORK" -c "$RUNTIME" -o "$WORK/runtime.o"
+# Vendored trust anchor (local_ta.c) + the 2-line accessor.
+printf '#include "bearssl.h"\n#include "local_ta.c"\nconst br_x509_trust_anchor *mc_trust_anchors(void){return TAs;}\nunsigned long mc_trust_anchors_num(void){return TAs_NUM;}\n' > "$WORK/ta.c"
+"$CLANG" "${CFLAGS_BEARSSL[@]}" -I"$TA_DIR" -c "$WORK/ta.c" -o "$WORK/ta.o"
 # Shared virtio-rng entropy driver (single source of truth, also used by the smoke test).
 "$MCC" emit-c "$HERE/kernel/drivers/virtio/virtio_rng.mc" > "$WORK/virtio_rng_gen.c" # virtio-rng driver is now pure MC
-"$CLANG" "${RUNTIME_FLAGS[@]}" -c "$WORK/virtio_rng_gen.c" -o "$WORK/virtio_rng.o"
+"$CLANG" "${MCFLAGS[@]}" -c "$WORK/virtio_rng_gen.c" -o "$WORK/virtio_rng.o"
 
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/virtio_rng.o" "$WORK/tls.o" "$WORK/time.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/https.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/cfg.o" "$WORK/platform.o" "$WORK/time.o" "$WORK/ta.o" "$WORK/virtio_rng.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/https.elf"
 
 # 5. Boot under QEMU with virtio-net (slirp) + virtio-rng + pcap. NO '-bios none' ->
 #    QEMU loads OpenSBI (the real firmware) which boots our kernel in S-mode.
