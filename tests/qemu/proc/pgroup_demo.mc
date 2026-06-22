@@ -1,4 +1,4 @@
-import "kernel/core/pgroup.mc";
+import "kernel/lib/pgroup.mc";
 global g_pg: PGroups;
 export fn pgroup_run() -> u32 {
     var pass: u32 = 1;

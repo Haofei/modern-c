@@ -1,5 +1,5 @@
 // Pipe FIFO: write bytes, read them back in order, confirm full/empty backpressure.
-import "kernel/core/pipe.mc";
+import "kernel/lib/pipe.mc";
 
 global g_pipe: Pipe;
 

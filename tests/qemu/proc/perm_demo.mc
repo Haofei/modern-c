@@ -1,4 +1,4 @@
-import "kernel/core/perm.mc";
+import "kernel/lib/perm.mc";
 export fn perm_run() -> u32 {
     var pass: u32 = 1;
     // file owned by uid=1000/gid=1000, mode 0640 (owner rw, group r, other none)

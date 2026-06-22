@@ -9,7 +9,7 @@
 // MCP is the compatibility layer; the verdicts come from MC capabilities. Returns
 // 1 iff every outcome is exactly right.
 
-import "kernel/core/mcp.mc";
+import "kernel/agent/mcp.mc";
 import "kernel/fs/treefs.mc";
 import "kernel/fs/fs_toolserver.mc";
 import "kernel/fs/agent_fs.mc";
