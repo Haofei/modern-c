@@ -37,7 +37,7 @@ case "$BACKEND" in
             -mtriple=aarch64-unknown-elf \
             -relocation-model=static \
             -code-model=small
-        "$CLANG" "${CFLAGS[@]}" -c "$HERE/kernel/arch/riscv64/llvm_kernel_support.c" -o "$WORK/llvm-support.o"
+        "$CLANG" "${CFLAGS[@]}" -x c -c /dev/null -o "$WORK/llvm-support.o"
         ;;
     *)
         echo "unknown kernel backend: $BACKEND" >&2

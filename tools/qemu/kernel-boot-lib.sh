@@ -139,8 +139,10 @@ kernel_boot_compile_llvm_support() {
     local backend="$1"
     local out="$2"
     if [ "$backend" = llvm ]; then
-        kernel_boot_compile_c_object "$HERE/kernel/arch/riscv64/llvm_kernel_support.c" "$out"
-        printf '%s' "$out"
+        # PROBE: provide nothing. The trap hooks are now self-provided per-object (emitTrapDecl weak
+        # trapping defines), and riscv `+m` lowers 64-bit mul/div to hardware — so the support object
+        # may be entirely unreferenced. The link will error on any genuinely-undefined symbol.
+        :
     fi
 }
 

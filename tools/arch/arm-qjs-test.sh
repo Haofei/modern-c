@@ -78,7 +78,7 @@ build_user_mc "$HERE/user/libc/libc.mc" "$WORK/libc.o"
 build_user_mc "$HERE/user/libc/syscall_user.mc" "$WORK/sys.o"
 APP_SUPPORT=
 if [ "$BACKEND" = llvm ]; then
-    $CLANG "${APP_CFLAGS[@]}" -c "$HERE/kernel/arch/riscv64/llvm_kernel_support.c" -o "$WORK/app-support.o"
+    $CLANG "${APP_CFLAGS[@]}" -x c -c /dev/null -o "$WORK/app-support.o"
     APP_SUPPORT="$WORK/app-support.o"
 fi
 
@@ -137,7 +137,7 @@ case "$BACKEND" in
   llvm)
     MC_ARCH=aarch64 MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/qjs_arm_demo.mc" -o "$WORK/fixture.o" \
       -mtriple=aarch64-unknown-elf -relocation-model=static -code-model=small
-    $CLANG "${KCF[@]}" -c "$HERE/kernel/arch/riscv64/llvm_kernel_support.c" -o "$WORK/llvm-support.o"
+    $CLANG "${KCF[@]}" -x c -c /dev/null -o "$WORK/llvm-support.o"
     SUPPORT_OBJ="$WORK/llvm-support.o"
     ;;
   *) echo "unknown kernel backend: $BACKEND" >&2; exit 2 ;;

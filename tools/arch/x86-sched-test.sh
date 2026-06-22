@@ -17,7 +17,7 @@ case "$BACKEND" in
         MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/x86/sched_x86_demo.mc" -o "$WORK/sched.o" \
             -mtriple=x86_64-unknown-linux-gnu \
             -relocation-model=pic
-        "$CLANG" -std=c11 -O1 -Wall -Wextra -Wno-unused-parameter -c "$HERE/kernel/arch/riscv64/llvm_kernel_support.c" -o "$WORK/llvm-support.o"
+        "$CLANG" -std=c11 -O1 -Wall -Wextra -Wno-unused-parameter -x c -c /dev/null -o "$WORK/llvm-support.o"
         ;;
     *)
         echo "unknown kernel backend: $BACKEND" >&2

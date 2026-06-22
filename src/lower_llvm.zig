@@ -233,14 +233,23 @@ fn moduleDefinesHook(module: ast.Module, hook: []const u8) bool {
 }
 
 fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: ast.Module) !void {
-    try out.appendSlice(allocator, "declare void @mc_trap_IntegerOverflow() noreturn\n");
-    try out.appendSlice(allocator, "declare void @mc_trap_DivideByZero() noreturn\n");
-    try out.appendSlice(allocator, "declare void @mc_trap_InvalidShift() noreturn\n\n");
-    try out.appendSlice(allocator, "declare void @mc_trap_InvalidRepresentation() noreturn\n");
-    try out.appendSlice(allocator, "declare void @mc_trap_Bounds() noreturn\n\n");
-    try out.appendSlice(allocator, "declare void @mc_trap_Assert() noreturn\n\n");
-    try out.appendSlice(allocator, "declare void @mc_trap_NullUnwrap() noreturn\n");
-    try out.appendSlice(allocator, "declare void @mc_trap_Unreachable() noreturn\n\n");
+    // The checked-arithmetic / bounds / unreachable trap hooks. Like the C backend (which emits
+    // them as per-unit `static inline ... __builtin_trap()`), emit a WEAK trapping `define` for
+    // each in EVERY LLVM object: a default build self-provides a halting handler (llvm.trap ->
+    // an illegal instruction), so no external object has to supply them. A module that defines a
+    // hook itself (a custom handler) overrides via its strong `export fn`; a linked C runtime with
+    // STRONG definitions likewise wins over these weak ones.
+    try out.appendSlice(allocator, "declare void @llvm.trap()\n");
+    const trap_hooks = [_][]const u8{
+        "mc_trap_IntegerOverflow", "mc_trap_DivideByZero",        "mc_trap_InvalidShift",
+        "mc_trap_InvalidRepresentation", "mc_trap_Bounds",        "mc_trap_Assert",
+        "mc_trap_NullUnwrap",            "mc_trap_Unreachable",
+    };
+    for (trap_hooks) |hook| {
+        if (moduleDefinesHook(module, hook)) continue;
+        try out.print(allocator, "define weak void @{s}() noreturn {{\n  call void @llvm.trap()\n  unreachable\n}}\n", .{hook});
+    }
+    try out.appendSlice(allocator, "\n");
     // C-ABI varargs intrinsics (for `va.start`/`va.end`; `va.arg` uses the `va_arg` instr).
     try out.appendSlice(allocator, "declare void @llvm.va_start(ptr)\n");
     try out.appendSlice(allocator, "declare void @llvm.va_end(ptr)\n\n");
