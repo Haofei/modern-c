@@ -52,19 +52,30 @@ pub const FileBoundary = struct {
 pub const arch_active_prefix = "kernel/arch/active/";
 pub const default_arch = "riscv64";
 
+// The virtual platform directory: an `import "kernel/platform/active/<x>"` is rewritten to
+// `import "kernel/platform/<platform>/<x>"` where <platform> is the `--platform` selection
+// (default "qemu_virt"). This is the platform-selection seam (kernel-layering plan, Wave 0):
+// a generic core module keeps its stable import path and pulls its board/device backend
+// (the fixed MMIO addresses for the UART console, the RTC, the virtio-rng window) from
+// `active`, so swapping boards is a compile-time selection — not a source edit of the 45
+// modules that import the console interface.
+pub const platform_active_prefix = "kernel/platform/active/";
+pub const default_platform = "qemu_virt";
+
 pub fn loadCombinedSource(
     allocator: std.mem.Allocator,
     io: std.Io,
     root_path: []const u8,
     root_source: []const u8,
 ) LoadError![]u8 {
-    return loadCombinedSourceWithBoundaries(allocator, io, root_path, root_source, null, null);
+    return loadCombinedSourceWithBoundaries(allocator, io, root_path, root_source, null, null, null);
 }
 
 // As `loadCombinedSource`, but if `boundaries` is non-null it is filled (appended) with one
 // `FileBoundary` per contributing file. The boundary `path` strings are allocated with
 // `allocator` and owned by the caller (free each `.path`, then the list). `arch` selects the
-// `kernel/arch/active/` alias target (null => default_arch).
+// `kernel/arch/active/` alias target (null => default_arch); `platform` selects the
+// `kernel/platform/active/` alias target (null => default_platform).
 pub fn loadCombinedSourceWithBoundaries(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -72,6 +83,7 @@ pub fn loadCombinedSourceWithBoundaries(
     root_source: []const u8,
     boundaries: ?*std.ArrayList(FileBoundary),
     arch: ?[]const u8,
+    platform: ?[]const u8,
 ) LoadError![]u8 {
     var visited = std.StringHashMap(void).init(allocator);
     defer {
@@ -83,7 +95,7 @@ pub fn loadCombinedSourceWithBoundaries(
     errdefer out.deinit(allocator);
     const canon_root = std.fs.path.resolve(allocator, &.{root_path}) catch try allocator.dupe(u8, root_path);
     defer allocator.free(canon_root);
-    try expand(allocator, io, canon_root, root_source, &visited, &out, boundaries, arch orelse default_arch);
+    try expand(allocator, io, canon_root, root_source, &visited, &out, boundaries, arch orelse default_arch, platform orelse default_platform);
     return out.toOwnedSlice(allocator);
 }
 
@@ -96,6 +108,7 @@ fn expand(
     out: *std.ArrayList(u8),
     boundaries: ?*std.ArrayList(FileBoundary),
     arch: []const u8,
+    platform: []const u8,
 ) LoadError!void {
     if (visited.contains(path)) return;
     try visited.put(try allocator.dupe(u8, path), {});
@@ -107,7 +120,7 @@ fn expand(
     defer arena.deinit();
     const a = arena.allocator();
 
-    const imports = try scanImports(a, io, path, source, arch);
+    const imports = try scanImports(a, io, path, source, arch, platform);
 
     // Append this file's source with its import statements blanked out.
     const blanked = try allocator.dupe(u8, source);
@@ -128,13 +141,13 @@ fn expand(
             return error.ImportNotFound;
         };
         defer allocator.free(imp_source);
-        try expand(allocator, io, imp.path, imp_source, visited, out, boundaries, arch);
+        try expand(allocator, io, imp.path, imp_source, visited, out, boundaries, arch, platform);
     }
 }
 
 // Find top-level `import "path";` statements by lexing. Returns the resolved
 // path and the byte range (start of `import` .. end of `;`) for each.
-fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: []const u8, arch: []const u8) LoadError![]ImportRef {
+fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: []const u8, arch: []const u8, platform: []const u8) LoadError![]ImportRef {
     var refs: std.ArrayList(ImportRef) = .empty;
     var reporter = diagnostics.Reporter.init(arena, path, source);
     var lx = lexer.Lexer.init(source, &reporter);
@@ -158,6 +171,9 @@ fn scanImports(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: [
                 // Arch-selection seam: rewrite `kernel/arch/active/<x>` to the chosen arch.
                 if (std.mem.startsWith(u8, rel, arch_active_prefix)) {
                     rel = try std.fmt.allocPrint(arena, "kernel/arch/{s}/{s}", .{ arch, rel[arch_active_prefix.len..] });
+                } else if (std.mem.startsWith(u8, rel, platform_active_prefix)) {
+                    // Platform-selection seam: rewrite `kernel/platform/active/<x>` to the board.
+                    rel = try std.fmt.allocPrint(arena, "kernel/platform/{s}/{s}", .{ platform, rel[platform_active_prefix.len..] });
                 }
                 const resolved = try resolveImportPath(arena, io, path, rel);
                 try refs.append(arena, .{

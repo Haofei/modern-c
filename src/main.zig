@@ -135,6 +135,11 @@ pub fn main(init: std.process.Init) !void {
     // existing riscv builds need no flag; only x86/aarch64 builds pass it.
     var arch_flag: ?[]const u8 = null;
     var saw_arch_flag = false;
+    // Platform-selection seam (kernel-layering Wave 0): `--platform=qemu_virt` picks which
+    // board a `import "kernel/platform/active/..."` resolves to. Null => loader default
+    // (qemu_virt), so existing builds need no flag; only alternate boards pass it.
+    var platform_flag: ?[]const u8 = null;
+    var saw_platform_flag = false;
     while (args.next()) |flag| {
         if (std.mem.startsWith(u8, flag, "--arch=")) {
             saw_arch_flag = true;
@@ -143,6 +148,14 @@ pub fn main(init: std.process.Init) !void {
                 std.mem.eql(u8, value, "aarch64"))
             {
                 arch_flag = value;
+            } else {
+                return failUsage();
+            }
+        } else if (std.mem.startsWith(u8, flag, "--platform=")) {
+            saw_platform_flag = true;
+            const value = flag["--platform=".len..];
+            if (std.mem.eql(u8, value, "qemu_virt")) {
+                platform_flag = value;
             } else {
                 return failUsage();
             }
@@ -209,6 +222,9 @@ pub fn main(init: std.process.Init) !void {
     // imports through the loader (the same set that accepts `--checks`, which are the compile
     // commands). Reject it elsewhere rather than silently ignoring it.
     if (saw_arch_flag and !accepts_checks) return failUsage();
+    // `--platform` affects import resolution exactly like `--arch`, so it is meaningful only on
+    // the import-flattening (compile) commands. Reject it elsewhere rather than silently ignoring.
+    if (saw_platform_flag and !accepts_checks) return failUsage();
     // The sanitizer profiles are not all independently combinable: a single raw.load/
     // raw.store wraps exactly one shadow protocol. msan implies ksan (composable), but
     // csan is mutually exclusive with ksan/msan — `--checks=ksan,csan` (or `msan,csan`)
@@ -244,7 +260,7 @@ pub fn main(init: std.process.Init) !void {
         for (boundaries.items) |b| allocator.free(b.path);
         boundaries.deinit(allocator);
     }
-    const source = try loader.loadCombinedSourceWithBoundaries(allocator, init.io, path, root_source, &boundaries, arch_flag);
+    const source = try loader.loadCombinedSourceWithBoundaries(allocator, init.io, path, root_source, &boundaries, arch_flag, platform_flag);
     defer allocator.free(source);
     combined_boundaries = boundaries.items;
     defer combined_boundaries = null;

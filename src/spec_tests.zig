@@ -947,7 +947,7 @@ fn resolveSpecSource(
         for (boundaries.items) |b| allocator.free(b.path);
         boundaries.deinit(allocator);
     }
-    const combined = try loader.loadCombinedSourceWithBoundaries(allocator, io, abs, raw, &boundaries, null);
+    const combined = try loader.loadCombinedSourceWithBoundaries(allocator, io, abs, raw, &boundaries, null, null);
     return .{ .source = combined, .boundaries = try boundaries.toOwnedSlice(allocator) };
 }
 
