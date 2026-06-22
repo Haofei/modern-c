@@ -26,11 +26,57 @@ FORBIDDEN_ASSUMPTIONS = ("nuw", "nsw", "nonnull", "noalias", "noundef", "poison"
 FORBIDDEN_RE = re.compile(r"(^|[ ,(])(" + "|".join(FORBIDDEN_ASSUMPTIONS) + r")([ ,)]|$)")
 REASSOC_RE = re.compile(r"(^|[ ,(])reassoc([ ,)]|$)")
 
+# emit-llvm emits no target triple, so llc would otherwise inherit the HOST default
+# (e.g. aarch64 in the arm64 dev container) and fail to assemble the inline asm the
+# precise-asm fixtures carry — a host-dependent result. Pin one triple so the object
+# step is deterministic; the fixtures' valid asm is x86-64 and all non-asm fixtures
+# emit target-neutral IR that assembles for any triple.
+OBJ_TRIPLE = "x86_64-unknown-none"
+
+# Same contract as spec-llvm-sweep.py's OUT_OF_SCOPE (kept in parity): phase=sema
+# DIAGNOSTIC fixtures whose `check=` is a sema diagnostic (E_*), never a `lower-*`
+# check, so their accept+reject contract is owned by src/spec_tests.zig, not by backend
+# object emission. A fixture carrying a real `lower-*` check must NEVER be added here.
+OUT_OF_SCOPE = {
+    "soundness_address_class_cast.mc": "checker-only address-class cast has no IR lowering (phase=sema; E_ADDRESS_CLASS_* owned by spec_tests.zig)",
+    "soundness_use_after_move.mc": "accept/reject cases share move-typed defs the chunk-level EXPECT_ERROR strip cannot isolate (phase=sema; E_USE_AFTER_MOVE owned by spec_tests.zig)",
+    "soundness_conservative_overrejection.mc": "shared move-typed defs across accept/reject (phase=sema; E_USE_AFTER_MOVE owned by spec_tests.zig)",
+    "soundness_opaque_declassify.mc": "accept/reject cases share opaque defs (phase=sema; E_OPAQUE_DECLASSIFY owned by spec_tests.zig)",
+    "soundness_guard_opaque_reject.mc": "opaque private-field reject fixture; positive impl cannot be chunk-isolated (phase=sema; E_PRIVATE_FIELD owned by spec_tests.zig)",
+    "soundness_orphan_impl_reject.mc": "orphan-impl reject fixture (phase=sema; E_ORPHAN_IMPL owned by spec_tests.zig)",
+    "traits_effect_sleep_in_atomic.mc": "effect-typed callees are EXPECT_ERROR-stripped, leaving dangling refs (phase=parse,sema; E_SLEEP_IN_ATOMIC owned by spec_tests.zig)",
+}
+
 
 def split_top_level(src):
-    """Split source into top-level chunks by brace/semicolon at depth 0."""
+    """Split source into top-level chunks by brace/semicolon at depth 0.
+
+    Comment- and string-aware: punctuation inside a `//` line comment, a `/* */`
+    block comment, or a string/char literal is literal text, not a structural
+    delimiter. Kept identical to spec-emit-sweep.py / spec-llvm-sweep.py.
+    """
     chunks, buf, depth = [], "", 0
-    for c in src:
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = src.find("\n", i)
+            j = n if j == -1 else j + 1
+            buf += src[i:j]; i = j; continue
+        if c == "/" and nxt == "*":
+            j = src.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            buf += src[i:j]; i = j; continue
+        if c == '"' or c == "'":
+            q = c; buf += c; i += 1
+            while i < n:
+                d = src[i]; buf += d; i += 1
+                if d == "\\" and i < n:
+                    buf += src[i]; i += 1; continue
+                if d == q:
+                    break
+            continue
         buf += c
         if c == "{":
             depth += 1
@@ -42,6 +88,7 @@ def split_top_level(src):
         elif c == ";" and depth == 0:
             chunks.append(buf)
             buf = ""
+        i += 1
     if buf.strip():
         chunks.append(buf)
     return chunks
@@ -83,7 +130,7 @@ def main():
         return 0
 
     os.makedirs(out_dir, exist_ok=True)
-    failures, swept, kept_fns = [], 0, 0
+    failures, oos_failures, swept, kept_fns = [], [], 0, 0
     for path in sorted(glob.glob(os.path.join(spec_dir, "*.mc"))):
         name = os.path.basename(path)
         stem = os.path.splitext(name)[0]
@@ -105,7 +152,7 @@ def main():
                 token, line_no, line = forbidden
                 failures.append((name, "ASSUMPTION", f"forbidden LLVM assumption token '{token}' at line {line_no}: {line}"))
                 continue
-            compile_obj = subprocess.run(["llc", "-filetype=obj", "-o", out_path], input=emit.stdout, capture_output=True, text=True)
+            compile_obj = subprocess.run(["llc", "-mtriple=" + OBJ_TRIPLE, "-filetype=obj", "-o", out_path], input=emit.stdout, capture_output=True, text=True)
             if compile_obj.returncode != 0:
                 failures.append((name, "LLC", first_error(compile_obj.stderr)))
                 continue
@@ -114,7 +161,14 @@ def main():
         finally:
             os.unlink(tmp_path)
 
+    oos_failures = [f for f in failures if f[0] in OUT_OF_SCOPE]
+    failures = [f for f in failures if f[0] not in OUT_OF_SCOPE]
+
     print(f"spec fixtures swept: {swept}, valid functions compiled to LLVM objects: {kept_fns}")
+    if oos_failures:
+        print("known out-of-scope fixtures (allowlisted, not failing the gate):")
+        for name, kind, message in oos_failures:
+            print(f"  [{kind}] {name}: {message}\n        reason: {OUT_OF_SCOPE[name]}")
     if failures:
         print(f"FAIL: {len(failures)} valid spec fixture(s) did not compile to LLVM objects:")
         for name, kind, message in failures:
