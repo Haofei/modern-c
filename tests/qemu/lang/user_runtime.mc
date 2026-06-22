@@ -13,35 +13,13 @@
 // so it does NOT import console.mc (that would duplicate the symbol). Kernel-side
 // banners go out the bare 16550 UART directly; all U-mode I/O flows through do_ecall.
 
-const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
+import "tests/qemu/lib/test_report.mc";
 
 const RT_SYS_PUTC: u64 = 2;
 const RT_SYS_WRITE: u64 = 4;
 const RT_SYS_EXIT: u64 = 3;
 
 const RT_NEG1: u64 = 0xFFFF_FFFF_FFFF_FFFF; // (u64)-1: copy_from_user rejection
-
-// Write one byte to the bare 16550 UART transmit register.
-fn uputc(c: u8) -> void {
-    unsafe {
-        raw.store<u8>(phys(RT_UART_THR), c);
-    }
-}
-
-// Write a NUL-terminated string over the bare UART.
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 {
-            break;
-        }
-        uputc(b);
-        i = i + 1;
-    }
-}
 
 // Defined in the shared M-mode bring-up runtime (context_runtime.c).
 extern fn mc_halt() -> void;

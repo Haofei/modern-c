@@ -14,36 +14,8 @@
 // saves a full integer frame, hands its address to `trap_entry`, restores (a0 now
 // holds the syscall result), and `mret`s past the 4-byte ecall.
 
+import "tests/qemu/lib/test_report.mc";
 import "kernel/arch/riscv64/csr.mc";
-
-// The syscall demo (tests/qemu/lang/syscall_demo.mc) imports kernel/core/console.mc
-// and so DEFINES `console_putc` in its object; this runtime is linked beside it.
-// To avoid a duplicate `console_putc` definition across the two objects, this unit
-// does NOT import console.mc/mmio_console.mc — it writes the bare 16550 UART
-// directly (the same raw store console.mc performs) for its own banner/diagnostics.
-const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
-
-// Write one byte to the bare 16550 UART transmit register.
-fn uputc(c: u8) -> void {
-    unsafe {
-        raw.store<u8>(phys(RT_UART_THR), c);
-    }
-}
-
-// Write a NUL-terminated string over the bare UART.
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 {
-            break;
-        }
-        uputc(b);
-        i = i + 1;
-    }
-}
 
 const RT_MCAUSE_M_ECALL: u64 = 11;
 const RT_SYS_ADD: u64 = 1;

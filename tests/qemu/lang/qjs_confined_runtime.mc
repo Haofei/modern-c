@@ -10,7 +10,7 @@
 // demo app_run_demo.mc. The kernel is UNMAPPED in the agent's space — the MMU is the
 // confinement boundary; the agent reaches the kernel only via ecall.
 
-const RT_UART_THR: usize = 0x1000_0000;
+import "tests/qemu/lib/test_report.mc";
 const RT_KERNEL_VA: usize = 0x8000_0000;
 const RT_PAGE: usize = 4096;
 const RT_REGION_LEN: usize = 16 * 1024 * 1024; // 16 MiB usable
@@ -44,20 +44,6 @@ export fn mc_agent_source(out_len: *mut usize) -> usize {
     return 0;
 }
 
-fn uputc(c: u8) -> void {
-    unsafe { raw.store<u8>(phys(RT_UART_THR), c); }
-}
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 { break; }
-        uputc(b);
-        i = i + 1;
-    }
-}
 fn page_align(base: usize) -> usize {
     return (base + (RT_PAGE - 1)) & ~(RT_PAGE - 1);
 }

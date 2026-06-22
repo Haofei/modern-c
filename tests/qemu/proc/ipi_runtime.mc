@@ -6,32 +6,12 @@
 // tests/qemu/proc/ipi_demo.mc, linked beside this object), hart 1 traps, clears +
 // counts it, and hart 0 confirms delivery.
 
-const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
+import "tests/qemu/lib/test_report.mc";
 const RT_FINISHER: usize = 0x0010_0000; // SiFive test finisher
 const RT_FINISHER_HALT: u32 = 0x5555;
 const RT_MIE_MSIE: usize = 0x8;             // machine software interrupt enable (mie)
 const RT_MSTATUS_MIE: usize = 0x8;          // global machine interrupt enable (mstatus)
 const RT_CAUSE_MSI: u64 = 0x8000_0000_0000_0003; // interrupt | machine software interrupt
-
-fn uputc(c: u8) -> void {
-    unsafe {
-        raw.store<u8>(phys(RT_UART_THR), c);
-    }
-}
-
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 {
-            break;
-        }
-        uputc(b);
-        i = i + 1;
-    }
-}
 
 // MC entry points (tests/qemu/proc/ipi_demo.mc).
 extern fn ipi_send(target: u32) -> void;

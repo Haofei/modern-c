@@ -16,6 +16,7 @@
 // BIDI=33178. A too-small/misaligned context fails the CERT-CHAIN-VALIDATED + decrypted-token
 // asserts, so the sizing is gate-verified.
 
+import "tests/qemu/lib/test_report.mc";
 import "tests/qemu/tls/tls_demo.mc"; // tls_net_up / tls_connect / tls_send / tls_recv + Virtq/MmioPtr
 
 // The vendored trust anchor, via a C accessor (local_ta.c stays vendored cert data).
@@ -69,7 +70,6 @@ extern fn mc_tls_google() -> u32;
 extern fn mc_dnshost() -> *const u8;
 extern fn mc_dns_server_ip() -> u32;
 
-const UART_THR: usize = 0x1000_0000;
 const FINISHER: usize = 0x0010_0000;
 const FINISHER_HALT: u32 = 0x5555;
 const HG_MMIO_BASE: usize = 0x10001000;
@@ -98,20 +98,6 @@ global g_tx_used: VringUsed;
 global g_rxq: Virtq;
 global g_txq: Virtq;
 
-fn uputc(c: u8) -> void {
-    unsafe { raw.store<u8>(phys(UART_THR), c); }
-}
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 { break; }
-        uputc(b);
-        i = i + 1;
-    }
-}
 fn uputhex(v: u64) -> void {
     uputc(48); uputc(120);
     var s: i32 = 60;

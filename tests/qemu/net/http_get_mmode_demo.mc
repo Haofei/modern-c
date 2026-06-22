@@ -8,12 +8,12 @@
 // std/dma + std/time platform primitives from the separate mmode_dma_time.mc (8 MiB
 // bump pool — TCP drives many unfreed RX refills + TX segments).
 
+import "tests/qemu/lib/test_report.mc";
 import "kernel/arch/riscv64/sbi_virtio_probe.mc";
 import "tests/qemu/net/http_get_demo.mc"; // http_get_drive / http_resp_len / http_resp_byte
 
 const VIRTIO_ID_NET: u32 = 1;
 const HTTP_PORT: u16 = 8080;          // must match tools/net/http-get-test.sh
-const UART_THR: usize = 0x1000_0000;
 const FINISHER: usize = 0x0010_0000;
 const FINISHER_HALT: u32 = 0x5555;
 
@@ -27,20 +27,6 @@ global g_rxq: Virtq;
 global g_txq: Virtq;
 global g_framebuf: [2048]u8;
 
-fn uputc(c: u8) -> void {
-    unsafe { raw.store<u8>(phys(UART_THR), c); }
-}
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 { break; }
-        uputc(b);
-        i = i + 1;
-    }
-}
 fn uputhex(v: u64) -> void {
     uputc(48); uputc(120); // "0x"
     var s: i32 = 60;

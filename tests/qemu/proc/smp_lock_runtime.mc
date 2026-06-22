@@ -6,32 +6,12 @@
 // final shared counter. If the lock provides real mutual exclusion the counter equals
 // harts * ITERS exactly (here 2 * 2000 = 4000).
 
-const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
+import "tests/qemu/lib/test_report.mc";
 const RT_FINISHER: usize = 0x0010_0000; // SiFive test finisher
 const RT_FINISHER_HALT: u32 = 0x5555;
 const RT_NHARTS: u32 = 2;
 const RT_ITERS: u32 = 2000;
 const RT_EXPECTED: u32 = 4000; // NHARTS * ITERS
-
-fn uputc(c: u8) -> void {
-    unsafe {
-        raw.store<u8>(phys(RT_UART_THR), c);
-    }
-}
-
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 {
-            break;
-        }
-        uputc(b);
-        i = i + 1;
-    }
-}
 
 fn uputdec(v: u32) -> void {
     if v == 0 {

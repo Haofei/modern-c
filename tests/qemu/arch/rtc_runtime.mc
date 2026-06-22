@@ -10,29 +10,7 @@
 //   reads the low word twice (advancing check), prints EPOCH=/NS=, and on a
 //   plausible live "now" (1.7e9 .. 2.0e9 s) prints RTC-OK.
 
-const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
-
-// Write one byte to the bare 16550 UART transmit register.
-fn uputc(c: u8) -> void {
-    unsafe {
-        raw.store<u8>(phys(RT_UART_THR), c);
-    }
-}
-
-// Write a NUL-terminated string over the bare UART.
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 {
-            break;
-        }
-        uputc(b);
-        i = i + 1;
-    }
-}
+import "tests/qemu/lib/test_report.mc";
 
 // Print an unsigned 64-bit value in decimal.
 fn uputdec(v: u64) -> void {

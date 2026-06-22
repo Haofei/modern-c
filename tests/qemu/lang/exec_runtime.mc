@@ -14,7 +14,7 @@
 // duplicate definition this unit does NOT import console.mc — it writes the bare 16550
 // UART directly for diagnostics.
 
-const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
+import "tests/qemu/lib/test_report.mc";
 
 const RT_SYS_PUTC: u64 = 2;
 const RT_SYS_EXIT: u64 = 3;
@@ -25,26 +25,6 @@ const RT_EH: usize = 64;  // ELF64 header size
 const RT_PH: usize = 56;  // program-header size
 const RT_CODE: usize = 20; // 5 instructions
 const RT_PROG_LEN: usize = 140; // EH + PH + CODE
-
-fn uputc(c: u8) -> void {
-    unsafe {
-        raw.store<u8>(phys(RT_UART_THR), c);
-    }
-}
-
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 {
-            break;
-        }
-        uputc(b);
-        i = i + 1;
-    }
-}
 
 // Shared M-mode bring-up runtime (context_runtime.c).
 extern fn mc_halt() -> void;

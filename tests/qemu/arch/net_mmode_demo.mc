@@ -12,11 +12,11 @@
 // (mmode_dma_time.mc) linked beside this one so its definitions bind the std `extern fn`
 // seam by name (a single MC unit may not both import the extern decl and define it).
 
+import "tests/qemu/lib/test_report.mc";
 import "kernel/arch/riscv64/sbi_virtio_probe.mc";
 import "kernel/main.mc"; // kernel_main + the virtio-net driver / net stack
 
 const VIRTIO_ID_NET: u32 = 1;
-const UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
 const FINISHER: usize = 0x0010_0000; // SiFive test finisher
 const FINISHER_HALT: u32 = 0x5555;
 
@@ -31,20 +31,6 @@ global g_tx_used: VringUsed;
 global g_rxq: Virtq;
 global g_txq: Virtq;
 
-fn uputc(c: u8) -> void {
-    unsafe { raw.store<u8>(phys(UART_THR), c); }
-}
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 { break; }
-        uputc(b);
-        i = i + 1;
-    }
-}
 fn uputhex(v: u32) -> void {
     uputc(48); uputc(120); // "0x"
     var s: i32 = 28;

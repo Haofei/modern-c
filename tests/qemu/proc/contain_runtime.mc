@@ -13,32 +13,12 @@
 // importing console.mc -> defining console_putc/put_str), so this runtime must NOT import
 // console.mc; it writes the bare 16550 UART directly for diagnostics.
 
+import "tests/qemu/lib/test_report.mc";
 import "tests/qemu/mem/mmode_sdrop.mc"; // drop_to_smode + activate_satp (no console import)
 
-const RT_UART_THR: usize = 0x1000_0000;  // QEMU virt 16550 transmit-hold register
 const RT_FINISHER: usize = 0x0010_0000;  // SiFive test finisher
 const RT_FINISHER_HALT: u32 = 0x5555;
 const RT_BAD_VA: usize = 0xD000_0000;
-
-fn uputc(c: u8) -> void {
-    unsafe {
-        raw.store<u8>(phys(RT_UART_THR), c);
-    }
-}
-
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 {
-            break;
-        }
-        uputc(b);
-        i = i + 1;
-    }
-}
 
 // kernel/core/demand.mc: build the address space (kernel mapped; region unmapped).
 extern fn dp_setup(region_base: usize, region_len: usize) -> u64;

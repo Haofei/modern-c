@@ -24,9 +24,9 @@
 // and reaches the scheduler/process/paging work (sched_vm_setup / sched_vm_run /
 // sched_vm_kernel_satp) through `extern fn`.
 
+import "tests/qemu/lib/test_report.mc";
 import "tests/qemu/mem/mmode_sdrop.mc"; // drop_to_smode + activate_satp
 
-const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
 const RT_FINISHER: usize = 0x0010_0000;
 const RT_FINISHER_HALT: u32 = 0x5555;
 
@@ -101,28 +101,6 @@ export fn mc_thread_init(ctx: *mut Context, stack_top: usize, entry: fn() -> voi
         raw.store<u64>(phys(base + 0), tramp);       // ra  = trampoline
         raw.store<u64>(phys(base + 8), stack_top as u64); // sp = stack_top
         raw.store<u64>(phys(base + 16), ent);        // s0  = entry
-    }
-}
-
-// Write one byte to the bare 16550 UART transmit register.
-fn uputc(c: u8) -> void {
-    unsafe {
-        raw.store<u8>(phys(RT_UART_THR), c);
-    }
-}
-
-// Write a NUL-terminated string over the bare UART.
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 {
-            break;
-        }
-        uputc(b);
-        i = i + 1;
     }
 }
 

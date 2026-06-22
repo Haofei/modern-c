@@ -12,12 +12,12 @@
 // this demo defines NO _start and uses LOCAL console names (uputc/uputs) to avoid the
 // putc_/puts_/_start/test_main collisions the old C runtime inlined everything to dodge.
 
+import "tests/qemu/lib/test_report.mc";
 import "kernel/arch/riscv64/sbi_virtio_probe.mc";
 import "tests/qemu/proc/agent_net_real_demo.mc"; // agent_net_real_main / agent_net_real_resp_*
 
 const VIRTIO_ID_NET: u32 = 1;
 const HTTP_PORT: u16 = 8080;          // must match tools/proc/agent-net-real-test.sh
-const UART_THR: usize = 0x1000_0000;
 const FINISHER: usize = 0x0010_0000;
 const FINISHER_HALT: u32 = 0x5555;
 
@@ -30,23 +30,9 @@ global g_tx_used: VringUsed;
 global g_rxq: Virtq;
 global g_txq: Virtq;
 
-fn uputc(c: u8) -> void {
-    unsafe { raw.store<u8>(phys(UART_THR), c); }
-}
 fn halt() -> void {
     unsafe { raw.store<u32>(phys(FINISHER), FINISHER_HALT); }
     while true {}
-}
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 { break; }
-        uputc(b);
-        i = i + 1;
-    }
 }
 fn uputhex(v: u64) -> void {
     uputc(48); uputc(120); // "0x"

@@ -15,7 +15,7 @@
 // All U-mode I/O here flows through `do_ecall` (SYS_PUTC); the only direct UART writes
 // are the kernel-side banners, done bare on the 16550 transmit register.
 
-const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
+import "tests/qemu/lib/test_report.mc";
 
 const RT_SYS_PUTC: u64 = 2;
 const RT_SYS_EXIT: u64 = 3;
@@ -23,28 +23,6 @@ const RT_SYS_OPEN: u64 = 5;
 const RT_SYS_FWRITE: u64 = 6;
 const RT_SYS_FREAD: u64 = 7;
 const RT_SYS_FCLOSE: u64 = 8;
-
-// Write one byte to the bare 16550 UART transmit register.
-fn uputc(c: u8) -> void {
-    unsafe {
-        raw.store<u8>(phys(RT_UART_THR), c);
-    }
-}
-
-// Write a NUL-terminated string over the bare UART.
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 {
-            break;
-        }
-        uputc(b);
-        i = i + 1;
-    }
-}
 
 // Defined in the shared M-mode bring-up runtime (context_runtime.c).
 extern fn mc_halt() -> void;

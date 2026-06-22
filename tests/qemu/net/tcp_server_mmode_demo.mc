@@ -10,9 +10,9 @@
 // over-allocated and the base rounded up to a page (MC has no compile-time global-align
 // attribute; same idiom as agent_confined_runtime.mc).
 
+import "tests/qemu/lib/test_report.mc";
 import "tests/qemu/net/tcp_server_demo.mc"; // tcp_server_run
 
-const UART_THR: usize = 0x1000_0000;
 const FINISHER: usize = 0x0010_0000;
 const FINISHER_HALT: u32 = 0x5555;
 const RT_PAGE: usize = 4096;
@@ -21,20 +21,6 @@ const HEAP_LEN: usize = 256 * 1024;
 // Over-allocate by a page so the usable base can be rounded up to a 4 KiB boundary.
 global g_heap: [262144 + 4096]u8;
 
-fn uputc(c: u8) -> void {
-    unsafe { raw.store<u8>(phys(UART_THR), c); }
-}
-fn uputs(s: *const u8) -> void {
-    let base: usize = s as usize;
-    var i: usize = 0;
-    while true {
-        var b: u8 = 0;
-        unsafe { b = raw.load<u8>(phys(base + i)); }
-        if b == 0 { break; }
-        uputc(b);
-        i = i + 1;
-    }
-}
 fn halt() -> void {
     unsafe { raw.store<u32>(phys(FINISHER), FINISHER_HALT); }
     while true {}
