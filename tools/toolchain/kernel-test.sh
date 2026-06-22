@@ -67,9 +67,18 @@ kt_reject_one() {
     local src="$1"
     local name="bad/$(basename "$src")"
     local want; want="$(grep -o 'EXPECT: [A-Z_]*' "$src" | awk '{print $2}')"
-    local out; out="$("$MCC" check "$src" 2>&1 || true)"
+    # A reject fixture must FAIL `check` (nonzero exit) AND name its diagnostic — asserting
+    # only on the message lets a fixture that actually COMPILES pass. Capture status, not `|| true`.
+    local out rc
+    set +e
+    out="$("$MCC" check "$src" 2>&1)"
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+        echo "FAIL: kernel-test — $name should have been REJECTED ($want) but check succeeded (rc=0)"; return 1
+    fi
     if ! printf '%s' "$out" | grep -q "$want"; then
-        echo "FAIL: kernel-test — $name should be rejected with $want"; printf '%s\n' "$out" | head; return 1
+        echo "FAIL: kernel-test — $name rejected, but not with $want"; printf '%s\n' "$out" | head; return 1
     fi
 }
 export -f kt_reject_one

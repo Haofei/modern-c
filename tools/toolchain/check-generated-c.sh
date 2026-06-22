@@ -42,9 +42,21 @@ for fixture in $reject_glob; do
         echo "FAIL: c-test — $fixture has no 'EXPECT: E_CODE' line" >&2
         exit 1
     fi
-    out=$("$exe" emit-c "$fixture" 2>&1 || true)
+    # A reject fixture must FAIL emit-c (nonzero exit) AND name its diagnostic. Asserting
+    # only on the message is spoofable: a fixture that COMPILES and merely emits a symbol or
+    # comment containing the wanted code would otherwise count as "diagnosed". Require both —
+    # capture the status explicitly (don't swallow it with `|| true`).
+    set +e
+    out=$("$exe" emit-c "$fixture" 2>&1)
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+        echo "FAIL: c-test — $fixture should have been REJECTED ($want) but emit-c succeeded (rc=0)" >&2
+        printf '%s\n' "$out" | head >&2
+        exit 1
+    fi
     if ! printf '%s' "$out" | grep -q "$want"; then
-        echo "FAIL: c-test — $fixture should be rejected with $want" >&2
+        echo "FAIL: c-test — $fixture rejected, but not with $want" >&2
         printf '%s\n' "$out" | head >&2
         exit 1
     fi

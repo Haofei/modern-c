@@ -39,7 +39,18 @@ OUT_OF_SCOPE = {
     "traits_orphan_opaque_reject.mc": "pure compile_error fixture; residue emits a `static main` the sweep's -Wmain rejects (phase=sema; E_ORPHAN_IMPL owned by spec_tests.zig)",
 }
 
-CLANG = ["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
+# Compile the emitted C exactly as the MC kernel profile intends: a deterministic
+# bare-metal ELF target, freestanding. Both flags are load-bearing for host independence:
+#   --target=x86_64-unknown-none : pin an ELF target so target-specific attributes don't
+#       diverge with the host. e.g. `section_attr.mc`'s plain section name is valid on ELF
+#       but rejected on a Mach-O host (macOS/aarch64 requires `segment,section`) — the
+#       host-dependent red this fixes. (Mirrors the obj/opt sweeps' x86_64-unknown-none.)
+#   -ffreestanding : use the COMPILER's builtin <stdint.h>/<stddef.h>/… (the kernel profile
+#       is freestanding) instead of the host libc's. Without it, a non-host target can't find
+#       glibc's `bits/libc-header-start.h`, so the triple alone would break the Linux sweep.
+SWEEP_TRIPLE = "x86_64-unknown-none"
+CLANG = ["clang", "--target=" + SWEEP_TRIPLE, "-ffreestanding",
+         "-std=c11", "-Wall", "-Wextra", "-Werror",
          # The harness keeps unused valid functions, so silence those two only.
          "-Wno-unused-parameter", "-Wno-unused-variable",
          "-fsyntax-only", "-x", "c", "-"]
