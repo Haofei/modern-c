@@ -39,19 +39,6 @@ kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/runtime.o" "$WORK/thread.o" $SUPPORT_OBJ -o "$WORK/thread.elf"
-
-OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
-        -kernel "$WORK/thread.elf" 2>/dev/null || true)"
-
-echo "--- kernel UART output ---"
-printf '%s\n' "$OUT"
-echo "--------------------------"
-
-# main/worker must interleave (MWMWMW) and the demo must return cleanly.
-if printf '%s' "$OUT" | grep -q "IPC2-OK"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend IPC completeness: multi-slot mailbox queues two clients, ipc_receive_from filters B before A, async ipc_notify delivered (IPC2-OK) under QEMU"
-    exit 0
-fi
-echo "FAIL: $TEST_NAME — expected IPC2-OK in kernel output"
-exit 1
+kernel_boot_link_run "$TEST_NAME" "IPC2-OK" \
+    "$BACKEND backend IPC completeness: multi-slot mailbox queues two clients, ipc_receive_from filters B before A, async ipc_notify delivered (IPC2-OK) under QEMU" \
+    "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/runtime.o" "$WORK/thread.o" $SUPPORT_OBJ

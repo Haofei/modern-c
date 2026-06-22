@@ -40,18 +40,6 @@ MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/alloc.o" "$WORK"
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/alloc.o" $SUPPORT_OBJ -o "$WORK/alloc.elf"
-
-OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
-        -kernel "$WORK/alloc.elf" 2>/dev/null || true)"
-
-echo "--- kernel UART output ---"
-printf '%s\n' "$OUT"
-echo "--------------------------"
-
-if printf '%s' "$OUT" | grep -q "$EXPECT"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend ran the all-MC allocator (reusing heap.mc's free-list): malloc/free/calloc/realloc, reuse-after-free, calloc-zero, and realloc-preserve all correct under QEMU"
-    exit 0
-fi
-echo "FAIL: $TEST_NAME — expected '$EXPECT' in kernel output"
-exit 1
+kernel_boot_link_run "$TEST_NAME" "$EXPECT" \
+    "$BACKEND backend ran the all-MC allocator (reusing heap.mc's free-list): malloc/free/calloc/realloc, reuse-after-free, calloc-zero, and realloc-preserve all correct under QEMU" \
+    "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/alloc.o" $SUPPORT_OBJ

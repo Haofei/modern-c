@@ -36,19 +36,6 @@ mkdir -p "$WORK/rt"
 kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK/rt"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/thread.o" $SUPPORT_OBJ -o "$WORK/thread.elf"
-
-OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
-        -kernel "$WORK/thread.elf" 2>/dev/null || true)"
-
-echo "--- kernel UART output ---"
-printf '%s\n' "$OUT"
-echo "--------------------------"
-
-# Both harts must check in (the boot hart reports the total).
-if printf '%s' "$OUT" | grep -q "CONTAINED-OK"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend MMU crash containment: a server dereferenced an unmapped address; the fault handler contained it (redirected to recovery, no panic) and the system continued (CONTAINED-OK) under QEMU"
-    exit 0
-fi
-echo "FAIL: $TEST_NAME — expected 'CONTAINED-OK' in kernel output"
-exit 1
+kernel_boot_link_run "$TEST_NAME" "CONTAINED-OK" \
+    "$BACKEND backend MMU crash containment: a server dereferenced an unmapped address; the fault handler contained it (redirected to recovery, no panic) and the system continued (CONTAINED-OK) under QEMU" \
+    "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/thread.o" $SUPPORT_OBJ
