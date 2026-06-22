@@ -160,3 +160,40 @@ kernel_boot_compile_rt() {
     "$MCC" emit-c "$HERE/kernel/lib/freestanding.mc" > "$dir/freestanding.c"
     "$CLANG" "${CFLAGS[@]}" -fno-builtin -c "$dir/freestanding.c" -o "$out"
 }
+
+# Link the given objects into a bare riscv64 image with $LDSCRIPT, boot it under
+# `qemu-system-riscv64 -machine virt -bios none`, dump the UART output, and PASS iff
+# the success marker appears (exit 0) else FAIL (exit 1). This collapses the
+# link + boot + UART-dump + marker-grep + PASS/FAIL boilerplate that the single-marker
+# riscv64 boot gates all repeat verbatim — only the objects, the marker, and the PASS
+# detail vary, which are the arguments here. Tests that need OpenSBI/-bios, a netdev,
+# bounded retry, an alternate machine/arch, or bespoke extra diagnostics keep their own
+# flow (this is deliberately the plain-boot path only).
+#
+# Reads from the caller's scope (the boot scripts all set these): LDSCRIPT, WORK, LLD,
+# QEMU. Honors BOOT_TIMEOUT (default 30).
+#
+# Usage: kernel_boot_link_run <test-name> <marker> <pass-detail> <obj> [obj...]
+kernel_boot_link_run() {
+    local test_name="$1"
+    local marker="$2"
+    local pass_detail="$3"
+    shift 3
+
+    "${LLD:-ld.lld}" -T "$LDSCRIPT" "$@" -o "$WORK/image.elf"
+
+    local out
+    out="$(timeout "${BOOT_TIMEOUT:-30}" "${QEMU:-qemu-system-riscv64}" -machine virt -bios none -nographic \
+            -kernel "$WORK/image.elf" 2>/dev/null || true)"
+
+    echo "--- kernel UART output ---"
+    printf '%s\n' "$out"
+    echo "--------------------------"
+
+    if printf '%s' "$out" | grep -q "$marker"; then
+        echo "PASS: $test_name — $pass_detail"
+        exit 0
+    fi
+    echo "FAIL: $test_name — expected '$marker' in kernel output"
+    exit 1
+}
