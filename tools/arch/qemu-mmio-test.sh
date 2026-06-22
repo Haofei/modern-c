@@ -20,7 +20,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/arch/uart_mmio.mc"
-RUNTIME="$HERE/tests/qemu/runtime.c"
+RUNTIME="$HERE/tests/qemu/runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 EXPECT="MMIO-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-qemu-mmio-test" || echo "qemu-mmio-test")
