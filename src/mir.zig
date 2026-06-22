@@ -5584,7 +5584,15 @@ fn isNonBlockingPrimitive(name: []const u8) bool {
         std.mem.startsWith(u8, name, "atomic.") or
         std.mem.startsWith(u8, name, "raw_") or
         std.mem.startsWith(u8, name, "mmio_") or
-        std.mem.startsWith(u8, name, "atomic_");
+        std.mem.startsWith(u8, name, "atomic_") or
+        // Pure compiler builtins that emit no blocking work and no call: `phys`/`pa`
+        // construct an address (an integer cast), `drop`/`forget_unchecked`
+        // evaluate-and-discard a value (no destructor). All are legal on an
+        // #[irq_context] path — sema already accepts them; the MIR verifier must agree.
+        std.mem.eql(u8, name, "phys") or
+        std.mem.eql(u8, name, "pa") or
+        std.mem.eql(u8, name, "drop") or
+        std.mem.eql(u8, name, "forget_unchecked");
 }
 
 fn isKnownBlockingIrqCallee(name: []const u8) bool {
@@ -6331,6 +6339,14 @@ test "MIR context verifier handles extern irq callees and ordinary store name" {
         \\}
         \\
         \\#[irq_context]
+        \\fn accepted_builtins(addr: usize, token: u32) -> void {
+        \\    unsafe {
+        \\        raw.store<u32>(phys(addr), 0);
+        \\        forget_unchecked(token);
+        \\    }
+        \\}
+        \\
+        \\#[irq_context]
         \\fn rejected_store_name() -> void {
         \\    store();
         \\}
@@ -6383,6 +6399,9 @@ test "MIR context verifier handles extern irq callees and ordinary store name" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accepted_irq pass=context finding=irq_call detail=irq_poll") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accepted_atomic pass=context finding=irq_call") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accepted_mmio pass=context finding=irq_call") == null);
+    // Pure builtins (`phys` address-cast as a call-arg, `forget_unchecked` discard) are
+    // non-blocking and must NOT be flagged on an irq_context path — the plic.mc regression.
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accepted_builtins pass=context finding=irq_call") == null);
 }
 
 test "MIR verifier enforces typed MMIO register access modes" {

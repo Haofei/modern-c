@@ -18,11 +18,26 @@ command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: kernel-test (clang not foun
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-CFLAGS="--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function"
+# Each module compiles for ITS OWN target. Modules under kernel/arch/<arch>/ carry
+# that ISA's inline asm, so compiling them for the wrong triple is a guaranteed
+# (and meaningless) failure — the same per-arch split llvm-kernel-test already uses
+# on the LLVM path. Everything else is portable kernel logic, built for riscv64.
+COMMON_CFLAGS="-nostdlib -ffreestanding -fno-pic -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function"
+RISCV_CFLAGS="--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -mcmodel=medany $COMMON_CFLAGS"
+X86_CFLAGS="--target=x86_64-unknown-none -mcmodel=kernel -mno-red-zone $COMMON_CFLAGS"
 
-export MCC CLANG WORK HERE CFLAGS
+export MCC CLANG WORK HERE RISCV_CFLAGS X86_CFLAGS
 
-# 1. Every kernel module must lower to C that compiles for riscv64. Each worker
+# Map a module's path to the CFLAGS for its target ISA.
+kt_cflags_for() {
+    case "$1" in
+        kernel/arch/x86_64/*) printf '%s' "$X86_CFLAGS" ;;
+        *) printf '%s' "$RISCV_CFLAGS" ;;
+    esac
+}
+export -f kt_cflags_for
+
+# 1. Every kernel module must lower to C that compiles for its target ISA. Each worker
 # lowers + compiles one module into a per-module scratch file (named from the
 # source path so parallel workers never collide) and returns non-zero on the
 # first problem; xargs then fails the gate.
@@ -32,11 +47,13 @@ kt_compile_one() {
     local id; id="$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '_')"
     local c="$WORK/$id.c"
     local e="$WORK/$id.err"
+    local cflags; cflags="$(kt_cflags_for "$name")"
+    local triple="${cflags#--target=}"; triple="${triple%% *}"
     if ! "$MCC" emit-c "$src" >"$c" 2>"$e"; then
         echo "FAIL: kernel-test — $name did not lower to C"; cat "$e"; return 1
     fi
-    if ! "$CLANG" $CFLAGS -c "$c" -o /dev/null 2>"$e"; then
-        echo "FAIL: kernel-test — $name produced C that does not compile for riscv64"; head "$e"; return 1
+    if ! "$CLANG" $cflags -c "$c" -o /dev/null 2>"$e"; then
+        echo "FAIL: kernel-test — $name produced C that does not compile for $triple"; head "$e"; return 1
     fi
 }
 export -f kt_compile_one
@@ -64,5 +81,5 @@ if compgen -G "$HERE/kernel/bad/*.mc" >/dev/null; then
     printf '%s\0' "${bads[@]}" | xargs -0 -P "$JOBS" -I{} bash -c 'kt_reject_one "$@"' _ {}
 fi
 
-echo "PASS: kernel-test — $count kernel modules compile for riscv64; $rejects typestate misuses rejected"
+echo "PASS: kernel-test — $count kernel modules compile for their target ISA; $rejects typestate misuses rejected"
 exit 0
