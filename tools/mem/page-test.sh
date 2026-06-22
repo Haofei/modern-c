@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Page/frame allocator test: compile kernel/core/page_alloc.mc through the
-# selected backend, link a C driver that exercises bump allocation, free-list
-# reclaim, and LIFO reuse over a real backing pool, and run it.
+# Page/frame allocator test: compile the MC host driver (tests/mem/page_host_driver.mc,
+# which imports kernel/core/page_alloc.mc) through the selected backend, link a
+# MINIMAL C harness, and run it. The whole test body lives in MC — the C harness
+# mirrors NO MC struct (PageAllocator, Page, MemoryMap, PhysRange), so the silent
+# by-value/sret ABI drift that bit the paging test cannot happen here. The harness
+# supplies only the trap stubs, a page-aligned backing pool, and main().
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
@@ -20,10 +23,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 case "$BACKEND" in
     c)
-        MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/kernel/core/page_alloc.mc" -o "$WORK/page_alloc.o" >/dev/null
+        MCC="$MCC" "$HERE/tools/toolchain/mcc-cc.sh" "$HERE/tests/mem/page_host_driver.mc" -o "$WORK/driver_mc.o" >/dev/null
         ;;
     llvm)
-        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/kernel/core/page_alloc.mc" -o "$WORK/page_alloc.o" >/dev/null
+        MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/mem/page_host_driver.mc" -o "$WORK/driver_mc.o" >/dev/null
         ;;
     *)
         echo "unknown backend: $BACKEND" >&2
@@ -31,9 +34,9 @@ case "$BACKEND" in
         ;;
 esac
 
-cat >"$WORK/driver.c" <<'EOF'
+cat >"$WORK/harness.c" <<'EOF'
 #include <stdint.h>
-#include <stdbool.h>
+#include <stddef.h>
 
 void mc_trap_Assert(void) { __builtin_trap(); }
 void mc_trap_Bounds(void) { __builtin_trap(); }
@@ -44,54 +47,19 @@ void mc_trap_InvalidShift(void) { __builtin_trap(); }
 void mc_trap_NullUnwrap(void) { __builtin_trap(); }
 void mc_trap_Unreachable(void) { __builtin_trap(); }
 
-// The opaque address class PAddr and the move handle Page lower to plain words;
-// only the struct *layout* matters for the ABI (the type names are erased).
-struct Page { uintptr_t addr; };
-struct PhysRange { uintptr_t start; uintptr_t end; };
-typedef struct { struct PhysRange range; } MemoryMapU;
-typedef struct { struct PhysRange range; } MemoryMapV;
-struct PageAllocator { uintptr_t next, end, free_head, free_count; };
+// The entire test is in MC. The harness mirrors no MC type: it only passes the
+// pool's raw base/length (plain words) and reads back a u32 result code.
+extern uint32_t page_host_test(uintptr_t pool_start, uintptr_t pool_len);
 
-extern MemoryMapU memory_map(uintptr_t base, uintptr_t size);
-extern MemoryMapV validate(MemoryMapU m);
-extern struct PageAllocator page_allocator_from(MemoryMapV m);
-extern struct Page page_alloc(struct PageAllocator *a);
-extern void page_free(struct PageAllocator *a, struct Page p);
-extern uintptr_t page_addr(struct Page *p);
-extern uintptr_t pages_available(struct PageAllocator *a);
-
-#define CHECK(c) do { if (!(c)) return __LINE__; } while (0)
 #define PAGE 4096u
 static uint8_t pool[16 * PAGE] __attribute__((aligned(PAGE)));
 
 int main(void) {
-    uintptr_t base = (uintptr_t)pool;
-    struct PageAllocator a = page_allocator_from(validate(memory_map(base, sizeof(pool))));
-    CHECK(pages_available(&a) == 16);
-
-    // Bump allocation hands out consecutive frames.
-    struct Page p0 = page_alloc(&a); CHECK(page_addr(&p0) == base);
-    struct Page p1 = page_alloc(&a); CHECK(page_addr(&p1) == base + PAGE);
-    struct Page p2 = page_alloc(&a); CHECK(page_addr(&p2) == base + 2 * PAGE);
-    CHECK(pages_available(&a) == 13);
-
-    // Free returns the frame; the next alloc reuses it (real reclaim, not a leak).
-    page_free(&a, p1);
-    CHECK(pages_available(&a) == 14);
-    struct Page r = page_alloc(&a); CHECK(page_addr(&r) == base + PAGE);
-    CHECK(pages_available(&a) == 13);
-
-    // LIFO free list: the most-recently-freed frame is handed out first.
-    page_free(&a, p0); // head -> p0
-    page_free(&a, p2); // head -> p2
-    struct Page x = page_alloc(&a); CHECK(page_addr(&x) == base + 2 * PAGE); // p2
-    struct Page y = page_alloc(&a); CHECK(page_addr(&y) == base);            // p0
-    CHECK(pages_available(&a) == 13);
-    return 0;
+    return (int)page_host_test((uintptr_t)pool, sizeof(pool));
 }
 EOF
 
-"$CLANG" -std=c11 -Wall -Wextra -Werror "$WORK/driver.c" "$WORK/page_alloc.o" -o "$WORK/app"
+"$CLANG" -std=c11 -Wall -Wextra -Werror "$WORK/harness.c" "$WORK/driver_mc.o" -o "$WORK/app"
 set +e
 "$WORK/app"
 rc=$?
@@ -100,5 +68,5 @@ if [ "$rc" -eq 0 ]; then
     echo "PASS: $TEST_NAME — $BACKEND backend frame allocator bump + free-list reclaim + LIFO reuse compute correctly"
     exit 0
 fi
-echo "FAIL: $TEST_NAME — driver returned non-zero (failing CHECK line or signal, rc=$rc)"
+echo "FAIL: $TEST_NAME — MC driver returned non-zero (failing check id or signal, rc=$rc)"
 exit 1
