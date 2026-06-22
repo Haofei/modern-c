@@ -33,7 +33,7 @@ DNS_FWD="0x0A000203u"   # slirp built-in DNS forwarder 10.0.2.3
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/tls/tls_demo.mc"
-RUNTIME="$HERE/kernel/drivers/virtio/https_get_runtime.c"
+RUNTIME="$HERE/tests/qemu/tls/https_get_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 BEARSSL="$HERE/third_party/bearssl"
 TA_DIR="$HERE/third_party/trust-anchors"
@@ -61,33 +61,39 @@ while IFS= read -r f; do
     BEARSSL_OBJS+=("$obj")
 done < <(find "$BEARSSL/src" -name '*.c' | sort)
 
-# Lower the MC transport + compile the runtime in TLS_GOOGLE mode (embeds google_ta.c).
+# The runtime is now PURE MC (tests/qemu/tls/https_get_runtime.mc, shared with https-get-test); it
+# imports tls_demo.mc, reads its config (google-mode: resolve $SERVERNAME via DNS at $DNS_FWD, :443)
+# from a generated MC unit, and gets the GTS Root R1 trust anchor pointer from a 2-line C accessor
+# over the vendored google_ta.c. Platform = mmode_dma_time.mc.
+CFLAGS_BEARSSL=("${CFLAGS[@]}")
 MCFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
          -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
          -Wno-unused-function -fno-builtin)
-RUNTIME_FLAGS=("${CFLAGS[@]}"
-        -I"$TA_DIR"
-        -DTLS_GOOGLE
-        -DMC_BUILD_EPOCH="$EPOCH"
-        -DDNS_SERVER_IP="$DNS_FWD"
-        "-DTLS_DNSHOST=\"$SERVERNAME\""
-        "-DTLS_SERVERNAME=\"$SERVERNAME\""
-        "-DTLS_HOSTHDR=\"$HOSTHDR\"")
+
+cat > "$WORK/cfg.mc" <<EOF
+export fn mc_https_port() -> u16 { return 443; }
+export fn mc_servername() -> *const u8 { return "$SERVERNAME"; }
+export fn mc_hosthdr() -> *const u8 { return "$HOSTHDR"; }
+export fn mc_build_epoch_fn() -> u64 { return $EPOCH; }
+export fn mc_tls_google() -> u32 { return 1; }
+export fn mc_dnshost() -> *const u8 { return "$SERVERNAME"; }
+export fn mc_dns_server_ip() -> u32 { return ${DNS_FWD%u}; }
+EOF
 
 CFLAGS=("${MCFLAGS[@]}")
-kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/tls.o" "$WORK"
-# Real wall-clock seam (goldfish-RTC) for X.509 validity.
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
+kernel_boot_compile_mc_object "$BACKEND" "$WORK/cfg.mc" "$WORK/cfg.o" "$WORK"
+kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/arch/riscv64/mmode_dma_time.mc" "$WORK/platform.o" "$WORK"
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/core/time.mc" "$WORK/time.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
-# A2: the runtime #includes the generated virtq_structs.h (single source of truth);
-# this script direct-compiles the runtime (custom BearSSL flags), so generate it here.
-kernel_boot_emit_virtq_structs_header "$WORK"
-"$CLANG" "${RUNTIME_FLAGS[@]}" -I"$WORK" -c "$RUNTIME" -o "$WORK/runtime.o"
+# Vendored GTS Root R1 trust anchor (google_ta.c) + the 2-line accessor.
+printf '#include "bearssl.h"\n#include "google_ta.c"\nconst br_x509_trust_anchor *mc_trust_anchors(void){return TAs;}\nunsigned long mc_trust_anchors_num(void){return TAs_NUM;}\n' > "$WORK/ta.c"
+"$CLANG" "${CFLAGS_BEARSSL[@]}" -I"$TA_DIR" -c "$WORK/ta.c" -o "$WORK/ta.o"
 # Shared virtio-rng entropy driver (single source of truth).
 "$MCC" emit-c "$HERE/kernel/drivers/virtio/virtio_rng.mc" > "$WORK/virtio_rng_gen.c" # virtio-rng driver is now pure MC
-"$CLANG" "${RUNTIME_FLAGS[@]}" -c "$WORK/virtio_rng_gen.c" -o "$WORK/virtio_rng.o"
+"$CLANG" "${MCFLAGS[@]}" -c "$WORK/virtio_rng_gen.c" -o "$WORK/virtio_rng.o"
 kernel_boot_compile_rt "$WORK/freestanding.o"
-"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/virtio_rng.o" "$WORK/tls.o" "$WORK/time.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/google.elf"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" "$WORK/cfg.o" "$WORK/platform.o" "$WORK/time.o" "$WORK/ta.o" "$WORK/virtio_rng.o" "${BEARSSL_OBJS[@]}" $SUPPORT_OBJ -o "$WORK/google.elf"
 
 # Boot with plain slirp user networking (real upstream DNS + internet egress, if the
 # sandbox permits it) + virtio-rng. Capture a pcap for the honest report.
