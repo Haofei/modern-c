@@ -5388,6 +5388,7 @@ const CEmitter = struct {
                 if (try self.emitDeclassifyCall(node, locals)) return;
                 if (try self.emitDmaCall(node, locals)) return;
                 if (try self.emitMmioMapCall(node, locals)) return;
+                if (try self.emitInlineMmioReadCall(node, locals)) return;
                 if (try self.emitMaybeUninitAssumeInitCall(node, locals)) return;
                 if (try self.emitResidueCall(node, locals)) return;
                 if (try self.emitDomainOpCall(node, locals)) return;
@@ -6126,6 +6127,29 @@ const CEmitter = struct {
         try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(payload_ty, .typedef_name)});
         try self.emitExpr(call.args[0], locals);
         try self.out.appendSlice(self.allocator, ")");
+        return true;
+    }
+
+    // An MMIO register READ rendered INLINE (as an expression), for contexts where it must
+    // NOT be hoisted to a preceding temp because that would change evaluation order — namely
+    // inside the operands of a short-circuiting `&&` / `||`, where hoisting would execute the
+    // read unconditionally (wrong for device registers that ack an IRQ / pop a queue / clear
+    // status on read). An `.acquire` read uses a GNU statement-expression so its trailing
+    // acquire fence stays attached to the read at this syntactic position; C's short-circuit
+    // then guarantees the read runs only when its operand is actually evaluated. Other contexts
+    // never reach here (their reads are hoisted by collectMmioReadHoistsForExpr and substituted
+    // before the generic call path), so this is purely additive.
+    fn emitInlineMmioReadCall(self: *CEmitter, call: anytype, locals_opt: ?*std.StringHashMap(LocalInfo)) !bool {
+        const locals = locals_opt orelse return false;
+        const access = self.mmioAccess(call.callee.*, call.args, locals) orelse return false;
+        if (!std.mem.eql(u8, access.kind, "read")) return false;
+        if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
+        const value_c_type = self.cTypeForMmioValue(access.value_type);
+        if (std.mem.eql(u8, access.ordering, "acquire")) {
+            try self.out.print(self.allocator, "({{ {s} mc_mr = ({s})mc_mmio_read_{s}(&{s}->{s}); mc_barrier_acquire_after(); mc_mr; }})", .{ value_c_type, value_c_type, access.width, access.param, access.field });
+        } else {
+            try self.out.print(self.allocator, "(({s})mc_mmio_read_{s}(&{s}->{s}))", .{ value_c_type, access.width, access.param, access.field });
+        }
         return true;
     }
 
@@ -9969,11 +9993,17 @@ const CEmitter = struct {
             .grouped, .address_of, .deref => |inner| return try self.collectMmioReadHoistsForExpr(inner.*, locals, replacements),
             .unary => |node| return try self.collectMmioReadHoistsForExpr(node.expr.*, locals, replacements),
             .binary => |node| {
-                // Both operands must be visited for their side effect (registering each
-                // mmio read as a hoist replacement). A short-circuiting `or` would skip the
-                // right operand once the left registered a read — leaving the right read
-                // un-hoisted and lowered through the generic path, which cannot emit the
-                // `.read(.acquire)` ordering arg (e.g. `a.r.read(.x) == K && b.r.read(.x) == J`).
+                // Short-circuiting logical operators (C semantics: the right operand runs only
+                // when the left does not already decide the result) must NOT have either
+                // operand's mmio reads hoisted out of the expression — hoisting executes them
+                // unconditionally, which is wrong for device registers that ack/pop/clear on
+                // read. Leave them to render inline (emitInlineMmioReadCall) at their syntactic
+                // position, where C's `&&`/`||` preserves the short-circuit.
+                if (node.op == .logical_and or node.op == .logical_or) return false;
+                // Non-logical binaries evaluate BOTH operands, so both must be visited for their
+                // side effect (registering each mmio read as a hoist replacement). A
+                // short-circuiting `or` here would skip the right operand once the left
+                // registered a read, leaving the right read un-hoisted.
                 const left_found = try self.collectMmioReadHoistsForExpr(node.left.*, locals, replacements);
                 const right_found = try self.collectMmioReadHoistsForExpr(node.right.*, locals, replacements);
                 return left_found or right_found;
