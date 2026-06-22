@@ -42,18 +42,6 @@ MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$LIBC" "$WORK/libc.o" "$WORK"
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/libc.o" $SUPPORT_OBJ "$WORK/libm.a" -o "$WORK/stdio.elf"
-
-OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
-        -kernel "$WORK/stdio.elf" 2>/dev/null || true)"
-
-echo "--- kernel UART output ---"
-printf '%s\n' "$OUT"
-echo "--------------------------"
-
-if printf '%s' "$OUT" | grep -q "$EXPECT"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend ran the all-MC printf family (snprintf/printf, integer/string/char/pointer specifiers, flags/width/precision/length, truncation) under QEMU"
-    exit 0
-fi
-echo "FAIL: $TEST_NAME — expected '$EXPECT' in kernel output"
-exit 1
+kernel_boot_link_run "$TEST_NAME" "$EXPECT" \
+    "$BACKEND backend ran the all-MC printf family (snprintf/printf, integer/string/char/pointer specifiers, flags/width/precision/length, truncation) under QEMU" \
+    "$WORK/runtime.o" "$WORK/libc.o" $SUPPORT_OBJ "$WORK/libm.a"

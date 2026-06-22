@@ -40,18 +40,6 @@ MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
 # NOTE: no freestanding.o — cnum.mc IS the mem/str libc here.
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/cnum.o" $SUPPORT_OBJ "$WORK/libm.a" -o "$WORK/cnum.elf"
-
-OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
-        -kernel "$WORK/cnum.elf" 2>/dev/null || true)"
-
-echo "--- kernel UART output ---"
-printf '%s\n' "$OUT"
-echo "--------------------------"
-
-if printf '%s' "$OUT" | grep -q "$EXPECT"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend ran the all-MC ctype + integer parsing correctly under QEMU"
-    exit 0
-fi
-echo "FAIL: $TEST_NAME — expected '$EXPECT' in kernel output"
-exit 1
+kernel_boot_link_run "$TEST_NAME" "$EXPECT" \
+    "$BACKEND backend ran the all-MC ctype + integer parsing correctly under QEMU" \
+    "$WORK/runtime.o" "$WORK/cnum.o" $SUPPORT_OBJ "$WORK/libm.a"

@@ -39,18 +39,6 @@ MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/cstr.o" "$WORK"
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 # NOTE: no freestanding.o — cstr.mc IS the mem/str libc here.
-"$LLD" -T "$LDSCRIPT" "$WORK/runtime.o" "$WORK/cstr.o" $SUPPORT_OBJ -o "$WORK/cstr.elf"
-
-OUT="$(timeout 30 "$QEMU" -machine virt -bios none -nographic \
-        -kernel "$WORK/cstr.elf" 2>/dev/null || true)"
-
-echo "--- kernel UART output ---"
-printf '%s\n' "$OUT"
-echo "--------------------------"
-
-if printf '%s' "$OUT" | grep -q "$EXPECT"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend ran the all-MC mem/string core (mem*/str*) correctly under QEMU"
-    exit 0
-fi
-echo "FAIL: $TEST_NAME — expected '$EXPECT' in kernel output"
-exit 1
+kernel_boot_link_run "$TEST_NAME" "$EXPECT" \
+    "$BACKEND backend ran the all-MC mem/string core (mem*/str*) correctly under QEMU" \
+    "$WORK/runtime.o" "$WORK/cstr.o" $SUPPORT_OBJ
