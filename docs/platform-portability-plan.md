@@ -68,10 +68,13 @@ as the rationale for code that now exists, not as outstanding work.
   `emit-llvm`; garbage across the QuickJS FFI on x86/arm) but the target-aware varargs fix is
   not yet landed (§12 item 3). C backend passes on all three arches; LLVM passes fully on
   RISC-V.
-- The agent async broker is still duplicated 3× across the arch fixtures; the real FS op
-  family + `net_fetch` are wired on the RISC-V reference path only.
+- The kernel agent broker (`agent.mc`/`net_broker.mc`) is already single-source; the real FS
+  op family + `net_fetch` run on the RISC-V reference path only — x86/ARM still need their own
+  confined-agent runtimes (which would reuse the shared broker), so the work is *building* those,
+  not de-duplicating a broker.
 - Device depth: the full virtio-pci data path (virtqueue sector read over PCI) on x86; and on
-  RISC-V S-mode the PLIC external-interrupt path, SBI HSM/IPI, and the shared `s_trap_vector`
+  RISC-V S-mode the reusable PLIC driver + interrupt-driven device wiring (external-interrupt
+  *delivery* is proven — `smode-plic-test`), SBI HSM/IPI, and the shared `s_trap_vector`
   SPP/nested-trap rework (the timer-interrupt core is done).
 - `cow.mc`/`demand.mc` remain RISC-V-only (deferred until an x86/ARM kernel needs them).
 
@@ -121,7 +124,8 @@ What was **not** present at the start, and where it stands now:
 - ~~Integrated supervisor trap handling for the U-mode syscall/fault path.~~ **Done.**
 - ~~FDT-driven S-mode boot memory/device discovery.~~ **Done** (`fdt.mc` + `BootInfo`).
 - S-mode PLIC/ACLINT/SBI-timer integration for the interrupt/timer model — partial
-  (timer via `rdtime`; PLIC interrupt integration still pending).
+  (timer via `rdtime`; PLIC external-interrupt *delivery* proven — `smode-plic-test`; reusable
+  S-mode PLIC driver + interrupt-driven device wiring still pending).
 - ~~Revalidation of virtio-blk and virtio-net under S-mode.~~ **Done** (network-stack TLS
   gates not yet re-run under S-mode).
 - x86_64 and AArch64 user-mode/VM/QuickJS parity — **done at the user/VM/agent level**;
@@ -1174,7 +1178,8 @@ driver) have since landed. What remains is captured in the marked-up items and t
    path-cap, audited) against a kernel treefs — a pure-JS agent writes/reads a file back and
    is denied an un-allowlisted op (`fs: read=hi`, `fs: mkdir denied EDENIED`). Gated by
    `qjs-realtool-test`/`llvm-` in m0. (Net `net_fetch` through `net_broker.mc` and applying
-   the same op family on x86/arm — the broker is still duplicated 3× — remain follow-ups.)
+   the same op family on x86/arm remain follow-ups — the kernel broker is already single-source,
+   so this is *building* the x86/ARM confined-agent runtimes that reuse it, not de-duplication.)
 3. **Fix the three ungated LLVM-backend QuickJS gates** (`llvm-x86-qjs-async-test`,
    `llvm-arm-qjs-test`, `llvm-arm-qjs-async-test`). **Root-caused:** `mcc emit-llvm` models C
    `va_list` as a single `ptr` and emits the LLVM `va_arg` instruction — correct only for the
