@@ -26,19 +26,36 @@ jobs:
           qemu-system-riscv64 --version
           qemu-system-aarch64 --version
           qemu-system-x86_64 --version
+      - name: Preflight the QEMU toolchain (fail fast with a clear report)
+        run: zig build preflight
       - name: Run full milestone gate without skips
         shell: bash
+        # MC_REQUIRE_TOOLS=1 makes a missing tool FAIL at the gate (not silently SKIP), instead of
+        # relying on the implicit CI env var. The grep is then belt-and-suspenders.
         run: |
           set -o pipefail
-          zig build m0 2>&1 | tee m0.log
+          MC_REQUIRE_TOOLS=1 zig build m0 2>&1 | tee m0.log
           if grep -n '^SKIP:' m0.log; then
             echo "m0 skipped at least one gate in CI" >&2
             exit 1
           fi
+          # Positively assert the async QEMU gates RAN on both backends — a no-SKIP check alone
+          # would not catch a gate silently dropped from the m0 aggregate. Each prints "PASS: <name>".
+          for g in async-test async-irq-test async-cancel-test async-pollmany-test \
+                   async-future-test async-select-test async-agent-test; do
+            for name in "$g" "llvm-$g"; do
+              if ! grep -q "^PASS: $name " m0.log; then
+                echo "expected gate '$name' to run and pass in m0, but no 'PASS: $name' line was found" >&2
+                exit 1
+              fi
+            done
+          done
 
   docker:
     # Keeps the cross-platform dev image (Dockerfile / docker-compose.yml) honest: the image
-    # must build and the host-only inner-loop gate must pass inside it.
+    # must build and the host-only inner-loop gate must pass inside it. The dev image GUARANTEES
+    # clang/ld.lld/llc/qemu, so it is also the reproducible place to run the C+LLVM QEMU async
+    # gates as REAL gates — independent of whatever the bare runner's apt happened to install.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,3 +63,15 @@ jobs:
         run: docker compose build dev
       - name: Run the fast gate in the container
         run: docker compose run --rm dev zig build fast
+      - name: Preflight the toolchain inside the container
+        run: docker compose run --rm dev zig build preflight
+      - name: Run the async C+LLVM QEMU gates in the container (no skips)
+        run: |
+          docker compose run --rm dev bash -lc '
+            set -euo pipefail
+            for g in async-test async-irq-test async-cancel-test async-pollmany-test \
+                     async-future-test async-select-test async-agent-test; do
+              MC_REQUIRE_TOOLS=1 zig build "$g"
+              MC_REQUIRE_TOOLS=1 zig build "llvm-$g"
+            done
+          '
