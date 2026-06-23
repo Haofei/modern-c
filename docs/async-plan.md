@@ -1,8 +1,26 @@
 # Async/await roadmap
 
-Status: **Phases A, B, C landed**; D (syntax) — **v0 straight-line `async fn`/`await` landed**
-(steps 1–3 + 7-as-applied: lexer/AST/parser sugar + the pre-sema state-machine transform). Branches
-across await (step 4), loops (step 5), and cancellation (step 6) are still pending.
+Status: **Phases A, B, C landed**; D (syntax) — **straight-line `async fn`/`await` + LAZY
+per-state child construction + CANCELLATION landed** (steps 1–3, 6, 7-as-applied: lexer/AST/parser
+sugar, the pre-sema state-machine transform, lazy dependent-await construction, and a generated
+drop/cancel that reclaims the in-flight slot). Branches across await (step 4) and loops (step 5)
+are still pending.
+
+**Step 6 (cancellation) + lazy construction — DONE.** `kernel/lib/async.mc` gains `async_cancel(b,
+t, id)` (free the inflight slot + release any parked waiter, idempotent; a late `async_complete`
+on the canceled id is then a no-op), and `std/task.mc`'s `SlotFuture` gains an injected `cancel:
+fn(u64)->void` + `slot_future_cancel`. The transform (`src/async_lower.zig`) now builds child0 in
+the constructor and each LATER child LAZILY at the transition ending the prior step — so a later
+awaited call MAY reference an earlier `await` result (`let t = await login(); let d = await
+fetch(t);`), lifting the old `E_ASYNC_AWAIT_DEPENDS_ON_PRIOR` (fixture deleted). It also generates
+a free `f__Fut_cancel(self)` that walks the CURRENT state's child via `<childFutType>_cancel` then
+marks DONE (idempotent, no double-free). The leaf Future ABI is now uniform: `__poll` +
+`_take_result` + `_cancel`. Soundness of leaving later child fields unbuilt in the constructor:
+sema def-init tracks only SCALAR `uninit` vars, so a partially-built aggregate is accepted and each
+`__cN` is written before its first poll. Gates (both backends): host `fuzz-async-cancel-lowering-test`
+(hand-lowered acceptance target) + `fuzz-async-syntax-test` (real syntax: dependent await + cancel)
+in diff-backend (129/129 agree); kernel `async-cancel-test` / `llvm-async-cancel-test` (QEMU, in m0:
+fill the quota, cancel one, reuse the reclaimed slot — FXR, ASYNC-CANCEL-OK).
 
 MC already has most of the async *runtime* and is missing the *vocabulary* and the *syntax*.
 Rather than start with `async`/`await` keywords, we start with the runtime semantics production
@@ -152,14 +170,16 @@ place: the *driver* of the top-level future — `run_to_completion` (cooperative
 `async_await_irq` (park/wake). So `await` inside an `async fn` is a suspend point that returns
 pending up the poll chain, never a park.
 
-**3. Cancellation / drop — v0 rule: NO cancellation; futures must run to completion.** A started
-future that holds a `SlotFuture` owns a live `MAX_INFLIGHT` slot (and an enqueued waiter) until it
-completes and its result is taken — and `MAX_INFLIGHT` is tiny on an agent OS. In **v0**, every
-started future MUST be driven to completion; **dropping a still-pending future LEAKS its slot**.
-The transform/executor must reject abandoning a pending generated future, and `race`/`select`
-(which leave a loser pending) are **out of scope for v0**. v1 generates a `cancel`/`drop` method
-that walks the active child futures and frees their resources via a new broker `async_cancel(id)`
-(frees the slot, de-registers the waiter). Until then the leak is a documented, bounded limitation.
+**3. Cancellation / drop — LANDED.** A started future that holds a `SlotFuture` owns a live
+`MAX_INFLIGHT` slot (and an enqueued waiter) until it completes and its result is taken — and
+`MAX_INFLIGHT` is tiny on an agent OS, so a leaked slot eventually wedges submission. This is now
+fixed: the broker exposes `async_cancel(b, t, id)` (frees the slot, releases any parked waiter,
+idempotent; a late completion on the canceled id is a no-op), `SlotFuture` carries an injected
+`cancel`, and the transform GENERATES `f__Fut_cancel(self)` that walks the currently-active child
+future down to the in-flight leaf and frees it, then marks DONE (idempotent — no double-free).
+Because of LAZY construction at most one child is live at a time, so cancel only walks the current
+state's child. This unblocks `race`/`select` and timeout cleanup (still to be built on top), and
+removes the v0 "must run to completion or leak" limitation.
 
 **4. Ownership across `await` (the hard part — rules spelled out).** Capture analysis (which live
 locals become state fields) must integrate with MC's move/borrow checker:
@@ -191,11 +211,14 @@ are proven IRQ-safe — not worth supporting initially; treat generated futures 
    `poll()`/`take_result()` ABI with single-await and two-awaits-in-sequence, both backends
    agree. The transform's output must match fixtures of this shape; extend with branch/loop/
    moved-after-await cases as steps 4–6 land.)*
-3. **Implement the transform for straight-line `await`** — emit MC that matches the fixtures.
-4. **Add branches** (`if`/`else` with `await` on one side).
-5. **Add loops** (preserve index/condition across suspension).
-6. **Add cancellation / resource cleanup** (`cancel`/drop walking child futures).
-7. **Only then add the parser sugar** (`async fn` / `await` keywords).
+3. **Implement the transform for straight-line `await`** — emit MC that matches the fixtures. **DONE**
+   (incl. LAZY per-state child construction, so a later await may read an earlier await's result).
+4. **Add branches** (`if`/`else` with `await` on one side). *(pending)*
+5. **Add loops** (preserve index/condition across suspension). *(pending)*
+6. **Add cancellation / resource cleanup** (`cancel`/drop walking child futures + broker
+   `async_cancel(id)`). **DONE.**
+7. **Only then add the parser sugar** (`async fn` / `await` keywords). **DONE** (contextual
+   `async`/`await`, applied alongside step 3).
 
 ### Acceptance gates (each both-backend, matching the hand-written state machine)
 
