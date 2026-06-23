@@ -67,7 +67,9 @@ export fn trap_vector() -> void {
 }
 
 // Install the trap vector, arm ONE timer compare, and enable machine timer interrupts. Re-callable
-// from the ISR to re-arm for the next in-flight request.
+// from the ISR to re-arm for the next in-flight request — so its body is #[irq_context] too
+// (CSR asm + MMIO load/store only, no calls), matching the extern decl in the demo.
+#[irq_context]
 export fn mc_timer_arm_oneshot() -> void {
     let vec: usize = (&trap_vector) as usize;
     let mtie: usize = RT_MIE_MTIE;
