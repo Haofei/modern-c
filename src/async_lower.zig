@@ -263,7 +263,97 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
         }
     }
 
+    // Pass 3: UFCS on GENERATED futures. The parser rewrites `Owner.method(args)` to the mangled
+    // `Owner__method` at PARSE time, but a generated future type (`f__Fut`) does not exist then, so
+    // a caller's `f__Fut.poll(&x)` is left as an unresolved member expr. Patch those in place now:
+    // for each generated future `G`, rewrite a `member{ base: ident(G), name: "poll" }` to the free
+    // ident `G__poll` (the impl method's mangled name the transform already emits). `take_result`
+    // and `cancel` are plain free fns (single-underscore `G_take_result`), not trait methods, so
+    // only `.poll` is UFCS-eligible. This also registers G as a qualified owner (shadow safety).
+    if (low.async_info.count() > 0) {
+        var futs = std.StringHashMap(void).init(arena);
+        var it = low.async_info.valueIterator();
+        while (it.next()) |ai| try futs.put(ai.fut_type, {});
+        for (out.items) |d| {
+            if (d.kind == .fn_decl) {
+                if (d.kind.fn_decl.body) |b| for (b.items) |s| patchUfcsStmt(arena, s, &futs);
+            }
+        }
+        // Extend qualified_owners with the generated future names (dedup against existing).
+        var owners: std.ArrayList([]const u8) = .empty;
+        try owners.appendSlice(arena, module.qualified_owners);
+        var fit = futs.keyIterator();
+        while (fit.next()) |k| {
+            var present = false;
+            for (module.qualified_owners) |o| {
+                if (std.mem.eql(u8, o, k.*)) { present = true; break; }
+            }
+            if (!present) try owners.append(arena, k.*);
+        }
+        return .{ .decls = try out.toOwnedSlice(arena), .qualified_owners = try owners.toOwnedSlice(arena) };
+    }
+
     return .{ .decls = try out.toOwnedSlice(arena), .qualified_owners = module.qualified_owners };
+}
+
+// ---- Pass-3 UFCS patcher: rewrite `G.poll` member exprs (G a generated future) to `ident(G__poll)`
+// IN PLACE. Recurses through statement/expression child pointers, patching `expr.*` at each match.
+// Coverage spans the ordinary stmt/expr shapes a driver uses (calls, control flow, decls). ----
+fn patchUfcsStmt(arena: std.mem.Allocator, s: ast.Stmt, futs: *std.StringHashMap(void)) void {
+    switch (s.kind) {
+        .let_decl, .var_decl => |l| { if (l.init) |e| patchUfcsExpr(arena, e, futs); },
+        .assignment => |a| { patchUfcsExpr(arena, a.target, futs); patchUfcsExpr(arena, a.value, futs); },
+        .expr => |e| patchUfcsExpr(arena, e, futs),
+        .@"return" => |e| { if (e) |x| patchUfcsExpr(arena, x, futs); },
+        .assert => |e| patchUfcsExpr(arena, e, futs),
+        .@"defer" => |e| patchUfcsExpr(arena, e, futs),
+        .block, .unsafe_block, .comptime_block => |b| { for (b.items) |it| patchUfcsStmt(arena, it, futs); },
+        .loop => |lp| { if (lp.iterable) |it| patchUfcsExpr(arena, it, futs); for (lp.body.items) |it| patchUfcsStmt(arena, it, futs); },
+        .if_let => |il| {
+            patchUfcsExpr(arena, il.value, futs);
+            for (il.then_block.items) |it| patchUfcsStmt(arena, it, futs);
+            if (il.else_block) |eb| for (eb.items) |it| patchUfcsStmt(arena, it, futs);
+        },
+        .@"switch" => |sw| {
+            patchUfcsExpr(arena, sw.subject, futs);
+            for (sw.arms) |arm| switch (arm.body) {
+                .block => |b| { for (b.items) |it| patchUfcsStmt(arena, it, futs); },
+                .expr => |e| patchUfcsExpr(arena, e, futs),
+            };
+        },
+        .contract_block => |cb| { for (cb.block.items) |it| patchUfcsStmt(arena, it, futs); },
+        else => {},
+    }
+}
+
+// Recurse into an expression's child pointers and, when a child points at a `member{ ident(G),
+// "poll" }`, overwrite it with `ident(G__poll)`.
+fn patchUfcsExpr(arena: std.mem.Allocator, e: ast.Expr, futs: *std.StringHashMap(void)) void {
+    switch (e.kind) {
+        .grouped, .address_of, .deref => |inner| { patchUfcsOne(arena, inner, futs); },
+        .unary => |u| patchUfcsOne(arena, u.expr, futs),
+        .binary => |b| { patchUfcsOne(arena, b.left, futs); patchUfcsOne(arena, b.right, futs); },
+        .cast => |c| patchUfcsOne(arena, c.value, futs),
+        .call => |c| { patchUfcsOne(arena, c.callee, futs); for (c.args) |*a| patchUfcsOne(arena, a, futs); },
+        .index => |ix| { patchUfcsOne(arena, ix.base, futs); patchUfcsOne(arena, ix.index, futs); },
+        .member => |m| patchUfcsOne(arena, m.base, futs),
+        .try_expr => |t| patchUfcsOne(arena, t.operand, futs),
+        else => {},
+    }
+}
+
+// Check-and-patch a single child pointer, then recurse into it.
+fn patchUfcsOne(arena: std.mem.Allocator, p: *ast.Expr, futs: *std.StringHashMap(void)) void {
+    if (p.kind == .member) {
+        const m = p.kind.member;
+        if (m.base.kind == .ident and std.mem.eql(u8, m.name.text, "poll") and futs.contains(m.base.kind.ident.text)) {
+            // `G.poll` -> `G__poll` (the generated impl method's mangled free name).
+            const mangled = std.fmt.allocPrint(arena, "{s}__poll", .{m.base.kind.ident.text}) catch return;
+            p.* = .{ .span = p.span, .kind = .{ .ident = .{ .text = mangled, .span = p.span } } };
+            return; // patched leaf; nothing to recurse into
+        }
+    }
+    patchUfcsExpr(arena, p.*, futs);
 }
 
 fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Error!void {
