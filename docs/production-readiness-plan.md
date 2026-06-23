@@ -208,6 +208,12 @@ Acceptance gates:
 Current status:
 
 - The kernel has agent bundle and runtime direction, but production update mechanics are not complete.
+- The **signature-verification primitive exists**: `kernel/crypto/rsa_verify.mc` is a thin MC
+  binding over the vendored constant-time BearSSL "i31" engine for RSA-PKCS#1/SHA-256. The
+  `rsa-verify-test` gate (both backends, in m0) verifies a real RSA-2048 signature and rejects a
+  tampered signature and a wrong message. Crypto stays in the audited BearSSL library; MC only
+  marshals arguments. What remains for P4 is the bundle *format*, key management/rotation, and
+  wiring verification into the loader before untrusted bundles run.
 
 Production target:
 

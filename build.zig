@@ -2455,6 +2455,24 @@ pub fn build(b: *std.Build) void {
     const bearssl_smoke_test_step = b.step("bearssl-smoke-test", "Compute a SHA-256 vector via freestanding BearSSL and pull live virtio-rng entropy in a bare-metal riscv64 kernel under QEMU (Phase 1 TLS de-risking)");
     bearssl_smoke_test_step.dependOn(&bearssl_smoke_test_cmd.step);
 
+    // rsa-verify-test: the MC RSA-PKCS#1/SHA-256 signature-verify binding
+    // (kernel/crypto/rsa_verify.mc) over the constant-time BearSSL i31 engine — the
+    // signed-bundle / image-verification primitive (production plan P4). Host-based and
+    // deterministic; a real RSA-2048 signature must VERIFY while a tampered signature and a
+    // wrong message are REJECTED. Both backends, so a green run is the parity proof.
+    const rsa_verify_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/crypto/rsa-verify-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_rsa_verify_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/crypto/rsa-verify-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    rsa_verify_test_cmd.step.dependOn(b.getInstallStep());
+    const rsa_verify_test_step = b.step("rsa-verify-test", "Verify a real RSA-2048/SHA-256 signature (accept valid, reject tampered+wrong) via the MC BearSSL-i31 binding");
+    rsa_verify_test_step.dependOn(&rsa_verify_test_cmd.step);
+    llvm_rsa_verify_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_rsa_verify_test_step = b.step("llvm-rsa-verify-test", "LLVM-backend RSA-2048/SHA-256 signature verify via the MC BearSSL-i31 binding");
+    llvm_rsa_verify_test_step.dependOn(&llvm_rsa_verify_test_cmd.step);
+
     // bearssl-smode-test revalidates the SAME freestanding BearSSL SHA-256 vector +
     // live virtio-rng entropy under REAL OpenSBI in S-mode (boot seam only: SBI
     // console/shutdown, sbi.ld, rdtime CSR; no `-bios none`). Deterministic — no
@@ -3835,6 +3853,11 @@ pub fn build(b: *std.Build) void {
     // entropy (the TLS crypto stack) under REAL OpenSBI in S-mode. Deterministic (no
     // network egress), so gated in m0.
     m0_step.dependOn(&bearssl_smode_test_cmd.step);
+    // rsa-verify-test proves the MC signature-verify binding over BearSSL i31 (signed-bundle
+    // primitive, P4): a real RSA-2048/SHA-256 signature verifies; tampered + wrong-message
+    // are rejected. Host-based, deterministic, both backends.
+    m0_step.dependOn(&rsa_verify_test_cmd.step);
+    m0_step.dependOn(&llvm_rsa_verify_test_cmd.step);
     // https-smode-test revalidates the in-kernel REAL BearSSL TLS 1.2 handshake +
     // HTTPS GET under REAL OpenSBI in S-mode. Deterministic — the TLS peer is a
     // LOCAL python server over slirp loopback (no internet egress) — so gated in m0
