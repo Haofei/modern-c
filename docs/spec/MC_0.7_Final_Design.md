@@ -2144,6 +2144,17 @@ does `KEEP(*(.text.boot))` first, and the entry is written
 honor it (C: `__attribute__((section("…")))`; LLVM: a `section "…"` clause on the
 `define`).
 
+**`#[align(N)]`** (N a power of two) emits the function with at least N-byte
+alignment (C: `__attribute__((aligned(N)))`; LLVM: an `align N` attribute on the
+`define`). It is required when a function's **address** is loaded into an
+alignment-sensitive register. The motivating case is a RISC-V trap vector written to
+`stvec`/`mtvec`: the low two bits of those CSRs are the **MODE** field, so the base
+must be 4-byte aligned — a 2-byte-aligned vector silently selects a reserved MODE and
+the hart traps to the wrong PC. Because a `#[naked]` function is almost always such an
+entry/vector stub, **`#[naked]` defaults to 4-byte alignment** when no explicit
+`#[align]` is given; an explicit `#[align(N)]` with a larger N wins. (`#[align]` is
+also useful for DMA buffers and cache-line placement.)
+
 Distinction:
 
 ```txt

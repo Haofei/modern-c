@@ -2250,6 +2250,14 @@ const CEmitter = struct {
         if (hasWeakAttr(attrs)) {
             try self.out.appendSlice(self.allocator, "MC_WEAK ");
         }
+        // `#[align(N)]`: emit at least N-byte alignment. `#[naked]` functions are entry/trap
+        // code whose address is loaded into alignment-sensitive registers (a RISC-V `stvec`
+        // base must be 4-byte aligned — its low two bits are the MODE field), so they default
+        // to 4-byte alignment when no explicit `#[align]` is given.
+        if (effectiveAlign(attrs)) |al| {
+            var buf: [32]u8 = undefined;
+            try self.out.appendSlice(self.allocator, std.fmt.bufPrint(&buf, "__attribute__((aligned({d}))) ", .{al}) catch unreachable);
+        }
         if (sectionAttr(attrs)) |sec| {
             try self.out.appendSlice(self.allocator, "__attribute__((section(\"");
             try self.out.appendSlice(self.allocator, sec);
@@ -11246,6 +11254,23 @@ fn sectionAttr(attrs: []const ast.Attr) ?[]const u8 {
     return null;
 }
 
+// Effective alignment for a function: the explicit `#[align(N)]` value if present, else 4 for
+// a `#[naked]` function (trap-vector / entry code whose address is loaded into an
+// alignment-sensitive register — e.g. a RISC-V `stvec`/`mtvec` base must be 4-byte aligned),
+// else null (no alignment directive). Returns the larger of the two when both apply.
+fn effectiveAlign(attrs: []const ast.Attr) ?u32 {
+    var explicit: ?u32 = null;
+    for (attrs) |attr| {
+        if (attr.kind == .@"align") explicit = attr.kind.@"align";
+    }
+    const naked_min: ?u32 = if (hasNakedAttr(attrs)) 4 else null;
+    if (explicit) |e| {
+        if (naked_min) |n| return @max(e, n);
+        return e;
+    }
+    return naked_min;
+}
+
 fn isNumericStorageType(ty: ast.TypeExpr) bool {
     return switch (ty.kind) {
         .name => |ident| checkedTypeSuffix(ident.text) != null,
@@ -14211,6 +14236,37 @@ test "backend_name attribute renames the object symbol via an asm label" {
     try std.testing.expect(std.mem.count(u8, output.items, "__asm__(\"rss_helper_x\")") == 1);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "helper(uint64_t x) __asm__(\"rss_helper_x\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "helper(uint64_t x) {") != null);
+}
+
+test "align attribute and naked default emit aligned() in C" {
+    const source =
+        \\#[align(64)]
+        \\export fn dma_buf_fn() -> void { return; }
+        \\#[naked]
+        \\export fn trap_vector() -> void {
+        \\    asm opaque volatile { "ret" }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "align.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    // Explicit #[align(64)] emits aligned(64); #[naked] defaults to 4-byte alignment
+    // (its address may be loaded into an alignment-sensitive register, e.g. stvec).
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__attribute__((aligned(64)))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__attribute__((aligned(4)))") != null);
 }
 
 test "C emission materializes closure callees once" {

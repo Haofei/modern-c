@@ -779,6 +779,28 @@ pub fn build(b: *std.Build) void {
     const llvm_smode_plic_test_step = b.step("llvm-smode-plic-test", "Build and run the LLVM-lowered flat S-mode external-interrupt (PLIC) kernel under REAL OpenSBI");
     llvm_smode_plic_test_step.dependOn(&llvm_smode_plic_test_cmd.step);
 
+    // Steady-state (re-armed) variant: 3 discrete external interrupts. The regression gate for
+    // the former C-backend S-mode async-IRQ reset (root cause: a 2-byte-aligned naked trap
+    // vector → reserved stvec MODE; fixed by #[align(4)] / naked-defaults-to-4).
+    const smode_plic_multishot_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/smode-plic-multishot-test.sh",
+        "zig-out/bin/mcc",
+        "c",
+    });
+    const llvm_smode_plic_multishot_test_cmd = b.addSystemCommand(&.{
+        "bash",
+        "tools/arch/smode-plic-multishot-test.sh",
+        "zig-out/bin/mcc",
+        "llvm",
+    });
+    smode_plic_multishot_test_cmd.step.dependOn(b.getInstallStep());
+    const smode_plic_multishot_test_step = b.step("smode-plic-multishot-test", "Build and run the flat S-mode kernel taking 3 RE-ARMED REAL S-mode EXTERNAL interrupts via the PLIC under REAL OpenSBI");
+    smode_plic_multishot_test_step.dependOn(&smode_plic_multishot_test_cmd.step);
+    llvm_smode_plic_multishot_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_smode_plic_multishot_test_step = b.step("llvm-smode-plic-multishot-test", "Build and run the LLVM-lowered re-armed S-mode external-interrupt (PLIC) kernel under REAL OpenSBI");
+    llvm_smode_plic_multishot_test_step.dependOn(&llvm_smode_plic_multishot_test_cmd.step);
+
     const net_smode_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/arch/net-smode-test.sh",
@@ -3732,8 +3754,11 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_blk_test_cmd.step);
     m0_step.dependOn(&llvm_blk_smode_test_cmd.step);
     m0_step.dependOn(&llvm_smode_timer_test_cmd.step);
-    // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI.
+    // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI;
+    // the multishot variant proves the re-armed steady-state path (regression gate for the former
+    // C-backend async-IRQ reset, fixed by #[align(4)] on naked trap vectors).
     m0_step.dependOn(&llvm_smode_plic_test_cmd.step);
+    m0_step.dependOn(&llvm_smode_plic_multishot_test_cmd.step);
     m0_step.dependOn(&llvm_net_smode_test_cmd.step);
     m0_step.dependOn(&llvm_net_test_cmd.step);
     m0_step.dependOn(&llvm_nic_test_cmd.step);
@@ -3800,8 +3825,11 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&blk_smode_test_cmd.step);
     // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
     m0_step.dependOn(&smode_timer_test_cmd.step);
-    // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI.
+    // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI;
+    // the multishot variant proves the re-armed steady-state path on the C backend (regression
+    // gate for the former async-IRQ reset).
     m0_step.dependOn(&smode_plic_test_cmd.step);
+    m0_step.dependOn(&smode_plic_multishot_test_cmd.step);
     m0_step.dependOn(&net_smode_test_cmd.step);
     // bearssl-smode-test revalidates the freestanding BearSSL SHA-256 + virtio-rng
     // entropy (the TLS crypto stack) under REAL OpenSBI in S-mode. Deterministic (no

@@ -731,6 +731,20 @@ pub const Parser = struct {
                 .kind = if (std.mem.eql(u8, which, "origin")) .{ .origin = value } else if (std.mem.eql(u8, which, "section")) .{ .section = value } else .{ .backend_name = value },
             };
         }
+        if (std.mem.eql(u8, name.text, "align")) {
+            try self.expect(.l_paren, "expected '(' after align");
+            if (self.current.kind != .integer_literal) return self.fail("expected an integer argument to align");
+            const raw = self.current.lexeme;
+            self.advance();
+            try self.expect(.r_paren, "expected ')' after align argument");
+            const end = try self.expectTok(.r_bracket, "expected ']' after attribute");
+            const n = std.fmt.parseInt(u32, raw, 0) catch return self.fail("align argument is not a valid integer");
+            if (n == 0 or (n & (n - 1)) != 0) return self.fail("align argument must be a non-zero power of two");
+            return .{
+                .span = joinSpan(start, end.span),
+                .kind = .{ .@"align" = n },
+            };
+        }
         const end = try self.expectTok(.r_bracket, "expected ']' after attribute");
         return .{
             .span = joinSpan(start, end.span),

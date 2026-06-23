@@ -13,6 +13,8 @@ Related detailed plans:
 - `docs/platform-portability-plan.md` — how the platform moves to
   `RV64GC + S-mode + OpenSBI + virtio`, then x86_64 and AArch64.
 - `docs/agent-sandbox-milestone.md` — current sandbox milestone notes.
+- `docs/production-readiness-plan.md` — the path from gated prototype to fixed-device
+  production readiness.
 
 ## 1. Core thesis
 

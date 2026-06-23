@@ -1218,12 +1218,15 @@ driver) have since landed. What remains is captured in the marked-up items and t
    `kernel/drivers/irq/plic.mc` (today M-context-only) to S-context and replacing the virtio-net
    poll loop; (b) the **SBI HSM/IPI** service layer (SMP hart start/stop + inter-hart IPIs); and
    (c) the **`s_trap_vector` SPP/nested-trap rework** on the shared confinement vector
-   (`smode_usermode_runtime.mc`) so the confined-agent path can ALSO take interrupts. NOTE: (a)
-   and (c) are gated by a **C-backend reset** seen when a naked S-mode vector services an *async*
-   interrupt and resumes (PLIC re-arm or U-mode preemption) — LLVM is clean, the same vector
-   passes on C for *synchronous* ecalls, and a handler-entry SBI ecall masks it (timing, not
-   logic). That root-cause must land before multi-IRQ / preemptive S-mode paths ship parity-clean
-   on C; an LLVM-only U-mode-preemption proof was built but not committed (parity).
+   (`smode_usermode_runtime.mc`) so the confined-agent path can ALSO take interrupts. NOTE: the
+   **C-backend "reset"** that previously gated (a)/(c) — seen when a naked S-mode vector serviced
+   an *async* interrupt and resumed — is **FIXED**. It was not a reset: the `#[naked]` vector
+   could land 2-byte aligned, but a RISC-V `stvec` base must be 4-byte aligned (low two bits =
+   MODE), so it trapped to the wrong PC. Fixed with the `#[align(N)]` attribute + a 4-byte
+   alignment default for `#[naked]`. The re-armed steady-state path now passes on BOTH backends
+   (`smode-plic-multishot-test`, in m0). See `docs/smode-irq-cbackend-reset.md`. Multi-IRQ /
+   preemptive S-mode paths are unblocked; the remaining (a)/(b)/(c) work is driver/SMP/vector
+   plumbing, not a codegen blocker.
 6. ~~**Re-run the `kernel/net/` TLS gates under S-mode.**~~ **Done.** `bearssl-smode-test`
    (BearSSL SHA-256 vector + live virtio-rng entropy) and `https-smode-test` (a full BearSSL
    TLS 1.2 handshake — ECDHE-RSA-AES256-GCM — with X.509 cert-chain validation against the

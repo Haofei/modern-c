@@ -892,6 +892,15 @@ const LlvmEmitter = struct {
             try section_buf.print(self.allocator, " section \"{s}\"", .{sec});
         }
         const section_str: []const u8 = section_buf.items;
+        // `#[align(N)]`: emit an LLVM `align N` function attribute. `#[naked]` functions default
+        // to 4-byte alignment — they are trap/entry code whose address is loaded into an
+        // alignment-sensitive register (a RISC-V `stvec`/`mtvec` base must be 4-byte aligned;
+        // its low two bits are the MODE field, so a 2-byte-aligned vector traps to a bad PC).
+        var align_buf: [32]u8 = undefined;
+        const align_str: []const u8 = if (effectiveAlign(attrs)) |al|
+            std.fmt.bufPrint(&align_buf, " align {d}", .{al}) catch unreachable
+        else
+            "";
         // `#[weak]`: weak linkage (a linkage specifier, before the return type) so a strong
         // definition in another unit overrides this default.
         const weak_str: []const u8 = if (hasWeakAttr(attrs)) "weak " else "";
@@ -909,9 +918,9 @@ const LlvmEmitter = struct {
         // The naked path needs no entry-alloca buffering: its body is a single asm stmt.
         if (naked) {
             if (self.current_debug_scope) |scope| {
-                try self.out.print(self.allocator, "){s}{s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, section_str, scope });
+                try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, section_str, align_str, scope });
             } else {
-                try self.out.print(self.allocator, "){s}{s} {{\nbb_entry:\n", .{ attr_str, section_str });
+                try self.out.print(self.allocator, "){s}{s}{s} {{\nbb_entry:\n", .{ attr_str, section_str, align_str });
             }
             self.temp_index = 0;
             try self.emitAsmStmt(ast_query.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
@@ -966,9 +975,9 @@ const LlvmEmitter = struct {
         self.out = real_out;
         self.entry_allocas = null;
         if (self.current_debug_scope) |scope| {
-            try self.out.print(self.allocator, "){s}{s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, section_str, scope });
+            try self.out.print(self.allocator, "){s}{s}{s} !dbg !{d} {{\nbb_entry:\n", .{ attr_str, section_str, align_str, scope });
         } else {
-            try self.out.print(self.allocator, "){s}{s} {{\nbb_entry:\n", .{ attr_str, section_str });
+            try self.out.print(self.allocator, "){s}{s}{s} {{\nbb_entry:\n", .{ attr_str, section_str, align_str });
         }
         try self.out.appendSlice(self.allocator, alloca_buf.items);
         try self.out.appendSlice(self.allocator, body_buf.items);
@@ -6015,6 +6024,23 @@ fn sectionAttr(attrs: []const ast.Attr) ?[]const u8 {
         if (attr.kind == .section) return attr.kind.section;
     }
     return null;
+}
+
+// Effective alignment for a function: the explicit `#[align(N)]` value if present, else 4 for a
+// `#[naked]` function (trap-vector / entry code whose address goes into an alignment-sensitive
+// register — e.g. a RISC-V `stvec`/`mtvec` base must be 4-byte aligned), else null. When both
+// apply, the larger wins. Mirrors lower_c.zig's effectiveAlign so the backends stay in parity.
+fn effectiveAlign(attrs: []const ast.Attr) ?u32 {
+    var explicit: ?u32 = null;
+    for (attrs) |attr| {
+        if (attr.kind == .@"align") explicit = attr.kind.@"align";
+    }
+    const naked_min: ?u32 = if (hasNakedAttr(attrs)) 4 else null;
+    if (explicit) |e| {
+        if (naked_min) |n| return @max(e, n);
+        return e;
+    }
+    return naked_min;
 }
 
 fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {
