@@ -28,19 +28,22 @@ pub const IntBounds = struct {
     min_abs: u128 = 0,
 };
 
-pub fn maxUnsigned(bits: u7) u128 {
-    return (@as(u128, 1) << bits) - 1;
+pub fn maxUnsigned(bits: u8) u128 {
+    // A 128-bit shift is inexpressible (u128's shift amount is u7, 0..127), so the full u128
+    // range is returned directly; narrower widths use the shift.
+    if (bits >= 128) return std.math.maxInt(u128);
+    return (@as(u128, 1) << @as(u7, @intCast(bits))) - 1;
 }
 
-pub fn maxSigned(bits: u7) u128 {
-    return (@as(u128, 1) << (bits - 1)) - 1;
+pub fn maxSigned(bits: u8) u128 {
+    return (@as(u128, 1) << @as(u7, @intCast(bits - 1))) - 1;
 }
 
-pub fn signedBounds(bits: u7) IntBounds {
+pub fn signedBounds(bits: u8) IntBounds {
     return .{
         .signed = true,
         .max = maxSigned(bits),
-        .min_abs = @as(u128, 1) << (bits - 1),
+        .min_abs = @as(u128, 1) << @as(u7, @intCast(bits - 1)),
     };
 }
 

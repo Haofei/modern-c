@@ -6476,6 +6476,7 @@ fn rawScalarTypeName(ty: ast.TypeExpr) ?[]const u8 {
     if (std.mem.eql(u8, name, "u16")) return name;
     if (std.mem.eql(u8, name, "u32")) return name;
     if (std.mem.eql(u8, name, "u64")) return name;
+    if (std.mem.eql(u8, name, "u128")) return name;
     if (std.mem.eql(u8, name, "usize")) return name;
     if (std.mem.eql(u8, name, "i8")) return name;
     if (std.mem.eql(u8, name, "i16")) return name;
@@ -6769,6 +6770,7 @@ fn integerBits(ty: ast.TypeExpr) ?u16 {
     if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) return 16;
     if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return 32;
     if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return 64;
+    if (std.mem.eql(u8, name, "u128") or std.mem.eql(u8, name, "i128")) return 128;
     if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return 64;
     return null;
 }
@@ -6811,6 +6813,7 @@ fn signedMinLiteral(ty: ast.TypeExpr) ?[]const u8 {
     if (std.mem.eql(u8, name, "i16")) return "-32768";
     if (std.mem.eql(u8, name, "i32")) return "-2147483648";
     if (std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "isize")) return "-9223372036854775808";
+    if (std.mem.eql(u8, name, "i128")) return "-170141183460469231731687303715884105728";
     return null;
 }
 

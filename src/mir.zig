@@ -4148,11 +4148,13 @@ fn checkedIntBoundsByName(name: []const u8) ?IntBounds {
     if (std.mem.eql(u8, name, "u16")) return .{ .signed = false, .max = maxUnsigned(16) };
     if (std.mem.eql(u8, name, "u32")) return .{ .signed = false, .max = maxUnsigned(32) };
     if (std.mem.eql(u8, name, "u64")) return .{ .signed = false, .max = maxUnsigned(64) };
+    if (std.mem.eql(u8, name, "u128")) return .{ .signed = false, .max = maxUnsigned(128) };
     if (std.mem.eql(u8, name, "usize")) return .{ .signed = false, .max = maxUnsigned(64) };
     if (std.mem.eql(u8, name, "i8")) return signedBounds(8);
     if (std.mem.eql(u8, name, "i16")) return signedBounds(16);
     if (std.mem.eql(u8, name, "i32")) return signedBounds(32);
     if (std.mem.eql(u8, name, "i64")) return signedBounds(64);
+    if (std.mem.eql(u8, name, "i128")) return signedBounds(128);
     if (std.mem.eql(u8, name, "isize")) return signedBounds(64);
     return null;
 }
@@ -5181,6 +5183,7 @@ fn isCheckedUnsignedType(ty: ValueType) bool {
             std.mem.eql(u8, name, "u16") or
             std.mem.eql(u8, name, "u32") or
             std.mem.eql(u8, name, "u64") or
+            std.mem.eql(u8, name, "u128") or
             std.mem.eql(u8, name, "usize"),
         else => false,
     };
@@ -5192,6 +5195,7 @@ fn isCheckedSignedType(ty: ValueType) bool {
             std.mem.eql(u8, name, "i16") or
             std.mem.eql(u8, name, "i32") or
             std.mem.eql(u8, name, "i64") or
+            std.mem.eql(u8, name, "i128") or
             std.mem.eql(u8, name, "isize"),
         else => false,
     };

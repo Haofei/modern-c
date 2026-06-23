@@ -371,12 +371,14 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         \\MC_DEFINE_CHECKED_UNSIGNED(u16, uint16_t, UINT16_MAX)
         \\MC_DEFINE_CHECKED_UNSIGNED(u32, uint32_t, UINT32_MAX)
         \\MC_DEFINE_CHECKED_UNSIGNED(u64, uint64_t, UINT64_MAX)
+        \\MC_DEFINE_CHECKED_UNSIGNED(u128, unsigned __int128, (~(unsigned __int128)0))
         \\MC_DEFINE_CHECKED_UNSIGNED(usize, uintptr_t, UINTPTR_MAX)
         \\MC_DEFINE_CHECKED_SIGNED(i8, int8_t, INT8_MIN, INT8_MAX)
         \\MC_DEFINE_CHECKED_SIGNED(i16, int16_t, INT16_MIN, INT16_MAX)
         \\MC_DEFINE_CHECKED_SIGNED(i32, int32_t, INT32_MIN, INT32_MAX)
         \\MC_DEFINE_CHECKED_SIGNED(i64, int64_t, INT64_MIN, INT64_MAX)
         \\MC_DEFINE_CHECKED_SIGNED(isize, intptr_t, INTPTR_MIN, INTPTR_MAX)
+        \\MC_DEFINE_CHECKED_SIGNED(i128, __int128, (-(__int128)((unsigned __int128)(~(unsigned __int128)0) >> 1) - 1), (__int128)((unsigned __int128)(~(unsigned __int128)0) >> 1))
         \\
         \\#define MC_DEFINE_CHECKED_NEG_SIGNED(NAME, TYPE, MINV) \
         \\MC_UNUSED static inline TYPE mc_checked_neg_##NAME(TYPE a) { \
@@ -389,6 +391,7 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         \\MC_DEFINE_CHECKED_NEG_SIGNED(i32, int32_t, INT32_MIN)
         \\MC_DEFINE_CHECKED_NEG_SIGNED(i64, int64_t, INT64_MIN)
         \\MC_DEFINE_CHECKED_NEG_SIGNED(isize, intptr_t, INTPTR_MIN)
+        \\MC_DEFINE_CHECKED_NEG_SIGNED(i128, __int128, (-(__int128)((unsigned __int128)(~(unsigned __int128)0) >> 1) - 1))
         \\
         \\#define MC_DEFINE_WRAP_SHIFT_UNSIGNED(NAME, TYPE) \
         \\MC_UNUSED static inline TYPE mc_wrap_shl_##NAME(TYPE a, TYPE b) { \
@@ -419,11 +422,13 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         \\MC_DEFINE_WRAP_SHIFT_UNSIGNED(u32, uint32_t)
         \\MC_DEFINE_WRAP_SHIFT_UNSIGNED(u64, uint64_t)
         \\MC_DEFINE_WRAP_SHIFT_UNSIGNED(usize, uintptr_t)
+        \\MC_DEFINE_WRAP_SHIFT_UNSIGNED(u128, unsigned __int128)
         \\MC_DEFINE_SAT_UNSIGNED(u8, uint8_t, UINT8_MAX)
         \\MC_DEFINE_SAT_UNSIGNED(u16, uint16_t, UINT16_MAX)
         \\MC_DEFINE_SAT_UNSIGNED(u32, uint32_t, UINT32_MAX)
         \\MC_DEFINE_SAT_UNSIGNED(u64, uint64_t, UINT64_MAX)
         \\MC_DEFINE_SAT_UNSIGNED(usize, uintptr_t, UINTPTR_MAX)
+        \\MC_DEFINE_SAT_UNSIGNED(u128, unsigned __int128, (~(unsigned __int128)0))
         \\
     );
 
@@ -12527,6 +12532,7 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "u16")) return "uint16_t";
     if (std.mem.eql(u8, name, "u32")) return "uint32_t";
     if (std.mem.eql(u8, name, "u64")) return "uint64_t";
+    if (std.mem.eql(u8, name, "u128")) return "unsigned __int128";
     if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
     if (isOpaqueAddressTypeName(name)) return "uintptr_t";
     // IrqOff (§19.1) capability token: a 1-byte witness value.
@@ -12535,6 +12541,7 @@ fn cType(ty: ast.TypeExpr) []const u8 {
     if (std.mem.eql(u8, name, "i16")) return "int16_t";
     if (std.mem.eql(u8, name, "i32")) return "int32_t";
     if (std.mem.eql(u8, name, "i64")) return "int64_t";
+    if (std.mem.eql(u8, name, "i128")) return "__int128";
     if (std.mem.eql(u8, name, "isize")) return "intptr_t";
     if (std.mem.eql(u8, name, "f32")) return "float";
     if (std.mem.eql(u8, name, "f64")) return "double";
@@ -12563,11 +12570,13 @@ fn checkedTypeSuffix(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "u16")) return "u16";
     if (std.mem.eql(u8, name, "u32")) return "u32";
     if (std.mem.eql(u8, name, "u64")) return "u64";
+    if (std.mem.eql(u8, name, "u128")) return "u128";
     if (std.mem.eql(u8, name, "usize")) return "usize";
     if (std.mem.eql(u8, name, "i8")) return "i8";
     if (std.mem.eql(u8, name, "i16")) return "i16";
     if (std.mem.eql(u8, name, "i32")) return "i32";
     if (std.mem.eql(u8, name, "i64")) return "i64";
+    if (std.mem.eql(u8, name, "i128")) return "i128";
     if (std.mem.eql(u8, name, "isize")) return "isize";
     return null;
 }
@@ -12588,6 +12597,7 @@ fn unsignedTypeSuffix(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "u16")) return "u16";
     if (std.mem.eql(u8, name, "u32")) return "u32";
     if (std.mem.eql(u8, name, "u64")) return "u64";
+    if (std.mem.eql(u8, name, "u128")) return "u128";
     if (std.mem.eql(u8, name, "usize")) return "usize";
     return null;
 }
@@ -12597,6 +12607,7 @@ fn signedTypeSuffix(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "i16")) return "i16";
     if (std.mem.eql(u8, name, "i32")) return "i32";
     if (std.mem.eql(u8, name, "i64")) return "i64";
+    if (std.mem.eql(u8, name, "i128")) return "i128";
     if (std.mem.eql(u8, name, "isize")) return "isize";
     return null;
 }
@@ -12690,6 +12701,7 @@ fn primitiveCTypeName(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "u16")) return "uint16_t";
     if (std.mem.eql(u8, name, "u32")) return "uint32_t";
     if (std.mem.eql(u8, name, "u64")) return "uint64_t";
+    if (std.mem.eql(u8, name, "u128")) return "unsigned __int128";
     if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
     if (isOpaqueAddressTypeName(name)) return "uintptr_t";
     // IrqOff (§19.1) capability token: a 1-byte witness value.
@@ -12698,6 +12710,7 @@ fn primitiveCTypeName(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "i16")) return "int16_t";
     if (std.mem.eql(u8, name, "i32")) return "int32_t";
     if (std.mem.eql(u8, name, "i64")) return "int64_t";
+    if (std.mem.eql(u8, name, "i128")) return "__int128";
     if (std.mem.eql(u8, name, "isize")) return "intptr_t";
     if (std.mem.eql(u8, name, "f32")) return "float";
     if (std.mem.eql(u8, name, "f64")) return "double";

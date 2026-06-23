@@ -7116,11 +7116,13 @@ const TypeClass = enum {
     checked_u16,
     checked_u32,
     checked_u64,
+    checked_u128,
     checked_usize,
     checked_i8,
     checked_i16,
     checked_i32,
     checked_i64,
+    checked_i128,
     checked_isize,
     wrap,
     sat,
@@ -7320,14 +7322,14 @@ fn divModProvablySafe(op: ast.BinaryOp, left: TypeClass, divisor: ast.Expr) bool
 
 fn isCheckedUnsigned(kind: TypeClass) bool {
     return switch (kind) {
-        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_usize => true,
+        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_u128, .checked_usize => true,
         else => false,
     };
 }
 
 fn isCheckedSigned(kind: TypeClass) bool {
     return switch (kind) {
-        .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_isize => true,
+        .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_i128, .checked_isize => true,
         else => false,
     };
 }
@@ -7575,7 +7577,7 @@ fn classifyTypeCtx(ty: ast.TypeExpr, ctx: Context) TypeClass {
 // never made pending (avoids false positives on the `buf[i] = …` / `s.f = …` idiom).
 fn diIsScalarType(ty: ast.TypeExpr, ctx: Context) bool {
     return switch (classifyTypeCtx(ty, ctx)) {
-        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_usize, .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_isize, .wrap, .sat, .serial, .counter, .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer, .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr, .secret, .fn_pointer, .bool, .f32, .f64, .duration, .order => true,
+        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_u128, .checked_usize, .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_i128, .checked_isize, .wrap, .sat, .serial, .counter, .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer, .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr, .secret, .fn_pointer, .bool, .f32, .f64, .duration, .order => true,
         // Not tracked: array, slice, atomic, dma_buf, result, void, never, the
         // literal/unknown classes (structs/enums/unions/generics resolve to .unknown).
         else => false,
@@ -7743,7 +7745,7 @@ fn isTypeStaticMember(member: anytype, ctx: Context) bool {
 
 fn isIntegerScalarName(name: []const u8) bool {
     return switch (classifyTypeName(name)) {
-        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_usize, .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_isize => true,
+        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_u128, .checked_usize, .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_i128, .checked_isize => true,
         else => false,
     };
 }
@@ -8059,11 +8061,13 @@ fn classifyTypeName(name: []const u8) TypeClass {
     if (std.mem.eql(u8, name, "u16")) return .checked_u16;
     if (std.mem.eql(u8, name, "u32")) return .checked_u32;
     if (std.mem.eql(u8, name, "u64")) return .checked_u64;
+    if (std.mem.eql(u8, name, "u128")) return .checked_u128;
     if (std.mem.eql(u8, name, "usize")) return .checked_usize;
     if (std.mem.eql(u8, name, "i8")) return .checked_i8;
     if (std.mem.eql(u8, name, "i16")) return .checked_i16;
     if (std.mem.eql(u8, name, "i32")) return .checked_i32;
     if (std.mem.eql(u8, name, "i64")) return .checked_i64;
+    if (std.mem.eql(u8, name, "i128")) return .checked_i128;
     if (std.mem.eql(u8, name, "isize")) return .checked_isize;
     if (std.mem.eql(u8, name, "f32")) return .f32;
     if (std.mem.eql(u8, name, "f64")) return .f64;
@@ -8093,11 +8097,13 @@ fn checkedIntBounds(kind: TypeClass) ?IntBounds {
         .checked_u16 => .{ .signed = false, .max = maxUnsigned(16) },
         .checked_u32 => .{ .signed = false, .max = maxUnsigned(32) },
         .checked_u64 => .{ .signed = false, .max = maxUnsigned(64) },
+        .checked_u128 => .{ .signed = false, .max = maxUnsigned(128) },
         .checked_usize => .{ .signed = false, .max = maxUnsigned(64) },
         .checked_i8 => signedBounds(8),
         .checked_i16 => signedBounds(16),
         .checked_i32 => signedBounds(32),
         .checked_i64 => signedBounds(64),
+        .checked_i128 => signedBounds(128),
         .checked_isize => signedBounds(64),
         else => null,
     };

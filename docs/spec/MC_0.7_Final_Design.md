@@ -299,8 +299,8 @@ MC has fixed-width scalar types.
 ```mc
 bool
 
-i8  i16  i32  i64  isize
-u8  u16  u32  u64  usize
+i8  i16  i32  i64  i128  isize
+u8  u16  u32  u64  u128  usize
 
 f32 f64
 
@@ -317,6 +317,15 @@ Signed integers are two's-complement.
 usize/isize match pointer width.
 bool is a distinct type.
 ```
+
+`u128`/`i128` are 128-bit integers (lowered to `unsigned __int128`/`__int128` in the
+C backend and `i128` in the LLVM backend) — primarily for wide-integer math (bignum /
+crypto limbs). The inline operations — widening/truncating casts, add/sub (with carry),
+shifts, bitwise ops, comparisons, and signed negate — work on both backends. NOTE:
+128-bit **multiply** and **divide/mod** lower to compiler-rt routines (`__multi3`,
+`__muloti4`, `__udivti3`, `__umodti3`, …) that a freestanding image does not provide, so
+those operations require either linking such runtime routines or, for bignum, decomposing
+into `u32` limbs whose 64-bit products avoid the libcall entirely.
 
 There are no implicit runtime conversions.
 
