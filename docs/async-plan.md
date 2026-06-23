@@ -109,17 +109,24 @@ device/timer interrupt resumes it.
 The same wiring generalizes to a virtio-blk/net completion interrupt — the ISR calls
 `async_complete(id, result)` for the finished op instead of a timer; the await side is identical.
 
-## Phase D — Optional syntax (design contract)
+## Phase D — `async`/`await` syntax (design contract + build order)
 
 `async fn` lowers to a fixed-size, **stackless** state machine — pure sugar over the Phase-A
-`Future`. Live locals across `await` become fields; the body splits at each `await`; the fn
-becomes a `poll`. Forbidden in `#[irq_context]`; no hidden heap; both-backend parity. A separate
-compiler project, greenlit only after A→C prove the semantics. The contract it must implement:
+`Future`. It is a separate compiler project, greenlit only after A→C (done) prove the semantics.
 
-**1. Typed-result ABI (how a result of type `T` flows out of `poll() -> bool`).** Phase A's
-`Future::poll` returns only readiness (`bool`) — it deliberately does NOT carry `T` (MC has no
-generic tagged unions, so a generic `Poll<T>` return would force heap/unsafe). So a future that
-produces a value exposes it through a **generated per-type result accessor**, not the trait:
+**The first dependency is the CONTRACT, not the parser.** The parser sugar is the *last* step.
+Before any transform we must (a) make the future/result/cancel contract precise, then (b) write
+the exact MC the compiler should generate — by hand — as the acceptance fixtures, so "the
+transform is correct" means "it emits ordinary MC that matches the hand-written state machines"
+on both backends.
+
+### The contract
+
+**1. Typed-result ABI.** Phase A's `Future::poll` returns only readiness (`bool`) — it
+deliberately does NOT carry `T` (MC has no generic tagged unions, so a generic `Poll<T>` return
+would force heap/unsafe). So `async fn f(..) -> T` has nowhere standard to store/return the `T`
+*unless we fix the protocol*. The protocol: **`poll() -> bool` + a generated once-only
+`take_result() -> T`** per concrete future:
 
 ```
 // generated for `async fn f(..) -> T`
@@ -128,35 +135,72 @@ impl Future for FFuture { fn poll(self: *mut FFuture) -> bool { /* state machine
 fn f_take_result(self: *mut FFuture) -> T   // valid EXACTLY ONCE, only after poll() == true
 ```
 
-`await e` lowers to: poll `e` to completion (suspending this future — return `false` — whenever
-`e.poll()` is `false`), then read `e`'s typed result via its `*_take_result` accessor and
-continue. Leaf futures (`SlotFuture`, the broker future) get the same `take_result` shape, so the
-typed result is uniform across hand-written and generated futures. There is no `Poll<T>` type;
-the protocol is `poll() -> bool` + a once-only typed `take_result()`.
+`await e` lowers to: poll `e` (suspend — `return false` — whenever `e.poll()` is `false`), then
+read `e`'s value via its `*_take_result` accessor and advance. Leaf futures (`SlotFuture`, broker
+readiness futures) get the same `take_result` shape, so typed results are uniform across
+hand-written and generated futures. (Alternative the transform could adopt instead: a generic
+`trait Future<T>` with `result(self) -> T` — same effect; the `take_result` form avoids generic
+traits, which MC's procedural generics make awkward.)
 
 **2. `poll()` must never block (the stackless invariant).** A generated `poll()` may ONLY poll
-its child futures and `return false` (pending) when a child is pending — it MUST NOT call
-`async_await` / `async_await_irq` (those park the task). Blocking happens in exactly one place:
-the *driver* of the top-level future — `run_to_completion` (cooperative) or the kernel
-`async_await_irq` (park/wake). This is what keeps the machine stackless: an `await` inside an
-`async fn` is a *suspend point that returns pending up the poll chain*, never a park.
+its child futures (Phase-A `Future`s / broker *readiness* futures) and `return false` when a
+child is pending. It MUST NOT call the Phase-B/C **blocking** APIs `async_await` /
+`async_await_irq` — those are stackful and park the current task. Blocking lives in exactly ONE
+place: the *driver* of the top-level future — `run_to_completion` (cooperative) or the kernel
+`async_await_irq` (park/wake). So `await` inside an `async fn` is a suspend point that returns
+pending up the poll chain, never a park.
 
-**3. Cancellation / resource cleanup — v0 rule: NO cancellation; drop-of-pending is forbidden.**
-A started future that produces a `SlotFuture` holds a live `MAX_INFLIGHT` slot until it completes
-and its result is taken. In **v0**, every started future MUST be driven to completion (and its
-`take_result` called) — **dropping a still-pending future LEAKS its inflight slot** (and leaves a
-stale waiter enqueued). The transform must therefore reject (or the executor must not allow)
-abandoning a pending generated future; `race`/`select` (which by design leave a loser pending)
-are **out of scope for v0** for this reason. v1 adds a `cancel`/`drop` path: a `Future::cancel`
-that returns the inflight slot to the broker (a new `async_cancel(id)` that frees the slot and
-de-registers the waiter) and is run on drop of a pending future. Until then the leak is a known,
-documented limitation, bounded by `MAX_INFLIGHT`.
+**3. Cancellation / drop — v0 rule: NO cancellation; futures must run to completion.** A started
+future that holds a `SlotFuture` owns a live `MAX_INFLIGHT` slot (and an enqueued waiter) until it
+completes and its result is taken — and `MAX_INFLIGHT` is tiny on an agent OS. In **v0**, every
+started future MUST be driven to completion; **dropping a still-pending future LEAKS its slot**.
+The transform/executor must reject abandoning a pending generated future, and `race`/`select`
+(which leave a loser pending) are **out of scope for v0**. v1 generates a `cancel`/`drop` method
+that walks the active child futures and frees their resources via a new broker `async_cancel(id)`
+(frees the slot, de-registers the waiter). Until then the leak is a documented, bounded limitation.
 
-**4. Soundness — move/borrow across `await`.** The capture analysis (which live locals become
-state fields) must integrate with MC's move/borrow checker: a value moved before an `await`
-cannot be used after it, and a borrow cannot span an `await` unless the borrowed object is itself
-captured into the state. This is the subtle, load-bearing piece and the reason D is its own
-project rather than a parser tweak.
+**4. Ownership across `await` (the hard part — rules spelled out).** Capture analysis (which live
+locals become state fields) must integrate with MC's move/borrow checker:
+- a value **moved before an `await` cannot be used after it**;
+- a **reference that spans an `await` is forbidden in v0** (allowed later only with a lifetime
+  proof that the referent is itself captured into the future — i.e. outlives the suspend);
+- **no self-referential future fields** (a field pointing into the same future) unless pinning is
+  introduced — so v0 forbids capturing an interior pointer across an `await`;
+- a captured local that owns a **resource / has a destructor** must be cleaned up on completion
+  AND on cancellation (ties into rule 3).
+
+**5. Control flow across `await` — scope v0 narrowly.** Straight-line and `if`/`else` first;
+**loops are a later step.** Linear code maps to a simple state sequence; a loop with an `await`
+creates a *re-enterable* state that must preserve the loop index/condition across suspension —
+materially harder. Gate v0 with **straight-line + branches**, then add loops.
+
+**6. IRQ context.** `async fn` is forbidden in `#[irq_context]` (it suspends / uses `*dyn`).
+Separately, polling an arbitrary `*dyn Future` from `#[irq_context]` stays forbidden (indirect
+call). A generated `poll()` could in principle be called from IRQ context only if ALL its callees
+are proven IRQ-safe — not worth supporting initially; treat generated futures as task-context only.
+
+### Build order (do NOT start with syntax)
+
+1. **Define the typed future ABI** — `poll()`/`take_result()` (or `Future<T>`); update `std/task.mc`
+   leaf futures (`SlotFuture` etc.) to expose `take_result`.
+2. **Hand-write the lowered examples** — the exact MC state machines for 2–3 `async fn`s, as
+   differential fixtures (both backends). These are the spec and the acceptance target.
+   *(Started: `tests/c_emit/fuzz_async_lowering.mc` / `fuzz-async-lowering-test` — pins the
+   `poll()`/`take_result()` ABI with single-await and two-awaits-in-sequence, both backends
+   agree. The transform's output must match fixtures of this shape; extend with branch/loop/
+   moved-after-await cases as steps 4–6 land.)*
+3. **Implement the transform for straight-line `await`** — emit MC that matches the fixtures.
+4. **Add branches** (`if`/`else` with `await` on one side).
+5. **Add loops** (preserve index/condition across suspension).
+6. **Add cancellation / resource cleanup** (`cancel`/drop walking child futures).
+7. **Only then add the parser sugar** (`async fn` / `await` keywords).
+
+### Acceptance gates (each both-backend, matching the hand-written state machine)
+
+- `async fn` returning a scalar result; two `await`s in sequence; out-of-order child completion;
+  branch with `await` on only one side; loop with multiple `await`s;
+- a value moved-after-`await` is **rejected**; a reference spanning an `await` is rejected (or proven);
+- C and LLVM generated code match the hand-written fixtures.
 
 ## Backend follow-up found while building Phase A
 
