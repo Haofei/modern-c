@@ -103,6 +103,18 @@ async fn pick(sel: bool, dt: u64, de: u64) -> i32 {
     return out;
 }
 
+// ---- AWAIT INSIDE A while LOOP ----
+// A back-edge loop: the await result accumulates across iterations. Lowers to a `while true`-wrapped
+// poll with a loop-head state (re-check the condition), a body-await state that BACK-EDGES to the
+// head, a continuation, and DONE — the shape hand-written in fuzz_async_loop_lowering.mc. The index
+// `i` and accumulator `acc` survive suspension as captured fields.
+async fn sumn(n: i32, d: u64) -> i32 {
+    var acc: i32 = 0;
+    var i: i32 = 0;
+    while i < n { let v: i32 = await mk_val(d, i * 10); acc = acc + v; i = i + 1; }
+    return acc;
+}
+
 export fn async_syntax_run() -> u32 {
     var acc: u32 = 0;
 
@@ -183,7 +195,34 @@ export fn async_syntax_run() -> u32 {
     let p2: bool = pick__Fut__poll(&pc);      // canceled -> DONE: poll true, no churn
     if p2 && g_open == 0 { acc = acc ^ 0x80000; }
 
+    // AWAIT-IN-while-LOOP (multi-iteration): n=3 -> v = 0,10,20 -> sum 30. Each await ready@1, so
+    // the first poll suspends at clock 0; once clock reaches 1 the while-true drives ALL remaining
+    // iterations in one poll.
+    g_clock = 0; g_open = 0;
+    var lf: sumn__Fut = sumn(3, 1);
+    run_to_completion(&lf, tick_idle);
+    if sumn__Fut_take_result(&lf) == 30 { acc = acc ^ 0x100000; }   // 0+10+20
+    if g_open == 0 { acc = acc ^ 0x200000; }                        // every iteration slot consumed
+
+    // AWAIT-IN-while-LOOP (zero iterations): n=0 -> condition false immediately -> result 0, no await.
+    g_clock = 0; g_open = 0;
+    var lz: sumn__Fut = sumn(0, 1);
+    run_to_completion(&lz, tick_idle);
+    if sumn__Fut_take_result(&lz) == 0 { acc = acc ^ 0x400000; }    // no iterations -> 0
+    if g_open == 0 { acc = acc ^ 0x800000; }                        // no child ever built
+
+    // CANCEL mid-loop: a long deadline keeps the iteration await pending; poll once to park on it
+    // (one slot held), cancel, prove the slot is reclaimed and a later poll reports done.
+    g_clock = 0; g_open = 0;
+    var lc: sumn__Fut = sumn(5, 100);             // await ready@100 (never in this window)
+    let l0: bool = sumn__Fut__poll(&lc);          // head: i=0<5 -> build child; body: pending -> false
+    if !l0 && g_open == 1 { acc = acc ^ 0x1000000; }   // parked on the iteration await, one slot held
+    sumn__Fut_cancel(&lc);                        // walk the active child -> release its slot
+    if g_open == 0 { acc = acc ^ 0x2000000; }
+    let l1: bool = sumn__Fut__poll(&lc);          // canceled -> DONE: poll true, no churn
+    if l1 && g_open == 0 { acc = acc ^ 0x4000000; }
+
     // entry-mode contract: 1 = pass, 0 = fail.
-    if acc != 0xFFFFF { return 0; }
+    if acc != 0x7FFFFFF { return 0; }
     return 1;
 }

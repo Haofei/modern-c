@@ -139,6 +139,16 @@ const AwaitStep = struct {
     result_type: ast.TypeExpr, // the child's result type (binding_type, or async fn's return type)
 };
 
+// A `while cond { body }` whose body CONTAINS awaits, split into the body's leading await-run +
+// straight-line tail. The loop needs a BACK-EDGE: the entire poll body is wrapped in `while true`
+// and the last body state sets `state` back to the loop-head state (0). (v0: exactly one such loop,
+// optional no-await pre-loop straight-line, a straight-line tail ending in `return expr;`.)
+const WhileLoop = struct {
+    cond: ast.Expr, // the loop condition (re-checked at the head each iteration)
+    steps: std.ArrayList(AwaitStep) = .empty, // the body's leading await-run
+    tail: std.ArrayList(ast.Stmt) = .empty, // the body's straight-line tail (no return/break/continue)
+};
+
 // A bool-`if`/`else` (parser-desugared to a 2-arm bool `switch`) that CONTAINS awaits, split into
 // each arm's leading await-run + straight-line tail. The shared continuation runs the body tail.
 const Branch = struct {
@@ -278,6 +288,18 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     const result_type = info.result_type;
 
     const body = fd.body orelse return low.fail(fd.name.span, "async fn '{s}' must have a body", .{fname});
+
+    // ---- An await-bearing `while` loop takes a DEDICATED lowering path (back-edge + while-true poll
+    // wrapper). Detect it first; it may not be mixed with an await-bearing if/else in v0. ----
+    {
+        var loop_count: usize = 0;
+        for (body.items) |stmt| {
+            if (stmt.kind == .loop and blockContainsAwait(stmt.kind.loop.body)) loop_count += 1;
+        }
+        if (loop_count > 0) {
+            return lowerAsyncLoopFn(low, out, decl, info, fut_type, result_type, body);
+        }
+    }
 
     // ---- Walk the body in this v0 shape: a LEADING run of `let x = await call;` steps, then AT MOST
     // ONE bool-`if`/`else` that CONTAINS awaits (each arm: its own leading await-run + straight-line
@@ -663,6 +685,265 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     } } });
 }
 
+// ---- LOOP lowering: an async body of `<pre-loop straight-line>; while cond { <leading await-run>
+// <body straight-line> } <tail: return expr;>`. A loop needs a BACK-EDGE (re-check the condition
+// after each iteration), which the flat `if self.state==N` fall-through cannot express within a
+// single poll — so the WHOLE poll body is wrapped in `while true { <DONE early-return>; <state
+// blocks> }` and the last body state sets `state` BACKWARD to the loop head (state 0).
+//
+// State layout (B = body await steps):
+//   state 0       LOOP HEAD: `if <cond> { build __c0; state=1 } else { state=cont }`.
+//   states 1..B   LOOP BODY awaits: poll __c{j-1}; on the LAST (j==B) run the body straight-line
+//                 tail then `state=0` (BACK-EDGE); otherwise build __c{j} and advance.
+//   state cont    (=B+1) CONTINUATION/TAIL: `return expr` -> result-store + state=done + return true.
+//   state done    (=B+2) DONE: checked FIRST inside the while-true.
+fn lowerAsyncLoopFn(
+    low: *Lowerer,
+    out: *std.ArrayList(ast.Decl),
+    decl: ast.Decl,
+    info: AsyncInfo,
+    fut_type: []const u8,
+    result_type: ast.TypeExpr,
+    body: ast.Block,
+) Error!void {
+    const arena = low.arena;
+    const fd = decl.kind.fn_decl;
+
+    // ---- Split the body: optional PRE-LOOP straight-line (no await), exactly ONE await-bearing
+    // `while`, then a straight-line TAIL ending in `return expr;`. ----
+    var pre_loop: std.ArrayList(ast.Stmt) = .empty; // pre-loop straight-line decls/stmts (no await)
+    var tail: std.ArrayList(ast.Stmt) = .empty; // post-loop straight-line tail (incl the return)
+    var wl: ?WhileLoop = null;
+    var seen_loop = false;
+    for (body.items) |stmt| {
+        if (stmt.kind == .loop and blockContainsAwait(stmt.kind.loop.body)) {
+            if (seen_loop) return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: async v0 supports at most ONE await-bearing loop", .{});
+            const loop = stmt.kind.loop;
+            if (loop.kind != .@"while") return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: async v0 supports an `await` only inside a `while` loop (a `for` loop with awaits is unsupported)", .{});
+            const cond = loop.iterable orelse return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: a `while` loop must have a condition in async v0", .{});
+            var w = WhileLoop{ .cond = cond };
+            try collectLoopBody(low, loop.body, &w.steps, &w.tail);
+            if (w.steps.items.len == 0) return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: an await-bearing `while` body must begin with a `let x = await call;` run in async v0", .{});
+            wl = w;
+            seen_loop = true;
+            continue;
+        }
+        if (stmtContainsAwait(stmt)) return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: an await-bearing async fn with a loop may not have awaits in its pre-loop or tail (only inside the one `while` loop) in async v0", .{});
+        if (!seen_loop) {
+            try pre_loop.append(arena, stmt);
+        } else {
+            try tail.append(arena, stmt);
+        }
+    }
+    const loopw = wl.?;
+    const B = loopw.steps.items.len;
+
+    // ---- Build the future struct: state + one __cN per body await + params + pre-loop locals +
+    // body-awaited bindings + result. ----
+    var fields: std.ArrayList(ast.Field) = .empty;
+    try fields.append(arena, .{ .name = id("state"), .ty = try nameType(arena, "u8") });
+    for (loopw.steps.items) |s| try fields.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
+    for (fd.params) |p| try fields.append(arena, .{ .name = p.name, .ty = p.ty });
+    // Pre-loop locals are live across the loop (the index/accumulator) -> captured fields; require an
+    // explicit type annotation like the pre-branch locals.
+    for (pre_loop.items) |stmt| switch (stmt.kind) {
+        .let_decl, .var_decl => |ld| {
+            if (ld.names.len != 1) return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: a pre-loop `let`/`var` must bind exactly one name in async v0", .{});
+            const lty = ld.ty orelse return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: a pre-loop `let`/`var` live across the loop needs an explicit type annotation in async v0", .{});
+            try fields.append(arena, .{ .name = ld.names[0], .ty = lty });
+        },
+        else => {},
+    };
+    for (loopw.steps.items) |s| if (s.binding) |nm| try fields.append(arena, .{ .name = id(nm), .ty = s.result_type });
+    try fields.append(arena, .{ .name = id("result"), .ty = result_type });
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .struct_decl = .{
+        .name = id(fut_type),
+        .abi = null,
+        .fields = try fields.toOwnedSlice(arena),
+    } } });
+
+    // Captured names now read as `self.*`: params + pre-loop locals + body-awaited bindings.
+    var field_names = std.StringHashMap(void).init(arena);
+    for (fd.params) |p| try field_names.put(p.name.text, {});
+    for (pre_loop.items) |stmt| switch (stmt.kind) {
+        .let_decl, .var_decl => |ld| try field_names.put(ld.names[0].text, {}),
+        else => {},
+    };
+    for (loopw.steps.items) |s| if (s.binding) |nm| try field_names.put(nm, {});
+    const bind_names = &field_names;
+
+    // ---- State indices. ----
+    const cont_state: usize = B + 1;
+    const done_state: usize = B + 2;
+    const done_str = try std.fmt.allocPrint(arena, "{d}", .{done_state});
+
+    // ---- Constructor: build NO child eagerly (the first child is built at the loop head); copy
+    // params; REPLAY pre-loop straight-line decls as `self.x = init` stores; zero scalar fields. ----
+    var cbody: std.ArrayList(ast.Stmt) = .empty;
+    try cbody.append(arena, .{ .span = zspan, .kind = .{ .var_decl = .{
+        .names = try dupIdents(arena, &.{"self"}),
+        .ty = try nameType(arena, fut_type),
+        .init = .{ .span = zspan, .kind = .uninit_literal },
+    } } });
+    try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
+    for (fd.params) |p| try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
+    // Replay the pre-loop straight-line, lifting `let/var x = init` to `self.x = init` and rewriting
+    // captured reads to self.*.
+    for (pre_loop.items) |stmt| try cbody.append(arena, try rewriteDeclToStore(low, stmt, bind_names));
+    // Zero the body-awaited binding fields + result (definite-init for the move/borrow checker).
+    for (loopw.steps.items) |s| if (s.binding) |b| try cbody.append(arena, assignStmt(try selfMember(arena, b), try zeroFor(low, s.result_type)));
+    try cbody.append(arena, assignStmt(try selfMember(arena, "result"), try zeroFor(low, result_type)));
+    try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = identExpr("self") } });
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
+        .name = id(fd.name.text),
+        .abi = null,
+        .params = fd.params,
+        .return_type = try nameType(arena, fut_type),
+        .body = .{ .span = zspan, .items = try cbody.toOwnedSlice(arena) },
+        .is_const = false,
+        .exported = fd.exported,
+    } } });
+
+    // ---- The poll method: `while true { <state blocks> } return false;`. ----
+    var inner: std.ArrayList(ast.Stmt) = .empty;
+    // DONE early-return, checked FIRST.
+    {
+        var dbody = try arena.alloc(ast.Stmt, 1);
+        dbody[0] = .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } };
+        try inner.append(arena, try ifStateEq(arena, done_state, dbody));
+    }
+    // state 0 = LOOP HEAD: `if <cond> { build __c0; state=1 } else { state=cont }`.
+    {
+        var hbody: std.ArrayList(ast.Stmt) = .empty;
+        var tb: std.ArrayList(ast.Stmt) = .empty;
+        try emitBuildChild(low, &tb, loopw.steps.items[0], bind_names);
+        try setState(low, &tb, 1);
+        var ebl: std.ArrayList(ast.Stmt) = .empty;
+        try setState(low, &ebl, cont_state);
+        const rcond = try rewriteParamRefs(low, loopw.cond, bind_names);
+        try hbody.append(arena, try ifElseBlock(arena, rcond, try tb.toOwnedSlice(arena), try ebl.toOwnedSlice(arena)));
+        try inner.append(arena, try ifStateEq(arena, 0, try hbody.toOwnedSlice(arena)));
+    }
+    // states 1..B = LOOP BODY awaits.
+    for (loopw.steps.items, 0..) |s, j| {
+        var blk: std.ArrayList(ast.Stmt) = .empty;
+        try emitPollAndTake(low, &blk, s);
+        if (j + 1 < B) {
+            try emitBuildChild(low, &blk, loopw.steps.items[j + 1], bind_names);
+            try setState(low, &blk, j + 2); // states are 1-based: step j is state j+1
+        } else {
+            // LAST body await: run the body straight-line tail, then BACK-EDGE to the loop head.
+            for (loopw.tail.items) |st| try blk.append(arena, try rewriteStmtParamRefs(low, st, bind_names));
+            try setState(low, &blk, 0);
+        }
+        try inner.append(arena, try ifStateEq(arena, j + 1, try blk.toOwnedSlice(arena)));
+    }
+    // state cont = CONTINUATION/TAIL.
+    {
+        var tail_body: std.ArrayList(ast.Stmt) = .empty;
+        for (tail.items) |stmt| switch (stmt.kind) {
+            .@"return" => |maybe_expr| {
+                const rexpr = maybe_expr orelse return low.fail(stmt.span, "async v0: `return` must return a value", .{});
+                const rewritten = try rewriteParamRefs(low, rexpr, bind_names);
+                try tail_body.append(arena, assignStmt(try selfMember(arena, "result"), rewritten));
+                try tail_body.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
+                try tail_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } });
+            },
+            else => try tail_body.append(arena, try rewriteStmtParamRefs(low, stmt, bind_names)),
+        };
+        try inner.append(arena, try ifStateEq(arena, cont_state, try tail_body.toOwnedSlice(arena)));
+    }
+    // Wrap the state chain in `while true { ... }`, then a trailing `return false;` (the return
+    // checker does not special-case `while true`, so this is REQUIRED to avoid E_RETURN_MISSING).
+    var pbody: std.ArrayList(ast.Stmt) = .empty;
+    try pbody.append(arena, try whileTrueBlock(try inner.toOwnedSlice(arena)));
+    try pbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = false } } } });
+
+    const poll_method_name = try std.fmt.allocPrint(arena, "{s}__poll", .{fut_type});
+    var poll_params = try arena.alloc(ast.Param, 1);
+    poll_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
+        .name = id(poll_method_name),
+        .abi = null,
+        .params = poll_params,
+        .return_type = try nameType(arena, "bool"),
+        .body = .{ .span = zspan, .items = try pbody.toOwnedSlice(arena) },
+        .is_const = false,
+    } } });
+
+    // `impl Future for f__Fut` conformance record.
+    var conf_methods = try arena.alloc(ast.ImplTraitMethod, 1);
+    conf_methods[0] = .{
+        .name = id("poll"),
+        .mangled = poll_method_name,
+        .self_mode = .by_mut_ptr,
+        .params = poll_params,
+        .return_type = try nameType(arena, "bool"),
+    };
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .impl_trait = .{
+        .trait_name = id("Future"),
+        .type_name = id(fut_type),
+        .methods = conf_methods,
+    } } });
+
+    // `fn f__Fut_take_result(self) -> T { return self.result; }`.
+    var tr_params = try arena.alloc(ast.Param, 1);
+    tr_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
+    var tr_body: std.ArrayList(ast.Stmt) = .empty;
+    try tr_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try selfMember(arena, "result") } });
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
+        .name = id(info.take_result),
+        .abi = null,
+        .params = tr_params,
+        .return_type = result_type,
+        .body = .{ .span = zspan, .items = try tr_body.toOwnedSlice(arena) },
+        .is_const = false,
+        .exported = fd.exported,
+    } } });
+
+    // `fn f__Fut_cancel(self) -> void`: one guard per body-await state (1..B), then mark DONE.
+    var cn_params = try arena.alloc(ast.Param, 1);
+    cn_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
+    var cn_body: std.ArrayList(ast.Stmt) = .empty;
+    for (loopw.steps.items, 0..) |s, j| try emitCancelGuard(low, &cn_body, s, j + 1);
+    try cn_body.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
+        .name = id(info.cancel),
+        .abi = null,
+        .params = cn_params,
+        .return_type = try nameType(arena, "void"),
+        .body = .{ .span = zspan, .items = try cn_body.toOwnedSlice(arena) },
+        .is_const = false,
+        .exported = fd.exported,
+    } } });
+}
+
+// Split a `while` loop body into a leading await-run (-> `steps`) and a straight-line tail
+// (-> `tail`). v0 rejects: `return`/`break`/`continue` inside the body; any await beyond the
+// leading run (nested in straight-line code / control flow).
+fn collectLoopBody(low: *Lowerer, blk: ast.Block, steps: *std.ArrayList(AwaitStep), tail: *std.ArrayList(ast.Stmt)) Error!void {
+    const arena = low.arena;
+    var in_tail = false;
+    for (blk.items) |stmt| {
+        const await_call = awaitStepCall(stmt);
+        if (await_call != null and !in_tail) {
+            const step = try buildAwaitStep(low, stmt, await_call.?, steps.items.len);
+            try steps.append(arena, step);
+            continue;
+        }
+        in_tail = true;
+        switch (stmt.kind) {
+            .@"return" => return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: a `return` inside an await-bearing loop body is not supported in async v0", .{}),
+            .@"break" => return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: a `break` inside an await-bearing loop body is not supported in async v0", .{}),
+            .@"continue" => return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: a `continue` inside an await-bearing loop body is not supported in async v0", .{}),
+            else => {},
+        }
+        if (stmtContainsAwait(stmt))
+            return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: an await-bearing loop body may contain only a LEADING run of `let x = await call;` then straight-line code (no awaits nested in inner loops, switches, or deeper control flow) in async v0", .{});
+        try tail.append(arena, stmt);
+    }
+}
+
 // ---- helpers ----
 
 const ResolvedChild = struct {
@@ -916,6 +1197,29 @@ fn ifCondBlock(arena: std.mem.Allocator, cond: ast.Expr, body: []ast.Stmt) Error
     false_pats[0] = boolPattern(false);
     arms[0] = .{ .patterns = true_pats, .body = .{ .block = .{ .span = zspan, .items = body } } };
     arms[1] = .{ .patterns = false_pats, .body = .{ .block = .{ .span = zspan, .items = &.{} } } };
+    return .{ .span = zspan, .kind = .{ .@"switch" = .{ .subject = cond, .arms = arms } } };
+}
+
+// `while true { <body> }` — the back-edge wrapper for a loop-bearing poll. A body state sets
+// `self.state` BACKWARD (to the loop head) and the while re-runs the if-state chain from the top.
+fn whileTrueBlock(body: []ast.Stmt) Error!ast.Stmt {
+    return .{ .span = zspan, .kind = .{ .loop = .{
+        .kind = .@"while",
+        .label = null,
+        .iterable = .{ .span = zspan, .kind = .{ .bool_literal = true } },
+        .body = .{ .span = zspan, .items = body },
+    } } };
+}
+
+// `if cond { then } else { els }` as the parser's 2-arm bool `switch` desugar.
+fn ifElseBlock(arena: std.mem.Allocator, cond: ast.Expr, then_body: []ast.Stmt, else_body: []ast.Stmt) Error!ast.Stmt {
+    var arms = try arena.alloc(ast.SwitchArm, 2);
+    var true_pats = try arena.alloc(ast.Pattern, 1);
+    true_pats[0] = boolPattern(true);
+    var false_pats = try arena.alloc(ast.Pattern, 1);
+    false_pats[0] = boolPattern(false);
+    arms[0] = .{ .patterns = true_pats, .body = .{ .block = .{ .span = zspan, .items = then_body } } };
+    arms[1] = .{ .patterns = false_pats, .body = .{ .block = .{ .span = zspan, .items = else_body } } };
     return .{ .span = zspan, .kind = .{ .@"switch" = .{ .subject = cond, .arms = arms } } };
 }
 
