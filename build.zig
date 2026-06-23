@@ -2228,6 +2228,22 @@ pub fn build(b: *std.Build) void {
     const llvm_ipc_test_step = b.step("llvm-ipc-test", "Run LLVM-lowered kernel-mediated IPC under QEMU");
     llvm_ipc_test_step.dependOn(&llvm_ipc_test_cmd.step);
 
+    // async-test (async/await roadmap Phase B): request-id-keyed PARK/WAKE completion broker
+    // (kernel/lib/async.mc). A waiter PARKS on submitted requests; a completer wakes it
+    // (out-of-order completions) under the real cooperative scheduler. WCR + ASYNC-OK.
+    const async_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_async_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    async_test_cmd.step.dependOn(b.getInstallStep());
+    const async_test_step = b.step("async-test", "async Phase B: request-id park/wake completion broker (submit/await/complete) under the scheduler");
+    async_test_step.dependOn(&async_test_cmd.step);
+    llvm_async_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_async_test_step = b.step("llvm-async-test", "LLVM-lowered async park/wake completion broker under QEMU");
+    llvm_async_test_step.dependOn(&llvm_async_test_cmd.step);
+
     const cap_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/cap-test.sh",
@@ -3741,6 +3757,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_registry_test_cmd.step);
     m0_step.dependOn(&llvm_ipc2_test_cmd.step);
     m0_step.dependOn(&llvm_ipc_test_cmd.step);
+    m0_step.dependOn(&llvm_async_test_cmd.step);
     m0_step.dependOn(&llvm_usched_test_cmd.step);
     m0_step.dependOn(&llvm_heartbeat_test_cmd.step);
     m0_step.dependOn(&llvm_privilege_test_cmd.step);
@@ -4049,6 +4066,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&e1000_test_cmd.step);
     m0_step.dependOn(&grant_test_cmd.step);
     m0_step.dependOn(&ipc_test_cmd.step);
+    m0_step.dependOn(&async_test_cmd.step);
     m0_step.dependOn(&block_server_test_cmd.step);
     m0_step.dependOn(&fs_server_test_cmd.step);
     m0_step.dependOn(&net_server_test_cmd.step);

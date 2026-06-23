@@ -901,9 +901,20 @@ const LlvmEmitter = struct {
             std.fmt.bufPrint(&align_buf, " align {d}", .{al}) catch unreachable
         else
             "";
-        // `#[weak]`: weak linkage (a linkage specifier, before the return type) so a strong
-        // definition in another unit overrides this default.
-        const weak_str: []const u8 = if (hasWeakAttr(attrs)) "weak " else "";
+        // Linkage specifier (before the return type):
+        // - `#[weak]` -> `weak` (a strong definition in another unit overrides this default);
+        // - a NON-`export` function -> `internal`, the analogue of the C backend's `static`.
+        //   MC inlines an imported module's source into every importer's object, so a non-export
+        //   helper (e.g. std/fmt_sink.mc's `fmt_put_*`) is COPIED into each object; without
+        //   internal linkage the copies collide at link time (`ld.lld: duplicate symbol`).
+        //   Exported functions keep external linkage so the C bring-up glue / cross-object
+        //   references resolve.
+        const weak_str: []const u8 = if (hasWeakAttr(attrs))
+            "weak "
+        else if (!fn_decl.exported)
+            "internal "
+        else
+            "";
         try self.out.print(self.allocator, "define {s}{s} @{s}(", .{ weak_str, ret_llvm, fn_decl.name.text });
         for (fn_decl.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
@@ -6847,7 +6858,7 @@ test "LLVM backend emits a backend_name alias for the override symbol" {
     defer output.deinit(std.testing.allocator);
     try appendLlvm(std.testing.allocator, module, &output);
     // The function keeps its source name; the override is exposed via a module-level alias.
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "define i64 @helper(i64 %x)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal i64 @helper(i64 %x)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@rss_helper_x = alias i64 (i64), ptr @helper") != null);
 }
 
@@ -6872,7 +6883,7 @@ test "LLVM backend emits checked integer add from MIR-gated source" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvm(std.testing.allocator, module, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "define i32 @add_one(i32 %value)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal i32 @add_one(i32 %value)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@llvm.uadd.with.overflow.i32") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "call void @mc_trap_IntegerOverflow()") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, " nsw ") == null);

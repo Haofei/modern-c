@@ -42,15 +42,29 @@ nested composition verified. The **vectored drain** (`poll_many`) is deliberatel
 Phase B because in pure std it needs pointer arithmetic over `*dyn` fat pointers; in the kernel it
 iterates the fixed inflight-slot table (typed, bounded).
 
-## Phase B — Park/wake broker (the real production feature)
+## Phase B — Park/wake broker (DONE)
 
-`kernel/lib/async.mc` (or `kernel/core/task.mc`) — the scheduler/broker integration std must not
-contain. Replace "poll until ready" with: submit → park the task on the request/inflight slot →
-broker completion marks ready → wake the task; idle path uses `wfi`. The current `WaitQueue` is
-FIFO endpoint-based, not request-id keyed — so add either one wait queue per inflight slot, or a
-`CompletionWait { id, endpoint }` table keyed by request id. Stackful: one kernel/user stack per
-parked task, **quota-bound by `MAX_INFLIGHT`**. The kernel-side `poll_many` (vectored drain over
-the inflight table) lives here.
+`kernel/lib/async.mc` — the scheduler/broker integration std must not contain. A request-id-keyed
+inflight table (`Inflight[MAX_INFLIGHT]`, **one `WaitQueue` per slot** — the first option), built
+on the proven `wq_wait`/`wq_wake_all` + `proc_park`/`proc_unblock` primitives:
+
+- `async_submit(b) -> id` — reserve a slot, monotonic id, or `ASYNC_NO_ID` if the `MAX_INFLIGHT`
+  quota is full.
+- `async_await(b, t, id) -> result` — PARK the current task (`wq_wait`) until the slot is ready;
+  yields to the next runnable task or `wfi`, re-checks on wake. No busy-spin.
+- `async_complete(b, t, id, result)` — mark ready + `wq_wake_all` (Phase C calls this from an ISR).
+- `async_slot_ready(b, id)` — readiness predicate to inject into `std/task.mc`'s `SlotFuture`.
+
+Stackful: one kernel/user stack per parked task, quota-bound by `MAX_INFLIGHT`. Gate: `async-test`
+/ `llvm-async-test` (both backends, in m0) — two cooperative processes; a waiter parks on submitted
+requests, a completer wakes it (out-of-order, one already-ready), `WCR` + `ASYNC-OK` (result 42).
+The kernel-side `poll_many` (vectored drain over the inflight table) is a follow-up here.
+
+**Backend parity fix made for this phase:** the LLVM backend emitted non-`export` module functions
+with *external* linkage, so two objects that each inline a shared non-export helper (e.g.
+`std/fmt_sink.mc`'s `fmt_put_*`) collided (`ld.lld: duplicate symbol`). It now emits `internal`
+linkage for non-`export` functions (the analogue of the C backend's `static`) — MC inlines imports
+per-object, so per-object copies are correct. This also fixed the pre-existing `llvm-ipc-test`.
 
 ## Phase C — IRQ-backed completion (production-readiness milestone)
 
