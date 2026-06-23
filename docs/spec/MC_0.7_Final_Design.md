@@ -44,6 +44,7 @@
   - [30. Modules and Associated Functions](#30-modules-and-associated-functions)
   - [31. Opaque Structs](#31-opaque-structs)
   - [32. Traits and Interfaces](#32-traits-and-interfaces)
+  - [33. Async and Await](#33-async-and-await)
 - [Part II — Implementation and Conformance Annex](#part-ii--implementation-and-conformance-annex)
   - [A. Spec Layering](#a-spec-layering)
   - [B. Recommended Compilation Pipeline](#b-recommended-compilation-pipeline)
@@ -3321,6 +3322,133 @@ value. This is what a registry of optional trait-object slots uses — `[N]?*dyn
 `null` — so absence is type-checked rather than tracked by a parallel boolean. The `data == null`
 niche is observable runtime state, identical on both backends; the `zig build nulldyn-run-test`
 conformance gate (annex) runs the lowered program natively on each backend to confirm it round-trips.
+
+---
+
+# 33. Async and Await
+
+`async`/`await` is **sugar over the `Future` trait (section 32)**: an `async fn` lowers to a
+fixed-size, **stackless** state machine — a plain `struct` plus an `impl Future` — with no hidden
+heap, no stackful coroutine, and no runtime beyond the executor that drives it. It is a pre-sema
+source transform (annex C): no `async`/`await` construct reaches the type checker, MIR, or either
+backend, so async code carries exactly the guarantees of the ordinary MC it expands to, identically
+on both backends. `async` and `await` are **contextual keywords** — matched by position; no
+identifier is reserved.
+
+## 33.1 The Future Contract
+
+A future is any type implementing `Future` (section 32):
+
+```mc
+trait Future { fn poll(self: *mut Self) -> bool; }
+```
+
+`poll` advances the future and returns `true` once it is **complete**, and must keep returning
+`true` afterward (idempotent). `poll` **must not block** — it may only poll child futures and
+return pending. A future yielding a value of type `T` additionally exposes two generated free
+functions, the **uniform leaf ABI**:
+
+```mc
+fn F_take_result(self: *mut F) -> T;   // valid exactly once, only after poll() == true
+fn F_cancel(self: *mut F) -> void;     // release a still-pending future's resources (drop)
+```
+
+Every type awaited inside an `async fn` must provide all three (`poll` via `impl Future`,
+`<F>_take_result`, `<F>_cancel`); a leaf with no resource to release gives `cancel` an empty body.
+
+## 33.2 `async fn` and `await`
+
+An `async fn f(params) -> T` may contain `await`. Calling `f(args)` does **not** run the body; it
+constructs and returns a future value (`f`'s generated future type), which the caller must drive to
+completion (section 33.5).
+
+`await e` is a **suspend point**: it polls the child future `e` and, while `e` is pending, returns
+pending **up the poll chain**; once `e` completes, `await e` takes its value (via `e`'s
+`_take_result`) and the state machine advances.
+
+**Stackless invariant (normative).** A generated `poll` only polls child futures and returns
+pending — it **never** calls a blocking primitive. `await` is therefore a *suspend*, never a park.
+Blocking lives in exactly one place: the *driver* of the top-level future — the cooperative
+executor `run_to_completion`, or the kernel park/wake driver `async_await_irq`. `await` outside an
+`async fn` is `E_AWAIT_OUTSIDE_ASYNC`.
+
+## 33.3 Lowering (informative)
+
+`async fn f(p) -> T` generates: `struct f__Fut { state: u8, /* one child-future field per await */,
+/* captured params + locals */, result: T }`; a by-value constructor `fn f(p) -> f__Fut`;
+`impl Future for f__Fut { fn poll(self: *mut f__Fut) -> bool { /* switch-on-state */ } }`; and
+`fn f__Fut_take_result(self) -> T` / `fn f__Fut_cancel(self)`. Child futures are built **lazily** —
+the child for await *k* is constructed at the transition ending await *k−1* — so a later awaited
+call may read an earlier `await`'s result:
+
+```mc
+async fn flow(...) -> Data {
+    let token = await login(creds);   // child 0
+    let data  = await fetch(token);   // child 1 — built only after `token` exists
+    return data;
+}
+```
+
+## 33.4 Control Flow Across `await`
+
+v0 supports `await` in:
+- **straight-line** code — `let x = await e;` … then ordinary statements;
+- **`if`/`else`** — each branch is its own state range joining a common continuation; only the
+  taken branch's child future is constructed;
+- **`while` loops** — the state machine carries a back-edge to the loop head; the loop
+  index/condition survive suspension as captured fields.
+
+Reserved (rejected `E_ASYNC_BRANCH_UNSUPPORTED` / `E_ASYNC_LOOP_UNSUPPORTED`): a `for` loop
+containing `await`; `break`/`continue`/`return` inside an await-bearing loop body; mixing an
+await-bearing loop and an await-bearing `if`/`else` in one function; and `await` nested more than
+one control-flow level deep.
+
+## 33.5 Cancellation and Drop
+
+A started future may own a bounded resource (e.g. an in-flight broker slot) until it completes;
+dropping a still-pending future must release it. The generated `f__Fut_cancel` walks the
+currently-active child future and cancels it — recursively, down to a leaf's `_cancel` — then marks
+the future complete (idempotent: a later `poll`/`cancel` is a no-op, with no double-free). The
+kernel primitive behind a leaf cancel is `async_cancel(id)`, which frees the slot and releases any
+parked waiter. `race`/`select` and timeout cleanup build on cancellation and are **reserved** in v0.
+
+## 33.6 Ownership and Borrowing Across `await`
+
+Captured locals become future fields, so the move/borrow checker (sections 18.1, 9) runs on the
+generated code: a value moved before an `await` cannot be used after it.
+
+A **reference into the future itself, captured across an `await`, is forbidden**. The future is
+returned and stored by value, so an interior pointer would dangle after that move (a
+self-referential future; pinning is not in v0). Forming `&x` of a captured local or parameter whose
+borrow lives across a suspend point is `E_ASYNC_BORROW_ACROSS_AWAIT`. A borrow whose entire
+lifetime stays within one state — e.g. used only after the final `await` — is permitted.
+
+## 33.7 Interrupt and Bounded Context
+
+An `async fn` suspends and is driven through `*dyn` dispatch, both forbidden in an `#[irq_context]`
+/ `#[atomic_context]` or `#[bounded]` context (sections 19.1, 32.4). Declaring an `async fn` with
+any of these attributes is `E_ASYNC_FORBIDDEN_CONTEXT`. The *completion* side — waking a parked task
+from an interrupt handler — is ordinary non-async kernel code and **is** `#[irq_context]` (the wake
+path forms no `Result`, takes no indirect call, and runs in bounded loops; section 19.1).
+
+## 33.8 Diagnostics
+
+| Code | Condition |
+|---|---|
+| `E_AWAIT_OUTSIDE_ASYNC` | `await` used outside an `async fn` |
+| `E_ASYNC_FORBIDDEN_CONTEXT` | `async fn` in `#[irq_context]` / `#[atomic_context]` / `#[bounded]` |
+| `E_ASYNC_BRANCH_UNSUPPORTED` | a branch shape outside the v0 `if`/`else` scope (section 33.4) |
+| `E_ASYNC_LOOP_UNSUPPORTED` | a loop shape outside the v0 `while` scope (section 33.4) |
+| `E_ASYNC_BORROW_ACROSS_AWAIT` | a reference to a captured local/parameter spans an `await` (section 33.6) |
+
+**Conformance.** The generated state machine must lower identically on both backends. The
+hand-lowered acceptance targets (`fuzz-async-lowering`, `-branch-lowering`, `-loop-lowering`,
+`-cancel-lowering`) pin the required shape; the real-syntax `fuzz-async-syntax`, `fuzz-async-ufcs`,
+and `fuzz-async-safe-borrow` gates verify the transform's output against it — all in the
+diff-backend corpus (annex). The runtime is exercised under QEMU by `async-test` (park/wake),
+`async-irq-test` (IRQ-backed completion), `async-cancel-test` (slot reclamation on drop), and
+`async-pollmany-test` (vectored drain). The roadmap for the reserved features (`race`/`select`,
+pinning) is `docs/async-plan.md`.
 
 ---
 
