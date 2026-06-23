@@ -132,6 +132,20 @@ fn typeName(t: ast.TypeExpr) ?[]const u8 {
 }
 
 pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter) Error!ast.Module {
+    // `await` is ONLY valid inside an `async fn` — the transform rewrites those away. Any `await`
+    // surviving in a non-async fn would reach sema as an unhandled `await_expr` (a compiler crash),
+    // so reject it here with a diagnostic. This runs UNCONDITIONALLY (even with no async fns).
+    for (module.decls) |d| {
+        if (d.kind != .fn_decl) continue;
+        const fd = d.kind.fn_decl;
+        if (fd.is_async) continue; // an async fn's own awaits are handled by the transform
+        const b = fd.body orelse continue;
+        if (blockContainsAwait(b)) {
+            if (reporter) |r| r.err(fd.name.span, "E_AWAIT_OUTSIDE_ASYNC: `await` is only valid inside an `async fn` (in '{s}')", .{fd.name.text});
+            return error.AsyncLowerFailed;
+        }
+    }
+
     // Quick pass: does any async fn exist? If not, pass through untouched.
     var has_async = false;
     for (module.decls) |d| {
@@ -184,6 +198,18 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     const arena = low.arena;
     const fd = decl.kind.fn_decl;
     const fname = fd.name.text;
+
+    // An `async fn` suspends (returns `pending` up the poll chain) and is driven through `*dyn`
+    // dispatch — both forbidden in an IRQ/atomic/bounded context. Reject it before lowering, since
+    // the generated decls carry no attrs and sema would otherwise never see the conflict.
+    for (decl.attrs) |a| {
+        if (a.kind == .named) {
+            const an = a.kind.named.text;
+            if (std.mem.eql(u8, an, "irq_context") or std.mem.eql(u8, an, "bounded")) {
+                return low.fail(a.span, "E_ASYNC_FORBIDDEN_CONTEXT: `async fn` is forbidden in a #[{s}] context (it suspends and uses indirect dispatch)", .{an});
+            }
+        }
+    }
     const info = low.async_info.get(fname).?;
     const fut_type = info.fut_type;
     const result_type = info.result_type;
@@ -194,6 +220,8 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // ordinary statements ending in `return expr;`. Reject anything outside this v0 shape. ----
     var steps: std.ArrayList(AwaitStep) = .empty;
     var tail: std.ArrayList(ast.Stmt) = .empty; // post-await straight-line stmts (incl the return)
+    // Names bound by EARLIER awaits — an awaited call may not reference them in v0 (see below).
+    var prior_bindings = std.StringHashMap(void).init(arena);
 
     var in_tail = false;
     for (body.items) |stmt| {
@@ -203,6 +231,13 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
             const ld = stmt.kind.let_decl; // (let or var; both carry LocalDecl)
             if (ld.names.len != 1) return low.fail(stmt.span, "async v0: an awaited binding must bind exactly one name", .{});
             const acall = await_call.?;
+            // v0: the constructor builds ALL child futures up front, before any await result exists,
+            // so a later awaited call cannot read an earlier `await` binding. Reject it clearly
+            // rather than emit code that references a not-yet-existing value. (Lazy per-state child
+            // construction would lift this — a tracked Phase-D follow-up.) Params are fine (captured).
+            if (exprRefsAny(acall, &prior_bindings)) {
+                return low.fail(stmt.span, "E_ASYNC_AWAIT_DEPENDS_ON_PRIOR: an awaited call may not reference an earlier `await` result in async v0 (children are constructed up front); lazy child construction is a tracked follow-up", .{});
+            }
             // Resolve the child future type from the awaited call's callee.
             const child = try resolveAwait(low, stmt.span, acall);
             const field = try std.fmt.allocPrint(arena, "__c{d}", .{steps.items.len});
@@ -222,6 +257,7 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
                 .call = acall,
                 .result_type = res_ty,
             });
+            try prior_bindings.put(ld.names[0].text, {});
             continue;
         }
         // First non-await statement begins the tail. Reject a stray await beyond the leading run
@@ -296,6 +332,15 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // into the binding field, then advances `state`. After the last await, run the straight-line
     // tail (with `return expr;` rewritten to `self.result = expr; self.state = LAST; return true;`).
     var pbody: std.ArrayList(ast.Stmt) = .empty;
+    const tail_state = steps.items.len; // state reached after the last await; the tail runs here
+    const done_state = steps.items.len + 1; // distinct DONE state: complete, nothing left to run
+    // Idempotence (std/task.mc: poll must keep returning true after completion): check DONE FIRST
+    // and return true WITHOUT re-running the tail statements or their side effects.
+    {
+        var dbody = try arena.alloc(ast.Stmt, 1);
+        dbody[0] = .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } };
+        try pbody.append(arena, try ifStateEq(arena, done_state, dbody));
+    }
     for (steps.items, 0..) |s, i| {
         var blk: std.ArrayList(ast.Stmt) = .empty;
         // let r: bool = FutT__poll(&self.__cN);
@@ -334,25 +379,33 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     for (steps.items) |s| {
         if (s.binding) |b| try bind_names.put(b, {});
     }
-    const last_state = try std.fmt.allocPrint(arena, "{d}", .{steps.items.len});
+    // The tail runs in ONE guarded state (`if self.state == tail_state`), reached after the last
+    // await advances `state` to tail_state. `return expr;` becomes result-store + advance to DONE +
+    // `return true`. Guarding it (plus the DONE early-return above) makes poll idempotent: once
+    // complete, state == done_state, so the tail never re-runs.
+    const done_str = try std.fmt.allocPrint(arena, "{d}", .{done_state});
+    var tail_body: std.ArrayList(ast.Stmt) = .empty;
     for (tail.items) |stmt| {
         switch (stmt.kind) {
             .@"return" => |maybe_expr| {
                 const rexpr = maybe_expr orelse return low.fail(stmt.span, "async v0: `return` must return a value", .{});
                 const rewritten = try rewriteParamRefs(low, rexpr, &bind_names);
-                try pbody.append(arena, assignStmt(try selfMember(arena, "result"), rewritten));
-                try pbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(last_state)));
-                try pbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } });
+                try tail_body.append(arena, assignStmt(try selfMember(arena, "result"), rewritten));
+                try tail_body.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
+                try tail_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } });
             },
             else => {
                 // A straight-line tail stmt: rewrite ident reads of params/bindings to self.* .
                 const rewritten = try rewriteStmtParamRefs(low, stmt, &bind_names);
-                try pbody.append(arena, rewritten);
+                try tail_body.append(arena, rewritten);
             },
         }
     }
-    // If the body had no explicit return (shouldn't happen for `-> T`), fall through to true.
-    // (v0 requires a `return expr;`; the loop above appends the `return true`.)
+    try pbody.append(arena, try ifStateEq(arena, tail_state, try tail_body.toOwnedSlice(arena)));
+    // Unreachable fallback: at runtime `state` is always DONE or one of 0..tail_state, so one guard
+    // above always returns. But every path is now inside a state guard, so the definite-return
+    // check needs an explicit trailing return. `false` (not-complete) is the conservative choice.
+    try pbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = false } } } });
 
     const poll_method_name = try std.fmt.allocPrint(arena, "{s}__poll", .{fut_type});
     var poll_params = try arena.alloc(ast.Param, 1);
@@ -498,6 +551,26 @@ fn exprContainsAwait(e: ast.Expr) bool {
         .index => |ix| exprContainsAwait(ix.base.*) or exprContainsAwait(ix.index.*),
         .member => |m| exprContainsAwait(m.base.*),
         .try_expr => |t| exprContainsAwait(t.operand.*),
+        else => false,
+    };
+}
+
+// Does the expression read any bare ident in `names`? (Used to reject a later awaited call that
+// references an earlier `await` binding. The callee position is a function name, not a binding.)
+fn exprRefsAny(e: ast.Expr, names: *std.StringHashMap(void)) bool {
+    return switch (e.kind) {
+        .ident => |i| names.contains(i.text),
+        .grouped, .address_of, .deref => |inner| exprRefsAny(inner.*, names),
+        .unary => |u| exprRefsAny(u.expr.*, names),
+        .binary => |b| exprRefsAny(b.left.*, names) or exprRefsAny(b.right.*, names),
+        .cast => |c| exprRefsAny(c.value.*, names),
+        .call => |c| blk: {
+            for (c.args) |a| if (exprRefsAny(a, names)) break :blk true;
+            break :blk false;
+        },
+        .index => |ix| exprRefsAny(ix.base.*, names) or exprRefsAny(ix.index.*, names),
+        .member => |m| exprRefsAny(m.base.*, names),
+        .try_expr => |t| exprRefsAny(t.operand.*, names),
         else => false,
     };
 }

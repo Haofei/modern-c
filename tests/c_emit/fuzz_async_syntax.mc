@@ -12,6 +12,9 @@ import "std/task.mc";
 global g_clock: u64 = 0;
 fn tick_idle() -> void { g_clock = g_clock + 1; }
 
+// side-effect counter, to prove poll() is idempotent after completion (the tail runs exactly once).
+global g_side: u32 = 0;
+
 // ---- leaf future: a mock async value, ready at `deadline`, yielding `val`. Hand-written with
 // the uniform child-future ABI the transform consumes for an awaited leaf:
 //   - a by-value constructor `mk_val(deadline, val) -> ValFut` (the awaited call `await mk_val(..)`)
@@ -46,6 +49,13 @@ async fn sum_two(da: u64, va: i32, db: u64, vb: i32) -> i32 {
     return a + b;
 }
 
+// idempotence: a side-effecting tail statement, so re-polling after completion is observable.
+async fn with_side(d: u64) -> i32 {
+    let r: i32 = await mk_val(d, 7);
+    g_side = g_side + 1;   // tail statement — must run EXACTLY ONCE, not on every later poll
+    return r;
+}
+
 export fn async_syntax_run() -> u32 {
     var acc: u32 = 0;
 
@@ -62,7 +72,17 @@ export fn async_syntax_run() -> u32 {
     if sum_two__Fut_take_result(&sf) == 42 { acc = acc ^ 0x2; }
     if ticks == 5 { acc = acc ^ 0x4; }   // completes only when the LATER await is ready
 
+    // idempotent poll: drive to completion (side effect runs once), then drive AGAIN — a completed
+    // future must report done immediately (0 idle ticks: poll returned true on the first call)
+    // WITHOUT re-running the tail (g_side stays 1).
+    g_clock = 0; g_side = 0;
+    var ws: with_side__Fut = with_side(2);
+    run_to_completion(&ws, tick_idle);                  // completes; g_side -> 1
+    let extra: u64 = run_to_completion(&ws, tick_idle); // re-drive a completed future
+    if extra == 0 { acc = acc ^ 0x8; }                  // poll returned true at once (already done)
+    if g_side == 1 { acc = acc ^ 0x10; }                // tail ran exactly once (idempotent)
+
     // entry-mode contract: 1 = pass, 0 = fail.
-    if acc != 0x7 { return 0; }
+    if acc != 0x1F { return 0; }
     return 1;
 }
