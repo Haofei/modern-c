@@ -1,10 +1,13 @@
 # Async/await roadmap
 
-Status: **Phases A, B, C landed**; D (syntax) — **straight-line `async fn`/`await` + LAZY
-per-state child construction + CANCELLATION landed** (steps 1–3, 6, 7-as-applied: lexer/AST/parser
-sugar, the pre-sema state-machine transform, lazy dependent-await construction, and a generated
-drop/cancel that reclaims the in-flight slot). Branches across await (step 4) and loops (step 5)
-are still pending.
+Status: **Phases A, B, C landed**; D (syntax) — **ALL of straight-line + LAZY dependent-await
+construction + CANCELLATION + BRANCHES + LOOPS landed** (steps 1–7). The transform handles
+straight-line awaits, an `await` inside an `if`/`else` (each arm a state range joining a common
+continuation), and an `await` inside a `while` loop (the poll wrapped in `while true` for the
+back-edge). Plus follow-ups: the kernel vectored drain `async_poll_many`; `#[irq_context]`
+enforcement on the whole `async_complete` wake chain; UFCS on generated future types
+(`f__Fut.poll(&x)`); and the backend-parity fix so a `*dyn` dispatch call lowers directly as an
+if/switch subject on both backends. **Phase D is feature-complete for the v0 scope.**
 
 **Step 6 (cancellation) + lazy construction — DONE.** `kernel/lib/async.mc` gains `async_cancel(b,
 t, id)` (free the inflight slot + release any parked waiter, idempotent; a late `async_complete`
@@ -213,12 +216,20 @@ are proven IRQ-safe — not worth supporting initially; treat generated futures 
    moved-after-await cases as steps 4–6 land.)*
 3. **Implement the transform for straight-line `await`** — emit MC that matches the fixtures. **DONE**
    (incl. LAZY per-state child construction, so a later await may read an earlier await's result).
-4. **Add branches** (`if`/`else` with `await` on one side). *(pending)*
-5. **Add loops** (preserve index/condition across suspension). *(pending)*
+4. **Add branches** (`if`/`else` with `await` on one side). **DONE** — each arm a state range
+   joining a common continuation; spec `fuzz_async_branch_lowering.mc`, gate `fuzz-async-syntax`.
+5. **Add loops** (preserve index/condition across suspension). **DONE** — poll wrapped in
+   `while true` for the back-edge; spec `fuzz_async_loop_lowering.mc`. v0 loop scope: one `while`,
+   body = leading await-run + straight-line, no break/continue/return-in-body, no loop+branch mix.
 6. **Add cancellation / resource cleanup** (`cancel`/drop walking child futures + broker
    `async_cancel(id)`). **DONE.**
 7. **Only then add the parser sugar** (`async fn` / `await` keywords). **DONE** (contextual
    `async`/`await`, applied alongside step 3).
+
+Follow-ups beyond the 7 build-order steps, all **DONE**: kernel vectored drain `async_poll_many`
+(`async-pollmany-test`); `#[irq_context]` enforcement on the `async_complete` wake chain (sentinel
+`endpoint_slot_or` replaces the non-irq-safe `Result` lookup); UFCS on generated futures
+(`f__Fut.poll(&x)` → `f__Fut__poll`); and the backend-parity fix below.
 
 ### Acceptance gates (each both-backend, matching the hand-written state machine)
 
@@ -227,10 +238,12 @@ are proven IRQ-safe — not worth supporting initially; treat generated futures 
 - a value moved-after-`await` is **rejected**; a reference spanning an `await` is rejected (or proven);
 - C and LLVM generated code match the hand-written fixtures.
 
-## Backend follow-up found while building Phase A
+## Backend follow-up found while building Phase A — RESOLVED
 
-The LLVM backend does not yet lower a **`*dyn` dispatch call used directly as an `if`-condition
-whose body terminates** (`if self.inner.poll() { return ... }`) — the C backend does. The
-parity-clean form is to hoist the dispatch result into a local first (`let r = self.inner.poll();
-if r { ... }`), which `std/task.mc` does. Worth fixing in the LLVM `if`/switch lowering so the
-hoist isn't required.
+A **`*dyn` dispatch call used directly as an `if`-condition whose body terminates**
+(`if self.inner.poll() { return ... }`) now lowers cleanly on BOTH backends; the hoist workaround
+in `std/task.mc` (Race2/Timeout) is removed. Root cause on both sides was that the dispatch call's
+return type was not resolved, so the if/switch SUBJECT could not be typed: LLVM `callReturnType`
+returned null → `emitScalarSwitch` bailed (`UnsupportedLlvmEmission`); C `callReturnTypeForExpr`
+returned null → the bool subject was not cast to `(int)` → clang `-Wswitch-bool` under `-Werror`.
+Both now resolve the trait method's return type. Gate: `fuzz-dyn-ifcond-test` (both backends).
