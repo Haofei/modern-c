@@ -72,16 +72,31 @@ with *external* linkage, so two objects that each inline a shared non-export hel
 linkage for non-`export` functions (the analogue of the C backend's `static`) — MC inlines imports
 per-object, so per-object copies are correct. This also fixed the pre-existing `llvm-ipc-test`.
 
-## Phase C — IRQ-backed completion (production-readiness milestone)
+## Phase C — IRQ-backed completion (DONE — production-readiness milestone)
 
-A virtio-blk/net interrupt completes the inflight op and wakes the awaiting task — no steady-state
-polling. Unblocked by the `#[align]`/naked-vector fix (the former "C-backend async-IRQ reset").
-Two requirements, both absent in Phase B:
-1. The IRQ wake path stays **IRQ-safe**: no heap, no blocking, no dynamic dispatch — the ISR only
-   claims/completes and marks/defers a wake (`async_complete` already meets this).
-2. `async_await` adds an **IRQ-off critical section** that enqueues the waiter on the slot's wait
-   queue and THEN re-checks `ready` (waking itself if the completion already landed), closing the
-   check-then-park lost-wake window that a preemptive ISR completion would otherwise open.
+A real interrupt completes the in-flight op and wakes the awaiting task — no steady-state polling.
+Both requirements that were absent in Phase B are now in place:
+
+1. `async_await_irq(b, t, id, irq_off, irq_on)` — the IRQ-safe await. It brackets the readiness
+   check and the enqueue-and-park (`wq_prepare_wait`, split out of `wq_wait`) in an **interrupts-off
+   critical section**, so a completion delivered from an ISR cannot land in the check-then-park
+   window: by the time interrupts are re-enabled the task is already done, or enqueued+parked and
+   reachable by the wake. `irq_off`/`irq_on` are injected (the riscv platform passes
+   `disable_interrupts_global`/`enable_interrupts_global`) so `kernel/lib/async.mc` stays
+   arch-neutral.
+2. The ISR wake path stays IRQ-safe — `async_complete` only marks the slot and `wq_wake_one`
+   (`proc_unblock`, an atomic bit-clear). No heap, no blocking, no dynamic dispatch.
+
+Gate: `async-irq-test` / `llvm-async-irq-test` (both backends, in m0). A single task submits a
+request, arms a **single-shot M-mode CLINT timer**, and `async_await_irq` PARKS it in `wfi`. The
+timer fires; the M-mode trap vector (a `#[naked]` full-frame handler, 4-byte aligned by the
+`#[align]`/naked default — the fix that unblocked this whole interrupt path) disarms the timer and
+calls `async_complete` from interrupt context, waking the task. Trace `W I R` (await / completion
+in ISR / resume) + `ASYNC-IRQ-OK` (result 42). This is the production shape: a task sleeps until a
+device/timer interrupt resumes it.
+
+The same wiring generalizes to a virtio-blk/net completion interrupt — the ISR calls
+`async_complete(id, result)` for the finished op instead of a timer; the await side is identical.
 
 ## Phase D — Optional syntax
 

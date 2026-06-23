@@ -24,14 +24,27 @@ export fn wq_len(q: *mut WaitQueue) -> usize {
     return ring_len(Endpoint, WQ_MAX, &q.waiters);
 }
 
-// Block the current process on this queue: record its endpoint, park it (non-runnable), and
-// yield. It resumes after a waker validates its endpoint and wakes it.
-export fn wq_wait(q: *mut WaitQueue, t: *mut ProcTable) -> void {
+// Enqueue the current process on this queue and mark it parked (non-runnable), WITHOUT
+// yielding. Returns true if it was enqueued (and thus reachable by a waker). Splitting the
+// enqueue+park from the yield lets a caller bracket the enqueue with an interrupts-off critical
+// section so a wake delivered from interrupt context between "decide to wait" and "park" cannot
+// be lost: once enqueued+parked here (interrupts off), a later `wq_wake_one` will find and
+// unblock this process. The caller then re-enables interrupts and yields. A full queue returns
+// false (no waker could find us) — do NOT yield in that case; re-check the condition instead.
+export fn wq_prepare_wait(q: *mut WaitQueue, t: *mut ProcTable) -> bool {
     let me: Endpoint = proc_self_endpoint(t);
-    // Only block if we were actually recorded as a waiter; a full queue means no waker can
-    // find us, so returning (the caller re-checks) is safer than parking unreachably.
     if ring_push(Endpoint, WQ_MAX, &q.waiters, me) {
         proc_park(t);
+        return true;
+    }
+    return false;
+}
+
+// Block the current process on this queue: record its endpoint, park it (non-runnable), and
+// yield. It resumes after a waker validates its endpoint and wakes it. (The cooperative form;
+// for completions delivered from interrupt context use wq_prepare_wait under an irq-off section.)
+export fn wq_wait(q: *mut WaitQueue, t: *mut ProcTable) -> void {
+    if wq_prepare_wait(q, t) {
         proc_yield_or_idle(t);
     }
 }

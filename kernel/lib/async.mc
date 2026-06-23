@@ -123,6 +123,41 @@ export fn async_await(b: *mut AsyncBroker, t: *mut ProcTable, id: u64) -> i32 {
     return result;
 }
 
+// Phase C: IRQ-SAFE await for completions delivered from INTERRUPT context. `irq_off`/`irq_on`
+// are the arch's interrupt disable/enable (injected so this module stays arch-neutral — the
+// riscv platform passes disable/enable_interrupts_global). The readiness check and the
+// enqueue-and-park run with interrupts OFF, closing the lost-wake window: an `async_complete`
+// from an ISR cannot land between "saw not-ready" and "parked". By the time interrupts are
+// re-enabled, this task is either already done, or enqueued+parked and reachable by the wake —
+// so it then yields/`wfi` (interrupts now on) and the completing interrupt resumes it.
+// Single-consumer, same as async_await.
+export fn async_await_irq(b: *mut AsyncBroker, t: *mut ProcTable, id: u64, irq_off: fn() -> void, irq_on: fn() -> void) -> i32 {
+    var done: bool = false;
+    var result: i32 = 0;
+    while !done {
+        (irq_off)();
+        let s: usize = find_slot(b, id);
+        if s >= MAX_INFLIGHT {
+            (irq_on)();
+            return 0;
+        }
+        if b.slots[s].ready {
+            result = b.slots[s].result;
+            b.slots[s].active = false;
+            (irq_on)();
+            done = true;
+        } else {
+            // Enqueue + park with interrupts still OFF, so a completion cannot be lost.
+            let parked: bool = wq_prepare_wait(&b.slots[s].waiter, t);
+            (irq_on)();
+            if parked {
+                proc_yield_or_idle(t);   // sleep until the ISR completes us (interrupts now on)
+            }
+        }
+    }
+    return result;
+}
+
 // Mark request `id` complete with `result` and wake its (single) awaiter. Returns false if `id`
 // is not an active in-flight request. `wq_wake_one` matches the single-consumer contract above
 // (the awaiter consumes+frees the slot, so a broadcast would leave later wakers with no result).

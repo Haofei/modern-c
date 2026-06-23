@@ -2244,6 +2244,22 @@ pub fn build(b: *std.Build) void {
     const llvm_async_test_step = b.step("llvm-async-test", "LLVM-lowered async park/wake completion broker under QEMU");
     llvm_async_test_step.dependOn(&llvm_async_test_cmd.step);
 
+    // async-irq-test (async/await Phase C): a real M-mode TIMER interrupt completes an in-flight
+    // request and wakes a task parked in async_await_irq (irq-off wait-prepare closes the
+    // lost-wake window). The production shape: a task sleeps in wfi until an interrupt resumes it.
+    const async_irq_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-irq-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_async_irq_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-irq-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    async_irq_test_cmd.step.dependOn(b.getInstallStep());
+    const async_irq_test_step = b.step("async-irq-test", "async Phase C: a real timer interrupt completes an async request and wakes the parked task (IRQ-backed completion)");
+    async_irq_test_step.dependOn(&async_irq_test_cmd.step);
+    llvm_async_irq_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_async_irq_test_step = b.step("llvm-async-irq-test", "LLVM-lowered IRQ-backed async completion under QEMU");
+    llvm_async_irq_test_step.dependOn(&llvm_async_irq_test_cmd.step);
+
     const cap_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/cap-test.sh",
@@ -3758,6 +3774,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_ipc2_test_cmd.step);
     m0_step.dependOn(&llvm_ipc_test_cmd.step);
     m0_step.dependOn(&llvm_async_test_cmd.step);
+    m0_step.dependOn(&llvm_async_irq_test_cmd.step);
     m0_step.dependOn(&llvm_usched_test_cmd.step);
     m0_step.dependOn(&llvm_heartbeat_test_cmd.step);
     m0_step.dependOn(&llvm_privilege_test_cmd.step);
@@ -4067,6 +4084,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&grant_test_cmd.step);
     m0_step.dependOn(&ipc_test_cmd.step);
     m0_step.dependOn(&async_test_cmd.step);
+    m0_step.dependOn(&async_irq_test_cmd.step);
     m0_step.dependOn(&block_server_test_cmd.step);
     m0_step.dependOn(&fs_server_test_cmd.step);
     m0_step.dependOn(&net_server_test_cmd.step);
