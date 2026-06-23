@@ -51,14 +51,20 @@ on the proven `wq_wait`/`wq_wake_all` + `proc_park`/`proc_unblock` primitives:
 - `async_submit(b) -> id` — reserve a slot, monotonic id, or `ASYNC_NO_ID` if the `MAX_INFLIGHT`
   quota is full.
 - `async_await(b, t, id) -> result` — PARK the current task (`wq_wait`) until the slot is ready;
-  yields to the next runnable task or `wfi`, re-checks on wake. No busy-spin.
-- `async_complete(b, t, id, result)` — mark ready + `wq_wake_all` (Phase C calls this from an ISR).
+  yields to the next runnable task or `wfi`, re-checks on wake. No busy-spin. **Single-consumer**
+  (exactly one task awaits a given id — the submitter); it consumes and frees the slot.
+- `async_complete(b, t, id, result)` — mark ready + `wq_wake_one` (matches single-consumer).
 - `async_slot_ready(b, id)` — readiness predicate to inject into `std/task.mc`'s `SlotFuture`.
 
 Stackful: one kernel/user stack per parked task, quota-bound by `MAX_INFLIGHT`. Gate: `async-test`
 / `llvm-async-test` (both backends, in m0) — two cooperative processes; a waiter parks on submitted
 requests, a completer wakes it (out-of-order, one already-ready), `WCR` + `ASYNC-OK` (result 42).
 The kernel-side `poll_many` (vectored drain over the inflight table) is a follow-up here.
+
+**Scope: cooperative only.** `async_complete` is invoked from another *task*, so `async_await`'s
+check-then-park is race-free (control only yields at `wq_wait`). It is NOT yet safe against a
+completion from interrupt context — that is Phase C (see below), which must add the IRQ-off
+wait-prepare. Do not wire `async_complete` to an ISR against this unchanged code.
 
 **Backend parity fix made for this phase:** the LLVM backend emitted non-`export` module functions
 with *external* linkage, so two objects that each inline a shared non-export helper (e.g.
@@ -70,8 +76,12 @@ per-object, so per-object copies are correct. This also fixed the pre-existing `
 
 A virtio-blk/net interrupt completes the inflight op and wakes the awaiting task — no steady-state
 polling. Unblocked by the `#[align]`/naked-vector fix (the former "C-backend async-IRQ reset").
-The IRQ wake path must stay **IRQ-safe**: no heap, no blocking, no dynamic dispatch — the ISR only
-claims/completes and marks/defers a wake.
+Two requirements, both absent in Phase B:
+1. The IRQ wake path stays **IRQ-safe**: no heap, no blocking, no dynamic dispatch — the ISR only
+   claims/completes and marks/defers a wake (`async_complete` already meets this).
+2. `async_await` adds an **IRQ-off critical section** that enqueues the waiter on the slot's wait
+   queue and THEN re-checks `ready` (waking itself if the completion already landed), closing the
+   check-then-park lost-wake window that a preemptive ISR completion would otherwise open.
 
 ## Phase D — Optional syntax
 

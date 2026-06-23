@@ -10,9 +10,15 @@
 // is fixed-size and STACKFUL by nature (each parked task holds its own kernel/user stack), so
 // concurrency is quota-bound by MAX_INFLIGHT.
 //
-// Phase C will drive `async_complete` from a device interrupt (virtio-blk/net) instead of a
-// cooperative completer; the IRQ wake path must stay IRQ-safe (no heap, no blocking, no
-// dynamic dispatch) — it only marks the slot ready and wakes.
+// SCOPE: Phase B is COOPERATIVE ONLY. `async_complete` is called from another TASK, not from
+// an interrupt, so `async_await`'s check-then-park is race-free (control only yields AT
+// `wq_wait`). Driving `async_complete` from a device interrupt (virtio-blk/net) is Phase C, and
+// it requires TWO things this module does not yet have: (1) the IRQ wake path must stay IRQ-safe
+// (no heap, no blocking, no dynamic dispatch — `async_complete` already only marks state and
+// wakes one waiter), and (2) `async_await` must add an IRQ-off critical section that enqueues
+// the waiter THEN re-checks `ready`, or a completion arriving between the check and the enqueue
+// would be a LOST WAKE (the waiter parks on a slot that is already ready). See the contract on
+// `async_await`. Do NOT wire `async_complete` to an ISR until that is in place.
 
 import "kernel/lib/waitqueue.mc";
 import "kernel/core/process.mc";
@@ -82,9 +88,21 @@ export fn async_submit(b: *mut AsyncBroker) -> u64 {
     return ASYNC_NO_ID;
 }
 
-// Park the current task until request `id` completes; return its result and free the slot.
-// While not ready, `wq_wait` blocks the task (proc_park) and yields to the next runnable task
-// or `wfi` — so this does NOT busy-spin. Re-checks readiness on each wake (spurious-wake safe).
+// Park the current (single) awaiter of request `id` until it completes; return its result and
+// free the slot. While not ready, `wq_wait` blocks the task (proc_park) and yields to the next
+// runnable task or `wfi` — so this does NOT busy-spin. Re-checks readiness on each wake.
+//
+// CONCURRENCY CONTRACT (Phase B = COOPERATIVE ONLY):
+//   - Single-consumer: exactly ONE task awaits a given `id` (the one that submitted it). A slot
+//     is consumed and freed by its awaiter, so a second awaiter of the same `id` is undefined —
+//     do not share an id across tasks.
+//   - This function is NOT yet safe against a completion delivered from INTERRUPT context. The
+//     `ready` check and the `wq_wait` enqueue are two steps; a preemptive `async_complete`
+//     (Phase C, from an ISR) landing between them would wake an empty queue and the waiter would
+//     park forever (a lost wake). In cooperative Phase B this cannot happen — control only leaves
+//     this task AT `wq_wait`, so nothing runs between the check and the enqueue. Phase C MUST add
+//     an IRQ-off critical section that enqueues the waiter THEN re-checks `ready` (waking
+//     itself if the completion already arrived) before `async_complete` is wired to an interrupt.
 export fn async_await(b: *mut AsyncBroker, t: *mut ProcTable, id: u64) -> i32 {
     var done: bool = false;
     var result: i32 = 0;
@@ -105,8 +123,13 @@ export fn async_await(b: *mut AsyncBroker, t: *mut ProcTable, id: u64) -> i32 {
     return result;
 }
 
-// Mark request `id` complete with `result` and wake every task parked on it. Returns false if
-// `id` is not an active in-flight request. Phase C calls this from an interrupt handler.
+// Mark request `id` complete with `result` and wake its (single) awaiter. Returns false if `id`
+// is not an active in-flight request. `wq_wake_one` matches the single-consumer contract above
+// (the awaiter consumes+frees the slot, so a broadcast would leave later wakers with no result).
+//
+// Phase C will call this from an interrupt handler; that path must stay IRQ-safe (no heap, no
+// blocking, no dynamic dispatch — this function already only marks state and wakes) AND requires
+// the IRQ-off wait-prepare in `async_await` noted above to avoid a lost wake.
 export fn async_complete(b: *mut AsyncBroker, t: *mut ProcTable, id: u64, result: i32) -> bool {
     let s: usize = find_slot(b, id);
     if s >= MAX_INFLIGHT {
@@ -114,7 +137,7 @@ export fn async_complete(b: *mut AsyncBroker, t: *mut ProcTable, id: u64, result
     }
     b.slots[s].ready = true;
     b.slots[s].result = result;
-    wq_wake_all(&b.slots[s].waiter, t);
+    let _woke: bool = wq_wake_one(&b.slots[s].waiter, t);
     return true;
 }
 
