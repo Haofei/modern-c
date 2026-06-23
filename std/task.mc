@@ -113,15 +113,13 @@ export fn race2_winner(r: *Race2) -> i32 {
 
 impl Future for Race2 {
     fn poll(self: *mut Race2) -> bool {
-        // The `*dyn` poll result is hoisted into a local before the `if`: the LLVM backend
-        // does not yet lower a dynamic-dispatch call used DIRECTLY as an if-condition whose
-        // body terminates (`if self.a.poll() { return ... }`) — the C backend does. Hoisting
-        // is the parity-clean form (tracked as an LLVM-backend follow-up).
+        // A `*dyn` dispatch call used DIRECTLY as an if-condition whose body terminates now lowers
+        // on BOTH backends (the LLVM backend previously needed the result hoisted into a local; that
+        // gap is fixed — callReturnType resolves a dispatch call's type, so the if/switch subject
+        // lowers). No hoist needed.
         if self.winner >= 0 { return true; }
-        let ra: bool = self.a.poll();
-        if ra { self.winner = 0; return true; }
-        let rb: bool = self.b.poll();
-        if rb { self.winner = 1; return true; }
+        if self.a.poll() { self.winner = 0; return true; }
+        if self.b.poll() { self.winner = 1; return true; }
         return false;
     }
 }
@@ -151,9 +149,8 @@ export fn timeout_timed_out(t: *Timeout) -> bool {
 impl Future for Timeout {
     fn poll(self: *mut Timeout) -> bool {
         if self.done { return true; }
-        // hoist the `*dyn` poll result (see the note in Race2::poll — LLVM-backend parity).
-        let ri: bool = self.inner.poll();
-        if ri {
+        // direct `*dyn` dispatch as the if-condition — lowers on both backends (see Race2::poll).
+        if self.inner.poll() {
             self.done = true;
             return true;
         }

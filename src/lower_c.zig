@@ -3106,6 +3106,15 @@ const CEmitter = struct {
         };
     }
 
+    // The method name of a `d.method` dispatch callee (`d.method` -> "method"), through `grouped`.
+    fn dynCalleeMethodName(callee: ast.Expr) ?[]const u8 {
+        return switch (callee.kind) {
+            .member => |m| m.name.text,
+            .grouped => |inner| dynCalleeMethodName(inner.*),
+            else => null,
+        };
+    }
+
     // `d.method(args)` -> `({ mc_dyn_T t = d; t.vtable->method(t.data, args); })`.
     // The `d` value is spilled to a temp so its `.data`/`.vtable` are read once.
     fn emitDynDispatch(self: *CEmitter, node: anytype, trait_name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) !void {
@@ -10640,6 +10649,18 @@ const CEmitter = struct {
                 if (self.rawManyOffsetReturnTypeForCall(node, locals)) |ty| break :blk ty;
                 if (byteViewCallReturnTypeForCall(node)) |ty| break :blk ty;
                 if (self.atomicLoadReturnTypeForCall(node, locals)) |ty| break :blk ty;
+                // Tier 2 dynamic dispatch `d.method(args)`: the return type is the trait method's.
+                // Without this, a dispatch call used as a `switch`/`if` subject is not recognized as
+                // bool, so the subject is not cast to int and clang flags -Wswitch-bool (parity with
+                // the LLVM-backend fix in callReturnType — std/task.mc Race2/Timeout rely on this).
+                if (self.dynCalleeTrait(node.callee.*, locals)) |trait_name| {
+                    const trait = self.trait_decls.get(trait_name) orelse break :blk null;
+                    const mname = dynCalleeMethodName(node.callee.*) orelse break :blk null;
+                    for (trait.methods) |m| {
+                        if (std.mem.eql(u8, m.name.text, mname)) break :blk m.return_type;
+                    }
+                    break :blk null;
+                }
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
                 break :blk info.return_type;

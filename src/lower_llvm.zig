@@ -5084,6 +5084,22 @@ const LlvmEmitter = struct {
 
     fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
         if (reflectionCallKind(call.callee.*) != null) return simpleType(call.callee.*.span, "usize");
+        // Tier 2 dynamic dispatch `d.method(args)` through a `*dyn Trait`: the return type is the
+        // trait method's declared return type. Without this, exprType() is null for a dispatch call,
+        // so a dispatch used directly as a switch/if subject (`if self.inner.poll() { ... }`) fell
+        // through to the unsupported path — the C backend handled it, the LLVM backend did not.
+        if (self.dynDispatchTrait(call.callee.*)) |trait| {
+            const mname = switch (call.callee.*.kind) {
+                .member => |m| m.name.text,
+                .grouped => |inner| switch (inner.*.kind) {
+                    .member => |m| m.name.text,
+                    else => return null,
+                },
+                else => return null,
+            };
+            const slot = traitMethodIndex(trait, mname) orelse return null;
+            return trait.methods[slot].return_type orelse simpleType(call.callee.*.span, "void");
+        }
         if (self.constGetCallInfo(call)) |info| return info.element_ty;
         if (bitcastTargetType(call)) |ty| return ty;
         if (builtinCallReturnType(call)) |ty| return ty;
