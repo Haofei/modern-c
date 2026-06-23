@@ -3372,6 +3372,14 @@ Blocking lives in exactly one place: the *driver* of the top-level future — th
 executor `run_to_completion`, or the kernel park/wake driver `async_await_irq`. `await` outside an
 `async fn` is `E_AWAIT_OUTSIDE_ASYNC`.
 
+**Try-await.** When the awaited value is a `Result<U, E>`, `let x = (await e)?;` applies the
+error-propagation operator (section 21) to the awaited result: on `ok(v)` it binds `v` (of type
+`U`) and continues; on `err(_)` it **completes the future early** with that error. The enclosing
+`async fn` must itself return `Result<_, E>`. This is the async form of `?` — short-circuiting an
+`async fn` on the first failed step (`let token = (await login())?; let data = (await
+fetch(token))?;`). The parentheses are required (`?` binds tighter than the `await` prefix).
+`(await e)? else MAPPED` (error remap) is reserved.
+
 ## 33.3 Lowering (informative)
 
 `async fn f(p) -> T` generates: `struct f__Fut { state: u8, /* one child-future field per await */,

@@ -249,7 +249,13 @@ are proven IRQ-safe — not worth supporting initially; treat generated futures 
 Follow-ups beyond the 7 build-order steps, all **DONE**: kernel vectored drain `async_poll_many`
 (`async-pollmany-test`); `#[irq_context]` enforcement on the `async_complete` wake chain (sentinel
 `endpoint_slot_or` replaces the non-irq-safe `Result` lookup); UFCS on generated futures
-(`f__Fut.poll(&x)` → `f__Fut__poll`); and the backend-parity fix below.
+(`f__Fut.poll(&x)` → `f__Fut__poll`); interior-borrow-across-await soundness
+(`E_ASYNC_BORROW_ACROSS_AWAIT`); the backend-parity fix below; **broker integration** (`ReqFut`
+leaf + `drive_irq` executor + `async-future-test`); **select/cancel-the-loser** (`ReqRace2` +
+`async-select-test`, `MAX_INFLIGHT → 0`); the **capstone agent demo** (`async-agent-test`: an agent
+in real async/await resolving tool calls over the broker + timing one out); and **try-await**
+(`let x = (await e)?;` Result-propagation, `fuzz-async-try-test`). Spec: §33 of
+`docs/spec/MC_0.7_Final_Design.md`.
 
 ### Acceptance gates (each both-backend, matching the hand-written state machine)
 
