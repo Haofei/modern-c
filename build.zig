@@ -2310,6 +2310,22 @@ pub fn build(b: *std.Build) void {
     const llvm_async_future_test_step = b.step("llvm-async-future-test", "LLVM-lowered broker-backed async fn under QEMU");
     llvm_async_future_test_step.dependOn(&llvm_async_future_test_cmd.step);
 
+    // async-select-test: select / cancel-the-loser over the real broker. Two in-flight requests are
+    // raced (ReqRace2); a timer ISR completes the winner; the race cancels the loser and the active
+    // slot count returns to 0 — the MAX_INFLIGHT-returns-to-zero acceptance. WR + ASYNC-SELECT-OK.
+    const async_select_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-select-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_async_select_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-select-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    async_select_test_cmd.step.dependOn(b.getInstallStep());
+    const async_select_test_step = b.step("async-select-test", "broker-backed select: race two requests, cancel the loser, active slots return to 0");
+    async_select_test_step.dependOn(&async_select_test_cmd.step);
+    llvm_async_select_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_async_select_test_step = b.step("llvm-async-select-test", "LLVM-lowered broker-backed select / cancel-the-loser under QEMU");
+    llvm_async_select_test_step.dependOn(&llvm_async_select_test_cmd.step);
+
     const cap_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/cap-test.sh",
@@ -3828,6 +3844,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_async_cancel_test_cmd.step);
     m0_step.dependOn(&llvm_async_pollmany_test_cmd.step);
     m0_step.dependOn(&llvm_async_future_test_cmd.step);
+    m0_step.dependOn(&llvm_async_select_test_cmd.step);
     m0_step.dependOn(&llvm_usched_test_cmd.step);
     m0_step.dependOn(&llvm_heartbeat_test_cmd.step);
     m0_step.dependOn(&llvm_privilege_test_cmd.step);
@@ -4141,6 +4158,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&async_cancel_test_cmd.step);
     m0_step.dependOn(&async_pollmany_test_cmd.step);
     m0_step.dependOn(&async_future_test_cmd.step);
+    m0_step.dependOn(&async_select_test_cmd.step);
     m0_step.dependOn(&block_server_test_cmd.step);
     m0_step.dependOn(&fs_server_test_cmd.step);
     m0_step.dependOn(&net_server_test_cmd.step);

@@ -67,6 +67,59 @@ export fn ReqFut_cancel(self: *mut ReqFut) -> void {
     }
 }
 
+// ---- select / timeout cleanup built on cancellation ----------------------------------------
+// `ReqRace2` races two in-flight broker requests: it completes when EITHER finishes and CANCELS
+// the loser (`ReqFut_cancel` -> `async_cancel_slot`), so the loser's MAX_INFLIGHT slot is
+// reclaimed rather than leaked. `winner` records which finished first (0 = a, 1 = b; -1 while
+// undecided). This is the cancellation-dependent primitive an agent needs to race two tool calls
+// (or to time one out: race the operation against a deadline request — whichever loses is
+// cancelled). Concrete over `ReqFut` (not `*mut dyn Future`): cancelling a type-erased loser needs
+// `cancel` in the `Future` vtable, a trait-ABI change tracked as a follow-up (docs/async-plan.md).
+struct ReqRace2 {
+    a: *mut ReqFut,
+    b: *mut ReqFut,
+    winner: i32,
+}
+
+export fn req_race2_init(r: *mut ReqRace2, a: *mut ReqFut, b: *mut ReqFut) -> void {
+    r.a = a;
+    r.b = b;
+    r.winner = -1;
+}
+
+impl Future for ReqRace2 {
+    fn poll(self: *mut ReqRace2) -> bool {
+        if self.winner >= 0 {
+            return true;
+        }
+        let ra: bool = ReqFut.poll(self.a);
+        if ra {
+            self.winner = 0;
+            ReqFut_cancel(self.b);   // cancel the loser -> free its slot
+            return true;
+        }
+        let rb: bool = ReqFut.poll(self.b);
+        if rb {
+            self.winner = 1;
+            ReqFut_cancel(self.a);
+            return true;
+        }
+        return false;
+    }
+}
+
+export fn req_race2_winner(r: *mut ReqRace2) -> i32 {
+    return r.winner;
+}
+
+// The winner's result (valid after the race completes). Reads from whichever leaf won.
+export fn req_race2_result(r: *mut ReqRace2) -> i32 {
+    if r.winner == 0 {
+        return ReqFut_take_result(r.a);
+    }
+    return ReqFut_take_result(r.b);
+}
+
 // Drive a FUTURE to completion under IRQ-backed completion, sleeping in `wfi` until an interrupt
 // makes progress. This GENERALIZES `async_await_irq` from a single request id to an arbitrary
 // `Future` (which may hold any number of in-flight child requests): poll the future with interrupts

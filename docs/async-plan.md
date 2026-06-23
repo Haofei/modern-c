@@ -181,8 +181,21 @@ idempotent; a late completion on the canceled id is a no-op), `SlotFuture` carri
 `cancel`, and the transform GENERATES `f__Fut_cancel(self)` that walks the currently-active child
 future down to the in-flight leaf and frees it, then marks DONE (idempotent — no double-free).
 Because of LAZY construction at most one child is live at a time, so cancel only walks the current
-state's child. This unblocks `race`/`select` and timeout cleanup (still to be built on top), and
-removes the v0 "must run to completion or leak" limitation.
+state's child. This removes the v0 "must run to completion or leak" limitation.
+
+**Broker integration + select/cancel-the-loser — LANDED.** `kernel/lib/async_future.mc` connects
+the lowering to the real broker: `ReqFut` (a broker-backed `Future` leaf with the uniform
+`__poll`/`_take_result`/`_cancel` ABI over `async_submit`/`async_slot_ready`/`async_take`/
+`async_cancel_slot`), `drive_irq` (an IRQ-backed executor that generalizes `async_await_irq` from
+one id to an arbitrary `*dyn Future`), and `ReqRace2` (race two requests, cancel the loser).
+Gates: `async-future-test` (an `async fn`'s two awaits resolve against real timer-ISR completions)
+and `async-select-test` (race two in-flight requests, complete the winner, cancel the loser, prove
+`async_active_count` returns to 0) — both backends, in m0. **FOLLOW-UP**: `ReqRace2` is concrete
+over `ReqFut` because cancelling a TYPE-ERASED loser (`*mut dyn Future` in the existing `Race2`/
+`Timeout` combinators) needs `cancel` in the `Future` VTABLE. That is a trait-ABI change: MC has no
+default trait-method bodies (the parser rejects them), so it requires adding a `cancel` method to
+every `impl Future` (~20, hand + generated) — tracked, not yet done. Timeout is the same shape as
+race (race the operation against a deadline request; whichever loses is cancelled).
 
 **4. Ownership across `await` (the hard part — rules spelled out).** Capture analysis (which live
 locals become state fields) must integrate with MC's move/borrow checker:

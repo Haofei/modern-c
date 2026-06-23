@@ -304,6 +304,21 @@ export fn async_cancel_slot(b: *mut AsyncBroker, id: u64) -> bool {
     return true;
 }
 
+// How many inflight slots are currently reserved (active). A test/observability hook: after a
+// race cancels the loser and the winner is consumed, this must return to 0 — proof that no slot
+// leaked (the MAX_INFLIGHT-returns-to-zero acceptance for cancellation).
+export fn async_active_count(b: *mut AsyncBroker) -> usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while i < MAX_INFLIGHT {
+        if b.slots[i].active {
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
 // The id of some active, not-yet-ready in-flight request, or ASYNC_NO_ID if none. Lets a device/
 // timer ISR complete "the request currently in flight" without threading the id through a global.
 export fn async_first_active_unready(b: *mut AsyncBroker) -> u64 {
