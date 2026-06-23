@@ -2326,6 +2326,23 @@ pub fn build(b: *std.Build) void {
     const llvm_async_select_test_step = b.step("llvm-async-select-test", "LLVM-lowered broker-backed select / cancel-the-loser under QEMU");
     llvm_async_select_test_step.dependOn(&llvm_async_select_test_cmd.step);
 
+    // async-agent-test: the capstone — an agent in real async/await over the kernel broker.
+    // async-fn-awaiting-async-fn (agent -> tool_fetch/tool_read -> ReqFut) resolves two sequential
+    // tool calls (page+cfg==42), then TIMES OUT a slow tool call by racing it against a deadline
+    // (slow tool cancelled, inflight count back to 0). FRT + ASYNC-AGENT-OK.
+    const async_agent_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-agent-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_async_agent_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-agent-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    async_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const async_agent_test_step = b.step("async-agent-test", "capstone: an agent in real async/await resolves tool calls over the broker + times out a slow call");
+    async_agent_test_step.dependOn(&async_agent_test_cmd.step);
+    llvm_async_agent_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_async_agent_test_step = b.step("llvm-async-agent-test", "LLVM-lowered agent async/await over the broker under QEMU");
+    llvm_async_agent_test_step.dependOn(&llvm_async_agent_test_cmd.step);
+
     const cap_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/cap-test.sh",
@@ -3845,6 +3862,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_async_pollmany_test_cmd.step);
     m0_step.dependOn(&llvm_async_future_test_cmd.step);
     m0_step.dependOn(&llvm_async_select_test_cmd.step);
+    m0_step.dependOn(&llvm_async_agent_test_cmd.step);
     m0_step.dependOn(&llvm_usched_test_cmd.step);
     m0_step.dependOn(&llvm_heartbeat_test_cmd.step);
     m0_step.dependOn(&llvm_privilege_test_cmd.step);
@@ -4159,6 +4177,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&async_pollmany_test_cmd.step);
     m0_step.dependOn(&async_future_test_cmd.step);
     m0_step.dependOn(&async_select_test_cmd.step);
+    m0_step.dependOn(&async_agent_test_cmd.step);
     m0_step.dependOn(&block_server_test_cmd.step);
     m0_step.dependOn(&fs_server_test_cmd.step);
     m0_step.dependOn(&net_server_test_cmd.step);
