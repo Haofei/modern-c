@@ -2277,6 +2277,22 @@ pub fn build(b: *std.Build) void {
     const llvm_async_cancel_test_step = b.step("llvm-async-cancel-test", "LLVM-lowered async_cancel slot reclamation under QEMU");
     llvm_async_cancel_test_step.dependOn(&llvm_async_cancel_test_cmd.step);
 
+    // async-pollmany-test: the VECTORED DRAIN kernel/lib/async.mc `async_poll_many` — harvest many
+    // completed in-flight requests per wakeup over the inflight table (the kernel analogue of
+    // SYS_POLL(events, max)). Capped + re-enterable drain; pending requests never harvested. SD + OK.
+    const async_pollmany_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-pollmany-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_async_pollmany_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-pollmany-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    async_pollmany_test_cmd.step.dependOn(b.getInstallStep());
+    const async_pollmany_test_step = b.step("async-pollmany-test", "async vectored drain: async_poll_many harvests many completions per wakeup over the inflight table");
+    async_pollmany_test_step.dependOn(&async_pollmany_test_cmd.step);
+    llvm_async_pollmany_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_async_pollmany_test_step = b.step("llvm-async-pollmany-test", "LLVM-lowered async_poll_many vectored drain under QEMU");
+    llvm_async_pollmany_test_step.dependOn(&llvm_async_pollmany_test_cmd.step);
+
     const cap_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/cap-test.sh",
@@ -3793,6 +3809,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_async_test_cmd.step);
     m0_step.dependOn(&llvm_async_irq_test_cmd.step);
     m0_step.dependOn(&llvm_async_cancel_test_cmd.step);
+    m0_step.dependOn(&llvm_async_pollmany_test_cmd.step);
     m0_step.dependOn(&llvm_usched_test_cmd.step);
     m0_step.dependOn(&llvm_heartbeat_test_cmd.step);
     m0_step.dependOn(&llvm_privilege_test_cmd.step);
@@ -4104,6 +4121,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&async_test_cmd.step);
     m0_step.dependOn(&async_irq_test_cmd.step);
     m0_step.dependOn(&async_cancel_test_cmd.step);
+    m0_step.dependOn(&async_pollmany_test_cmd.step);
     m0_step.dependOn(&block_server_test_cmd.step);
     m0_step.dependOn(&fs_server_test_cmd.step);
     m0_step.dependOn(&net_server_test_cmd.step);

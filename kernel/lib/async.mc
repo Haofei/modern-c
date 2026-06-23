@@ -228,6 +228,50 @@ export fn async_cancel(b: *mut AsyncBroker, t: *mut ProcTable, id: u64) -> bool 
     return true;
 }
 
+// One harvested completion: the request id and its result. Filled by `async_poll_many`.
+struct AsyncEvent {
+    id: u64,
+    result: i32,
+}
+
+// A fixed-size drain buffer (bounded by MAX_INFLIGHT — at most that many can be in flight, so at
+// most that many completions exist at once). `count` is how many of `ev` are valid after a drain.
+const ASYNC_MAX_EVENTS: usize = MAX_INFLIGHT;
+struct AsyncEvents {
+    count: usize,
+    ev: [ASYNC_MAX_EVENTS]AsyncEvent,
+}
+
+// VECTORED drain: harvest up to `max` COMPLETED in-flight requests into `out.ev[0..]`, freeing each
+// drained slot, and return the count (also stored in `out.count`). One scheduler wakeup can collect
+// many completions in a single pass over the inflight table — the kernel-side analogue of the
+// broker's `SYS_POLL(events, max)` (the Phase-A note deferred this here: the drain iterates the
+// fixed, typed inflight table rather than doing `*dyn` fat-pointer arithmetic in pure std).
+//
+// This is the DRAIN-driven completion model: the caller owns dispatch of the harvested events. It
+// CONSUMES (frees) each ready slot, so do NOT also have a task parked in `async_await`/`_irq` on a
+// drained id (that is the park/wake model — pick one per id). A still-pending (not-ready) slot is
+// left untouched, so a later drain resumes where this one stopped (the `max` cap is re-enterable).
+export fn async_poll_many(b: *mut AsyncBroker, out: *mut AsyncEvents, max: usize) -> usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while i < MAX_INFLIGHT {
+        if n >= max {
+            out.count = n;
+            return n;
+        }
+        if b.slots[i].active && b.slots[i].ready {
+            out.ev[n].id = b.slots[i].id;
+            out.ev[n].result = b.slots[i].result;
+            b.slots[i].active = false;   // consume + free the slot
+            n = n + 1;
+        }
+        i = i + 1;
+    }
+    out.count = n;
+    return n;
+}
+
 // Readiness predicate for std/task.mc's `SlotFuture` (the Phase-A injection seam): true once
 // `id` has completed (or is unknown/already consumed). A `SlotFuture` whose `done` wraps this
 // (over a global or captured broker) composes with join2/race2/timeout — the executor's idle
