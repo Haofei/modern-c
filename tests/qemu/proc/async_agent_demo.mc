@@ -19,6 +19,7 @@ import "kernel/core/process.mc";
 import "kernel/arch/riscv64/csr.mc";
 
 extern fn putc_(c: u8) -> void;
+#[irq_context]
 extern fn mc_timer_arm_oneshot() -> void;
 
 global g_procs: ProcTable;
@@ -44,7 +45,9 @@ async fn agent(b: *mut AsyncBroker) -> i32 {
 }
 
 // Re-armed timer ISR: complete the in-flight request (22, then 20, then 7 for later phases) and
-// re-arm while anything is in flight. async_complete is IRQ-safe (spec §33.7).
+// re-arm while anything is in flight. async_complete is IRQ-safe (spec §33.7); marking the
+// handler #[irq_context] makes the whole completion path compiler-verified.
+#[irq_context]
 export fn agent_on_timer() -> void {
     let id: u64 = async_first_active_unready(&g_broker);
     if id != ASYNC_NO_ID {

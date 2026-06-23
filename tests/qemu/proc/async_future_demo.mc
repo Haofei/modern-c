@@ -16,6 +16,7 @@ import "kernel/core/process.mc";
 import "kernel/arch/riscv64/csr.mc";
 
 extern fn putc_(c: u8) -> void;
+#[irq_context]
 extern fn mc_timer_arm_oneshot() -> void;
 
 global g_procs: ProcTable;
@@ -32,7 +33,9 @@ async fn two(b: *mut AsyncBroker) -> i32 {
 
 // Timer ISR (invoked from the runtime trap vector). Complete whichever request is in flight with a
 // deterministic result (22 then 20) and RE-ARM for the next await; when nothing is in flight, do
-// not re-arm (the future is complete). async_complete is IRQ-safe (spec §33.7).
+// not re-arm (the future is complete). async_complete is IRQ-safe (spec §33.7); marking the
+// handler #[irq_context] makes the whole completion path compiler-verified.
+#[irq_context]
 export fn future_on_timer() -> void {
     let id: u64 = async_first_active_unready(&g_broker);
     if id != ASYNC_NO_ID {

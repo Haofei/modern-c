@@ -1607,6 +1607,15 @@ const coverage_exempt = [_][]const u8{
     // N.1 (editor tooling — formatter + language server) is exercised by `fmt-test` and
     // `lsp-test`, not by a semantic fixture.
     "J", "K", "L", "L.1", "L.2", "L.3", "M", "N", "N.1", "O",
+    // §33 async/await is a PRE-SEMA source transform (src/async_lower.zig, run in
+    // parseModuleOrReport). This harness's parseSpecModule only parses + monomorphizes, so it
+    // never applies that transform — `async fn`/`await` can't reach sema here, and the transform's
+    // own guardrail diagnostics (E_AWAIT_OUTSIDE_ASYNC, E_ASYNC_*) never fire in this path. The
+    // family is exercised by the host diff-backend fixtures (tests/c_emit/fuzz_async_* — lowering,
+    // cancel, branch, loop, ufcs, try, safe-borrow, plus bad/ reject fixtures, all on BOTH
+    // backends) and the 14 QEMU kernel gates (async{,-irq,-cancel,-pollmany,-future,-select,-agent}
+    // × C/LLVM), not by a tests/spec semantic fixture.
+    "33", "33.1", "33.2", "33.3", "33.4", "33.5", "33.6", "33.7", "33.8",
 };
 
 fn coverageIsAllDigits(s: []const u8) bool {

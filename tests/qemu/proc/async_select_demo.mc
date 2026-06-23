@@ -22,6 +22,8 @@ global g_broker: AsyncBroker;
 global g_completions: i32 = 0;
 
 // Single-shot timer ISR: complete the first in-flight request (the race winner) and do NOT re-arm.
+// async_complete is IRQ-safe (spec §33.7); #[irq_context] makes the completion path compiler-verified.
+#[irq_context]
 export fn select_on_timer() -> void {
     let id: u64 = async_first_active_unready(&g_broker);
     if id != ASYNC_NO_ID {

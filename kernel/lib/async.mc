@@ -321,6 +321,9 @@ export fn async_active_count(b: *mut AsyncBroker) -> usize {
 
 // The id of some active, not-yet-ready in-flight request, or ASYNC_NO_ID if none. Lets a device/
 // timer ISR complete "the request currently in flight" without threading the id through a global.
+// IRQ-safe: a bounded scan of field reads, no calls — runs on the ISR completion path alongside
+// `async_complete`, so it is #[irq_context] and the whole handler is compiler-verified.
+#[irq_context]
 export fn async_first_active_unready(b: *mut AsyncBroker) -> u64 {
     var i: usize = 0;
     while i < MAX_INFLIGHT {
