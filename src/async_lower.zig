@@ -137,6 +137,8 @@ const AwaitStep = struct {
     cancel: []const u8, // child `FutT_cancel`
     call: ast.Expr, // the awaited `g(args)` call (used to construct the child)
     result_type: ast.TypeExpr, // the child's result type (binding_type, or async fn's return type)
+    is_try: bool = false, // `let x = (await c)?;` — the awaited value is a Result; `?` propagates err
+    try_mapped: ?ast.Expr = null, // `(await c)? else MAPPED` — the remapped error to propagate
 };
 
 // A `while cond { body }` whose body CONTAINS awaits, split into the body's leading await-run +
@@ -553,17 +555,17 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // covers pre-await bindings, pre-branch locals, and BOTH arms' awaited bindings — every scalar
     // field the poll machine may read. (The real pre-branch local init is replayed at the dispatch.)
     for (steps.items) |s| {
-        if (s.binding) |b| try cbody.append(arena, assignStmt(try selfMember(arena, b), try zeroFor(low, s.result_type)));
+        if (s.binding) |b| try appendZeroInit(low, &cbody, b, s.result_type);
     }
     if (branch) |b| {
         for (pre_branch.items) |stmt| switch (stmt.kind) {
-            .let_decl, .var_decl => |ld| try cbody.append(arena, assignStmt(try selfMember(arena, ld.names[0].text), try zeroFor(low, ld.ty.?))),
+            .let_decl, .var_decl => |ld| try appendZeroInit(low, &cbody, ld.names[0].text, ld.ty.?),
             else => {},
         };
-        for (b.then_steps.items) |s| if (s.binding) |nm| try cbody.append(arena, assignStmt(try selfMember(arena, nm), try zeroFor(low, s.result_type)));
-        for (b.else_steps.items) |s| if (s.binding) |nm| try cbody.append(arena, assignStmt(try selfMember(arena, nm), try zeroFor(low, s.result_type)));
+        for (b.then_steps.items) |s| if (s.binding) |nm| try appendZeroInit(low, &cbody, nm, s.result_type);
+        for (b.else_steps.items) |s| if (s.binding) |nm| try appendZeroInit(low, &cbody, nm, s.result_type);
     }
-    try cbody.append(arena, assignStmt(try selfMember(arena, "result"), try zeroFor(low, result_type)));
+    try appendZeroInit(low, &cbody, "result", result_type);
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = identExpr("self") } });
 
     try checkNoSelfBorrow(low, fd, cbody.items);
@@ -644,7 +646,7 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // pre-branch straight-line + dispatch.
     for (steps.items, 0..) |s, i| {
         var blk: std.ArrayList(ast.Stmt) = .empty;
-        try emitPollAndTake(low, &blk, s);
+        try emitPollAndTake(low, &blk, s, done_str);
         if (i + 1 < P) {
             // LAZY: build the next pre-child now (it may reference an earlier await result).
             try emitBuildChild(low, &blk, steps.items[i + 1], bind_names);
@@ -674,8 +676,8 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // which lies BEYOND both arm ranges, so the sequential `if self.state==N` fall-through is sound:
     // the untaken arm's guards never match.
     if (branch) |b| {
-        try emitArm(low, &pbody, b.then_steps.items, b.then_tail.items, arm_base, cont_state, bind_names);
-        try emitArm(low, &pbody, b.else_steps.items, b.else_tail.items, arm_base + n_then, cont_state, bind_names);
+        try emitArm(low, &pbody, b.then_steps.items, b.then_tail.items, arm_base, cont_state, done_str, bind_names);
+        try emitArm(low, &pbody, b.else_steps.items, b.else_tail.items, arm_base + n_then, cont_state, done_str, bind_names);
     }
 
     // The continuation / tail. `return expr;` -> result-store + advance to DONE + `return true`. Other
@@ -883,8 +885,8 @@ fn lowerAsyncLoopFn(
     // captured reads to self.*.
     for (pre_loop.items) |stmt| try cbody.append(arena, try rewriteDeclToStore(low, stmt, bind_names));
     // Zero the body-awaited binding fields + result (definite-init for the move/borrow checker).
-    for (loopw.steps.items) |s| if (s.binding) |b| try cbody.append(arena, assignStmt(try selfMember(arena, b), try zeroFor(low, s.result_type)));
-    try cbody.append(arena, assignStmt(try selfMember(arena, "result"), try zeroFor(low, result_type)));
+    for (loopw.steps.items) |s| if (s.binding) |b| try appendZeroInit(low, &cbody, b, s.result_type);
+    try appendZeroInit(low, &cbody, "result", result_type);
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = identExpr("self") } });
     try checkNoSelfBorrow(low, fd, cbody.items);
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
@@ -920,7 +922,7 @@ fn lowerAsyncLoopFn(
     // states 1..B = LOOP BODY awaits.
     for (loopw.steps.items, 0..) |s, j| {
         var blk: std.ArrayList(ast.Stmt) = .empty;
-        try emitPollAndTake(low, &blk, s);
+        try emitPollAndTake(low, &blk, s, done_str);
         if (j + 1 < B) {
             try emitBuildChild(low, &blk, loopw.steps.items[j + 1], bind_names);
             try setState(low, &blk, j + 2); // states are 1-based: step j is state j+1
@@ -1083,6 +1085,16 @@ fn buildAwaitStep(low: *Lowerer, stmt: ast.Stmt, acall: ast.Expr, field_index: u
         return low.fail(stmt.span, "async v0: `let {s} = await <leaf>;` needs an explicit result type annotation `let {s}: T = await ...;`", .{ ld.names[0].text, ld.names[0].text });
     }
     const res_ty = ld.ty orelse child.result_type;
+    // `let x = (await c)?;` — the awaited value is a `Result`; `?` propagates its `err` up the async
+    // fn (which must itself return a `Result`) and binds the `ok` value to `x` (of type `res_ty`).
+    var is_try = false;
+    var try_mapped: ?ast.Expr = null;
+    if (ld.init) |ie| {
+        if (ie.kind == .try_expr and unwrapToAwaitCall(ie.kind.try_expr.operand.*) != null) {
+            is_try = true;
+            if (ie.kind.try_expr.mapped) |m| try_mapped = m.*;
+        }
+    }
     return .{
         .binding = ld.names[0].text,
         .binding_type = ld.ty,
@@ -1092,6 +1104,8 @@ fn buildAwaitStep(low: *Lowerer, stmt: ast.Stmt, acall: ast.Expr, field_index: u
         .cancel = child.cancel,
         .call = acall,
         .result_type = res_ty,
+        .is_try = is_try,
+        .try_mapped = try_mapped,
     };
 }
 
@@ -1126,6 +1140,18 @@ fn awaitStepCall(stmt: ast.Stmt) ?ast.Expr {
     const init_expr = ld.init orelse return null;
     return switch (init_expr.kind) {
         .await_expr => |inner| inner.*,
+        // `let x = (await c)?;` — a try-propagating await. The parens make a `grouped` node, so
+        // unwrap try -> grouped* -> await -> the call.
+        .try_expr => |t| unwrapToAwaitCall(t.operand.*),
+        else => null,
+    };
+}
+
+// Unwrap `grouped`/`await` layers to the awaited CALL: `(await g(x))` / `await g(x)` -> `g(x)`.
+fn unwrapToAwaitCall(e: ast.Expr) ?ast.Expr {
+    return switch (e.kind) {
+        .await_expr => |inner| inner.*,
+        .grouped => |inner| unwrapToAwaitCall(inner.*),
         else => null,
     };
 }
@@ -1192,7 +1218,11 @@ fn exprContainsAwait(e: ast.Expr) bool {
 // Emit the suspend-or-take prologue of an await step into `blk`:
 //   let r: bool = FutT__poll(&self.__cN);  if !r { return false; }
 //   self.<binding> = FutT_take_result(&self.__cN);   (or drop the result if no binding)
-fn emitPollAndTake(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), s: AwaitStep) Error!void {
+// For a TRY step (`let x = (await c)?;`) the awaited value is a `Result`; instead of a plain
+// assignment, match it: `ok(v)` binds `v` to the binding, `err(e)` propagates by completing the
+// future with that error (`self.result = err(e); self.state = done; return true;`). `done_str` is
+// the DONE-state index; the enclosing async fn must itself return a `Result` (sema enforces it).
+fn emitPollAndTake(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), s: AwaitStep, done_str: []const u8) Error!void {
     const arena = low.arena;
     const poll_fn = try std.fmt.allocPrint(arena, "{s}__poll", .{s.fut_type});
     var poll_args = try arena.alloc(ast.Expr, 1);
@@ -1206,6 +1236,36 @@ fn emitPollAndTake(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), s: AwaitStep) E
     var take_args = try arena.alloc(ast.Expr, 1);
     take_args[0] = try addrOf(arena, try selfMember(arena, s.child_field));
     const take_call = try callExpr(arena, s.take_result, take_args);
+
+    if (s.is_try) {
+        if (s.try_mapped != null) return low.fail(zspan, "async v0: `(await e)? else MAPPED` (error remap) is not supported in try-await; use plain `?`", .{});
+        // let __try = FutT_take_result(&self.__cN);   (a Result<U, E>; type inferred)
+        try blk.append(arena, .{ .span = zspan, .kind = .{ .let_decl = .{
+            .names = try dupIdents(arena, &.{"__try"}),
+            .ty = null,
+            .init = take_call,
+        } } });
+        // ok(__v) => { self.<binding> = __v; }
+        var ok_body: std.ArrayList(ast.Stmt) = .empty;
+        if (s.binding) |b| try ok_body.append(arena, assignStmt(try selfMember(arena, b), identExpr("__v")));
+        var ok_pats = try arena.alloc(ast.Pattern, 1);
+        ok_pats[0] = .{ .span = zspan, .kind = .{ .tag_bind = .{ .tag = id("ok"), .binding = id("__v") } } };
+        // err(__e) => { self.result = err(__e); self.state = done; return true; }
+        var err_body: std.ArrayList(ast.Stmt) = .empty;
+        var err_args = try arena.alloc(ast.Expr, 1);
+        err_args[0] = identExpr("__e");
+        try err_body.append(arena, assignStmt(try selfMember(arena, "result"), try callExpr(arena, "err", err_args)));
+        try err_body.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
+        try err_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } });
+        var err_pats = try arena.alloc(ast.Pattern, 1);
+        err_pats[0] = .{ .span = zspan, .kind = .{ .tag_bind = .{ .tag = id("err"), .binding = id("__e") } } };
+        var arms = try arena.alloc(ast.SwitchArm, 2);
+        arms[0] = .{ .patterns = ok_pats, .body = .{ .block = .{ .span = zspan, .items = try ok_body.toOwnedSlice(arena) } } };
+        arms[1] = .{ .patterns = err_pats, .body = .{ .block = .{ .span = zspan, .items = try err_body.toOwnedSlice(arena) } } };
+        try blk.append(arena, .{ .span = zspan, .kind = .{ .@"switch" = .{ .subject = identExpr("__try"), .arms = arms } } });
+        return;
+    }
+
     if (s.binding) |b| {
         try blk.append(arena, assignStmt(try selfMember(arena, b), take_call));
     } else {
@@ -1230,11 +1290,11 @@ fn setState(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), n: usize) Error!void {
 // Each block polls its child, suspends while pending, takes the result; the next child is built
 // lazily at the prior transition. After the LAST await, the arm's straight-line stmts run and state
 // advances to `cont_state`. (T==0 arms produce no blocks here — handled synchronously at dispatch.)
-fn emitArm(low: *Lowerer, pbody: *std.ArrayList(ast.Stmt), arm_steps: []const AwaitStep, arm_tail: []const ast.Stmt, entry: usize, cont_state: usize, names: *std.StringHashMap(void)) Error!void {
+fn emitArm(low: *Lowerer, pbody: *std.ArrayList(ast.Stmt), arm_steps: []const AwaitStep, arm_tail: []const ast.Stmt, entry: usize, cont_state: usize, done_str: []const u8, names: *std.StringHashMap(void)) Error!void {
     const arena = low.arena;
     for (arm_steps, 0..) |s, i| {
         var blk: std.ArrayList(ast.Stmt) = .empty;
-        try emitPollAndTake(low, &blk, s);
+        try emitPollAndTake(low, &blk, s, done_str);
         if (i + 1 < arm_steps.len) {
             try emitBuildChild(low, &blk, arm_steps[i + 1], names);
             try setState(low, &blk, entry + i + 1);
@@ -1404,15 +1464,29 @@ fn dupIdents(arena: std.mem.Allocator, names: []const []const u8) Error![]ast.Id
     return out;
 }
 
-// A definite-init zero for a captured field. v0 uses `0` for scalars; the move/borrow checker
-// only needs the field written before `return self`, and these fields are overwritten by the
-// poll state machine before they are read. Scalars cover the v0 fixture's `i32`/`u64`/`bool`.
-fn zeroFor(low: *Lowerer, ty: ast.TypeExpr) Error!ast.Expr {
+// A definite-init zero for a captured SCALAR field, or null for a non-scalar (a `Result`, struct,
+// pointer, …). The constructor zero-inits scalar fields only; non-scalar fields are left unwritten,
+// which is sound because (a) sema def-init tracks only scalar `uninit` vars, not aggregate fields,
+// and (b) the poll state machine overwrites a captured field before it is read. This lets an
+// `async fn` return a `Result<T, E>` (try-await): `self.result = 0` would be a type error, so it is
+// simply not emitted.
+fn zeroFor(low: *Lowerer, ty: ast.TypeExpr) Error!?ast.Expr {
     _ = low;
-    if (typeName(ty)) |tn| {
-        if (std.mem.eql(u8, tn, "bool")) return .{ .span = zspan, .kind = .{ .bool_literal = false } };
-    }
-    return intExpr("0");
+    const tn = typeName(ty) orelse return null; // non-nominal (Result, pointer, slice, …) -> skip
+    if (std.mem.eql(u8, tn, "bool")) return .{ .span = zspan, .kind = .{ .bool_literal = false } };
+    if (isScalarIntName(tn)) return intExpr("0");
+    return null; // a struct/aggregate nominal -> not def-init-tracked, skip
+}
+
+fn isScalarIntName(tn: []const u8) bool {
+    const names = [_][]const u8{ "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "usize", "isize", "char" };
+    for (names) |n| if (std.mem.eql(u8, tn, n)) return true;
+    return false;
+}
+
+// Append `self.<field> = <zero>;` only when the field type has a scalar zero (see zeroFor).
+fn appendZeroInit(low: *Lowerer, body: *std.ArrayList(ast.Stmt), field: []const u8, ty: ast.TypeExpr) Error!void {
+    if (try zeroFor(low, ty)) |z| try body.append(low.arena, assignStmt(try selfMember(low.arena, field), z));
 }
 
 // Rewrite bare-ident reads that name a captured field (param or awaited binding) to `self.<name>`.
