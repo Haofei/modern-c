@@ -50,22 +50,26 @@ export fn wq_wait(q: *mut WaitQueue, t: *mut ProcTable) -> void {
 }
 
 // Wake the oldest *live* waiter (FIFO), skipping any whose endpoint is now stale (the waiter
-// exited and its slot may have been reused). Returns false if no live waiter remained.
+// exited and its slot may have been reused). Returns false if no live waiter remained. Called
+// from an ISR via async_complete, so it stays non-blocking (ring + generation-check +
+// proc_unblock); it is not yet `#[irq_context]`-annotated only because `endpoint_slot` returns a
+// `Result` the MIR irq-context verifier rejects (see the note on async_complete).
 export fn wq_wake_one(q: *mut WaitQueue, t: *mut ProcTable) -> bool {
-    var scanning: bool = true;
-    while scanning {
+    // Bounded scan: the ring holds at most WQ_MAX waiters, so at most WQ_MAX pops drain it.
+    var i: usize = 0;
+    while i < WQ_MAX {
         if ring_is_empty(Endpoint, WQ_MAX, &q.waiters) {
-            scanning = false;
-        } else {
-            let ep: Endpoint = ring_pop(Endpoint, WQ_MAX, &q.waiters);
-            switch endpoint_slot(t, ep) {
-                ok(slot) => {
-                    proc_unblock(t, slot, BLOCK_RECV);
-                    return true;
-                }
-                err(e) => {} // stale endpoint: drop it and try the next waiter
-            }
+            return false;
         }
+        let ep: Endpoint = ring_pop(Endpoint, WQ_MAX, &q.waiters);
+        switch endpoint_slot(t, ep) {
+            ok(slot) => {
+                proc_unblock(t, slot, BLOCK_RECV);
+                return true;
+            }
+            err(e) => {} // stale endpoint: drop it and try the next waiter
+        }
+        i = i + 1;
     }
     return false;
 }

@@ -27,8 +27,10 @@ global g_broker: AsyncBroker;
 global g_pending_id: u64;
 
 // Called from the timer ISR (runtime trap_entry) in INTERRUPT context. Completes the pending
-// request and wakes the parked waiter. IRQ-safe: only marks slot state and proc_unblock — no
-// heap, no blocking, no dynamic dispatch.
+// request and wakes the parked waiter. The actual completion path — `async_complete` — is
+// marked `#[irq_context]`, so MC's checker ENFORCES its IRQ-safety (no sleepable/indirect
+// calls, bounded loops) rather than leaving it to inspection. This thin demo glue itself is
+// not annotated because it makes an opaque `extern` UART call (`putc_`) for the test trace.
 export fn async_on_timer() -> void {
     putc_(73); // 'I' — completion delivered from interrupt context
     let _ok: bool = async_complete(&g_broker, &g_procs, g_pending_id, 42);
@@ -43,10 +45,12 @@ export fn async_irq_demo(region_base: usize, region_len: usize) -> u32 {
     putc_(87); // 'W'
     mc_timer_arm_oneshot();      // one timer interrupt will complete g_pending_id
 
-    // PARK until the timer interrupt completes the request. The irq-off critical section makes
-    // this safe against the completion arriving from interrupt context.
+    // PARK until the timer interrupt completes the request. Interrupts stay off across the
+    // park and the wfi (wait_for_interrupt resumes on the pending timer even with the global
+    // enable cleared), so the completion can be neither lost nor idled-through.
     let r: i32 = async_await_irq(&g_broker, &g_procs, g_pending_id,
-                                 disable_interrupts_global, enable_interrupts_global);
+                                 disable_interrupts_global, enable_interrupts_global,
+                                 wait_for_interrupt);
     putc_(82); // 'R'
     return r as u32; // 42 iff the interrupt-delivered completion reached the parked waiter
 }

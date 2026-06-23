@@ -281,6 +281,14 @@ export fn proc_is_runnable_slot(t: *mut ProcTable, slot: usize) -> bool {
     return false;
 }
 
+// True if the CURRENT process is blocked (non-runnable). An interrupts-off wait loop polls
+// this to decide whether to keep idling: once a wake (e.g. from an ISR) clears the current
+// process's block reasons, it returns false so the loop stops idling and re-checks its
+// condition — closing the "wake delivered while about to idle" race.
+export fn proc_current_blocked(t: *mut ProcTable) -> bool {
+    return !proc_is_runnable_slot(t, t.current);
+}
+
 // Park the current process (generic block): non-runnable until woken.
 export fn proc_park(t: *mut ProcTable) -> void {
     proc_block(t, t.current, BLOCK_RECV);

@@ -77,15 +77,24 @@ per-object, so per-object copies are correct. This also fixed the pre-existing `
 A real interrupt completes the in-flight op and wakes the awaiting task — no steady-state polling.
 Both requirements that were absent in Phase B are now in place:
 
-1. `async_await_irq(b, t, id, irq_off, irq_on)` — the IRQ-safe await. It brackets the readiness
-   check and the enqueue-and-park (`wq_prepare_wait`, split out of `wq_wait`) in an **interrupts-off
-   critical section**, so a completion delivered from an ISR cannot land in the check-then-park
-   window: by the time interrupts are re-enabled the task is already done, or enqueued+parked and
-   reachable by the wake. `irq_off`/`irq_on` are injected (the riscv platform passes
-   `disable_interrupts_global`/`enable_interrupts_global`) so `kernel/lib/async.mc` stays
-   arch-neutral.
-2. The ISR wake path stays IRQ-safe — `async_complete` only marks the slot and `wq_wake_one`
-   (`proc_unblock`, an atomic bit-clear). No heap, no blocking, no dynamic dispatch.
+1. `async_await_irq(b, t, id, irq_off, irq_on, wfi)` — the IRQ-safe await. Interrupts stay OFF
+   across the readiness check, the enqueue-and-park (`wq_prepare_wait`, split out of `wq_wait`),
+   AND the idle `wfi`. RISC-V `wfi` resumes on a locally-enabled *pending* interrupt regardless of
+   the global enable, and `irq_off` clears only the global bit — so a completion can be neither
+   lost between check-and-park nor "taken-and-serviced just before we idle" (the lost-idle race).
+   The await briefly enables interrupts only to *take* the pending ISR, then disables and
+   re-checks `proc_current_blocked`. `irq_off`/`irq_on`/`wfi` are injected (riscv passes
+   `disable_interrupts_global`/`enable_interrupts_global`/`wait_for_interrupt`) so
+   `kernel/lib/async.mc` stays arch-neutral. (Precondition: entered with interrupts enabled; it
+   uses plain disable/enable, not save/restore. Single waiter per id; `wfi`-idles rather than
+   yielding to other runnable tasks — integrating with preemptive multi-task scheduling is broader
+   scheduler work.)
+2. The ISR wake path stays IRQ-safe by construction — `async_complete` only marks the slot and
+   `wq_wake_one` (`proc_unblock`, an atomic bit-clear). No heap, no blocking, no dynamic dispatch;
+   the loops are bounded. NOTE: this is not yet *enforced* with `#[irq_context]` — the wake reaches
+   `endpoint_slot`, which returns a `Result`, and the MIR irq-context verifier currently rejects
+   `Result` construction; closing that (relax the verifier, or a sentinel-returning irq-safe
+   endpoint lookup) is a tracked follow-up.
 
 Gate: `async-irq-test` / `llvm-async-irq-test` (both backends, in m0). A single task submits a
 request, arms a **single-shot M-mode CLINT timer**, and `async_await_irq` PARKS it in `wfi`. The
