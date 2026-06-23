@@ -2293,6 +2293,23 @@ pub fn build(b: *std.Build) void {
     const llvm_async_pollmany_test_step = b.step("llvm-async-pollmany-test", "LLVM-lowered async_poll_many vectored drain under QEMU");
     llvm_async_pollmany_test_step.dependOn(&llvm_async_pollmany_test_cmd.step);
 
+    // async-future-test: the compiler's `async fn`/`await` lowering wired to the REAL kernel broker.
+    // An async fn's two awaits resolve through ReqFut leaves (async_submit/async_slot_ready/
+    // async_take/async_cancel_slot) driven to completion by drive_irq while sleeping in wfi; a
+    // re-armed timer ISR delivers one real async_complete per request. WR + ASYNC-FUTURE-OK (42).
+    const async_future_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-future-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_async_future_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-future-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    async_future_test_cmd.step.dependOn(b.getInstallStep());
+    const async_future_test_step = b.step("async-future-test", "broker-backed async: an async fn's awaits resolve against real broker completions driven by drive_irq (ReqFut leaves)");
+    async_future_test_step.dependOn(&async_future_test_cmd.step);
+    llvm_async_future_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_async_future_test_step = b.step("llvm-async-future-test", "LLVM-lowered broker-backed async fn under QEMU");
+    llvm_async_future_test_step.dependOn(&llvm_async_future_test_cmd.step);
+
     const cap_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/cap-test.sh",
@@ -3810,6 +3827,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_async_irq_test_cmd.step);
     m0_step.dependOn(&llvm_async_cancel_test_cmd.step);
     m0_step.dependOn(&llvm_async_pollmany_test_cmd.step);
+    m0_step.dependOn(&llvm_async_future_test_cmd.step);
     m0_step.dependOn(&llvm_usched_test_cmd.step);
     m0_step.dependOn(&llvm_heartbeat_test_cmd.step);
     m0_step.dependOn(&llvm_privilege_test_cmd.step);
@@ -4122,6 +4140,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&async_irq_test_cmd.step);
     m0_step.dependOn(&async_cancel_test_cmd.step);
     m0_step.dependOn(&async_pollmany_test_cmd.step);
+    m0_step.dependOn(&async_future_test_cmd.step);
     m0_step.dependOn(&block_server_test_cmd.step);
     m0_step.dependOn(&fs_server_test_cmd.step);
     m0_step.dependOn(&net_server_test_cmd.step);

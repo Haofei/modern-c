@@ -1,0 +1,94 @@
+// kernel/lib/async_future.mc — the bridge from the compiler's `async fn`/`await` lowering to the
+// real kernel completion broker (kernel/lib/async.mc). The async transform lowers `await e` into
+// calls on a child future's uniform leaf ABI (`<F>__poll` / `<F>_take_result` / `<F>_cancel`);
+// this module supplies a broker-backed leaf `ReqFut` that satisfies that ABI over an in-flight
+// request id, plus `drive_irq`, an IRQ-backed executor that drives such a future to completion
+// while sleeping in `wfi`. Together they let an `async fn` `await` real device/timer completions:
+//
+//     async fn f(b: *mut AsyncBroker) -> i32 {
+//         let x: i32 = await req_begin(b);   // suspend until an IRQ async_completes this request
+//         let y: i32 = await req_begin(b);
+//         return x + y;
+//     }
+//
+// The generated `poll` only polls `ReqFut`s (non-blocking); the single blocking point is the
+// `drive_irq` driver. So `await` is a suspend, never a park (the stackless invariant, spec §33.2).
+
+import "kernel/lib/async.mc";
+import "std/task.mc";
+
+// A broker-backed FUTURE leaf: a submitted request id presented as a `Future`. `req_begin(b)` (the
+// awaited call) reserves a slot; `poll` reports readiness via `async_slot_ready` and, on the edge
+// to ready, reads+frees the result (`async_take`); `ReqFut_take_result` yields it once;
+// `ReqFut_cancel` frees a still-pending slot on drop (`async_cancel_slot`) — so a dropped async
+// future reclaims its `MAX_INFLIGHT` reservation. `ready` latches so `poll` stays idempotent and
+// the result survives the slot's release.
+struct ReqFut {
+    b: *mut AsyncBroker,
+    id: u64,
+    ready: bool,
+    result: i32,
+}
+
+// The awaited constructor: reserve a broker slot and return a future over it. The caller arms the
+// actual operation (a device or the timer) that will `async_complete` this id. If the MAX_INFLIGHT
+// quota is exhausted the id is ASYNC_NO_ID and the future completes immediately with 0 (the caller
+// must back-pressure on submission to avoid that).
+export fn req_begin(b: *mut AsyncBroker) -> ReqFut {
+    var f: ReqFut = uninit;
+    f.b = b;
+    f.id = async_submit(b);
+    f.ready = false;
+    f.result = 0;
+    return f;
+}
+
+impl Future for ReqFut {
+    fn poll(self: *mut ReqFut) -> bool {
+        if self.ready {
+            return true;
+        }
+        if async_slot_ready(self.b, self.id) {
+            self.result = async_take(self.b, self.id);   // read + free on the ready edge
+            self.ready = true;
+            return true;
+        }
+        return false;
+    }
+}
+
+export fn ReqFut_take_result(self: *mut ReqFut) -> i32 {
+    return self.result;
+}
+
+export fn ReqFut_cancel(self: *mut ReqFut) -> void {
+    if !self.ready {
+        let _freed: bool = async_cancel_slot(self.b, self.id);
+    }
+}
+
+// Drive a FUTURE to completion under IRQ-backed completion, sleeping in `wfi` until an interrupt
+// makes progress. This GENERALIZES `async_await_irq` from a single request id to an arbitrary
+// `Future` (which may hold any number of in-flight child requests): poll the future with interrupts
+// OFF; while it is pending, idle in `wfi` (which resumes on a pending, locally-enabled completion
+// interrupt even with the global enable cleared), then briefly enable interrupts to TAKE the ISR
+// (which `async_complete`s a child), and re-poll. Interrupts stay OFF across the poll and the
+// `wfi`, so a completion can be neither lost (taken before we park) nor idled-through — the same
+// invariant `async_await_irq` relies on.
+//
+// PRECONDITION: entered with interrupts ENABLED; returns with interrupts ENABLED. It parks in
+// `wfi` rather than yielding to other runnable tasks (integrating with preemptive scheduling is
+// broader scheduler work), so it drives ONE top-level future on the current task.
+export fn drive_irq(f: *mut dyn Future, irq_off: fn() -> void, irq_on: fn() -> void, wfi: fn() -> void) -> void {
+    var done: bool = false;
+    while !done {
+        (irq_off)();
+        if f.poll() {
+            done = true;
+            (irq_on)();
+        } else {
+            (wfi)();      // resumes on the pending completion interrupt (interrupts still off)
+            (irq_on)();   // take it now: ISR -> async_complete(child); next iteration re-polls
+        }
+    }
+}

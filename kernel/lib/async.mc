@@ -275,6 +275,48 @@ export fn async_poll_many(b: *mut AsyncBroker, out: *mut AsyncEvents, max: usize
     return n;
 }
 
+// Read and CONSUME a completed request's result, freeing its slot. Precondition: `id` is ready
+// (check `async_slot_ready` first). Returns 0 for an unknown/already-consumed id. Single-consumer —
+// the Future-leaf `ReqFut` (kernel/lib/async_future.mc) calls this once, from its poll, when the
+// slot becomes ready (the broker analogue of `async_await`'s result read, but non-blocking).
+export fn async_take(b: *mut AsyncBroker, id: u64) -> i32 {
+    let s: usize = find_slot(b, id);
+    if s >= MAX_INFLIGHT {
+        return 0;
+    }
+    let r: i32 = b.slots[s].result;
+    b.slots[s].active = false;   // consume + free the slot
+    return r;
+}
+
+// Free an in-flight slot WITHOUT waking a waiter — the Future-based executor (`drive_irq`) parks in
+// `wfi`, not on the slot's wait queue, so a dropped `ReqFut` has no parked waiter to release. This
+// is the leaf-cancel primitive behind a dropped async future (`ReqFut_cancel`); it reclaims the
+// slot so a future abandoned mid-flight does not leak its `MAX_INFLIGHT` reservation. Returns false
+// if `id` is not active (idempotent).
+export fn async_cancel_slot(b: *mut AsyncBroker, id: u64) -> bool {
+    let s: usize = find_slot(b, id);
+    if s >= MAX_INFLIGHT {
+        return false;
+    }
+    b.slots[s].active = false;
+    b.slots[s].ready = false;
+    return true;
+}
+
+// The id of some active, not-yet-ready in-flight request, or ASYNC_NO_ID if none. Lets a device/
+// timer ISR complete "the request currently in flight" without threading the id through a global.
+export fn async_first_active_unready(b: *mut AsyncBroker) -> u64 {
+    var i: usize = 0;
+    while i < MAX_INFLIGHT {
+        if b.slots[i].active && !b.slots[i].ready {
+            return b.slots[i].id;
+        }
+        i = i + 1;
+    }
+    return ASYNC_NO_ID;
+}
+
 // Readiness predicate for std/task.mc's `SlotFuture` (the Phase-A injection seam): true once
 // `id` has completed (or is unknown/already consumed). A `SlotFuture` whose `done` wraps this
 // (over a global or captured broker) composes with join2/race2/timeout — the executor's idle
