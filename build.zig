@@ -2260,6 +2260,23 @@ pub fn build(b: *std.Build) void {
     const llvm_async_irq_test_step = b.step("llvm-async-irq-test", "LLVM-lowered IRQ-backed async completion under QEMU");
     llvm_async_irq_test_step.dependOn(&llvm_async_irq_test_cmd.step);
 
+    // async-cancel-test (async/await Phase D step 6, runtime half): the broker CANCELLATION
+    // primitive kernel/lib/async.mc `async_cancel`. Fill the inflight quota, cancel one request,
+    // prove its slot is RECLAIMED (a fresh submit reuses it), a late completion is a no-op, and a
+    // double-cancel is idempotent — so a dropped pending future does not leak its slot. FXR + OK.
+    const async_cancel_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-cancel-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_async_cancel_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-cancel-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    async_cancel_test_cmd.step.dependOn(b.getInstallStep());
+    const async_cancel_test_step = b.step("async-cancel-test", "async Phase D: async_cancel reclaims a dropped request's inflight slot (no leak on drop)");
+    async_cancel_test_step.dependOn(&async_cancel_test_cmd.step);
+    llvm_async_cancel_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_async_cancel_test_step = b.step("llvm-async-cancel-test", "LLVM-lowered async_cancel slot reclamation under QEMU");
+    llvm_async_cancel_test_step.dependOn(&llvm_async_cancel_test_cmd.step);
+
     const cap_test_cmd = b.addSystemCommand(&.{
         "bash",
         "tools/proc/cap-test.sh",
@@ -3775,6 +3792,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_ipc_test_cmd.step);
     m0_step.dependOn(&llvm_async_test_cmd.step);
     m0_step.dependOn(&llvm_async_irq_test_cmd.step);
+    m0_step.dependOn(&llvm_async_cancel_test_cmd.step);
     m0_step.dependOn(&llvm_usched_test_cmd.step);
     m0_step.dependOn(&llvm_heartbeat_test_cmd.step);
     m0_step.dependOn(&llvm_privilege_test_cmd.step);
@@ -4085,6 +4103,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&ipc_test_cmd.step);
     m0_step.dependOn(&async_test_cmd.step);
     m0_step.dependOn(&async_irq_test_cmd.step);
+    m0_step.dependOn(&async_cancel_test_cmd.step);
     m0_step.dependOn(&block_server_test_cmd.step);
     m0_step.dependOn(&fs_server_test_cmd.step);
     m0_step.dependOn(&net_server_test_cmd.step);

@@ -203,6 +203,31 @@ export fn async_complete(b: *mut AsyncBroker, t: *mut ProcTable, id: u64, result
     return true;
 }
 
+// Cancel an in-flight request `id`: free its slot and release any task parked on it. After
+// cancel the id is UNKNOWN (`find_slot` no longer matches), so the slot is immediately reusable
+// by `async_submit`, and a late `async_complete(id)` (e.g. a device interrupt for an op whose
+// future was dropped) finds nothing and is a harmless no-op. This is the broker primitive behind
+// dropping a still-pending future: without it a dropped future LEAKS its `MAX_INFLIGHT` slot
+// (and an enqueued waiter), which on an agent OS — tiny `MAX_INFLIGHT` — eventually wedges
+// submission. Returns false if `id` is not an active request (idempotent: a second cancel, or a
+// cancel of an already-completed/consumed id, is a no-op).
+//
+// CONTRACT: the single owner of a future cancels it; it is NOT simultaneously parked in
+// `async_await(id)` on the same id (a task cannot both await and cancel). Defensively we still
+// `wq_wake_one` so that IF a waiter were parked, it resumes, re-runs `find_slot`, sees the slot
+// gone, and returns 0 rather than parking forever. IRQ-safe by the same construction as
+// `async_complete` (only marks slot state + an atomic bit-clear wake; bounded loops, no heap).
+export fn async_cancel(b: *mut AsyncBroker, t: *mut ProcTable, id: u64) -> bool {
+    let s: usize = find_slot(b, id);
+    if s >= MAX_INFLIGHT {
+        return false;
+    }
+    b.slots[s].active = false;   // free immediately; a later async_complete(id) matches nothing
+    b.slots[s].ready = false;
+    let _woke: bool = wq_wake_one(&b.slots[s].waiter, t);
+    return true;
+}
+
 // Readiness predicate for std/task.mc's `SlotFuture` (the Phase-A injection seam): true once
 // `id` has completed (or is unknown/already consumed). A `SlotFuture` whose `done` wraps this
 // (over a global or captured broker) composes with join2/race2/timeout — the executor's idle

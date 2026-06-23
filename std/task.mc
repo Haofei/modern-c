@@ -30,15 +30,23 @@ trait Future {
 // by INJECTING the completion source as `done(id) -> bool`: std never learns what the source
 // is (the kernel supplies a `done` backed by the vectored SYS_POLL / inflight table in Phase
 // B). Fixed-size — one per in-flight request — so callers keep the live count <= MAX_INFLIGHT.
+//
+// Cancellation is ALSO injected, as `cancel(id) -> void` (the kernel supplies one backed by
+// `async_cancel`, which frees the inflight slot). `slot_future_cancel` is what a generated
+// `async fn`'s `cancel` walks down to when this is the leaf still in flight: dropping a pending
+// future must release its broker slot, or it leaks (see kernel/lib/async.mc `async_cancel`).
+// `cancel` is only meaningful while pending — once `ready`, the slot is already consumed.
 struct SlotFuture {
     id: u64,
     done: fn(u64) -> bool,
+    cancel: fn(u64) -> void,
     ready: bool,
 }
 
-export fn slot_future_init(s: *mut SlotFuture, id: u64, done: fn(u64) -> bool) -> void {
+export fn slot_future_init(s: *mut SlotFuture, id: u64, done: fn(u64) -> bool, cancel: fn(u64) -> void) -> void {
     s.id = id;
     s.done = done;
+    s.cancel = cancel;
     s.ready = false;
 }
 
@@ -48,6 +56,14 @@ impl Future for SlotFuture {
         self.ready = (self.done)(self.id);
         return self.ready;
     }
+}
+
+// Cancel a still-pending SlotFuture: release its in-flight slot via the injected `cancel`.
+// No-op once the future is `ready` (its slot was already consumed by completion). Idempotent
+// at the leaf: after a cancel the caller must not poll/take_result this future again.
+export fn slot_future_cancel(s: *mut SlotFuture) -> void {
+    if s.ready { return; }
+    (s.cancel)(s.id);
 }
 
 // ---- combinator: join2 — complete when BOTH children complete ----
