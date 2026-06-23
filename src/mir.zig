@@ -2037,6 +2037,8 @@ const FunctionBuilder = struct {
         }
 
         switch (expr.kind) {
+            // The async transform eliminates every `await_expr` pre-sema.
+            .await_expr => unreachable,
             .ident => {
                 const ty = self.exprType(expr);
                 if (representationCheckKind(ty) != null) {

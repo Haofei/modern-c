@@ -287,6 +287,8 @@ const FunctionIrBuilder = struct {
 
     fn collectExpr(self: *FunctionIrBuilder, expr: ast.Expr) anyerror!void {
         switch (expr.kind) {
+            // The async transform eliminates every `await_expr` pre-sema.
+            .await_expr => unreachable,
             .ident,
             .int_literal,
             .float_literal,
@@ -901,6 +903,8 @@ fn writeStmtFacts(collector: *ModuleFactCollector, stmt: ast.Stmt, writer: anyty
 
 fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anytype, ctx: Context) anyerror!void {
     switch (expr.kind) {
+        // The async transform eliminates every `await_expr` pre-sema.
+        .await_expr => unreachable,
         .ident => |ident| {
             if (collector.isOrdinaryGlobalLoad(ident.text, ctx)) {
                 try writeOrdinaryAccessFact(expr.span, ident.text, "load", writer, ctx);

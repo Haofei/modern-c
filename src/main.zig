@@ -17,6 +17,7 @@ const lower_cov = @import("lower_cov.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const monomorphize = @import("monomorphize.zig");
+const async_lower = @import("async_lower.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 const spec_tests = @import("spec_tests.zig");
@@ -889,10 +890,17 @@ fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *
         diag.render();
         return err;
     };
+    // Lower `async fn` / `await` to stackless Future state machines BEFORE monomorphize/sema, so
+    // the move/borrow checker and both backends only ever see ordinary MC. No-op for modules
+    // without any `async fn` (passes the module through untouched).
+    const lowered = async_lower.transform(allocator, module, diag) catch |err| {
+        diag.render();
+        return err;
+    };
     // Specialize comptime-parameter type-generic functions (section 22). This is
     // a no-op for modules without any such function, so non-generic code is
     // passed through untouched.
-    return monomorphize.transformReport(allocator, module, diag) catch |err| {
+    return monomorphize.transformReport(allocator, lowered, diag) catch |err| {
         diag.render();
         return err;
     };
@@ -911,6 +919,7 @@ test {
     _ = lower_llvm;
     _ = mir;
     _ = monomorphize;
+    _ = async_lower;
     _ = parser;
     _ = sema;
     _ = spec_tests;

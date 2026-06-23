@@ -3438,6 +3438,8 @@ pub const Checker = struct {
 
     fn checkExpr(self: *Checker, expr: ast.Expr, ctx: Context) TypeClass {
         return switch (expr.kind) {
+            // The async transform eliminates every `await_expr` pre-sema.
+            .await_expr => unreachable,
             .ident => |ident| self.checkIdentExpr(ident, ctx),
             .int_literal => .int_literal,
             .float_literal => .float_literal,

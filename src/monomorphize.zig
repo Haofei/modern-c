@@ -483,6 +483,9 @@ fn cloneExprCtx(ctx: *const CloneCtx, expr: ast.Expr) anyerror!ast.Expr {
         .address_of => |inner| .{ .address_of = try clonePtr(ctx, inner.*) },
         .deref => |inner| .{ .deref = try clonePtr(ctx, inner.*) },
         .try_expr => |inner| .{ .try_expr = .{ .operand = try clonePtr(ctx, inner.operand.*), .mapped = if (inner.mapped) |m| try clonePtr(ctx, m.*) else null } },
+        // `await` is normally eliminated by the async transform before monomorphize; clone it
+        // total-ly anyway so the cloner stays correct if the ordering ever changes.
+        .await_expr => |inner| .{ .await_expr = try clonePtr(ctx, inner.*) },
         .member => |node| .{ .member = .{ .base = try clonePtr(ctx, node.base.*), .name = node.name } },
         .index => |node| .{ .index = .{ .base = try clonePtr(ctx, node.base.*), .index = try clonePtr(ctx, node.index.*) } },
         .slice => |node| .{ .slice = .{ .base = try clonePtr(ctx, node.base.*), .start = try clonePtr(ctx, node.start.*), .end = try clonePtr(ctx, node.end.*) } },

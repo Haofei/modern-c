@@ -1,6 +1,8 @@
 # Async/await roadmap
 
-Status: **Phases A, B, C landed**; D (syntax) pending.
+Status: **Phases A, B, C landed**; D (syntax) — **v0 straight-line `async fn`/`await` landed**
+(steps 1–3 + 7-as-applied: lexer/AST/parser sugar + the pre-sema state-machine transform). Branches
+across await (step 4), loops (step 5), and cancellation (step 6) are still pending.
 
 MC already has most of the async *runtime* and is missing the *vocabulary* and the *syntax*.
 Rather than start with `async`/`await` keywords, we start with the runtime semantics production

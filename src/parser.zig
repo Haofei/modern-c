@@ -437,12 +437,19 @@ pub const Parser = struct {
         }
 
         const exported = self.match(.kw_export);
+        // `async fn …` — a stackless async function (Phase D). `async` is contextual (matched
+        // as identifier text) so it never reserves the word elsewhere; it must be followed by
+        // `fn`. The pre-sema transform rewrites the resulting `is_async` fn into a state machine.
+        const is_async = self.matchIdentifierText("async");
         const is_const = self.match(.kw_const);
         if (self.match(.kw_fn)) {
-            const fn_decl = try self.finishFnDecl(null, is_const, exported);
+            if (is_async and is_const) return self.fail("'const fn' cannot be 'async'");
+            var fn_decl = try self.finishFnDecl(null, is_const, exported);
+            fn_decl.is_async = is_async;
             const end = if (fn_decl.body) |body| body.span else fn_decl.name.span;
             return .{ .span = joinSpan(start, end), .attrs = attrs, .kind = .{ .fn_decl = fn_decl } };
         }
+        if (is_async) return self.fail("'async' applies only to a function declaration");
 
         // `const NAME: T = <comptime constant>;` — a named compile-time constant
         // (section 22). A const declaration that is not `const fn` is this form.
@@ -1351,6 +1358,16 @@ pub const Parser = struct {
             const start = self.lxTokenBeforeCurrent();
             const value = try ast.makePtr(self.allocator, try self.parseExpr(prefix_operand_bp));
             return .{ .span = joinSpan(start, value.span), .kind = .{ .address_of = value } };
+        }
+        // `await EXPR` — a suspend point inside an `async fn` (Phase D). `await` is contextual
+        // (matched as identifier text). It binds as a unary prefix; the pre-sema async transform
+        // rewrites it into a child-future poll/take_result. Outside an `async fn` it is rejected
+        // by the transform.
+        if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "await")) {
+            const start = self.current.span;
+            self.advance();
+            const value = try ast.makePtr(self.allocator, try self.parseExpr(prefix_operand_bp));
+            return .{ .span = joinSpan(start, value.span), .kind = .{ .await_expr = value } };
         }
         return self.parsePrimary();
     }

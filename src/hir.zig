@@ -406,6 +406,8 @@ const FunctionBuilder = struct {
 
     fn buildExpr(self: *FunctionBuilder, expr: ast.Expr) anyerror!void {
         switch (expr.kind) {
+            // The async transform (src/async_lower.zig) eliminates every `await_expr` pre-sema.
+            .await_expr => unreachable,
             .ident, .int_literal, .float_literal, .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal => {
                 try self.addInstr("expr", exprText(expr), "value", expr.span);
             },
