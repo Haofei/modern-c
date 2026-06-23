@@ -23,6 +23,11 @@ CLANG="${CLANG:-clang}"
 LLD="${LLD:-ld.lld}"
 LLC="${LLC:-llc}"
 QEMU="${QEMU:-qemu-system-riscv64}"
+# Used ONLY for the optional static vector-alignment assertion below. Must be riscv-capable
+# (a host GNU `objdump` typically cannot disassemble riscv64); when it is unavailable the
+# assertion is skipped but the QEMU behavioral proof — which itself catches a misaligned
+# vector (the reset-loop hangs into the timeout) — still runs.
+OBJDUMP="${OBJDUMP:-llvm-objdump}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
@@ -43,12 +48,22 @@ kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/runtime.o" -o "$WORK/plic.elf"
 
-# Assert the trap vector is 4-byte aligned (the whole point of the fix): a misaligned
-# stvec base sets a reserved MODE and traps to the wrong PC. Fail loudly if it regresses.
-VADDR="$(llvm-objdump -d "$WORK/plic.elf" 2>/dev/null | sed -n 's/^0*\([0-9a-f]*\) <s_trap_vector>:.*/\1/p' | head -n1)"
-if [ -n "$VADDR" ] && [ $(( 0x$VADDR & 3 )) -ne 0 ]; then
-    echo "FAIL: $TEST_NAME — s_trap_vector at 0x$VADDR is NOT 4-byte aligned (stvec MODE would be reserved)"
-    exit 1
+# Optional static assertion: the trap vector must be 4-byte aligned (the whole point of the
+# fix) — a misaligned stvec base sets a reserved MODE and traps to the wrong PC. Only run it
+# when a riscv-capable objdump is available; the QEMU run below is the load-bearing proof.
+# (`... | head -n1` closes the pipe early; under `set -o pipefail` the upstream SIGPIPE would
+# abort the script, so the extraction is isolated with `|| true`.)
+VADDR=""
+ALIGN_NOTE="alignment asserted via QEMU"
+if command -v "$OBJDUMP" >/dev/null 2>&1; then
+    VADDR="$("$OBJDUMP" -d "$WORK/plic.elf" 2>/dev/null | sed -n 's/^0*\([0-9a-f]*\) <s_trap_vector>:.*/\1/p' | head -n1 || true)"
+    if [ -n "$VADDR" ] && [ $(( 0x$VADDR & 3 )) -ne 0 ]; then
+        echo "FAIL: $TEST_NAME — s_trap_vector at 0x$VADDR is NOT 4-byte aligned (stvec MODE would be reserved)"
+        exit 1
+    fi
+    [ -n "$VADDR" ] && ALIGN_NOTE="vector 4-byte aligned @0x$VADDR"
+else
+    echo "note: $OBJDUMP unavailable — skipping the static vector-alignment assertion (QEMU still proves delivery)"
 fi
 
 OUT="$(timeout 30 "$QEMU" -machine virt -m 256M -nographic \
@@ -62,7 +77,7 @@ IRQS="$(printf '%s' "$OUT" | sed -n 's/.*SMODE-PLIC IRQS=\([0-9][0-9]*\).*/\1/p'
 if printf '%s' "$OUT" | grep -qi "OpenSBI" \
    && printf '%s' "$OUT" | grep -q "SMODE-PLIC-OK" \
    && [ -n "$IRQS" ] && [ "$IRQS" -eq 3 ]; then
-    echo "PASS: $TEST_NAME — $BACKEND backend flat S-mode kernel took 3 REAL re-armed S-mode EXTERNAL interrupts (PLIC S-mode context 1; UART THRE line 10; claim/mask/complete/re-arm; vector 4-byte aligned @0x$VADDR; wfi-parked) under REAL OpenSBI"
+    echo "PASS: $TEST_NAME — $BACKEND backend flat S-mode kernel took 3 REAL re-armed S-mode EXTERNAL interrupts (PLIC S-mode context 1; UART THRE line 10; claim/mask/complete/re-arm; $ALIGN_NOTE; wfi-parked) under REAL OpenSBI"
     exit 0
 fi
 echo "FAIL: $TEST_NAME — expected OpenSBI banner + SMODE-PLIC-OK + IRQS==3 (got IRQS='${IRQS:-<none>}')"

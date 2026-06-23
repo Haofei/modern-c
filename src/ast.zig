@@ -52,12 +52,13 @@ pub const Attr = struct {
         // points whose linker script pins a section to a fixed load address (e.g. the
         // OpenSBI S-mode payload `_start` at 0x80200000 via `KEEP(*(.text.boot))`).
         section: []const u8,
-        // `#[align(N)]` — emit the function/object with at least N-byte alignment (N a
-        // power of two). Required for code whose ADDRESS is loaded into an alignment-sensitive
+        // `#[align(N)]` — emit the FUNCTION with at least N-byte alignment (N a power of
+        // two). Currently applies to function definitions only (global/object alignment is
+        // not yet wired). Required for code whose ADDRESS is loaded into an alignment-sensitive
         // register: a RISC-V trap vector written to `stvec`/`mtvec` MUST be 4-byte aligned
         // because the low two bits of that CSR are the MODE field — a 2-byte-aligned vector
-        // silently sets a reserved MODE and traps to the wrong PC. Also useful for DMA/cache
-        // alignment. `#[naked]` functions default to 4-byte alignment for this reason.
+        // silently sets a reserved MODE and traps to the wrong PC. `#[naked]` functions
+        // default to 4-byte alignment for this reason.
         @"align": u32,
         named: Ident,
     };
