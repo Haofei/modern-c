@@ -190,7 +190,14 @@ locals become state fields) must integrate with MC's move/borrow checker:
 - a **reference that spans an `await` is forbidden in v0** (allowed later only with a lifetime
   proof that the referent is itself captured into the future — i.e. outlives the suspend);
 - **no self-referential future fields** (a field pointing into the same future) unless pinning is
-  introduced — so v0 forbids capturing an interior pointer across an `await`;
+  introduced — so v0 forbids capturing an interior pointer across an `await`. **ENFORCED**: the
+  transform rejects `E_ASYNC_BORROW_ACROSS_AWAIT` when the generated constructor would form
+  `&self.<field>` (the only place an interior borrow can span a suspend in the v0 lowering shapes —
+  pre-section straight-line or a first-await arg — since the future is returned by value and an
+  interior pointer dangles after the move). Precise + complete for v0: a borrow used only after all
+  awaits (the tail) is in a poll state where `self` is stable, so it is accepted (no false positive).
+  Verified: the rejected pattern segfaulted on LLVM / lucked into copy-elision on C before the check;
+  reject fixture `async_borrow_across_await.mc`, positive fixture `fuzz_async_safe_borrow.mc`;
 - a captured local that owns a **resource / has a destructor** must be cleaned up on completion
   AND on cancellation (ties into rule 3).
 

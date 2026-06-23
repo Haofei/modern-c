@@ -566,6 +566,8 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     try cbody.append(arena, assignStmt(try selfMember(arena, "result"), try zeroFor(low, result_type)));
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = identExpr("self") } });
 
+    try checkNoSelfBorrow(low, fd, cbody.items);
+
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
         .name = id(fname),
         .abi = null,
@@ -884,6 +886,7 @@ fn lowerAsyncLoopFn(
     for (loopw.steps.items) |s| if (s.binding) |b| try cbody.append(arena, assignStmt(try selfMember(arena, b), try zeroFor(low, s.result_type)));
     try cbody.append(arena, assignStmt(try selfMember(arena, "result"), try zeroFor(low, result_type)));
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = identExpr("self") } });
+    try checkNoSelfBorrow(low, fd, cbody.items);
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
         .name = id(fd.name.text),
         .abi = null,
@@ -1266,6 +1269,69 @@ fn emitCancelGuard(low: *Lowerer, cn_body: *std.ArrayList(ast.Stmt), s: AwaitSte
     var cblk = try arena.alloc(ast.Stmt, 1);
     cblk[0] = .{ .span = zspan, .kind = .{ .expr = try callExpr(arena, s.cancel, cargs) } };
     try cn_body.append(arena, try ifStateEq(arena, state, cblk));
+}
+
+// ---- Interior-borrow check (move/borrow soundness across `await`) ----------------------------
+// A future is built in its constructor as a local `self` and RETURNED BY VALUE, so the caller's
+// copy lives at a new address. Any pointer the constructor forms INTO `self` (`&self.<field>`)
+// therefore dangles after that move — a self-referential future, which needs pinning (not in v0).
+//
+// This is PRECISE and COMPLETE for the v0 lowering shapes: the only borrow of a captured
+// local/param that can live across an `await` suspend is one the transform places in the
+// CONSTRUCTOR — a pre-branch/pre-loop straight-line `let p = &x;` (replayed as `self.p = &self.x`)
+// or a first-await arg `await g(&x)` (built as `self.__c0 = g(&self.x)`). A borrow formed in a
+// poll state cannot span a suspend, because each region's straight-line runs AFTER that region's
+// awaits. And the constructor never legitimately forms `&self.<field>` (it builds children by
+// value; only `poll` takes `&self.__cN`). So `&self.<anything>` in the constructor is exactly the
+// unsound set — no false positives, no false negatives.
+fn checkNoSelfBorrow(low: *Lowerer, fd: ast.FnDecl, ctor_body: []const ast.Stmt) Error!void {
+    for (ctor_body) |s| {
+        if (stmtFormsSelfBorrow(s)) {
+            return low.fail(fd.name.span, "E_ASYNC_BORROW_ACROSS_AWAIT: in async fn '{s}', a reference to a local or parameter (`&x`) is captured across an `await` — the future is returned by value, so an interior pointer dangles after the move (self-referential futures need pinning, unsupported in async v0). Restructure so no borrow of a captured value crosses the await.", .{fd.name.text});
+        }
+    }
+}
+
+// Is `e` rooted at the identifier `self` (a member/index/deref chain bottoming out at `self`)?
+fn rootIsSelf(e: ast.Expr) bool {
+    return switch (e.kind) {
+        .ident => |i| std.mem.eql(u8, i.text, "self"),
+        .member => |m| rootIsSelf(m.base.*),
+        .index => |ix| rootIsSelf(ix.base.*),
+        .deref => |inner| rootIsSelf(inner.*),
+        .grouped => |inner| rootIsSelf(inner.*),
+        else => false,
+    };
+}
+
+// Does `e` form the address of `self.*` anywhere within it (`&self.x`, `g(&self.x)`, …)?
+fn exprFormsSelfBorrow(e: ast.Expr) bool {
+    return switch (e.kind) {
+        .address_of => |inner| rootIsSelf(inner.*) or exprFormsSelfBorrow(inner.*),
+        .grouped, .deref => |inner| exprFormsSelfBorrow(inner.*),
+        .unary => |u| exprFormsSelfBorrow(u.expr.*),
+        .binary => |b| exprFormsSelfBorrow(b.left.*) or exprFormsSelfBorrow(b.right.*),
+        .cast => |c| exprFormsSelfBorrow(c.value.*),
+        .call => |c| blk: {
+            if (exprFormsSelfBorrow(c.callee.*)) break :blk true;
+            for (c.args) |a| if (exprFormsSelfBorrow(a)) break :blk true;
+            break :blk false;
+        },
+        .index => |ix| exprFormsSelfBorrow(ix.base.*) or exprFormsSelfBorrow(ix.index.*),
+        .member => |m| exprFormsSelfBorrow(m.base.*),
+        .try_expr => |t| exprFormsSelfBorrow(t.operand.*),
+        else => false,
+    };
+}
+
+fn stmtFormsSelfBorrow(s: ast.Stmt) bool {
+    return switch (s.kind) {
+        .let_decl, .var_decl => |l| if (l.init) |e| exprFormsSelfBorrow(e) else false,
+        .assignment => |a| exprFormsSelfBorrow(a.target) or exprFormsSelfBorrow(a.value),
+        .expr => |e| exprFormsSelfBorrow(e),
+        .@"return" => |e| if (e) |x| exprFormsSelfBorrow(x) else false,
+        else => false,
+    };
 }
 
 fn assignStmt(target: ast.Expr, value: ast.Expr) ast.Stmt {
