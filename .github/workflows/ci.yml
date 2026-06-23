@@ -42,7 +42,7 @@ jobs:
           # Positively assert the async QEMU gates RAN on both backends — a no-SKIP check alone
           # would not catch a gate silently dropped from the m0 aggregate. Each prints "PASS: <name>".
           for g in async-test async-irq-test async-cancel-test async-pollmany-test \
-                   async-future-test async-select-test async-agent-test; do
+                   async-future-test async-select-test async-agent-test async-blk-test; do
             for name in "$g" "llvm-$g"; do
               if ! grep -q "^PASS: $name " m0.log; then
                 echo "expected gate '$name' to run and pass in m0, but no 'PASS: $name' line was found" >&2
@@ -70,7 +70,7 @@ jobs:
           docker compose run --rm dev bash -lc '
             set -euo pipefail
             for g in async-test async-irq-test async-cancel-test async-pollmany-test \
-                     async-future-test async-select-test async-agent-test; do
+                     async-future-test async-select-test async-agent-test async-blk-test; do
               MC_REQUIRE_TOOLS=1 zig build "$g"
               MC_REQUIRE_TOOLS=1 zig build "llvm-$g"
             done
