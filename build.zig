@@ -2310,6 +2310,24 @@ pub fn build(b: *std.Build) void {
     const llvm_async_future_test_step = b.step("llvm-async-future-test", "LLVM-lowered broker-backed async fn under QEMU");
     llvm_async_future_test_step.dependOn(&llvm_async_future_test_cmd.step);
 
+    // async-blk-test: DEVICE-BACKED async completion. An async fn's await resolves against a REAL
+    // virtio-blk device interrupt: blk_read_sector_async submits a read + ties the head descriptor id
+    // to a broker request id; the PLIC-routed used-ring IRQ reaps the completion in interrupt context
+    // (blk_irq_reap -> async_complete) and wakes the task parked in drive_irq. Trace W i R + the sector
+    // word "DISK" + ASYNC-BLK-OK prove the completion came from the device IRQ, not a polling loop.
+    const async_blk_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-blk-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_async_blk_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-blk-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    async_blk_test_cmd.step.dependOn(b.getInstallStep());
+    const async_blk_test_step = b.step("async-blk-test", "device-backed async: an async fn's await resolves against a real virtio-blk device interrupt (PLIC used-ring completion reaped in interrupt context)");
+    async_blk_test_step.dependOn(&async_blk_test_cmd.step);
+    llvm_async_blk_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_async_blk_test_step = b.step("llvm-async-blk-test", "LLVM-lowered device-backed async virtio-blk completion under QEMU");
+    llvm_async_blk_test_step.dependOn(&llvm_async_blk_test_cmd.step);
+
     // async-select-test: select / cancel-the-loser over the real broker. Two in-flight requests are
     // raced (ReqRace2); a timer ISR completes the winner; the race cancels the loser and the active
     // slot count returns to 0 — the MAX_INFLIGHT-returns-to-zero acceptance. WR + ASYNC-SELECT-OK.
@@ -3861,6 +3879,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_async_cancel_test_cmd.step);
     m0_step.dependOn(&llvm_async_pollmany_test_cmd.step);
     m0_step.dependOn(&llvm_async_future_test_cmd.step);
+    m0_step.dependOn(&llvm_async_blk_test_cmd.step);
     m0_step.dependOn(&llvm_async_select_test_cmd.step);
     m0_step.dependOn(&llvm_async_agent_test_cmd.step);
     m0_step.dependOn(&llvm_usched_test_cmd.step);
@@ -4176,6 +4195,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&async_cancel_test_cmd.step);
     m0_step.dependOn(&async_pollmany_test_cmd.step);
     m0_step.dependOn(&async_future_test_cmd.step);
+    m0_step.dependOn(&async_blk_test_cmd.step);
     m0_step.dependOn(&async_select_test_cmd.step);
     m0_step.dependOn(&async_agent_test_cmd.step);
     m0_step.dependOn(&block_server_test_cmd.step);
