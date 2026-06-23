@@ -205,7 +205,8 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     for (decl.attrs) |a| {
         if (a.kind == .named) {
             const an = a.kind.named.text;
-            if (std.mem.eql(u8, an, "irq_context") or std.mem.eql(u8, an, "bounded")) {
+            // `atomic_context` is a sema synonym for `irq_context` (see sema.hasIrqContext).
+            if (std.mem.eql(u8, an, "irq_context") or std.mem.eql(u8, an, "atomic_context") or std.mem.eql(u8, an, "bounded")) {
                 return low.fail(a.span, "E_ASYNC_FORBIDDEN_CONTEXT: `async fn` is forbidden in a #[{s}] context (it suspends and uses indirect dispatch)", .{an});
             }
         }
