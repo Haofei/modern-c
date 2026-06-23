@@ -68,6 +68,7 @@ export const fn wrapping_add_u16(a: u16, b: u16) -> u16 {
 // Wrapping (modulo-2^32) 32-bit left shift: bits shifted past bit 31 are discarded
 // rather than overflowing (the checked `<<` would trap). For hashes / PRNGs where
 // the wraparound is intended. `n` must be < 32.
+#[irq_context]
 export const fn wrapping_shl_u32(x: u32, n: u32) -> u32 {
     return (((x as u64) << (n as u64)) & 0x0000_0000_FFFF_FFFF) as u32;
 }

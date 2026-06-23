@@ -27,6 +27,7 @@ export fn ring_init(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> 
 export fn ring_len(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> usize {
     return r.count;
 }
+#[irq_context]
 export fn ring_is_empty(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> bool {
     return r.count == 0;
 }
@@ -54,6 +55,7 @@ export fn ring_front(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) ->
 }
 
 // Dequeue the tail (oldest) in place. Traps if empty — check `ring_is_empty` first.
+#[irq_context]
 export fn ring_pop(comptime T: type, comptime N: usize, r: *mut Ring<T, N>) -> T {
     if r.count == 0 {
         unreachable; // ring empty

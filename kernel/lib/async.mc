@@ -56,7 +56,9 @@ export fn async_init(b: *mut AsyncBroker) -> void {
     b.next_id = 0;
 }
 
-// The index of the active slot holding request `id`, or MAX_INFLIGHT if none.
+// The index of the active slot holding request `id`, or MAX_INFLIGHT if none. `#[irq_context]`:
+// a bounded scan of comparisons, no calls — safe on the ISR completion path (async_complete).
+#[irq_context]
 fn find_slot(b: *mut AsyncBroker, id: u64) -> usize {
     var i: usize = 0;
     while i < MAX_INFLIGHT {
@@ -186,12 +188,13 @@ export fn async_await_irq(b: *mut AsyncBroker, t: *mut ProcTable, id: u64,
 // heap, no blocking, no dynamic dispatch; the only loops (find_slot, wq_wake_one) are bounded by
 // MAX_INFLIGHT / WQ_MAX. The lost-wake window is closed on the await side by async_await_irq.
 //
-// NOTE: this could not yet be ENFORCED with `#[irq_context]`. The wake path reaches
-// `endpoint_slot` (generation-checked endpoint validation), which returns a `Result`, and the
-// MIR irq-context verifier currently rejects `Result` construction inside an `#[irq_context]`
-// function. So the claim here is by construction + review, not by the checker. Closing that gap
-// (relax the verifier for `Result`, or add a sentinel-returning irq-safe endpoint lookup) is a
-// tracked follow-up.
+// NOW ENFORCED with `#[irq_context]`. The entire wake chain is annotated and MIR-verified
+// irq-safe: async_complete -> find_slot / wq_wake_one -> ring_is_empty/ring_pop, endpoint_slot,
+// proc_unblock -> mask32_clear. (The MIR irq-context verifier flags only CALLS — to a non-irq
+// callee, an indirect call, or a known-blocking one; `endpoint_slot` returning a `Result` is fine
+// because Result construction is not a call. The earlier "verifier rejects Result" note was a
+// misdiagnosis: the real requirement was simply annotating the whole chain.)
+#[irq_context]
 export fn async_complete(b: *mut AsyncBroker, t: *mut ProcTable, id: u64, result: i32) -> bool {
     let s: usize = find_slot(b, id);
     if s >= MAX_INFLIGHT {

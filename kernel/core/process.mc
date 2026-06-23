@@ -625,6 +625,33 @@ export fn endpoint_slot(t: *mut ProcTable, ep: Endpoint) -> Result<usize, EpErro
     return ok(ep.slot);
 }
 
+// IRQ-safe endpoint validation: the same generation/state check as `endpoint_slot`, but it
+// returns the slot index on success or `sentinel` on a stale/dead endpoint — NO `Result`. The
+// `Result`-constructing `endpoint_slot` cannot be `#[irq_context]` (each `ok(..)`/`err(..)` lowers
+// to a call-like instruction the MIR irq-context verifier rejects); this sentinel form is what the
+// ISR wake path (`wq_wake_one` <- `async_complete`) calls. Pass `t.count` as the sentinel (no live
+// slot equals it) and check `< t.count`.
+#[irq_context]
+export fn endpoint_slot_or(t: *mut ProcTable, ep: Endpoint, sentinel: usize) -> usize {
+    if ep.slot >= t.count {
+        return sentinel;
+    }
+    if t.procs[ep.slot].gen != ep.gen {
+        return sentinel;
+    }
+    let s: ProcState = t.procs[ep.slot].state;
+    if s == .Unused {
+        return sentinel;
+    }
+    if s == .Zombie {
+        return sentinel;
+    }
+    if s == .Dead {
+        return sentinel;
+    }
+    return ep.slot;
+}
+
 // True if the endpoint still refers to the same live process.
 export fn endpoint_live(t: *mut ProcTable, ep: Endpoint) -> bool {
     switch endpoint_slot(t, ep) {

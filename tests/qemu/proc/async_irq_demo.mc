@@ -27,11 +27,12 @@ global g_broker: AsyncBroker;
 global g_pending_id: u64;
 
 // Called from the timer ISR (runtime trap_entry) in INTERRUPT context. Completes the pending
-// request and wakes the parked waiter. The completion path (`async_complete`) is IRQ-safe by
-// construction — it only marks slot state and wakes one waiter via an atomic bit-clear, with
-// bounded loops. It is NOT yet `#[irq_context]`-annotated: the wake reaches `endpoint_slot`,
-// which returns a `Result`, and the MIR irq-context verifier currently rejects `Result`
-// construction (see the note on `async_complete` in kernel/lib/async.mc).
+// request and wakes the parked waiter. The completion path (`async_complete`) is now
+// `#[irq_context]`-VERIFIED: the whole wake chain (find_slot / wq_wake_one -> ring_pop,
+// endpoint_slot_or, proc_unblock -> mask32_clear) is annotated and MIR-checked irq-safe (the
+// wake uses the sentinel `endpoint_slot_or`, not the `Result`-returning `endpoint_slot`, since
+// `Result` construction is not irq-safe). This demo entry itself stays unannotated only because
+// its `putc_('I')` trace is an opaque extern the verifier can't prove (it is a bare MMIO write).
 export fn async_on_timer() -> void {
     putc_(73); // 'I' — completion delivered from interrupt context
     let _ok: bool = async_complete(&g_broker, &g_procs, g_pending_id, 42);

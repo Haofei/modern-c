@@ -25,6 +25,7 @@ export fn mask32_set(m: *mut Mask32, b: u32) -> void {
         m.bits = m.bits | wrapping_shl_u32(1, b);
     }
 }
+#[irq_context]
 export fn mask32_clear(m: *mut Mask32, b: u32) -> void {
     if b < 32 {
         m.bits = m.bits & (~wrapping_shl_u32(1, b));
