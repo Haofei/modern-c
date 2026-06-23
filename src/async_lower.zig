@@ -139,6 +139,51 @@ const AwaitStep = struct {
     result_type: ast.TypeExpr, // the child's result type (binding_type, or async fn's return type)
 };
 
+// A bool-`if`/`else` (parser-desugared to a 2-arm bool `switch`) that CONTAINS awaits, split into
+// each arm's leading await-run + straight-line tail. The shared continuation runs the body tail.
+const Branch = struct {
+    cond: ast.Expr, // the `if` condition (switch subject)
+    then_steps: std.ArrayList(AwaitStep) = .empty, // then-arm leading awaits
+    then_tail: std.ArrayList(ast.Stmt) = .empty, // then-arm straight-line stmts (no return)
+    else_steps: std.ArrayList(AwaitStep) = .empty, // else-arm leading awaits
+    else_tail: std.ArrayList(ast.Stmt) = .empty, // else-arm straight-line stmts (no return)
+};
+
+// Is this stmt the parser's bool-`if`/`else` desugar: a 2-arm `switch` whose arms are `true`/`false`
+// literal patterns over block bodies? (See parser.desugarBoolIf.) Returns the cond + both blocks.
+const BoolIf = struct { cond: ast.Expr, then_blk: ast.Block, else_blk: ast.Block };
+fn asBoolIf(stmt: ast.Stmt) ?BoolIf {
+    const sw = switch (stmt.kind) {
+        .@"switch" => |s| s,
+        else => return null,
+    };
+    if (sw.arms.len != 2) return null;
+    const t = boolPatternValue(sw.arms[0]) orelse return null;
+    const f = boolPatternValue(sw.arms[1]) orelse return null;
+    if (!(t == true and f == false)) return null;
+    const then_blk = switch (sw.arms[0].body) {
+        .block => |b| b,
+        else => return null,
+    };
+    const else_blk = switch (sw.arms[1].body) {
+        .block => |b| b,
+        else => return null,
+    };
+    return .{ .cond = sw.subject, .then_blk = then_blk, .else_blk = else_blk };
+}
+
+// A switch arm whose single pattern is a bool literal -> that bool's value, else null.
+fn boolPatternValue(arm: ast.SwitchArm) ?bool {
+    if (arm.patterns.len != 1) return null;
+    return switch (arm.patterns[0].kind) {
+        .literal => |e| switch (e.kind) {
+            .bool_literal => |b| b,
+            else => null,
+        },
+        else => null,
+    };
+}
+
 // Returns the type-name a `*TypeExpr` denotes if it is a bare nominal name, else null.
 fn typeName(t: ast.TypeExpr) ?[]const u8 {
     return switch (t.kind) {
@@ -234,64 +279,113 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
 
     const body = fd.body orelse return low.fail(fd.name.span, "async fn '{s}' must have a body", .{fname});
 
-    // ---- Walk the straight-line body: leading `let x = await call;` steps, then a tail of
-    // ordinary statements ending in `return expr;`. Reject anything outside this v0 shape. ----
-    var steps: std.ArrayList(AwaitStep) = .empty;
-    var tail: std.ArrayList(ast.Stmt) = .empty; // post-await straight-line stmts (incl the return)
+    // ---- Walk the body in this v0 shape: a LEADING run of `let x = await call;` steps, then AT MOST
+    // ONE bool-`if`/`else` that CONTAINS awaits (each arm: its own leading await-run + straight-line
+    // tail, NO return), then a straight-line tail ending in `return expr;`. A body with no
+    // await-bearing branch keeps the original linear path (`branch == null`). ----
+    var steps: std.ArrayList(AwaitStep) = .empty; // pre-branch await run
+    var branch: ?Branch = null; // the single await-bearing if/else, if any
+    var pre_branch: std.ArrayList(ast.Stmt) = .empty; // straight-line stmts between pre-await & branch
+    var tail: std.ArrayList(ast.Stmt) = .empty; // post-branch straight-line stmts (incl the return)
 
-    var in_tail = false;
+    var in_await_run = true; // still consuming the leading `let x = await ...;` run
+    var in_tail = false; // past the branch (or no branch): accumulating the final straight-line tail
     for (body.items) |stmt| {
-        // An await step is `let NAME = await CALL;` (or `var`), seen before any non-await stmt.
         const await_call = awaitStepCall(stmt);
-        if (await_call != null and !in_tail) {
-            const ld = stmt.kind.let_decl; // (let or var; both carry LocalDecl)
-            if (ld.names.len != 1) return low.fail(stmt.span, "async v0: an awaited binding must bind exactly one name", .{});
-            const acall = await_call.?;
-            // LAZY construction: child0 is built in the constructor; each LATER child is built at the
-            // transition ending the prior step, so an awaited call MAY reference an earlier `await`
-            // result (the prior binding is a struct field by then). No depends-on-prior rejection.
-            // Resolve the child future type from the awaited call's callee.
-            const child = try resolveAwait(low, stmt.span, acall);
-            const field = try std.fmt.allocPrint(arena, "__c{d}", .{steps.items.len});
-            // The binding's result type: an async-fn child carries its own return type; a leaf
-            // child's result type is only known from the binding's `: T` annotation (v0 requires
-            // one). `__async_infer` is the leaf placeholder — reject if no annotation overrides it.
-            if (ld.ty == null and typeName(child.result_type) != null and std.mem.eql(u8, typeName(child.result_type).?, "__async_infer")) {
-                return low.fail(stmt.span, "async v0: `let {s} = await <leaf>;` needs an explicit result type annotation `let {s}: T = await ...;`", .{ ld.names[0].text, ld.names[0].text });
-            }
-            const res_ty = ld.ty orelse child.result_type;
-            try steps.append(arena, .{
-                .binding = ld.names[0].text,
-                .binding_type = ld.ty,
-                .child_field = field,
-                .fut_type = child.fut_type,
-                .take_result = child.take_result,
-                .cancel = child.cancel,
-                .call = acall,
-                .result_type = res_ty,
-            });
+        // (1) The leading await-run.
+        if (await_call != null and in_await_run) {
+            const step = try buildAwaitStep(low, stmt, await_call.?, steps.items.len);
+            try steps.append(arena, step);
             continue;
         }
-        // First non-await statement begins the tail. Reject a stray await beyond the leading run
-        // (v0 forbids awaits interleaved with / nested in straight-line code or control flow).
+        in_await_run = false;
+        // (2) The single await-bearing bool-`if`/`else` (at most one, before the tail). A branch with
+        // no awaits is NOT the branch — it falls through to the straight-line tail unchanged.
+        if (!in_tail and branch == null) {
+            if (asBoolIf(stmt)) |bi| {
+                if (blockContainsAwait(bi.then_blk) or blockContainsAwait(bi.else_blk)) {
+                    var b = Branch{ .cond = bi.cond };
+                    // then-awaits are __c{P..}, else-awaits continue the GLOBAL numbering after them.
+                    try collectArm(low, bi.then_blk, steps.items.len, &b.then_steps, &b.then_tail);
+                    try collectArm(low, bi.else_blk, steps.items.len + b.then_steps.items.len, &b.else_steps, &b.else_tail);
+                    branch = b;
+                    continue;
+                }
+            }
+            // (3) Straight-line stmt between the pre-await run and the branch. Reject an await here
+            // (an await outside the leading run / not a plain `let x = await`).
+            if (stmtContainsAwait(stmt)) return low.fail(stmt.span, "E_ASYNC_BRANCH_UNSUPPORTED: async v0 supports a leading await-run, at most one await-bearing if/else, then a straight-line tail ending in `return expr;` (no awaits in the tail, in loops, or nested deeper than one if-level)", .{});
+            try pre_branch.append(arena, stmt);
+            continue;
+        }
+        // (4) The straight-line tail (after the branch, or the whole body if there is no branch). A
+        // second await-bearing branch, or any await beyond the leading run, is rejected here.
         in_tail = true;
-        if (stmtContainsAwait(stmt)) return low.fail(stmt.span, "async v0: only a leading run of `let x = await call;` statements is supported (no awaits in the straight-line tail, branches, or loops)", .{});
+        if (asBoolIf(stmt)) |bi| {
+            if (blockContainsAwait(bi.then_blk) or blockContainsAwait(bi.else_blk))
+                return low.fail(stmt.span, "E_ASYNC_BRANCH_UNSUPPORTED: async v0 supports at most ONE await-bearing if/else (then a straight-line tail); a second await-bearing branch is unsupported", .{});
+        }
+        if (stmtContainsAwait(stmt)) return low.fail(stmt.span, "E_ASYNC_BRANCH_UNSUPPORTED: async v0 supports a leading await-run, at most one await-bearing if/else, then a straight-line tail ending in `return expr;` (no awaits in the tail, in loops, or nested deeper than one if-level)", .{});
         try tail.append(arena, stmt);
     }
+
+    // If there is no branch, fold the pre-branch straight-line stmts back into the tail (they ARE the
+    // tail in the linear case), preserving the original single-tail-state lowering exactly.
+    if (branch == null) {
+        var merged: std.ArrayList(ast.Stmt) = .empty;
+        try merged.appendSlice(arena, pre_branch.items);
+        try merged.appendSlice(arena, tail.items);
+        tail = merged;
+        pre_branch = .empty;
+    }
+
+    // Total await count across pre-run + both arms; used for child-field allocation and cancel.
+    const n_then: usize = if (branch) |b| b.then_steps.items.len else 0;
+    const n_else: usize = if (branch) |b| b.else_steps.items.len else 0;
 
     // ---- Build the future struct: state + child fields + captured-binding fields + result. ----
     var fields: std.ArrayList(ast.Field) = .empty;
     try fields.append(arena, .{ .name = id("state"), .ty = try nameType(arena, "u8") });
+    // One child-future field per await, across pre-run + both arms (only the taken arm's children are
+    // ever built — lazy — but all fields exist).
     for (steps.items) |s| {
         try fields.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
     }
+    if (branch) |b| {
+        for (b.then_steps.items) |s| try fields.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
+        for (b.else_steps.items) |s| try fields.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
+    }
     // Conservative capture: every awaited binding becomes a field (it may be live across a later
-    // await or used in the tail). Params are also captured so the tail/await args can read them.
+    // await or used in the tail). Params are also captured so the tail/await args can read them. Arm
+    // bindings (pre + then + else) AND any local declared in an arm/tail straight-line block become
+    // fields too. (Arm-local `let`s in the straight-line tail are lowered in place; declaring them as
+    // struct fields would double-declare, so we DON'T add tail/arm-straight-line locals as fields —
+    // only awaited bindings. Straight-line `let`/`var` keep their local scope, rewritten to self.* for
+    // reads of captured names but their own name stays a local.)
     for (fd.params) |p| {
         try fields.append(arena, .{ .name = p.name, .ty = p.ty });
     }
     for (steps.items) |s| {
         if (s.binding) |b| try fields.append(arena, .{ .name = id(b), .ty = s.result_type });
+    }
+    // Locals declared in the pre-branch straight-line (e.g. `var out: i32 = 0;`) are live across the
+    // branch's states, so they become captured fields too (only in the branch lowering). Their init
+    // is replayed (as an assignment) at the dispatch; reads/writes in the arms rewrite to self.*.
+    if (branch != null) {
+        for (pre_branch.items) |stmt| {
+            switch (stmt.kind) {
+                .let_decl, .var_decl => |ld| {
+                    if (ld.names.len != 1) return low.fail(stmt.span, "E_ASYNC_BRANCH_UNSUPPORTED: a pre-branch `let`/`var` must bind exactly one name in async v0", .{});
+                    const lty = ld.ty orelse return low.fail(stmt.span, "E_ASYNC_BRANCH_UNSUPPORTED: a pre-branch `let`/`var` live across an await-bearing if/else needs an explicit type annotation in async v0", .{});
+                    try fields.append(arena, .{ .name = ld.names[0], .ty = lty });
+                },
+                else => {},
+            }
+        }
+    }
+    if (branch) |b| {
+        for (b.then_steps.items) |s| if (s.binding) |nm| try fields.append(arena, .{ .name = id(nm), .ty = s.result_type });
+        for (b.else_steps.items) |s| if (s.binding) |nm| try fields.append(arena, .{ .name = id(nm), .ty = s.result_type });
     }
     try fields.append(arena, .{ .name = id("result"), .ty = result_type });
 
@@ -308,6 +402,16 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     for (fd.params) |p| try field_names.put(p.name.text, {});
     for (steps.items) |s| {
         if (s.binding) |b| try field_names.put(b, {});
+    }
+    // Branch-captured names: pre-branch declared locals + both arms' awaited bindings. Within an arm
+    // a reference to one of these reads/writes the corresponding `self.*` field.
+    if (branch) |b| {
+        for (pre_branch.items) |stmt| switch (stmt.kind) {
+            .let_decl, .var_decl => |ld| try field_names.put(ld.names[0].text, {}),
+            else => {},
+        };
+        for (b.then_steps.items) |s| if (s.binding) |nm| try field_names.put(nm, {});
+        for (b.else_steps.items) |s| if (s.binding) |nm| try field_names.put(nm, {});
     }
 
     // ---- The constructor `fn f(params) -> f__Fut { var self: f__Fut = uninit; ...; return self; }`
@@ -333,9 +437,19 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
         const rewritten = try rewriteParamRefs(low, s0.call, &field_names);
         try cbody.append(arena, assignStmt(try selfMember(arena, s0.child_field), rewritten));
     }
-    // Zero the captured binding fields + result (definite-init for the move/borrow checker).
+    // Zero the captured binding fields + result (definite-init for the move/borrow checker). This
+    // covers pre-await bindings, pre-branch locals, and BOTH arms' awaited bindings — every scalar
+    // field the poll machine may read. (The real pre-branch local init is replayed at the dispatch.)
     for (steps.items) |s| {
         if (s.binding) |b| try cbody.append(arena, assignStmt(try selfMember(arena, b), try zeroFor(low, s.result_type)));
+    }
+    if (branch) |b| {
+        for (pre_branch.items) |stmt| switch (stmt.kind) {
+            .let_decl, .var_decl => |ld| try cbody.append(arena, assignStmt(try selfMember(arena, ld.names[0].text), try zeroFor(low, ld.ty.?))),
+            else => {},
+        };
+        for (b.then_steps.items) |s| if (s.binding) |nm| try cbody.append(arena, assignStmt(try selfMember(arena, nm), try zeroFor(low, s.result_type)));
+        for (b.else_steps.items) |s| if (s.binding) |nm| try cbody.append(arena, assignStmt(try selfMember(arena, nm), try zeroFor(low, s.result_type)));
     }
     try cbody.append(arena, assignStmt(try selfMember(arena, "result"), try zeroFor(low, result_type)));
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = identExpr("self") } });
@@ -355,62 +469,104 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // into the binding field, then advances `state`. After the last await, run the straight-line
     // tail (with `return expr;` rewritten to `self.result = expr; self.state = LAST; return true;`).
     var pbody: std.ArrayList(ast.Stmt) = .empty;
-    const tail_state = steps.items.len; // state reached after the last await; the tail runs here
-    const done_state = steps.items.len + 1; // distinct DONE state: complete, nothing left to run
-    // Idempotence (std/task.mc: poll must keep returning true after completion): check DONE FIRST
-    // and return true WITHOUT re-running the tail statements or their side effects.
+    const bind_names = &field_names;
+    const P = steps.items.len;
+    // State layout. LINEAR (no branch): pre states 0..P-1, tail at state P, DONE at P+1 — UNCHANGED.
+    // BRANCH: pre states 0..P-1; then-arm states [arm_base .. arm_base+T-1]; else-arm states
+    // [arm_base+T .. arm_base+T+E-1]; continuation (tail) at `cont_state`; DONE at `cont_state+1`.
+    // When P==0 the dispatch occupies state 0 on its own, so arms start at 1 (arm_base==1); when P>0
+    // the dispatch rides on pre-state P-1's completion block and arms start at P (arm_base==P).
+    const arm_base: usize = if (branch == null) P else (if (P == 0) 1 else P);
+    const cont_state: usize = arm_base + n_then + n_else;
+    const done_state: usize = cont_state + 1;
+    const done_str = try std.fmt.allocPrint(arena, "{d}", .{done_state});
+
+    // Idempotence: check DONE FIRST and return true WITHOUT re-running the tail / its side effects.
     {
         var dbody = try arena.alloc(ast.Stmt, 1);
         dbody[0] = .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } };
         try pbody.append(arena, try ifStateEq(arena, done_state, dbody));
     }
+
+    // Build the DISPATCH stmt (only used when there is a branch): rewrite the cond to self.*, then in
+    // each arm lazily build the arm's FIRST child (if it has awaits) and jump to the arm-entry state,
+    // OR (zero-await arm) run the arm's straight-line stmts synchronously and jump to the continuation.
+    const dispatch: ?ast.Stmt = if (branch) |b| blk: {
+        const then_entry = arm_base; // first then state
+        const else_entry = arm_base + n_then; // first else state
+        // then-branch body
+        var tb: std.ArrayList(ast.Stmt) = .empty;
+        if (n_then > 0) {
+            try emitBuildChild(low, &tb, b.then_steps.items[0], bind_names);
+            try setState(low, &tb, then_entry);
+        } else {
+            // zero-await then arm: run its straight-line stmts now, then go to the continuation.
+            for (b.then_tail.items) |st| try tb.append(arena, try rewriteStmtParamRefs(low, st, bind_names));
+            try setState(low, &tb, cont_state);
+        }
+        // else-branch body
+        var eb: std.ArrayList(ast.Stmt) = .empty;
+        if (n_else > 0) {
+            try emitBuildChild(low, &eb, b.else_steps.items[0], bind_names);
+            try setState(low, &eb, else_entry);
+        } else {
+            for (b.else_tail.items) |st| try eb.append(arena, try rewriteStmtParamRefs(low, st, bind_names));
+            try setState(low, &eb, cont_state);
+        }
+        // `if <cond> { tb } else { eb }` as a 2-arm bool switch (same desugar the parser produces).
+        const rcond = try rewriteParamRefs(low, b.cond, bind_names);
+        var arms = try arena.alloc(ast.SwitchArm, 2);
+        var tpat = try arena.alloc(ast.Pattern, 1);
+        tpat[0] = boolPattern(true);
+        var fpat = try arena.alloc(ast.Pattern, 1);
+        fpat[0] = boolPattern(false);
+        arms[0] = .{ .patterns = tpat, .body = .{ .block = .{ .span = zspan, .items = try tb.toOwnedSlice(arena) } } };
+        arms[1] = .{ .patterns = fpat, .body = .{ .block = .{ .span = zspan, .items = try eb.toOwnedSlice(arena) } } };
+        break :blk .{ .span = zspan, .kind = .{ .@"switch" = .{ .subject = rcond, .arms = arms } } };
+    } else null;
+
+    // Pre-await states 0..P-1. Each polls its child, takes its result, then advances. The LAST
+    // pre-state's completion either (linear) advances to the tail state, or (branch, P>0) runs the
+    // pre-branch straight-line + dispatch.
     for (steps.items, 0..) |s, i| {
         var blk: std.ArrayList(ast.Stmt) = .empty;
-        // let r: bool = FutT__poll(&self.__cN);
-        const poll_fn = try std.fmt.allocPrint(arena, "{s}__poll", .{s.fut_type});
-        var poll_args = try arena.alloc(ast.Expr, 1);
-        poll_args[0] = try addrOf(arena, try selfMember(arena, s.child_field));
-        try blk.append(arena, .{ .span = zspan, .kind = .{ .let_decl = .{
-            .names = try dupIdents(arena, &.{"r"}),
-            .ty = try nameType(arena, "bool"),
-            .init = try callExpr(arena, poll_fn, poll_args),
-        } } });
-        // if !r { return false; }
-        try blk.append(arena, try ifNotReturnFalse(arena));
-        // self.<binding> = FutT_take_result(&self.__cN);   (or drop the result if no binding)
-        var take_args = try arena.alloc(ast.Expr, 1);
-        take_args[0] = try addrOf(arena, try selfMember(arena, s.child_field));
-        const take_call = try callExpr(arena, s.take_result, take_args);
-        if (s.binding) |b| {
-            try blk.append(arena, assignStmt(try selfMember(arena, b), take_call));
+        try emitPollAndTake(low, &blk, s);
+        if (i + 1 < P) {
+            // LAZY: build the next pre-child now (it may reference an earlier await result).
+            try emitBuildChild(low, &blk, steps.items[i + 1], bind_names);
+            try setState(low, &blk, i + 1);
+        } else if (branch != null) {
+            // Last pre-await done -> replay pre-branch straight-line (lifting decls to self.* stores),
+            // then DISPATCH.
+            for (pre_branch.items) |st| try blk.append(arena, try rewriteDeclToStore(low, st, bind_names));
+            try blk.append(arena, dispatch.?);
         } else {
-            try blk.append(arena, .{ .span = zspan, .kind = .{ .expr = take_call } });
+            try setState(low, &blk, i + 1); // -> linear tail state (== P)
         }
-        // LAZY: build the NEXT child future now, AFTER the prior result is stored in its field, so
-        // its call may reference an earlier `await` result (and params) — all `self.*` fields.
-        if (i + 1 < steps.items.len) {
-            const next = steps.items[i + 1];
-            const rewritten = try rewriteParamRefs(low, next.call, &field_names);
-            try blk.append(arena, assignStmt(try selfMember(arena, next.child_field), rewritten));
-        }
-        // self.state = N+1;
-        const next_state = try std.fmt.allocPrint(arena, "{d}", .{i + 1});
-        try blk.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(next_state)));
-
-        // if self.state == N { <blk> }
         try pbody.append(arena, try ifStateEq(arena, i, try blk.toOwnedSlice(arena)));
     }
 
-    // The straight-line tail. `return expr;` becomes result-store + final-state + `return true`.
-    // Other tail statements are emitted as-is, but local idents that name a param or an awaited
-    // binding must read from `self.*` (they are fields now); the `return expr` is rewritten too.
-    // `field_names` (params ∪ all bindings) is exactly the captured-field set the tail needs.
-    const bind_names = &field_names;
-    // The tail runs in ONE guarded state (`if self.state == tail_state`), reached after the last
-    // await advances `state` to tail_state. `return expr;` becomes result-store + advance to DONE +
-    // `return true`. Guarding it (plus the DONE early-return above) makes poll idempotent: once
-    // complete, state == done_state, so the tail never re-runs.
-    const done_str = try std.fmt.allocPrint(arena, "{d}", .{done_state});
+    // When P==0 and there is a branch, the dispatch is a standalone `if self.state == 0` block (it
+    // polls no child): run the pre-branch straight-line then dispatch.
+    if (branch != null and P == 0) {
+        var blk: std.ArrayList(ast.Stmt) = .empty;
+        for (pre_branch.items) |st| try blk.append(arena, try rewriteDeclToStore(low, st, bind_names));
+        try blk.append(arena, dispatch.?);
+        try pbody.append(arena, try ifStateEq(arena, 0, try blk.toOwnedSlice(arena)));
+    }
+
+    // Arm states: each arm's await-run, contiguous. After an arm's LAST await takes its result, run
+    // the arm's straight-line stmts then jump to the continuation. Both arms converge on cont_state,
+    // which lies BEYOND both arm ranges, so the sequential `if self.state==N` fall-through is sound:
+    // the untaken arm's guards never match.
+    if (branch) |b| {
+        try emitArm(low, &pbody, b.then_steps.items, b.then_tail.items, arm_base, cont_state, bind_names);
+        try emitArm(low, &pbody, b.else_steps.items, b.else_tail.items, arm_base + n_then, cont_state, bind_names);
+    }
+
+    // The continuation / tail. `return expr;` -> result-store + advance to DONE + `return true`. Other
+    // tail stmts emit as-is with captured-name reads rewritten to self.*. Guarding it at cont_state
+    // (plus the DONE early-return) keeps poll idempotent.
     var tail_body: std.ArrayList(ast.Stmt) = .empty;
     for (tail.items) |stmt| {
         switch (stmt.kind) {
@@ -422,16 +578,14 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
                 try tail_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } });
             },
             else => {
-                // A straight-line tail stmt: rewrite ident reads of params/bindings to self.* .
                 const rewritten = try rewriteStmtParamRefs(low, stmt, bind_names);
                 try tail_body.append(arena, rewritten);
             },
         }
     }
-    try pbody.append(arena, try ifStateEq(arena, tail_state, try tail_body.toOwnedSlice(arena)));
-    // Unreachable fallback: at runtime `state` is always DONE or one of 0..tail_state, so one guard
-    // above always returns. But every path is now inside a state guard, so the definite-return
-    // check needs an explicit trailing return. `false` (not-complete) is the conservative choice.
+    try pbody.append(arena, try ifStateEq(arena, cont_state, try tail_body.toOwnedSlice(arena)));
+    // Conservative definite-return fallback (unreachable at runtime: state is always DONE or a guarded
+    // state above). `false` (not-complete) is the safe choice.
     try pbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = false } } } });
 
     const poll_method_name = try std.fmt.allocPrint(arena, "{s}__poll", .{fut_type});
@@ -488,13 +642,13 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     var cn_params = try arena.alloc(ast.Param, 1);
     cn_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
     var cn_body: std.ArrayList(ast.Stmt) = .empty;
-    for (steps.items, 0..) |s, i| {
-        // if self.state == i { ChildI_cancel(&self.__ci); }
-        var cargs = try arena.alloc(ast.Expr, 1);
-        cargs[0] = try addrOf(arena, try selfMember(arena, s.child_field));
-        var cblk = try arena.alloc(ast.Stmt, 1);
-        cblk[0] = .{ .span = zspan, .kind = .{ .expr = try callExpr(arena, s.cancel, cargs) } };
-        try cn_body.append(arena, try ifStateEq(arena, i, cblk));
+    // Pre-await children: state i holds child i.
+    for (steps.items, 0..) |s, i| try emitCancelGuard(low, &cn_body, s, i);
+    // Arm children: only the TAKEN arm's children are ever built, and at most one is live (the active
+    // state's), so a guard per arm-await at its own state index is correct.
+    if (branch) |b| {
+        for (b.then_steps.items, 0..) |s, j| try emitCancelGuard(low, &cn_body, s, arm_base + j);
+        for (b.else_steps.items, 0..) |s, k| try emitCancelGuard(low, &cn_body, s, arm_base + n_then + k);
     }
     // self.state = done_state;  (idempotent: subsequent poll/cancel are no-ops)
     try cn_body.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
@@ -541,6 +695,52 @@ fn resolveAwait(low: *Lowerer, span: diagnostics.Span, call: ast.Expr) Error!Res
     // The leaf's result type is unknown here; callers fall back to the binding's `: T` annotation.
     // Use a placeholder; a leaf await without a `: T` annotation is rejected at the call site.
     return .{ .fut_type = fut_type, .take_result = take, .cancel = cancel, .result_type = .{ .span = zspan, .kind = .{ .name = id("__async_infer") } } };
+}
+
+// Build an AwaitStep from a `let NAME = await CALL;` stmt, using `field_index` for its `__cN` field
+// name. Shared by the pre-await run and both branch arms so field numbering is GLOBAL (unique).
+fn buildAwaitStep(low: *Lowerer, stmt: ast.Stmt, acall: ast.Expr, field_index: usize) Error!AwaitStep {
+    const arena = low.arena;
+    const ld = stmt.kind.let_decl; // (let or var; both carry LocalDecl)
+    if (ld.names.len != 1) return low.fail(stmt.span, "async v0: an awaited binding must bind exactly one name", .{});
+    const child = try resolveAwait(low, stmt.span, acall);
+    const field = try std.fmt.allocPrint(arena, "__c{d}", .{field_index});
+    if (ld.ty == null and typeName(child.result_type) != null and std.mem.eql(u8, typeName(child.result_type).?, "__async_infer")) {
+        return low.fail(stmt.span, "async v0: `let {s} = await <leaf>;` needs an explicit result type annotation `let {s}: T = await ...;`", .{ ld.names[0].text, ld.names[0].text });
+    }
+    const res_ty = ld.ty orelse child.result_type;
+    return .{
+        .binding = ld.names[0].text,
+        .binding_type = ld.ty,
+        .child_field = field,
+        .fut_type = child.fut_type,
+        .take_result = child.take_result,
+        .cancel = child.cancel,
+        .call = acall,
+        .result_type = res_ty,
+    };
+}
+
+// Split an arm's block into a leading await-run (-> `steps`) and a straight-line tail (-> `tail`).
+// `field_base` is the GLOBAL `__cN` index for this arm's first await. v0 rejects: a `return` inside
+// the arm, any await beyond the leading run (nested in straight-line code / control flow).
+fn collectArm(low: *Lowerer, blk: ast.Block, field_base: usize, steps: *std.ArrayList(AwaitStep), tail: *std.ArrayList(ast.Stmt)) Error!void {
+    const arena = low.arena;
+    var in_tail = false;
+    for (blk.items) |stmt| {
+        const await_call = awaitStepCall(stmt);
+        if (await_call != null and !in_tail) {
+            const step = try buildAwaitStep(low, stmt, await_call.?, field_base + steps.items.len);
+            try steps.append(arena, step);
+            continue;
+        }
+        in_tail = true;
+        if (stmt.kind == .@"return")
+            return low.fail(stmt.span, "E_ASYNC_BRANCH_UNSUPPORTED: a `return` inside an await-bearing if/else arm is not supported in async v0 (the arm must fall through to the shared continuation)", .{});
+        if (stmtContainsAwait(stmt))
+            return low.fail(stmt.span, "E_ASYNC_BRANCH_UNSUPPORTED: in async v0 an if/else arm may contain only a LEADING run of `let x = await call;` then straight-line code (no awaits nested in loops, switches, or deeper control flow)", .{});
+        try tail.append(arena, stmt);
+    }
 }
 
 // `let x = await CALL;` (or `var`) — return the inner CALL expr if this stmt is exactly that.
@@ -613,6 +813,88 @@ fn exprContainsAwait(e: ast.Expr) bool {
         .try_expr => |t| exprContainsAwait(t.operand.*),
         else => false,
     };
+}
+
+// Emit the suspend-or-take prologue of an await step into `blk`:
+//   let r: bool = FutT__poll(&self.__cN);  if !r { return false; }
+//   self.<binding> = FutT_take_result(&self.__cN);   (or drop the result if no binding)
+fn emitPollAndTake(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), s: AwaitStep) Error!void {
+    const arena = low.arena;
+    const poll_fn = try std.fmt.allocPrint(arena, "{s}__poll", .{s.fut_type});
+    var poll_args = try arena.alloc(ast.Expr, 1);
+    poll_args[0] = try addrOf(arena, try selfMember(arena, s.child_field));
+    try blk.append(arena, .{ .span = zspan, .kind = .{ .let_decl = .{
+        .names = try dupIdents(arena, &.{"r"}),
+        .ty = try nameType(arena, "bool"),
+        .init = try callExpr(arena, poll_fn, poll_args),
+    } } });
+    try blk.append(arena, try ifNotReturnFalse(arena));
+    var take_args = try arena.alloc(ast.Expr, 1);
+    take_args[0] = try addrOf(arena, try selfMember(arena, s.child_field));
+    const take_call = try callExpr(arena, s.take_result, take_args);
+    if (s.binding) |b| {
+        try blk.append(arena, assignStmt(try selfMember(arena, b), take_call));
+    } else {
+        try blk.append(arena, .{ .span = zspan, .kind = .{ .expr = take_call } });
+    }
+}
+
+// `self.__cN = g(args);` with the awaited call's ident args rewritten to read captured `self.*`
+// fields (params + prior await results). Used to LAZILY construct an arm/pre child at a transition.
+fn emitBuildChild(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), s: AwaitStep, names: *std.StringHashMap(void)) Error!void {
+    const rewritten = try rewriteParamRefs(low, s.call, names);
+    try blk.append(low.arena, assignStmt(try selfMember(low.arena, s.child_field), rewritten));
+}
+
+// `self.state = N;`
+fn setState(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), n: usize) Error!void {
+    const n_str = try std.fmt.allocPrint(low.arena, "{d}", .{n});
+    try blk.append(low.arena, assignStmt(try selfMember(low.arena, "state"), intExpr(n_str)));
+}
+
+// Emit one `if self.state == N { ... }` poll block per await in an arm, at states `entry .. entry+T-1`.
+// Each block polls its child, suspends while pending, takes the result; the next child is built
+// lazily at the prior transition. After the LAST await, the arm's straight-line stmts run and state
+// advances to `cont_state`. (T==0 arms produce no blocks here — handled synchronously at dispatch.)
+fn emitArm(low: *Lowerer, pbody: *std.ArrayList(ast.Stmt), arm_steps: []const AwaitStep, arm_tail: []const ast.Stmt, entry: usize, cont_state: usize, names: *std.StringHashMap(void)) Error!void {
+    const arena = low.arena;
+    for (arm_steps, 0..) |s, i| {
+        var blk: std.ArrayList(ast.Stmt) = .empty;
+        try emitPollAndTake(low, &blk, s);
+        if (i + 1 < arm_steps.len) {
+            try emitBuildChild(low, &blk, arm_steps[i + 1], names);
+            try setState(low, &blk, entry + i + 1);
+        } else {
+            // last await of the arm: run the arm's straight-line stmts, then go to the continuation.
+            for (arm_tail) |st| try blk.append(arena, try rewriteStmtParamRefs(low, st, names));
+            try setState(low, &blk, cont_state);
+        }
+        try pbody.append(arena, try ifStateEq(arena, entry + i, try blk.toOwnedSlice(arena)));
+    }
+}
+
+// A pre-branch straight-line stmt, lifted into the poll machine: a `let/var x = init;` becomes
+// `self.x = init;` (x is a captured field); reads of captured names rewrite to self.*. Anything else
+// (assignment / expr) is rewritten in place.
+fn rewriteDeclToStore(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void)) Error!ast.Stmt {
+    switch (s.kind) {
+        .let_decl, .var_decl => |ld| {
+            const init_expr = ld.init orelse return low.fail(s.span, "E_ASYNC_BRANCH_UNSUPPORTED: a pre-branch `let`/`var` live across an await-bearing if/else must have an initializer in async v0", .{});
+            const rinit = try rewriteParamRefs(low, init_expr, names);
+            return assignStmt(try selfMember(low.arena, ld.names[0].text), rinit);
+        },
+        else => return rewriteStmtParamRefs(low, s, names),
+    }
+}
+
+// `if self.state == N { <childType>_cancel(&self.__cN); }` — release the active state's in-flight child.
+fn emitCancelGuard(low: *Lowerer, cn_body: *std.ArrayList(ast.Stmt), s: AwaitStep, state: usize) Error!void {
+    const arena = low.arena;
+    var cargs = try arena.alloc(ast.Expr, 1);
+    cargs[0] = try addrOf(arena, try selfMember(arena, s.child_field));
+    var cblk = try arena.alloc(ast.Stmt, 1);
+    cblk[0] = .{ .span = zspan, .kind = .{ .expr = try callExpr(arena, s.cancel, cargs) } };
+    try cn_body.append(arena, try ifStateEq(arena, state, cblk));
 }
 
 fn assignStmt(target: ast.Expr, value: ast.Expr) ast.Stmt {

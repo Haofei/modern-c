@@ -90,6 +90,19 @@ async fn chain(d1: u64, v1: i32, d2: u64) -> i32 {
     return u;
 }
 
+// ---- AWAIT INSIDE AN if/else ----
+// A pre-branch await (`base`), then ONE bool-if/else each arm of which awaits, then a straight-line
+// tail. Only the TAKEN arm's child is ever built (lazy). Lowers to a state machine with per-branch
+// state ranges converging on a shared continuation, exactly the shape of fuzz_async_branch_lowering.
+// then-path: base(=10)+a(=100)=110; else-path: base(=10)+b(=200)=210.
+async fn pick(sel: bool, dt: u64, de: u64) -> i32 {
+    let base: i32 = await mk_val(1, 10);
+    var out: i32 = 0;
+    if sel { let a: i32 = await mk_val(dt, 100); out = base + a; }
+    else   { let b: i32 = await mk_val(de, 200); out = base + b; }
+    return out;
+}
+
 export fn async_syntax_run() -> u32 {
     var acc: u32 = 0;
 
@@ -142,7 +155,35 @@ export fn async_syntax_run() -> u32 {
     let q2: bool = chain__Fut__poll(&xf);   // a canceled future is DONE: poll true, no slot churn
     if q2 && g_open == 0 { acc = acc ^ 0x800; }  // idempotent: cancel set DONE, no double-free
 
+    // AWAIT-IN-if/else (then branch): sel=true. base ready@1, a ready@3 -> 110, done at tick 3.
+    g_clock = 0; g_open = 0;
+    var pt: pick__Fut = pick(true, 3, 9);
+    run_to_completion(&pt, tick_idle);
+    if pick__Fut_take_result(&pt) == 110 { acc = acc ^ 0x1000; }   // base+a = 10+100
+    if g_open == 0 { acc = acc ^ 0x2000; }                         // only the then child was built
+
+    // AWAIT-IN-if/else (else branch): sel=false. base ready@1, b ready@5 -> 210, done at tick 5.
+    g_clock = 0; g_open = 0;
+    var pe: pick__Fut = pick(false, 9, 5);
+    run_to_completion(&pe, tick_idle);
+    if pick__Fut_take_result(&pe) == 210 { acc = acc ^ 0x4000; }   // base+b = 10+200
+    if g_open == 0 { acc = acc ^ 0x8000; }
+
+    // CANCEL mid-branch: take the THEN path, poll past the pre-await so it parks on the then child
+    // (one slot held), cancel, prove the slot is reclaimed and a later poll reports done.
+    g_clock = 0; g_open = 0;
+    var pc: pick__Fut = pick(true, 100, 9);   // then child ready@100 (never in this window)
+    let p0: bool = pick__Fut__poll(&pc);      // clock 0: pre-await pending. g_open=1
+    tick_idle();                              // clock 1
+    let p1: bool = pick__Fut__poll(&pc);      // pre ready -> dispatch then -> build & poll then child -> pending
+    if !p0 && !p1 { acc = acc ^ 0x10000; }
+    if g_open == 1 { acc = acc ^ 0x20000; }   // one slot held (the then child)
+    pick__Fut_cancel(&pc);                    // walk the active then child -> release its slot
+    if g_open == 0 { acc = acc ^ 0x40000; }
+    let p2: bool = pick__Fut__poll(&pc);      // canceled -> DONE: poll true, no churn
+    if p2 && g_open == 0 { acc = acc ^ 0x80000; }
+
     // entry-mode contract: 1 = pass, 0 = fail.
-    if acc != 0xFFF { return 0; }
+    if acc != 0xFFFFF { return 0; }
     return 1;
 }
