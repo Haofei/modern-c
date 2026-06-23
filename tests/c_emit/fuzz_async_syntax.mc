@@ -1,11 +1,18 @@
 // Phase D, build-order step 3: REAL `async fn` / `await` SYNTAX driven through the Phase-A
 // executor. The async transform (src/async_lower.zig) lowers these `async fn`s into stackless
-// Future state machines of EXACTLY the shape hand-written in fuzz_async_lowering.mc — a struct
-// `f__Fut { state, <child futures>, <captured locals>, result }`, an `impl Future` poll that polls
-// children and suspends (`return false`) while pending, a `f__Fut_take_result`, and a `fn f(..)`
-// constructor. This fixture verifies the GENERATED code matches the proven results on BOTH backends
-// (entry-mode contract: returns 1 on success). It mirrors fuzz_async_lowering.mc's scenarios:
-// single await + scalar result, and two awaits in sequence with a live local across the 2nd await.
+// Future state machines of EXACTLY the shape hand-written in fuzz_async_lowering.mc /
+// fuzz_async_cancel_lowering.mc — a struct `f__Fut { state, <child futures>, <captured locals>,
+// result }`, an `impl Future` poll that polls children and suspends (`return false`) while pending,
+// a `f__Fut_take_result`, a `f__Fut_cancel`, and a `fn f(..)` constructor. This fixture verifies
+// the GENERATED code matches the proven results on BOTH backends (entry-mode contract: returns 1
+// on success). It exercises:
+//   - single await + scalar result;
+//   - two awaits in sequence (live local across the 2nd await; async-awaiting-async nesting);
+//   - idempotent poll after completion (tail runs exactly once);
+//   - LAZY per-state construction: a DEPENDENT await whose call uses an EARLIER await's result
+//     (previously REJECTED as E_ASYNC_AWAIT_DEPENDS_ON_PRIOR — now legal);
+//   - generated CANCEL: a still-pending future's in-flight leaf slot is reclaimed on drop, and
+//     cancel is idempotent (a subsequent poll reports done with no double-free).
 
 import "std/task.mc";
 
@@ -15,26 +22,43 @@ fn tick_idle() -> void { g_clock = g_clock + 1; }
 // side-effect counter, to prove poll() is idempotent after completion (the tail runs exactly once).
 global g_side: u32 = 0;
 
-// ---- leaf future: a mock async value, ready at `deadline`, yielding `val`. Hand-written with
-// the uniform child-future ABI the transform consumes for an awaited leaf:
-//   - a by-value constructor `mk_val(deadline, val) -> ValFut` (the awaited call `await mk_val(..)`)
-//   - `impl Future for ValFut` (the `ValFut__poll` the transform calls)
-//   - a free `ValFut_take_result(self) -> i32` (valid once, after poll()==true). ----
-struct ValFut { deadline: u64, val: i32 }
+// ---- leaf future: a mock async value, ready at `deadline`, yielding `val`. Hand-written with the
+// uniform child-future ABI the transform consumes for an awaited leaf: a by-value constructor
+// `mk_val(..) -> ValFut` (the awaited call), `impl Future for ValFut` (the `ValFut__poll`), a free
+// `ValFut_take_result`, AND a free `ValFut_cancel` (the transform now generates a `*_cancel` for
+// every async fn, which calls this leaf cancel — so it MUST exist or you get E_UNKNOWN_IDENTIFIER).
+//
+// A slot counter `g_open` models a held in-flight resource: `mk_val` acquires one; it is released
+// EXACTLY ONCE — by the leaf's first completion OR by cancel — guarded by `held`. So a leak (cancel
+// not walked to the leaf) or a double-free is observable on BOTH backends. ----
+global g_open: i32 = 0;            // live leaf slots; must return to 0
+struct ValFut { deadline: u64, val: i32, held: bool }
 fn mk_val(deadline: u64, val: i32) -> ValFut {
     var f: ValFut = uninit;
     f.deadline = deadline;
     f.val = val;
+    f.held = true;
+    g_open = g_open + 1;           // acquire a slot
     return f;
 }
 impl Future for ValFut {
-    fn poll(self: *mut ValFut) -> bool { return g_clock >= self.deadline; }
+    fn poll(self: *mut ValFut) -> bool {
+        if g_clock >= self.deadline {
+            if self.held { self.held = false; g_open = g_open - 1; }   // completion consumes the slot
+            return true;
+        }
+        return false;
+    }
 }
 fn ValFut_take_result(self: *mut ValFut) -> i32 { return self.val; }
+fn ValFut_cancel(self: *mut ValFut) -> void {
+    if self.held { self.held = false; g_open = g_open - 1; }           // drop releases the slot
+}
 
 // ---- single await + scalar result ----
 // Lowers to: struct fetch__Fut { state, __c0: ValFut, d, v, result: i32 }; a constructor
-// `fn fetch(d,v) -> fetch__Fut`; `impl Future for fetch__Fut { poll }`; `fetch__Fut_take_result`.
+// `fn fetch(d,v) -> fetch__Fut`; `impl Future for fetch__Fut { poll }`; `fetch__Fut_take_result`;
+// `fetch__Fut_cancel`.
 async fn fetch(d: u64, v: i32) -> i32 {
     let r: i32 = await mk_val(d, v);
     return r;
@@ -56,11 +80,21 @@ async fn with_side(d: u64) -> i32 {
     return r;
 }
 
+// ---- LAZY per-state construction: the 2nd await's CALL uses `t`, the 1st await's RESULT ----
+// Lowers to: struct chain__Fut { state, __c0: ValFut, __c1: ValFut, d1, v1, d2, t, result }; the
+// constructor builds ONLY __c0; __c1 is built at the 0->1 transition (when `t` exists), using
+// `t + 1000`. This was previously rejected as E_ASYNC_AWAIT_DEPENDS_ON_PRIOR.
+async fn chain(d1: u64, v1: i32, d2: u64) -> i32 {
+    let t: i32 = await mk_val(d1, v1);
+    let u: i32 = await mk_val(d2, t + 1000);
+    return u;
+}
+
 export fn async_syntax_run() -> u32 {
     var acc: u32 = 0;
 
     // single await + scalar result: ready at tick 3, value 22
-    g_clock = 0;
+    g_clock = 0; g_open = 0;
     var ff: fetch__Fut = fetch(3, 22);
     run_to_completion(&ff, tick_idle);
     if fetch__Fut_take_result(&ff) == 22 { acc = acc ^ 0x1; }
@@ -82,7 +116,33 @@ export fn async_syntax_run() -> u32 {
     if extra == 0 { acc = acc ^ 0x8; }                  // poll returned true at once (already done)
     if g_side == 1 { acc = acc ^ 0x10; }                // tail ran exactly once (idempotent)
 
+    // LAZY dependent await: t = mk_val(d1=2, v1=5) -> 5; u = mk_val(d2=4, t+1000) -> 1005.
+    // If lazy construction works, the 2nd leaf's value reflects the FIRST await's result.
+    g_clock = 0; g_open = 0;
+    var cf: chain__Fut = chain(2, 5, 4);
+    let cticks: u64 = run_to_completion(&cf, tick_idle);
+    if chain__Fut_take_result(&cf) == 1005 { acc = acc ^ 0x20; }   // 2nd await saw t=5 -> 1005
+    if cticks == 4 { acc = acc ^ 0x40; }                           // completes when the LATER leaf is ready
+    if g_open == 0 { acc = acc ^ 0x80; }                           // both leaf slots consumed (no leak)
+
+    // CANCEL a still-pending future: start it, poll twice so it is parked on the 2nd await (the
+    // 1st leaf's slot was consumed on completion; the 2nd leaf is in flight, holding one slot), then
+    // call the GENERATED cancel. Drive via the generated free fns (UFCS does not resolve on the
+    // generated future types). d1=1 (ready@1), d2=100 (never ready in this window).
+    g_clock = 0; g_open = 0;
+    var xf: chain__Fut = chain(1, 5, 100);
+    let q0: bool = chain__Fut__poll(&xf);   // clock 0: 1st leaf pending. g_open=1
+    tick_idle();                            // clock 1
+    let q1: bool = chain__Fut__poll(&xf);   // clock 1: 1st leaf ready -> release; build & poll 2nd
+                                            //          leaf -> acquire; pending. g_open=1
+    if !q0 && !q1 { acc = acc ^ 0x100; }    // pending on both polls (not yet complete)
+    if g_open == 1 { acc = acc ^ 0x200; }   // exactly one slot held (the 2nd leaf)
+    chain__Fut_cancel(&xf);                 // walk the active child (2nd leaf) -> release its slot
+    if g_open == 0 { acc = acc ^ 0x400; }   // cancel reclaimed the would-be-leaked slot
+    let q2: bool = chain__Fut__poll(&xf);   // a canceled future is DONE: poll true, no slot churn
+    if q2 && g_open == 0 { acc = acc ^ 0x800; }  // idempotent: cancel set DONE, no double-free
+
     // entry-mode contract: 1 = pass, 0 = fail.
-    if acc != 0x1F { return 0; }
+    if acc != 0xFFF { return 0; }
     return 1;
 }

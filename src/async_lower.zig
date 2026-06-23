@@ -10,28 +10,42 @@
 // lowers to:
 //
 //   struct f__Fut { state: u8, <one child-future field per await>, <captured locals>, result: T }
-//   fn f(params) -> f__Fut { ...construct all child futures + state=0 + result=0... }   // constructor
+//   fn f(params) -> f__Fut { ...construct ONLY child0 + state=0 + result=0... }   // constructor
 //   impl Future for f__Fut { fn poll(self: *mut f__Fut) -> bool { <switch-on-state machine> } }
 //   fn f__Fut_take_result(self: *mut f__Fut) -> T { return self.result; }
+//   fn f__Fut_cancel(self: *mut f__Fut) -> void { ...walk the active child, mark DONE... }
 //
-// `await g(args)`: the child future for `g(args)` is constructed up-front in the constructor and
-// stored in a `__cN` field; the poll state machine polls it (`FutT__poll(&self.__cN)`), returns
-// `false` (suspend) while pending, then reads its typed result via `FutT_take_result(&self.__cN)`
-// and advances `state`. The generated poll NEVER calls a blocking await — it only polls children.
+// `await g(args)`: the child future for step 0 is constructed up-front in the constructor; each
+// LATER child (`__c{i+1}`) is constructed LAZILY at the transition that ends step i — AFTER its
+// take-result has stored the prior binding — so a later awaited call MAY reference an earlier
+// `await` result (`let t = await login(); let d = await fetch(t);`). The poll state machine polls
+// the active child (`FutT__poll(&self.__cN)`), returns `false` (suspend) while pending, reads its
+// typed result via `FutT_take_result(&self.__cN)`, builds the next child, then advances `state`.
+// The generated poll NEVER calls a blocking await — it only polls children.
 //
 // v0 scope (enforced): STRAIGHT-LINE only — a sequence of `let xN = await eN;` (each `eN` a plain
 // call `g(args)`), followed by branch-free straight-line statements, then `return expr;`. No
-// branches/loops across an await; no cancellation. Capture analysis is CONSERVATIVE: every local
-// binding becomes a struct field (correctness over minimality).
+// branches/loops across an await. Capture analysis is CONSERVATIVE: every local binding becomes a
+// struct field (correctness over minimality).
+//
+// CANCEL (drop): a generated free fn `f__Fut_cancel(self: *mut f__Fut)` reclaims the in-flight
+// broker slot held by a still-pending future. Because of lazy construction, at most ONE child is
+// live at a time (state i ⇒ only `__ci` exists), so cancel walks just the current state's child
+// via `<childFutType>_cancel(&self.__ci)`, then sets `state = done_state` (idempotent: a later poll
+// early-returns true; no double-free). This establishes the LEAF Future ABI as `__poll` +
+// `_take_result` + `_cancel` — every awaited leaf must provide all three.
 //
 // CHILD-FUTURE ABI (uniform across generated futures and hand-written leaves), resolved WITHOUT
 // sema by scanning the module's fn decls for the awaited callee's return type:
 //   - `await g(args)` ⇒ child future struct type `FutT` = return type of fn `g`
 //     (for an async `g`, the transform rewrites `g` to return `g__Fut`, so `FutT == g__Fut`);
-//   - construct by value:  `self.__cN = g(args);`
+//   - construct by value:  `self.__cN = g(args);` (child0 in the constructor; later children at
+//                          the transition that ends the prior step, so they may read prior results);
 //   - poll:                `FutT__poll(&self.__cN)`  (the `impl Future for FutT` method);
 //   - typed result:        `FutT_take_result(&self.__cN)`  (a free fn; generated for async `g`,
-//                          author-provided for a leaf — valid once, after poll()==true).
+//                          author-provided for a leaf — valid once, after poll()==true);
+//   - cancel:              `FutT_cancel(&self.__cN)`  (a free fn; generated for async `g`,
+//                          author-provided for a leaf — releases the in-flight slot on drop).
 
 const std = @import("std");
 const ast = @import("ast.zig");
@@ -92,6 +106,7 @@ const Error = std.mem.Allocator.Error || error{AsyncLowerFailed};
 const AsyncInfo = struct {
     fut_type: []const u8, // `f__Fut`
     take_result: []const u8, // `f__Fut_take_result`
+    cancel: []const u8, // `f__Fut_cancel`
     result_type: ast.TypeExpr,
 };
 
@@ -119,7 +134,8 @@ const AwaitStep = struct {
     child_field: []const u8, // `__cN`
     fut_type: []const u8, // child future struct type
     take_result: []const u8, // child `FutT_take_result`
-    call: ast.Expr, // the awaited `g(args)` call (used to construct the child up-front)
+    cancel: []const u8, // child `FutT_cancel`
+    call: ast.Expr, // the awaited `g(args)` call (used to construct the child)
     result_type: ast.TypeExpr, // the child's result type (binding_type, or async fn's return type)
 };
 
@@ -170,8 +186,9 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
                 if (d.kind == .fn_decl and fd.is_async) {
                     const fut_type = try std.fmt.allocPrint(arena, "{s}__Fut", .{fd.name.text});
                     const take = try std.fmt.allocPrint(arena, "{s}_take_result", .{fut_type});
+                    const cancel = try std.fmt.allocPrint(arena, "{s}_cancel", .{fut_type});
                     const rt = fd.return_type orelse return low.fail(fd.name.span, "async fn '{s}' must declare a return type", .{fd.name.text});
-                    try low.async_info.put(fd.name.text, .{ .fut_type = fut_type, .take_result = take, .result_type = rt });
+                    try low.async_info.put(fd.name.text, .{ .fut_type = fut_type, .take_result = take, .cancel = cancel, .result_type = rt });
                     // After lowering, calling `g(args)` yields a `g__Fut`, so record that as g's
                     // "return type" for nested awaits (`await g(...)`).
                     try low.fn_ret_type.put(fd.name.text, fut_type);
@@ -221,8 +238,6 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // ordinary statements ending in `return expr;`. Reject anything outside this v0 shape. ----
     var steps: std.ArrayList(AwaitStep) = .empty;
     var tail: std.ArrayList(ast.Stmt) = .empty; // post-await straight-line stmts (incl the return)
-    // Names bound by EARLIER awaits — an awaited call may not reference them in v0 (see below).
-    var prior_bindings = std.StringHashMap(void).init(arena);
 
     var in_tail = false;
     for (body.items) |stmt| {
@@ -232,13 +247,9 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
             const ld = stmt.kind.let_decl; // (let or var; both carry LocalDecl)
             if (ld.names.len != 1) return low.fail(stmt.span, "async v0: an awaited binding must bind exactly one name", .{});
             const acall = await_call.?;
-            // v0: the constructor builds ALL child futures up front, before any await result exists,
-            // so a later awaited call cannot read an earlier `await` binding. Reject it clearly
-            // rather than emit code that references a not-yet-existing value. (Lazy per-state child
-            // construction would lift this — a tracked Phase-D follow-up.) Params are fine (captured).
-            if (exprRefsAny(acall, &prior_bindings)) {
-                return low.fail(stmt.span, "E_ASYNC_AWAIT_DEPENDS_ON_PRIOR: an awaited call may not reference an earlier `await` result in async v0 (children are constructed up front); lazy child construction is a tracked follow-up", .{});
-            }
+            // LAZY construction: child0 is built in the constructor; each LATER child is built at the
+            // transition ending the prior step, so an awaited call MAY reference an earlier `await`
+            // result (the prior binding is a struct field by then). No depends-on-prior rejection.
             // Resolve the child future type from the awaited call's callee.
             const child = try resolveAwait(low, stmt.span, acall);
             const field = try std.fmt.allocPrint(arena, "__c{d}", .{steps.items.len});
@@ -255,10 +266,10 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
                 .child_field = field,
                 .fut_type = child.fut_type,
                 .take_result = child.take_result,
+                .cancel = child.cancel,
                 .call = acall,
                 .result_type = res_ty,
             });
-            try prior_bindings.put(ld.names[0].text, {});
             continue;
         }
         // First non-await statement begins the tail. Reject a stray await beyond the leading run
@@ -290,9 +301,21 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
         .fields = try fields.toOwnedSlice(arena),
     } } });
 
+    // The set of names that are now `self.*` fields: every param plus every awaited binding. An
+    // awaited call's args (built lazily at a transition) may reference a param OR any PRIOR binding,
+    // and a later binding name never appears before it is bound, so one combined set is correct.
+    var field_names = std.StringHashMap(void).init(arena);
+    for (fd.params) |p| try field_names.put(p.name.text, {});
+    for (steps.items) |s| {
+        if (s.binding) |b| try field_names.put(b, {});
+    }
+
     // ---- The constructor `fn f(params) -> f__Fut { var self: f__Fut = uninit; ...; return self; }`
-    // It zeroes state, copies params into their fields, and constructs every child future up-front
-    // (matching the hand fixture, which builds all children in `*_init`). ----
+    // It zeroes state, copies params into their fields, and constructs ONLY child0 (step 0's child)
+    // from the params. Later children are built LAZILY in `poll` at their step's entry transition,
+    // so an awaited call may read an earlier `await` result. Leaving the later `__cN` fields
+    // unwritten is sound: sema def-init tracks only SCALAR `uninit` vars, and each `__cN` is written
+    // (at the transition) before its first poll. ----
     var cbody: std.ArrayList(ast.Stmt) = .empty;
     try cbody.append(arena, .{ .span = zspan, .kind = .{ .var_decl = .{
         .names = try dupIdents(arena, &.{"self"}),
@@ -303,13 +326,12 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     for (fd.params) |p| {
         try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
     }
-    // Each child future is constructed by value: `self.__cN = g(args);` — but the call's args may
-    // reference params, which are now `self.<param>` fields. Rewrite ident args that name a param.
-    var param_names = std.StringHashMap(void).init(arena);
-    for (fd.params) |p| try param_names.put(p.name.text, {});
-    for (steps.items) |s| {
-        const rewritten = try rewriteParamRefs(low, s.call, &param_names);
-        try cbody.append(arena, assignStmt(try selfMember(arena, s.child_field), rewritten));
+    // child0 is constructed by value: `self.__c0 = g(args);` — the call's args may reference params,
+    // which are now `self.<param>` fields. Rewrite ident args that name a captured field.
+    if (steps.items.len > 0) {
+        const s0 = steps.items[0];
+        const rewritten = try rewriteParamRefs(low, s0.call, &field_names);
+        try cbody.append(arena, assignStmt(try selfMember(arena, s0.child_field), rewritten));
     }
     // Zero the captured binding fields + result (definite-init for the move/borrow checker).
     for (steps.items) |s| {
@@ -364,6 +386,13 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
         } else {
             try blk.append(arena, .{ .span = zspan, .kind = .{ .expr = take_call } });
         }
+        // LAZY: build the NEXT child future now, AFTER the prior result is stored in its field, so
+        // its call may reference an earlier `await` result (and params) — all `self.*` fields.
+        if (i + 1 < steps.items.len) {
+            const next = steps.items[i + 1];
+            const rewritten = try rewriteParamRefs(low, next.call, &field_names);
+            try blk.append(arena, assignStmt(try selfMember(arena, next.child_field), rewritten));
+        }
         // self.state = N+1;
         const next_state = try std.fmt.allocPrint(arena, "{d}", .{i + 1});
         try blk.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(next_state)));
@@ -375,11 +404,8 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // The straight-line tail. `return expr;` becomes result-store + final-state + `return true`.
     // Other tail statements are emitted as-is, but local idents that name a param or an awaited
     // binding must read from `self.*` (they are fields now); the `return expr` is rewritten too.
-    var bind_names = std.StringHashMap(void).init(arena);
-    for (fd.params) |p| try bind_names.put(p.name.text, {});
-    for (steps.items) |s| {
-        if (s.binding) |b| try bind_names.put(b, {});
-    }
+    // `field_names` (params ∪ all bindings) is exactly the captured-field set the tail needs.
+    const bind_names = &field_names;
     // The tail runs in ONE guarded state (`if self.state == tail_state`), reached after the last
     // await advances `state` to tail_state. `return expr;` becomes result-store + advance to DONE +
     // `return true`. Guarding it (plus the DONE early-return above) makes poll idempotent: once
@@ -390,14 +416,14 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
         switch (stmt.kind) {
             .@"return" => |maybe_expr| {
                 const rexpr = maybe_expr orelse return low.fail(stmt.span, "async v0: `return` must return a value", .{});
-                const rewritten = try rewriteParamRefs(low, rexpr, &bind_names);
+                const rewritten = try rewriteParamRefs(low, rexpr, bind_names);
                 try tail_body.append(arena, assignStmt(try selfMember(arena, "result"), rewritten));
                 try tail_body.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
                 try tail_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } });
             },
             else => {
                 // A straight-line tail stmt: rewrite ident reads of params/bindings to self.* .
-                const rewritten = try rewriteStmtParamRefs(low, stmt, &bind_names);
+                const rewritten = try rewriteStmtParamRefs(low, stmt, bind_names);
                 try tail_body.append(arena, rewritten);
             },
         }
@@ -450,6 +476,37 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
         .is_const = false,
         .exported = fd.exported,
     } } });
+
+    // ---- The generated drop/cancel `fn f__Fut_cancel(self: *mut f__Fut) -> void`. It reclaims the
+    // in-flight broker slot a still-pending future holds. With LAZY construction at most ONE child
+    // is live at a time (state i ⇒ only `__ci` exists; states < i are done & consumed, states > i
+    // not yet built), so cancel walks just the CURRENT state's child via `<childFutType>_cancel`,
+    // then marks DONE (state = done_state). DONE makes it idempotent: a later poll early-returns
+    // true and a later cancel finds no active child — no double-free. States >= tail_state hold no
+    // active child, so they fall through to the DONE store. This is a PLAIN free fn (not a trait
+    // method) — it is NOT added to the `impl Future` record. ----
+    var cn_params = try arena.alloc(ast.Param, 1);
+    cn_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
+    var cn_body: std.ArrayList(ast.Stmt) = .empty;
+    for (steps.items, 0..) |s, i| {
+        // if self.state == i { ChildI_cancel(&self.__ci); }
+        var cargs = try arena.alloc(ast.Expr, 1);
+        cargs[0] = try addrOf(arena, try selfMember(arena, s.child_field));
+        var cblk = try arena.alloc(ast.Stmt, 1);
+        cblk[0] = .{ .span = zspan, .kind = .{ .expr = try callExpr(arena, s.cancel, cargs) } };
+        try cn_body.append(arena, try ifStateEq(arena, i, cblk));
+    }
+    // self.state = done_state;  (idempotent: subsequent poll/cancel are no-ops)
+    try cn_body.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
+        .name = id(info.cancel),
+        .abi = null,
+        .params = cn_params,
+        .return_type = try nameType(arena, "void"),
+        .body = .{ .span = zspan, .items = try cn_body.toOwnedSlice(arena) },
+        .is_const = false,
+        .exported = fd.exported,
+    } } });
 }
 
 // ---- helpers ----
@@ -457,6 +514,7 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
 const ResolvedChild = struct {
     fut_type: []const u8,
     take_result: []const u8,
+    cancel: []const u8,
     result_type: ast.TypeExpr,
 };
 
@@ -474,14 +532,15 @@ fn resolveAwait(low: *Lowerer, span: diagnostics.Span, call: ast.Expr) Error!Res
         else => return low.fail(span, "async v0: `await` must call a plain named function", .{}),
     };
     if (low.async_info.get(cname)) |ai| {
-        return .{ .fut_type = ai.fut_type, .take_result = ai.take_result, .result_type = ai.result_type };
+        return .{ .fut_type = ai.fut_type, .take_result = ai.take_result, .cancel = ai.cancel, .result_type = ai.result_type };
     }
     const fut_type = low.fn_ret_type.get(cname) orelse
         return low.fail(span, "async v0: awaited callee '{s}' must be an async fn or a future-returning function (with a declared struct return type)", .{cname});
     const take = try std.fmt.allocPrint(low.arena, "{s}_take_result", .{fut_type});
+    const cancel = try std.fmt.allocPrint(low.arena, "{s}_cancel", .{fut_type});
     // The leaf's result type is unknown here; callers fall back to the binding's `: T` annotation.
     // Use a placeholder; a leaf await without a `: T` annotation is rejected at the call site.
-    return .{ .fut_type = fut_type, .take_result = take, .result_type = .{ .span = zspan, .kind = .{ .name = id("__async_infer") } } };
+    return .{ .fut_type = fut_type, .take_result = take, .cancel = cancel, .result_type = .{ .span = zspan, .kind = .{ .name = id("__async_infer") } } };
 }
 
 // `let x = await CALL;` (or `var`) — return the inner CALL expr if this stmt is exactly that.
@@ -552,26 +611,6 @@ fn exprContainsAwait(e: ast.Expr) bool {
         .index => |ix| exprContainsAwait(ix.base.*) or exprContainsAwait(ix.index.*),
         .member => |m| exprContainsAwait(m.base.*),
         .try_expr => |t| exprContainsAwait(t.operand.*),
-        else => false,
-    };
-}
-
-// Does the expression read any bare ident in `names`? (Used to reject a later awaited call that
-// references an earlier `await` binding. The callee position is a function name, not a binding.)
-fn exprRefsAny(e: ast.Expr, names: *std.StringHashMap(void)) bool {
-    return switch (e.kind) {
-        .ident => |i| names.contains(i.text),
-        .grouped, .address_of, .deref => |inner| exprRefsAny(inner.*, names),
-        .unary => |u| exprRefsAny(u.expr.*, names),
-        .binary => |b| exprRefsAny(b.left.*, names) or exprRefsAny(b.right.*, names),
-        .cast => |c| exprRefsAny(c.value.*, names),
-        .call => |c| blk: {
-            for (c.args) |a| if (exprRefsAny(a, names)) break :blk true;
-            break :blk false;
-        },
-        .index => |ix| exprRefsAny(ix.base.*, names) or exprRefsAny(ix.index.*, names),
-        .member => |m| exprRefsAny(m.base.*, names),
-        .try_expr => |t| exprRefsAny(t.operand.*, names),
         else => false,
     };
 }
