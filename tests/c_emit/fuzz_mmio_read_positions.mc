@@ -64,11 +64,13 @@ export fn mmio_read_positions_run() -> u32 {
     let neg: i32 = -(p.small.read(.relaxed) as i32);
     acc = acc ^ (neg as u32);
 
-    // (4) packed-bits field test on an MMIO read, in condition position
-    if p.flags.read(.acquire).ready { acc = acc ^ 0x0000_0100; }
-    if p.flags.read(.acquire).full { acc = acc ^ 0x0000_0200; }   // full=0 -> not taken
-    if p.flags.read(.acquire).b5 { acc = acc ^ 0x0000_0400; }
-    if p.flags.read(.acquire).b7 { acc = acc ^ 0x0000_0800; }
+    // (4) packed-bits field reads on an MMIO read, folded via arithmetic (cast bool->u32)
+    // rather than `if` — an `if` on a packed-bits bool field lowers to a C switch-on-bool
+    // that trips -Wswitch-bool under the c-test gate's -Werror.
+    acc = acc ^ ((p.flags.read(.acquire).ready as u32) << 8);   // ready=1
+    acc = acc ^ ((p.flags.read(.acquire).full as u32) << 9);    // full=0
+    acc = acc ^ ((p.flags.read(.acquire).b5 as u32) << 10);     // b5=1
+    acc = acc ^ ((p.flags.read(.acquire).b7 as u32) << 11);     // b7=1
 
     // Both backends must compute the same acc; entry mode diffs C vs LLVM stdout.
     return acc;
