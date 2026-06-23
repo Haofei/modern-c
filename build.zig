@@ -3732,6 +3732,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_blk_test_cmd.step);
     m0_step.dependOn(&llvm_blk_smode_test_cmd.step);
     m0_step.dependOn(&llvm_smode_timer_test_cmd.step);
+    // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI.
+    m0_step.dependOn(&llvm_smode_plic_test_cmd.step);
     m0_step.dependOn(&llvm_net_smode_test_cmd.step);
     m0_step.dependOn(&llvm_net_test_cmd.step);
     m0_step.dependOn(&llvm_nic_test_cmd.step);
@@ -3798,6 +3800,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&blk_smode_test_cmd.step);
     // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
     m0_step.dependOn(&smode_timer_test_cmd.step);
+    // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI.
+    m0_step.dependOn(&smode_plic_test_cmd.step);
     m0_step.dependOn(&net_smode_test_cmd.step);
     // bearssl-smode-test revalidates the freestanding BearSSL SHA-256 + virtio-rng
     // entropy (the TLS crypto stack) under REAL OpenSBI in S-mode. Deterministic (no

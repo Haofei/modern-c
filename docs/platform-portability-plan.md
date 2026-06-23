@@ -1202,11 +1202,23 @@ driver) have since landed. What remains is captured in the marked-up items and t
 5. **S-mode interrupts.** *Core done:* real S-mode **timer-interrupt delivery** under OpenSBI
    via the SBI TIME extension (`sie.STIE`+`sstatus.SIE`, `rdtime`, re-armed per tick,
    `wfi`-parked) — `smode-timer-test` (`SMODE-TIMER TICKS=3`, both backends, in m0), proving
-   genuine non-polled IRQ delivery (`MIDELEG` bit 5 confirms S-timer delegation). *Remaining:*
-   **S-mode PLIC** external-interrupt integration; the **SBI HSM/IPI** service layer (SMP hart
-   start/stop + inter-hart IPIs); and the **`s_trap_vector` SPP/nested-trap rework** on the
-   shared confinement vector (`smode_usermode_runtime.c`) so the confined-agent path can ALSO
-   take interrupts (the timer proof uses a standalone pure-S-mode vector that needs no swap).
+   genuine non-polled IRQ delivery (`MIDELEG` bit 5 confirms S-timer delegation). Real S-mode
+   **external (PLIC) interrupt delivery** is now also proven — `smode-plic-test` (both backends,
+   in m0): a flat S-mode kernel programs the PLIC **S-mode context** (context 1: enable @ +0x2080,
+   threshold/claim @ +0x201000), opens `sie.SEIE`, and takes a real external interrupt from the
+   16550 UART (line 10), claiming and completing it. It is **single-shot** — one claimed+completed
+   external IRQ, which is the full integration proof (S-context routing, SEIE/SEIP, the claim
+   returning the right source id, complete). *Remaining:* (a) a **reusable PLIC driver** + wiring
+   an actual device (virtio/net) to be interrupt-driven instead of polled — generalizing
+   `kernel/drivers/irq/plic.mc` (today M-context-only) to S-context and replacing the virtio-net
+   poll loop; (b) the **SBI HSM/IPI** service layer (SMP hart start/stop + inter-hart IPIs); and
+   (c) the **`s_trap_vector` SPP/nested-trap rework** on the shared confinement vector
+   (`smode_usermode_runtime.mc`) so the confined-agent path can ALSO take interrupts. NOTE: (a)
+   and (c) are gated by a **C-backend reset** seen when a naked S-mode vector services an *async*
+   interrupt and resumes (PLIC re-arm or U-mode preemption) — LLVM is clean, the same vector
+   passes on C for *synchronous* ecalls, and a handler-entry SBI ecall masks it (timing, not
+   logic). That root-cause must land before multi-IRQ / preemptive S-mode paths ship parity-clean
+   on C; an LLVM-only U-mode-preemption proof was built but not committed (parity).
 6. ~~**Re-run the `kernel/net/` TLS gates under S-mode.**~~ **Done.** `bearssl-smode-test`
    (BearSSL SHA-256 vector + live virtio-rng entropy) and `https-smode-test` (a full BearSSL
    TLS 1.2 handshake — ECDHE-RSA-AES256-GCM — with X.509 cert-chain validation against the
@@ -1222,11 +1234,15 @@ driver) have since landed. What remains is captured in the marked-up items and t
 
 ---
 
-**Beyond §12 (follow-ups surfaced this round):** the agent async broker is still duplicated
-3× across the arch fixtures (consolidating it is the natural next first-principles cleanup);
-net `net_fetch` through `net_broker.mc` and the real FS op family on x86/arm; the full
-virtio-pci data path (virtqueue sector read over PCI); S-mode PLIC + SBI HSM/IPI + the shared
-`s_trap_vector` SPP/nested-trap rework; the target-aware LLVM varargs fix (item 3 above); and
+**Beyond §12 (follow-ups surfaced this round):** the agent async broker — NOTE: re-survey showed
+the *kernel* broker (`agent.mc`/`net_broker.mc`) is already single-source; the only per-arch code
+is riscv64 M-mode bring-up scaffolding, so "consolidate the broker" really means *building* the
+x86/ARM confined-agent runtimes that reuse it; net `net_fetch` through `net_broker.mc` and the
+real FS op family on x86/arm; the full virtio-pci data path (virtqueue sector read over PCI);
+the **reusable S-mode PLIC driver + interrupt-driven device wiring** (delivery itself is now proven
+by `smode-plic-test`) + SBI HSM/IPI + the shared `s_trap_vector` SPP/nested-trap rework — the last
+two gated by the C-backend async-IRQ reset noted in item 5; the target-aware LLVM varargs fix
+(item 3 above); and
 cow/demand portability (deferred until an x86/ARM kernel needs COW/demand paging).
 
 The sequencing principle still holds: the agent ABI stays stable while each architecture
