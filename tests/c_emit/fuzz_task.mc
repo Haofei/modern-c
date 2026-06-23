@@ -1,6 +1,6 @@
 // Differential smoke test for the pure async task vocabulary (std/task.mc, Phase A):
 // SlotFuture (an id mapped to a pending future via an injected completion source), the
-// join2 / race2 / timeout combinators, the executor (run_to_completion), and poll_many.
+// join2 / race2 / timeout combinators, and the executor (run_to_completion).
 // A mock completion source `done_at(id)` reports a request "done" once a virtual clock
 // reaches `id`; the executor's idle hook advances that clock — so each future completes at
 // a deterministic tick. Entry mode diffs C vs LLVM, so any backend disagreement on `*dyn`
@@ -54,5 +54,7 @@ export fn task_run() -> u32 {
     var nj: Join2 = uninit; join2_init(&nj, &n1, &nto);
     if run_to_completion(&nj, tick_idle) == 6 { acc = acc ^ 0x20; }
 
-    return acc;   // 0x3F iff every combinator + the executor agree
+    // 0x3F = all six combinator/executor checks passed. Entry-mode contract: 1 = pass, 0 = fail.
+    if acc != 0x3F { return 0; }
+    return 1;
 }

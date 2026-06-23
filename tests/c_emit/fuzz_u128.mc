@@ -53,5 +53,8 @@ export fn u128_run() -> u32 {
     if sa < 0 { acc = acc ^ 0x40; }
     if (sa - 1) < sa { acc = acc ^ 0x80; }
 
-    return acc;
+    // entry-mode contract: 1 = pass, 0 = fail. The snapshot also catches a both-backends-
+    // identical miscompile that a pure C-vs-LLVM diff would miss.
+    if acc != 0xDDA4_9472 { return 0; }
+    return 1;
 }

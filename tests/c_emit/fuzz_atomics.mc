@@ -49,7 +49,9 @@ export fn atomics_run() -> u32 {
     let f: u32 = c.flag.load(.acquire);
     if f == 0xABCD { acc = acc ^ 0x10000; }
 
-    return acc;
+    // entry-mode contract: 1 = pass, 0 = fail (snapshot also catches both-backends-identical miscompiles).
+    if acc != 0x9E36_79BF { return 0; }
+    return 1;
 
     // NOTE (C-backend parity follow-up, tracked in docs/lowering-coverage.md): the C
     // backend raises UnsupportedCEmission for some atomic-result uses that LLVM lowers —

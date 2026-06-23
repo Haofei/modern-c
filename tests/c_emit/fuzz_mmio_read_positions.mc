@@ -73,5 +73,7 @@ export fn mmio_read_positions_run() -> u32 {
     acc = acc ^ ((p.flags.read(.acquire).b7 as u32) << 11);     // b7=1
 
     // Both backends must compute the same acc; entry mode diffs C vs LLVM stdout.
-    return acc;
+    // entry-mode contract: 1 = pass, 0 = fail (snapshot also catches both-backends-identical miscompiles).
+    if acc != 0xBB88_94EB { return 0; }
+    return 1;
 }
