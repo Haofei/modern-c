@@ -178,6 +178,12 @@ static JSValue start_request_full(JSContext *ctx, uint32_t op, uint64_t arg, int
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise)) return promise;
 
+    // Invalidate the last-id BEFORE any rejection path: every early return below (local saturation,
+    // out-buffer exhaustion, kernel -errno) leaves g_last_id == -1, so the prelude's host_call()
+    // builds a cancel() that targets nothing (a no-op) instead of cancelling a PREVIOUS, unrelated
+    // in-flight request whose id was still sitting here. Only a successful submit sets it (below).
+    g_last_id = -1;
+
     // Check LOCAL capacity before submitting: a saturated resolver table means we could not
     // record a completion, so reject without ever touching the kernel.
     if (g_inflight >= MAXREQ) {

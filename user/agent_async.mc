@@ -102,13 +102,16 @@ export fn pump_pump(p: *mut ToolPump, timeout: usize) -> usize {
 }
 
 // Look up + CONSUME a stashed completion for `id`. Returns the registry index (< PUMP_STASH) and
-// fills *status/*result, or PUMP_STASH if `id` is not (yet) stashed. Consuming frees the entry.
-fn pump_take(p: *mut ToolPump, id: u64, status: *mut i32, result: *mut i32) -> usize {
+// fills *status/*result/*outlen, or PUMP_STASH if `id` is not (yet) stashed. Consuming frees the
+// entry. `outlen` is the result-payload byte count (read_async / echo) — propagated so the leaf can
+// surface it via ToolFut_out_len (else read_async would always report 0 bytes).
+fn pump_take(p: *mut ToolPump, id: u64, status: *mut i32, result: *mut i32, outlen: *mut u32) -> usize {
     var i: usize = 0;
     while i < PUMP_STASH {
         if p.stash_used[i] && p.stash_id[i] == id {
             *status = p.stash_status[i];
             *result = p.stash_result[i];
+            *outlen = p.stash_outlen[i];
             p.stash_used[i] = false;   // consume
             return i;
         }
@@ -148,20 +151,23 @@ impl Future for ToolFut {
         // Is my completion already stashed (delivered earlier, possibly out of order)?
         var st: i32 = 0;
         var rs: i32 = 0;
-        let idx: usize = pump_take(self.p, self.id, &st, &rs);
+        var ol: u32 = 0;
+        let idx: usize = pump_take(self.p, self.id, &st, &rs, &ol);
         if idx < PUMP_STASH {
             self.status = st;
             self.result = rs;
+            self.out_len = ol;
             self.ready = true;
             return true;
         }
         // Not yet — drain the broker once (timeout 0: advance the clock a single tick), which stashes
         // any newly-ready completions (mine AND siblings'), then re-check just mine.
         pump_pump(self.p, 0);
-        let idx2: usize = pump_take(self.p, self.id, &st, &rs);
+        let idx2: usize = pump_take(self.p, self.id, &st, &rs, &ol);
         if idx2 < PUMP_STASH {
             self.status = st;
             self.result = rs;
+            self.out_len = ol;
             self.ready = true;
             return true;
         }
