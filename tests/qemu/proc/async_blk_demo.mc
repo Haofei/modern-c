@@ -44,6 +44,7 @@ const VMMIO_SLOT_STRIDE: usize = 0x1000;
 global g_procs: ProcTable;
 global g_broker: AsyncBroker;
 global g_map: BlkReqMap;
+global g_pool: BlkBufPool;
 global g_vq: Virtq;
 global g_desc: DescTable;
 global g_avail: VringAvail;
@@ -125,6 +126,7 @@ export fn async_blk_demo() -> u32 {
         .regs = regs,
         .vq = &g_vq,
         .map = &g_map,
+        .pool = &g_pool,
         .broker = &g_broker,
         .procs = &g_procs,
     };
@@ -142,19 +144,49 @@ export fn async_blk_demo() -> u32 {
     plic_enable_src(g_irq_src);
     enable_external_interrupt();   // mie.MEIE
 
-    // Submit the async read and build a future over its broker id.
-    let id: u64 = blk_read_sector_async(&g_dev, 0);
-    if id == ASYNC_NO_ID {
-        puts_("BLK-SUBMIT-FAIL\n");
+    // REPEATED-READ leak probe. The 3-descriptor chain consumes 3 of the 8 (VRING_QSIZE) free
+    // descriptors per read; with the old hand-rolled reap (which never freed the chain) the free
+    // count fell 8→5→2 and the THIRD read hit QUEUE-FULL (ASYNC_NO_ID) — and the DMA buffers
+    // leaked. We now do NREADS sequential reads, each awaited to completion via the device IRQ; if
+    // descriptors (and pool slots) are reclaimed in the ISR, every read succeeds and the free list
+    // returns to full (8) after each completion. We assert FULL after the last read.
+    let nreads: usize = 5;
+    var word: i32 = 0;
+    var n: usize = 0;
+    while n < nreads {
+        let id: u64 = blk_read_sector_async(&g_dev, 0);
+        if id == ASYNC_NO_ID {
+            // The unfixed code reaches here on read #3 (queue full): loud, distinct failure token.
+            puts_("\nBLK-QUEUE-FULL\n");
+            return 0;
+        }
+
+        var f: read_sector0__Fut = read_sector0(&g_broker, id);
+        putc_(87); // 'W' — future built, about to drive under wfi
+        // Drive to completion: poll with interrupts off, wfi until the device IRQ async_completes it.
+        drive_irq(&f, disable_interrupts_global, enable_interrupts_global, wait_for_interrupt);
+        putc_(82); // 'R' — resumed
+
+        word = read_sector0__Fut_take_result(&f);
+        if word != 0x4B53_4944 {
+            puts_("\nBLK-VALUE-FAIL\n");
+            return 0;
+        }
+        n = n + 1;
+    }
+
+    // After all reads completed, the descriptor free list must be fully replenished — proof the
+    // ISR returns every chain's descriptors (no QUEUE-FULL leak). VRING_QSIZE == 8.
+    let free_now: u16 = vq_free_count(&g_vq);
+    puts_("\nfree=");
+    putc_((48 + (free_now % 10) as u8)); // single decimal digit (8)
+    putc_(10);
+    if free_now == 8 {
+        puts_("BLK-NOLEAK-OK\n"); // all NREADS reads succeeded AND free list back to full
+    } else {
+        puts_("BLK-NOLEAK-FAIL\n");
         return 0;
     }
 
-    var f: read_sector0__Fut = read_sector0(&g_broker, id);
-    putc_(87); // 'W' — future built, about to drive under wfi
-    // Drive to completion: poll with interrupts off, wfi until the device IRQ async_completes it.
-    drive_irq(&f, disable_interrupts_global, enable_interrupts_global, wait_for_interrupt);
-    putc_(82); // 'R' — resumed
-
-    let word: i32 = read_sector0__Fut_take_result(&f);
     return word as u32;
 }

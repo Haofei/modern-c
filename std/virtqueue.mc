@@ -85,14 +85,51 @@ fn vq_alloc_desc(vq: *mut Virtq) -> u16 {
     return id;
 }
 
-// Return a descriptor to the free list.
-fn vq_free_desc(vq: *mut Virtq, id: u16) -> void {
+// Return a descriptor to the free list. Pure vq-field manipulation (no alloc/free, no blocking,
+// no MMIO), so it is safe to call from an interrupt handler — an IRQ-driven driver (e.g.
+// kernel/drivers/virtio/virtio_blk_async.mc) reaps the used ring and returns its descriptors here.
+#[irq_context]
+export fn vq_free_desc(vq: *mut Virtq, id: u16) -> void {
     vq.inflight_addr[id as usize] = 0;
     vq.inflight_len[id as usize] = 0;
     vq.inflight_present[id as usize] = false;
     vq.desc.d[id as usize].next = vq.free_head;
     vq.free_head = id;
     vq.num_free = vq.num_free + 1;
+}
+
+// Free a three-descriptor request chain (head → next → next) back to the free list, WITHOUT
+// reconstructing or freeing the DMA buffers. The descriptor links are read from the desc table
+// (the same `next` words `vq_submit_chain3` wrote) and each id is bounds-checked against the
+// queue before it is touched. Unlike `vq_complete_chain` this neither validates the device's
+// reported length nor hands buffers back — it ONLY returns the three descriptors — so it is pure
+// vq-field manipulation and `#[irq_context]`-safe: an IRQ reap path that owns its buffers via a
+// fixed pool (and so does not reclaim per request) uses this to replenish the free list in the
+// ISR. The caller must have already validated `head` (in [0, size) and in flight). Idempotent
+// against double-reap is the caller's responsibility (clear the desc-id→request record first).
+#[irq_context]
+export fn vq_free_chain3(vq: *mut Virtq, head: u16) -> void {
+    if head >= vq.size {
+        return; // out-of-range head — fail safe, free nothing
+    }
+    let id1: u16 = vq.desc.d[head as usize].next;
+    var id2: u16 = 0;
+    var have_id2: bool = false;
+    if id1 < vq.size {
+        id2 = vq.desc.d[id1 as usize].next;
+        if id2 < vq.size {
+            have_id2 = true;
+        }
+    }
+    // Free head last is unnecessary (each free only touches its own id), but free in chain order
+    // for clarity: status (tail) then data then header (head). Guard each id's range.
+    vq_free_desc(vq, head);
+    if id1 < vq.size {
+        vq_free_desc(vq, id1);
+    }
+    if have_id2 {
+        vq_free_desc(vq, id2);
+    }
 }
 
 // ----- queue setup -----
