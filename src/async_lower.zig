@@ -2483,6 +2483,18 @@ fn declShadowNames(arena: std.mem.Allocator, ld: ast.LocalDecl) Error![]const []
     return out.toOwnedSlice(arena);
 }
 
+// The name(s) an `if let <pat> = v` binds into its then-block (mirrors armBoundNames for switch arms):
+// a `.bind`/`.tag_bind` pattern names a then-block-local that shadows a captured outer name there.
+fn ifLetBoundNames(arena: std.mem.Allocator, pat: ast.Pattern) Error![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    switch (pat.kind) {
+        .bind => |b| try out.append(arena, b.text),
+        .tag_bind => |tb| try out.append(arena, tb.binding.text),
+        else => {},
+    }
+    return out.toOwnedSlice(arena);
+}
+
 // Rewrite bare-ident reads that name a captured field (param or awaited binding) to `self.<name>`.
 // Inside the constructor and poll method the original locals are FIELDS, so a reference to `a`
 // must become `self.a`. Recurses structurally over the expression.
@@ -2584,6 +2596,22 @@ fn rewriteRegionStmt(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void)
             }
             return .{ .span = s.span, .kind = .{ .@"switch" = .{ .subject = rsubj, .arms = new_arms } } };
         },
+        .if_let => |il| {
+            // `if let <pat> = v { then } else { else }`: the matched value is read in the OUTER scope
+            // (rewrite with the full capture set), the pattern binds a then-block-local that shadows a
+            // captured name (shadow-remove for the then-block, like a switch arm), the else-block sees
+            // the full set. Previously this fell to `else => rewriteStmtParamRefs` (an `else => s`
+            // no-op), leaving captured-name reads inside the then/else arms unrewritten -> a
+            // fail-closed E_UNKNOWN_IDENTIFIER; now they are rewritten with correct shadowing.
+            const rvalue = try rewriteParamRefs(low, il.value, names);
+            const bound = try ifLetBoundNames(arena, il.pattern);
+            var removed: std.ArrayList([]const u8) = .empty;
+            try shadowRemove(names, bound, &removed, arena);
+            const rthen = try rewriteRegionBlock(low, il.then_block, names, done_str);
+            try shadowRestore(names, removed.items);
+            const relse = if (il.else_block) |eb| try rewriteRegionBlock(low, eb, names, done_str) else null;
+            return .{ .span = s.span, .kind = .{ .if_let = .{ .pattern = il.pattern, .value = rvalue, .then_block = rthen, .else_block = relse } } };
+        },
         else => return rewriteStmtParamRefs(low, s, names),
     }
 }
@@ -2673,6 +2701,20 @@ fn rewriteLoopBodyStmtIn(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(v
                 new_arms[i] = .{ .patterns = arm.patterns, .body = new_body };
             }
             return .{ .span = s.span, .kind = .{ .@"switch" = .{ .subject = rsubj, .arms = new_arms } } };
+        },
+        .if_let => |il| {
+            // See rewriteRegionStmt's `.if_let`: rewrite the matched value in the outer scope, shadow
+            // the pattern binding for the then-block, full set for the else-block. The arms are
+            // await-free (an await here routes to the general path), so a `return` inside still becomes
+            // the DONE transition via rewriteLoopBodyBlock; no break/continue ambiguity arises.
+            const rvalue = try rewriteParamRefs(low, il.value, names);
+            const bound = try ifLetBoundNames(arena, il.pattern);
+            var removed: std.ArrayList([]const u8) = .empty;
+            try shadowRemove(names, bound, &removed, arena);
+            const rthen = try rewriteLoopBodyBlock(low, il.then_block, names, done_str, cont_state, in_inner_loop);
+            try shadowRestore(names, removed.items);
+            const relse = if (il.else_block) |eb| try rewriteLoopBodyBlock(low, eb, names, done_str, cont_state, in_inner_loop) else null;
+            return .{ .span = s.span, .kind = .{ .if_let = .{ .pattern = il.pattern, .value = rvalue, .then_block = rthen, .else_block = relse } } };
         },
         else => return rewriteStmtParamRefs(low, s, names),
     }
