@@ -11,6 +11,81 @@ const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 const switch_lower = @import("switch_lower.zig");
 
+// Phase-2a split: scalar/primitive C-type mapping helpers moved verbatim to
+// `lower_c_type.zig`. Re-exported here so call sites read unchanged.
+const lower_c_type = @import("lower_c_type.zig");
+const cType = lower_c_type.cType;
+const isVaListType = lower_c_type.isVaListType;
+const checkedTypeSuffix = lower_c_type.checkedTypeSuffix;
+const rawScalarSuffix = lower_c_type.rawScalarSuffix;
+const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
+const signedTypeSuffix = lower_c_type.signedTypeSuffix;
+const IntTypeRange = lower_c_type.IntTypeRange;
+const intTypeRange = lower_c_type.intTypeRange;
+const signedMinMacroForInner = lower_c_type.signedMinMacroForInner;
+const signedCTypeForInner = lower_c_type.signedCTypeForInner;
+const isCReservedWord = lower_c_type.isCReservedWord;
+const floatCTypeName = lower_c_type.floatCTypeName;
+const mmioFieldWidthBytes = lower_c_type.mmioFieldWidthBytes;
+const primitiveCTypeName = lower_c_type.primitiveCTypeName;
+const ptrCType = lower_c_type.ptrCType;
+const isCVoidType = lower_c_type.isCVoidType;
+const isVoidType = lower_c_type.isVoidType;
+const cTaggedUnionTagSize = lower_c_type.cTaggedUnionTagSize;
+const isCKeyword = lower_c_type.isCKeyword;
+
+// Phase-2a split: operator spelling + checked/saturating-arithmetic helpers
+// moved verbatim to `lower_c_op.zig`. Re-exported here so call sites read
+// unchanged.
+const lower_c_op = @import("lower_c_op.zig");
+const unaryCOp = lower_c_op.unaryCOp;
+const binaryCOp = lower_c_op.binaryCOp;
+const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
+const isComparisonOp = lower_c_op.isComparisonOp;
+const isNoTrapBitwiseInfixOp = lower_c_op.isNoTrapBitwiseInfixOp;
+const CheckedHelperParts = lower_c_op.CheckedHelperParts;
+const checkedHelperParts = lower_c_op.checkedHelperParts;
+const satHelperParts = lower_c_op.satHelperParts;
+const isWrapPreservingBinary = lower_c_op.isWrapPreservingBinary;
+const arithmeticDomainOpName = lower_c_op.arithmeticDomainOpName;
+const trapHelperForCall = lower_c_op.trapHelperForCall;
+const isTrapCallee = lower_c_op.isTrapCallee;
+const trapHelperForKind = lower_c_op.trapHelperForKind;
+const CheckedOp = lower_c_op.CheckedOp;
+const TrapKind = lower_c_op.TrapKind;
+const checkedOpName = lower_c_op.checkedOpName;
+const isOverflowOp = lower_c_op.isOverflowOp;
+const trapKindForBinary = lower_c_op.trapKindForBinary;
+const isSignedIntType = lower_c_op.isSignedIntType;
+const isNegativeOne = lower_c_op.isNegativeOne;
+const isIntLiteral = lower_c_op.isIntLiteral;
+const widthBits = lower_c_op.widthBits;
+
+// Phase-2a split: atomic-ordering + memory-fence helper classifiers moved
+// verbatim to `lower_c_atomic.zig`. Re-exported here so call sites read
+// unchanged.
+const lower_c_atomic = @import("lower_c_atomic.zig");
+const orderingArg = lower_c_atomic.orderingArg;
+const atomicOrderingArg = lower_c_atomic.atomicOrderingArg;
+const asmHasMemoryClobber = lower_c_atomic.asmHasMemoryClobber;
+const atomicOrderCConstant = lower_c_atomic.atomicOrderCConstant;
+const atomicOrderSynchronizes = lower_c_atomic.atomicOrderSynchronizes;
+const isAtomicLoadOrdering = lower_c_atomic.isAtomicLoadOrdering;
+const isAtomicStoreOrdering = lower_c_atomic.isAtomicStoreOrdering;
+const isAtomicIntegerPayload = lower_c_atomic.isAtomicIntegerPayload;
+const fenceHelperForCall = lower_c_atomic.fenceHelperForCall;
+
+// Phase-2a split: type classifiers moved verbatim to `lower_c_type.zig`.
+const isNumericStorageType = lower_c_type.isNumericStorageType;
+const sameCStorageType = lower_c_type.sameCStorageType;
+const isNonNullPointerType = lower_c_type.isNonNullPointerType;
+const rawManyElementType = lower_c_type.rawManyElementType;
+const isDynCTypeName = lower_c_type.isDynCTypeName;
+const nullableInnerTypeExpr = lower_c_type.nullableInnerTypeExpr;
+const isBoolType = lower_c_type.isBoolType;
+const isPAddrType = lower_c_type.isPAddrType;
+const isPointerLikeAddressType = lower_c_type.isPointerLikeAddressType;
+
 // Shared with `sema.zig`/`mir.zig` (see `numeric.zig`/`ast_query.zig`); aliased so call sites
 // read unchanged.
 const parseUsizeLiteral = numeric.parseUsizeLiteral;
@@ -467,7 +542,8 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
         "    mc_ksan_store((uintptr_t)p, (uintptr_t)sizeof(TYPE)); \\\n"
     else
         "";
-    try out.print(allocator,
+    try out.print(
+        allocator,
         "#define MC_DEFINE_RACE_SCALAR(NAME, TYPE) \\\n" ++
             "MC_UNUSED static inline TYPE mc_race_load_##NAME(TYPE const *p) {{ \\\n" ++
             "{s}" ++
@@ -558,7 +634,8 @@ pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Mo
     else
         "";
     try out.appendSlice(allocator, profile_comment);
-    try out.print(allocator,
+    try out.print(
+        allocator,
         "#define MC_DEFINE_RAW_STORE(NAME, TYPE) \\\n" ++
             "MC_UNUSED static inline void mc_raw_store_##NAME(uintptr_t addr, TYPE value) {{ \\\n" ++
             "{s}" ++
@@ -1763,7 +1840,6 @@ const CEmitter = struct {
         try self.out.print(self.allocator, "}} {s};\n\n", .{name});
     }
 
-
     fn emitTaggedUnionType(self: *CEmitter, union_decl: ast.UnionDecl) !void {
         try self.out.print(self.allocator, "typedef enum {s}Tag {{\n", .{union_decl.name.text});
         self.indent += 1;
@@ -1886,7 +1962,8 @@ const CEmitter = struct {
             const struct_decl = self.structs.get(name) orelse return error.LayoutStructNotFound;
             const total = self.comptimeStructSize(struct_decl, 0) orelse {
                 if (fatal) return error.LayoutUnresolved;
-                try self.out.print(self.allocator,
+                try self.out.print(
+                    self.allocator,
                     "/* layout cross-check skipped for {s}: MC does not compute its comptime size (tagged-union/nullable/overlay field); the struct definition above is authoritative. */\n",
                     .{name},
                 );
@@ -1903,19 +1980,22 @@ const CEmitter = struct {
             }
             if (!offsets_ok) {
                 if (fatal) return error.LayoutUnresolved;
-                try self.out.print(self.allocator,
+                try self.out.print(
+                    self.allocator,
                     "/* layout cross-check skipped for {s}: MC does not compute every field offset at comptime (tagged-union/nullable/overlay field); the struct definition above is authoritative. */\n",
                     .{name},
                 );
                 continue;
             }
-            try self.out.print(self.allocator,
+            try self.out.print(
+                self.allocator,
                 "_Static_assert(sizeof({s}) == {d}, \"MC<->C layout drift: sizeof({s})\");\n",
                 .{ name, total, name },
             );
             for (struct_decl.fields) |field| {
                 const offset = self.comptimeFieldOffset(.{ .kind = .{ .name = struct_decl.name }, .span = struct_decl.name.span }, field.name.text, 0).?;
-                try self.out.print(self.allocator,
+                try self.out.print(
+                    self.allocator,
                     "_Static_assert(offsetof({s}, {s}) == {d}, \"MC<->C layout drift: offsetof({s}, {s})\");\n",
                     .{ name, field.name.text, offset, name, field.name.text },
                 );
@@ -2187,7 +2267,6 @@ const CEmitter = struct {
         }
     }
 
-
     // C has no `void` struct member, so a `Result<void, E>` (or `Result<T, void>`)
     // payload uses a 1-byte placeholder. The unit value `()` lowers to `0`, so
     // `.payload.ok = 0` stays well-formed.
@@ -2214,7 +2293,6 @@ const CEmitter = struct {
         self.indent -= 1;
         try self.out.print(self.allocator, "}} {s};\n\n", .{result.name});
     }
-
 
     fn emitArrayType(self: *CEmitter, array: ArrayInfo) !void {
         try self.out.print(self.allocator, "typedef struct {s} {{\n", .{array.name});
@@ -3282,7 +3360,6 @@ const CEmitter = struct {
     fn resultTypeName(self: *CEmitter, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) ![]const u8 {
         return std.fmt.allocPrint(self.scratch.allocator(), "mc_result_{s}_{s}", .{ try self.typeSuffix(ok_ty), try self.typeSuffix(err_ty) });
     }
-
 
     fn emitStmt(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         try self.writeLineDirective(stmt.span);
@@ -8772,7 +8849,6 @@ const CEmitter = struct {
         return true;
     }
 
-
     fn emitResultTryCallArgTemps(self: *CEmitter, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!std.ArrayList(SequencedArgTemp) {
         var temps: std.ArrayList(SequencedArgTemp) = .empty;
         errdefer temps.deinit(self.scratch.allocator());
@@ -11297,22 +11373,6 @@ fn effectiveAlign(attrs: []const ast.Attr) ?u32 {
     return naked_min;
 }
 
-fn isNumericStorageType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .name => |ident| checkedTypeSuffix(ident.text) != null,
-        .generic => |node| {
-            // wrap/sat/serial/counter all lower to their unsigned inner integer, so a
-            // `.from()` cast into any of them is a plain numeric storage conversion (the
-            // LLVM backend recognizes the same set via isPayloadDomainGenericName).
-            if ((!std.mem.eql(u8, node.base.text, "wrap") and !std.mem.eql(u8, node.base.text, "sat") and
-                !std.mem.eql(u8, node.base.text, "serial") and !std.mem.eql(u8, node.base.text, "counter")) or node.args.len != 1) return false;
-            return isNumericStorageType(node.args[0]);
-        },
-        .qualified => |node| isNumericStorageType(node.child.*),
-        else => false,
-    };
-}
-
 // Which of `break`/`continue` does this loop body use targeting *this* loop
 // (i.e. not nested inside an inner loop)? Each needs a labeled target so a
 // `break`/`continue` inside a `switch` reaches the loop, not the switch.
@@ -11381,47 +11441,6 @@ fn isNumericValueBinaryOp(op: ast.BinaryOp) bool {
     return switch (op) {
         .add, .sub, .mul, .div, .mod, .shl, .shr, .bit_and, .bit_or, .bit_xor => true,
         else => false,
-    };
-}
-
-fn sameCStorageType(left: ast.TypeExpr, right: ast.TypeExpr) bool {
-    return switch (left.kind) {
-        .name => |left_name| switch (right.kind) {
-            .name => |right_name| std.mem.eql(u8, left_name.text, right_name.text),
-            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
-            else => false,
-        },
-        .generic => |left_node| switch (right.kind) {
-            .generic => |right_node| {
-                if (!std.mem.eql(u8, left_node.base.text, right_node.base.text)) return false;
-                if (left_node.args.len != right_node.args.len) return false;
-                for (left_node.args, right_node.args) |left_arg, right_arg| {
-                    if (!sameCStorageType(left_arg, right_arg)) return false;
-                }
-                return true;
-            },
-            .qualified => |right_node| sameCStorageType(left, right_node.child.*),
-            else => false,
-        },
-        .qualified => |left_node| sameCStorageType(left_node.child.*, right),
-        else => false,
-    };
-}
-
-
-fn isNonNullPointerType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .pointer, .raw_many_pointer => true,
-        .qualified => |node| isNonNullPointerType(node.child.*),
-        else => false,
-    };
-}
-
-fn rawManyElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .raw_many_pointer => |node| node.child.*,
-        .qualified => |node| rawManyElementType(node.child.*),
-        else => null,
     };
 }
 
@@ -11544,19 +11563,6 @@ const NullableSwitchSubject = struct {
             std.fmt.bufPrint(buf, "{s} != NULL", .{self.name}) catch "0";
     }
 };
-
-fn isDynCTypeName(name: []const u8) bool {
-    return std.mem.startsWith(u8, name, "mc_dyn_");
-}
-
-// The inner (non-null) type of a `?T` TypeExpr — e.g. `?*dyn Trait` -> `*dyn Trait`.
-fn nullableInnerTypeExpr(ty: ast.TypeExpr) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .nullable => |child| child.*,
-        .qualified => |node| nullableInnerTypeExpr(node.child.*),
-        else => null,
-    };
-}
 
 const NullableSwitchBranch = struct {
     condition: ?[]const u8 = null,
@@ -12422,7 +12428,6 @@ fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {
     return null;
 }
 
-
 fn resultPayloadTypeForTag(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
     return switch (ty.kind) {
         .generic => |node| {
@@ -12436,12 +12441,9 @@ fn resultPayloadTypeForTag(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
     };
 }
 
-
-
 // A string literal lowers to a C string literal cast to a `u8` pointer target
 // (`*const u8` or `[*]const u8`), the FFI-facing string shape MC's grammar can
 // express. Other targets are left unsupported (loud failure by design).
-
 
 fn structFieldType(struct_decl: ast.StructDecl, field_name: []const u8) ?ast.TypeExpr {
     for (struct_decl.fields) |field| {
@@ -12449,8 +12451,6 @@ fn structFieldType(struct_decl: ast.StructDecl, field_name: []const u8) ?ast.Typ
     }
     return null;
 }
-
-
 
 fn genericChildType(ty: ast.TypeExpr, base_name: []const u8) ?ast.TypeExpr {
     return switch (ty.kind) {
@@ -12473,46 +12473,12 @@ fn atomicPayloadOfType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
-fn isCVoidType(ty: ast.TypeExpr) bool {
-    const name = typeName(ty) orelse return false;
-    return std.mem.eql(u8, name, "void") or std.mem.eql(u8, name, "never");
-}
-
-fn isVoidType(ty: ast.TypeExpr) bool {
-    const name = typeName(ty) orelse return false;
-    return std.mem.eql(u8, name, "void");
-}
-
 fn isVoidLiteralExpr(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .void_literal => true,
         .grouped => |inner| isVoidLiteralExpr(inner.*),
         else => false,
     };
-}
-
-
-fn cTaggedUnionTagSize() i128 {
-    return 4;
-}
-
-
-
-fn isCKeyword(name: []const u8) bool {
-    const keywords = [_][]const u8{
-        "auto",           "break",         "case",     "char",     "const",      "continue",
-        "default",        "do",            "double",   "else",     "enum",       "extern",
-        "float",          "for",           "goto",     "if",       "inline",     "int",
-        "long",           "register",      "restrict", "return",   "short",      "signed",
-        "sizeof",         "static",        "struct",   "switch",   "typedef",    "union",
-        "unsigned",       "void",          "volatile", "while",    "_Alignas",   "_Alignof",
-        "_Atomic",        "_Bool",         "_Complex", "_Generic", "_Imaginary", "_Noreturn",
-        "_Static_assert", "_Thread_local",
-    };
-    for (keywords) |keyword| {
-        if (std.mem.eql(u8, name, keyword)) return true;
-    }
-    return false;
 }
 
 // A trait is object-safe (so it can have a vtable): every method takes self by
@@ -12535,227 +12501,6 @@ fn implMethodMangled(methods: []const ast.ImplTraitMethod, name: []const u8) ?[]
         if (std.mem.eql(u8, m.name.text, name)) return m.mangled;
     }
     return null;
-}
-
-fn cType(ty: ast.TypeExpr) []const u8 {
-    switch (ty.kind) {
-        .pointer => |node| return ptrCType(node.child.*, node.mutability),
-        .raw_many_pointer => |node| return ptrCType(node.child.*, node.mutability),
-        .slice => |node| return ptrCType(node.child.*, node.mutability),
-        .array => |node| return ptrCType(node.child.*, .none),
-        .nullable => |child| return cType(child.*),
-        else => {},
-    }
-    const name = typeName(ty) orelse return "void *";
-    if (std.mem.eql(u8, name, "void")) return "void";
-    if (std.mem.eql(u8, name, "c_void")) return "void";
-    if (std.mem.eql(u8, name, "never")) return "void";
-    if (std.mem.eql(u8, name, "bool")) return "bool";
-    if (std.mem.eql(u8, name, "u8")) return "uint8_t";
-    if (std.mem.eql(u8, name, "u16")) return "uint16_t";
-    if (std.mem.eql(u8, name, "u32")) return "uint32_t";
-    if (std.mem.eql(u8, name, "u64")) return "uint64_t";
-    if (std.mem.eql(u8, name, "u128")) return "unsigned __int128";
-    if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
-    if (isOpaqueAddressTypeName(name)) return "uintptr_t";
-    // IrqOff (§19.1) capability token: a 1-byte witness value.
-    if (std.mem.eql(u8, name, "IrqOff")) return "uint8_t";
-    if (std.mem.eql(u8, name, "i8")) return "int8_t";
-    if (std.mem.eql(u8, name, "i16")) return "int16_t";
-    if (std.mem.eql(u8, name, "i32")) return "int32_t";
-    if (std.mem.eql(u8, name, "i64")) return "int64_t";
-    if (std.mem.eql(u8, name, "i128")) return "__int128";
-    if (std.mem.eql(u8, name, "isize")) return "intptr_t";
-    if (std.mem.eql(u8, name, "f32")) return "float";
-    if (std.mem.eql(u8, name, "f64")) return "double";
-    // Library result/order types (sections 5.4, 5.5). Order is a three-way
-    // comparison (-1/0/+1); the ambiguity error types carry no payload.
-    if (std.mem.eql(u8, name, "Order")) return "int8_t";
-    if (std.mem.eql(u8, name, "AmbiguousSerialOrder")) return "uint8_t";
-    if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return "uint8_t";
-    if (std.mem.eql(u8, name, "ConversionError")) return "uint8_t";
-    if (std.mem.eql(u8, name, "Overflow")) return "uint8_t";
-    if (std.mem.eql(u8, name, "va_list")) return "__builtin_va_list";
-    return "void *";
-}
-
-// Is `ty` the `va_list` named type? (Used to copy va_list temps with __builtin_va_copy rather
-// than `=`, which is ill-formed for x86-64's array-typed __builtin_va_list.)
-fn isVaListType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .name => |n| std.mem.eql(u8, n.text, "va_list"),
-        else => false,
-    };
-}
-
-fn checkedTypeSuffix(name: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, name, "u8")) return "u8";
-    if (std.mem.eql(u8, name, "u16")) return "u16";
-    if (std.mem.eql(u8, name, "u32")) return "u32";
-    if (std.mem.eql(u8, name, "u64")) return "u64";
-    if (std.mem.eql(u8, name, "u128")) return "u128";
-    if (std.mem.eql(u8, name, "usize")) return "usize";
-    if (std.mem.eql(u8, name, "i8")) return "i8";
-    if (std.mem.eql(u8, name, "i16")) return "i16";
-    if (std.mem.eql(u8, name, "i32")) return "i32";
-    if (std.mem.eql(u8, name, "i64")) return "i64";
-    if (std.mem.eql(u8, name, "i128")) return "i128";
-    if (std.mem.eql(u8, name, "isize")) return "isize";
-    return null;
-}
-
-// Scalar element types valid for `raw.load`/`raw.store`. A superset of the
-// checked-arithmetic scalars: it also admits the IEEE floats `f32`/`f64`, which
-// are legal raw memory cells (the round-trip float-buffer kernel reads/writes
-// them) even though they have no checked-arithmetic helpers.
-fn rawScalarSuffix(name: []const u8) ?[]const u8 {
-    if (checkedTypeSuffix(name)) |s| return s;
-    if (std.mem.eql(u8, name, "f32")) return "f32";
-    if (std.mem.eql(u8, name, "f64")) return "f64";
-    return null;
-}
-
-fn unsignedTypeSuffix(name: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, name, "u8")) return "u8";
-    if (std.mem.eql(u8, name, "u16")) return "u16";
-    if (std.mem.eql(u8, name, "u32")) return "u32";
-    if (std.mem.eql(u8, name, "u64")) return "u64";
-    if (std.mem.eql(u8, name, "u128")) return "u128";
-    if (std.mem.eql(u8, name, "usize")) return "usize";
-    return null;
-}
-
-fn signedTypeSuffix(name: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, name, "i8")) return "i8";
-    if (std.mem.eql(u8, name, "i16")) return "i16";
-    if (std.mem.eql(u8, name, "i32")) return "i32";
-    if (std.mem.eql(u8, name, "i64")) return "i64";
-    if (std.mem.eql(u8, name, "i128")) return "i128";
-    if (std.mem.eql(u8, name, "isize")) return "isize";
-    return null;
-}
-
-
-const IntTypeRange = struct {
-    min: i128,
-    max: i128,
-    c_min: []const u8,
-    c_max: []const u8,
-};
-
-// Value ranges for the scalar integer types, used to elide unnecessary bound
-// checks in `trap_from`/`sat_from` lowering. `usize`/`isize` are treated as
-// 64-bit for elision; the emitted bounds use the portable limit macros.
-fn intTypeRange(name: []const u8) ?IntTypeRange {
-    if (std.mem.eql(u8, name, "u8")) return .{ .min = 0, .max = 255, .c_min = "0", .c_max = "UINT8_MAX" };
-    if (std.mem.eql(u8, name, "u16")) return .{ .min = 0, .max = 65535, .c_min = "0", .c_max = "UINT16_MAX" };
-    if (std.mem.eql(u8, name, "u32")) return .{ .min = 0, .max = 4294967295, .c_min = "0", .c_max = "UINT32_MAX" };
-    if (std.mem.eql(u8, name, "u64")) return .{ .min = 0, .max = 18446744073709551615, .c_min = "0", .c_max = "UINT64_MAX" };
-    if (std.mem.eql(u8, name, "usize")) return .{ .min = 0, .max = 18446744073709551615, .c_min = "0", .c_max = "UINTPTR_MAX" };
-    if (std.mem.eql(u8, name, "i8")) return .{ .min = -128, .max = 127, .c_min = "INT8_MIN", .c_max = "INT8_MAX" };
-    if (std.mem.eql(u8, name, "i16")) return .{ .min = -32768, .max = 32767, .c_min = "INT16_MIN", .c_max = "INT16_MAX" };
-    if (std.mem.eql(u8, name, "i32")) return .{ .min = -2147483648, .max = 2147483647, .c_min = "INT32_MIN", .c_max = "INT32_MAX" };
-    if (std.mem.eql(u8, name, "i64")) return .{ .min = -9223372036854775808, .max = 9223372036854775807, .c_min = "INT64_MIN", .c_max = "INT64_MAX" };
-    if (std.mem.eql(u8, name, "isize")) return .{ .min = -9223372036854775808, .max = 9223372036854775807, .c_min = "INTPTR_MIN", .c_max = "INTPTR_MAX" };
-    return null;
-}
-
-fn signedMinMacroForInner(name: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) return "INT8_MIN";
-    if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) return "INT16_MIN";
-    if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return "INT32_MIN";
-    if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return "INT64_MIN";
-    if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return "INTPTR_MIN";
-    return null;
-}
-
-fn signedCTypeForInner(name: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) return "int8_t";
-    if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) return "int16_t";
-    if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return "int32_t";
-    if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return "int64_t";
-    if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return "intptr_t";
-    return null;
-}
-
-fn isCReservedWord(name: []const u8) bool {
-    const reserved = [_][]const u8{
-        // C keywords (C11).
-        "auto",     "break",      "case",           "char",          "const",
-        "continue", "default",    "do",             "double",        "else",
-        "enum",     "extern",     "float",          "for",           "goto",
-        "if",       "inline",     "int",            "long",          "register",
-        "restrict", "return",     "short",          "signed",        "sizeof",
-        "static",   "struct",     "switch",         "typedef",       "union",
-        "unsigned", "void",       "volatile",       "while",         "_Bool",
-        "_Complex", "_Imaginary", "_Alignas",       "_Alignof",      "_Atomic",
-        "_Generic", "_Noreturn",  "_Static_assert", "_Thread_local",
-        // Macros from the headers the prelude includes.
-        "bool",
-        "true",     "false",      "NULL",
-    };
-    for (reserved) |word| {
-        if (std.mem.eql(u8, name, word)) return true;
-    }
-    return false;
-}
-
-fn floatCTypeName(ty: ast.TypeExpr) ?[]const u8 {
-    const name = typeName(ty) orelse return null;
-    if (std.mem.eql(u8, name, "f32")) return "float";
-    if (std.mem.eql(u8, name, "f64")) return "double";
-    return null;
-}
-
-fn mmioFieldWidthBytes(width: []const u8) u64 {
-    if (std.mem.eql(u8, width, "u8") or std.mem.eql(u8, width, "i8") or std.mem.eql(u8, width, "bool")) return 1;
-    if (std.mem.eql(u8, width, "u16") or std.mem.eql(u8, width, "i16")) return 2;
-    if (std.mem.eql(u8, width, "u32") or std.mem.eql(u8, width, "i32")) return 4;
-    if (std.mem.eql(u8, width, "u64") or std.mem.eql(u8, width, "i64") or std.mem.eql(u8, width, "usize")) return 8;
-    return 4;
-}
-
-fn primitiveCTypeName(name: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, name, "void")) return "void";
-    if (std.mem.eql(u8, name, "c_void")) return "void";
-    if (std.mem.eql(u8, name, "never")) return "void";
-    if (std.mem.eql(u8, name, "bool")) return "bool";
-    if (std.mem.eql(u8, name, "u8")) return "uint8_t";
-    if (std.mem.eql(u8, name, "u16")) return "uint16_t";
-    if (std.mem.eql(u8, name, "u32")) return "uint32_t";
-    if (std.mem.eql(u8, name, "u64")) return "uint64_t";
-    if (std.mem.eql(u8, name, "u128")) return "unsigned __int128";
-    if (std.mem.eql(u8, name, "usize")) return "uintptr_t";
-    if (isOpaqueAddressTypeName(name)) return "uintptr_t";
-    // IrqOff (§19.1) capability token: a 1-byte witness value.
-    if (std.mem.eql(u8, name, "IrqOff")) return "uint8_t";
-    if (std.mem.eql(u8, name, "i8")) return "int8_t";
-    if (std.mem.eql(u8, name, "i16")) return "int16_t";
-    if (std.mem.eql(u8, name, "i32")) return "int32_t";
-    if (std.mem.eql(u8, name, "i64")) return "int64_t";
-    if (std.mem.eql(u8, name, "i128")) return "__int128";
-    if (std.mem.eql(u8, name, "isize")) return "intptr_t";
-    if (std.mem.eql(u8, name, "f32")) return "float";
-    if (std.mem.eql(u8, name, "f64")) return "double";
-    // C-ABI varargs cursor (the `va.*` intrinsics operate on it). Maps to the
-    // compiler's native va_list so it is passed/used with the exact target ABI.
-    if (std.mem.eql(u8, name, "va_list")) return "__builtin_va_list";
-    return null;
-}
-
-fn ptrCType(child: ast.TypeExpr, mutability: ast.Mutability) []const u8 {
-    const child_ty = cType(child);
-    const is_const = mutability == .@"const";
-    if (std.mem.eql(u8, child_ty, "uint8_t")) return if (is_const) "uint8_t const *" else "uint8_t *";
-    if (std.mem.eql(u8, child_ty, "uint16_t")) return if (is_const) "uint16_t const *" else "uint16_t *";
-    if (std.mem.eql(u8, child_ty, "uint32_t")) return if (is_const) "uint32_t const *" else "uint32_t *";
-    if (std.mem.eql(u8, child_ty, "uint64_t")) return if (is_const) "uint64_t const *" else "uint64_t *";
-    if (std.mem.eql(u8, child_ty, "int8_t")) return if (is_const) "int8_t const *" else "int8_t *";
-    if (std.mem.eql(u8, child_ty, "int16_t")) return if (is_const) "int16_t const *" else "int16_t *";
-    if (std.mem.eql(u8, child_ty, "int32_t")) return if (is_const) "int32_t const *" else "int32_t *";
-    if (std.mem.eql(u8, child_ty, "int64_t")) return if (is_const) "int64_t const *" else "int64_t *";
-    if (std.mem.eql(u8, child_ty, "bool")) return if (is_const) "bool const *" else "bool *";
-    return "void *";
 }
 
 fn isStaticCInitializer(expr: ast.Expr) bool {
@@ -12785,7 +12530,6 @@ fn isStructLiteralExpr(expr: ast.Expr) bool {
     };
 }
 
-
 fn isDirectStaticCInitializer(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .unary => |node| node.op == .neg and isNegativeStaticCOperand(node.expr.*),
@@ -12801,7 +12545,6 @@ fn isNegativeStaticCOperand(expr: ast.Expr) bool {
         else => false,
     };
 }
-
 
 fn sequencedConditionCandidate(expr: ast.Expr) bool {
     return switch (expr.kind) {
@@ -12849,14 +12592,6 @@ fn comparisonExpr(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .binary => |node| isComparisonOp(node.op),
         .grouped => |inner| comparisonExpr(inner.*),
-        else => false,
-    };
-}
-
-fn isBoolType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .name => |name| std.mem.eql(u8, name.text, "bool"),
-        .qualified => |node| isBoolType(node.child.*),
         else => false,
     };
 }
@@ -13123,7 +12858,6 @@ fn overlayByteArrayLen(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
-
 fn resultTryOperand(expr: ast.Expr) ?ast.Expr {
     return switch (expr.kind) {
         .try_expr => |inner| inner.operand.*,
@@ -13191,147 +12925,6 @@ fn mmioReadReplacementValueTypeForExpr(expr: ast.Expr, replacements: []const Mmi
 
 fn sameSpan(left: ast.Span, right: ast.Span) bool {
     return left.offset == right.offset and left.len == right.len and left.line == right.line and left.column == right.column;
-}
-
-
-fn unaryCOp(op: ast.UnaryOp) []const u8 {
-    return switch (op) {
-        .neg => "-",
-        .bit_not => "~",
-        .logical_not => "!",
-    };
-}
-
-fn binaryCOp(op: ast.BinaryOp) []const u8 {
-    return switch (op) {
-        .logical_or => "||",
-        .logical_and => "&&",
-        .eq => "==",
-        .ne => "!=",
-        .lt => "<",
-        .le => "<=",
-        .gt => ">",
-        .ge => ">=",
-        .bit_or => "|",
-        .bit_xor => "^",
-        .bit_and => "&",
-        .shl => "<<",
-        .shr => ">>",
-        .add => "+",
-        .sub => "-",
-        .mul => "*",
-        .div => "/",
-        .mod => "%",
-    };
-}
-
-fn isCheckedBinaryOp(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .add, .sub, .mul, .div, .mod, .shl, .shr => true,
-        else => false,
-    };
-}
-
-fn isComparisonOp(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .eq, .ne, .lt, .le, .gt, .ge => true,
-        else => false,
-    };
-}
-
-fn isNoTrapBitwiseInfixOp(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .bit_and, .bit_or, .bit_xor => true,
-        else => false,
-    };
-}
-
-const CheckedHelperParts = struct {
-    prefix: []const u8,
-    suffix: []const u8,
-};
-
-fn checkedHelperParts(op: ast.BinaryOp, type_name: []const u8) ?CheckedHelperParts {
-    const suffix = checkedTypeSuffix(type_name) orelse return null;
-    const prefix = switch (op) {
-        .add => "mc_checked_add_",
-        .sub => "mc_checked_sub_",
-        .mul => "mc_checked_mul_",
-        .div => "mc_checked_div_",
-        .mod => "mc_checked_mod_",
-        .shl => "mc_checked_shl_",
-        .shr => "mc_checked_shr_",
-        else => return null,
-    };
-    return .{ .prefix = prefix, .suffix = suffix };
-}
-
-fn satHelperParts(op: ast.BinaryOp, type_name: []const u8) ?CheckedHelperParts {
-    const suffix = unsignedTypeSuffix(type_name) orelse return null;
-    const prefix = switch (op) {
-        .add => "mc_sat_add_",
-        .sub => "mc_sat_sub_",
-        .mul => "mc_sat_mul_",
-        else => return null,
-    };
-    return .{ .prefix = prefix, .suffix = suffix };
-}
-
-fn isWrapPreservingBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .add, .sub, .mul, .bit_and, .bit_or, .bit_xor, .shl, .shr => true,
-        else => false,
-    };
-}
-
-
-fn arithmeticDomainOpName(op: ast.BinaryOp) []const u8 {
-    return switch (op) {
-        .add => "add",
-        .sub => "sub",
-        .mul => "mul",
-        .bit_and => "bit_and",
-        .bit_or => "bit_or",
-        .bit_xor => "bit_xor",
-        .shl => "shl",
-        .shr => "shr",
-        else => "unknown",
-    };
-}
-
-fn trapHelperForCall(call: anytype) ?[]const u8 {
-    if (!isTrapCallee(call.callee.*) or call.args.len != 1) return null;
-    return switch (call.args[0].kind) {
-        .enum_literal => |literal| trapHelperForKind(literal.text),
-        else => null,
-    };
-}
-
-fn isTrapCallee(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, "trap"),
-        .grouped => |inner| isTrapCallee(inner.*),
-        else => false,
-    };
-}
-
-fn trapHelperForKind(kind: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, kind, "Bounds")) return "mc_trap_Bounds";
-    if (std.mem.eql(u8, kind, "NullUnwrap")) return "mc_trap_NullUnwrap";
-    if (std.mem.eql(u8, kind, "IntegerOverflow")) return "mc_trap_IntegerOverflow";
-    if (std.mem.eql(u8, kind, "DivideByZero")) return "mc_trap_DivideByZero";
-    if (std.mem.eql(u8, kind, "InvalidShift")) return "mc_trap_InvalidShift";
-    if (std.mem.eql(u8, kind, "InvalidRepresentation")) return "mc_trap_InvalidRepresentation";
-    if (std.mem.eql(u8, kind, "Assert")) return "mc_trap_Assert";
-    if (std.mem.eql(u8, kind, "Unreachable")) return "mc_trap_Unreachable";
-    return null;
-}
-
-fn orderingArg(args: []ast.Expr) []const u8 {
-    for (args) |arg| {
-        if (arg.kind == .enum_literal) return arg.kind.enum_literal.text;
-    }
-    return "none";
 }
 
 fn atomicAccess(callee: ast.Expr, args: []const ast.Expr, ctx: FnContext) ?AtomicAccess {
@@ -13414,112 +13007,6 @@ fn dmaAddrHandoffObject(value: ast.Expr, ctx: FnContext) ?[]const u8 {
     };
 }
 
-fn atomicOrderingArg(args: []const ast.Expr, index: usize) []const u8 {
-    if (index >= args.len) return "none";
-    return switch (args[index].kind) {
-        .enum_literal => |literal| literal.text,
-        else => "none",
-    };
-}
-
-
-fn asmHasMemoryClobber(asm_stmt: ast.AsmStmt) bool {
-    if (asm_stmt.clobbers.len == 0) return true;
-    for (asm_stmt.clobbers) |clobber| {
-        if (std.mem.indexOf(u8, clobber, "memory") != null) return true;
-    }
-    return false;
-}
-
-fn atomicOrderCConstant(ordering: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, ordering, "relaxed")) return "__ATOMIC_RELAXED";
-    if (std.mem.eql(u8, ordering, "acquire")) return "__ATOMIC_ACQUIRE";
-    if (std.mem.eql(u8, ordering, "release")) return "__ATOMIC_RELEASE";
-    if (std.mem.eql(u8, ordering, "acq_rel")) return "__ATOMIC_ACQ_REL";
-    if (std.mem.eql(u8, ordering, "seq_cst")) return "__ATOMIC_SEQ_CST";
-    return null;
-}
-
-fn atomicOrderSynchronizes(ordering: []const u8) bool {
-    return !std.mem.eql(u8, ordering, "relaxed") and atomicOrderCConstant(ordering) != null;
-}
-
-fn isAtomicLoadOrdering(ordering: []const u8) bool {
-    return std.mem.eql(u8, ordering, "relaxed") or
-        std.mem.eql(u8, ordering, "acquire") or
-        std.mem.eql(u8, ordering, "seq_cst");
-}
-
-fn isAtomicStoreOrdering(ordering: []const u8) bool {
-    return std.mem.eql(u8, ordering, "relaxed") or
-        std.mem.eql(u8, ordering, "release") or
-        std.mem.eql(u8, ordering, "seq_cst");
-}
-
-fn isAtomicIntegerPayload(name: []const u8) bool {
-    return std.mem.eql(u8, name, "u8") or
-        std.mem.eql(u8, name, "u16") or
-        std.mem.eql(u8, name, "u32") or
-        std.mem.eql(u8, name, "u64") or
-        std.mem.eql(u8, name, "usize") or
-        std.mem.eql(u8, name, "i8") or
-        std.mem.eql(u8, name, "i16") or
-        std.mem.eql(u8, name, "i32") or
-        std.mem.eql(u8, name, "i64") or
-        std.mem.eql(u8, name, "isize");
-}
-
-const CheckedOp = union(enum) {
-    binary: ast.BinaryOp,
-    neg,
-};
-
-const TrapKind = enum {
-    integer_overflow,
-    divide_by_zero,
-    invalid_shift,
-
-    fn text(self: TrapKind) []const u8 {
-        return switch (self) {
-            .integer_overflow => "IntegerOverflow",
-            .divide_by_zero => "DivideByZero",
-            .invalid_shift => "InvalidShift",
-        };
-    }
-};
-
-fn checkedOpName(op: CheckedOp) ?[]const u8 {
-    return switch (op) {
-        .neg => "neg",
-        .binary => |binary| switch (binary) {
-            .add => "add",
-            .sub => "sub",
-            .mul => "mul",
-            .div => "div",
-            .mod => "mod",
-            .shl => "shl",
-            .shr => "shr",
-            else => null,
-        },
-    };
-}
-
-fn isOverflowOp(op: CheckedOp) bool {
-    return switch (op) {
-        .neg => true,
-        .binary => |binary| switch (binary) {
-            .add, .sub, .mul, .div, .mod, .shl => true,
-            else => false,
-        },
-    };
-}
-
-fn trapKindForBinary(node: anytype, ty: []const u8) TrapKind {
-    if ((node.op == .div or node.op == .mod) and isSignedIntType(ty) and isNegativeOne(node.right.*)) return .integer_overflow;
-    if (node.op == .div or node.op == .mod) return .divide_by_zero;
-    return .integer_overflow;
-}
-
 fn exprType(expr: ast.Expr, ctx: *FnContext) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| ctx.local_types.get(ident.text),
@@ -13556,31 +13043,6 @@ fn iterableElementCTypeForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(Local
         .grouped => |inner| iterableElementCTypeForExpr(inner.*, locals),
         else => null,
     };
-}
-
-fn isSignedIntType(ty: []const u8) bool {
-    return ty.len >= 2 and ty[0] == 'i' and std.ascii.isDigit(ty[1]);
-}
-
-fn isNegativeOne(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .unary => |node| node.op == .neg and isIntLiteral(node.expr.*, "1"),
-        else => false,
-    };
-}
-
-fn isIntLiteral(expr: ast.Expr, value: []const u8) bool {
-    return switch (expr.kind) {
-        .int_literal => |literal| std.mem.eql(u8, literal, value),
-        else => false,
-    };
-}
-
-fn widthBits(width: []const u8) []const u8 {
-    if (std.mem.eql(u8, width, "usize") or std.mem.eql(u8, width, "isize")) return "ptr";
-    if (width.len > 1 and (width[0] == 'u' or width[0] == 'i')) return width[1..];
-    if (std.mem.eql(u8, width, "bool")) return "1";
-    return "unknown";
 }
 
 fn ordinaryGlobalTarget(allocator: std.mem.Allocator, target: ast.Expr, ctx: FnContext, globals: std.StringHashMap(GlobalInfo), structs: std.StringHashMap(ast.StructDecl)) ?GlobalAccess {
@@ -13695,9 +13157,6 @@ fn contractMatchesCallee(contract: []const u8, callee: []const u8) bool {
     return false;
 }
 
-
-
-
 fn byteViewCallReturnTypeForCall(call: anytype) ?ast.TypeExpr {
     const kind = byteViewCallKind(call.callee.*) orelse return null;
     return switch (kind) {
@@ -13721,7 +13180,6 @@ fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
     };
 }
 
-
 fn isAssumeNoaliasCall(call: anytype) bool {
     if (call.type_args.len != 0 or call.args.len != 2) return false;
     const member = switch (call.callee.kind) {
@@ -13733,19 +13191,6 @@ fn isAssumeNoaliasCall(call: anytype) bool {
         else => return false,
     };
     return isIdentNamed(member.base.*, "compiler") and std.mem.eql(u8, member.name.text, "assume_noalias_unchecked");
-}
-
-fn isPAddrType(ty: ast.TypeExpr) bool {
-    const name = typeName(ty) orelse return false;
-    return std.mem.eql(u8, name, "PAddr");
-}
-
-fn isPointerLikeAddressType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .pointer, .raw_many_pointer => true,
-        .qualified => |node| isPointerLikeAddressType(node.child.*),
-        else => false,
-    };
 }
 
 fn uncheckedNoOverflowCallOp(call: anytype) ?[]const u8 {
@@ -13771,21 +13216,6 @@ fn uncheckedNoOverflowOperator(op: []const u8) []const u8 {
     if (std.mem.eql(u8, op, "mul")) return "*";
     return "+";
 }
-
-fn fenceHelperForCall(callee: ast.Expr) ?[]const u8 {
-    return switch (callee.kind) {
-        .member => |node| blk: {
-            if (!isIdentNamed(node.base.*, "fence")) break :blk null;
-            if (std.mem.eql(u8, node.name.text, "full")) break :blk "mc_barrier_full";
-            if (std.mem.eql(u8, node.name.text, "release")) break :blk "mc_barrier_release_before";
-            if (std.mem.eql(u8, node.name.text, "acquire")) break :blk "mc_barrier_acquire_after";
-            break :blk null;
-        },
-        .grouped => |inner| fenceHelperForCall(inner.*),
-        else => null,
-    };
-}
-
 
 fn isBitcastCall(call: anytype) bool {
     return switch (call.callee.kind) {
@@ -13814,7 +13244,6 @@ fn isDeclassifyCall(call: anytype) bool {
     };
     return std.mem.eql(u8, name, "declassify") or std.mem.eql(u8, name, "reveal");
 }
-
 
 fn appendCPreprocessorString(out: *std.ArrayList(u8), allocator: std.mem.Allocator, text: []const u8) !void {
     for (text) |ch| switch (ch) {
