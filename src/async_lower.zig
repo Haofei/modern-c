@@ -1161,6 +1161,202 @@ fn blockHasNestedAwait(b: ast.Block) bool {
     return false;
 }
 
+// ===== general-path alpha-rename (findings #1 + #2) =====
+//
+// PROBLEM. The general path captures every local that is live across a suspend as a `self.*` field,
+// and rewrites references to that local by NAME (`rewriteParamRefs` maps any ident whose text is a
+// captured name to `self.<name>`). That is sound ONLY when every textual occurrence of a name refers
+// to ONE declaration. Two failures arise otherwise:
+//   #1 a local declared INSIDE a nested region (an `if`/`while` block) and read AFTER a later await
+//      was NOT captured (the capture set was params + awaited bindings + TOP-LEVEL let/var only), so
+//      it was emitted as a plain local in one poll-state and referenced in a later one -> sema's
+//      E_UNKNOWN_IDENTIFIER on the user's variable.
+//   #2 the SAME name declared in two disjoint scopes produced two struct fields of that name ->
+//      E_DUPLICATE_STRUCT_FIELD at 0:0 (no source location).
+//
+// FIX. Run a lexically-scoped alpha-rename over the async-fn body BEFORE lowering: give every `let`/
+// `var` binding a globally UNIQUE fresh name and rewrite its in-scope references to that fresh name,
+// honoring shadowing (an inner decl shadows an outer same-named one only within its block). After
+// this pass NO two declarations share a name, so (a) every local — including nested ones — can be
+// captured as a uniquely-named field with the existing name-keyed rewrite, and (b) #2's duplicate
+// field is impossible. Params are NEVER renamed (they are not locals and the awaited-expr resolver +
+// the ctor's param copies key on the original param names). The pass is pure source-to-source AST
+// rewriting that runs before any state-machine construction, so it is backend-agnostic by definition.
+
+const RenameScope = struct {
+    low: *Lowerer,
+    // Innermost-last stack of (original-name -> fresh-name) maps; lookup walks outermost-from-inner.
+    frames: std.ArrayList(std.StringHashMap([]const u8)) = .empty,
+    counter: *usize,
+
+    fn arena(self: *RenameScope) std.mem.Allocator {
+        return self.low.arena;
+    }
+    fn push(self: *RenameScope) Error!void {
+        try self.frames.append(self.arena(), std.StringHashMap([]const u8).init(self.arena()));
+    }
+    fn pop(self: *RenameScope) void {
+        _ = self.frames.pop();
+    }
+    // Bind `orig` in the CURRENT (innermost) frame to a fresh unique name and return it.
+    fn bind(self: *RenameScope, orig: []const u8) Error![]const u8 {
+        const fresh = try std.fmt.allocPrint(self.arena(), "{s}__a{d}", .{ orig, self.counter.* });
+        self.counter.* += 1;
+        try self.frames.items[self.frames.items.len - 1].put(orig, fresh);
+        return fresh;
+    }
+    // Resolve `name` to its fresh binding if any enclosing scope declared it; else null (a param /
+    // global / fn / type — left untouched).
+    fn lookup(self: *RenameScope, name: []const u8) ?[]const u8 {
+        var i: usize = self.frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.frames.items[i].get(name)) |fresh| return fresh;
+        }
+        return null;
+    }
+};
+
+// Alpha-rename a block in its own lexical scope (a new frame pushed/popped around its items).
+fn renameBlock(rs: *RenameScope, b: ast.Block) Error!ast.Block {
+    try rs.push();
+    defer rs.pop();
+    return renameBlockItems(rs, b);
+}
+
+// Rename a block's items WITHOUT pushing a frame (used for the fn body / a region whose frame the
+// caller manages, e.g. so a loop's condition and body share the body decls' visibility correctly).
+fn renameBlockItems(rs: *RenameScope, b: ast.Block) Error!ast.Block {
+    var items: std.ArrayList(ast.Stmt) = .empty;
+    for (b.items) |st| try items.append(rs.arena(), try renameStmt(rs, st));
+    return .{ .span = b.span, .items = try items.toOwnedSlice(rs.arena()) };
+}
+
+fn renameStmt(rs: *RenameScope, s: ast.Stmt) Error!ast.Stmt {
+    const arena = rs.arena();
+    switch (s.kind) {
+        .let_decl, .var_decl => |ld| {
+            // The init is evaluated in the OUTER scope (the binding is not yet visible), so rename it
+            // BEFORE binding the new name. Then bind each name to a fresh unique symbol.
+            const new_init = if (ld.init) |e| try renameExpr(rs, e) else null;
+            var new_names = try arena.alloc(ast.Ident, ld.names.len);
+            for (ld.names, 0..) |nm, i| new_names[i] = .{ .text = try rs.bind(nm.text), .span = nm.span };
+            const nl: ast.LocalDecl = .{ .names = new_names, .ty = ld.ty, .init = new_init };
+            return .{ .span = s.span, .kind = if (s.kind == .let_decl) .{ .let_decl = nl } else .{ .var_decl = nl } };
+        },
+        .assignment => |a| return .{ .span = s.span, .kind = .{ .assignment = .{ .target = try renameExpr(rs, a.target), .value = try renameExpr(rs, a.value) } } },
+        .expr => |e| return .{ .span = s.span, .kind = .{ .expr = try renameExpr(rs, e) } },
+        .@"return" => |e| return .{ .span = s.span, .kind = .{ .@"return" = if (e) |x| try renameExpr(rs, x) else null } },
+        .assert => |e| return .{ .span = s.span, .kind = .{ .assert = try renameExpr(rs, e) } },
+        .@"defer" => |e| return .{ .span = s.span, .kind = .{ .@"defer" = try renameExpr(rs, e) } },
+        .block => |b| return .{ .span = s.span, .kind = .{ .block = try renameBlock(rs, b) } },
+        .unsafe_block => |b| return .{ .span = s.span, .kind = .{ .unsafe_block = try renameBlock(rs, b) } },
+        .comptime_block => |b| return .{ .span = s.span, .kind = .{ .comptime_block = try renameBlock(rs, b) } },
+        .loop => |l| {
+            // `for`/`while`: the condition/iterable is evaluated in the loop's scope; the body shares
+            // that scope (so the iterable can refer to nothing the body binds, but a `while` cond and
+            // body live in one frame). Push one frame for the whole loop.
+            try rs.push();
+            defer rs.pop();
+            const new_iter = if (l.iterable) |it| try renameExpr(rs, it) else null;
+            const new_body = try renameBlockItems(rs, l.body);
+            var nl = l;
+            nl.iterable = new_iter;
+            nl.body = new_body;
+            return .{ .span = s.span, .kind = .{ .loop = nl } };
+        },
+        .@"switch" => |sw| {
+            const rsubj = try renameExpr(rs, sw.subject);
+            var new_arms = try arena.alloc(ast.SwitchArm, sw.arms.len);
+            for (sw.arms, 0..) |arm, i| {
+                const new_body: ast.SwitchBody = switch (arm.body) {
+                    .block => |b| .{ .block = try renameBlock(rs, b) },
+                    .expr => |e| .{ .expr = try renameExpr(rs, e) },
+                };
+                // A `tag_bind`/`bind` pattern would introduce a binding; the general path does not
+                // accept await inside if_let/switch-binding arms, but rename pass-through must still be
+                // sound for await-free arms — patterns bind in the arm's block scope. Since switch
+                // patterns here are bool/literal/tag (no value binding reaching this path), leave the
+                // patterns as-is; any binding pattern lives only inside the arm block already scoped.
+                new_arms[i] = .{ .patterns = arm.patterns, .body = new_body };
+            }
+            return .{ .span = s.span, .kind = .{ .@"switch" = .{ .subject = rsubj, .arms = new_arms } } };
+        },
+        // No identifiers to rebind / no locals introduced into the enclosing scope.
+        .@"break", .@"continue" => return s,
+        // Constructs the general path rejects when they bear an await; for await-free pass-through we
+        // do not introduce bindings into the enclosing scope, so leaving them as-is is sound (their
+        // own sub-scopes, if any, contain no captured-across-suspend locals).
+        else => return s,
+    }
+}
+
+fn renameExpr(rs: *RenameScope, e: ast.Expr) Error!ast.Expr {
+    const arena = rs.arena();
+    return switch (e.kind) {
+        .ident => |i| if (rs.lookup(i.text)) |fresh| .{ .span = e.span, .kind = .{ .ident = .{ .text = fresh, .span = i.span } } } else e,
+        .grouped => |inner| .{ .span = e.span, .kind = .{ .grouped = try ptr(arena, ast.Expr, try renameExpr(rs, inner.*)) } },
+        .address_of => |inner| .{ .span = e.span, .kind = .{ .address_of = try ptr(arena, ast.Expr, try renameExpr(rs, inner.*)) } },
+        .deref => |inner| .{ .span = e.span, .kind = .{ .deref = try ptr(arena, ast.Expr, try renameExpr(rs, inner.*)) } },
+        .await_expr => |inner| .{ .span = e.span, .kind = .{ .await_expr = try ptr(arena, ast.Expr, try renameExpr(rs, inner.*)) } },
+        .unary => |u| .{ .span = e.span, .kind = .{ .unary = .{ .op = u.op, .expr = try ptr(arena, ast.Expr, try renameExpr(rs, u.expr.*)) } } },
+        .binary => |b| .{ .span = e.span, .kind = .{ .binary = .{ .op = b.op, .left = try ptr(arena, ast.Expr, try renameExpr(rs, b.left.*)), .right = try ptr(arena, ast.Expr, try renameExpr(rs, b.right.*)) } } },
+        .cast => |c| .{ .span = e.span, .kind = .{ .cast = .{ .value = try ptr(arena, ast.Expr, try renameExpr(rs, c.value.*)), .ty = c.ty } } },
+        .call => |c| blk: {
+            var new_args = try arena.alloc(ast.Expr, c.args.len);
+            for (c.args, 0..) |a, i| new_args[i] = try renameExpr(rs, a);
+            // The callee is a function name (or `Owner.method` already mangled) — not a local.
+            break :blk .{ .span = e.span, .kind = .{ .call = .{ .callee = c.callee, .type_args = c.type_args, .args = new_args } } };
+        },
+        .index => |ix| .{ .span = e.span, .kind = .{ .index = .{ .base = try ptr(arena, ast.Expr, try renameExpr(rs, ix.base.*)), .index = try ptr(arena, ast.Expr, try renameExpr(rs, ix.index.*)) } } },
+        .slice => |sl| .{ .span = e.span, .kind = .{ .slice = .{ .base = try ptr(arena, ast.Expr, try renameExpr(rs, sl.base.*)), .start = try ptr(arena, ast.Expr, try renameExpr(rs, sl.start.*)), .end = try ptr(arena, ast.Expr, try renameExpr(rs, sl.end.*)) } } },
+        .member => |m| .{ .span = e.span, .kind = .{ .member = .{ .base = try ptr(arena, ast.Expr, try renameExpr(rs, m.base.*)), .name = m.name } } },
+        .try_expr => |t| .{ .span = e.span, .kind = .{ .try_expr = .{ .operand = try ptr(arena, ast.Expr, try renameExpr(rs, t.operand.*)), .mapped = if (t.mapped) |mp| try ptr(arena, ast.Expr, try renameExpr(rs, mp.*)) else null } } },
+        .array_literal => |els| blk: {
+            var new_els = try arena.alloc(ast.Expr, els.len);
+            for (els, 0..) |x, i| new_els[i] = try renameExpr(rs, x);
+            break :blk .{ .span = e.span, .kind = .{ .array_literal = new_els } };
+        },
+        .struct_literal => |flds| blk: {
+            var new_flds = try arena.alloc(ast.StructLiteralField, flds.len);
+            for (flds, 0..) |f, i| new_flds[i] = .{ .name = f.name, .value = try renameExpr(rs, f.value) };
+            break :blk .{ .span = e.span, .kind = .{ .struct_literal = new_flds } };
+        },
+        // Literals, enum literals, void/null/uninit/unreachable, nested `block`/`if_let` exprs the
+        // general path does not admit with awaits — no captured-local identifier to rebind here.
+        else => e,
+    };
+}
+
+// Collect EVERY local declaration (name + type) declared ANYWHERE in `b` (top-level or nested), in
+// source order, into `out`. After the alpha-rename every name is unique, so each becomes its own
+// captured field. A decl without an explicit type is reported (the field needs a type); the caller
+// turns a missing type into a precise diagnostic. Awaited bindings (`let x = await e;`) are EXCLUDED
+// here — they are captured from the await steps (their type is the awaited future's result type).
+const LocalCapture = struct { name: ast.Ident, ty: ?ast.TypeExpr, span: diagnostics.Span };
+fn collectAllLocalDecls(low: *Lowerer, b: ast.Block, out: *std.ArrayList(LocalCapture)) Error!void {
+    const arena = low.arena;
+    for (b.items) |s| {
+        switch (s.kind) {
+            .let_decl, .var_decl => |ld| {
+                if (awaitStepCall(s) != null) continue; // awaited binding: captured from its step
+                // A multi-name decl (`let a, b = ...`) is not lifted to a field store soundly by the
+                // single-name decl->store path; reject it here with a precise span (rare; the prior
+                // top-level-only path rejected it too).
+                if (ld.names.len != 1) return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: a `let`/`var` live across the await regions must bind exactly one name in async E3c", .{});
+                try out.append(arena, .{ .name = ld.names[0], .ty = ld.ty, .span = s.span });
+            },
+            .loop => |l| try collectAllLocalDecls(low, l.body, out),
+            .block, .unsafe_block, .comptime_block => |bl| try collectAllLocalDecls(low, bl, out),
+            .@"switch" => |sw| for (sw.arms) |arm| switch (arm.body) {
+                .block => |bl| try collectAllLocalDecls(low, bl, out),
+                .expr => {},
+            },
+            else => {},
+        }
+    }
+}
+
 // The general lowering context: a growing single `while true` dispatch built as a list of finalized
 // state blocks plus the "current" block being accumulated. `newState`/`gotoState`/`finishCur`/
 // `startState` are the basic-block-builder primitives; `emitAwaitState` records each await poll-state
@@ -1209,20 +1405,30 @@ fn lowerAsyncGeneralFn(
     info: AsyncInfo,
     fut_type: []const u8,
     result_type: ast.TypeExpr,
-    body: ast.Block,
+    body_in: ast.Block,
 ) Error!void {
     const arena = low.arena;
     const fd = decl.kind.fn_decl;
 
-    // Captured names: params + every awaited binding (anywhere) + every TOP-LEVEL `let`/`var` (the
-    // index/accumulators live across the regions). They become `self.*` fields; reads rewrite to self.*.
+    // Findings #1+#2: alpha-rename every local in the body to a globally-unique name FIRST. This makes
+    // it sound to capture EVERY local — including ones declared inside nested regions (`if`/`while`
+    // blocks) and ones whose source name is reused across disjoint scopes — as a uniquely-named
+    // `self.*` field, with the existing name-keyed rewrite. Params are not renamed.
+    var rename_counter: usize = 0;
+    var rs = RenameScope{ .low = low, .counter = &rename_counter };
+    try rs.push(); // the fn body's top scope (params live one level up, conceptually — not renamed)
+    const body = try renameBlockItems(&rs, body_in);
+    rs.pop();
+
+    // Captured names: params + every awaited binding (anywhere) + every (now-unique) local declared
+    // ANYWHERE (top-level OR nested — the index/accumulators AND nested temporaries live across the
+    // regions). They become `self.*` fields; reads rewrite to self.*.
     var field_names = std.StringHashMap(void).init(arena);
     for (fd.params) |p| try field_names.put(p.name.text, {});
     try collectAwaitBindingNames(body, &field_names);
-    for (body.items) |stmt| switch (stmt.kind) {
-        .let_decl, .var_decl => |ld| try field_names.put(ld.names[0].text, {}),
-        else => {},
-    };
+    var local_caps: std.ArrayList(LocalCapture) = .empty;
+    try collectAllLocalDecls(low, body, &local_caps);
+    for (local_caps.items) |lc| try field_names.put(lc.name.text, {});
     const names = &field_names;
 
     var ctx = GenCtx{ .low = low, .names = names, .done_str = "" };
@@ -1250,18 +1456,14 @@ fn lowerAsyncGeneralFn(
         try fields.append(arena, .{ .name = id(ga.step.child_field), .ty = try nameType(arena, ga.step.fut_type) });
     }
     for (fd.params) |p| try fields.append(arena, .{ .name = p.name, .ty = p.ty });
-    // Top-level locals (the accumulators/index live across the regions) -> captured fields; require an
-    // explicit type annotation (same contract as the pre-loop/pre-branch locals in the fast paths).
-    for (body.items) |stmt| switch (stmt.kind) {
-        .let_decl, .var_decl => |ld| {
-            // A top-level awaited binding is added below from the await steps; skip it here.
-            if (awaitStepCall(stmt) != null) continue;
-            if (ld.names.len != 1) return low.fail(stmt.span, "E_ASYNC_GENERAL_UNSUPPORTED: a top-level `let`/`var` must bind exactly one name in async E3c", .{});
-            const lty = ld.ty orelse return low.fail(stmt.span, "E_ASYNC_GENERAL_UNSUPPORTED: a top-level `let`/`var` live across the await regions needs an explicit type annotation in async E3c", .{});
-            try fields.append(arena, .{ .name = ld.names[0], .ty = lty });
-        },
-        else => {},
-    };
+    // EVERY local (top-level OR nested, now uniquely renamed) -> a captured field; each lives across
+    // the regions as a `self.*` field (its source-level scope is enforced by where its init store and
+    // reads are emitted, not by the field's existence). Require an explicit type annotation (same
+    // contract as the pre-loop/pre-branch locals in the fast paths) — the field needs a type pre-sema.
+    for (local_caps.items) |lc| {
+        const lty = lc.ty orelse return low.fail(lc.span, "E_ASYNC_GENERAL_UNSUPPORTED: a `let`/`var` live across the await regions needs an explicit type annotation in async E3c", .{});
+        try fields.append(arena, .{ .name = lc.name, .ty = lty });
+    }
     // Awaited-binding fields (in state/await order; each unique).
     for (ctx.awaits.items) |ga| if (ga.step.binding) |nm| try fields.append(arena, .{ .name = id(nm), .ty = ga.step.result_type });
     try fields.append(arena, .{ .name = id("result"), .ty = result_type });
@@ -1281,18 +1483,14 @@ fn lowerAsyncGeneralFn(
     } } });
     try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
     for (fd.params) |p| try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
-    // Zero the scalar TOP-LEVEL local fields for definite-init (the move/borrow checker needs every
-    // field initialized before `return self`). Their REAL init (`self.x = init;`) runs in poll state 0
-    // — the entry state, which always executes before any state that reads them — emitted by
-    // `genRewriteStraight` converting the decl to a store (so it is NOT a dangling local, and NOT
-    // double-initialized in a meaningful way).
-    for (body.items) |stmt| switch (stmt.kind) {
-        .let_decl, .var_decl => |ld| {
-            if (awaitStepCall(stmt) != null) continue; // awaited binding: written by its poll-state
-            if (ld.ty) |lty| try appendZeroInit(low, &cbody, ld.names[0].text, lty);
-        },
-        else => {},
-    };
+    // Zero every scalar local field for definite-init (the move/borrow checker needs every field
+    // initialized before `return self`). Each local's REAL init (`self.x = init;`) runs in the
+    // poll-state where its declaration executes — which always runs before any state that reads it
+    // (a local is read only after its own declaration) — emitted by `genRewriteStraight` converting
+    // the decl to a store. So the zero-init is a sound definite-init placeholder, never observed.
+    for (local_caps.items) |lc| {
+        if (lc.ty) |lty| try appendZeroInit(low, &cbody, lc.name.text, lty);
+    }
     // Zero the scalar awaited-binding fields + result (definite-init).
     for (ctx.awaits.items) |ga| if (ga.step.binding) |b| try appendZeroInit(low, &cbody, b, ga.step.result_type);
     try appendZeroInit(low, &cbody, "result", result_type);
