@@ -12,8 +12,9 @@
 // field BEFORE sema, so sema can no longer see the source collision: pre-fix this MASKED the
 // E_DUPLICATE_LOCAL non-async reports (and, were it run, read the OUTER carrier instead of the unwrap).
 // `validateNoDuplicateLocals` now dup-checks a single-pattern `.bind` over a nullable PARAM subject
-// PRE-rename, restoring parity. (A nullable LOCAL/complex subject stays a bounded, type-info-only
-// residual — not closable pre-sema without resolving its type.)
+// PRE-rename, restoring parity. (A nullable typed LOCAL subject is covered too — see
+// bad/async_switch_nullable_local_shadow.mc; only a subject whose type isn't syntactically resolvable
+// here — an untyped/inferred local or a member/index/call expr — stays a bounded residual.)
 import "std/task.mc";
 
 global g_clock: u64 = 0;

@@ -1363,20 +1363,21 @@ fn blockHasNestedAwait(b: ast.Block) bool {
 // fns BEFORE routing/renaming, so the diagnostic is identical regardless of which lowering path the
 // body takes; without it the renamer/fast-paths would silently accept invalid source.
 const DupScope = struct {
+    // Each live binding records its span (for the diagnostic) plus whether its declared type is
+    // syntactically NULLABLE (`?T`). The nullable bit lets the `.@"switch"` handler decide whether a
+    // bare-ident subject (a param OR a typed local) makes its `.bind` arm BIND the unwrap (sema binds a
+    // bare `.bind` ONLY for a nullable subject). Looked up scope-aware (innermost-first), so a shadowing
+    // binding's own nullability governs.
+    const Binding = struct { span: diagnostics.Span, nullable: bool };
     low: *Lowerer,
-    // Innermost-last stack of name-sets; a name is a duplicate if it is in ANY currently-open frame.
-    frames: std.ArrayList(std.StringHashMap(diagnostics.Span)) = .empty,
-    // Names of params whose declared type is syntactically NULLABLE (`?T`). A switch over a bare ref to
-    // such a param binds its `.bind` arm (the unwrap) — see the `.@"switch"` handler. A param is never
-    // shadowed by a local (that is itself E_DUPLICATE_LOCAL), so a subject ident in this set maps
-    // unambiguously to that nullable param.
-    nullable_params: *const std.StringHashMap(void),
+    // Innermost-last stack of name maps; a name is a duplicate if it is in ANY currently-open frame.
+    frames: std.ArrayList(std.StringHashMap(Binding)) = .empty,
 
     fn arena(self: *DupScope) std.mem.Allocator {
         return self.low.arena;
     }
     fn push(self: *DupScope) Error!void {
-        try self.frames.append(self.arena(), std.StringHashMap(diagnostics.Span).init(self.arena()));
+        try self.frames.append(self.arena(), std.StringHashMap(Binding).init(self.arena()));
     }
     fn pop(self: *DupScope) void {
         _ = self.frames.pop();
@@ -1389,26 +1390,39 @@ const DupScope = struct {
         }
         return false;
     }
+    // Is `name` a still-live binding of syntactically-nullable type? Walks innermost-first so the
+    // nearest (shadowing) binding's nullability wins. False if unbound (a global / fn / unknown) or
+    // non-nullable.
+    fn subjectNullable(self: *DupScope, name: []const u8) bool {
+        var i: usize = self.frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.frames.items[i].get(name)) |b| return b.nullable;
+        }
+        return false;
+    }
     // Bind `name` into the current (innermost) frame, failing E_DUPLICATE_LOCAL if it collides with a
-    // still-live binding in this or any enclosing frame.
-    fn bind(self: *DupScope, name: ast.Ident) Error!void {
+    // still-live binding in this or any enclosing frame. `nullable` records whether the binding's
+    // declared type is `?T` (only meaningful for params/locals; pass false for payload bindings).
+    fn bind(self: *DupScope, name: ast.Ident, nullable: bool) Error!void {
         if (self.liveInAnyFrame(name.text)) {
             return self.low.fail(name.span, "E_DUPLICATE_LOCAL: local bindings must have unique names in the current scope", .{});
         }
-        try self.frames.items[self.frames.items.len - 1].put(name.text, name.span);
+        try self.frames.items[self.frames.items.len - 1].put(name.text, .{ .span = name.span, .nullable = nullable });
     }
 };
+
+// Is a declared type syntactically nullable (`?T`)? Used to seed `DupScope` binding nullability so a
+// switch over a bare ref to a nullable param/local is known to bind its `.bind` arm.
+fn typeIsNullable(ty: ?ast.TypeExpr) bool {
+    const t = ty orelse return false;
+    return t.kind == .nullable;
+}
 
 // Validate a whole async fn body: params + top-level body live in ONE scope (matching sema's
 // `checkFn`), each nested block/loop/arm pushes a child frame that inherits its parent's bindings.
 fn validateNoDuplicateLocals(low: *Lowerer, params: []const ast.Param, body: ast.Block) Error!void {
-    // Record params of syntactically-nullable type, so a switch over a bare ref to one is known to
-    // BIND its `.bind` arm (mirroring sema's nullable-only `.bind` binding) — see `dupCheckStmt`.
-    var nullable_params = std.StringHashMap(void).init(low.arena);
-    for (params) |p| {
-        if (p.ty.kind == .nullable) try nullable_params.put(p.name.text, {});
-    }
-    var ds = DupScope{ .low = low, .nullable_params = &nullable_params };
+    var ds = DupScope{ .low = low };
     try ds.push(); // the fn's top scope: params + the body's top-level locals share it
     defer ds.pop();
     // Param-vs-param collisions are E_DUPLICATE_PARAMETER in sema (`checkFn`), NOT E_DUPLICATE_LOCAL.
@@ -1423,7 +1437,7 @@ fn validateNoDuplicateLocals(low: *Lowerer, params: []const ast.Param, body: ast
             try seen.put(p.name.text, {});
         }
     }
-    for (params) |p| try ds.bind(p.name);
+    for (params) |p| try ds.bind(p.name, p.ty.kind == .nullable);
     try dupCheckBlockItems(&ds, body);
 }
 
@@ -1443,7 +1457,10 @@ fn dupCheckBlock(ds: *DupScope, b: ast.Block) Error!void {
 fn dupCheckStmt(ds: *DupScope, s: ast.Stmt) Error!void {
     switch (s.kind) {
         .let_decl, .var_decl => |ld| {
-            for (ld.names) |nm| try ds.bind(nm);
+            // A typed nullable local (`let m: ?T`) makes a switch over a bare ref to it bind its `.bind`
+            // arm — record the bit (the decl's type, if any, is shared across all names).
+            const nullable = typeIsNullable(ld.ty);
+            for (ld.names) |nm| try ds.bind(nm, nullable);
         },
         .block => |b| try dupCheckBlock(ds, b),
         .unsafe_block => |b| try dupCheckBlock(ds, b),
@@ -1458,7 +1475,7 @@ fn dupCheckStmt(ds: *DupScope, s: ast.Stmt) Error!void {
             // `addForBinding`), so re-using a still-live name there is E_DUPLICATE_LOCAL. A `while`
             // loop's `label` is a loop LABEL, not a value binding — only bind for `.@"for"`.
             if (l.kind == .@"for") {
-                if (l.label) |lbl| try ds.bind(lbl);
+                if (l.label) |lbl| try ds.bind(lbl, false);
             }
             try dupCheckBlockItems(ds, l.body);
         },
@@ -1490,24 +1507,25 @@ fn dupCheckStmt(ds: *DupScope, s: ast.Stmt) Error!void {
             // (no live outer collision) the renamer's "leave the payload name original" is then sound: its
             // body read finds no live frame entry and stays the payload. We still recurse into each arm
             // body in its own child frame so a genuine NESTED `let` is dup-checked.
-            // A bare `.bind` binds ONLY for a NULLABLE subject. We can confirm nullability syntactically
-            // (no sema) when the subject is a bare ref to a nullable-typed PARAM — then the `.bind` binds
-            // the unwrap exactly as sema does, so dup-check it for E_DUPLICATE_LOCAL parity (the general
-            // path otherwise alpha-renames the colliding outer to a `self.*` field before sema, hiding
-            // the collision — accepting code non-async rejects). A NON-nullable param subject must NOT
-            // bind (the bare `.bind` is a no-op catch-all reading the outer — binding it would
-            // false-reject the valid `switch n { x => x; _ => }` form). A LOCAL/complex subject is
-            // undeterminable here, so defer (the renamer's `.bind` lookup-aliasing keeps the valid
-            // non-nullable form correct and prevents a nullable miscompile; that nullable-local subject
-            // collision stays masked — a bounded, type-info-only residual).
-            const subj_nullable_param = sw.subject.kind == .ident and
-                ds.nullable_params.contains(sw.subject.kind.ident.text);
+            // A bare `.bind` binds ONLY for a NULLABLE subject (sema). We can confirm nullability
+            // syntactically (no sema) when the subject is a bare ref to a nullable-typed PARAM or LOCAL
+            // (`subjectNullable`, scope-aware) — then the `.bind` binds the unwrap exactly as sema does,
+            // so dup-check it for E_DUPLICATE_LOCAL parity (the general path otherwise alpha-renames the
+            // colliding outer to a `self.*` field before sema, hiding the collision — accepting code
+            // non-async rejects, and reading the OUTER carrier rather than the unwrap). A NON-nullable
+            // subject must NOT bind (the bare `.bind` is a no-op catch-all reading the outer — binding it
+            // would false-reject the valid `switch n { x => x; _ => }` form). A subject whose type is not
+            // syntactically resolvable here (an untyped/inferred local, or a member/index/call expr)
+            // defers — patterns stay original so the valid non-nullable form is correct; a nullable such
+            // subject shadowing a live outer stays masked (a bounded residual needing real type info).
+            const subj_nullable = sw.subject.kind == .ident and
+                ds.subjectNullable(sw.subject.kind.ident.text);
             for (sw.arms) |arm| {
                 try ds.push();
                 if (arm.patterns.len == 1) {
                     switch (arm.patterns[0].kind) {
-                        .tag_bind => |tb| try ds.bind(tb.binding),
-                        .bind => |nm| if (subj_nullable_param) try ds.bind(nm),
+                        .tag_bind => |tb| try ds.bind(tb.binding, false),
+                        .bind => |nm| if (subj_nullable) try ds.bind(nm, false),
                         else => {},
                     }
                 }
@@ -1528,8 +1546,10 @@ fn dupCheckStmt(ds: *DupScope, s: ast.Stmt) Error!void {
 // sema validates them.
 fn dupCheckPattern(ds: *DupScope, p: ast.Pattern) Error!void {
     switch (p.kind) {
-        .bind => |b| try ds.bind(b),
-        .tag_bind => |tb| try ds.bind(tb.binding),
+        // An `if let` narrowing binds the unwrapped value; it is not itself a switch subject, so its
+        // nullability bit is irrelevant — pass false.
+        .bind => |b| try ds.bind(b, false),
+        .tag_bind => |tb| try ds.bind(tb.binding, false),
         else => {},
     }
 }
@@ -1664,9 +1684,10 @@ fn renameStmt(rs: *RenameScope, s: ast.Stmt) Error!ast.Stmt {
 // `self.<field>` — turning a valid non-nullable catch-all's outer read into an E_UNKNOWN_IDENTIFIER.
 // A STILL-LIVE outer collision is instead rejected PRE-RENAME by `validateNoDuplicateLocals` (it
 // dup-checks a single-pattern `.tag_bind` payload — always binds — and a single-pattern `.bind` when the
-// subject is a nullable param — binds the unwrap), so the only miscompiling shapes never reach here. The
-// one residual it cannot reach (a `.bind` over a nullable LOCAL/complex subject shadowing a live outer)
-// stays masked — a bounded, type-info-only gap. `.literal` patterns hold an expr that may reference an
+// subject is a nullable param OR typed local — binds the unwrap), so the only miscompiling shapes never
+// reach here. The one residual it cannot reach (a `.bind` over a nullable subject whose type isn't
+// syntactically resolvable — an untyped/inferred local or a member/index/call expr — shadowing a live
+// outer) stays masked — a bounded, type-info-only gap. `.literal` patterns hold an expr that may reference an
 // outer renamed binding — rename it. `.wildcard`/`.tag` bind nothing.
 fn renamePatterns(rs: *RenameScope, pats: []const ast.Pattern) Error![]ast.Pattern {
     const arena = rs.arena();
