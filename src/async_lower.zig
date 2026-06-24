@@ -261,12 +261,27 @@ fn paramCarrierTypeName(t: ast.TypeExpr) ?[]const u8 {
 // resolves in `structTypeOf(.ident)` exactly like a param. Untyped decls (and awaited bindings,
 // whose type is the awaited future's RESULT, not a carrier) contribute nothing. Re-keying after the
 // general path's alpha-rename is handled by a second call on the renamed body.
+//
+// FINDING #2 (fail-closed regression): the map is FLAT and function-wide while `structTypeOf` has no
+// scope model, so a naive `put` lets an inner `let ctx: Other` CLOBBER a param `ctx: Ctx` for the
+// whole fn — breaking an earlier/outer `await ctx.fut` (param) that lexically PRECEDES the shadow.
+// Fix: FIRST-WRITER-WINS — never overwrite an existing entry. Params are recorded before this scan
+// (lowerAsyncFn), so a local can never clobber a param; and the lexically-EARLIER carrier (the one an
+// earlier await depends on) is recorded before a later same-named shadow, so that await still
+// resolves correctly. (In the general path the body is alpha-renamed before this runs, so every local
+// is unique and first-vs-last is moot; the protection matters only for the non-renamed fast paths.)
+// A genuinely ambiguous later shadow with a DIFFERENT carrier type that is itself awaited after its
+// decl would, in the fast paths, mis-route — but such a shape (an await on a shadowing typed-carrier
+// local) takes the general path, where alpha-rename makes it unambiguous; so no SILENT mis-resolution
+// remains. Worst case is a clean fail-closed E_ASYNC_AWAIT_UNRESOLVED, never wrong codegen.
 fn recordLocalCarrierTypes(low: *Lowerer, b: ast.Block) Error!void {
     for (b.items) |s| switch (s.kind) {
         .let_decl, .var_decl => |ld| {
             if (ld.ty) |ty| {
                 if (paramCarrierTypeName(ty)) |tn| {
-                    for (ld.names) |nm| try low.param_types.put(nm.text, tn);
+                    for (ld.names) |nm| {
+                        if (!low.param_types.contains(nm.text)) try low.param_types.put(nm.text, tn);
+                    }
                 }
             }
         },
@@ -810,10 +825,11 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // tail stmts emit as-is with captured-name reads rewritten to self.*. Guarding it at cont_state
     // (plus the DONE early-return) keeps poll idempotent.
     var tail_body: std.ArrayList(ast.Stmt) = .empty;
-    for (tail.items) |stmt| {
-        // E3a: a `return` (top-level or nested in non-await control flow) becomes the DONE transition.
-        try tail_body.append(arena, try rewriteRegionStmt(low, stmt, bind_names, done_str));
-    }
+    // Route through rewriteRegionBlock for block-scoped `let`/`var` shadow handling (a region-local
+    // shadowing a captured name reads the local, not `self.<name>`). E3a: a `return` (top-level or
+    // nested in non-await control flow) becomes the DONE transition.
+    const rtail = try rewriteRegionBlock(low, .{ .span = zspan, .items = tail.items }, bind_names, done_str);
+    for (rtail.items) |stmt| try tail_body.append(arena, stmt);
     try pbody.append(arena, try ifStateEq(arena, cont_state, try tail_body.toOwnedSlice(arena)));
     // Conservative definite-return fallback (unreachable at runtime: state is always DONE or a guarded
     // state above). `false` (not-complete) is the safe choice.
@@ -1051,7 +1067,10 @@ fn lowerAsyncLoopFn(
             // becomes the DONE transition; E3b: a `break`/`continue` becomes the loop-exit/head
             // transition), then BACK-EDGE to the loop head. If the body ends in an unconditional
             // break/continue/return, the `state=0` below is dead but harmless.
-            for (loopw.tail.items) |st| try blk.append(arena, try rewriteLoopBodyStmt(low, st, bind_names, done_str, cont_state));
+            // Route the tail through rewriteLoopBodyBlock so block-scoped `let`/`var` shadowing of a
+            // captured name is honored (a region-local must read the local, not the captured field).
+            const rtail = try rewriteLoopBodyBlock(low, .{ .span = zspan, .items = loopw.tail.items }, bind_names, done_str, cont_state, false);
+            for (rtail.items) |st| try blk.append(arena, st);
             try setState(low, &blk, 0);
         }
         try inner.append(arena, try ifStateEq(arena, j + 1, try blk.toOwnedSlice(arena)));
@@ -1061,7 +1080,8 @@ fn lowerAsyncLoopFn(
         var tail_body: std.ArrayList(ast.Stmt) = .empty;
         // The post-loop tail is straight-line (no break/continue): a `return` becomes the DONE
         // transition (E3a-consistent; nested returns handled too).
-        for (tail.items) |stmt| try tail_body.append(arena, try rewriteRegionStmt(low, stmt, bind_names, done_str));
+        const rtail2 = try rewriteRegionBlock(low, .{ .span = zspan, .items = tail.items }, bind_names, done_str);
+        for (rtail2.items) |stmt| try tail_body.append(arena, stmt);
         try inner.append(arena, try ifStateEq(arena, cont_state, try tail_body.toOwnedSlice(arena)));
     }
     // Wrap the state chain in `while true { ... }`, then a trailing `return false;` (the return
@@ -2208,7 +2228,9 @@ fn emitArm(low: *Lowerer, pbody: *std.ArrayList(ast.Stmt), arm_steps: []const Aw
             // last await of the arm: run the arm's straight-line stmts (E3a: a `return` inside the
             // arm becomes the DONE transition), then go to the continuation. If the arm's last stmt
             // is an unconditional `return`, the `state=cont_state` below is dead but harmless.
-            for (arm_tail) |st| try blk.append(arena, try rewriteRegionStmt(low, st, names, done_str));
+            // Route through rewriteRegionBlock for block-scoped `let`/`var` shadow handling.
+            const rtail = try rewriteRegionBlock(low, .{ .span = zspan, .items = @constCast(arm_tail) }, names, done_str);
+            for (rtail.items) |st| try blk.append(arena, st);
             try setState(low, &blk, cont_state);
         }
         try pbody.append(arena, try ifStateEq(arena, entry + i, try blk.toOwnedSlice(arena)));
@@ -2444,6 +2466,23 @@ fn shadowRestore(names: *std.StringHashMap(void), restored: []const []const u8) 
     for (restored) |nm| try names.put(nm, {});
 }
 
+// A `let`/`var` decl introduces region-locals. In the fast paths (which, unlike the general path,
+// do NOT alpha-rename), such a local may share its name with a CAPTURED outer name (a param,
+// pre-loop/pre-branch local, or awaited binding). For the REST of the enclosing block the captured
+// name is shadowed by this local, so reads of it must stay bare (read the local) — NOT rewrite to
+// `self.<name>`. `declShadowNames` lists the decl's bound names; the block walker shadow-removes them
+// AFTER rewriting the decl (whose init is evaluated in the OUTER scope) and restores at block end
+// (lexical scope). A captured TOP-LEVEL pre-loop/pre-branch local never reaches a region/loop body
+// rewriter (it lives in `pre_loop`/`pre_branch`); only genuine region-locals do, so removing the name
+// is always the correct shadow — without this, a nested `let p` shadowing param `p` silently read
+// `self->p` (the param) instead of the local. (The general path is immune: alpha-rename made every
+// such local a globally-unique name, so no capture-set collision can occur there.)
+fn declShadowNames(arena: std.mem.Allocator, ld: ast.LocalDecl) Error![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (ld.names) |nm| try out.append(arena, nm.text);
+    return out.toOwnedSlice(arena);
+}
+
 // Rewrite bare-ident reads that name a captured field (param or awaited binding) to `self.<name>`.
 // Inside the constructor and poll method the original locals are FIELDS, so a reference to `a`
 // must become `self.a`. Recurses structurally over the expression.
@@ -2550,9 +2589,20 @@ fn rewriteRegionStmt(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void)
 }
 
 fn rewriteRegionBlock(low: *Lowerer, b: ast.Block, names: *std.StringHashMap(void), done_str: []const u8) Error!ast.Block {
+    const arena = low.arena;
     var items: std.ArrayList(ast.Stmt) = .empty;
-    for (b.items) |st| try items.append(low.arena, try rewriteRegionStmt(low, st, names, done_str));
-    return .{ .span = b.span, .items = try items.toOwnedSlice(low.arena) };
+    // Block-scoped shadowing: a `let`/`var` in this block shadows a captured outer name from its decl
+    // to the block end. Accumulate removals and restore them all when the block closes (lexical scope).
+    var block_removed: std.ArrayList([]const u8) = .empty;
+    for (b.items) |st| {
+        try items.append(arena, try rewriteRegionStmt(low, st, names, done_str));
+        switch (st.kind) {
+            .let_decl, .var_decl => |ld| try shadowRemove(names, try declShadowNames(arena, ld), &block_removed, arena),
+            else => {},
+        }
+    }
+    try shadowRestore(names, block_removed.items);
+    return .{ .span = b.span, .items = try items.toOwnedSlice(arena) };
 }
 
 // E3b: rewrite a loop-BODY straight-line statement. Like `rewriteRegionStmt` (returns -> DONE) but
@@ -2606,10 +2656,20 @@ fn rewriteLoopBodyStmtIn(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(v
             const rsubj = try rewriteParamRefs(low, sw.subject, names);
             var new_arms = try arena.alloc(ast.SwitchArm, sw.arms.len);
             for (sw.arms, 0..) |arm, i| {
+                // FINDING #1 (silent miscompile): a switch-arm pattern binding (`number(x)` / bare
+                // `bind`) introduces an arm-local that shadows a captured outer name. Remove the bound
+                // names from the capture-set for the arm body so their reads stay bare (read the
+                // payload), NOT `self.<name>` — mirroring rewriteRegionStmt / genRewriteStraight. This
+                // path (the loop-body rewriter) previously skipped the shadow and read the captured
+                // field instead of the payload.
+                const bound = try armBoundNames(arena, arm);
+                var removed: std.ArrayList([]const u8) = .empty;
+                try shadowRemove(names, bound, &removed, arena);
                 const new_body: ast.SwitchBody = switch (arm.body) {
                     .block => |b| .{ .block = try rewriteLoopBodyBlock(low, b, names, done_str, cont_state, in_inner_loop) },
                     .expr => |e| .{ .expr = try rewriteParamRefs(low, e, names) },
                 };
+                try shadowRestore(names, removed.items);
                 new_arms[i] = .{ .patterns = arm.patterns, .body = new_body };
             }
             return .{ .span = s.span, .kind = .{ .@"switch" = .{ .subject = rsubj, .arms = new_arms } } };
@@ -2619,7 +2679,18 @@ fn rewriteLoopBodyStmtIn(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(v
 }
 
 fn rewriteLoopBodyBlock(low: *Lowerer, b: ast.Block, names: *std.StringHashMap(void), done_str: []const u8, cont_state: usize, in_inner_loop: bool) Error!ast.Block {
+    const arena = low.arena;
     var items: std.ArrayList(ast.Stmt) = .empty;
-    for (b.items) |st| try items.append(low.arena, try rewriteLoopBodyStmtIn(low, st, names, done_str, cont_state, in_inner_loop));
+    // Block-scoped shadowing (see rewriteRegionBlock): a `let`/`var` shadows a captured outer name for
+    // the rest of the block; restore at block close.
+    var block_removed: std.ArrayList([]const u8) = .empty;
+    for (b.items) |st| {
+        try items.append(arena, try rewriteLoopBodyStmtIn(low, st, names, done_str, cont_state, in_inner_loop));
+        switch (st.kind) {
+            .let_decl, .var_decl => |ld| try shadowRemove(names, try declShadowNames(arena, ld), &block_removed, arena),
+            else => {},
+        }
+    }
+    try shadowRestore(names, block_removed.items);
     return .{ .span = b.span, .items = try items.toOwnedSlice(low.arena) };
 }
