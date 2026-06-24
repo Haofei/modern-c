@@ -305,6 +305,24 @@ proposition rests on. Phase 6 is cosmetic and deferrable.
   (MC_Kernel_Design.md, platform-portability-plan.md). Not a now-fix; lifting it
   risks the cow/demand QEMU gates. No kernel changes warranted.
 
+- **Phase 6 — done (std/ grouped)**: moved 17 cohesive files into
+  `std/{sync,fmt,alloc,collections}/` (foundational primitives kept flat to bound
+  churn); rewrote 67 absolute imports across 57 files. Caught a real gotcha: MC
+  mixes absolute and RELATIVE imports — `std/virtqueue.mc`'s relative
+  `import "barrier.mc"`/`"dma.mc"` dangled after the move and broke the whole
+  virtio/net kernel transitively. emit-snapshot/`fast` missed it (they don't
+  compile the kernel graph); only `c1` (kernel-test/demo-test) caught it. Fixed.
+  Final `c1` green: kernel-test 134, demo-test 11, move-fuzz 200, diff-backend 150.
+  `trace.mc` move and cow/demand relocation remain legitimately deferred.
+
+## Net outcome
+
+Real value delivered: build.zig decomposed (4,481→25 + modules); a genuine
+double-free hole fixed; compiler files modestly split (sema_move isolated); std
+grouped. Phases 4–5 were verification-only — `review.md` was stale and the
+codebase was already sound. The lesson: verify before refactoring; three of six
+phases' premises did not survive contact with the actual code.
+
 ## Open decisions to confirm before Phase 3
 
 - **IR level for the move CFG**: build a sema-local CFG (keeps source-span
