@@ -219,9 +219,14 @@ export fn blk_read_sector_async(dev: *mut BlkAsyncDev, sector: u64) -> u64 {
         return ASYNC_NO_ID; // broker full — back-pressure
     }
 
-    // Claim a free pool slot. (Bounded by MAP_LEN, which matches both the broker depth and the
-    // descriptor budget — VRING_QSIZE/3 — so a free broker slot generally implies a free pool
-    // slot; fail closed and release the broker slot if not.)
+    // Claim a free pool slot. MAP_LEN is sized to the BROKER depth (== MAX_INFLIGHT), so whenever
+    // async_submit handed us a slot above, a pool slot is available too — the pool is never the
+    // binding constraint. The REAL concurrency ceiling is the DESCRIPTOR budget: the queue has
+    // VRING_QSIZE (8) descriptors and each read consumes a 3-descriptor chain, so at most
+    // floor(8/3) = 2 reads can be in flight at the device simultaneously. That limit is enforced
+    // downstream — vq_submit_chain3 returns QueueFull once fewer than 3 descriptors are free — and
+    // we fail closed there (releasing the broker slot). This pool-slot check is just a defensive
+    // belt-and-suspenders (it cannot trip while in-flight ≤ MAP_LEN); release and bail if it does.
     let slot: usize = blk_pool_claim(dev.pool);
     if slot >= MAP_LEN {
         let _c: bool = async_cancel_slot(dev.broker, id);
