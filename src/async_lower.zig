@@ -1400,6 +1400,18 @@ fn validateNoDuplicateLocals(low: *Lowerer, params: []const ast.Param, body: ast
     var ds = DupScope{ .low = low };
     try ds.push(); // the fn's top scope: params + the body's top-level locals share it
     defer ds.pop();
+    // Param-vs-param collisions are E_DUPLICATE_PARAMETER in sema (`checkFn`), NOT E_DUPLICATE_LOCAL.
+    // Detect them SEPARATELY before seeding the scope so the diagnostic matches non-async exactly; a
+    // body local later shadowing a (now known-unique) param still reports E_DUPLICATE_LOCAL via `bind`.
+    {
+        var seen = std.StringHashMap(void).init(low.arena);
+        for (params) |p| {
+            if (seen.contains(p.name.text)) {
+                return low.fail(p.name.span, "E_DUPLICATE_PARAMETER: function parameter names must be unique", .{});
+            }
+            try seen.put(p.name.text, {});
+        }
+    }
     for (params) |p| try ds.bind(p.name);
     try dupCheckBlockItems(&ds, body);
 }
@@ -1431,6 +1443,12 @@ fn dupCheckStmt(ds: *DupScope, s: ast.Stmt) Error!void {
             // sema (a `for` binds its element in the body scope; a `while` cond + body in one scope).
             try ds.push();
             defer ds.pop();
+            // A `for x in xs` binds its element `x` into the body scope (sema's `checkForBody`/
+            // `addForBinding`), so re-using a still-live name there is E_DUPLICATE_LOCAL. A `while`
+            // loop's `label` is a loop LABEL, not a value binding — only bind for `.@"for"`.
+            if (l.kind == .@"for") {
+                if (l.label) |lbl| try ds.bind(lbl);
+            }
             try dupCheckBlockItems(ds, l.body);
         },
         .if_let => |node| {
