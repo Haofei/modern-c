@@ -5784,6 +5784,15 @@ pub const MoveSlot = struct {
     // move). Holds the span of the escaping store, for the diagnostic. Null when no borrow
     // has escaped into untracked memory.
     escaped_borrow: ?diagnostics.Span = null,
+    // Set when this alias was formed by taking the address of the move binding ITSELF
+    // (`let p = &o;`, or copied from such an alias `let q = p;`), so dereferencing it
+    // reconstitutes the whole move value: `*p` IS `o`. Moving `*p` out by value (e.g.
+    // `own_free(T, *p)`) is then a move-out THROUGH the alias — unsound, because the
+    // checker tracks the owning binding, not the pointee, so it can neither stop a later
+    // free of `o` (a double-free) nor a use of the now moved-from pointee. The move-out
+    // is rejected in moveConsume's `.deref` arm. False for DERIVED aliases (`p = f(&o)`,
+    // `p = &o.field`) where `*p` is sub-data, not the move binding — those stay borrows.
+    full_deref_alias: bool = false,
 };
 
 const LayoutFieldInfo = struct {

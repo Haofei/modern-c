@@ -196,10 +196,17 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *std.StringHashMap(MoveSl
                     };
                 } else if (spine.aliasReferentOf(decl.init.?, state)) |referent| {
                     if (state.contains(referent)) {
+                        // Is `*<this alias>` the whole move binding? True when the initializer
+                        // is `&<ident>` directly (`let p = &o` ⇒ `*p` IS `o`), or when copying
+                        // an existing full alias (`let q = p`). A `&o.field`/`&o[i]` initializer
+                        // is NOT a full alias (its referent resolves to `o` for stale-tracking,
+                        // but `*p` is the field, not `o`).
+                        const full = isDirectIdentAddressOf(decl.init.?) or
+                            inheritedFullDerefAlias(decl.init.?, state);
                         // `live = false`: the alias is a borrow, not a linear resource, so
                         // leak/exit checks (which only fire on `live` slots) must skip it.
                         // Its referent's moved-out state is what the stale check consults.
-                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .alias_of = referent }) catch {
+                        state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .alias_of = referent, .full_deref_alias = full }) catch {
                             self.oom = true;
                         };
                     }
@@ -609,6 +616,30 @@ pub fn mergeMoveBranches(
     replaceMoveState(self, dest, &merged);
 }
 
+// `&<ident>` (peeling `grouped`): the address of a binding ITSELF, so `*result` is that
+// binding. `&t.field`, `&t[i]`, and call results are NOT direct ident address-of.
+fn isDirectIdentAddressOf(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .grouped => |inner| isDirectIdentAddressOf(inner.*),
+        .address_of => |inner| switch (inner.*.kind) {
+            .ident => true,
+            .grouped => |g| g.*.kind == .ident,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+// `let q = p` copying an existing full-deref alias `p`: `q` is also one (`*q` == `*p`).
+fn inheritedFullDerefAlias(expr: ast.Expr, state: *const std.StringHashMap(MoveSlot)) bool {
+    switch (expr.kind) {
+        .ident => |id| if (state.get(id.text)) |s| return s.full_deref_alias,
+        .grouped => |inner| return inheritedFullDerefAlias(inner.*, state),
+        else => {},
+    }
+    return false;
+}
+
 // Consume the move bindings used by-value in `expr` (checking liveness).
 pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(MoveSlot), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     switch (expr.kind) {
@@ -673,7 +704,38 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *std.StringHashMap(Mov
                 }
             }
         },
-        .deref => |inner| moveBorrow(self, inner.*, state),
+        .deref => |inner| {
+            // Moving a linear `move` value out THROUGH a pointer deref (`own_free(T, *p)`)
+            // is unsound: the checker tracks the owning *binding*, not the pointee, so it
+            // can neither prevent a later free of that binding (a double-free) nor a use of
+            // the now moved-from pointee. (Modeling it as a plain borrow — the old behavior —
+            // let `own_free(T, *p); own_free(T, o)` compile into a double-free.) Reject the
+            // move out of the alias; the owner must be moved directly. A non-move deref
+            // (`f(*p)` for a scalar) is an ordinary borrow and still flows through.
+            // Detect a move-out THROUGH an alias of a tracked move binding (`*p` where
+            // `p = &o`): `aliasReferentOf` resolves `p` back to `o`, and only move
+            // bindings/aliases live in `state`, so a scalar `*u32` deref never matches
+            // (it stays a borrow). The type-based check is a fallback for derefs whose
+            // result type the move Context can resolve (it cannot for local pointer vars).
+            // A `full_deref_alias` (`p = &o`) makes `*p` the move binding itself, so consuming
+            // it moves the resource out THROUGH the alias — reject (the type-based check below
+            // cannot see this: the move Context does not carry local pointer-var types). A
+            // derived alias (`p = f(&o)`, `p = &o.field`) is NOT flagged, so reading its
+            // non-move pointee (`p.* + 1` on a `*mut u32`) stays an ordinary borrow.
+            var full_alias = false;
+            switch (inner.*.kind) {
+                .ident => |id| if (state.get(id.text)) |s| {
+                    full_alias = s.full_deref_alias;
+                },
+                else => {},
+            }
+            const moves_out = full_alias or exprIsMoveTyped(self, expr, state, aliases);
+            if (moves_out) {
+                self.errorCode(expr.span, "E_USE_AFTER_MOVE", "cannot move a linear `move` value out through a pointer deref; move the owning binding directly (the pointee would be left moved-from, which the checker cannot track through the alias)");
+            } else {
+                moveBorrow(self, inner.*, state);
+            }
+        },
         .index => |ix| {
             moveBorrow(self, ix.base.*, state);
             moveConsume(self, ix.index.*, state, aliases);
