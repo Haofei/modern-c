@@ -64,10 +64,16 @@ echo "--------------------------"
 
 # W i R: about-to-drive -> DEVICE IRQ reaped the completion (i, interrupt context) -> resumed.
 # ASYNC-BLK-OK + "DISK": the sector word round-tripped from the disk via the device interrupt.
+# BLK-NOLEAK-OK + free=8: the demo did 5 sequential reads (each awaited via the device IRQ) — more
+# than the 2 the UNFIXED hand-rolled reap could survive before QUEUE-FULL — and the descriptor free
+# list returned to full (8/8), proving the ISR reclaims every chain's descriptors and pool slot (no
+# per-read descriptor/DMA leak). A leak would surface as BLK-QUEUE-FULL or free!=8 / BLK-NOLEAK-FAIL.
 if printf '%s' "$OUT" | grep -q "Wi" \
-   && printf '%s' "$OUT" | grep -q "ASYNC-BLK-OK"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend: an async fn's await resolved against a REAL virtio-blk device interrupt (PLIC-routed used-ring completion reaped in interrupt context — trace 'i' — async_completing the broker id), driven by drive_irq under wfi; sector 0 word 'DISK' round-tripped (Wi…R, ASYNC-BLK-OK) under QEMU"
+   && printf '%s' "$OUT" | grep -q "ASYNC-BLK-OK" \
+   && printf '%s' "$OUT" | grep -q "BLK-NOLEAK-OK" \
+   && printf '%s' "$OUT" | grep -q "free=8"; then
+    echo "PASS: $TEST_NAME — $BACKEND backend: 5 sequential async reads each resolved against a REAL virtio-blk device interrupt (PLIC-routed used-ring completion reaped in interrupt context — trace 'i' — async_completing the broker id), driven by drive_irq under wfi; sector 0 word 'DISK' round-tripped each read (Wi…R, ASYNC-BLK-OK) and the descriptor free list returned to full 8/8 (free=8, BLK-NOLEAK-OK) — no descriptor/DMA leak across reads (unfixed code QUEUE-FULLs after 2) under QEMU"
     exit 0
 fi
-echo "FAIL: $TEST_NAME — expected 'Wi' (device IRQ in interrupt context) and ASYNC-BLK-OK in kernel output"
+echo "FAIL: $TEST_NAME — expected 'Wi' (device IRQ in interrupt context), ASYNC-BLK-OK, BLK-NOLEAK-OK and free=8 in kernel output (a leak shows as BLK-QUEUE-FULL or free!=8)"
 exit 1
