@@ -863,6 +863,11 @@ fn cloneSwitch(ctx: *const CloneCtx, node: ast.Switch) anyerror!ast.Switch {
                 .block => |b| .{ .block = try cloneBlock(ctx, b) },
                 .expr => |e| .{ .expr = try cloneExprCtx(ctx, e) },
             },
+            // Preserve the async-lowering flag (set pre-monomorphize by async_lower) so a generic async
+            // fn's switch keeps its bare-`.bind` shadow check through instantiation — monomorphize runs
+            // between async_lower and sema, so dropping it here would re-mask the collision sema relies
+            // on. Holds the "every SwitchArm rebuild preserves dup_local_if_binds" invariant.
+            .dup_local_if_binds = arm.dup_local_if_binds,
         };
     }
     return .{ .subject = try cloneExprCtx(ctx, node.subject), .arms = arms };
