@@ -1461,9 +1461,18 @@ fn dupCheckStmt(ds: *DupScope, s: ast.Stmt) Error!void {
             if (node.else_block) |eb| try dupCheckBlock(ds, eb);
         },
         .@"switch" => |sw| {
+            // Whether a switch arm's `.bind`/`.tag_bind` BINDS a local is TYPE-DEPENDENT and thus
+            // undeterminable here, PRE-sema: sema binds a `.bind` ONLY for a NULLABLE subject (the
+            // unwrap); a NON-nullable `switch n { x => ... }` does NOT bind `x`. A multi-pattern arm
+            // with a binding is E_SWITCH_MULTI_BINDING_ARM (and binds nothing). Pre-binding every
+            // pattern here mis-rejected the valid non-nullable form as E_DUPLICATE_LOCAL and masked
+            // sema's E_SWITCH_MULTI_BINDING_ARM on `ok(x), err(x) => ...`. So DON'T model switch-pattern
+            // binding here — sema (which has the subject type) is authoritative for switch arms,
+            // including rejecting a bind/tag_bind that shadows a still-live outer name (E_DUPLICATE_LOCAL
+            // — its no-shadow rule) and a multi-binding arm (E_SWITCH_MULTI_BINDING_ARM). We still
+            // recurse into each arm body in its own child frame so a genuine NESTED `let` is dup-checked.
             for (sw.arms) |arm| {
                 try ds.push();
-                for (arm.patterns) |p| try dupCheckPattern(ds, p);
                 switch (arm.body) {
                     .block => |b| try dupCheckBlockItems(ds, b),
                     .expr => {},
@@ -1476,6 +1485,9 @@ fn dupCheckStmt(ds: *DupScope, s: ast.Stmt) Error!void {
     }
 }
 
+// `dupCheckPattern` handles patterns that ALWAYS bind unconditionally (an `if let` narrowing). Switch
+// patterns are NOT routed here — their binding-ness is type-dependent (see `.@"switch"` above), so
+// sema validates them.
 fn dupCheckPattern(ds: *DupScope, p: ast.Pattern) Error!void {
     switch (p.kind) {
         .bind => |b| try ds.bind(b),
@@ -1570,14 +1582,21 @@ fn renameStmt(rs: *RenameScope, s: ast.Stmt) Error!ast.Stmt {
             const rsubj = try renameExpr(rs, sw.subject);
             var new_arms = try arena.alloc(ast.SwitchArm, sw.arms.len);
             for (sw.arms, 0..) |arm, i| {
-                // FINDING #1 (silent miscompile): a `tag_bind`/`bind` pattern introduces a REAL
-                // arm-local. The alpha-renamer must give it its OWN fresh name (and rewrite the
-                // pattern), binding it in a per-arm frame so the arm body's references resolve to the
-                // PAYLOAD local, not an outer renamed binding of the same source name. Because the
-                // fresh pattern name is NOT collected by collectAllLocalDecls/collectAwaitBindingNames
-                // (neither walks pattern bindings), it is never captured as a `self.*` field —
-                // genRewriteStraight then leaves it a local, reading the payload. (The general path
-                // rejects awaits inside such arms, so the payload is never live across a suspend.)
+                // A switch arm's `.bind`/`.tag_bind` introduces an arm-local whose binding-ness is
+                // TYPE-DEPENDENT (see the dup-check `.@"switch"` note): sema validates it. We do NOT
+                // alpha-rename the pattern NAME — we leave it ORIGINAL and do NOT bind it in the arm
+                // frame. Rationale (the earlier rename "fixed" a silent miscompile that ONLY arose on
+                // INVALID shadowing input — a payload name colliding with a still-live captured/awaited
+                // name — which MC's no-shadow rule now makes sema REJECT outright, so it never reaches
+                // here): on VALID (non-shadowing) input the arm body's references resolve correctly
+                // WITHOUT renaming. A payload `z` is in NO rename frame (the only same-named outer
+                // binding lives in a DISJOINT, already-popped scope), so `renameExpr` leaves the read
+                // bare `z` — reading the payload; an outer captured name referenced in the arm still
+                // renames via its still-live frame entry; and the identifier rewriters' `shadowRemove`
+                // (keyed on the original pattern name via `armBoundNames`) keeps the bare payload read
+                // from being rewritten to `self.<field>`. We STILL rename a `.literal` pattern's expr
+                // (it may reference an outer renamed binding). The frame is pushed for any arm-body
+                // NESTED `let` to rename within.
                 try rs.push();
                 const new_pats = try renamePatterns(rs, arm.patterns);
                 const new_body: ast.SwitchBody = switch (arm.body) {
@@ -1598,16 +1617,18 @@ fn renameStmt(rs: *RenameScope, s: ast.Stmt) Error!ast.Stmt {
     }
 }
 
-// Rename a switch arm's patterns: a `.bind`/`.tag_bind` binding gets a fresh unique name bound into
-// the CURRENT (arm) scope frame (so the arm body's references resolve to it). `.literal` patterns
-// hold an expr that may reference outer names — rename it. `.wildcard`/`.tag` bind nothing.
+// Rename a switch arm's patterns. A `.bind`/`.tag_bind` binding is LEFT ORIGINAL and NOT bound in the
+// arm frame: its binding-ness is type-dependent (sema is authoritative), and on valid (non-shadowing)
+// input the arm body's payload reads stay bare and resolve to the payload without renaming (any outer
+// same-named binding lives in a disjoint, already-popped scope; a still-live collision is rejected by
+// sema's no-shadow rule before reaching here). `.literal` patterns hold an expr that may reference an
+// outer renamed binding — rename it. `.wildcard`/`.tag` bind nothing.
 fn renamePatterns(rs: *RenameScope, pats: []const ast.Pattern) Error![]ast.Pattern {
     const arena = rs.arena();
     var out = try arena.alloc(ast.Pattern, pats.len);
     for (pats, 0..) |p, i| {
         out[i] = switch (p.kind) {
-            .bind => |b| .{ .span = p.span, .kind = .{ .bind = .{ .text = try rs.bind(b.text), .span = b.span } } },
-            .tag_bind => |tb| .{ .span = p.span, .kind = .{ .tag_bind = .{ .tag = tb.tag, .binding = .{ .text = try rs.bind(tb.binding.text), .span = tb.binding.span } } } },
+            .bind, .tag_bind => p,
             .literal => |e| .{ .span = p.span, .kind = .{ .literal = try renameExpr(rs, e) } },
             else => p,
         };
