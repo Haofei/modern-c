@@ -14,11 +14,11 @@
 // The move/linear discipline makes "read after handoff", "double free", and
 // "lock left held" compile errors — see std/dma.mc and std/sync.mc.
 
-import "std/sync.mc";
-import "std/dma.mc";
-import "std/ring.mc";
+import "std/sync/sync.mc";
+import "std/alloc/dma.mc";
+import "std/collections/ring.mc";
 import "std/endian.mc";
-import "std/barrier.mc";
+import "std/sync/barrier.mc";
 
 // The TX descriptor ring (const-generic std Ring; zero-initialized as a global).
 global g_tx: Ring<usize, 16>;

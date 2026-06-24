@@ -16,7 +16,7 @@
 // the instruction demands. This is the x86 equivalent of the C `"a"(val)`/`"Nd"(port)` the
 // inline asm this replaces used, expressed through MC's generic-operand model.
 
-import "std/fmt_sink.mc";
+import "std/fmt/fmt_sink.mc";
 
 const COM1: u16 = 0x3F8;        // base port of the legacy 16550 UART
 const COM1_LSR: u16 = 0x3FD;    // line-status register (COM1 + 5)

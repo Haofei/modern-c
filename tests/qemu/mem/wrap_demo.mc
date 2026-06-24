@@ -4,8 +4,8 @@
 // after the slot's generation has advanced far past it, and an exhausted pool fails closed
 // (Full) at exactly its capacity. Complements the single-shot genref/pool/ring demos.
 
-import "std/ring.mc";
-import "std/pool.mc";
+import "std/collections/ring.mc";
+import "std/alloc/pool.mc";
 
 global g_ring: Ring<u32, 8>;
 global g_pool: Pool<u32, 4>;

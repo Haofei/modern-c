@@ -7,7 +7,7 @@
 // checks the generation `reset` bumps).
 
 import "std/addr.mc";
-import "std/alloc.mc";
+import "std/alloc/alloc.mc";
 import "std/math.mc";
 
 move struct Arena {

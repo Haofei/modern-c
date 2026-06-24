@@ -1,5 +1,5 @@
-import "std/rwlock.mc";
-import "std/seqlock.mc";
+import "std/sync/rwlock.mc";
+import "std/sync/seqlock.mc";
 
 global g_rw: RwLock;
 global g_seq: SeqLock;

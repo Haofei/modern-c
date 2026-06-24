@@ -1,7 +1,7 @@
 // Typed owned allocation: create<T> hands back a linear Owned<T> (leak-checked); we
 // write/read through its address, then own_free consumes it.
 
-import "std/alloc.mc";
+import "std/alloc/alloc.mc";
 import "std/addr.mc";
 import "kernel/core/heap.mc";
 

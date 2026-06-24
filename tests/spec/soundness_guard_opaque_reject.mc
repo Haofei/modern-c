@@ -13,7 +13,7 @@
 // FORGE a witness with a struct literal `.{ .state = ..., .data = ... }` — all bypassing the
 // lock discipline. Making `Guard` an `opaque move struct` turns each of those into
 // E_PRIVATE_FIELD. This fixture reads `g.data` from outside the `impl Guard`; it must reject.
-import "std/guarded.mc";
+import "std/collections/guarded.mc";
 
 fn leak(g: *Guard<u32>) -> *mut u32 {
     return g.data; // private field of an opaque type, read outside impl Guard

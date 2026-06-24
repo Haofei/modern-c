@@ -17,7 +17,7 @@
 
 import "std/virtio.mc";
 import "std/virtqueue.mc";
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 import "std/time.mc";
 import "kernel/platform/active/virtio_mmio_hw.mc";
 

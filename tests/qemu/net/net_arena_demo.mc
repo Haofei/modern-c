@@ -3,7 +3,7 @@
 // (reclaim) per packet. A handle held across a reset is caught stale (use-after-reset).
 
 import "kernel/net/net_rx.mc"; // net_rx_deliver, sockets, udp_write, ByteWriter, RX_ETYPE_IPV4
-import "std/arena.mc";
+import "std/alloc/arena.mc";
 
 global g_socks: SocketTable;
 global g_scratch: [512]u8;

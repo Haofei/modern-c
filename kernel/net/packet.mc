@@ -6,7 +6,7 @@
 // so reads are relative and bounds-aware. The big-endian byte primitives live in
 // std/dma's typed buffer view; this layer gives them names and bounds.
 
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 
 // A typed IPv4 address (network byte order is applied at write time).
 struct Ipv4Addr {

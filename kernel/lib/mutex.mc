@@ -8,7 +8,7 @@
 // kernel's scheduler/wait-queue hooks — `mutex_lock` returns `Blocked` so the caller knows to
 // park, and `mutex_unlock` returns the task id to wake.
 
-import "std/ring.mc";
+import "std/collections/ring.mc";
 
 const MTX_WAITERS: usize = 8;
 

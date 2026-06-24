@@ -4,7 +4,7 @@
 // atomic tracks how many harts have finished. The lock's zero-initialized storage is
 // already a valid unlocked lock, so no init barrier is needed.
 
-import "std/spinlock.mc";
+import "std/sync/spinlock.mc";
 
 const ITERS: u32 = 2000;
 

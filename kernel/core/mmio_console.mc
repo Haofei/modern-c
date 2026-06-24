@@ -11,7 +11,7 @@
 // mcause/fault value).
 
 import "console.mc";
-import "std/fmt_sink.mc";
+import "std/fmt/fmt_sink.mc";
 
 // Print a NUL-terminated string over the bare UART.
 export fn put_str(s: *const u8) -> void {

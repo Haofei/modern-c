@@ -1,7 +1,7 @@
 // Allocate through the type-erased Allocator interface (std/alloc), backed by a bump
 // Heap captured in the alloc/free closures — generic code never names "Heap".
 
-import "std/alloc.mc";
+import "std/alloc/alloc.mc";
 import "std/addr.mc";
 import "kernel/core/heap.mc";
 

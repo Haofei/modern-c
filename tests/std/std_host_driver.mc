@@ -13,7 +13,7 @@ import "std/core.mc";
 import "std/bits.mc";
 import "std/math.mc";
 import "std/ascii.mc";
-import "std/fmt.mc";
+import "std/fmt/fmt.mc";
 import "std/addr.mc";
 
 export fn std_host_test() -> u32 {

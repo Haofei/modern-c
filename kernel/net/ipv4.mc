@@ -2,7 +2,7 @@
 // Arch-neutral. Includes the RFC 1071 ones-complement checksum used by IPv4 and
 // ICMP. `at` is the byte offset of the IPv4 header within the buffer.
 
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 
 const IP_PROTO_ICMP: u8 = 1;
 const IPV4_HDR_LEN: usize = 20;

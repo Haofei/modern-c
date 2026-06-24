@@ -1,5 +1,5 @@
 // EXPECT: E_NO_IMPLICIT_POINTER_CONVERSION — getting a CPU address of a device-owned buffer.
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 fn bad() -> PAddr {
     let cpu: CpuBuffer = alloc(64);
     var dev: DeviceBuffer = clean_for_device(cpu);

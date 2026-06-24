@@ -7,7 +7,7 @@
 // the `kernel/platform/active/` seam; this file stays free of any MMIO address so it never
 // needs editing to retarget a board.
 import "kernel/platform/active/console_hw.mc";
-import "std/fmt_sink.mc";
+import "std/fmt/fmt_sink.mc";
 
 export fn console_putc(c: u8) -> void {
     plat_console_putc(c);

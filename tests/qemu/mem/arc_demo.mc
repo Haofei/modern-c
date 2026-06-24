@@ -1,8 +1,8 @@
 // Arc<T>: shared ownership. Two owners see the same value; dropping one doesn't free;
 // dropping the last frees. (Leaking a handle is a compile error — kernel/bad/arc_leak.)
 
-import "std/arc.mc";
-import "std/alloc.mc";
+import "std/collections/arc.mc";
+import "std/alloc/alloc.mc";
 import "std/addr.mc";
 import "kernel/core/heap.mc";
 

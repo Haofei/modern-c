@@ -1,7 +1,7 @@
 // Exercise the move Arena: bump-allocate, reset (batch reclaim + reuse), and destroy
 // (consume the linear arena). Forgetting arena_destroy would be a compile error.
 
-import "std/arena.mc";
+import "std/alloc/arena.mc";
 import "std/addr.mc";
 
 global g_pool: [8192]u8;

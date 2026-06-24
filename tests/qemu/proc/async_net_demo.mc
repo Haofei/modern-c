@@ -16,7 +16,7 @@
 
 import "std/virtio.mc";
 import "std/virtqueue.mc";
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 import "std/addr.mc";
 import "kernel/drivers/virtio/virtio_net_async.mc";
 import "kernel/net/arp.mc";

@@ -7,7 +7,7 @@
 // section (blocking new readers and other writers) and waits for the existing readers to drain.
 // Zero-initialized storage is a valid unlocked lock.
 
-import "std/spinlock.mc";
+import "std/sync/spinlock.mc";
 
 struct RwLock {
     gate: Spinlock,       // serializes writers and reader-entry (the ticket lock)

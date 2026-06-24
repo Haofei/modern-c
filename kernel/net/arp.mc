@@ -3,7 +3,7 @@
 // offset of the Ethernet frame within the buffer.
 
 import "ethernet.mc";
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 
 const ARP_OP_REQUEST: u16 = 1;
 const ARP_OP_REPLY: u16 = 2;

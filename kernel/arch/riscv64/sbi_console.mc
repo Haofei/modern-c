@@ -7,7 +7,7 @@
 // the 16-nibble (u64) form (handy for dumping a scause/fault value).
 
 import "kernel/arch/riscv64/sbi.mc";
-import "std/fmt_sink.mc";
+import "std/fmt/fmt_sink.mc";
 
 // Print an unsigned 64-bit value in decimal (no leading zeros; "0" for zero).
 export fn put_dec(v: u64) -> void {

@@ -2,7 +2,7 @@
 // lower to scalar C lane operations today.
 
 import "std/addr.mc";
-import "std/vec.mc";
+import "std/collections/vec.mc";
 
 fn add_mul_sum(a: [4]f32, b: [4]f32) -> f32 {
     let s = f32x4_splat(2.0);

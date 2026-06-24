@@ -4,7 +4,7 @@
 
 import "ethernet.mc";
 import "ipv4.mc";
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 
 const ICMP_ECHO_REQUEST: u8 = 8;
 const ICMP_ECHO_REPLY: u8 = 0;

@@ -9,7 +9,7 @@
 // cycles are not collected (use a non-owning handle to break them).
 
 import "std/addr.mc";
-import "std/alloc.mc";
+import "std/alloc/alloc.mc";
 
 // `value` is first (offset 0) so arc_get can mint a pointer straight from the
 // block address — avoids taking `&blk.value` (which the escape analysis over-rejects).

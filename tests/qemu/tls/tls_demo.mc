@@ -21,7 +21,7 @@ import "kernel/net/ipv4.mc";
 import "kernel/net/udp.mc";
 import "kernel/net/tcp_socket.mc";
 import "std/bytes.mc";
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 
 const OUR_IP: u32 = 0x0A00_020F; // 10.0.2.15 (QEMU guest)
 const GW_IP: u32 = 0x0A00_0202;  // 10.0.2.2  (QEMU slirp gateway -> host)

@@ -12,7 +12,7 @@
 //   ... copy the protected fields ...
 //   if seq_read_retry(sl, s) { /* a write overlapped — read again */ }
 
-import "std/spinlock.mc";
+import "std/sync/spinlock.mc";
 
 struct SeqLock {
     gate: Spinlock,    // serializes writers (readers never touch it)

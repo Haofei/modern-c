@@ -2,7 +2,7 @@
 // generation the same handle fails to resolve (StaleHandle) — runtime use-after-reset
 // detection, fail closed, with no lifetimes in the language.
 
-import "std/arena.mc";
+import "std/alloc/arena.mc";
 import "std/addr.mc";
 
 global g_pool: [4096]u8;

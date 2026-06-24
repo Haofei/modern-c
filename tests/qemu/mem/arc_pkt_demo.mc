@@ -3,8 +3,8 @@
 // its own owner and releases it; the buffer is freed exactly when the last owner drops
 // — the skb/mbuf refcount pattern, with handle-leaks caught at compile time.
 
-import "std/arc.mc";
-import "std/alloc.mc";
+import "std/collections/arc.mc";
+import "std/alloc/alloc.mc";
 import "std/addr.mc";
 import "kernel/core/heap.mc";
 

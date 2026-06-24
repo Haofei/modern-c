@@ -7,7 +7,7 @@
 
 import "std/virtio.mc";
 import "std/virtqueue.mc";
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 import "std/time.mc";
 
 const VIRTIO_BLK_DEVICE_ID: u32 = 2;

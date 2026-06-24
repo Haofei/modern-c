@@ -11,8 +11,8 @@ import "kernel/lib/log.mc";
 import "kernel/fs/vfs.mc";
 import "kernel/core/process.mc";
 import "kernel/arch/riscv64/idle.mc";
-import "std/arena.mc";
-import "std/pool.mc";
+import "std/alloc/arena.mc";
+import "std/alloc/pool.mc";
 import "std/addr.mc";
 
 const UART_BASE: usize = 0x1000_0000;

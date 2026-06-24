@@ -1,4 +1,4 @@
-import "std/slotmap.mc";
+import "std/collections/slotmap.mc";
 global g_sm: SlotMap<u32, 4>;
 export fn slotmap_run() -> u32 {
     var pass: u32 = 1;

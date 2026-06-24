@@ -1,5 +1,5 @@
 // EXPECT: E_RESOURCE_LEAK — a move Arena is never destroyed (the arena itself leaks).
-import "std/arena.mc";
+import "std/alloc/arena.mc";
 import "std/addr.mc";
 global g_pool: [4096]u8;
 fn bad() -> void {

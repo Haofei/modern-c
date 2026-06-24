@@ -19,7 +19,7 @@
 // blocks, which is fine for the small block counts a kernel heap sees.
 
 import "std/addr.mc";
-import "std/alloc.mc";
+import "std/alloc/alloc.mc";
 
 // Max distinct (non-coalesced) free blocks tracked at once. A kernel heap fragments
 // little; coalescing collapses adjacent frees, so this rarely fills.

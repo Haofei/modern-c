@@ -10,7 +10,7 @@ import "kernel/net/ethernet.mc";
 import "kernel/net/ipv4.mc";
 import "kernel/net/udp.mc";
 import "std/bytes.mc";
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 
 const NET_HDR: usize = 12;       // virtio-net header precedes the Ethernet frame
 const IP_PROTO_UDP_B: u8 = 17;

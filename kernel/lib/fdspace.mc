@@ -4,7 +4,7 @@
 // select/poll. No sentinels: alloc/select/lookup return typed `Result`s, so a caller can
 // never confuse a real fd with a 0xFFFF "none".
 
-import "std/slotmap.mc";
+import "std/collections/slotmap.mc";
 
 const FD_MAX: usize = 8;
 

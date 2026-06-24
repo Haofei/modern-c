@@ -3,7 +3,7 @@
 // path), and an idle core steals a runnable task from the busiest core (load balancing).
 // The per-core FIFOs are std `Ring<u32, RQ_CAP>` — no hand-rolled head/tail/count/`% CAP`.
 
-import "std/ring.mc";
+import "std/collections/ring.mc";
 
 const NCORES: usize = 2;
 const RQ_CAP: usize = 8;

@@ -8,7 +8,7 @@
 // and skipped on wake. The block/wake transitions go through the core mechanisms.
 
 import "kernel/core/process.mc";
-import "std/ring.mc";
+import "std/collections/ring.mc";
 
 const WQ_MAX: usize = 8;
 

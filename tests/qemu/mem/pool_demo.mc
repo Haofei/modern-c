@@ -2,7 +2,7 @@
 // (use-after-free), a second free fails (double-free), and after the slot is reused
 // the old handle stays stale (generation differs). Runtime, fail-closed.
 
-import "std/pool.mc";
+import "std/alloc/pool.mc";
 
 struct Cell { v: u32 }
 global g_pool: Pool<Cell, 16>;

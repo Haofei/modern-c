@@ -1,6 +1,6 @@
 // EXPECT: E_RESOURCE_LEAK — an Arc handle is never dropped (shared owner leaked).
-import "std/arc.mc";
-import "std/alloc.mc";
+import "std/collections/arc.mc";
+import "std/alloc/alloc.mc";
 import "std/addr.mc";
 import "kernel/core/heap.mc";
 struct Payload { value: u32 }

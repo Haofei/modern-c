@@ -6,7 +6,7 @@
 // Found by the Phase-3 adversarial move-checker audit; the fix rejects the move-out-of-deref
 // at src/sema_move.zig (the `.deref` arm of moveConsume) so the alias free can never pair
 // with a direct free to double-release. A scalar (non-move) deref `f(*p)` stays a plain borrow.
-import "std/alloc.mc";
+import "std/alloc/alloc.mc";
 import "std/addr.mc";
 import "kernel/core/heap.mc";
 global g_pool: [4096]u8;

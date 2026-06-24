@@ -7,7 +7,7 @@
 // the byte to the data register through `raw.store<u8>`. This is the reusable ARM console
 // the rest of the aarch64 sweep (vm/user/qjs/context kmains) prints through.
 
-import "std/fmt_sink.mc";
+import "std/fmt/fmt_sink.mc";
 
 // QEMU 'virt' PL011 base. DR is at +0x00 (write a byte to transmit); FR (flag register) is
 // at +0x18, with bit 5 = TXFF (transmit FIFO full) — we spin while it is set so we never

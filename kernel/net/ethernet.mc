@@ -3,7 +3,7 @@
 // takes `at`, the byte offset where the Ethernet frame begins (e.g. after a
 // 12-byte virtio-net header), so the frame can be placed anywhere in the buffer.
 
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 
 const ETH_HDR_LEN: usize = 14;
 const ETHERTYPE_ARP: u16 = 0x0806;

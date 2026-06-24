@@ -9,7 +9,7 @@
 // runtimes that print values import std/fmt_sink and call `fmt_put_dec`/
 // `fmt_put_hex*` with `uputc` as the sink directly.
 
-import "std/fmt_sink.mc";
+import "std/fmt/fmt_sink.mc";
 
 const RT_UART_THR: usize = 0x1000_0000; // QEMU virt 16550 transmit-hold register
 

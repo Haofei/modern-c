@@ -1,6 +1,6 @@
 // Test wrappers around the generic in-place ring buffer, instantiated at Ring<u32, 16>.
 
-import "std/ring.mc";
+import "std/collections/ring.mc";
 
 global g_ring: Ring<u32, 16>;
 

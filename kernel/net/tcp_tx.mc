@@ -9,7 +9,7 @@
 // the sequence/ack/flags/window and the payload extent so a client loop can advance
 // its sequence accounting and read the response body.
 
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 import "std/bytes.mc";
 import "kernel/net/ethernet.mc";
 import "kernel/net/ipv4.mc";

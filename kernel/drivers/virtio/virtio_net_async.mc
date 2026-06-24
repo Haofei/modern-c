@@ -42,7 +42,7 @@
 
 import "std/virtio.mc";
 import "std/virtqueue.mc";
-import "std/dma.mc";
+import "std/alloc/dma.mc";
 import "std/addr.mc";
 import "kernel/lib/async.mc";
 import "kernel/core/process.mc";
