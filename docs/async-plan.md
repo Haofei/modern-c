@@ -307,15 +307,44 @@ never-break exit, continue-skip, cancel-mid-loop). The old `bad/async_loop_break
 `bad/async_loop_nested_await.mc` keeps the still-illegal "await nested in inner control flow"
 (= E3c) rejected with `E_ASYNC_LOOP_UNSUPPORTED`.
 
-**E3c — DEFERRED (nested awaits / loop+branch mixing).** An `await` nested inside an `if` inside a
-`while`, or more than one await-bearing construct in a fn, still rejects (`E_ASYNC_LOOP_UNSUPPORTED`
-/ `E_ASYNC_BRANCH_UNSUPPORTED`). It needs generalizing the state ALLOCATOR from "one contiguous
-range per construct" to a proper per-suspend-point CFG numbering (a suspend point reached by
-multiple edges — a loop back-edge or branch join — must materialize its child exactly once per
-entry, which the flat `if self.state==N` fall-through cannot express for an interior await). The
-E3a/E3b edges are a stepping stone: they already route control to arbitrary states via
-`state=N; continue;`, so the remaining work is the numbering + per-state child-build placement, not
-the edge mechanism.
+**E3c — DONE (nested awaits / multiple await-bearing constructs).** An `await` nested inside an `if`
+inside a `while`, AND more than one await-bearing construct in one `async fn` (e.g. an await-bearing
+`if`/`else` followed by an await-bearing `while`), now lower via a GENERAL structured-CFG path
+(`src/async_lower.zig`, `lowerAsyncGeneralFn` + `lowerStmtsGen`). The whole fn body becomes ONE
+`while true { if state==DONE return true; <if state==N {…}> } return false;` dispatch with a
+per-suspend-point state numbering, replacing the flat "one contiguous range per construct" allocator
+for these shapes. Routing: `needsGeneralLowering(body)` sends ONLY the previously-rejected shapes
+(nested await, or >1 top-level await-bearing construct) to the general path; the two fast paths
+(`lowerAsyncFn` linear/branch, `lowerAsyncLoopFn`) keep their byte-for-byte lowering for the shapes
+they already handle, so the five pre-existing async shapes are untouched (zero regression).
+
+The crux invariants hold BY CONSTRUCTION. **Each `await` is its OWN poll-state**, which only polls
+`&self.__cN`, suspends while pending (`return false`), then takes the result into the binding field —
+it NEVER builds a child. **A child is materialized on the ENTRY EDGE** (the predecessor block),
+`self.__cN = <expr>; self.state = pollState; continue;` — so **build-once-per-entry**: a re-poll
+re-enters the poll-state through the while-true dispatch (NOT the edge) and does not rebuild (it would
+re-issue the awaited side effect / re-submit a broker slot); a loop back-edge re-runs the head, which
+routes through the body-entry edge that rebuilds the loop child exactly once per iteration. Because
+the build sits on the edge and the take happens inside the poll-state before control leaves it,
+**at-most-one-child-live** holds: no edge builds two children, and the next await's child is built
+only after the prior poll-state took its result and left. `if`/`else` arms each get an entry
+trampoline + their own poll-states, converging on a fresh JOIN state; a `while` gets head/body-entry/
+exit states with the body's fall-off as the back-edge to the head; `return`/`break`/`continue` lower
+to state-edges (return→DONE; break→exit; continue→head) that run AFTER the region's await took its
+result (no live child at the edge). The constructor builds NO child (every child is edge-built in
+`poll`), so `checkNoSelfBorrow` over the constructor stays sound+complete UNCHANGED (it never had to
+scan poll-formed borrows; the general path simply moves even more builds out of the constructor).
+Generated `cancel` walks `if state==N { __cN_cancel }` per await poll-state then marks DONE
+(cancel-on-every-exit + idempotent). Gates (both backends, in diff-backend):
+`fuzz-async-nested-await-test` (await in an `if` in a `while`: full run, arm-not-taken,
+cancel-parked-on-outer-await, cancel-parked-on-inner-nested-await — a leak/double-free/double-build
+detector returns to 0 only if every child was built once and freed once) and
+`fuzz-async-multi-construct-test` (leading await → await-`if`/`else` → await-`while`: both arms,
+zero-iteration loop, cancel on the leading await, cancel parked in the loop after the if region
+completed asserting exactly one live slot). The old `bad/async_loop_nested_await.mc` reject (the shape
+is now legal) was removed; a new `bad/async_for_await_nested.mc` keeps an await inside a `for` loop
+rejected with `E_ASYNC_GENERAL_UNSUPPORTED` (the general lowerer supports `let x = await e;`, bool
+`if`/`else`, and `while` — a `for`'s iterator desugaring is not yet modelled).
 
 **6. IRQ context.** `async fn` is forbidden in `#[irq_context]` (it suspends / uses `*dyn`).
 Separately, polling an arbitrary `*dyn Future` from `#[irq_context]` stays forbidden (indirect
@@ -340,7 +369,9 @@ are proven IRQ-safe — not worth supporting initially; treat generated futures 
    `while true` for the back-edge; spec `fuzz_async_loop_lowering.mc`. v0 loop scope: one `while`,
    body = leading await-run + straight-line. **E3a/E3b** then added `return`/`break`/`continue`
    inside the loop/branch body (each maps to a state transition; see §"Control flow across `await`").
-   Still v0: no loop+branch mix and no await nested in inner control flow (= E3c, deferred).
+   **E3c** then lifted the last restriction: nested awaits (await in an `if` in a `while`) and
+   multiple await-bearing constructs in one fn now lower via the general structured-CFG path
+   (`lowerAsyncGeneralFn`), routed only for those shapes so the fast paths stay byte-for-byte.
 6. **Add cancellation / resource cleanup** (`cancel`/drop walking child futures + broker
    `async_cancel(id)`). **DONE.**
 7. **Only then add the parser sugar** (`async fn` / `await` keywords). **DONE** (contextual

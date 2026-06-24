@@ -438,6 +438,17 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
 
     const body = fd.body orelse return low.fail(fd.name.span, "async fn '{s}' must have a body", .{fname});
 
+    // ---- E3c: a body whose control flow is BEYOND the two pattern-matched fast paths — an `await`
+    // nested inside inner control flow (an `if`/`switch`/`loop` within a loop body or an if/else arm),
+    // or MORE THAN ONE await-bearing top-level construct — takes the GENERAL structured-CFG path
+    // (`lowerAsyncGeneralFn`): the whole body becomes one `while true { switch state }` dispatch with a
+    // per-suspend-point state numbering and build-on-the-entry-edge. The two fast paths below are left
+    // untouched for the exact shapes they already handle (zero regression), so only the previously-
+    // REJECTED shapes route here. ----
+    if (needsGeneralLowering(body)) {
+        return lowerAsyncGeneralFn(low, out, decl, info, fut_type, result_type, body);
+    }
+
     // ---- An await-bearing `while` loop takes a DEDICATED lowering path (back-edge + while-true poll
     // wrapper). Detect it first; it may not be mixed with an await-bearing if/else in v0. ----
     {
@@ -1059,6 +1070,500 @@ fn lowerAsyncLoopFn(
         .is_const = false,
         .exported = fd.exported,
     } } });
+}
+
+// ===== E3c: GENERAL structured-CFG lowering =====================================================
+// The two fast paths (`lowerAsyncFn` linear/branch, `lowerAsyncLoopFn`) pattern-match a single
+// await-bearing construct with a flat contiguous state range. E3c generalizes to ARBITRARY nesting
+// and SEQUENCING of await-bearing constructs by lowering the whole body as a structured CFG into ONE
+// `while true { if state==DONE return true; <state blocks> } return false;` dispatch, with a
+// per-suspend-point state numbering. The crux invariants — at-most-one-child-live and
+// build-once-per-entry — hold BY CONSTRUCTION:
+//   * Every `await` is its OWN poll-state. That state ONLY polls `&self.__cN`, suspends while pending
+//     (`return false`), then takes the result into the binding field. It NEVER builds a child.
+//   * A child is materialized (`self.__cN = <expr>;`) on the ENTRY EDGE — the predecessor block,
+//     immediately before `self.state = pollState; continue;`. Re-polling re-enters the poll-state via
+//     the while-true dispatch (NOT via the edge), so it never rebuilds (build-once-per-entry). A loop
+//     back-edge re-runs the loop head, which routes through the body-entry edge that rebuilds the loop
+//     child exactly once per iteration.
+//   * Because the build sits on the edge and the take happens inside the poll-state before control
+//     leaves it, at any suspend exactly the current poll-state's child is live; no edge builds two
+//     children, and the next await's child is built only after the prior poll-state took its result and
+//     left (at-most-one-child-live).
+// `return`/`break`/`continue` lower to state-edges that run AFTER the region's await took its result
+// (no live child at the edge); cancel walks `if state==N { __cN_cancel }` per await poll-state then
+// marks DONE (cancel-on-every-exit + idempotent). The constructor builds NO child (every child is
+// edge-built in `poll`), so `checkNoSelfBorrow` over the constructor stays sound+complete unchanged.
+
+// Does the body need the general path (i.e. is it BEYOND both fast paths)? True iff there is more than
+// one top-level await-bearing construct, OR an `await` nested inside inner control flow within a loop
+// body / if-arm (which the flat per-construct allocator cannot number). Shapes the fast paths accept
+// (a single leading await-run + at most one await-bearing if/else, OR a single await-bearing while with
+// a leading-await-run body) return false here and keep their byte-for-byte lowering — zero regression.
+fn needsGeneralLowering(body: ast.Block) bool {
+    var top_await_ifs: usize = 0;
+    var top_await_loops: usize = 0;
+    for (body.items) |stmt| {
+        if (asBoolIf(stmt)) |bi| {
+            if (blockContainsAwait(bi.then_blk) or blockContainsAwait(bi.else_blk)) {
+                top_await_ifs += 1;
+                // An await nested in inner control flow within either arm needs the general path.
+                if (blockHasNestedAwait(bi.then_blk) or blockHasNestedAwait(bi.else_blk)) return true;
+            }
+            continue;
+        }
+        if (stmt.kind == .loop and blockContainsAwait(stmt.kind.loop.body)) {
+            top_await_loops += 1;
+            if (blockHasNestedAwait(stmt.kind.loop.body)) return true;
+        }
+    }
+    // More than one top-level await-bearing construct (e.g. await-if THEN await-while), or an
+    // await-while mixed with an await-if, is multi-construct — general.
+    return (top_await_ifs + top_await_loops) > 1;
+}
+
+// Does this block (a loop body or if-arm) contain an `await` NESTED inside inner control flow — i.e.
+// inside an `if`/`switch`/`loop`/inner block — as opposed to a top-level leading `let x = await e;`?
+// The fast paths only support a LEADING run of top-level await-lets in a region; anything deeper is
+// E3c. (A top-level await-let in the block is NOT "nested"; an await inside a top-level if/loop IS.)
+fn blockHasNestedAwait(b: ast.Block) bool {
+    for (b.items) |s| {
+        switch (s.kind) {
+            // A top-level await-let is fine (fast-path leading run). Any OTHER top-level stmt that
+            // contains an await has that await nested in inner control flow.
+            .let_decl, .var_decl => {},
+            else => if (stmtContainsAwait(s)) return true,
+        }
+    }
+    return false;
+}
+
+// The general lowering context: a growing single `while true` dispatch built as a list of finalized
+// state blocks plus the "current" block being accumulated. `newState`/`gotoState`/`finishCur`/
+// `startState` are the basic-block-builder primitives; `emitAwaitState` records each await poll-state
+// for the struct fields + cancel guards.
+const GenCtx = struct {
+    low: *Lowerer,
+    names: *std.StringHashMap(void),
+    done_str: []const u8,
+    states: std.ArrayList(GenState) = .empty, // finalized state blocks
+    cur: std.ArrayList(ast.Stmt) = .empty, // the block being accumulated
+    cur_state: usize = 0,
+    counter: usize = 1, // 0 is the entry state; next fresh state is 1
+    awaits: std.ArrayList(GenAwait) = .empty, // (state, step) for fields + cancel
+
+    const GenState = struct { num: usize, items: []ast.Stmt };
+    const GenAwait = struct { state: usize, step: AwaitStep };
+
+    fn arena(self: *GenCtx) std.mem.Allocator {
+        return self.low.arena;
+    }
+    fn newState(self: *GenCtx) usize {
+        const n = self.counter;
+        self.counter += 1;
+        return n;
+    }
+    // Append `self.state = n; continue;` (the edge terminator) to the current block.
+    fn gotoState(self: *GenCtx, n: usize) Error!void {
+        try setState(self.low, &self.cur, n);
+        try self.cur.append(self.arena(), .{ .span = zspan, .kind = .@"continue" });
+    }
+    // Finalize the current block under its state number.
+    fn finishCur(self: *GenCtx) Error!void {
+        try self.states.append(self.arena(), .{ .num = self.cur_state, .items = try self.cur.toOwnedSlice(self.arena()) });
+        self.cur = .empty;
+    }
+    fn startState(self: *GenCtx, n: usize) void {
+        self.cur_state = n;
+        self.cur = .empty;
+    }
+};
+
+fn lowerAsyncGeneralFn(
+    low: *Lowerer,
+    out: *std.ArrayList(ast.Decl),
+    decl: ast.Decl,
+    info: AsyncInfo,
+    fut_type: []const u8,
+    result_type: ast.TypeExpr,
+    body: ast.Block,
+) Error!void {
+    const arena = low.arena;
+    const fd = decl.kind.fn_decl;
+
+    // Captured names: params + every awaited binding (anywhere) + every TOP-LEVEL `let`/`var` (the
+    // index/accumulators live across the regions). They become `self.*` fields; reads rewrite to self.*.
+    var field_names = std.StringHashMap(void).init(arena);
+    for (fd.params) |p| try field_names.put(p.name.text, {});
+    try collectAwaitBindingNames(body, &field_names);
+    for (body.items) |stmt| switch (stmt.kind) {
+        .let_decl, .var_decl => |ld| try field_names.put(ld.names[0].text, {}),
+        else => {},
+    };
+    const names = &field_names;
+
+    var ctx = GenCtx{ .low = low, .names = names, .done_str = "" };
+
+    // DONE is a FIXED state allocated FIRST (so `return`/fall-off can reference it during lowering);
+    // the body's states are allocated after it. State 0 is the entry. The numeric value of DONE thus
+    // does not depend on body size — it is always state 1 — which keeps every `return`/fall-off edge
+    // well-formed in a single lowering pass.
+    const done_state = ctx.newState(); // == 1
+    const done_str = try std.fmt.allocPrint(arena, "{d}", .{done_state});
+    ctx.done_str = done_str;
+
+    // Lower the whole body in one pass. The body's final fall-off (if reachable) jumps to DONE; a fn
+    // that never returns is rejected by the return checker later (an async fn must `return`). brk/cont
+    // are null at the top level (a break/continue outside any loop is a parse/sema error upstream).
+    ctx.startState(0);
+    try lowerStmtsGen(&ctx, body.items, done_state, null, null);
+    try ctx.finishCur(); // finalize the last open block (its terminator is its own goto/return)
+
+    // ---- Build the future struct: state + one __cN per await (in state order) + params + top-level
+    // locals + awaited bindings + result. ----
+    var fields: std.ArrayList(ast.Field) = .empty;
+    try fields.append(arena, .{ .name = id("state"), .ty = try nameType(arena, "u8") });
+    for (ctx.awaits.items) |ga| {
+        try fields.append(arena, .{ .name = id(ga.step.child_field), .ty = try nameType(arena, ga.step.fut_type) });
+    }
+    for (fd.params) |p| try fields.append(arena, .{ .name = p.name, .ty = p.ty });
+    // Top-level locals (the accumulators/index live across the regions) -> captured fields; require an
+    // explicit type annotation (same contract as the pre-loop/pre-branch locals in the fast paths).
+    for (body.items) |stmt| switch (stmt.kind) {
+        .let_decl, .var_decl => |ld| {
+            // A top-level awaited binding is added below from the await steps; skip it here.
+            if (awaitStepCall(stmt) != null) continue;
+            if (ld.names.len != 1) return low.fail(stmt.span, "E_ASYNC_GENERAL_UNSUPPORTED: a top-level `let`/`var` must bind exactly one name in async E3c", .{});
+            const lty = ld.ty orelse return low.fail(stmt.span, "E_ASYNC_GENERAL_UNSUPPORTED: a top-level `let`/`var` live across the await regions needs an explicit type annotation in async E3c", .{});
+            try fields.append(arena, .{ .name = ld.names[0], .ty = lty });
+        },
+        else => {},
+    };
+    // Awaited-binding fields (in state/await order; each unique).
+    for (ctx.awaits.items) |ga| if (ga.step.binding) |nm| try fields.append(arena, .{ .name = id(nm), .ty = ga.step.result_type });
+    try fields.append(arena, .{ .name = id("result"), .ty = result_type });
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .struct_decl = .{
+        .name = id(fut_type),
+        .abi = null,
+        .fields = try fields.toOwnedSlice(arena),
+    } } });
+
+    // ---- Constructor: zero state, copy params, replay top-level straight-line decls as stores, zero
+    // scalar fields. Build NO child eagerly (every child is built on its entry edge in `poll`). ----
+    var cbody: std.ArrayList(ast.Stmt) = .empty;
+    try cbody.append(arena, .{ .span = zspan, .kind = .{ .var_decl = .{
+        .names = try dupIdents(arena, &.{"self"}),
+        .ty = try nameType(arena, fut_type),
+        .init = .{ .span = zspan, .kind = .uninit_literal },
+    } } });
+    try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
+    for (fd.params) |p| try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
+    // Zero the scalar TOP-LEVEL local fields for definite-init (the move/borrow checker needs every
+    // field initialized before `return self`). Their REAL init (`self.x = init;`) runs in poll state 0
+    // — the entry state, which always executes before any state that reads them — emitted by
+    // `genRewriteStraight` converting the decl to a store (so it is NOT a dangling local, and NOT
+    // double-initialized in a meaningful way).
+    for (body.items) |stmt| switch (stmt.kind) {
+        .let_decl, .var_decl => |ld| {
+            if (awaitStepCall(stmt) != null) continue; // awaited binding: written by its poll-state
+            if (ld.ty) |lty| try appendZeroInit(low, &cbody, ld.names[0].text, lty);
+        },
+        else => {},
+    };
+    // Zero the scalar awaited-binding fields + result (definite-init).
+    for (ctx.awaits.items) |ga| if (ga.step.binding) |b| try appendZeroInit(low, &cbody, b, ga.step.result_type);
+    try appendZeroInit(low, &cbody, "result", result_type);
+    try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = identExpr("self") } });
+    try checkNoSelfBorrow(low, fd, cbody.items);
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
+        .name = id(fd.name.text),
+        .abi = null,
+        .params = fd.params,
+        .return_type = try nameType(arena, fut_type),
+        .body = .{ .span = zspan, .items = try cbody.toOwnedSlice(arena) },
+        .is_const = false,
+        .exported = fd.exported,
+    } } });
+
+    // ---- The poll method: `while true { if state==DONE return true; <state blocks, sorted> } return
+    // false;`. State blocks are emitted in numeric order; each is `if self.state==N { ... }`. ----
+    var inner: std.ArrayList(ast.Stmt) = .empty;
+    {
+        var dbody = try arena.alloc(ast.Stmt, 1);
+        dbody[0] = .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } };
+        try inner.append(arena, try ifStateEq(arena, done_state, dbody));
+    }
+    // Emit states in ascending numeric order (deterministic output, stable across backends).
+    std.mem.sort(GenCtx.GenState, ctx.states.items, {}, struct {
+        fn lt(_: void, a: GenCtx.GenState, b: GenCtx.GenState) bool {
+            return a.num < b.num;
+        }
+    }.lt);
+    for (ctx.states.items) |st| {
+        try inner.append(arena, try ifStateEq(arena, st.num, st.items));
+    }
+    var pbody: std.ArrayList(ast.Stmt) = .empty;
+    try pbody.append(arena, try whileTrueBlock(try inner.toOwnedSlice(arena)));
+    try pbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = false } } } });
+
+    const poll_method_name = try std.fmt.allocPrint(arena, "{s}__poll", .{fut_type});
+    var poll_params = try arena.alloc(ast.Param, 1);
+    poll_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
+        .name = id(poll_method_name),
+        .abi = null,
+        .params = poll_params,
+        .return_type = try nameType(arena, "bool"),
+        .body = .{ .span = zspan, .items = try pbody.toOwnedSlice(arena) },
+        .is_const = false,
+    } } });
+
+    // `impl Future for f__Fut` (poll + cancel).
+    var conf_methods = try arena.alloc(ast.ImplTraitMethod, 2);
+    conf_methods[0] = .{
+        .name = id("poll"),
+        .mangled = poll_method_name,
+        .self_mode = .by_mut_ptr,
+        .params = poll_params,
+        .return_type = try nameType(arena, "bool"),
+    };
+    conf_methods[1] = try cancelConfMethod(low, info, fut_type);
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .impl_trait = .{
+        .trait_name = id("Future"),
+        .type_name = id(fut_type),
+        .methods = conf_methods,
+    } } });
+
+    // `fn f__Fut_take_result(self) -> T { return self.result; }`.
+    var tr_params = try arena.alloc(ast.Param, 1);
+    tr_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
+    var tr_body: std.ArrayList(ast.Stmt) = .empty;
+    try tr_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try selfMember(arena, "result") } });
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
+        .name = id(info.take_result),
+        .abi = null,
+        .params = tr_params,
+        .return_type = result_type,
+        .body = .{ .span = zspan, .items = try tr_body.toOwnedSlice(arena) },
+        .is_const = false,
+        .exported = fd.exported,
+    } } });
+
+    // `fn f__Fut_cancel(self) -> void`: one guard per await poll-state (each holds its own __cN while
+    // pending; at-most-one is live), then mark DONE (idempotent).
+    var cn_params = try arena.alloc(ast.Param, 1);
+    cn_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
+    var cn_body: std.ArrayList(ast.Stmt) = .empty;
+    for (ctx.awaits.items) |ga| try emitCancelGuard(low, &cn_body, ga.step, ga.state);
+    try cn_body.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
+        .name = id(info.cancel),
+        .abi = null,
+        .params = cn_params,
+        .return_type = try nameType(arena, "void"),
+        .body = .{ .span = zspan, .items = try cn_body.toOwnedSlice(arena) },
+        .is_const = false,
+        .exported = fd.exported,
+    } } });
+}
+
+// Collect every awaited binding name (`let x = await e;`) anywhere in `b` (top-level or nested) into
+// `set` — they all become captured `self.*` fields (live across their suspend).
+fn collectAwaitBindingNames(b: ast.Block, set: *std.StringHashMap(void)) Error!void {
+    for (b.items) |s| {
+        if (awaitStepCall(s) != null) {
+            const ld = s.kind.let_decl;
+            try set.put(ld.names[0].text, {});
+        }
+        switch (s.kind) {
+            .loop => |l| try collectAwaitBindingNames(l.body, set),
+            .@"switch" => |sw| for (sw.arms) |arm| switch (arm.body) {
+                .block => |bl| try collectAwaitBindingNames(bl, set),
+                .expr => {},
+            },
+            .block, .unsafe_block, .comptime_block => |bl| try collectAwaitBindingNames(bl, set),
+            else => {},
+        }
+    }
+}
+
+// Lower a statement sequence into `ctx`, such that control falls off the end to `succ` (or, if `succ`
+// is null, the body's final fall-off — only the top-level uses non-null `succ`). `brk`/`cont` are the
+// enclosing async-loop's exit/head state numbers (null outside a loop). Each await/await-bearing
+// construct CUTS the current block into new states; straight-line code accumulates into `ctx.cur`.
+fn lowerStmtsGen(ctx: *GenCtx, items: []const ast.Stmt, succ: ?usize, brk: ?usize, cont: ?usize) Error!void {
+    const low = ctx.low;
+    const arena = ctx.arena();
+    for (items) |s| {
+        if (!stmtContainsAwait(s)) {
+            // Straight-line (possibly with await-free inner control flow). Rewrite return->DONE,
+            // break/continue->edges; recurse through inner await-free control flow.
+            const rs = try genRewriteStraight(ctx, s, brk, cont);
+            try ctx.cur.append(arena, rs);
+            if (isUnconditionalTerminator(s)) return; // dead code after a terminator
+            continue;
+        }
+        // `s` contains an await.
+        if (awaitStepCall(s)) |acall| {
+            // `let x = await E;` — build the child on the current edge, jump to a fresh poll-state.
+            const step = try buildAwaitStep(low, s, acall, ctx.awaits.items.len);
+            const a = ctx.newState();
+            try emitBuildChild(low, &ctx.cur, step, ctx.names);
+            try ctx.gotoState(a);
+            try ctx.finishCur();
+            try ctx.awaits.append(arena, .{ .state = a, .step = step });
+            ctx.startState(a);
+            try emitPollAndTake(low, &ctx.cur, step, ctx.done_str);
+            continue; // subsequent items accumulate into state `a`
+        }
+        if (asBoolIf(s)) |bi| {
+            // An await-bearing bool-if: dispatch in the current state to each arm's entry trampoline,
+            // both converging on a fresh JOIN state. (A bool-if with no awaits was handled above as
+            // straight-line.)
+            const join = ctx.newState();
+            const t_entry = ctx.newState();
+            const f_entry = ctx.newState();
+            const rcond = try rewriteParamRefs(low, bi.cond, ctx.names);
+            var tb: std.ArrayList(ast.Stmt) = .empty;
+            try setState(low, &tb, t_entry);
+            try tb.append(arena, .{ .span = zspan, .kind = .@"continue" });
+            var eb: std.ArrayList(ast.Stmt) = .empty;
+            try setState(low, &eb, f_entry);
+            try eb.append(arena, .{ .span = zspan, .kind = .@"continue" });
+            try ctx.cur.append(arena, try ifElseBlock(arena, rcond, try tb.toOwnedSlice(arena), try eb.toOwnedSlice(arena)));
+            try ctx.finishCur();
+            // then arm
+            ctx.startState(t_entry);
+            try lowerStmtsGen(ctx, bi.then_blk.items, join, brk, cont);
+            try ctx.gotoState(join);
+            try ctx.finishCur();
+            // else arm
+            ctx.startState(f_entry);
+            try lowerStmtsGen(ctx, bi.else_blk.items, join, brk, cont);
+            try ctx.gotoState(join);
+            try ctx.finishCur();
+            // continue the outer sequence in the join state
+            ctx.startState(join);
+            continue;
+        }
+        if (s.kind == .loop and s.kind.loop.kind == .@"while") {
+            const loop = s.kind.loop;
+            const lcond = loop.iterable orelse return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: a `while` loop must have a condition in async E3c", .{});
+            const head = ctx.newState();
+            const body_entry = ctx.newState();
+            const exit = ctx.newState();
+            // edge into the head
+            try ctx.gotoState(head);
+            try ctx.finishCur();
+            // head: if cond { goto body_entry } else { goto exit }
+            ctx.startState(head);
+            {
+                const rcond = try rewriteParamRefs(low, lcond, ctx.names);
+                var tb: std.ArrayList(ast.Stmt) = .empty;
+                try setState(low, &tb, body_entry);
+                try tb.append(arena, .{ .span = zspan, .kind = .@"continue" });
+                var eb: std.ArrayList(ast.Stmt) = .empty;
+                try setState(low, &eb, exit);
+                try eb.append(arena, .{ .span = zspan, .kind = .@"continue" });
+                try ctx.cur.append(arena, try ifElseBlock(arena, rcond, try tb.toOwnedSlice(arena), try eb.toOwnedSlice(arena)));
+                try ctx.finishCur();
+            }
+            // body: lower with succ=head (back-edge), brk=exit, cont=head.
+            ctx.startState(body_entry);
+            try lowerStmtsGen(ctx, loop.body.items, head, exit, head);
+            try ctx.gotoState(head); // fall off the body -> back-edge to head
+            try ctx.finishCur();
+            // continue the outer sequence at the exit state
+            ctx.startState(exit);
+            continue;
+        }
+        // Any other await-bearing construct (await in `if_let`, `for`, `contract_block`, …) is beyond
+        // E3c — reject with a clear code rather than mislower.
+        return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: this await-bearing construct is unsupported in async E3c (supported: `let x = await e;`, bool `if`/`else`, and `while` loops, arbitrarily nested/sequenced)", .{});
+    }
+    // Fell off the end of the sequence: jump to the successor (or DONE for the top-level body).
+    if (succ) |sx| {
+        try ctx.gotoState(sx);
+    }
+}
+
+// Is this stmt an UNCONDITIONAL terminator (return/break/continue at the top level of a block)? Code
+// after it is dead, so we stop accumulating the current block (it already ends in a goto/return).
+fn isUnconditionalTerminator(s: ast.Stmt) bool {
+    return switch (s.kind) {
+        .@"return", .@"break", .@"continue" => true,
+        else => false,
+    };
+}
+
+// Rewrite a STRAIGHT-LINE (await-free) statement for emission into a poll-state, mapping the async
+// fn's control edges to state transitions:
+//   `return v`  -> `self.result = v; self.state = DONE; return true;`
+//   `break`     -> `self.state = brk; continue;`   (the enclosing async loop's exit state)
+//   `continue`  -> `self.state = cont; continue;`  (the enclosing async loop's head state)
+// recursing THROUGH await-free inner control flow (a plain `if`/`switch`/`block`), and leaving an
+// INNER await-free loop's own break/continue to that loop. Captured-name reads rewrite to `self.*`.
+fn genRewriteStraight(ctx: *GenCtx, s: ast.Stmt, brk: ?usize, cont: ?usize) Error!ast.Stmt {
+    const low = ctx.low;
+    const arena = ctx.arena();
+    switch (s.kind) {
+        // A `let/var x = init;` that binds a CAPTURED field (a top-level accumulator/index) is NOT a
+        // poll-machine local — `x` is `self.x`. Lift it to a store `self.x = init;` (so the emitted C
+        // has no unused local and the field — not a fresh local — carries the value across states). A
+        // decl whose name is NOT captured (a region-local not live across a suspend) stays a local.
+        .let_decl, .var_decl => |ld| {
+            if (ld.names.len == 1 and ctx.names.contains(ld.names[0].text)) {
+                return rewriteDeclToStore(low, s, ctx.names);
+            }
+            return rewriteStmtParamRefs(low, s, ctx.names);
+        },
+        .@"return" => return rewriteRegionStmt(low, s, ctx.names, ctx.done_str),
+        .@"break" => {
+            const b = brk orelse return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: `break` outside an await-bearing loop in async E3c", .{});
+            var bb: std.ArrayList(ast.Stmt) = .empty;
+            try setState(low, &bb, b);
+            try bb.append(arena, .{ .span = s.span, .kind = .@"continue" });
+            return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try bb.toOwnedSlice(arena) } } };
+        },
+        .@"continue" => {
+            const c = cont orelse return low.fail(s.span, "E_ASYNC_GENERAL_UNSUPPORTED: `continue` outside an await-bearing loop in async E3c", .{});
+            var cb: std.ArrayList(ast.Stmt) = .empty;
+            try setState(low, &cb, c);
+            try cb.append(arena, .{ .span = s.span, .kind = .@"continue" });
+            return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try cb.toOwnedSlice(arena) } } };
+        },
+        .block => |b| return .{ .span = s.span, .kind = .{ .block = try genRewriteStraightBlock(ctx, b, brk, cont) } },
+        .unsafe_block => |b| return .{ .span = s.span, .kind = .{ .unsafe_block = try genRewriteStraightBlock(ctx, b, brk, cont) } },
+        .loop => |l| {
+            // An INNER await-free loop: its own break/continue belong to IT, not the async loop, so
+            // pass `brk`/`cont` as null inside. A `return` inside still exits the whole fn (-> DONE).
+            const new_iter = if (l.iterable) |it| try rewriteParamRefs(low, it, ctx.names) else null;
+            const new_body = try genRewriteStraightBlock(ctx, l.body, null, null);
+            var nl = l;
+            nl.iterable = new_iter;
+            nl.body = new_body;
+            return .{ .span = s.span, .kind = .{ .loop = nl } };
+        },
+        .@"switch" => |sw| {
+            const rsubj = try rewriteParamRefs(low, sw.subject, ctx.names);
+            var new_arms = try arena.alloc(ast.SwitchArm, sw.arms.len);
+            for (sw.arms, 0..) |arm, i| {
+                const new_body: ast.SwitchBody = switch (arm.body) {
+                    .block => |b| .{ .block = try genRewriteStraightBlock(ctx, b, brk, cont) },
+                    .expr => |e| .{ .expr = try rewriteParamRefs(low, e, ctx.names) },
+                };
+                new_arms[i] = .{ .patterns = arm.patterns, .body = new_body };
+            }
+            return .{ .span = s.span, .kind = .{ .@"switch" = .{ .subject = rsubj, .arms = new_arms } } };
+        },
+        else => return rewriteStmtParamRefs(low, s, ctx.names),
+    }
+}
+
+fn genRewriteStraightBlock(ctx: *GenCtx, b: ast.Block, brk: ?usize, cont: ?usize) Error!ast.Block {
+    var items: std.ArrayList(ast.Stmt) = .empty;
+    for (b.items) |st| try items.append(ctx.arena(), try genRewriteStraight(ctx, st, brk, cont));
+    return .{ .span = b.span, .items = try items.toOwnedSlice(ctx.arena()) };
 }
 
 // E1: build the `cancel` entry of a generated future's `impl Future` record. It points the vtable
