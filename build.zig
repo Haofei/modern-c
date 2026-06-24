@@ -2310,6 +2310,26 @@ pub fn build(b: *std.Build) void {
     const llvm_async_future_test_step = b.step("llvm-async-future-test", "LLVM-lowered broker-backed async fn under QEMU");
     llvm_async_future_test_step.dependOn(&llvm_async_future_test_cmd.step);
 
+    // async-multi-test (async/await E6): the MULTI-FUTURE cooperative executor `drive_many`. THREE
+    // independent async fns are driven CONCURRENTLY by ONE drive_many call, sleeping in wfi between
+    // ISR completions; a re-armed timer completes the in-flight requests OUT OF ORDER, so they
+    // resolve interleaved. Generalizes drive_irq (one future) to N with the same lost-wakeup-free
+    // IRQ-off idle discipline; adversarial to a leaked slot (active count -> 0) and a lost wakeup
+    // (a stranded future would exhaust the idle budget and be cancelled, dropping drive_many < 3).
+    // WR + ASYNC-MULTI-OK (drive_many=3, each result, 3 completions, 0 active).
+    const async_multi_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-multi-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_async_multi_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-multi-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    async_multi_test_cmd.step.dependOn(b.getInstallStep());
+    const async_multi_test_step = b.step("async-multi-test", "multi-future cooperative async: drive_many drives three async fns concurrently, completed out-of-order by a re-armed timer ISR, no slot leak");
+    async_multi_test_step.dependOn(&async_multi_test_cmd.step);
+    llvm_async_multi_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_async_multi_test_step = b.step("llvm-async-multi-test", "LLVM-lowered multi-future cooperative async executor (drive_many) under QEMU");
+    llvm_async_multi_test_step.dependOn(&llvm_async_multi_test_cmd.step);
+
     // async-blk-test: DEVICE-BACKED async completion. An async fn's await resolves against a REAL
     // virtio-blk device interrupt: blk_read_sector_async submits a read + ties the head descriptor id
     // to a broker request id; the PLIC-routed used-ring IRQ reaps the completion in interrupt context
@@ -3964,6 +3984,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_async_cancel_test_cmd.step);
     m0_step.dependOn(&llvm_async_pollmany_test_cmd.step);
     m0_step.dependOn(&llvm_async_future_test_cmd.step);
+    m0_step.dependOn(&llvm_async_multi_test_cmd.step);
     m0_step.dependOn(&llvm_async_blk_test_cmd.step);
     m0_step.dependOn(&llvm_async_net_test_cmd.step);
     m0_step.dependOn(&llvm_async_select_test_cmd.step);
@@ -4282,6 +4303,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&async_cancel_test_cmd.step);
     m0_step.dependOn(&async_pollmany_test_cmd.step);
     m0_step.dependOn(&async_future_test_cmd.step);
+    m0_step.dependOn(&async_multi_test_cmd.step);
     m0_step.dependOn(&async_blk_test_cmd.step);
     m0_step.dependOn(&async_net_test_cmd.step);
     m0_step.dependOn(&async_select_test_cmd.step);

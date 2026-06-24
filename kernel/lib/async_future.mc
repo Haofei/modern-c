@@ -178,3 +178,144 @@ export fn drive_irq(f: *mut dyn Future, irq_off: fn() -> void, irq_on: fn() -> v
         }
     }
 }
+
+// E6 — a MULTI-FUTURE cooperative executor. `drive_many` generalizes `drive_irq` from ONE
+// top-level future to a fixed array of N `*mut dyn Future`, driving ALL of them to completion
+// while sleeping in `wfi` between ISR-delivered completions. This is the kernel-side concurrency
+// the agent OS needs: several independent async operations (each holding its own broker request
+// id) make progress INTERLEAVED as their child completions arrive from interrupt context, rather
+// than serially via N sequential `drive_irq` calls — one `wfi`-idle services whichever future's
+// completion the ISR delivered next.
+//
+// IDLE/PROGRESS DISCIPLINE (the lost-wakeup invariant, reused EXACTLY from `drive_irq` /
+// `async_await_irq`). Each pass runs with interrupts OFF: poll every not-yet-`done[i]` future and
+// count how many remain pending. The decision to idle is made WITH INTERRUPTS OFF, so a completion
+// cannot land between "saw all pending" and the park:
+//   - if `remaining == 0`, every future is complete — re-enable interrupts and return;
+//   - if a future completed THIS pass (`remaining` dropped), loop immediately (interrupts off) and
+//     re-poll — a sibling may now be unblocked, and we must not idle while progress is available;
+//   - only if NO future completed this pass do we `wfi` (interrupts still off, so a pending
+//     locally-enabled completion stays pending and wakes `wfi` rather than being serviced-then-
+//     idled-through — the lost-idle race), then briefly `irq_on` to TAKE the pending ISR (which
+//     `async_complete`s some child), and the next pass re-polls under interrupts-off again.
+// This is the SAME race-free discipline `async_await_irq` documents; it is merely lifted over N
+// futures with a "made progress?" gate so we never `wfi` while a just-arrived completion could
+// unblock a sibling on the next poll.
+//
+// TEARDOWN. The loop only exits once ALL futures are `done`, so on the normal path nothing is
+// pending. A bounded SAFETY BUDGET (`max_idle` consecutive idles with no progress) fails closed:
+// if the budget is exhausted (a wedged/never-completing future — e.g. a missing device IRQ), we
+// CANCEL every still-pending future via its E1 vtable `cancel` (reclaiming its broker slot, so no
+// `MAX_INFLIGHT` slot leaks) and return. So a still-pending future at teardown is ALWAYS cancelled.
+//
+// PRECONDITION: entered with interrupts ENABLED; returns with interrupts ENABLED (plain
+// disable/enable, like `async_await_irq`). Bounded + no heap: futures beyond `DRIVE_MANY_MAX` are
+// IGNORED (the `done` bitmap is a fixed stack array; pass a slice of length <= DRIVE_MANY_MAX), no
+// allocation (the `FutSet` array is caller-owned, fixed-size), no blocking call inside any `poll`
+// (the stackless invariant). It parks the CURRENT task in `wfi` rather than yielding to other
+// runnable tasks — see the deferred true-preemption note in docs/async-plan.md (E6).
+//
+// `max_idle` bounds consecutive no-progress idles before fail-closed teardown; pass a value large
+// enough that every expected completion arrives within it (one `wfi` wakes per ISR). Returns the
+// number of futures that completed normally (== n on the all-resolved path; < n iff the budget
+// fired and the remainder were cancelled).
+const DRIVE_MANY_MAX: usize = 16;
+
+// A fixed, no-heap set of type-erased futures handed to `drive_many`. The array lives in the
+// struct (a slice of `*dyn` fat pointers tripped a backend-parity gap in fat-pointer slice
+// codegen, so we pass a pointer to this struct and index its array field — the same `b.slots[i]`
+// pattern the broker uses). Fill `fs[0..n]` (n <= DRIVE_MANY_MAX) and set `n`. `&concrete` coerces
+// to `*mut dyn Future` on element assignment.
+export struct FutSet {
+    fs: [DRIVE_MANY_MAX]*mut dyn Future,
+    n: usize,
+}
+
+// Initialize an empty set.
+export fn futset_init(s: *mut FutSet) -> void {
+    s.n = 0;
+}
+
+// Append a future to the set (no-op past DRIVE_MANY_MAX — fail closed). `f` is a `*mut dyn Future`
+// (a coerced `&concrete`). Returns the slot index, or DRIVE_MANY_MAX if full.
+export fn futset_push(s: *mut FutSet, f: *mut dyn Future) -> usize {
+    if s.n >= DRIVE_MANY_MAX {
+        return DRIVE_MANY_MAX;
+    }
+    let i: usize = s.n;
+    s.fs[i] = f;
+    s.n = i + 1;
+    return i;
+}
+
+export fn drive_many(set: *mut FutSet, max_idle: u32,
+                     irq_off: fn() -> void, irq_on: fn() -> void, wfi: fn() -> void) -> usize {
+    let n: usize = set.n;
+    var done: [DRIVE_MANY_MAX]bool = uninit;
+    var i: usize = 0;
+    while i < DRIVE_MANY_MAX {
+        done[i] = false;
+        i = i + 1;
+    }
+    var completed: usize = 0;
+    var idle_streak: u32 = 0;
+    var stop: bool = false;
+    while !stop {
+        (irq_off)();
+        // Poll every still-pending future (interrupts OFF), counting completions THIS pass.
+        var progressed: bool = false;
+        var remaining: usize = 0;
+        var k: usize = 0;
+        while k < n {
+            if k < DRIVE_MANY_MAX {
+                if !done[k] {
+                    let f: *mut dyn Future = set.fs[k];
+                    if f.poll() {
+                        done[k] = true;
+                        completed = completed + 1;
+                        progressed = true;
+                    } else {
+                        remaining = remaining + 1;
+                    }
+                }
+            }
+            k = k + 1;
+        }
+        if remaining == 0 {
+            (irq_on)();
+            stop = true;
+        } else {
+            if progressed {
+                // Made progress: a sibling may now be unblocked. Re-poll without idling — never
+                // `wfi` while a just-arrived completion could resolve another future next pass.
+                (irq_on)();
+                idle_streak = 0;
+            } else {
+                // No progress this pass. Idle for one completion (interrupts still OFF, so a
+                // pending completion stays pending and wakes `wfi`), then take the ISR.
+                idle_streak = idle_streak + 1;
+                if idle_streak > max_idle {
+                    // Fail closed: a future is wedged. Cancel every still-pending future (E1
+                    // vtable `cancel` -> reclaims its broker slot) so no slot leaks, then return.
+                    var j: usize = 0;
+                    while j < n {
+                        if j < DRIVE_MANY_MAX {
+                            if !done[j] {
+                                let fc: *mut dyn Future = set.fs[j];
+                                fc.cancel();
+                                done[j] = true;
+                            }
+                        }
+                        j = j + 1;
+                    }
+                    (irq_on)();
+                    stop = true;
+                } else {
+                    (wfi)();      // resumes on the pending completion (interrupts still off)
+                    (irq_on)();   // take it now: ISR -> async_complete(child); next pass re-polls
+                }
+            }
+        }
+    }
+    return completed;
+}

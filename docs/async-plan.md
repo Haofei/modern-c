@@ -208,6 +208,63 @@ is RETAINED — not because of the vtable gap (resolved) but as the TYPED-i32-RE
 `async_active_count` returns to 0. Timeout is the same shape as race (race the operation against a
 deadline request; whichever loses is cancelled).
 
+**E6 — LANDED (multi-future COOPERATIVE executor `drive_many`; true preemption DEFERRED).**
+`kernel/lib/async_future.mc` adds `drive_many(set: *mut FutSet, max_idle, irq_off, irq_on, wfi) ->
+usize`, generalizing `drive_irq` from ONE top-level `*dyn Future` to a fixed, no-heap set of N
+(`FutSet` = `[DRIVE_MANY_MAX]*mut dyn Future` + len; a slice of `*dyn` fat pointers tripped a
+fat-pointer-slice codegen gap, so the set is passed by pointer and its array field indexed — the
+`b.slots[i]` pattern). The executor drives ALL futures to completion, sleeping in `wfi` between
+ISR-delivered completions, so N independent async operations make progress INTERLEAVED (rather than
+serially via N sequential `drive_irq` calls): one `wfi`-idle services whichever future's child
+completion the ISR delivered next.
+
+*Idle/progress discipline (the lost-wakeup invariant, reused EXACTLY from `async_await_irq`).* Each
+pass runs with interrupts OFF: poll every not-yet-done future, count those still pending. The decide-
+to-idle is made with interrupts OFF, so a completion cannot land between "saw all pending" and the
+park. If `remaining == 0`, return (interrupts on). If a future completed THIS pass, re-poll
+immediately without idling — a sibling may now be unblocked and we must not `wfi` while progress is
+available (the "made-progress?" gate; this is the only thing added over `drive_irq`'s single-future
+loop). Only if NO future completed this pass do we `wfi` (interrupts still off, so a pending locally-
+enabled completion stays pending and wakes `wfi` rather than being serviced-then-idled-through — the
+lost-idle race), then briefly `irq_on` to take the pending ISR, and the next pass re-polls under
+interrupts-off. Soundness: no lost wakeup (the IRQ-off ready-check/park, identical to
+`async_await_irq`); at-most-one-consumer per id is unchanged (each future owns its own `ReqFut`
+leaf/broker id); all-pending-cancelled-on-teardown (a bounded `max_idle` no-progress budget fails
+closed by `cancel`ling every still-pending future via its E1 vtable, reclaiming its broker slot, so
+no `MAX_INFLIGHT` slot leaks even under a wedged/never-completing future); bounded + no heap (fixed
+`FutSet` array, fixed `done` stack bitmap, futures past `DRIVE_MANY_MAX` ignored). Gate:
+`async-multi-test` / `llvm-async-multi-test` (in m0) — THREE independent `async fn`s driven
+concurrently by one `drive_many`, completed OUT OF ORDER (highest id first) by a re-armed timer ISR;
+asserts `drive_many == 3`, each future got its own id-encoded result, exactly 3 completions, and
+`async_active_count == 0` (adversarial to a leaked slot). Adversarial to a lost wakeup too: a
+stranded future would exhaust the idle budget and be cancelled, dropping `drive_many` below 3 and
+failing. (Helper `async_highest_active_unready` added to the broker for the deterministic out-of-
+order ISR schedule; `#[irq_context]`, like `async_first_active_unready`.)
+
+*DEFERRED — true preemptive async (timer-driven involuntary task switch wired to the executor).*
+`drive_many` is still COOPERATIVE: it parks the CURRENT task in `wfi` while futures are pending
+rather than `sched_yield`ing to other runnable tasks, so the CPU idles instead of running unrelated
+tasks during async waits. Integrating `sched_yield`/`mc_switch_context` into the executor was
+deliberately NOT attempted: the proven lost-wakeup-free idle path relies on a SIMPLE interrupts-off
+critical section around the ready-check and park, with plain `irq_off`/`irq_on` (NOT save/restore, as
+`async_await_irq` documents). A context switch in that window switches stacks to a task that re-
+enables interrupts on its own terms, breaking the plain-enable invariant, and the resumed-from switch
+returns with an interrupt state the executor did not establish — so wiring `sched_yield` into the
+IRQ-off region risks exactly the lost-wakeup/lost-idle races E6 must preserve against. The sound
+remainder is a separate milestone with this shape: (1) move the per-future readiness wake onto the
+scheduler's run-queue — i.e. the broker's `async_complete` ISR path does `proc_unblock(owner_task)`
+(it already calls `wq_wake_one` -> `proc_unblock`), and the executor task BLOCKS on the run queue
+(`proc_park`) rather than `wfi`-idling, so the scheduler runs other runnable tasks while it is parked;
+(2) the park/recheck must use a save/restore IRQ critical section (`irq_save`/`irq_restore`) around
+`proc_park` so the cooperative `sched_yield` inside `wq_wait` does not clobber the caller's interrupt
+state — i.e. a `drive_many_sched` variant built on `wq_prepare_wait`/`proc_current_blocked` (as
+`async_await_irq` already does for a SINGLE id) generalized to "block until ANY of the N owned ids
+completes"; (3) for true PREEMPTION (involuntary switch), the timer ISR must call the scheduler tick
+(`sched_tick`/`mc_switch_context`) and the executor must be re-entrant across an involuntary switch —
+which additionally requires the generated future state machines to be safe to leave mid-poll (they
+are, being stackless) and the broker table to be SMP/IRQ-reentrancy safe (currently single-hart, IRQ-
+off-guarded). That is genuinely broad scheduler work and is the documented Phase-F successor.
+
 **E2 — DONE (`await` of an arbitrary future-valued expression).** Until E2, `await e` required `e`
 to be a plain named call `g(args)` — a lowering convenience, not a runtime limit, since an awaited
 future just needs to be MATERIALIZED into the state machine's child slot and driven via its leaf

@@ -343,6 +343,32 @@ export fn async_first_active_unready(b: *mut AsyncBroker) -> u64 {
     return ASYNC_NO_ID;
 }
 
+// The HIGHEST id among active, not-yet-ready in-flight requests, or ASYNC_NO_ID if none. Lets a
+// device/timer ISR complete in-flight requests in a deterministic OUT-OF-SUBMISSION order (ids are
+// monotonic, so highest-id == most-recently-submitted) — used by the E6 multi-future executor gate
+// to prove its futures resolve interleaved rather than serially. IRQ-safe: a bounded scan of field
+// reads, no calls, so #[irq_context] like `async_first_active_unready`.
+#[irq_context]
+export fn async_highest_active_unready(b: *mut AsyncBroker) -> u64 {
+    var best: u64 = ASYNC_NO_ID;
+    var found: bool = false;
+    var i: usize = 0;
+    while i < MAX_INFLIGHT {
+        if b.slots[i].active && !b.slots[i].ready {
+            if !found {
+                best = b.slots[i].id;
+                found = true;
+            } else {
+                if b.slots[i].id > best {
+                    best = b.slots[i].id;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
 // Readiness predicate for std/task.mc's `SlotFuture` (the Phase-A injection seam): true once
 // `id` has completed (or is unknown/already consumed). A `SlotFuture` whose `done` wraps this
 // (over a global or captured broker) composes with join2/race2/timeout — the executor's idle
