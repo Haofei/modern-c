@@ -1,15 +1,13 @@
 // EXPECT: E_DUPLICATE_LOCAL
 // Companion to bad/async_switch_nullable_bind_shadow.mc (which uses a nullable PARAM subject): here the
-// switch subject is a nullable-typed LOCAL (`let maybe: ?*mut i32`). A bare switch `.bind` (`x =>`)
-// binds ONLY for a nullable subject (sema), and a `let m: ?T` annotation is just as syntactically
-// determinable as a param's, so `validateNoDuplicateLocals` tracks binding nullability SCOPE-AWARE
-// (params + typed locals) and dup-checks the bare `.bind` over such a subject pre-rename. The bound
-// name `x` shadows the still-live outer `let x`. On the GENERAL path (two await-bearing ifs) the outer
-// `x` is alpha-renamed to a `self.*` field before sema, so without the pre-rename check this MASKED the
-// E_DUPLICATE_LOCAL non-async reports AND emitted a wrong-code arm (both arms returned the renamed outer
-// `self->x__a1` while the payload local sat MC_UNUSED). The residual that stays masked is now only a
-// subject whose type is NOT syntactically resolvable here — an untyped/inferred local or a
-// member/index/call expr — which needs real type info.
+// switch subject is a nullable-typed LOCAL (`let maybe: ?*mut i32`). The bare `.bind` `x` binds the
+// unwrap (nullable subject) and shadows the still-live outer `let x`. On the GENERAL path (two
+// await-bearing ifs) the outer `x` is alpha-renamed to a `self.*` field before sema, so without the
+// fix this MASKED the E_DUPLICATE_LOCAL non-async reports AND emitted a wrong-code arm (both arms
+// returned the renamed outer `self->x__a1` while the payload local sat MC_UNUSED). ROOT FIX (see
+// bad/async_switch_nullable_bind_shadow.mc for the full note): the lowering DETECTS the collision and
+// sets SwitchArm.dup_local_if_binds; sema reports E_DUPLICATE_LOCAL iff it binds the arm (resolved
+// nullable subject) — so param/local/qualified/call/member subjects all reject by the same mechanism.
 import "std/task.mc";
 
 global g_clock: u64 = 0;

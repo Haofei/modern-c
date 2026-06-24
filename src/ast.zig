@@ -430,6 +430,15 @@ pub const Switch = struct {
 pub const SwitchArm = struct {
     patterns: []Pattern,
     body: SwitchBody,
+    // Set by the async lowering (src/async_lower.zig) on a single bare-`.bind` arm whose bound name
+    // shadows an enclosing local that the lowering lifted to a future-struct field (so sema, checking
+    // the generated poll fn, can no longer see the source collision). Binding-ness is TYPE-DEPENDENT —
+    // a bare `.bind` binds only for a nullable subject — so the lowering cannot decide pre-sema whether
+    // the collision is real. When this is set and sema DOES bind the arm (nullable subject, resolved
+    // type), it reports E_DUPLICATE_LOCAL — recovering exact non-async parity for any subject shape
+    // (param/local/call/member/...) without the lowering re-deriving the type. Default false; untouched
+    // for non-async code and compiler-synthesized arms.
+    dup_local_if_binds: bool = false,
 };
 
 pub const SwitchBody = union(enum) {

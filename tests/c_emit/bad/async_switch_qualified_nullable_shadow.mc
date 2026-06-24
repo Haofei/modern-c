@@ -1,13 +1,12 @@
 // EXPECT: E_DUPLICATE_LOCAL
 // Companion to bad/async_switch_nullable_{bind,local}_shadow.mc: the nullable switch subject is behind
-// a `const` qualifier (`const ?*mut i32`). Sema treats `const ?T` as nullable — `nullableInnerType`
-// (src/sema.zig) peels `.qualified` wrappers before checking — so the bare switch `.bind` (`x =>`)
-// binds the unwrap. The async prepass's `typeIsNullable` must MIRROR that and recurse through
-// `.qualified`; otherwise the subject is mis-recorded non-nullable, the bare `.bind` shadow check is
-// skipped, and the general path (two await-bearing ifs) alpha-renames the colliding outer `x` to a
-// `self.*` field before sema — MASKING E_DUPLICATE_LOCAL and emitting a wrong-code arm (both arms
-// returned the renamed outer `self->x__aN`; the payload local sat MC_UNUSED). Covered for a qualified
-// PARAM subject (`maybe`) here; a qualified typed LOCAL subject resolves the same way.
+// a `const` qualifier (`const ?*mut i32`). Sema treats `const ?T` as nullable (`nullableInnerType`
+// peels `.qualified`), so the bare `.bind` `x` binds the unwrap and shadows the still-live outer `let
+// x`. On the general path the outer `x` alpha-renames to a `self.*` field before sema. ROOT FIX (see
+// bad/async_switch_nullable_bind_shadow.mc): the lowering DETECTS the collision (type-independent) and
+// sets SwitchArm.dup_local_if_binds; sema reports E_DUPLICATE_LOCAL iff it binds the arm using the
+// RESOLVED subject type — so it correctly sees through `const ?T` (and aliases, calls, members) with no
+// syntactic qualifier-peeling in the lowering. Covered for a qualified PARAM subject here.
 import "std/task.mc";
 
 global g_clock: u64 = 0;

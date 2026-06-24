@@ -6661,7 +6661,7 @@ pub const Checker = struct {
                 copyScope(scope, &arm_scope) catch {
                     self.oom = true;
                 };
-                self.addSwitchArmBindings(arm.patterns, node.subject, subject_class, &arm_scope, ctx);
+                self.addSwitchArmBindings(arm.patterns, node.subject, subject_class, &arm_scope, ctx, arm.dup_local_if_binds);
                 arm_ctx.scope = &arm_scope;
             }
             switch (arm.body) {
@@ -6853,7 +6853,7 @@ pub const Checker = struct {
         self.errorCode(expr.span, "E_NO_IMPLICIT_CONVERSION", "switch literal pattern must match the subject type");
     }
 
-    fn addSwitchArmBindings(self: *Checker, patterns: []const ast.Pattern, subject: ast.Expr, subject_class: TypeClass, scope: *Scope, ctx: Context) void {
+    fn addSwitchArmBindings(self: *Checker, patterns: []const ast.Pattern, subject: ast.Expr, subject_class: TypeClass, scope: *Scope, ctx: Context, dup_local_if_binds: bool) void {
         if (patterns.len != 1) return;
         var binding_ctx = ctx;
         binding_ctx.scope = scope;
@@ -6879,6 +6879,15 @@ pub const Checker = struct {
                 .bind => |ident| {
                     if (!isNullableValue(subject_class)) continue;
                     const narrowed_ty = nullableInnerType(subject_ty) orelse continue;
+                    // The async lowering flagged this arm: its bound name shadows an enclosing local it
+                    // lifted to a future-struct field, hidden from this scope. Now that the resolved
+                    // subject type confirms the bare `.bind` DOES bind (nullable), the source-level
+                    // shadow is a real E_DUPLICATE_LOCAL — which a non-async fn reports directly. (For a
+                    // non-nullable subject we never reach here, so the valid catch-all form is accepted.)
+                    if (dup_local_if_binds) {
+                        self.errorCode(ident.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
+                        continue;
+                    }
                     self.addLocalBinding(scope, ident, .{
                         .class = classifyTypeCtx(narrowed_ty, ctx),
                         .mutable = false,

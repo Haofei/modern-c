@@ -1,20 +1,18 @@
 // EXPECT: E_DUPLICATE_LOCAL
 // A bare switch `.bind` (`x =>`) is TYPE-DEPENDENT: sema binds it ONLY for a NULLABLE subject (the
-// unwrap) — a non-nullable subject's bare `.bind` is a no-op catch-all that binds NOTHING. So unlike
-// `.tag_bind` (always binds — see bad/async_switch_bind_shadow*.mc), it cannot be unconditionally
-// dup-checked pre-sema without false-rejecting the valid non-nullable `switch n { x => x; _ => }` form.
+// unwrap) — a non-nullable subject's bare `.bind` is a no-op catch-all that binds NOTHING. Here the
+// PARAM subject `maybe: ?*mut i32` is nullable, so the `.bind` binds the unwrap, and the bound name `x`
+// shadows the still-live outer `let x`. On the GENERAL path (two await-bearing ifs) the outer `x` is
+// alpha-renamed to a `self.*` field BEFORE sema, so sema can no longer see the source collision: pre-fix
+// this MASKED the E_DUPLICATE_LOCAL non-async reports (and read the OUTER carrier instead of the unwrap).
 //
-// BUT when the subject is a bare ref to a NULLABLE-typed PARAM, nullability is known SYNTACTICALLY (the
-// async pass resolves types syntactically, no sema), and a param is never shadowed by a local (that is
-// itself E_DUPLICATE_LOCAL), so the subject ident maps unambiguously to that nullable param — the
-// `.bind` binds the unwrap exactly as sema does. Here the bound name `x` shadows the still-live outer
-// `let x`. On the GENERAL path (two await-bearing ifs) the outer `x` is alpha-renamed to a `self.*`
-// field BEFORE sema, so sema can no longer see the source collision: pre-fix this MASKED the
-// E_DUPLICATE_LOCAL non-async reports (and, were it run, read the OUTER carrier instead of the unwrap).
-// `validateNoDuplicateLocals` now dup-checks a single-pattern `.bind` over a nullable PARAM subject
-// PRE-rename, restoring parity. (A nullable typed LOCAL subject is covered too — see
-// bad/async_switch_nullable_local_shadow.mc; only a subject whose type isn't syntactically resolvable
-// here — an untyped/inferred local or a member/index/call expr — stays a bounded residual.)
+// ROOT FIX (shared by all bad/async_switch_*_nullable*_shadow.mc): the async lowering only DETECTS the
+// collision (the bare `.bind` name shadows a lifted outer local — type-INDEPENDENT) and sets
+// SwitchArm.dup_local_if_binds; sema, which has the RESOLVED subject type, reports E_DUPLICATE_LOCAL iff
+// it actually binds the arm (nullable subject). No syntactic nullability re-derivation — so a nullable
+// param/typed-local/qualified/call/member subject all reject identically, while a non-nullable subject's
+// catch-all is accepted. Sibling fixtures cover the typed-LOCAL, QUALIFIED (`const ?T`), and CALL/MEMBER
+// subject shapes.
 import "std/task.mc";
 
 global g_clock: u64 = 0;
