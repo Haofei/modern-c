@@ -511,6 +511,18 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
 
     const body = fd.body orelse return low.fail(fd.name.span, "async fn '{s}' must have a body", .{fname});
 
+    // FINDING (HIGH): the general path alpha-renames every local to a unique name PRE-sema, so two
+    // `let`/`var` of the SAME name in the SAME lexical scope — which ordinary MC rejects with
+    // E_DUPLICATE_LOCAL — would be silently renamed apart and never seen by sema. The fast paths mask
+    // it too (the body lowers with the source names untouched). Run a scope-aware duplicate-local
+    // validation over EVERY async body BEFORE routing/renaming, failing with the SAME diagnostic
+    // (code + message) sema's `addLocalBinding` raises — so an async fn accepts exactly the set of
+    // locally-valid programs a non-async fn does. Legitimate shadowing across DISJOINT scopes (and a
+    // nested binding that does not collide with a still-live enclosing one) stays accepted, matching
+    // sema's `copyScope` discipline (params + the fn's top-level body share one scope; each block/
+    // loop/arm inherits its enclosing bindings, so re-binding any still-live name is the error).
+    try validateNoDuplicateLocals(low, fd.params, body);
+
     // ---- E3c: a body whose control flow is BEYOND the two pattern-matched fast paths — an `await`
     // nested inside inner control flow (an `if`/`switch`/`loop` within a loop body or an if/else arm),
     // or MORE THAN ONE await-bearing top-level construct — takes the GENERAL structured-CFG path
@@ -1342,6 +1354,117 @@ fn blockHasNestedAwait(b: ast.Block) bool {
 // field is impossible. Params are NEVER renamed (they are not locals and the awaited-expr resolver +
 // the ctor's param copies key on the original param names). The pass is pure source-to-source AST
 // rewriting that runs before any state-machine construction, so it is backend-agnostic by definition.
+
+// Scope-aware duplicate-local validation, mirroring sema's `addLocalBinding` (src/sema.zig): a
+// `let`/`var` whose name already exists in the CURRENT scope OR any still-live enclosing scope is
+// E_DUPLICATE_LOCAL (sema seeds the fn's top scope with params, then `checkBlock` reuses that scope,
+// and each nested region copies its parent's bindings in via `copyScope`, so re-binding ANY live name
+// is the error — exactly what a frame-stack `lookup` over all open frames detects). Runs for ALL async
+// fns BEFORE routing/renaming, so the diagnostic is identical regardless of which lowering path the
+// body takes; without it the renamer/fast-paths would silently accept invalid source.
+const DupScope = struct {
+    low: *Lowerer,
+    // Innermost-last stack of name-sets; a name is a duplicate if it is in ANY currently-open frame.
+    frames: std.ArrayList(std.StringHashMap(diagnostics.Span)) = .empty,
+
+    fn arena(self: *DupScope) std.mem.Allocator {
+        return self.low.arena;
+    }
+    fn push(self: *DupScope) Error!void {
+        try self.frames.append(self.arena(), std.StringHashMap(diagnostics.Span).init(self.arena()));
+    }
+    fn pop(self: *DupScope) void {
+        _ = self.frames.pop();
+    }
+    fn liveInAnyFrame(self: *DupScope, name: []const u8) bool {
+        var i: usize = self.frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.frames.items[i].contains(name)) return true;
+        }
+        return false;
+    }
+    // Bind `name` into the current (innermost) frame, failing E_DUPLICATE_LOCAL if it collides with a
+    // still-live binding in this or any enclosing frame.
+    fn bind(self: *DupScope, name: ast.Ident) Error!void {
+        if (self.liveInAnyFrame(name.text)) {
+            return self.low.fail(name.span, "E_DUPLICATE_LOCAL: local bindings must have unique names in the current scope", .{});
+        }
+        try self.frames.items[self.frames.items.len - 1].put(name.text, name.span);
+    }
+};
+
+// Validate a whole async fn body: params + top-level body live in ONE scope (matching sema's
+// `checkFn`), each nested block/loop/arm pushes a child frame that inherits its parent's bindings.
+fn validateNoDuplicateLocals(low: *Lowerer, params: []const ast.Param, body: ast.Block) Error!void {
+    var ds = DupScope{ .low = low };
+    try ds.push(); // the fn's top scope: params + the body's top-level locals share it
+    defer ds.pop();
+    for (params) |p| try ds.bind(p.name);
+    try dupCheckBlockItems(&ds, body);
+}
+
+// Walk a block's items WITHOUT pushing a frame (the caller owns the frame), so a loop's condition and
+// body — and the fn's params and top-level body — share one scope, exactly as sema does.
+fn dupCheckBlockItems(ds: *DupScope, b: ast.Block) Error!void {
+    for (b.items) |st| try dupCheckStmt(ds, st);
+}
+
+// Walk a nested block in its OWN child frame (it inherits the enclosing bindings via `liveInAnyFrame`).
+fn dupCheckBlock(ds: *DupScope, b: ast.Block) Error!void {
+    try ds.push();
+    defer ds.pop();
+    try dupCheckBlockItems(ds, b);
+}
+
+fn dupCheckStmt(ds: *DupScope, s: ast.Stmt) Error!void {
+    switch (s.kind) {
+        .let_decl, .var_decl => |ld| {
+            for (ld.names) |nm| try ds.bind(nm);
+        },
+        .block => |b| try dupCheckBlock(ds, b),
+        .unsafe_block => |b| try dupCheckBlock(ds, b),
+        .comptime_block => |b| try dupCheckBlock(ds, b),
+        .contract_block => |c| try dupCheckBlock(ds, c.block),
+        .loop => |l| {
+            // The condition/iterable and the body share one (child) frame, matching the renamer and
+            // sema (a `for` binds its element in the body scope; a `while` cond + body in one scope).
+            try ds.push();
+            defer ds.pop();
+            try dupCheckBlockItems(ds, l.body);
+        },
+        .if_let => |node| {
+            // `if`/`if let`: the then-block is a child scope; a `.bind`/`.tag_bind` pattern introduces
+            // an arm-local into it (sema binds the pattern then checks the then-block in that scope).
+            try ds.push();
+            try dupCheckPattern(ds, node.pattern);
+            try dupCheckBlockItems(ds, node.then_block);
+            ds.pop();
+            if (node.else_block) |eb| try dupCheckBlock(ds, eb);
+        },
+        .@"switch" => |sw| {
+            for (sw.arms) |arm| {
+                try ds.push();
+                for (arm.patterns) |p| try dupCheckPattern(ds, p);
+                switch (arm.body) {
+                    .block => |b| try dupCheckBlockItems(ds, b),
+                    .expr => {},
+                }
+                ds.pop();
+            }
+        },
+        // No locals introduced into the enclosing scope.
+        else => {},
+    }
+}
+
+fn dupCheckPattern(ds: *DupScope, p: ast.Pattern) Error!void {
+    switch (p.kind) {
+        .bind => |b| try ds.bind(b),
+        .tag_bind => |tb| try ds.bind(tb.binding),
+        else => {},
+    }
+}
 
 const RenameScope = struct {
     low: *Lowerer,

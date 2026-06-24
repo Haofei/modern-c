@@ -2,11 +2,13 @@
 // all in the async transform (src/async_lower.zig). VALUE-SENSITIVE: each assertion would FAIL on
 // the pre-fix tree, where the wrong binding was read silently.
 //
-//   #1 a `switch` arm pattern (`number(x) => ...`) introduces a REAL arm-local that SHADOWS a
-//      captured outer param / awaited-binding / renamed-local of the same name. Pre-fix the
-//      identifier rewriters rewrote the in-arm `x` to `self->x` (the captured field) instead of the
-//      arm payload local — silently reading the WRONG value. Covered on BOTH the fast path (pattern
-//      shadows a PARAM) and the general structured-CFG path (pattern shadows an AWAITED binding).
+//   #1 a `switch` arm pattern (`number(x) => ...`) introduces a REAL arm-local; a same-named binding
+//      `x` lives in a DISJOINT scope (a separate await-bearing `if`). Pre-fix the identifier rewriters
+//      rewrote the in-arm `x` to `self->x` (the disjoint captured field) instead of the arm payload
+//      local — silently reading the WRONG value. Covered on BOTH the fast path and the general path.
+//      (NOTE: the arm payload may NOT shadow a STILL-LIVE same-named binding — that is E_DUPLICATE_LOCAL
+//      in ordinary MC and async fns now reject it identically; see bad/async_duplicate_local.mc. So the
+//      same-named binding is placed in a DISJOINT scope, the only locally-valid form of this collision.)
 //   #2 a captured fn-pointer param used as a CALLEE after an await (`op(x, y)`) was left as `op(...)`
 //      instead of `self->op(...)` -> E_UNKNOWN_FUNCTION. Covered fast + general.
 //   #3 `await ctx.fut` where `ctx` is an explicitly-typed LOCAL carrier (not a param) now resolves
@@ -36,31 +38,40 @@ union Token { number: i32, eof }
 
 fn add2(a: i32, b: i32) -> i32 { return a + b; }
 
-// ---- #1 FAST path: pattern `x` shadows the PARAM `x`. Awaited `a`; the `number(x)` arm must read
-// the PAYLOAD `x`, not the captured param `x`. Single leading await + await-free tail switch.
-//   f1(param x=1000, t=number(7)): a = await(42); arm returns payload x + a = 7 + 42 = 49.
-//   A pre-fix read of `self->x` (param) would give 1000 + 42 = 1042 — caught by the assert.
-async fn f1(d: u64, x: i32, t: Token) -> i32 {
-    let a: i32 = await mk_val(d, 42);
+// ---- #1 FAST path: an arm payload `x` whose name is reused (disjointly) by a binding `x` in a
+// SEPARATE scope (a leading await-bearing `if`). The leading `if` awaits into a disjoint-scope `x`
+// (= 42) accumulated into `a`; the `switch` is the await-free tail, where the `number(x)` arm must read
+// its PAYLOAD (not the disjoint awaited `x`'s captured field).
+//   f1(t=number(7)): a = (await 42); arm reads payload x=7, returns payload x + a = 7 + 42 = 49.
+//   A pre-fix read of the disjoint awaited `self->x` for the payload would give 42 + 42 = 84.
+async fn f1(d: u64, t: Token) -> i32 {
+    var a: i32 = 0;
+    if a == 0 {
+        let x: i32 = await mk_val(d, 42);
+        a = x;
+    }
     switch t {
         number(x) => { return x + a; },
         .eof => { return a; },
     }
 }
 
-// ---- #1 GENERAL path: pattern `x` shadows the AWAITED binding `x`. Two await-bearing ifs force the
-// general structured-CFG path (alpha-renamer). The `number(x)` arm must read the PAYLOAD, the `.eof`
-// arm (no binding) the awaited `x`.
-//   f2(t=number(7)):  x = await(42); two no-op await-ifs; arm number returns payload 7.
-//   f2(t=eof):        x = await(42); .eof returns awaited x = 42.
-//   Pre-fix: `number(x)` returned self->x (awaited 42), NOT the payload 7.
+// ---- #1 GENERAL path: arm payload `x` reused (disjointly) by an awaited binding `x` that lives in a
+// SEPARATE await-bearing `if`. Two await-bearing ifs force the general structured-CFG path (alpha-
+// renamer). The `number(x)` arm must read the PAYLOAD; the awaited `x` is captured as its own field.
+//   f2(t=number(7)): if-block awaits into x (=42, disjoint scope); arm number returns payload 7.
+//   f2(t=eof):       .eof has no binding -> returns the running total (awaited 42).
+//   Pre-fix: `number(x)` returned the awaited capture (42), NOT the payload 7.
 async fn f2(d: u64, t: Token, cond: bool) -> i32 {
-    let x: i32 = await mk_val(d, 42);
-    if cond { let z: i32 = await mk_val(d, 1); }
+    var total: i32 = 0;
+    if cond {
+        let x: i32 = await mk_val(d, 42);
+        total = total + x;
+    }
     if cond { let w: i32 = await mk_val(d, 1); }
     switch t {
         number(x) => { return x; },
-        .eof => { return x; },
+        .eof => { return total; },
     }
 }
 
@@ -101,13 +112,13 @@ export fn async_shadow_pattern_run() -> u32 {
     var acc: u32 = 0;
     g_clock = 0;
 
-    // #1 fast: payload 7 + awaited 42 = 49 (NOT param 1000 + 42).
-    var a1: f1__Fut = f1(0, 1000, number(7));
+    // #1 fast: arm payload 7 + 42 = 49 (NOT awaited x=42 read for the payload -> 84).
+    var a1: f1__Fut = f1(0, number(7));
     run_to_completion(&a1, tick_idle);
     if f1__Fut_take_result(&a1) == 49 { acc = acc ^ 0x01; }
 
-    // #1 fast .eof arm: no binding, returns awaited a = 42.
-    var a1e: f1__Fut = f1(0, 1000, eof());
+    // #1 fast .eof arm: no payload, returns the awaited x = 42.
+    var a1e: f1__Fut = f1(0, eof());
     run_to_completion(&a1e, tick_idle);
     if f1__Fut_take_result(&a1e) == 42 { acc = acc ^ 0x02; }
 
