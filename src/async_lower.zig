@@ -518,6 +518,21 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // per-suspend-point state numbering and build-on-the-entry-edge. The two fast paths below are left
     // untouched for the exact shapes they already handle (zero regression), so only the previously-
     // REJECTED shapes route here. ----
+    //
+    // ROOT-CAUSE ROUTING (finding: fast-path capture keys fields by ORIGINAL binding name, so it
+    // cannot represent lexical shadowing). The fast paths build the future-struct's captured fields by
+    // ORIGINAL name from: params + pre-region (pre-branch/pre-loop) top-level locals + awaited
+    // bindings. If any two of those sources share a name, the struct gets a duplicate field
+    // (E_DUPLICATE_STRUCT_FIELD) and/or the carrier-type map mis-resolves an `await x.fut` to the
+    // FIRST writer's type (E_RETURN_TYPE_MISMATCH) — both are broken-generated-struct errors on VALID
+    // shadowing source. The general path alpha-renames every local to a globally-unique name BEFORE
+    // lowering, so neither a capture-field collision nor a carrier mis-resolution is possible there.
+    // Therefore: route any fast-path-breaking capture-name collision to the general path. (We detect
+    // ONLY the captured-name sources, so a non-captured arm/loop-body/tail local that shadows a param —
+    // already handled correctly by the fast-path rewriters' shadow-removal — keeps the fast path.)
+    if (fastPathCaptureCollision(fd.params, body)) {
+        return lowerAsyncGeneralFn(low, out, decl, info, fut_type, result_type, body);
+    }
     if (needsGeneralLowering(body)) {
         return lowerAsyncGeneralFn(low, out, decl, info, fut_type, result_type, body);
     }
@@ -1178,6 +1193,88 @@ fn lowerAsyncLoopFn(
 // body / if-arm (which the flat per-construct allocator cannot number). Shapes the fast paths accept
 // (a single leading await-run + at most one await-bearing if/else, OR a single await-bearing while with
 // a leading-await-run body) return false here and keep their byte-for-byte lowering — zero regression.
+// ROOT-CAUSE collision detector for the fast paths. The branch/loop fast paths emit the future
+// struct's CAPTURED fields BY ORIGINAL binding name from exactly three sources, and rely on each
+// captured name being unique (one struct field, one carrier-type entry):
+//   (1) params                                  (async_lower.zig branch ~620 / loop ~976)
+//   (2) pre-REGION top-level `let`/`var` locals  (pre-branch ~635 / pre-loop ~983)
+//   (3) awaited bindings `let x = await E;`      (pre-run ~624, both arms ~642/643, loop body ~987)
+// A name appearing in TWO of these sources yields a duplicate field (E_DUPLICATE_STRUCT_FIELD) and/or
+// a carrier mis-resolution (the first-writer-wins `param_types` map binds the awaited `x.fut` to the
+// WRONG carrier → E_RETURN_TYPE_MISMATCH). Both are broken-generated-struct errors on valid shadowing
+// source. This predicate returns true iff the fast paths WOULD build such a colliding capture set, so
+// the caller can route the fn to the alpha-renaming general path instead. It is intentionally a tight
+// over-approximation: it counts every name a fast path could capture as a field. NON-captured locals
+// (arm-body / loop-body / post-region tail decls) are excluded — the fast-path rewriters already honor
+// their shadowing via shadow-removal, so those keep the fast path (no needless rerouting).
+//
+// `in_region` = "we are at/after the first await-bearing top-level branch/loop". Top-level locals
+// BEFORE it are captured (source 2); AFTER it they are tail-only (not captured) and ignored. Awaited
+// bindings are gathered structurally from the leading await-runs the fast paths actually capture.
+fn fastPathCaptureCollision(params: []const ast.Param, body: ast.Block) bool {
+    var seen = std.StringHashMap(void).init(std.heap.page_allocator);
+    defer seen.deinit();
+    // A name collides if we try to add it twice. `add` returns true on the SECOND insertion.
+    const add = struct {
+        fn f(s: *std.StringHashMap(void), name: []const u8) bool {
+            if (s.contains(name)) return true;
+            s.put(name, {}) catch return true; // OOM: fail safe → route to general
+            return false;
+        }
+    }.f;
+
+    for (params) |p| if (add(&seen, p.name.text)) return true;
+
+    var in_region = false;
+    for (body.items) |stmt| {
+        // An await-bearing top-level branch or loop is the fast-path REGION. Its leading await-runs
+        // are captured; we count their bindings, then mark in_region so later top-level locals (tail)
+        // are NOT counted as captured fields.
+        if (asBoolIf(stmt)) |bi| {
+            if (blockContainsAwait(bi.then_blk) or blockContainsAwait(bi.else_blk)) {
+                if (collectLeadingAwaitBindings(&seen, bi.then_blk)) return true;
+                if (collectLeadingAwaitBindings(&seen, bi.else_blk)) return true;
+                in_region = true;
+                continue;
+            }
+        }
+        if (stmt.kind == .loop and blockContainsAwait(stmt.kind.loop.body)) {
+            if (collectLeadingAwaitBindings(&seen, stmt.kind.loop.body)) return true;
+            in_region = true;
+            continue;
+        }
+        // Top-level straight-line stmt. A pre-region `let`/`var` is captured (source 2); a pre-region
+        // top-level awaited-let is captured (source 3). Post-region top-level decls are tail-only.
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |ld| {
+                if (!in_region) for (ld.names) |nm| {
+                    if (add(&seen, nm.text)) return true;
+                };
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+// Add the binding names of a block's LEADING run of `let x = await E;` (the run the fast paths
+// capture). Stops at the first non-await-let stmt (the arm/loop "tail" begins there, matching
+// collectArm/collectLoopBody). Returns true on the first duplicate.
+fn collectLeadingAwaitBindings(seen: *std.StringHashMap(void), b: ast.Block) bool {
+    for (b.items) |s| {
+        if (awaitStepCall(s) == null) break; // leading await-run ended
+        const ld = switch (s.kind) {
+            .let_decl, .var_decl => |l| l,
+            else => break,
+        };
+        for (ld.names) |nm| {
+            if (seen.contains(nm.text)) return true;
+            seen.put(nm.text, {}) catch return true;
+        }
+    }
+    return false;
+}
+
 fn needsGeneralLowering(body: ast.Block) bool {
     var top_await_ifs: usize = 0;
     var top_await_loops: usize = 0;
