@@ -3400,6 +3400,19 @@ pub fn build(b: *std.Build) void {
     const llvm_qjs_quota_agent_test_step = b.step("llvm-qjs-quota-agent-test", "A pure-JS agent proves tool-ABI back-pressure surfaces as a structured JS error under QEMU (LLVM)");
     llvm_qjs_quota_agent_test_step.dependOn(&llvm_qjs_quota_agent_test_cmd.step);
 
+    // A pure-JS agent CANCELS an in-flight async request (AbortController-like { promise, cancel }
+    // handle from the host prelude): the cancelled request rejects with a structured ECANCELED, a
+    // concurrent request still resolves, and the kernel broker slot is reclaimed (host inflight=0).
+    const qjs_cancel_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-cancel-test.sh", "zig-out/bin/mcc", "c" });
+    qjs_cancel_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_cancel_test_step = b.step("qjs-cancel-test", "A pure-JS agent cancels an in-flight async request (structured ECANCELED reject + broker-slot reclamation) under QEMU");
+    qjs_cancel_test_step.dependOn(&qjs_cancel_test_cmd.step);
+
+    const llvm_qjs_cancel_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-cancel-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_qjs_cancel_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_cancel_test_step = b.step("llvm-qjs-cancel-test", "A pure-JS agent cancels an in-flight async request (structured ECANCELED reject + broker-slot reclamation) under QEMU (LLVM)");
+    llvm_qjs_cancel_test_step.dependOn(&llvm_qjs_cancel_test_cmd.step);
+
     // The host ITSELF in MC (examples/apps/qjs_host.mc): MC drives the QuickJS C API directly —
     // JSValue (the 16-byte struct) by value, JS_Eval/JS_GetPropertyStr/JS_ToInt32 from MC —
     // evaluating 6*7=42 confined. Proves the host need not be C either. Both backends.
@@ -3870,6 +3883,8 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_quota_probe_test_cmd.step);
     m0_step.dependOn(&qjs_quota_agent_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_quota_agent_test_cmd.step);
+    m0_step.dependOn(&qjs_cancel_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_cancel_test_cmd.step);
     m0_step.dependOn(&broker_probe_test_cmd.step);
     m0_step.dependOn(&llvm_broker_probe_test_cmd.step);
     m0_step.dependOn(&qjs_broker_agent_test_cmd.step);
