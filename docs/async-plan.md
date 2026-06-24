@@ -208,6 +208,33 @@ is RETAINED — not because of the vtable gap (resolved) but as the TYPED-i32-RE
 `async_active_count` returns to 0. Timeout is the same shape as race (race the operation against a
 deadline request; whichever loses is cancelled).
 
+**E2 — DONE (`await` of an arbitrary future-valued expression).** Until E2, `await e` required `e`
+to be a plain named call `g(args)` — a lowering convenience, not a runtime limit, since an awaited
+future just needs to be MATERIALIZED into the state machine's child slot and driven via its leaf
+`__poll`/`_take_result`/`_cancel` ABI. `src/async_lower.zig` now generalizes the await operand: the
+awaited future expression is evaluated by value into the child field (`self.__cN = <e>`) at the
+transition that begins that await — exactly where the call used to be built — so the LAZY,
+at-most-one-child-live invariant the E1 cancel walk depends on is preserved unchanged (child0 in the
+constructor; each later child built at the prior transition; only `__cN` ever holds a live future),
+and the `E_ASYNC_BORROW_ACROSS_AWAIT` check is unaffected (it still scans the generated constructor
+for `&self.<field>`; a field/index await is a by-value copy, never an interior borrow). The future
+type is resolved SYNTACTICALLY (no sema, since the transform runs pre-sema): a call's declared return
+type, an awaited struct FIELD's declared type, or an array ELEMENT type — using a new struct-field
+type map (`Lowerer.struct_fields`) and the current fn's param types (`Lowerer.param_types`).
+**Supported await forms:** (a) call `g(args)` and `Owner.method(args)` (the parser pre-mangles a
+static UFCS call to a plain ident call, so it already flowed through); (b) parenthesized such expr
+`(g(args))` / `(ctx.fut)`; (c) struct-FIELD future `base.fut` where `base` resolves to a known struct
+type (a param or a chain of struct fields); (d) array element `arr[i]` where `arr` is a param/field
+of `[N]ElemFut`. **Deferred (later in Phase E):** `await` of a `*mut dyn Future` (the trait vtable
+carries `poll`+`cancel` after E1 but NOT `take_result`, so the typed result is unreachable through
+dispatch — dyn-await needs a result-typing story first), and any `e` whose future type is not
+syntactically resolvable (a block expression, an inherent-impl method/UFCS call returning a future,
+an arbitrary local of inferred type). These reject with `E_ASYNC_AWAIT_UNRESOLVED`. Gate:
+`fuzz-async-await-expr-test` (field-future await `await ctx.fut` with a `+bias` tail, parenthesized
+call await, and cancel-mid-await reclaiming the active child), both backends, in the diff-backend
+parity set; the full `fuzz-async-*`/`fuzz-task` family and the QEMU `async-future`/`async-select`
+gates stay green on C and LLVM.
+
 **4. Ownership across `await` (the hard part — rules spelled out).** Capture analysis (which live
 locals become state fields) must integrate with MC's move/borrow checker:
 - a value **moved before an `await` cannot be used after it**;

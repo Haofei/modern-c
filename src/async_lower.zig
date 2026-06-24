@@ -35,11 +35,26 @@
 // early-returns true; no double-free). This establishes the LEAF Future ABI as `__poll` +
 // `_take_result` + `_cancel` — every awaited leaf must provide all three.
 //
+// PHASE E, step E2: `await e` for an ARBITRARY future-valued expression, not only a plain named
+// call. The awaited future is MATERIALIZED into the child slot by VALUE (`self.__cN = <e>`) at the
+// transition that begins that await — exactly where the call used to be built — so the lazy
+// at-most-one-child-live property (the E1 cancel walk depends on it) and the borrow-across-await
+// rule are preserved unchanged. Supported `e` forms (future type resolved SYNTACTICALLY, no sema):
+//   - call `g(args)` / `Owner.method(args)` (the parser pre-mangles UFCS to a plain ident call);
+//   - parenthesized such expr `(g(args))`, `(ctx.fut)`;
+//   - struct-FIELD future `base.fut` where `base` resolves to a known struct type (a param, or a
+//     chain of struct fields) — the field's declared type IS the concrete future struct;
+//   - array element `arr[i]` where `arr` is a param/field of `[N]ElemFut` (element type = `ElemFut`).
+// DEFERRED (Phase E later): `*dyn Future` await (the vtable lacks `take_result`, so the typed result
+// is unreachable through dispatch) and any `e` whose future type is not syntactically resolvable
+// (e.g. a block expr, a method/UFCS call returning a future via an inherent-impl, an arbitrary local).
+//
 // CHILD-FUTURE ABI (uniform across generated futures and hand-written leaves), resolved WITHOUT
-// sema by scanning the module's fn decls for the awaited callee's return type:
-//   - `await g(args)` ⇒ child future struct type `FutT` = return type of fn `g`
-//     (for an async `g`, the transform rewrites `g` to return `g__Fut`, so `FutT == g__Fut`);
-//   - construct by value:  `self.__cN = g(args);` (child0 in the constructor; later children at
+// sema by scanning the module's fn decls + struct-field types for the awaited future's struct type:
+//   - `await e` ⇒ child future struct type `FutT` = the syntactic type of `e` (call return type,
+//     awaited field's declared type, or array element type; for an async `g`, the transform rewrites
+//     `g` to return `g__Fut`, so a call `g(...)` gives `FutT == g__Fut`);
+//   - construct by value:  `self.__cN = <e>;` (child0 in the constructor; later children at
 //                          the transition that ends the prior step, so they may read prior results);
 //   - poll:                `FutT__poll(&self.__cN)`  (the `impl Future for FutT` method);
 //   - typed result:        `FutT_take_result(&self.__cN)`  (a free fn; generated for async `g`,
@@ -118,6 +133,14 @@ const Lowerer = struct {
     fn_ret_type: std.StringHashMap([]const u8),
     // async fn name -> its generated future ABI.
     async_info: std.StringHashMap(AsyncInfo),
+    // E2: struct type name -> (field name -> field type name). Lets `await base.fut` resolve the
+    // awaited field's CONCRETE future type syntactically (no sema), when `base` resolves to a known
+    // struct type. Array fields are recorded under the synthetic field key "[]" (element type) so
+    // `await arr[i]` (arr a field/param of `[N]ElemFut`) resolves to `ElemFut`.
+    struct_fields: std.StringHashMap(std.StringHashMap([]const u8)),
+    // E2: the CURRENT async fn's param name -> declared type name (reset per fn). The entry point
+    // for resolving a field/index await's base type without sema.
+    param_types: std.StringHashMap([]const u8),
     failed: bool = false,
 
     fn fail(self: *Lowerer, span: diagnostics.Span, comptime fmt: []const u8, args: anytype) Error {
@@ -204,6 +227,15 @@ fn typeName(t: ast.TypeExpr) ?[]const u8 {
     };
 }
 
+// E2: for an array type `[N]Elem`, return `Elem`'s bare type name (else null). Used so a struct
+// field / param of array-of-future type lets `await arr[i]` resolve to the element future type.
+fn arrayElemTypeName(t: ast.TypeExpr) ?[]const u8 {
+    return switch (t.kind) {
+        .array => |a| typeName(a.child.*),
+        else => null,
+    };
+}
+
 pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter) Error!ast.Module {
     // `await` is ONLY valid inside an `async fn` — the transform rewrites those away. Any `await`
     // surviving in a non-async fn would reach sema as an unhandled `await_expr` (a compiler crash),
@@ -231,7 +263,25 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
         .reporter = reporter,
         .fn_ret_type = std.StringHashMap([]const u8).init(arena),
         .async_info = std.StringHashMap(AsyncInfo).init(arena),
+        .struct_fields = std.StringHashMap(std.StringHashMap([]const u8)).init(arena),
+        .param_types = std.StringHashMap([]const u8).init(arena),
     };
+
+    // E2 pass 0: record each struct's field -> field-type-name map (and array fields' element type
+    // under key "[]"), so a field/index await can resolve its CONCRETE future type without sema.
+    for (module.decls) |d| {
+        if (d.kind != .struct_decl) continue;
+        const sd = d.kind.struct_decl;
+        var fm = std.StringHashMap([]const u8).init(arena);
+        for (sd.fields) |f| {
+            if (typeName(f.ty)) |tn| {
+                try fm.put(f.name.text, tn);
+            } else if (arrayElemTypeName(f.ty)) |en| {
+                try fm.put(f.name.text, en);
+            }
+        }
+        try low.struct_fields.put(sd.name.text, fm);
+    }
 
     // Pass 1: record every fn's return-type name, and each async fn's generated future ABI.
     for (module.decls) |d| {
@@ -362,6 +412,13 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     const arena = low.arena;
     const fd = decl.kind.fn_decl;
     const fname = fd.name.text;
+
+    // E2: record this fn's param name -> declared type name, so a field/index await (`await p.fut`,
+    // `await arr[i]`) can resolve the awaited future's CONCRETE type via the struct-field map.
+    low.param_types.clearRetainingCapacity();
+    for (fd.params) |p| {
+        if (typeName(p.ty)) |tn| try low.param_types.put(p.name.text, tn);
+    }
 
     // An `async fn` suspends (returns `pending` up the poll chain) and is driven through `*dyn`
     // dispatch — both forbidden in an IRQ/atomic/bounded context. Reject it before lowering, since
@@ -1072,28 +1129,68 @@ const ResolvedChild = struct {
     result_type: ast.TypeExpr,
 };
 
-// Resolve `await g(args)` to its child future type + take_result accessor + result type, using
-// only the module's fn-return-type map (no sema). For an async callee, use its generated ABI;
-// for a leaf, the callee's declared return type IS the future struct, and `<FutT>_take_result`
-// is the (author-provided) accessor.
-fn resolveAwait(low: *Lowerer, span: diagnostics.Span, call: ast.Expr) Error!ResolvedChild {
-    const callee = switch (call.kind) {
-        .call => |c| c.callee.*,
-        else => return low.fail(span, "async v0: `await` must be applied to a call `g(args)`", .{}),
+// E2: the bare type name a future-valued expression denotes, resolved SYNTACTICALLY (no sema), or
+// null if not resolvable. Handles the await-expr forms E2 supports:
+//   - `g(args)` (ident callee) / `Owner.method(args)` (parser already mangled to an ident call):
+//       the callee's declared return-type name (a future struct).
+//   - `(e)` grouped / nested parens: the inner expr's future type.
+//   - `base.field`: `base`'s struct type's `field` type — a CONCRETE future struct.
+//   - `base[i]`: `base`'s array-element type (recorded as the field's type in the struct-field map).
+// A field/index `base` must itself resolve to a struct type (a param, or a chain of fields).
+fn futureTypeOf(low: *Lowerer, e: ast.Expr) ?[]const u8 {
+    return switch (e.kind) {
+        .call => |c| switch (c.callee.*.kind) {
+            .ident => |i| low.fn_ret_type.get(i.text),
+            else => null,
+        },
+        .grouped => |inner| futureTypeOf(low, inner.*),
+        .member => |m| blk: {
+            const base_ty = structTypeOf(low, m.base.*) orelse break :blk null;
+            const fm = low.struct_fields.get(base_ty) orelse break :blk null;
+            break :blk fm.get(m.name.text);
+        },
+        .index => |ix| structTypeOf(low, ix.base.*), // base array's element type (stored as the field type)
+        else => null,
     };
-    const cname = switch (callee.kind) {
-        .ident => |i| i.text,
-        else => return low.fail(span, "async v0: `await` must call a plain named function", .{}),
+}
+
+// E2: the bare STRUCT type name an lvalue-ish expr denotes (for resolving a field/index await's
+// base), or null. A bare param uses `param_types`; a nested `base.field` / `base[i]` looks the
+// field/element type up in the struct-field map (must itself be a struct/array carrier).
+fn structTypeOf(low: *Lowerer, e: ast.Expr) ?[]const u8 {
+    return switch (e.kind) {
+        .ident => |i| low.param_types.get(i.text),
+        .grouped => |inner| structTypeOf(low, inner.*),
+        .member => |m| blk: {
+            const base_ty = structTypeOf(low, m.base.*) orelse break :blk null;
+            const fm = low.struct_fields.get(base_ty) orelse break :blk null;
+            break :blk fm.get(m.name.text);
+        },
+        .index => |ix| structTypeOf(low, ix.base.*),
+        else => null,
     };
-    if (low.async_info.get(cname)) |ai| {
-        return .{ .fut_type = ai.fut_type, .take_result = ai.take_result, .cancel = ai.cancel, .result_type = ai.result_type };
+}
+
+// Resolve `await e` (E2: `e` is any future-valued expression) to its child future type +
+// take_result accessor + cancel + result type, using only syntactic maps (no sema). For an async
+// callee, use its generated ABI (which carries the result type); for any other concrete future
+// type the result type is unknown here and the caller falls back to the binding's `: T` annotation.
+fn resolveAwait(low: *Lowerer, span: diagnostics.Span, e: ast.Expr) Error!ResolvedChild {
+    // A plain async-fn call carries its result type directly from the generated ABI.
+    if (e.kind == .call) {
+        if (e.kind.call.callee.*.kind == .ident) {
+            const cname = e.kind.call.callee.*.kind.ident.text;
+            if (low.async_info.get(cname)) |ai| {
+                return .{ .fut_type = ai.fut_type, .take_result = ai.take_result, .cancel = ai.cancel, .result_type = ai.result_type };
+            }
+        }
     }
-    const fut_type = low.fn_ret_type.get(cname) orelse
-        return low.fail(span, "async v0: awaited callee '{s}' must be an async fn or a future-returning function (with a declared struct return type)", .{cname});
+    const fut_type = futureTypeOf(low, e) orelse return low.fail(span,
+        "E_ASYNC_AWAIT_UNRESOLVED: `await e` requires `e`'s future type be resolvable without sema — a call `g(args)`/`Owner.m(args)`, a parenthesized such expr, a struct-FIELD future `base.fut`, or an array element `arr[i]` (base a param/field of a known struct/array-of-future type); `*dyn Future` await and other expression shapes are deferred (Phase E)", .{});
     const take = try std.fmt.allocPrint(low.arena, "{s}_take_result", .{fut_type});
     const cancel = try std.fmt.allocPrint(low.arena, "{s}_cancel", .{fut_type});
-    // The leaf's result type is unknown here; callers fall back to the binding's `: T` annotation.
-    // Use a placeholder; a leaf await without a `: T` annotation is rejected at the call site.
+    // The result type is unknown here; callers fall back to the binding's `: T` annotation.
+    // Use a placeholder; an await without a `: T` annotation is rejected at the call site.
     return .{ .fut_type = fut_type, .take_result = take, .cancel = cancel, .result_type = .{ .span = zspan, .kind = .{ .name = id("__async_infer") } } };
 }
 
@@ -1155,7 +1252,9 @@ fn collectArm(low: *Lowerer, blk: ast.Block, field_base: usize, steps: *std.Arra
     }
 }
 
-// `let x = await CALL;` (or `var`) — return the inner CALL expr if this stmt is exactly that.
+// `let x = await E;` (or `var`) — return the awaited EXPRESSION `E` if this stmt is exactly that.
+// (E2: `E` is any future-valued expr — a call, a struct-field future, an index, a parenthesized
+// such expr — not only a plain call. `resolveAwait`/`futureTypeOf` decide if its type is resolvable.)
 fn awaitStepCall(stmt: ast.Stmt) ?ast.Expr {
     const ld = switch (stmt.kind) {
         .let_decl, .var_decl => |l| l,
@@ -1165,13 +1264,14 @@ fn awaitStepCall(stmt: ast.Stmt) ?ast.Expr {
     return switch (init_expr.kind) {
         .await_expr => |inner| inner.*,
         // `let x = (await c)?;` — a try-propagating await. The parens make a `grouped` node, so
-        // unwrap try -> grouped* -> await -> the call.
+        // unwrap try -> grouped* -> await -> the awaited expr.
         .try_expr => |t| unwrapToAwaitCall(t.operand.*),
         else => null,
     };
 }
 
-// Unwrap `grouped`/`await` layers to the awaited CALL: `(await g(x))` / `await g(x)` -> `g(x)`.
+// Unwrap `grouped`/`await` layers to the awaited EXPRESSION: `(await g(x))` / `await g(x)` -> `g(x)`,
+// `(await ctx.fut)` -> `ctx.fut`. (E2: the awaited inner may be any future-valued expr.)
 fn unwrapToAwaitCall(e: ast.Expr) ?ast.Expr {
     return switch (e.kind) {
         .await_expr => |inner| inner.*,
