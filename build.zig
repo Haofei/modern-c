@@ -2328,6 +2328,25 @@ pub fn build(b: *std.Build) void {
     const llvm_async_blk_test_step = b.step("llvm-async-blk-test", "LLVM-lowered device-backed async virtio-blk completion under QEMU");
     llvm_async_blk_test_step.dependOn(&llvm_async_blk_test_cmd.step);
 
+    // async-net-test: DEVICE-BACKED async completion over the NIC. An async fn's await resolves
+    // against a REAL virtio-net TX device interrupt: net_send_frame_async submits a frame + ties the
+    // TX head descriptor id to a broker request id; the PLIC-routed TX used-ring IRQ reaps the
+    // completion in interrupt context (net_irq_reap -> async_complete) and wakes the task parked in
+    // drive_irq. Trace W i R + ASYNC-NET-OK + free=8/NET-NOLEAK-OK prove the completion came from the
+    // device IRQ (not a poll loop) and no descriptor/DMA leaks across repeated sends.
+    const async_net_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-net-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_async_net_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/async-net-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    async_net_test_cmd.step.dependOn(b.getInstallStep());
+    const async_net_test_step = b.step("async-net-test", "device-backed async: an async fn's await resolves against a real virtio-net TX device interrupt (PLIC used-ring completion reaped in interrupt context)");
+    async_net_test_step.dependOn(&async_net_test_cmd.step);
+    llvm_async_net_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_async_net_test_step = b.step("llvm-async-net-test", "LLVM-lowered device-backed async virtio-net TX completion under QEMU");
+    llvm_async_net_test_step.dependOn(&llvm_async_net_test_cmd.step);
+
     // async-select-test: select / cancel-the-loser over the real broker. Two in-flight requests are
     // raced (ReqRace2); a timer ISR completes the winner; the race cancels the loser and the active
     // slot count returns to 0 — the MAX_INFLIGHT-returns-to-zero acceptance. WR + ASYNC-SELECT-OK.
@@ -3946,6 +3965,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_async_pollmany_test_cmd.step);
     m0_step.dependOn(&llvm_async_future_test_cmd.step);
     m0_step.dependOn(&llvm_async_blk_test_cmd.step);
+    m0_step.dependOn(&llvm_async_net_test_cmd.step);
     m0_step.dependOn(&llvm_async_select_test_cmd.step);
     m0_step.dependOn(&llvm_async_agent_test_cmd.step);
     m0_step.dependOn(&llvm_agent_async_api_test_cmd.step);
@@ -4263,6 +4283,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&async_pollmany_test_cmd.step);
     m0_step.dependOn(&async_future_test_cmd.step);
     m0_step.dependOn(&async_blk_test_cmd.step);
+    m0_step.dependOn(&async_net_test_cmd.step);
     m0_step.dependOn(&async_select_test_cmd.step);
     m0_step.dependOn(&async_agent_test_cmd.step);
     m0_step.dependOn(&agent_async_api_test_cmd.step);
