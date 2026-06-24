@@ -1366,6 +1366,11 @@ const DupScope = struct {
     low: *Lowerer,
     // Innermost-last stack of name-sets; a name is a duplicate if it is in ANY currently-open frame.
     frames: std.ArrayList(std.StringHashMap(diagnostics.Span)) = .empty,
+    // Names of params whose declared type is syntactically NULLABLE (`?T`). A switch over a bare ref to
+    // such a param binds its `.bind` arm (the unwrap) — see the `.@"switch"` handler. A param is never
+    // shadowed by a local (that is itself E_DUPLICATE_LOCAL), so a subject ident in this set maps
+    // unambiguously to that nullable param.
+    nullable_params: *const std.StringHashMap(void),
 
     fn arena(self: *DupScope) std.mem.Allocator {
         return self.low.arena;
@@ -1397,7 +1402,13 @@ const DupScope = struct {
 // Validate a whole async fn body: params + top-level body live in ONE scope (matching sema's
 // `checkFn`), each nested block/loop/arm pushes a child frame that inherits its parent's bindings.
 fn validateNoDuplicateLocals(low: *Lowerer, params: []const ast.Param, body: ast.Block) Error!void {
-    var ds = DupScope{ .low = low };
+    // Record params of syntactically-nullable type, so a switch over a bare ref to one is known to
+    // BIND its `.bind` arm (mirroring sema's nullable-only `.bind` binding) — see `dupCheckStmt`.
+    var nullable_params = std.StringHashMap(void).init(low.arena);
+    for (params) |p| {
+        if (p.ty.kind == .nullable) try nullable_params.put(p.name.text, {});
+    }
+    var ds = DupScope{ .low = low, .nullable_params = &nullable_params };
     try ds.push(); // the fn's top scope: params + the body's top-level locals share it
     defer ds.pop();
     // Param-vs-param collisions are E_DUPLICATE_PARAMETER in sema (`checkFn`), NOT E_DUPLICATE_LOCAL.
@@ -1479,11 +1490,24 @@ fn dupCheckStmt(ds: *DupScope, s: ast.Stmt) Error!void {
             // (no live outer collision) the renamer's "leave the payload name original" is then sound: its
             // body read finds no live frame entry and stays the payload. We still recurse into each arm
             // body in its own child frame so a genuine NESTED `let` is dup-checked.
+            // A bare `.bind` binds ONLY for a NULLABLE subject. We can confirm nullability syntactically
+            // (no sema) when the subject is a bare ref to a nullable-typed PARAM — then the `.bind` binds
+            // the unwrap exactly as sema does, so dup-check it for E_DUPLICATE_LOCAL parity (the general
+            // path otherwise alpha-renames the colliding outer to a `self.*` field before sema, hiding
+            // the collision — accepting code non-async rejects). A NON-nullable param subject must NOT
+            // bind (the bare `.bind` is a no-op catch-all reading the outer — binding it would
+            // false-reject the valid `switch n { x => x; _ => }` form). A LOCAL/complex subject is
+            // undeterminable here, so defer (the renamer's `.bind` lookup-aliasing keeps the valid
+            // non-nullable form correct and prevents a nullable miscompile; that nullable-local subject
+            // collision stays masked — a bounded, type-info-only residual).
+            const subj_nullable_param = sw.subject.kind == .ident and
+                ds.nullable_params.contains(sw.subject.kind.ident.text);
             for (sw.arms) |arm| {
                 try ds.push();
                 if (arm.patterns.len == 1) {
                     switch (arm.patterns[0].kind) {
                         .tag_bind => |tb| try ds.bind(tb.binding),
+                        .bind => |nm| if (subj_nullable_param) try ds.bind(nm),
                         else => {},
                     }
                 }
@@ -1632,14 +1656,18 @@ fn renameStmt(rs: *RenameScope, s: ast.Stmt) Error!ast.Stmt {
 }
 
 // Rename a switch arm's patterns. A `.bind`/`.tag_bind` binding is LEFT ORIGINAL and NOT bound in the
-// arm frame: its binding-ness is type-dependent (sema is authoritative), and on valid (non-shadowing)
-// input the arm body's payload reads stay bare and resolve to the payload without renaming (any outer
-// same-named binding lives in a disjoint, already-popped scope, so `lookup` misses it). A STILL-LIVE
-// outer collision — which would otherwise alpha-rename the payload read to the OUTER carrier (a silent
-// miscompile, since sema can no longer see the renamed-away outer name) — is rejected PRE-RENAME by
-// `validateNoDuplicateLocals` (it dup-checks a single-pattern `.tag_bind` payload, which always binds),
-// so it never reaches here. `.literal` patterns hold an expr that may reference an outer renamed
-// binding — rename it. `.wildcard`/`.tag` bind nothing.
+// arm frame: on valid input the arm body's payload reads stay bare and resolve to the payload without
+// renaming (a disjoint, already-popped same-named binding `lookup` misses; the identifier rewriters'
+// `shadowRemove`, keyed on the ORIGINAL pattern name, keeps the bare read off `self.*`). We must NOT
+// alias the pattern to a renamed outer here: that would push the renamed name into `armBoundNames`, so
+// `shadowRemove` would then (wrongly) stop the body's renamed read from being rewritten to its
+// `self.<field>` — turning a valid non-nullable catch-all's outer read into an E_UNKNOWN_IDENTIFIER.
+// A STILL-LIVE outer collision is instead rejected PRE-RENAME by `validateNoDuplicateLocals` (it
+// dup-checks a single-pattern `.tag_bind` payload — always binds — and a single-pattern `.bind` when the
+// subject is a nullable param — binds the unwrap), so the only miscompiling shapes never reach here. The
+// one residual it cannot reach (a `.bind` over a nullable LOCAL/complex subject shadowing a live outer)
+// stays masked — a bounded, type-info-only gap. `.literal` patterns hold an expr that may reference an
+// outer renamed binding — rename it. `.wildcard`/`.tag` bind nothing.
 fn renamePatterns(rs: *RenameScope, pats: []const ast.Pattern) Error![]ast.Pattern {
     const arena = rs.arena();
     var out = try arena.alloc(ast.Pattern, pats.len);
