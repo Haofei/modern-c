@@ -265,6 +265,46 @@ Phases 1–2 are safe, parallelizable, and reviewable. Phase 3 is the real work
 and the main risk. Phases 4–5 deliver the soundness the project's value
 proposition rests on. Phase 6 is cosmetic and deferrable.
 
+## Execution log (what actually happened)
+
+- **Phase 0–2**: done. build.zig 4,481→25 lines (+7 build/ modules); lower_c
+  17,244→16,673, sema 10,705→9,492 (+`sema_move.zig` isolated), lower_llvm
+  6,912→6,557. All emit byte-identical; `c1` green throughout. The deep
+  expr/stmt method-webs were left in-spine (single-entry method extraction only
+  worked cleanly for the move checker; not worth the churn/risk elsewhere).
+- **Phase 0 oracle bug**: the parallel emit-snapshot dropped paths (vacuous
+  "OK"); fixed. Structural phases were independently validated by the real
+  `fast`/`c1` behavioral gates regardless.
+- **Phase 3 — premise disproven, scope corrected**: `review.md` §1 claimed the
+  move checker missed early-return/loop/branch/if-let/nested-scope leaks.
+  EMPIRICALLY FALSE — the checker rejects all of them (it already does
+  per-exit-edge and per-scope analysis). A static review that never ran the
+  compiler. **No CFG rewrite was warranted.** Instead an adversarial audit
+  (28/29 shapes correctly rejected, 4/4 controls accepted) found the *one* real
+  hole the static review missed: a double-free by moving a linear value out
+  through a `&binding` alias. Fixed surgically (`MoveSlot.full_deref_alias`).
+- **Implication for Phases 4–5**: `review.md` §2/§3 must likewise be verified
+  empirically before any fix — treat each claim as a hypothesis, not a fact.
+- **Phase 4 — verification-only, no-op**: audited all five §2 stdlib claims
+  against HEAD. ALL already handled (verified by source + compiler probes):
+  `arc_get`→`*const T` with a separate trap-guarded `arc_get_mut`; saturating
+  refcount; handle-carried allocator provenance; virtqueue `inflight_len/present`
+  validation + `CompletedChain3`/`vq_reset_reclaim` ownership return; `opaque`
+  unforgeable arena/pool handles with checked (non-wrapping) generations; pool
+  `initialized` bit + `Uninitialized` error; `mem` power-of-two + overlap traps.
+  Only residual is a documented single-core refcount tradeoff, correctly deferred
+  to the SMP milestone. review.md §2 described an older revision.
+- **Phase 5 — verification-only, no-op**: audited all five §3 kernel claims.
+  Claims 1–4 FALSE at HEAD (already implemented: gen-validated parent endpoints
+  `parent_slot/parent_gen`, zeroed default `allow_mask/kcall_mask`, `death_hook`
+  grant/registry revocation, page-table-aware `uaccess` with PTE_U/R/W + all-or-
+  nothing copy, typed `MapError` with `AlreadyMapped`/`ConflictWithLargePage`
+  leaf checks, ramfs per-file `capacity`+`TooLarge`, fd-positioned `vfs_write`).
+  Claim 5 (fork-wide COW / per-frame refcounts) is genuinely real but documented
+  demo-scope, deferred behind an arch-neutral large-page/address-space milestone
+  (MC_Kernel_Design.md, platform-portability-plan.md). Not a now-fix; lifting it
+  risks the cow/demand QEMU gates. No kernel changes warranted.
+
 ## Open decisions to confirm before Phase 3
 
 - **IR level for the move CFG**: build a sema-local CFG (keeps source-span
