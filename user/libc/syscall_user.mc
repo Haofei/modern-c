@@ -8,6 +8,7 @@
 // (the ELF entry runtime).
 
 import "user/abi.mc";
+import "user/agent_async.mc"; // ToolPump (the agent-facing async API), bound to the real syscalls
 
 extern fn mc_ecall(number: u64, a0: u64, a1: u64, a2: u64) -> u64;
 
@@ -38,4 +39,11 @@ export fn mc_console_write(buf: usize, len: usize) -> void {
 // number of bytes delivered. The host calls this at boot instead of embedding the agent.
 export fn sys_read(buf: usize, max: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_READ, buf as u64, max as u64, 0));
+}
+
+// Bind the agent-facing async pump (user/agent_async.mc) to the REAL syscall Tool ABI: its drain
+// goes through sys_submit / sys_poll. A confined agent calls this once, then uses tool_call_async /
+// read_async / write_async / sleep_async / net_fetch_async + pump_run_to_completion over `p`.
+export fn tool_pump_init_syscall(p: *mut ToolPump) -> void {
+    tool_pump_init(p, sys_submit, sys_poll);
 }
