@@ -3413,6 +3413,34 @@ pub fn build(b: *std.Build) void {
     const llvm_qjs_cancel_test_step = b.step("llvm-qjs-cancel-test", "A pure-JS agent cancels an in-flight async request (structured ECANCELED reject + broker-slot reclamation) under QEMU (LLVM)");
     llvm_qjs_cancel_test_step.dependOn(&llvm_qjs_cancel_test_cmd.step);
 
+    // THE canonical "agent async smoke" gate (item 3): ONE confined PURE-JS agent walks the whole
+    // async happy path in a single run — host_call (SUM resolve) -> host_fs_read (real cap-checked FS
+    // read) -> host_sleep (async timeout) -> cancel (in-flight ECANCELED) — and prints AGENT-SMOKE-OK
+    // only if every stage passed AND the host drained to inflight=0 with no unknown completion id.
+    const qjs_agent_smoke_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-smoke-test.sh", "zig-out/bin/mcc", "c" });
+    qjs_agent_smoke_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_agent_smoke_test_step = b.step("qjs-agent-smoke-test", "Canonical agent async smoke: a confined pure-JS agent walks host_call+FS-read+timeout+cancel and reclaims every slot (AGENT-SMOKE-OK) under QEMU");
+    qjs_agent_smoke_test_step.dependOn(&qjs_agent_smoke_test_cmd.step);
+
+    const llvm_qjs_agent_smoke_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-agent-smoke-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_qjs_agent_smoke_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_agent_smoke_test_step = b.step("llvm-qjs-agent-smoke-test", "Canonical agent async smoke (LLVM): host_call+FS-read+timeout+cancel, all slots reclaimed (AGENT-SMOKE-OK) under QEMU");
+    llvm_qjs_agent_smoke_test_step.dependOn(&llvm_qjs_agent_smoke_test_cmd.step);
+
+    // Negative cancellation-edge gate (item 4) at the JS/host layer: a confined pure-JS agent proves
+    // post-completion cancel is denied, a failed-submit cancel hits nothing, a late completion after
+    // cancel produces NO fatal unknown-id, and an FS read resolves non-empty — each with a distinct
+    // marker; the host drains to inflight=0.
+    const qjs_cancel_edges_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-cancel-edges-test.sh", "zig-out/bin/mcc", "c" });
+    qjs_cancel_edges_test_cmd.step.dependOn(b.getInstallStep());
+    const qjs_cancel_edges_test_step = b.step("qjs-cancel-edges-test", "Negative cancellation edges (pure-JS): post-complete cancel denied, failed-submit cancel hits nothing, late completion is no unknown-id, FS read non-empty under QEMU");
+    qjs_cancel_edges_test_step.dependOn(&qjs_cancel_edges_test_cmd.step);
+
+    const llvm_qjs_cancel_edges_test_cmd = b.addSystemCommand(&.{ "bash", "tools/lang/qjs-cancel-edges-test.sh", "zig-out/bin/mcc", "llvm" });
+    llvm_qjs_cancel_edges_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_qjs_cancel_edges_test_step = b.step("llvm-qjs-cancel-edges-test", "Negative cancellation edges (pure-JS, LLVM): post-complete/failed-submit/late-completion cancels are harmless, FS read non-empty under QEMU");
+    llvm_qjs_cancel_edges_test_step.dependOn(&llvm_qjs_cancel_edges_test_cmd.step);
+
     // The host ITSELF in MC (examples/apps/qjs_host.mc): MC drives the QuickJS C API directly —
     // JSValue (the 16-byte struct) by value, JS_Eval/JS_GetPropertyStr/JS_ToInt32 from MC —
     // evaluating 6*7=42 confined. Proves the host need not be C either. Both backends.
@@ -3885,6 +3913,10 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_qjs_quota_agent_test_cmd.step);
     m0_step.dependOn(&qjs_cancel_test_cmd.step);
     m0_step.dependOn(&llvm_qjs_cancel_test_cmd.step);
+    m0_step.dependOn(&qjs_agent_smoke_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_agent_smoke_test_cmd.step);
+    m0_step.dependOn(&qjs_cancel_edges_test_cmd.step);
+    m0_step.dependOn(&llvm_qjs_cancel_edges_test_cmd.step);
     m0_step.dependOn(&broker_probe_test_cmd.step);
     m0_step.dependOn(&llvm_broker_probe_test_cmd.step);
     m0_step.dependOn(&qjs_broker_agent_test_cmd.step);

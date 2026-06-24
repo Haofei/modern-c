@@ -21,6 +21,9 @@ size_t strlen(const char *s);
 // The tool ABI, mirrored byte-for-byte from user/abi.mc (ToolReq=40B, ToolEvent=24B). host_async
 // builds a ToolReq and submits its address; the event loop polls completions into a ToolEvent.
 #define TOOL_OP_SUM 1u
+// TIMEOUT: completes (after its `flags` delay) with status -E_TIMEDOUT. By the agent_async sleep
+// convention the timer FIRING surfaces as that rejection — so host_sleep(ticks) is "await a timer".
+#define TOOL_OP_TIMEOUT 4u
 #define TOOL_OP_SPURIOUS 5u
 // REAL capability-checked FS ops (M5b.2): the kernel dispatches these through agent_fs_call (the
 // capability front door). The request payload packs the path then the data (FS_WRITE only); arg =
@@ -133,11 +136,13 @@ static const char *HOST_PRELUDE =
     "    globalThis.__host_errify);"
     "};"
     "globalThis.__host_errify = function (code) {"
-    "  var names = {'-1':'EBUSY','-2':'ENOENT','-11':'EAGAIN','-13':'EDENIED','-14':'EFAULT','-22':'EINVAL','-105':'ENOCAP','-125':'ECANCELED'};"
+    "  var names = {'-1':'EBUSY','-2':'ENOENT','-11':'EAGAIN','-13':'EDENIED','-14':'EFAULT','-22':'EINVAL','-105':'ENOCAP','-110':'ETIMEDOUT','-125':'ECANCELED'};"
     "  var name = names[String(code)] || 'EUNKNOWN';"
     "  throw { code: code, name: name, retryable: code === -11 || code === -1 };"
     "};"
     "globalThis.host_spurious = function () { return globalThis.__host_spurious_raw(); };"
+    // host_sleep(ticks): an async timer; the fired timer surfaces as a structured ETIMEDOUT reject.
+    "globalThis.host_sleep = function (ticks) { return globalThis.__host_sleep_raw(ticks).then(function (v) { return v; }, globalThis.__host_errify); };"
     // REAL FS tools: wrap each raw binding so a rejected (denied/failed) op surfaces the SAME
     // structured error shape the agent already handles for host_async.
     "globalThis.host_fs_write = function (p, d) { return globalThis.__host_fs_write_raw(p, d).then(function (v) { return v; }, globalThis.__host_errify); };"
@@ -253,6 +258,16 @@ static JSValue js_host_spurious(JSContext *ctx, JSValueConst this_val, int argc,
     return start_request(ctx, TOOL_OP_SPURIOUS, 0, 0);
 }
 
+// host_sleep(ticks): an async timer. Submits a TOOL_OP_TIMEOUT op that completes after `ticks`
+// broker ticks with status -E_TIMEDOUT; the event loop's status<0 path REJECTS the promise, and
+// the prelude's __host_errify maps -110 to { code:-110, name:'ETIMEDOUT' }. By the agent_async
+// convention a fired timer IS that rejection — the agent treats it as "slept", not a failure.
+static JSValue js_host_sleep(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    int32_t ticks = 0;
+    if (argc > 0) JS_ToInt32(ctx, &ticks, argv[0]);
+    return start_request(ctx, TOOL_OP_TIMEOUT, 0, ticks);
+}
+
 // ---- REAL capability-checked FS bindings (M5b.2): host_fs_write/read/mkdir ----
 // Each packs the request payload (path bytes, then data bytes for write), sets arg = path length,
 // and submits the matching TOOL_OP_FS_*. The kernel routes it through agent_fs_call (allowlist ->
@@ -342,6 +357,7 @@ int main(void) {
     JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_print, "print", 1));
     JS_SetPropertyStr(ctx, global, "__host_async_raw", JS_NewCFunction(ctx, js_host_async, "__host_async_raw", 2));
     JS_SetPropertyStr(ctx, global, "__host_spurious_raw", JS_NewCFunction(ctx, js_host_spurious, "__host_spurious_raw", 0));
+    JS_SetPropertyStr(ctx, global, "__host_sleep_raw", JS_NewCFunction(ctx, js_host_sleep, "__host_sleep_raw", 1));
     JS_SetPropertyStr(ctx, global, "__host_fs_write_raw", JS_NewCFunction(ctx, js_host_fs_write, "__host_fs_write_raw", 2));
     JS_SetPropertyStr(ctx, global, "__host_fs_read_raw", JS_NewCFunction(ctx, js_host_fs_read, "__host_fs_read_raw", 1));
     JS_SetPropertyStr(ctx, global, "__host_fs_mkdir_raw", JS_NewCFunction(ctx, js_host_fs_mkdir, "__host_fs_mkdir_raw", 1));
