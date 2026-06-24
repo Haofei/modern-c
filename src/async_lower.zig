@@ -256,6 +256,34 @@ fn paramCarrierTypeName(t: ast.TypeExpr) ?[]const u8 {
     };
 }
 
+// FINDING #3: scan a block (recursing through nested regions) for explicitly-typed `let`/`var`
+// decls and record `name -> carrier type name` into `param_types`, so a future-carrier LOCAL
+// resolves in `structTypeOf(.ident)` exactly like a param. Untyped decls (and awaited bindings,
+// whose type is the awaited future's RESULT, not a carrier) contribute nothing. Re-keying after the
+// general path's alpha-rename is handled by a second call on the renamed body.
+fn recordLocalCarrierTypes(low: *Lowerer, b: ast.Block) Error!void {
+    for (b.items) |s| switch (s.kind) {
+        .let_decl, .var_decl => |ld| {
+            if (ld.ty) |ty| {
+                if (paramCarrierTypeName(ty)) |tn| {
+                    for (ld.names) |nm| try low.param_types.put(nm.text, tn);
+                }
+            }
+        },
+        .loop => |l| try recordLocalCarrierTypes(low, l.body),
+        .block, .unsafe_block, .comptime_block => |bl| try recordLocalCarrierTypes(low, bl),
+        .@"switch" => |sw| for (sw.arms) |arm| switch (arm.body) {
+            .block => |bl| try recordLocalCarrierTypes(low, bl),
+            .expr => {},
+        },
+        .if_let => |il| {
+            try recordLocalCarrierTypes(low, il.then_block);
+            if (il.else_block) |eb| try recordLocalCarrierTypes(low, eb);
+        },
+        else => {},
+    };
+}
+
 pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter) Error!ast.Module {
     // `await` is ONLY valid inside an `async fn` — the transform rewrites those away. Any `await`
     // surviving in a non-async fn would reach sema as an unhandled `await_expr` (a compiler crash),
@@ -442,6 +470,13 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
         // (`await p[i]`) resolve — matching the E_ASYNC_AWAIT_UNRESOLVED message's promise.
         if (paramCarrierTypeName(p.ty)) |tn| try low.param_types.put(p.name.text, tn);
     }
+    // FINDING #3: ALSO record explicitly-typed LOCAL carrier types (`let ctx: Ctx = ...;` /
+    // `var ctx: Ctx = ...;`) so `await ctx.fut` (a local future-carrier) resolves the same way a
+    // param carrier does. Without this, `structTypeOf(.ident)` only knew params and a typed-local
+    // field await was rejected (E_ASYNC_AWAIT_UNRESOLVED) though `await param.fut` worked. We scan
+    // the body (top-level + nested) for typed `let`/`var` decls; untyped locals are left unresolved
+    // (the carrier type is unknown pre-sema). The general path records the POST-rename names below.
+    if (fd.body) |b0| try recordLocalCarrierTypes(low, b0);
 
     // An `async fn` suspends (returns `pending` up the poll chain) and is driven through `*dyn`
     // dispatch — both forbidden in an IRQ/atomic/bounded context. Reject it before lowering, since
@@ -1269,16 +1304,22 @@ fn renameStmt(rs: *RenameScope, s: ast.Stmt) Error!ast.Stmt {
             const rsubj = try renameExpr(rs, sw.subject);
             var new_arms = try arena.alloc(ast.SwitchArm, sw.arms.len);
             for (sw.arms, 0..) |arm, i| {
+                // FINDING #1 (silent miscompile): a `tag_bind`/`bind` pattern introduces a REAL
+                // arm-local. The alpha-renamer must give it its OWN fresh name (and rewrite the
+                // pattern), binding it in a per-arm frame so the arm body's references resolve to the
+                // PAYLOAD local, not an outer renamed binding of the same source name. Because the
+                // fresh pattern name is NOT collected by collectAllLocalDecls/collectAwaitBindingNames
+                // (neither walks pattern bindings), it is never captured as a `self.*` field —
+                // genRewriteStraight then leaves it a local, reading the payload. (The general path
+                // rejects awaits inside such arms, so the payload is never live across a suspend.)
+                try rs.push();
+                const new_pats = try renamePatterns(rs, arm.patterns);
                 const new_body: ast.SwitchBody = switch (arm.body) {
-                    .block => |b| .{ .block = try renameBlock(rs, b) },
+                    .block => |b| .{ .block = try renameBlockItems(rs, b) },
                     .expr => |e| .{ .expr = try renameExpr(rs, e) },
                 };
-                // A `tag_bind`/`bind` pattern would introduce a binding; the general path does not
-                // accept await inside if_let/switch-binding arms, but rename pass-through must still be
-                // sound for await-free arms — patterns bind in the arm's block scope. Since switch
-                // patterns here are bool/literal/tag (no value binding reaching this path), leave the
-                // patterns as-is; any binding pattern lives only inside the arm block already scoped.
-                new_arms[i] = .{ .patterns = arm.patterns, .body = new_body };
+                rs.pop();
+                new_arms[i] = .{ .patterns = new_pats, .body = new_body };
             }
             return .{ .span = s.span, .kind = .{ .@"switch" = .{ .subject = rsubj, .arms = new_arms } } };
         },
@@ -1289,6 +1330,23 @@ fn renameStmt(rs: *RenameScope, s: ast.Stmt) Error!ast.Stmt {
         // own sub-scopes, if any, contain no captured-across-suspend locals).
         else => return s,
     }
+}
+
+// Rename a switch arm's patterns: a `.bind`/`.tag_bind` binding gets a fresh unique name bound into
+// the CURRENT (arm) scope frame (so the arm body's references resolve to it). `.literal` patterns
+// hold an expr that may reference outer names — rename it. `.wildcard`/`.tag` bind nothing.
+fn renamePatterns(rs: *RenameScope, pats: []const ast.Pattern) Error![]ast.Pattern {
+    const arena = rs.arena();
+    var out = try arena.alloc(ast.Pattern, pats.len);
+    for (pats, 0..) |p, i| {
+        out[i] = switch (p.kind) {
+            .bind => |b| .{ .span = p.span, .kind = .{ .bind = .{ .text = try rs.bind(b.text), .span = b.span } } },
+            .tag_bind => |tb| .{ .span = p.span, .kind = .{ .tag_bind = .{ .tag = tb.tag, .binding = .{ .text = try rs.bind(tb.binding.text), .span = tb.binding.span } } } },
+            .literal => |e| .{ .span = p.span, .kind = .{ .literal = try renameExpr(rs, e) } },
+            else => p,
+        };
+    }
+    return out;
 }
 
 fn renameExpr(rs: *RenameScope, e: ast.Expr) Error!ast.Expr {
@@ -1305,8 +1363,11 @@ fn renameExpr(rs: *RenameScope, e: ast.Expr) Error!ast.Expr {
         .call => |c| blk: {
             var new_args = try arena.alloc(ast.Expr, c.args.len);
             for (c.args, 0..) |a, i| new_args[i] = try renameExpr(rs, a);
-            // The callee is a function name (or `Owner.method` already mangled) — not a local.
-            break :blk .{ .span = e.span, .kind = .{ .call = .{ .callee = c.callee, .type_args = c.type_args, .args = new_args } } };
+            // FINDING #2: a captured fn-pointer LOCAL used as a callee (`op(x,y)`) must be renamed too;
+            // a direct/global function name (or an already-mangled `Owner.method`) is not in any rename
+            // frame, so `renameExpr` on the ident leaves it unchanged — only a bound local is rewritten.
+            const new_callee = try ptr(arena, ast.Expr, try renameExpr(rs, c.callee.*));
+            break :blk .{ .span = e.span, .kind = .{ .call = .{ .callee = new_callee, .type_args = c.type_args, .args = new_args } } };
         },
         .index => |ix| .{ .span = e.span, .kind = .{ .index = .{ .base = try ptr(arena, ast.Expr, try renameExpr(rs, ix.base.*)), .index = try ptr(arena, ast.Expr, try renameExpr(rs, ix.index.*)) } } },
         .slice => |sl| .{ .span = e.span, .kind = .{ .slice = .{ .base = try ptr(arena, ast.Expr, try renameExpr(rs, sl.base.*)), .start = try ptr(arena, ast.Expr, try renameExpr(rs, sl.start.*)), .end = try ptr(arena, ast.Expr, try renameExpr(rs, sl.end.*)) } } },
@@ -1419,6 +1480,11 @@ fn lowerAsyncGeneralFn(
     try rs.push(); // the fn body's top scope (params live one level up, conceptually — not renamed)
     const body = try renameBlockItems(&rs, body_in);
     rs.pop();
+
+    // FINDING #3: the alpha-rename changed local names, so re-record typed-local carriers under their
+    // POST-rename names (the pre-rename scan in lowerAsyncFn keyed the original names). This lets
+    // `await ctx.fut` resolve when `ctx` is a typed local that the general path renamed.
+    try recordLocalCarrierTypes(low, body);
 
     // Captured names: params + every awaited binding (anywhere) + every (now-unique) local declared
     // ANYWHERE (top-level OR nested — the index/accumulators AND nested temporaries live across the
@@ -1769,10 +1835,16 @@ fn genRewriteStraight(ctx: *GenCtx, s: ast.Stmt, brk: ?usize, cont: ?usize) Erro
             const rsubj = try rewriteParamRefs(low, sw.subject, ctx.names);
             var new_arms = try arena.alloc(ast.SwitchArm, sw.arms.len);
             for (sw.arms, 0..) |arm, i| {
+                // FINDING #1: shadow the arm's pattern-bound names so their uses inside the arm are
+                // NOT rewritten to `self.*` (they read the arm-local payload, not a captured field).
+                const bound = try armBoundNames(arena, arm);
+                var removed: std.ArrayList([]const u8) = .empty;
+                try shadowRemove(ctx.names, bound, &removed, arena);
                 const new_body: ast.SwitchBody = switch (arm.body) {
                     .block => |b| .{ .block = try genRewriteStraightBlock(ctx, b, brk, cont) },
                     .expr => |e| .{ .expr = try rewriteParamRefs(low, e, ctx.names) },
                 };
+                try shadowRestore(ctx.names, removed.items);
                 new_arms[i] = .{ .patterns = arm.patterns, .body = new_body };
             }
             return .{ .span = s.span, .kind = .{ .@"switch" = .{ .subject = rsubj, .arms = new_arms } } };
@@ -2338,6 +2410,40 @@ fn appendZeroInit(low: *Lowerer, body: *std.ArrayList(ast.Stmt), field: []const 
     if (try zeroFor(low, ty)) |z| try body.append(low.arena, assignStmt(try selfMember(low.arena, field), z));
 }
 
+// FINDING #1 (silent miscompile): a switch-arm pattern `number(x) => ...` / `ident(s) => ...` / a
+// bare `bind` pattern introduces a REAL local in the arm scope (the backend desugars `tag_bind`/
+// `bind` into a local `let x = subject.payload...;`). That local SHADOWS any captured outer
+// param/awaited-binding/renamed-local of the same name. The capture-keyed rewriters
+// (`rewriteParamRefs` & friends) must therefore NOT rewrite a reference to a pattern-bound name to
+// `self.<name>` inside that arm. We model the shadowing by temporarily REMOVING the pattern's bound
+// names from the `names` capture-set for the duration of the arm body, then restoring them.
+//
+// `armBoundNames` lists the names a switch arm's patterns bind: `.bind` (the whole ident) and
+// `.tag_bind` (the binding ident); `.wildcard`/`.tag`/`.literal` bind nothing.
+fn armBoundNames(arena: std.mem.Allocator, arm: ast.SwitchArm) Error![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (arm.patterns) |p| switch (p.kind) {
+        .bind => |b| try out.append(arena, b.text),
+        .tag_bind => |tb| try out.append(arena, tb.binding.text),
+        else => {},
+    };
+    return out.toOwnedSlice(arena);
+}
+
+// Remove every name in `bound` from `names`, appending to `removed` exactly the subset that was
+// actually present (so the caller restores precisely those — a name the arm shadowed but that was
+// never captured must NOT be re-inserted). Makes a switch-arm pattern binding shadow a captured
+// outer name within the arm.
+fn shadowRemove(names: *std.StringHashMap(void), bound: []const []const u8, removed: *std.ArrayList([]const u8), alloc: std.mem.Allocator) Error!void {
+    for (bound) |nm| {
+        if (names.remove(nm)) try removed.append(alloc, nm);
+    }
+}
+
+fn shadowRestore(names: *std.StringHashMap(void), restored: []const []const u8) Error!void {
+    for (restored) |nm| try names.put(nm, {});
+}
+
 // Rewrite bare-ident reads that name a captured field (param or awaited binding) to `self.<name>`.
 // Inside the constructor and poll method the original locals are FIELDS, so a reference to `a`
 // must become `self.a`. Recurses structurally over the expression.
@@ -2354,8 +2460,11 @@ fn rewriteParamRefs(low: *Lowerer, e: ast.Expr, names: *std.StringHashMap(void))
         .call => |c| blk: {
             var new_args = try arena.alloc(ast.Expr, c.args.len);
             for (c.args, 0..) |a, i| new_args[i] = try rewriteParamRefs(low, a, names);
-            // The callee is a function name, not a captured local — leave it as-is.
-            break :blk .{ .span = e.span, .kind = .{ .call = .{ .callee = c.callee, .type_args = c.type_args, .args = new_args } } };
+            // FINDING #2: a captured fn-pointer param/local used as a callee (`op(x,y)`) must be
+            // rewritten to `self.op(...)`. A direct/global function name (or an already-mangled
+            // `Owner.method`) is not a captured name, so the ident lookup leaves it unchanged.
+            const new_callee = try ptr(arena, ast.Expr, try rewriteParamRefs(low, c.callee.*, names));
+            break :blk .{ .span = e.span, .kind = .{ .call = .{ .callee = new_callee, .type_args = c.type_args, .args = new_args } } };
         },
         .index => |ix| .{ .span = e.span, .kind = .{ .index = .{ .base = try ptr(arena, ast.Expr, try rewriteParamRefs(low, ix.base.*, names)), .index = try ptr(arena, ast.Expr, try rewriteParamRefs(low, ix.index.*, names)) } } },
         .member => |m| .{ .span = e.span, .kind = .{ .member = .{ .base = try ptr(arena, ast.Expr, try rewriteParamRefs(low, m.base.*, names)), .name = m.name } } },
@@ -2421,10 +2530,17 @@ fn rewriteRegionStmt(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void)
             const rsubj = try rewriteParamRefs(low, sw.subject, names);
             var new_arms = try arena.alloc(ast.SwitchArm, sw.arms.len);
             for (sw.arms, 0..) |arm, i| {
+                // FINDING #1: a pattern binding (`number(x)`/`ident(s)`/bare `bind`) introduces an
+                // arm-local that shadows a captured outer name — DON'T rewrite its uses to `self.*`
+                // inside this arm. Remove the bound names from the capture-set for the arm body.
+                const bound = try armBoundNames(arena, arm);
+                var removed: std.ArrayList([]const u8) = .empty;
+                try shadowRemove(names, bound, &removed, arena);
                 const new_body: ast.SwitchBody = switch (arm.body) {
                     .block => |b| .{ .block = try rewriteRegionBlock(low, b, names, done_str) },
                     .expr => |e| .{ .expr = try rewriteParamRefs(low, e, names) },
                 };
+                try shadowRestore(names, removed.items);
                 new_arms[i] = .{ .patterns = arm.patterns, .body = new_body };
             }
             return .{ .span = s.span, .kind = .{ .@"switch" = .{ .subject = rsubj, .arms = new_arms } } };
