@@ -1442,18 +1442,31 @@ fn emitCancelGuard(low: *Lowerer, cn_body: *std.ArrayList(ast.Stmt), s: AwaitSte
 }
 
 // ---- Interior-borrow check (move/borrow soundness across `await`) ----------------------------
-// A future is built in its constructor as a local `self` and RETURNED BY VALUE, so the caller's
-// copy lives at a new address. Any pointer the constructor forms INTO `self` (`&self.<field>`)
-// therefore dangles after that move — a self-referential future, which needs pinning (not in v0).
+// The soundness discriminator is WHERE an interior `&self.<field>` is formed (E4, v0.5):
 //
-// This is PRECISE and COMPLETE for the v0 lowering shapes: the only borrow of a captured
-// local/param that can live across an `await` suspend is one the transform places in the
-// CONSTRUCTOR — a pre-branch/pre-loop straight-line `let p = &x;` (replayed as `self.p = &self.x`)
-// or a first-await arg `await g(&x)` (built as `self.__c0 = g(&self.x)`). A borrow formed in a
-// poll state cannot span a suspend, because each region's straight-line runs AFTER that region's
-// awaits. And the constructor never legitimately forms `&self.<field>` (it builds children by
-// value; only `poll` takes `&self.__cN`). So `&self.<anything>` in the constructor is exactly the
-// unsound set — no false positives, no false negatives.
+//   * CONSTRUCTOR (REJECT — this check). The constructor builds `self` as a LOCAL and returns it BY
+//     VALUE, so the caller's copy lives at a NEW address. Any `&self.<field>` the constructor forms
+//     points into the constructor's transient `self` and DANGLES after that move — a self-referential
+//     future needing pinning (unsupported in v0). The transform itself can place such a borrow in the
+//     constructor in two ways: a first-await arg `await g(&x)` (built as `self.__c0 = g(&self.x)`),
+//     or — in the LOOP lowering only — a PRE-LOOP straight-line `let p = &x;` (replayed as
+//     `self.p = &self.x` in the constructor). Both are unsound and stay rejected (fail-closed).
+//
+//   * POLL MACHINE (ACCEPT — not scanned here, and proven sound). The DRIVER owns the future by
+//     `*mut` (run_to_completion/drive_irq poll it IN PLACE; it never moves between polls), so when a
+//     poll state forms `&self.<field>` it is taken at the future's STABLE address. Such a borrow stays
+//     valid across ANY number of subsequent suspends — including the loop back-edge — because every
+//     re-poll re-enters through the same `*mut self`. This is exactly the relaxation E4 pins: a
+//     captured-local borrow formed in the loop body (used across the back-edge) and a PRE-BRANCH
+//     borrow (the branch lowering replays the pre-branch straight-line into the poll dispatch, at the
+//     stable `*mut self`, NOT the constructor). Positive gate: fuzz_async_borrow_captured.mc.
+//
+// This check is PRECISE and COMPLETE for the v0 lowering shapes: it scans ONLY the constructor body,
+// which is exactly the set of `&self.<field>` taken at the transient (about-to-move) address — no
+// false positives (poll-formed borrows are never in `ctor_body`), no false negatives (the constructor
+// never legitimately forms `&self.<field>`: it builds children BY VALUE; only `poll` takes
+// `&self.__cN`). The relaxation is therefore achieved WITHOUT weakening the check — we did NOT stop it
+// firing; the safe poll-formed case simply never appears in the constructor body it scans.
 fn checkNoSelfBorrow(low: *Lowerer, fd: ast.FnDecl, ctor_body: []const ast.Stmt) Error!void {
     for (ctor_body) |s| {
         if (stmtFormsSelfBorrow(s)) {
