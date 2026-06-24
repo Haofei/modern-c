@@ -1,0 +1,36 @@
+// EXPECT: E_DUPLICATE_LOCAL
+// Companion to bad/async_switch_nullable_{bind,local}_shadow.mc: the nullable switch subject is behind
+// a `const` qualifier (`const ?*mut i32`). Sema treats `const ?T` as nullable — `nullableInnerType`
+// (src/sema.zig) peels `.qualified` wrappers before checking — so the bare switch `.bind` (`x =>`)
+// binds the unwrap. The async prepass's `typeIsNullable` must MIRROR that and recurse through
+// `.qualified`; otherwise the subject is mis-recorded non-nullable, the bare `.bind` shadow check is
+// skipped, and the general path (two await-bearing ifs) alpha-renames the colliding outer `x` to a
+// `self.*` field before sema — MASKING E_DUPLICATE_LOCAL and emitting a wrong-code arm (both arms
+// returned the renamed outer `self->x__aN`; the payload local sat MC_UNUSED). Covered for a qualified
+// PARAM subject (`maybe`) here; a qualified typed LOCAL subject resolves the same way.
+import "std/task.mc";
+
+global g_clock: u64 = 0;
+struct ValFut { deadline: u64, val: i32 }
+fn mk_val(deadline: u64, val: i32) -> ValFut {
+    var f: ValFut = uninit;
+    f.deadline = deadline;
+    f.val = val;
+    return f;
+}
+impl Future for ValFut {
+    fn poll(self: *mut ValFut) -> bool { return g_clock >= self.deadline; }
+    fn cancel(self: *mut ValFut) -> void { self.val = 0; }
+}
+fn ValFut_take_result(self: *mut ValFut) -> i32 { return self.val; }
+fn ValFut_cancel(self: *mut ValFut) -> void { self.val = 0; }
+
+async fn qualified_nullable_shadow_general(d: u64, maybe: const ?*mut i32, p: *mut i32, cond: bool) -> usize {
+    let x: *mut i32 = p;                         // still live below
+    if cond { let q: i32 = await mk_val(d, 7); if q == 999 { return 0; } }
+    if cond { let w: i32 = await mk_val(d, 0); if w == 999 { return 0; } }
+    switch maybe {
+        x => { return x as usize; },             // `const ?*mut i32` unwrap `x` shadows live outer `x` -> E_DUPLICATE_LOCAL
+        _ => { return x as usize; },
+    }
+}

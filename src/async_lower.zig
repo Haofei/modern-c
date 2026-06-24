@@ -1412,11 +1412,18 @@ const DupScope = struct {
     }
 };
 
-// Is a declared type syntactically nullable (`?T`)? Used to seed `DupScope` binding nullability so a
-// switch over a bare ref to a nullable param/local is known to bind its `.bind` arm.
+// Is a declared type syntactically nullable (`?T`, possibly behind `const`/`mut` qualifiers)? Used to
+// seed `DupScope` binding nullability so a switch over a bare ref to a nullable param/local is known to
+// bind its `.bind` arm. MIRRORS sema's `nullableInnerType` (src/sema.zig), which peels `.qualified`
+// wrappers before checking — so e.g. `const ?*mut i32` is nullable. Recurse through `.qualified` ONLY
+// (sema unwraps nothing else here).
 fn typeIsNullable(ty: ?ast.TypeExpr) bool {
     const t = ty orelse return false;
-    return t.kind == .nullable;
+    return switch (t.kind) {
+        .nullable => true,
+        .qualified => |node| typeIsNullable(node.child.*),
+        else => false,
+    };
 }
 
 // Validate a whole async fn body: params + top-level body live in ONE scope (matching sema's
@@ -1437,7 +1444,7 @@ fn validateNoDuplicateLocals(low: *Lowerer, params: []const ast.Param, body: ast
             try seen.put(p.name.text, {});
         }
     }
-    for (params) |p| try ds.bind(p.name, p.ty.kind == .nullable);
+    for (params) |p| try ds.bind(p.name, typeIsNullable(p.ty));
     try dupCheckBlockItems(&ds, body);
 }
 
