@@ -25,6 +25,14 @@ import "kernel/core/process.mc";
 
 // Mirrors user/abi.mc MAX_INFLIGHT: the max concurrent in-flight requests (and the hard
 // bound on how many tasks can be parked on completions at once).
+//
+// CAPACITY CONTRACT. This is the GLOBAL in-flight cap — the total number of broker slots shared
+// across EVERY async request kind at once. A per-backend leaf may impose a tighter cap of its own
+// (e.g. kernel/drivers/virtio/virtio_blk_async.mc's BLK_ASYNC_MAX = VRING_QSIZE/3 = 2 reads,
+// descriptor-bound); a request then needs BOTH a free global broker slot AND a free per-backend
+// slot, so the effective concurrency for that kind is min(MAX_INFLIGHT, that backend's cap). The
+// agent-side pump (user/agent_async.mc PUMP_STASH/PUMP_BATCH) is sized == MAX_INFLIGHT so it can
+// always stash every completion the broker may deliver. Keep these in sync if MAX_INFLIGHT changes.
 const MAX_INFLIGHT: usize = 8;
 
 // Returned by async_submit when the MAX_INFLIGHT quota is exhausted.

@@ -57,8 +57,21 @@ const VIRTIO_BLK_DEVICE_ID: u32 = 2;
 const VIRTIO_BLK_T_IN: u32 = 0; // read from disk into memory
 const SECTOR_SIZE: usize = 512;
 const BLK_HDR_SIZE: usize = 16;
-const MAP_LEN: usize = 8; // bounded by MAX_INFLIGHT
 const VRING_QSIZE: u16 = 8;
+
+// CAPACITY CONTRACT (this backend's honest in-flight ceiling).
+// A virtio-blk read is a BLK_DESC_PER_REQ-descriptor chain (header + data + status). The queue has
+// VRING_QSIZE descriptors, so the block backend can have at most VRING_QSIZE / BLK_DESC_PER_REQ =
+// floor(8/3) = 2 reads in flight AT THE DEVICE simultaneously — BLK_ASYNC_MAX. This is a per-backend
+// cap and is DISTINCT from the broker's MAX_INFLIGHT (8), which is the GLOBAL in-flight cap shared
+// across every async request kind (block, tool, sleep, ...). A block read consumes one of the 8
+// broker slots AND one of the BLK_ASYNC_MAX block slots, so block concurrency is min(8, 2) = 2.
+// MAP_LEN sizes the id-map and the DMA buffer pool to exactly this cap, so the pool-claim is the
+// honest back-pressure point and a claimed pool slot always has its 3 descriptors available
+// (BLK_ASYNC_MAX * BLK_DESC_PER_REQ = 6 <= VRING_QSIZE = 8).
+const BLK_DESC_PER_REQ: usize = 3;
+const BLK_ASYNC_MAX: usize = (VRING_QSIZE as usize) / BLK_DESC_PER_REQ; // = 2
+const MAP_LEN: usize = BLK_ASYNC_MAX;
 
 // virtio-mmio interrupt_status bit 0 = the used ring was updated (a buffer completed).
 const VIRTIO_INT_USED: u32 = 0x1;
@@ -219,14 +232,12 @@ export fn blk_read_sector_async(dev: *mut BlkAsyncDev, sector: u64) -> u64 {
         return ASYNC_NO_ID; // broker full — back-pressure
     }
 
-    // Claim a free pool slot. MAP_LEN is sized to the BROKER depth (== MAX_INFLIGHT), so whenever
-    // async_submit handed us a slot above, a pool slot is available too — the pool is never the
-    // binding constraint. The REAL concurrency ceiling is the DESCRIPTOR budget: the queue has
-    // VRING_QSIZE (8) descriptors and each read consumes a 3-descriptor chain, so at most
-    // floor(8/3) = 2 reads can be in flight at the device simultaneously. That limit is enforced
-    // downstream — vq_submit_chain3 returns QueueFull once fewer than 3 descriptors are free — and
-    // we fail closed there (releasing the broker slot). This pool-slot check is just a defensive
-    // belt-and-suspenders (it cannot trip while in-flight ≤ MAP_LEN); release and bail if it does.
+    // Claim a free pool slot. MAP_LEN == BLK_ASYNC_MAX, the descriptor-bound capacity, so this is
+    // the HONEST back-pressure point for the block backend: when both pool slots are taken, 6 of the
+    // 8 descriptors are in use and a third read genuinely cannot be queued. Failing here (rather than
+    // letting vq_submit_chain3 hit QueueFull) keeps the cap explicit and co-located with the
+    // capacity contract above. A claimed slot always has its 3 descriptors free. Fail closed:
+    // release the broker slot we reserved and report back-pressure.
     let slot: usize = blk_pool_claim(dev.pool);
     if slot >= MAP_LEN {
         let _c: bool = async_cancel_slot(dev.broker, id);
