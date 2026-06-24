@@ -238,17 +238,37 @@ gates stay green on C and LLVM.
 **4. Ownership across `await` (the hard part — rules spelled out).** Capture analysis (which live
 locals become state fields) must integrate with MC's move/borrow checker:
 - a value **moved before an `await` cannot be used after it**;
-- a **reference that spans an `await` is forbidden in v0** (allowed later only with a lifetime
-  proof that the referent is itself captured into the future — i.e. outlives the suspend);
+- a **reference that spans an `await`** is allowed ONLY when the referent is itself captured into
+  the future (proven to outlive the suspend) AND the borrow is formed at the future's STABLE address
+  — i.e. inside the POLL machine, not the by-value constructor (see E4 below). All other
+  cross-suspend interior borrows are forbidden (fail-closed);
 - **no self-referential future fields** (a field pointing into the same future) unless pinning is
-  introduced — so v0 forbids capturing an interior pointer across an `await`. **ENFORCED**: the
-  transform rejects `E_ASYNC_BORROW_ACROSS_AWAIT` when the generated constructor would form
-  `&self.<field>` (the only place an interior borrow can span a suspend in the v0 lowering shapes —
-  pre-section straight-line or a first-await arg — since the future is returned by value and an
-  interior pointer dangles after the move). Precise + complete for v0: a borrow used only after all
-  awaits (the tail) is in a poll state where `self` is stable, so it is accepted (no false positive).
-  Verified: the rejected pattern segfaulted on LLVM / lucked into copy-elision on C before the check;
-  reject fixture `async_borrow_across_await.mc`, positive fixture `fuzz_async_safe_borrow.mc`;
+  introduced — unsupported. **ENFORCED** by `checkNoSelfBorrow`, which rejects
+  `E_ASYNC_BORROW_ACROSS_AWAIT` when the generated **constructor** forms `&self.<field>`.
+  - **E4 (v0.5 relaxation) — the soundness discriminator is WHERE the `&self.<field>` is formed:**
+    - **CONSTRUCTOR-formed → REJECT (dangling).** The constructor builds `self` as a local and
+      returns it BY VALUE, so any `&self.<field>` it forms points into the transient `self` and
+      dangles after the move. The transform can place such a borrow in the constructor as a
+      **first-await arg** `await g(&x)` (→ `self.__c0 = g(&self.x)`) or — in the LOOP lowering only —
+      a **pre-loop** `let p = &x;` (→ `self.p = &self.x` in the constructor). Both stay rejected.
+      Reject fixtures: `bad/async_borrow_across_await.mc` (pre-loop), `bad/async_borrow_pinning.mc`
+      (self-referential / first-await-arg pinning).
+    - **POLL-MACHINE-formed → ACCEPT (sound).** The driver owns the future by `*mut` and polls it
+      IN PLACE (`run_to_completion`/`drive_irq` never move it between polls), so a `&self.<field>`
+      taken in a poll state is at the future's STABLE address and stays valid across ANY number of
+      subsequent suspends — including the loop back-edge. Two shapes are now allowed and pinned:
+      a **loop-body** borrow `let p = &acc;` dereferenced across the back-edge into the next
+      iteration's await, and a **pre-branch** borrow (the branch lowering REPLAYS the pre-branch
+      straight-line into the poll dispatch, at stable `*mut self`, not the constructor) written
+      through across an arm's await. Positive fixture: `fuzz_async_borrow_captured.mc`. The borrow
+      used only in the tail (after all awaits) remains accepted: `fuzz_async_safe_borrow.mc`.
+  - The check is made PRECISE, not weakened: it still scans only the constructor body (exactly the
+    set of `&self.<field>` taken at the about-to-move address) — no false positives (poll-formed
+    borrows never appear there) and no false negatives (the constructor never legitimately forms
+    `&self.<field>`). The pre-loop case is conservatively rejected even though it COULD be made sound
+    by replaying the borrow-init into the loop head (as the branch lowering already does); that
+    relocation is deferred — E4 stays fail-closed there. Verified: the rejected pattern segfaulted on
+    LLVM / lucked into copy-elision on C before the check;
 - a captured local that owns a **resource / has a destructor** must be cleaned up on completion
   AND on cancellation (ties into rule 3).
 
