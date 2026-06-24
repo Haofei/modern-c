@@ -772,8 +772,15 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
             try emitBuildChild(low, &tb, b.then_steps.items[0], bind_names);
             try setState(low, &tb, then_entry);
         } else {
-            // zero-await then arm: run its straight-line stmts now, then go to the continuation.
-            for (b.then_tail.items) |st| try tb.append(arena, try rewriteStmtParamRefs(low, st, bind_names));
+            // zero-await then arm: run its straight-line stmts now, then go to the continuation. The
+            // arm may END in a `return expr;` (an early exit that doesn't fall through to the common
+            // tail) — route through rewriteRegionBlock so that `return` becomes the DONE transition
+            // (`self.result = expr; self.state = DONE; return true;`), NOT a bare `return <expr>;`
+            // emitted into the bool-returning `poll` (that was E_RETURN_TYPE_MISMATCH on valid source).
+            // The trailing `setState(cont_state)` is then dead-but-harmless after an unconditional
+            // return, and is the correct fall-through edge when the arm does NOT return.
+            const rtb = try rewriteRegionBlock(low, .{ .span = zspan, .items = b.then_tail.items }, bind_names, done_str);
+            for (rtb.items) |st| try tb.append(arena, st);
             try setState(low, &tb, cont_state);
         }
         // else-branch body
@@ -782,7 +789,8 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
             try emitBuildChild(low, &eb, b.else_steps.items[0], bind_names);
             try setState(low, &eb, else_entry);
         } else {
-            for (b.else_tail.items) |st| try eb.append(arena, try rewriteStmtParamRefs(low, st, bind_names));
+            const reb = try rewriteRegionBlock(low, .{ .span = zspan, .items = b.else_tail.items }, bind_names, done_str);
+            for (reb.items) |st| try eb.append(arena, st);
             try setState(low, &eb, cont_state);
         }
         // `if <cond> { tb } else { eb }` as a 2-arm bool switch (same desugar the parser produces).
