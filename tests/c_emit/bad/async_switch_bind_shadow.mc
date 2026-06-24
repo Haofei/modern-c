@@ -1,11 +1,13 @@
 // EXPECT: E_DUPLICATE_LOCAL
-// A switch arm's `.tag_bind` payload ALWAYS binds (the subject is a union/Result), so a payload name
-// that shadows a STILL-LIVE same-named outer binding is E_DUPLICATE_LOCAL under MC's no-shadow rule
-// — exactly as a non-async fn reports. The async pre-sema transforms no longer model switch-pattern
-// binding (sema is authoritative) AND the alpha-renamer no longer renames switch-arm pattern names,
-// so this invalid shadowing is NOT masked: the program reaches sema, which rejects it (the renamer
-// change must not re-accept what non-async rejects). The disjoint-scope reuse stays VALID — see the
-// positive fixtures fuzz_async_shadow_pattern.mc / fuzz_async_switch_pattern_sema.mc.
+// A switch arm's `.tag_bind` payload ALWAYS binds (the subject is a union/Result) — INDEPENDENT of the
+// subject type — so a payload name that shadows a STILL-LIVE same-named outer binding is
+// E_DUPLICATE_LOCAL under MC's no-shadow rule, exactly as a non-async fn reports. This is the FAST-path
+// shape (one straight-line await then the switch); its general-path companion (where the outer is
+// alpha-renamed away pre-sema) is bad/async_switch_bind_shadow_general.mc. `validateNoDuplicateLocals`
+// dup-checks a single-pattern `.tag_bind` payload PRE-rename, so this invalid shadowing is rejected on
+// BOTH paths and is never masked (the renamer must not re-accept what non-async rejects). The
+// disjoint-scope reuse stays VALID — see the positive fixtures fuzz_async_shadow_pattern.mc /
+// fuzz_async_switch_pattern_sema.mc.
 import "std/task.mc";
 
 global g_clock: u64 = 0;

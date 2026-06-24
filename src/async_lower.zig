@@ -1461,18 +1461,32 @@ fn dupCheckStmt(ds: *DupScope, s: ast.Stmt) Error!void {
             if (node.else_block) |eb| try dupCheckBlock(ds, eb);
         },
         .@"switch" => |sw| {
-            // Whether a switch arm's `.bind`/`.tag_bind` BINDS a local is TYPE-DEPENDENT and thus
-            // undeterminable here, PRE-sema: sema binds a `.bind` ONLY for a NULLABLE subject (the
-            // unwrap); a NON-nullable `switch n { x => ... }` does NOT bind `x`. A multi-pattern arm
-            // with a binding is E_SWITCH_MULTI_BINDING_ARM (and binds nothing). Pre-binding every
-            // pattern here mis-rejected the valid non-nullable form as E_DUPLICATE_LOCAL and masked
-            // sema's E_SWITCH_MULTI_BINDING_ARM on `ok(x), err(x) => ...`. So DON'T model switch-pattern
-            // binding here — sema (which has the subject type) is authoritative for switch arms,
-            // including rejecting a bind/tag_bind that shadows a still-live outer name (E_DUPLICATE_LOCAL
-            // — its no-shadow rule) and a multi-binding arm (E_SWITCH_MULTI_BINDING_ARM). We still
-            // recurse into each arm body in its own child frame so a genuine NESTED `let` is dup-checked.
+            // Switch arm binding-ness is mostly TYPE-DEPENDENT and deferred to sema, with ONE exception.
+            // A bare `.bind` IS type-dependent: sema binds it ONLY for a NULLABLE subject (the unwrap); a
+            // NON-nullable `switch n { x => ... }` does NOT bind `x`. So we must NOT pre-bind a `.bind`
+            // (pre-binding mis-rejected the valid non-nullable form as E_DUPLICATE_LOCAL). A MULTI-pattern
+            // arm with a binding is E_SWITCH_MULTI_BINDING_ARM (binding nothing) — pre-binding masks that
+            // with E_DUPLICATE_LOCAL — so multi-pattern arms also defer to sema entirely.
+            //
+            // BUT a SINGLE-pattern `.tag_bind` (`ok(x)`) is a union-payload destructure that ALWAYS binds,
+            // INDEPENDENT of the subject type — it is NOT type-dependent. The general path alpha-renames
+            // outer locals BEFORE sema, which destroys sema's ability to see a tag_bind payload shadowing
+            // a still-live outer local; that collision (E_DUPLICATE_LOCAL in non-async) AND the resulting
+            // SILENT MISCOMPILE (the arm body's payload read alpha-renames to the OUTER carrier, not the
+            // payload) would both be masked. So we dup-check a single-pattern `.tag_bind` payload here,
+            // pre-rename — restoring parity and ensuring the only miscompiling shape (a live outer
+            // collision) is rejected before the renamer can mis-resolve the payload read. On valid input
+            // (no live outer collision) the renamer's "leave the payload name original" is then sound: its
+            // body read finds no live frame entry and stays the payload. We still recurse into each arm
+            // body in its own child frame so a genuine NESTED `let` is dup-checked.
             for (sw.arms) |arm| {
                 try ds.push();
+                if (arm.patterns.len == 1) {
+                    switch (arm.patterns[0].kind) {
+                        .tag_bind => |tb| try ds.bind(tb.binding),
+                        else => {},
+                    }
+                }
                 switch (arm.body) {
                     .block => |b| try dupCheckBlockItems(ds, b),
                     .expr => {},
@@ -1620,9 +1634,12 @@ fn renameStmt(rs: *RenameScope, s: ast.Stmt) Error!ast.Stmt {
 // Rename a switch arm's patterns. A `.bind`/`.tag_bind` binding is LEFT ORIGINAL and NOT bound in the
 // arm frame: its binding-ness is type-dependent (sema is authoritative), and on valid (non-shadowing)
 // input the arm body's payload reads stay bare and resolve to the payload without renaming (any outer
-// same-named binding lives in a disjoint, already-popped scope; a still-live collision is rejected by
-// sema's no-shadow rule before reaching here). `.literal` patterns hold an expr that may reference an
-// outer renamed binding — rename it. `.wildcard`/`.tag` bind nothing.
+// same-named binding lives in a disjoint, already-popped scope, so `lookup` misses it). A STILL-LIVE
+// outer collision — which would otherwise alpha-rename the payload read to the OUTER carrier (a silent
+// miscompile, since sema can no longer see the renamed-away outer name) — is rejected PRE-RENAME by
+// `validateNoDuplicateLocals` (it dup-checks a single-pattern `.tag_bind` payload, which always binds),
+// so it never reaches here. `.literal` patterns hold an expr that may reference an outer renamed
+// binding — rename it. `.wildcard`/`.tag` bind nothing.
 fn renamePatterns(rs: *RenameScope, pats: []const ast.Pattern) Error![]ast.Pattern {
     const arena = rs.arena();
     var out = try arena.alloc(ast.Pattern, pats.len);
