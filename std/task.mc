@@ -19,9 +19,14 @@
 // children, so they nest. `*dyn` dispatch is excluded from `#[irq_context]`/`#[bounded]`, so
 // this vocabulary is for task/agent context, never an ISR.
 
-// The core abstraction. `poll` advances the future and returns true once complete.
+// The core abstraction. `poll` advances the future and returns true once complete; `cancel`
+// drops a still-pending future, releasing any in-flight resource it holds (a broker slot, a child
+// future). `cancel` MUST be idempotent and a no-op once the future is complete — after a winner is
+// decided a combinator cancels the type-erased LOSER through this vtable slot (E1). `*dyn` dispatch
+// is excluded from `#[irq_context]`/`#[bounded]`, so this vocabulary is task/agent context only.
 trait Future {
     fn poll(self: *mut Self) -> bool;
+    fn cancel(self: *mut Self) -> void;
 }
 
 // ---- leaf: a request id mapped to a pending future (the broker seam, kept pure) ----
@@ -56,11 +61,17 @@ impl Future for SlotFuture {
         self.ready = (self.done)(self.id);
         return self.ready;
     }
+    // Cancel a still-pending SlotFuture: release its in-flight slot via the INJECTED `cancel`
+    // function pointer (the struct field, also named `cancel` — `self.cancel` reads the field, the
+    // method is reached via the vtable). No-op once `ready` (its slot was already consumed by
+    // completion). Idempotent: after a cancel the caller must not poll/take_result this future again.
+    fn cancel(self: *mut SlotFuture) -> void {
+        if self.ready { return; }
+        (self.cancel)(self.id);
+    }
 }
 
-// Cancel a still-pending SlotFuture: release its in-flight slot via the injected `cancel`.
-// No-op once the future is `ready` (its slot was already consumed by completion). Idempotent
-// at the leaf: after a cancel the caller must not poll/take_result this future again.
+// Free-function alias kept for callers that hold a concrete SlotFuture; mirrors the trait method.
 export fn slot_future_cancel(s: *mut SlotFuture) -> void {
     if s.ready { return; }
     (s.cancel)(s.id);
@@ -89,12 +100,21 @@ impl Future for Join2 {
         if !self.bd { self.bd = self.b.poll(); }
         return self.ad && self.bd;
     }
+    // Drop both children through the vtable. Each child's own `cancel` is a no-op if already
+    // complete, so cancelling a partially-done join only releases the still-pending arm.
+    fn cancel(self: *mut Join2) -> void {
+        self.a.cancel();
+        self.b.cancel();
+    }
 }
 
 // ---- combinator: race2 — complete when EITHER child completes ----
 //
-// `winner` records which finished first (0 = a, 1 = b; -1 while undecided). The loser is left
-// untouched — cancellation is a Phase-B concern (it needs the broker to drop the in-flight op).
+// `winner` records which finished first (0 = a, 1 = b; -1 while undecided). When a winner is
+// decided, the type-erased LOSER is CANCELLED through the `Future` vtable (E1: `cancel` is now a
+// trait method), so the loser's in-flight resource — e.g. a broker MAX_INFLIGHT slot — is reclaimed
+// rather than leaked. This is the cancellation-dependent agent primitive: "race two tool calls,
+// cancel the loser" (timeout is the same shape — race the op against a deadline future).
 struct Race2 {
     a: *mut dyn Future,
     b: *mut dyn Future,
@@ -118,9 +138,16 @@ impl Future for Race2 {
         // gap is fixed — callReturnType resolves a dispatch call's type, so the if/switch subject
         // lowers). No hoist needed.
         if self.winner >= 0 { return true; }
-        if self.a.poll() { self.winner = 0; return true; }
-        if self.b.poll() { self.winner = 1; return true; }
+        if self.a.poll() { self.winner = 0; self.b.cancel(); return true; }
+        if self.b.poll() { self.winner = 1; self.a.cancel(); return true; }
         return false;
+    }
+    // Drop the race (no winner yet, or to abandon it): cancel BOTH children. Idempotent — the
+    // already-decided winner is `ready` so its `cancel` is a no-op, and the loser was cancelled in
+    // `poll`, so re-cancelling here is harmless.
+    fn cancel(self: *mut Race2) -> void {
+        self.a.cancel();
+        self.b.cancel();
     }
 }
 
@@ -157,10 +184,16 @@ impl Future for Timeout {
         if self.remaining == 0 {
             self.timed_out = true;
             self.done = true;
+            self.inner.cancel();   // budget elapsed: drop the still-pending inner, free its slot
             return true;
         }
         self.remaining = self.remaining - 1;
         return false;
+    }
+    // Drop the timeout: cancel the inner future. No-op if inner already completed (its `cancel`
+    // is idempotent); harmless on the timed-out path where `poll` already cancelled it.
+    fn cancel(self: *mut Timeout) -> void {
+        self.inner.cancel();
     }
 }
 

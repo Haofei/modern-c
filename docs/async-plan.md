@@ -190,12 +190,23 @@ the lowering to the real broker: `ReqFut` (a broker-backed `Future` leaf with th
 one id to an arbitrary `*dyn Future`), and `ReqRace2` (race two requests, cancel the loser).
 Gates: `async-future-test` (an `async fn`'s two awaits resolve against real timer-ISR completions)
 and `async-select-test` (race two in-flight requests, complete the winner, cancel the loser, prove
-`async_active_count` returns to 0) — both backends, in m0. **FOLLOW-UP**: `ReqRace2` is concrete
-over `ReqFut` because cancelling a TYPE-ERASED loser (`*mut dyn Future` in the existing `Race2`/
-`Timeout` combinators) needs `cancel` in the `Future` VTABLE. That is a trait-ABI change: MC has no
-default trait-method bodies (the parser rejects them), so it requires adding a `cancel` method to
-every `impl Future` (~20, hand + generated) — tracked, not yet done. Timeout is the same shape as
-race (race the operation against a deadline request; whichever loses is cancelled).
+`async_active_count` returns to 0) — both backends, in m0. **E1 — DONE (cancel in the `Future`
+vtable).** `cancel(self: *mut Self) -> void` is now a second `Future` trait method, so a TYPE-ERASED
+loser (`*mut dyn Future`) is cancelled through the vtable. The generic `std/task.mc` combinators were
+upgraded: `Race2::poll` cancels the loser when a winner is decided, `Timeout::poll` cancels `inner`
+on the timed-out edge, `Join2`/`Race2`/`Timeout` each gained a `cancel` that drops their children
+(idempotent). Every `impl Future` now provides `cancel`: the hand-written leaves (`SlotFuture`,
+`ReqFut`, `ToolFut`) and combinators, AND every TRANSFORM-GENERATED future — `src/async_lower.zig`
+now routes the generated `f__Fut_cancel` free fn into the `impl Future` record's `cancel` vtable slot
+(`cancelConfMethod`), mirroring how `poll` is wired, so generated futures satisfy the enlarged trait
+on both backends. The trait-ABI/vtable-layout change was verified sound on C and LLVM
+(`fuzz-dyn-ifcond-test`, the full `fuzz-task`/`fuzz-async-*` family, `async-select-test`). `ReqRace2`
+is RETAINED — not because of the vtable gap (resolved) but as the TYPED-i32-RESULT convenience
+(`req_race2_result` reads the winner's concrete `ReqFut`, which a type-erased `Race2` cannot, since
+`poll` does not thread a typed value). `async-select-test` now exercises BOTH the generic dyn `Race2`
+(phase 1, the E1 path) and the concrete `ReqRace2` (phase 2), each proving the loser is cancelled and
+`async_active_count` returns to 0. Timeout is the same shape as race (race the operation against a
+deadline request; whichever loses is cancelled).
 
 **4. Ownership across `await` (the hard part — rules spelled out).** Capture analysis (which live
 locals become state fields) must integrate with MC's move/borrow checker:

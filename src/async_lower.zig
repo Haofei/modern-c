@@ -717,8 +717,11 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     } } });
 
     // The `impl Future for f__Fut` conformance record (so vtable emission picks it up, and sema's
-    // conformance check passes) — mirrors how parseImplBlock appends an `impl_trait` Decl.
-    var conf_methods = try arena.alloc(ast.ImplTraitMethod, 1);
+    // conformance check passes) — mirrors how parseImplBlock appends an `impl_trait` Decl. E1: the
+    // `Future` trait now REQUIRES `cancel` too, so the record carries BOTH methods. `poll` resolves
+    // to the impl method `f__Fut__poll`; `cancel` resolves to the generated free fn `f__Fut_cancel`
+    // emitted below (a vtable slot may name any existing fn symbol — same as `poll`'s mangled name).
+    var conf_methods = try arena.alloc(ast.ImplTraitMethod, 2);
     conf_methods[0] = .{
         .name = id("poll"),
         .mangled = poll_method_name,
@@ -726,6 +729,7 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
         .params = poll_params,
         .return_type = try nameType(arena, "bool"),
     };
+    conf_methods[1] = try cancelConfMethod(low, info, fut_type);
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .impl_trait = .{
         .trait_name = id("Future"),
         .type_name = id(fut_type),
@@ -753,8 +757,9 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // not yet built), so cancel walks just the CURRENT state's child via `<childFutType>_cancel`,
     // then marks DONE (state = done_state). DONE makes it idempotent: a later poll early-returns
     // true and a later cancel finds no active child — no double-free. States >= tail_state hold no
-    // active child, so they fall through to the DONE store. This is a PLAIN free fn (not a trait
-    // method) — it is NOT added to the `impl Future` record. ----
+    // active child, so they fall through to the DONE store. E1: this free fn is ALSO wired into the
+    // `impl Future` record above (as the `cancel` vtable slot), so a generated future satisfies the
+    // `Future` trait that now requires `cancel` — see `cancelConfMethod`. ----
     var cn_params = try arena.alloc(ast.Param, 1);
     cn_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
     var cn_body: std.ArrayList(ast.Stmt) = .empty;
@@ -966,8 +971,8 @@ fn lowerAsyncLoopFn(
         .is_const = false,
     } } });
 
-    // `impl Future for f__Fut` conformance record.
-    var conf_methods = try arena.alloc(ast.ImplTraitMethod, 1);
+    // `impl Future for f__Fut` conformance record (E1: carries both `poll` and `cancel`).
+    var conf_methods = try arena.alloc(ast.ImplTraitMethod, 2);
     conf_methods[0] = .{
         .name = id("poll"),
         .mangled = poll_method_name,
@@ -975,6 +980,7 @@ fn lowerAsyncLoopFn(
         .params = poll_params,
         .return_type = try nameType(arena, "bool"),
     };
+    conf_methods[1] = try cancelConfMethod(low, info, fut_type);
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .impl_trait = .{
         .trait_name = id("Future"),
         .type_name = id(fut_type),
@@ -1011,6 +1017,24 @@ fn lowerAsyncLoopFn(
         .is_const = false,
         .exported = fd.exported,
     } } });
+}
+
+// E1: build the `cancel` entry of a generated future's `impl Future` record. It points the vtable
+// `cancel` slot at the generated free fn `f__Fut_cancel` (`info.cancel`), emitted separately by the
+// straight-line / loop lowering. Signature mirrors that free fn: `fn cancel(self: *mut f__Fut) ->
+// void`. A vtable slot may name any existing fn symbol (the `poll` slot already names the mangled
+// `f__Fut__poll`), so the generated future satisfies the `Future` trait without a second fn body.
+fn cancelConfMethod(low: *Lowerer, info: AsyncInfo, fut_type: []const u8) Error!ast.ImplTraitMethod {
+    const arena = low.arena;
+    var cancel_params = try arena.alloc(ast.Param, 1);
+    cancel_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
+    return .{
+        .name = id("cancel"),
+        .mangled = info.cancel,
+        .self_mode = .by_mut_ptr,
+        .params = cancel_params,
+        .return_type = try nameType(arena, "void"),
+    };
 }
 
 // Split a `while` loop body into a leading await-run (-> `steps`) and a straight-line tail

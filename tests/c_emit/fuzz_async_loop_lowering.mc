@@ -38,6 +38,7 @@ impl Future for ValFut {
         }
         return false;
     }
+    fn cancel(self: *mut ValFut) -> void { if self.held { self.held = false; g_open = g_open - 1; } }  // E1
 }
 fn ValFut_take_result(self: *mut ValFut) -> i32 { return self.val; }
 fn ValFut_cancel(self: *mut ValFut) -> void { if self.held { self.held = false; g_open = g_open - 1; } }
@@ -87,6 +88,7 @@ impl Future for sumn__Fut {
         return false;   // unreachable (the while-true only exits via an inner return), but the
                         // return checker doesn't special-case `while true` — keep it satisfied.
     }
+    fn cancel(self: *mut sumn__Fut) -> void { sumn__Fut_cancel(self); }   // E1
 }
 fn sumn__Fut_take_result(self: *mut sumn__Fut) -> i32 { return self.result; }
 // cancel: only state 1 holds a live child (the in-flight iteration await).

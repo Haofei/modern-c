@@ -18,6 +18,7 @@ fn mk_val(deadline: u64, val: i32) -> ValFut {
 }
 impl Future for ValFut {
     fn poll(self: *mut ValFut) -> bool { return g_clock >= self.deadline; }
+    fn cancel(self: *mut ValFut) -> void { self.val = 0; }   // E1: leaf cancel (no real slot here)
 }
 fn ValFut_take_result(self: *mut ValFut) -> i32 { return self.val; }
 fn ValFut_cancel(self: *mut ValFut) -> void { self.val = 0; }   // (uses self; cancel unused in this run)

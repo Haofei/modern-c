@@ -30,20 +30,24 @@ export fn task_run() -> u32 {
     var j: Join2 = uninit; join2_init(&j, &s1, &s2);
     if run_to_completion(&j, tick_idle) == 5 { acc = acc ^ 0x01; }
 
-    // race2: deadlines 7 and 2 -> b wins at tick 2
-    g_clock = 0;
+    // race2: deadlines 7 and 2 -> b wins at tick 2. E1: the type-erased LOSER (r1, still pending)
+    // is CANCELLED through the Future vtable when b wins -> cancel_at(7) fires exactly once.
+    g_clock = 0; g_canceled = 0; g_last_cancel = 0;
     var r1: SlotFuture = uninit; slot_future_init(&r1, 7, done_at, cancel_at);
     var r2: SlotFuture = uninit; slot_future_init(&r2, 2, done_at, cancel_at);
     var rc: Race2 = uninit; race2_init(&rc, &r1, &r2);
     if run_to_completion(&rc, tick_idle) == 2 { acc = acc ^ 0x02; }
     if race2_winner(&rc) == 1 { acc = acc ^ 0x04; }
+    if g_canceled == 1 && g_last_cancel == 7 { acc = acc ^ 0x80; }  // loser cancelled via vtable
 
-    // timeout that FIRES: inner deadline 100, budget 4 ticks
-    g_clock = 0;
+    // timeout that FIRES: inner deadline 100, budget 4 ticks. E1: on the timed-out edge the inner
+    // (still pending) is CANCELLED through the vtable -> cancel_at(100) fires once.
+    g_clock = 0; g_canceled = 0; g_last_cancel = 0;
     var slow: SlotFuture = uninit; slot_future_init(&slow, 100, done_at, cancel_at);
     var to: Timeout = uninit; timeout_init(&to, &slow, 4);
     run_to_completion(&to, tick_idle);
     if timeout_timed_out(&to) { acc = acc ^ 0x08; }
+    if g_canceled == 1 && g_last_cancel == 100 { acc = acc ^ 0x100; }  // inner cancelled via vtable
 
     // timeout that does NOT fire: inner deadline 2, budget 10
     g_clock = 0;
@@ -71,7 +75,8 @@ export fn task_run() -> u32 {
     slot_future_cancel(&rdy);                         // no-op: already ready, slot consumed
     if g_canceled == 1 && g_last_cancel == 50 { acc = acc ^ 0x40; }  // cancel fired once, for pend's id
 
-    // 0x7F = six combinator/executor checks + the cancel check. Entry-mode contract: 1 = pass.
-    if acc != 0x7F { return 0; }
+    // 0x1FF = six combinator/executor checks + the cancel check + the two E1 vtable-cancel checks
+    // (Race2 loser, Timeout inner). Entry-mode contract: 1 = pass.
+    if acc != 0x1FF { return 0; }
     return 1;
 }

@@ -11,7 +11,7 @@ fn tick_idle() -> void { g_clock = g_clock + 1; }
 // A leaf future yielding a Result<i32,i32>: err(v) if v < 0, else ok(v). Uniform leaf ABI.
 struct RFut { deadline: u64, v: i32 }
 fn mk(deadline: u64, v: i32) -> RFut { var f: RFut = uninit; f.deadline = deadline; f.v = v; return f; }
-impl Future for RFut { fn poll(self: *mut RFut) -> bool { return g_clock >= self.deadline; } }
+impl Future for RFut { fn poll(self: *mut RFut) -> bool { return g_clock >= self.deadline; } fn cancel(self: *mut RFut) -> void { self.v = 0; } }
 fn RFut_take_result(self: *mut RFut) -> Result<i32, i32> {
     if self.v < 0 { return err(self.v); }
     return ok(self.v);

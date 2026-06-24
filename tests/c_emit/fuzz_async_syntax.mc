@@ -49,6 +49,11 @@ impl Future for ValFut {
         }
         return false;
     }
+    // E1: `Future` now requires `cancel`. Drop releases the held slot exactly once (mirrors the
+    // free `ValFut_cancel` the generated futures call by name on their child leaves).
+    fn cancel(self: *mut ValFut) -> void {
+        if self.held { self.held = false; g_open = g_open - 1; }
+    }
 }
 fn ValFut_take_result(self: *mut ValFut) -> i32 { return self.val; }
 fn ValFut_cancel(self: *mut ValFut) -> void {

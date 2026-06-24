@@ -20,6 +20,7 @@ fn valfuture_init(f: *mut ValFuture, deadline: u64, val: i32) -> void {
 }
 impl Future for ValFuture {
     fn poll(self: *mut ValFuture) -> bool { return g_clock >= self.deadline; }
+    fn cancel(self: *mut ValFuture) -> void { self.val = 0; }   // E1: leaf has no slot; clear on drop
 }
 fn valfuture_take_result(f: *mut ValFuture) -> i32 { return f.val; } // valid once, after poll()==true
 
@@ -39,6 +40,11 @@ impl Future for FetchFuture {
             self.state = 1;
         }
         return true;
+    }
+    // E1: walk the active child (state 0 holds the live `child`), then mark done (state 1).
+    fn cancel(self: *mut FetchFuture) -> void {
+        if self.state == 0 { ValFuture.cancel(&self.child); }
+        self.state = 1;
     }
 }
 fn fetch_take_result(f: *mut FetchFuture) -> i32 { return f.result; }
@@ -70,6 +76,12 @@ impl Future for SumFuture {
             self.state = 2;
         }
         return true;
+    }
+    // E1: at most one child is live at a time — state 0 holds `fa`, state 1 holds `fb`.
+    fn cancel(self: *mut SumFuture) -> void {
+        if self.state == 0 { FetchFuture.cancel(&self.fa); }
+        if self.state == 1 { FetchFuture.cancel(&self.fb); }
+        self.state = 2;
     }
 }
 fn sum_take_result(f: *mut SumFuture) -> i32 { return f.result; }

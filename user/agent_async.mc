@@ -173,6 +173,11 @@ impl Future for ToolFut {
         }
         return false;
     }
+    // Drop / lost-race cleanup through the vtable (E1 — `Future` now requires `cancel`): delegate
+    // to the free fn `ToolFut_cancel`, which submits a CANCEL for the in-flight id. Idempotent.
+    fn cancel(self: *mut ToolFut) -> void {
+        ToolFut_cancel(self);
+    }
 }
 
 // Free-function poll (the leaf ABI's `poll`), so callers in other modules can drive a bare ToolFut

@@ -47,6 +47,7 @@ impl Future for SlotLeaf {
         }
         return false;
     }
+    fn cancel(self: *mut SlotLeaf) -> void { if self.held { self.held = false; slot_release(); } }  // E1
 }
 fn slotleaf_take_result(f: *mut SlotLeaf) -> i32 { return f.val; }
 fn slotleaf_cancel(f: *mut SlotLeaf) -> void { if f.held { f.held = false; slot_release(); } } // drop releases
@@ -73,6 +74,7 @@ impl Future for login__Fut {
         }
         return true;
     }
+    fn cancel(self: *mut login__Fut) -> void { login__Fut_cancel(self); }   // E1
 }
 fn login__Fut_take_result(self: *mut login__Fut) -> i32 { return self.result; }
 fn login__Fut_cancel(self: *mut login__Fut) -> void {
@@ -104,6 +106,7 @@ impl Future for fetch__Fut {
         }
         return true;
     }
+    fn cancel(self: *mut fetch__Fut) -> void { fetch__Fut_cancel(self); }   // E1
 }
 fn fetch__Fut_take_result(self: *mut fetch__Fut) -> i32 { return self.result; }
 fn fetch__Fut_cancel(self: *mut fetch__Fut) -> void {
@@ -147,6 +150,7 @@ impl Future for flow__Fut {
         }
         return true;
     }
+    fn cancel(self: *mut flow__Fut) -> void { flow__Fut_cancel(self); }   // E1
 }
 fn flow__Fut_take_result(self: *mut flow__Fut) -> i32 { return self.result; }
 // cancel walks ONLY the currently-active child (the one for the current state). With lazy

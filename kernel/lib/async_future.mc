@@ -68,12 +68,22 @@ impl Future for ReqFut {
         }
         return false;
     }
+    // Drop a still-pending request: free its broker slot (E1 — `cancel` is now in the Future vtable,
+    // so a type-erased `*mut dyn Future` over a ReqFut can be cancelled by the generic combinators).
+    // No-op once `ready` (the slot was already consumed by completion). Idempotent.
+    fn cancel(self: *mut ReqFut) -> void {
+        if !self.ready {
+            let _freed: bool = async_cancel_slot(self.b, self.id);
+        }
+    }
 }
 
 export fn ReqFut_take_result(self: *mut ReqFut) -> i32 {
     return self.result;
 }
 
+// Free-function alias kept for concrete callers (and the generated async cancel ABI); mirrors the
+// trait method. The type-erased path goes through the vtable `cancel` above.
 export fn ReqFut_cancel(self: *mut ReqFut) -> void {
     if !self.ready {
         let _freed: bool = async_cancel_slot(self.b, self.id);
@@ -86,8 +96,11 @@ export fn ReqFut_cancel(self: *mut ReqFut) -> void {
 // reclaimed rather than leaked. `winner` records which finished first (0 = a, 1 = b; -1 while
 // undecided). This is the cancellation-dependent primitive an agent needs to race two tool calls
 // (or to time one out: race the operation against a deadline request — whichever loses is
-// cancelled). Concrete over `ReqFut` (not `*mut dyn Future`): cancelling a type-erased loser needs
-// `cancel` in the `Future` vtable, a trait-ABI change tracked as a follow-up (docs/async-plan.md).
+// cancelled). E1 RESOLVED the vtable gap: `cancel` is now a `Future` trait method, so the generic
+// `std/task.mc` `Race2` over `*mut dyn Future` also cancels its loser (see async_select_demo, which
+// exercises both). `ReqRace2` is RETAINED as the TYPED-RESULT convenience: it reads the winner's
+// `i32` result from the concrete `ReqFut` leaf (`req_race2_result`), which a type-erased `Race2`
+// cannot — `poll` does not thread a typed value (see std/task.mc's "no generic poll result" note).
 struct ReqRace2 {
     a: *mut ReqFut,
     b: *mut ReqFut,
@@ -118,6 +131,13 @@ impl Future for ReqRace2 {
             return true;
         }
         return false;
+    }
+    // Drop the race: cancel both leaves (E1 — `Future` now requires `cancel`). Idempotent: the
+    // decided winner is `ready` (no-op) and the loser was cancelled in `poll`, so re-cancelling
+    // here is harmless. A still-undecided race (dropped before any winner) frees both slots.
+    fn cancel(self: *mut ReqRace2) -> void {
+        ReqFut_cancel(self.a);
+        ReqFut_cancel(self.b);
     }
 }
 
