@@ -236,6 +236,26 @@ fn arrayElemTypeName(t: ast.TypeExpr) ?[]const u8 {
     };
 }
 
+// E2: the bare CARRIER type name a PARAM type denotes for await-base resolution. Peels the pointer/
+// qualifier wrappers a param commonly carries (`*mut T`, `*T`, `[*]T`, `mut T`, slices) so that a
+// param declared `*mut [N]Fut` / `*mut Ctx` resolves to its underlying carrier:
+//   - lands on a bare `name`  -> that name (a struct/future type; lets `await p.fut` resolve),
+//   - lands on an `array`     -> the ELEMENT type name (lets `await p[i]` resolve, matching how a
+//                                struct's array FIELD is recorded under the field name).
+// This is the same convention `structTypeOf` consumes for `.member` (struct) and `.index` (element)
+// bases, so a param works uniformly whether the future lives behind a pointer or directly.
+fn paramCarrierTypeName(t: ast.TypeExpr) ?[]const u8 {
+    return switch (t.kind) {
+        .name => |n| n.text,
+        .array => |a| typeName(a.child.*),
+        .qualified => |q| paramCarrierTypeName(q.child.*),
+        .pointer => |p| paramCarrierTypeName(p.child.*),
+        .raw_many_pointer => |p| paramCarrierTypeName(p.child.*),
+        .slice => |s| paramCarrierTypeName(s.child.*),
+        else => null,
+    };
+}
+
 pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter) Error!ast.Module {
     // `await` is ONLY valid inside an `async fn` — the transform rewrites those away. Any `await`
     // surviving in a non-async fn would reach sema as an unhandled `await_expr` (a compiler crash),
@@ -417,7 +437,10 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // `await arr[i]`) can resolve the awaited future's CONCRETE type via the struct-field map.
     low.param_types.clearRetainingCapacity();
     for (fd.params) |p| {
-        if (typeName(p.ty)) |tn| try low.param_types.put(p.name.text, tn);
+        // Peel pointer/qualifier wrappers and map an array param to its element type, so both a
+        // struct/future behind a pointer (`await p.fut`) and a (pointer-to-)array param element
+        // (`await p[i]`) resolve — matching the E_ASYNC_AWAIT_UNRESOLVED message's promise.
+        if (paramCarrierTypeName(p.ty)) |tn| try low.param_types.put(p.name.text, tn);
     }
 
     // An `async fn` suspends (returns `pending` up the poll chain) and is driven through `*dyn`

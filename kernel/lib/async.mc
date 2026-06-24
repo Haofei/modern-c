@@ -10,15 +10,17 @@
 // is fixed-size and STACKFUL by nature (each parked task holds its own kernel/user stack), so
 // concurrency is quota-bound by MAX_INFLIGHT.
 //
-// SCOPE: Phase B is COOPERATIVE ONLY. `async_complete` is called from another TASK, not from
-// an interrupt, so `async_await`'s check-then-park is race-free (control only yields AT
-// `wq_wait`). Driving `async_complete` from a device interrupt (virtio-blk/net) is Phase C, and
-// it requires TWO things this module does not yet have: (1) the IRQ wake path must stay IRQ-safe
-// (no heap, no blocking, no dynamic dispatch — `async_complete` already only marks state and
-// wakes one waiter), and (2) `async_await` must add an IRQ-off critical section that enqueues
-// the waiter THEN re-checks `ready`, or a completion arriving between the check and the enqueue
-// would be a LOST WAKE (the waiter parks on a slot that is already ready). See the contract on
-// `async_await`. Do NOT wire `async_complete` to an ISR until that is in place.
+// SCOPE: BOTH the cooperative path AND the IRQ-driven path now exist (Phase C landed; see
+// async_await_irq below and the async-irq/blk/net gates). `async_complete` may be called either
+// from another TASK (cooperative) or from a device interrupt (virtio-blk/net). The lost-wake race
+// this module guards against: a completion arriving between a waiter's `ready` check and its
+// enqueue would be LOST — the waiter would park on a slot that is already ready and sleep forever.
+// Two things make the IRQ path safe, and both are now in place: (1) the IRQ wake path stays
+// IRQ-safe — `async_complete` only marks state and wakes one waiter (no heap, no blocking, no
+// dynamic dispatch); and (2) `async_await_irq` runs an IRQ-off critical section that enqueues the
+// waiter THEN re-checks `ready`, closing the check-then-park window. The plain cooperative
+// `async_await` remains valid ONLY when `async_complete` cannot fire from an ISR for that slot
+// (control yields only AT `wq_wait`); use `async_await_irq` for any slot an interrupt may complete.
 
 import "kernel/lib/waitqueue.mc";
 import "kernel/core/process.mc";

@@ -250,7 +250,14 @@ export fn futset_push(s: *mut FutSet, f: *mut dyn Future) -> usize {
 
 export fn drive_many(set: *mut FutSet, max_idle: u32,
                      irq_off: fn() -> void, irq_on: fn() -> void, wfi: fn() -> void) -> usize {
-    let n: usize = set.n;
+    // Clamp to the array bound UP FRONT so the FutSet.n invariant is enforced, not merely
+    // tolerated: a manually-built set with n > DRIVE_MANY_MAX is silently capped (the slots past
+    // the bound do not exist), and every loop below can iterate `0..n` without a per-iteration
+    // bounds guard.
+    var n: usize = set.n;
+    if n > DRIVE_MANY_MAX {
+        n = DRIVE_MANY_MAX;
+    }
     var done: [DRIVE_MANY_MAX]bool = uninit;
     var i: usize = 0;
     while i < DRIVE_MANY_MAX {
@@ -267,16 +274,15 @@ export fn drive_many(set: *mut FutSet, max_idle: u32,
         var remaining: usize = 0;
         var k: usize = 0;
         while k < n {
-            if k < DRIVE_MANY_MAX {
-                if !done[k] {
-                    let f: *mut dyn Future = set.fs[k];
-                    if f.poll() {
-                        done[k] = true;
-                        completed = completed + 1;
-                        progressed = true;
-                    } else {
-                        remaining = remaining + 1;
-                    }
+            // n is clamped to DRIVE_MANY_MAX above, so set.fs[k]/done[k] are always in bounds.
+            if !done[k] {
+                let f: *mut dyn Future = set.fs[k];
+                if f.poll() {
+                    done[k] = true;
+                    completed = completed + 1;
+                    progressed = true;
+                } else {
+                    remaining = remaining + 1;
                 }
             }
             k = k + 1;
@@ -299,12 +305,10 @@ export fn drive_many(set: *mut FutSet, max_idle: u32,
                     // vtable `cancel` -> reclaims its broker slot) so no slot leaks, then return.
                     var j: usize = 0;
                     while j < n {
-                        if j < DRIVE_MANY_MAX {
-                            if !done[j] {
-                                let fc: *mut dyn Future = set.fs[j];
-                                fc.cancel();
-                                done[j] = true;
-                            }
+                        if !done[j] {
+                            let fc: *mut dyn Future = set.fs[j];
+                            fc.cancel();
+                            done[j] = true;
                         }
                         j = j + 1;
                     }
