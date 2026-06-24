@@ -10,8 +10,8 @@
 // is concentrated here behind that typed API.
 
 import "virtio.mc";
-import "barrier.mc";
-import "dma.mc";
+import "sync/barrier.mc";
+import "alloc/dma.mc";
 import "time.mc";
 import "math.mc";
 
