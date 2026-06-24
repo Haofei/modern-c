@@ -516,9 +516,14 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "@{s} = external global {s}\n", .{ global.name.text, llvm_ty });
             return;
         }
-        const linkage: []const u8 = if (global.is_const) "constant" else "global";
+        const kind: []const u8 = if (global.is_const) "constant" else "global";
+        // Mirror the C backend's `static` vs external split (lower_c.zig emitGlobal): a plain
+        // `global`/`const` stays module-private (LLVM `internal` linkage), so two separately
+        // compiled units may each define the same name (e.g. `PAGE`) without a link-time
+        // duplicate-symbol error. Only `export global` keeps default (external) linkage.
+        const visibility: []const u8 = if (global.exported) "" else "internal ";
         const init = if (global.init) |expr| try self.emitGlobalInitializer(expr, ty) else try self.zeroInitializer(ty);
-        try self.out.print(self.allocator, "@{s} = {s} {s} {s}\n", .{ global.name.text, linkage, llvm_ty, init });
+        try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ global.name.text, visibility, kind, llvm_ty, init });
     }
 
     fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
