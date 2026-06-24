@@ -2344,6 +2344,25 @@ pub fn build(b: *std.Build) void {
     const llvm_async_select_test_step = b.step("llvm-async-select-test", "LLVM-lowered broker-backed select / cancel-the-loser under QEMU");
     llvm_async_select_test_step.dependOn(&llvm_async_select_test_cmd.step);
 
+    // agent-async-api-test: the AGENT-FACING async API end-to-end. An `async fn` agent does
+    // `let a = await read_async(...); let b = await tool_call_async(...)` plus sleep_async (timeout)
+    // and a timeout-then-CANCEL, driven by pump_run_to_completion over the ToolFut/ToolPump leaves
+    // (user/agent_async.mc) against an in-kernel broker shim with app_run_demo's sys_submit/sys_poll
+    // semantics. ARW + AGENT-ASYNC-API-OK (result 42) proves the awaits resolved over the API and
+    // the cancel reclaimed the broker slot. Both backends.
+    const agent_async_api_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/agent-async-api-test.sh", "zig-out/bin/mcc", "c",
+    });
+    const llvm_agent_async_api_test_cmd = b.addSystemCommand(&.{
+        "bash", "tools/proc/agent-async-api-test.sh", "zig-out/bin/mcc", "llvm",
+    });
+    agent_async_api_test_cmd.step.dependOn(b.getInstallStep());
+    const agent_async_api_test_step = b.step("agent-async-api-test", "agent-facing async API: an async fn agent awaits read_async/tool_call_async + sleep_async + timeout-then-cancel over the ToolFut/ToolPump leaves under QEMU");
+    agent_async_api_test_step.dependOn(&agent_async_api_test_cmd.step);
+    llvm_agent_async_api_test_cmd.step.dependOn(b.getInstallStep());
+    const llvm_agent_async_api_test_step = b.step("llvm-agent-async-api-test", "LLVM-lowered agent-facing async API (ToolFut/ToolPump wrappers) end-to-end under QEMU");
+    llvm_agent_async_api_test_step.dependOn(&llvm_agent_async_api_test_cmd.step);
+
     // async-agent-test: the capstone — an agent in real async/await over the kernel broker.
     // async-fn-awaiting-async-fn (agent -> tool_fetch/tool_read -> ReqFut) resolves two sequential
     // tool calls (page+cfg==42), then TIMES OUT a slow tool call by racing it against a deadline
@@ -3882,6 +3901,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&llvm_async_blk_test_cmd.step);
     m0_step.dependOn(&llvm_async_select_test_cmd.step);
     m0_step.dependOn(&llvm_async_agent_test_cmd.step);
+    m0_step.dependOn(&llvm_agent_async_api_test_cmd.step);
     m0_step.dependOn(&llvm_usched_test_cmd.step);
     m0_step.dependOn(&llvm_heartbeat_test_cmd.step);
     m0_step.dependOn(&llvm_privilege_test_cmd.step);
@@ -4198,6 +4218,7 @@ pub fn build(b: *std.Build) void {
     m0_step.dependOn(&async_blk_test_cmd.step);
     m0_step.dependOn(&async_select_test_cmd.step);
     m0_step.dependOn(&async_agent_test_cmd.step);
+    m0_step.dependOn(&agent_async_api_test_cmd.step);
     m0_step.dependOn(&block_server_test_cmd.step);
     m0_step.dependOn(&fs_server_test_cmd.step);
     m0_step.dependOn(&net_server_test_cmd.step);
