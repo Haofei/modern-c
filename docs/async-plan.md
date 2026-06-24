@@ -257,6 +257,46 @@ locals become state fields) must integrate with MC's move/borrow checker:
 creates a *re-enterable* state that must preserve the loop index/condition across suspension —
 materially harder. Gate v0 with **straight-line + branches**, then add loops.
 
+**E3a/E3b — DONE (`return`/`break`/`continue` inside an await-bearing loop or branch).** v0's loop/
+arm bodies had to FALL THROUGH to the shared continuation / back-edge — a `return` in a branch arm
+and `return`/`break`/`continue` in a loop body were rejected. E3a/E3b lift this by lowering each
+non-fall-through edge to a state transition (`src/async_lower.zig`, `rewriteRegionStmt` /
+`rewriteLoopBodyStmt`, recursing THROUGH non-await inner control flow so a conditional
+`if c { return/break/continue; }` lowers too):
+- `return v` (in a loop body, a branch arm, or the tail) → the terminal DONE transition
+  `self.result = v; self.state = DONE; return true;`.
+- `break` → `self.state = cont_state; continue;` (re-enter the `while true` poll wrapper → the
+  continuation/tail state).
+- `continue` → `self.state = 0; continue;` (re-enter → the loop-head state, which re-checks the
+  condition).
+The emitted `continue;` re-enters the while-true (which checks DONE then dispatches on the NEW
+state), modelling the source edge exactly while skipping the rest of the body block + the back-edge.
+**At-most-one-child-live + cancel-on-exit are preserved:** every such edge lives in a region's
+straight-line code, which runs AFTER that region's await TOOK its result — so NO child is live at
+the edge. Jumping to DONE is a clean exit (a later cancel finds DONE → no active child → no
+double-free; a later poll early-returns true). `continue` re-enters the loop head, which rebuilds
+`__c0` exactly ONCE per entry; `break` builds no child — so no leak and no double-build across the
+back-edge/exit edge. The mid-flight child of a still-SUSPENDED await (the future dropped while
+parked, NOT at a `return`/`break`) is still freed by the generated cancel. An INNER (await-free)
+loop's own `break`/`continue` are NOT rewritten as the outer async loop's edges (the
+`in_inner_loop` guard); a `return` inside it still exits the whole async fn. Gates (both backends,
+in diff-backend): `fuzz-async-return-inregion-test` (early loop return, both-arm returns, normal
+loop-exit return, cancel-mid-loop-before-return) and `fuzz-async-loop-breakcont-test` (break-on-cap,
+never-break exit, continue-skip, cancel-mid-loop). The old `bad/async_loop_break.mc` and
+`bad/async_branch_return_in_arm.mc` reject fixtures now COMPILE and were removed; a new
+`bad/async_loop_nested_await.mc` keeps the still-illegal "await nested in inner control flow"
+(= E3c) rejected with `E_ASYNC_LOOP_UNSUPPORTED`.
+
+**E3c — DEFERRED (nested awaits / loop+branch mixing).** An `await` nested inside an `if` inside a
+`while`, or more than one await-bearing construct in a fn, still rejects (`E_ASYNC_LOOP_UNSUPPORTED`
+/ `E_ASYNC_BRANCH_UNSUPPORTED`). It needs generalizing the state ALLOCATOR from "one contiguous
+range per construct" to a proper per-suspend-point CFG numbering (a suspend point reached by
+multiple edges — a loop back-edge or branch join — must materialize its child exactly once per
+entry, which the flat `if self.state==N` fall-through cannot express for an interior await). The
+E3a/E3b edges are a stepping stone: they already route control to arbitrary states via
+`state=N; continue;`, so the remaining work is the numbering + per-state child-build placement, not
+the edge mechanism.
+
 **6. IRQ context.** `async fn` is forbidden in `#[irq_context]` (it suspends / uses `*dyn`).
 Separately, polling an arbitrary `*dyn Future` from `#[irq_context]` stays forbidden (indirect
 call). A generated `poll()` could in principle be called from IRQ context only if ALL its callees
@@ -278,7 +318,9 @@ are proven IRQ-safe — not worth supporting initially; treat generated futures 
    joining a common continuation; spec `fuzz_async_branch_lowering.mc`, gate `fuzz-async-syntax`.
 5. **Add loops** (preserve index/condition across suspension). **DONE** — poll wrapped in
    `while true` for the back-edge; spec `fuzz_async_loop_lowering.mc`. v0 loop scope: one `while`,
-   body = leading await-run + straight-line, no break/continue/return-in-body, no loop+branch mix.
+   body = leading await-run + straight-line. **E3a/E3b** then added `return`/`break`/`continue`
+   inside the loop/branch body (each maps to a state transition; see §"Control flow across `await`").
+   Still v0: no loop+branch mix and no await nested in inner control flow (= E3c, deferred).
 6. **Add cancellation / resource cleanup** (`cancel`/drop walking child futures + broker
    `async_cancel(id)`). **DONE.**
 7. **Only then add the parser sugar** (`async fn` / `await` keywords). **DONE** (contextual

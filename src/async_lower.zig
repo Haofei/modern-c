@@ -742,19 +742,8 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // (plus the DONE early-return) keeps poll idempotent.
     var tail_body: std.ArrayList(ast.Stmt) = .empty;
     for (tail.items) |stmt| {
-        switch (stmt.kind) {
-            .@"return" => |maybe_expr| {
-                const rexpr = maybe_expr orelse return low.fail(stmt.span, "async v0: `return` must return a value", .{});
-                const rewritten = try rewriteParamRefs(low, rexpr, bind_names);
-                try tail_body.append(arena, assignStmt(try selfMember(arena, "result"), rewritten));
-                try tail_body.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
-                try tail_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } });
-            },
-            else => {
-                const rewritten = try rewriteStmtParamRefs(low, stmt, bind_names);
-                try tail_body.append(arena, rewritten);
-            },
-        }
+        // E3a: a `return` (top-level or nested in non-await control flow) becomes the DONE transition.
+        try tail_body.append(arena, try rewriteRegionStmt(low, stmt, bind_names, done_str));
     }
     try pbody.append(arena, try ifStateEq(arena, cont_state, try tail_body.toOwnedSlice(arena)));
     // Conservative definite-return fallback (unreachable at runtime: state is always DONE or a guarded
@@ -989,8 +978,11 @@ fn lowerAsyncLoopFn(
             try emitBuildChild(low, &blk, loopw.steps.items[j + 1], bind_names);
             try setState(low, &blk, j + 2); // states are 1-based: step j is state j+1
         } else {
-            // LAST body await: run the body straight-line tail, then BACK-EDGE to the loop head.
-            for (loopw.tail.items) |st| try blk.append(arena, try rewriteStmtParamRefs(low, st, bind_names));
+            // LAST body await: run the body straight-line tail (E3a: a `return` inside the body
+            // becomes the DONE transition; E3b: a `break`/`continue` becomes the loop-exit/head
+            // transition), then BACK-EDGE to the loop head. If the body ends in an unconditional
+            // break/continue/return, the `state=0` below is dead but harmless.
+            for (loopw.tail.items) |st| try blk.append(arena, try rewriteLoopBodyStmt(low, st, bind_names, done_str, cont_state));
             try setState(low, &blk, 0);
         }
         try inner.append(arena, try ifStateEq(arena, j + 1, try blk.toOwnedSlice(arena)));
@@ -998,16 +990,9 @@ fn lowerAsyncLoopFn(
     // state cont = CONTINUATION/TAIL.
     {
         var tail_body: std.ArrayList(ast.Stmt) = .empty;
-        for (tail.items) |stmt| switch (stmt.kind) {
-            .@"return" => |maybe_expr| {
-                const rexpr = maybe_expr orelse return low.fail(stmt.span, "async v0: `return` must return a value", .{});
-                const rewritten = try rewriteParamRefs(low, rexpr, bind_names);
-                try tail_body.append(arena, assignStmt(try selfMember(arena, "result"), rewritten));
-                try tail_body.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
-                try tail_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = true } } } });
-            },
-            else => try tail_body.append(arena, try rewriteStmtParamRefs(low, stmt, bind_names)),
-        };
+        // The post-loop tail is straight-line (no break/continue): a `return` becomes the DONE
+        // transition (E3a-consistent; nested returns handled too).
+        for (tail.items) |stmt| try tail_body.append(arena, try rewriteRegionStmt(low, stmt, bind_names, done_str));
         try inner.append(arena, try ifStateEq(arena, cont_state, try tail_body.toOwnedSlice(arena)));
     }
     // Wrap the state chain in `while true { ... }`, then a trailing `return false;` (the return
@@ -1108,12 +1093,11 @@ fn collectLoopBody(low: *Lowerer, blk: ast.Block, steps: *std.ArrayList(AwaitSte
             continue;
         }
         in_tail = true;
-        switch (stmt.kind) {
-            .@"return" => return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: a `return` inside an await-bearing loop body is not supported in async v0", .{}),
-            .@"break" => return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: a `break` inside an await-bearing loop body is not supported in async v0", .{}),
-            .@"continue" => return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: a `continue` inside an await-bearing loop body is not supported in async v0", .{}),
-            else => {},
-        }
+        // E3a/E3b: `return` / `break` / `continue` inside an await-bearing loop body ARE now
+        // supported — lowered by rewriteLoopBodyStmt to a DONE / loop-exit / loop-head transition
+        // (a `break`/`continue` is typically written nested in an `if`, which already flows through
+        // here as a switch and is rewritten recursively). Still reject any await beyond the leading
+        // run (E3c: awaits nested in inner control flow).
         if (stmtContainsAwait(stmt))
             return low.fail(stmt.span, "E_ASYNC_LOOP_UNSUPPORTED: an await-bearing loop body may contain only a LEADING run of `let x = await call;` then straight-line code (no awaits nested in inner loops, switches, or deeper control flow) in async v0", .{});
         try tail.append(arena, stmt);
@@ -1244,8 +1228,8 @@ fn collectArm(low: *Lowerer, blk: ast.Block, field_base: usize, steps: *std.Arra
             continue;
         }
         in_tail = true;
-        if (stmt.kind == .@"return")
-            return low.fail(stmt.span, "E_ASYNC_BRANCH_UNSUPPORTED: a `return` inside an await-bearing if/else arm is not supported in async v0 (the arm must fall through to the shared continuation)", .{});
+        // E3a: a `return` inside an await-bearing arm IS now supported (lowered to the DONE
+        // transition by rewriteRegionStmt). Still reject any await beyond the leading run.
         if (stmtContainsAwait(stmt))
             return low.fail(stmt.span, "E_ASYNC_BRANCH_UNSUPPORTED: in async v0 an if/else arm may contain only a LEADING run of `let x = await call;` then straight-line code (no awaits nested in loops, switches, or deeper control flow)", .{});
         try tail.append(arena, stmt);
@@ -1423,8 +1407,10 @@ fn emitArm(low: *Lowerer, pbody: *std.ArrayList(ast.Stmt), arm_steps: []const Aw
             try emitBuildChild(low, &blk, arm_steps[i + 1], names);
             try setState(low, &blk, entry + i + 1);
         } else {
-            // last await of the arm: run the arm's straight-line stmts, then go to the continuation.
-            for (arm_tail) |st| try blk.append(arena, try rewriteStmtParamRefs(low, st, names));
+            // last await of the arm: run the arm's straight-line stmts (E3a: a `return` inside the
+            // arm becomes the DONE transition), then go to the continuation. If the arm's last stmt
+            // is an unconditional `return`, the `state=cont_state` below is dead but harmless.
+            for (arm_tail) |st| try blk.append(arena, try rewriteRegionStmt(low, st, names, done_str));
             try setState(low, &blk, cont_state);
         }
         try pbody.append(arena, try ifStateEq(arena, entry + i, try blk.toOwnedSlice(arena)));
@@ -1650,4 +1636,135 @@ fn rewriteStmtParamRefs(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(vo
         .@"return" => |e| .{ .span = s.span, .kind = .{ .@"return" = if (e) |x| try rewriteParamRefs(low, x, names) else null } },
         else => s,
     };
+}
+
+// E3a: rewrite a REGION (loop-body / arm) straight-line statement for emission into a poll state,
+// turning any `return v;` — top-level OR nested inside NON-await control flow (a plain `if`/`switch`,
+// inner block, inner loop) — into the terminal DONE transition `self.result = v; self.state = DONE;
+// return true;`. All other stmts get the ordinary captured-name -> `self.*` rewrite. This recurses
+// THROUGH inner control flow so a conditional early `return` (e.g. `if acc >= cap { return acc; }`)
+// lowers correctly; the region's awaits were already split off into states by collectArm/
+// collectLoopBody (they may not contain awaits), so this rewrite only ever wraps await-free code.
+//
+// Soundness: a `return` in a region's straight-line code runs AFTER the region's awaits took their
+// results, so NO child is live at the return — jumping to DONE is a clean exit (a later cancel finds
+// DONE, no active child, no double-free). The transition replaces the `return`'s control flow
+// exactly: `return true` out of `poll` means "future complete", and DONE makes it idempotent.
+fn rewriteRegionStmt(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void), done_str: []const u8) Error!ast.Stmt {
+    const arena = low.arena;
+    switch (s.kind) {
+        .@"return" => |maybe_expr| {
+            const rexpr = maybe_expr orelse return low.fail(s.span, "async v0: `return` must return a value", .{});
+            const rewritten = try rewriteParamRefs(low, rexpr, names);
+            var rb: std.ArrayList(ast.Stmt) = .empty;
+            try rb.append(arena, assignStmt(try selfMember(arena, "result"), rewritten));
+            try rb.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
+            try rb.append(arena, .{ .span = s.span, .kind = .{ .@"return" = .{ .span = s.span, .kind = .{ .bool_literal = true } } } });
+            // A `return` is multiple stmts now; wrap them in a block so the caller sees one stmt.
+            return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try rb.toOwnedSlice(arena) } } };
+        },
+        .block => |b| return .{ .span = s.span, .kind = .{ .block = try rewriteRegionBlock(low, b, names, done_str) } },
+        .unsafe_block => |b| return .{ .span = s.span, .kind = .{ .unsafe_block = try rewriteRegionBlock(low, b, names, done_str) } },
+        .loop => |l| {
+            // An INNER (await-free) loop: rewrite its condition refs + body; a `return` inside it
+            // still jumps to DONE (the enclosing async fn's return), which is correct.
+            const new_iter = if (l.iterable) |it| try rewriteParamRefs(low, it, names) else null;
+            const new_body = try rewriteRegionBlock(low, l.body, names, done_str);
+            var nl = l;
+            nl.iterable = new_iter;
+            nl.body = new_body;
+            return .{ .span = s.span, .kind = .{ .loop = nl } };
+        },
+        .@"switch" => |sw| {
+            // A plain `if`/`switch` (the parser desugars bool-`if` to a 2-arm switch). Rewrite the
+            // subject + each arm body. Arms may be block- or expr-bodied; an expr arm cannot hold a
+            // `return`, so only block arms need the region rewrite.
+            const rsubj = try rewriteParamRefs(low, sw.subject, names);
+            var new_arms = try arena.alloc(ast.SwitchArm, sw.arms.len);
+            for (sw.arms, 0..) |arm, i| {
+                const new_body: ast.SwitchBody = switch (arm.body) {
+                    .block => |b| .{ .block = try rewriteRegionBlock(low, b, names, done_str) },
+                    .expr => |e| .{ .expr = try rewriteParamRefs(low, e, names) },
+                };
+                new_arms[i] = .{ .patterns = arm.patterns, .body = new_body };
+            }
+            return .{ .span = s.span, .kind = .{ .@"switch" = .{ .subject = rsubj, .arms = new_arms } } };
+        },
+        else => return rewriteStmtParamRefs(low, s, names),
+    }
+}
+
+fn rewriteRegionBlock(low: *Lowerer, b: ast.Block, names: *std.StringHashMap(void), done_str: []const u8) Error!ast.Block {
+    var items: std.ArrayList(ast.Stmt) = .empty;
+    for (b.items) |st| try items.append(low.arena, try rewriteRegionStmt(low, st, names, done_str));
+    return .{ .span = b.span, .items = try items.toOwnedSlice(low.arena) };
+}
+
+// E3b: rewrite a loop-BODY straight-line statement. Like `rewriteRegionStmt` (returns -> DONE) but
+// ALSO maps the async loop's own `break`/`continue` to a state jump that re-enters the `while true`
+// poll wrapper:
+//   `break`    -> `self.state = cont_state; continue;`  (exit the loop -> continuation/tail state)
+//   `continue` -> `self.state = 0; continue;`           (loop-head state: re-check the condition)
+// The emitted `continue;` re-enters the while-true, which checks DONE then dispatches on the NEW
+// state — precisely modelling the source edge while skipping the rest of the body block + the
+// back-edge. `in_inner_loop` guards against rewriting an INNER (await-free) loop's own break/continue
+// as the OUTER async loop's exit: inside such a loop those keywords belong to it and pass through
+// unchanged; a `return` inside it still exits the whole async fn (-> DONE), which is correct.
+//
+// Soundness (at-most-one-child-live): a break/continue lives in the body's straight-line code, which
+// runs AFTER the body await took its result, so no child is live. `continue` re-enters at state 0,
+// where the loop head rebuilds __c0 exactly once per entry; `break` builds no child. So no leak and
+// no double-build across the back-edge/exit edge.
+fn rewriteLoopBodyStmt(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void), done_str: []const u8, cont_state: usize) Error!ast.Stmt {
+    return rewriteLoopBodyStmtIn(low, s, names, done_str, cont_state, false);
+}
+
+fn rewriteLoopBodyStmtIn(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void), done_str: []const u8, cont_state: usize, in_inner_loop: bool) Error!ast.Stmt {
+    const arena = low.arena;
+    switch (s.kind) {
+        .@"return" => return rewriteRegionStmt(low, s, names, done_str),
+        .@"break" => {
+            if (in_inner_loop) return s; // belongs to the inner loop
+            var bb: std.ArrayList(ast.Stmt) = .empty;
+            try setState(low, &bb, cont_state);
+            try bb.append(arena, .{ .span = s.span, .kind = .@"continue" });
+            return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try bb.toOwnedSlice(arena) } } };
+        },
+        .@"continue" => {
+            if (in_inner_loop) return s; // belongs to the inner loop
+            var cb: std.ArrayList(ast.Stmt) = .empty;
+            try setState(low, &cb, 0);
+            try cb.append(arena, .{ .span = s.span, .kind = .@"continue" });
+            return .{ .span = s.span, .kind = .{ .block = .{ .span = s.span, .items = try cb.toOwnedSlice(arena) } } };
+        },
+        .block => |b| return .{ .span = s.span, .kind = .{ .block = try rewriteLoopBodyBlock(low, b, names, done_str, cont_state, in_inner_loop) } },
+        .unsafe_block => |b| return .{ .span = s.span, .kind = .{ .unsafe_block = try rewriteLoopBodyBlock(low, b, names, done_str, cont_state, in_inner_loop) } },
+        .loop => |l| {
+            const new_iter = if (l.iterable) |it| try rewriteParamRefs(low, it, names) else null;
+            const new_body = try rewriteLoopBodyBlock(low, l.body, names, done_str, cont_state, true);
+            var nl = l;
+            nl.iterable = new_iter;
+            nl.body = new_body;
+            return .{ .span = s.span, .kind = .{ .loop = nl } };
+        },
+        .@"switch" => |sw| {
+            const rsubj = try rewriteParamRefs(low, sw.subject, names);
+            var new_arms = try arena.alloc(ast.SwitchArm, sw.arms.len);
+            for (sw.arms, 0..) |arm, i| {
+                const new_body: ast.SwitchBody = switch (arm.body) {
+                    .block => |b| .{ .block = try rewriteLoopBodyBlock(low, b, names, done_str, cont_state, in_inner_loop) },
+                    .expr => |e| .{ .expr = try rewriteParamRefs(low, e, names) },
+                };
+                new_arms[i] = .{ .patterns = arm.patterns, .body = new_body };
+            }
+            return .{ .span = s.span, .kind = .{ .@"switch" = .{ .subject = rsubj, .arms = new_arms } } };
+        },
+        else => return rewriteStmtParamRefs(low, s, names),
+    }
+}
+
+fn rewriteLoopBodyBlock(low: *Lowerer, b: ast.Block, names: *std.StringHashMap(void), done_str: []const u8, cont_state: usize, in_inner_loop: bool) Error!ast.Block {
+    var items: std.ArrayList(ast.Stmt) = .empty;
+    for (b.items) |st| try items.append(low.arena, try rewriteLoopBodyStmtIn(low, st, names, done_str, cont_state, in_inner_loop));
+    return .{ .span = b.span, .items = try items.toOwnedSlice(low.arena) };
 }
