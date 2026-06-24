@@ -35,6 +35,59 @@ const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 
 const backend_mod = @import("backend.zig");
 
+// Phase-2c split: pure type-mapping/classification helpers moved verbatim to
+// `lower_llvm_type.zig`. Re-exported here so call sites read unchanged.
+const lower_llvm_type = @import("lower_llvm_type.zig");
+const simpleType = lower_llvm_type.simpleType;
+const exprAsType = lower_llvm_type.exprAsType;
+const isPointerLikeType = lower_llvm_type.isPointerLikeType;
+const isDynTraitLlvmType = lower_llvm_type.isDynTraitLlvmType;
+const alignForward = lower_llvm_type.alignForward;
+const isPointerWidthIntegerTypeName = lower_llvm_type.isPointerWidthIntegerTypeName;
+const isOpaqueAddressGenericName = lower_llvm_type.isOpaqueAddressGenericName;
+const isPayloadDomainGenericName = lower_llvm_type.isPayloadDomainGenericName;
+const libraryScalarLlvmType = lower_llvm_type.libraryScalarLlvmType;
+const typeNameEql = lower_llvm_type.typeNameEql;
+const secretInnerType = lower_llvm_type.secretInnerType;
+const constGetIndexArg = lower_llvm_type.constGetIndexArg;
+const rawScalarTypeName = lower_llvm_type.rawScalarTypeName;
+const literalArrayLenValue = lower_llvm_type.literalArrayLenValue;
+const parseU64Literal = lower_llvm_type.parseU64Literal;
+const integerBits = lower_llvm_type.integerBits;
+const isSignedInteger = lower_llvm_type.isSignedInteger;
+const isFloatType = lower_llvm_type.isFloatType;
+const signedMinLiteral = lower_llvm_type.signedMinLiteral;
+const intrinsicBits = lower_llvm_type.intrinsicBits;
+
+// Phase-2c split: operator/predicate spelling, trap-helper, and literal
+// normalization helpers moved verbatim to `lower_llvm_op.zig`. Re-exported
+// here so call sites read unchanged.
+const lower_llvm_op = @import("lower_llvm_op.zig");
+const binaryIsComparison = lower_llvm_op.binaryIsComparison;
+const comparisonPredicate = lower_llvm_op.comparisonPredicate;
+const floatComparisonPredicate = lower_llvm_op.floatComparisonPredicate;
+const wrappingBuiltinOp = lower_llvm_op.wrappingBuiltinOp;
+const uncheckedBuiltinOp = lower_llvm_op.uncheckedBuiltinOp;
+const trapHelperForCall = lower_llvm_op.trapHelperForCall;
+const trapHelperForKind = lower_llvm_op.trapHelperForKind;
+const normalizedIntLiteral = lower_llvm_op.normalizedIntLiteral;
+const normalizedFloatLiteral = lower_llvm_op.normalizedFloatLiteral;
+const charLiteralValue = lower_llvm_op.charLiteralValue;
+const hexDigit = lower_llvm_op.hexDigit;
+
+// Phase-2c split: atomic-ordering & fence helpers moved verbatim to
+// `lower_llvm_atomic.zig`. Re-exported here so call sites read unchanged.
+const lower_llvm_atomic = @import("lower_llvm_atomic.zig");
+const AtomicOrderContext = lower_llvm_atomic.AtomicOrderContext;
+const atomicOrderingArg = lower_llvm_atomic.atomicOrderingArg;
+const atomicOrderingExpr = lower_llvm_atomic.atomicOrderingExpr;
+const orderingArg = lower_llvm_atomic.orderingArg;
+const atomicLlvmOrdering = lower_llvm_atomic.atomicLlvmOrdering;
+const fenceOrderingForCall = lower_llvm_atomic.fenceOrderingForCall;
+const isAtomicInitCall = lower_llvm_atomic.isAtomicInitCall;
+const isAtomicInitExpr = lower_llvm_atomic.isAtomicInitExpr;
+const atomicInitValue = lower_llvm_atomic.atomicInitValue;
+
 /// Construct the `Backend` registry entry for the LLVM backend. The LLVM
 /// backend is profile-agnostic and has no source-map artifact.
 pub fn mcBackend() backend_mod.Backend {
@@ -242,8 +295,8 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: a
     // STRONG definitions likewise wins over these weak ones.
     try out.appendSlice(allocator, "declare void @llvm.trap()\n");
     const trap_hooks = [_][]const u8{
-        "mc_trap_IntegerOverflow", "mc_trap_DivideByZero",        "mc_trap_InvalidShift",
-        "mc_trap_InvalidRepresentation", "mc_trap_Bounds",        "mc_trap_Assert",
+        "mc_trap_IntegerOverflow",       "mc_trap_DivideByZero", "mc_trap_InvalidShift",
+        "mc_trap_InvalidRepresentation", "mc_trap_Bounds",       "mc_trap_Assert",
         "mc_trap_NullUnwrap",            "mc_trap_Unreachable",
     };
     for (trap_hooks) |hook| {
@@ -4344,9 +4397,9 @@ const LlvmEmitter = struct {
                 "i8"
             else if (std.mem.eql(u8, name.text, "IrqOff"))
                 "i8"
-            // C-ABI varargs cursor. On the RISC-V lp64 ABI `va_list` is a single pointer
-            // (i8*), so the cursor storage is one `ptr`-sized slot. va.start/arg/end operate
-            // on a pointer TO this slot (the generic VAARG legalizer handles the ABI).
+                // C-ABI varargs cursor. On the RISC-V lp64 ABI `va_list` is a single pointer
+                // (i8*), so the cursor storage is one `ptr`-sized slot. va.start/arg/end operate
+                // on a pointer TO this slot (the generic VAARG legalizer handles the ABI).
             else if (std.mem.eql(u8, name.text, "va_list"))
                 "ptr"
             else if (std.mem.eql(u8, name.text, "bool"))
@@ -5958,7 +6011,6 @@ const IntRange = struct {
     max: i128,
 };
 
-
 const AtomicCallInfo = struct {
     base: ast.Expr,
     op: []const u8,
@@ -5983,12 +6035,6 @@ const ResultTypeInfo = struct {
 // module; these aliases keep the existing call sites in this file reading unchanged.
 const ResultSwitchPattern = switch_lower.ResultArmPattern;
 const TaggedUnionBinding = switch_lower.TaggedUnionArmBinding;
-
-const AtomicOrderContext = enum {
-    load,
-    store,
-    rmw,
-};
 
 fn restoreLocal(map: anytype, key: []const u8, old: anytype) !void {
     if (old) |entry| {
@@ -6027,7 +6073,6 @@ fn structLiteralField(fields: []const ast.StructLiteralField, field_name: []cons
     }
     return null;
 }
-
 
 fn hasNakedAttr(attrs: []const ast.Attr) bool {
     for (attrs) |attr| {
@@ -6073,10 +6118,6 @@ fn effectiveAlign(attrs: []const ast.Attr) ?u32 {
         return e;
     }
     return naked_min;
-}
-
-fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {
-    return .{ .span = span, .kind = .{ .name = .{ .span = span, .text = name } } };
 }
 
 // The slot index of trait method `name` (the vtable lists methods in declaration order).
@@ -6303,10 +6344,6 @@ fn appendLlvmStringByte(allocator: std.mem.Allocator, escaped: *std.ArrayList(u8
     }
 }
 
-fn hexDigit(value: u8) u8 {
-    return if (value < 10) '0' + value else 'A' + (value - 10);
-}
-
 fn packedBitsMask(bit_index: usize) u64 {
     return @as(u64, 1) << @intCast(bit_index);
 }
@@ -6329,23 +6366,6 @@ fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
         };
     }
     return null;
-}
-
-fn typeNameEql(ty: ast.TypeExpr, expected: []const u8) bool {
-    return switch (ty.kind) {
-        .name => |name| std.mem.eql(u8, name.text, expected),
-        else => false,
-    };
-}
-
-
-
-fn secretInnerType(ty: ast.TypeExpr) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .generic => |node| if (std.mem.eql(u8, node.base.text, "Secret") and node.args.len == 1) node.args[0] else null,
-        .qualified => |node| secretInnerType(node.child.*),
-        else => null,
-    };
 }
 
 fn isDeclassifyCall(call: anytype) bool {
@@ -6372,23 +6392,6 @@ fn isAssumeNoaliasCall(call: anytype) bool {
     };
 }
 
-
-
-
-fn fenceOrderingForCall(callee: ast.Expr) ?[]const u8 {
-    return switch (callee.kind) {
-        .member => |member| blk: {
-            if (!isIdentNamed(member.base.*, "fence")) break :blk null;
-            if (std.mem.eql(u8, member.name.text, "full")) break :blk "seq_cst";
-            if (std.mem.eql(u8, member.name.text, "release")) break :blk "release";
-            if (std.mem.eql(u8, member.name.text, "acquire")) break :blk "acquire";
-            break :blk null;
-        },
-        .grouped => |inner| fenceOrderingForCall(inner.*),
-        else => null,
-    };
-}
-
 fn isPhysCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, "phys"),
@@ -6402,67 +6405,6 @@ fn isPhysCall(callee: ast.Expr) bool {
 // `forget_unchecked` is the unsafe form legal on a linear resource.
 fn isDropCall(callee: ast.Expr) bool {
     return isIdentNamed(callee, "drop") or isIdentNamed(callee, "forget_unchecked");
-}
-
-
-fn isAtomicInitCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "init") and isIdentNamed(member.base.*, "atomic"),
-        .grouped => |inner| isAtomicInitCall(inner.*),
-        else => false,
-    };
-}
-
-fn isAtomicInitExpr(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .call => |call| isAtomicInitCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1,
-        .grouped => |inner| isAtomicInitExpr(inner.*),
-        else => false,
-    };
-}
-
-fn wrappingBuiltinOp(callee: ast.Expr) ?[]const u8 {
-    return switch (callee.kind) {
-        .member => |member| if (isIdentNamed(member.base.*, "wrapping"))
-            if (std.mem.eql(u8, member.name.text, "add"))
-                "add"
-            else if (std.mem.eql(u8, member.name.text, "sub"))
-                "sub"
-            else if (std.mem.eql(u8, member.name.text, "mul"))
-                "mul"
-            else
-                null
-        else
-            null,
-        .grouped => |inner| wrappingBuiltinOp(inner.*),
-        else => null,
-    };
-}
-
-fn uncheckedBuiltinOp(callee: ast.Expr) ?[]const u8 {
-    return switch (callee.kind) {
-        .member => |member| if (isIdentNamed(member.base.*, "unchecked"))
-            if (std.mem.eql(u8, member.name.text, "add"))
-                "add"
-            else if (std.mem.eql(u8, member.name.text, "sub"))
-                "sub"
-            else if (std.mem.eql(u8, member.name.text, "mul"))
-                "mul"
-            else
-                null
-        else
-            null,
-        .grouped => |inner| uncheckedBuiltinOp(inner.*),
-        else => null,
-    };
-}
-
-fn atomicInitValue(expr: ast.Expr) ?ast.Expr {
-    return switch (expr.kind) {
-        .call => |call| if (isAtomicInitCall(call.callee.*) and call.args.len == 1) call.args[0] else null,
-        .grouped => |inner| atomicInitValue(inner.*),
-        else => null,
-    };
 }
 
 fn isUninitExpr(expr: ast.Expr) bool {
@@ -6493,75 +6435,6 @@ fn bitcastTargetType(call: anytype) ?ast.TypeExpr {
     return call.type_args[0];
 }
 
-fn constGetIndexArg(ty: ast.TypeExpr) ?u64 {
-    return switch (ty.kind) {
-        .name => |name| parseU64Literal(name.text),
-        .qualified => |node| constGetIndexArg(node.child.*),
-        else => null,
-    };
-}
-
-
-fn rawScalarTypeName(ty: ast.TypeExpr) ?[]const u8 {
-    const name = typeName(ty) orelse return null;
-    if (std.mem.eql(u8, name, "u8")) return name;
-    if (std.mem.eql(u8, name, "u16")) return name;
-    if (std.mem.eql(u8, name, "u32")) return name;
-    if (std.mem.eql(u8, name, "u64")) return name;
-    if (std.mem.eql(u8, name, "u128")) return name;
-    if (std.mem.eql(u8, name, "usize")) return name;
-    if (std.mem.eql(u8, name, "i8")) return name;
-    if (std.mem.eql(u8, name, "i16")) return name;
-    if (std.mem.eql(u8, name, "i32")) return name;
-    if (std.mem.eql(u8, name, "i64")) return name;
-    if (std.mem.eql(u8, name, "isize")) return name;
-    if (std.mem.eql(u8, name, "f32")) return name;
-    if (std.mem.eql(u8, name, "f64")) return name;
-    return null;
-}
-
-fn atomicOrderingArg(args: []const ast.Expr, index: usize) ?[]const u8 {
-    if (index >= args.len) return null;
-    return atomicOrderingExpr(args[index]);
-}
-
-fn atomicOrderingExpr(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .enum_literal => |literal| literal.text,
-        .grouped => |inner| atomicOrderingExpr(inner.*),
-        else => null,
-    };
-}
-
-fn orderingArg(expr: ast.Expr) ?[]const u8 {
-    return atomicOrderingExpr(expr);
-}
-
-
-fn atomicLlvmOrdering(ordering: []const u8, context: AtomicOrderContext) ?[]const u8 {
-    if (std.mem.eql(u8, ordering, "relaxed")) return "monotonic";
-    return switch (context) {
-        .load => {
-            if (std.mem.eql(u8, ordering, "acquire")) return "acquire";
-            if (std.mem.eql(u8, ordering, "seq_cst")) return "seq_cst";
-            return null;
-        },
-        .store => {
-            if (std.mem.eql(u8, ordering, "release")) return "release";
-            if (std.mem.eql(u8, ordering, "seq_cst")) return "seq_cst";
-            return null;
-        },
-        .rmw => {
-            if (std.mem.eql(u8, ordering, "acquire")) return "acquire";
-            if (std.mem.eql(u8, ordering, "release")) return "release";
-            if (std.mem.eql(u8, ordering, "acq_rel")) return "acq_rel";
-            if (std.mem.eql(u8, ordering, "seq_cst")) return "seq_cst";
-            return null;
-        },
-    };
-}
-
-
 fn llvmComptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
     const self: *LlvmEmitter = @ptrCast(@alignCast(ctx orelse return null));
     return self.comptimeReflect(call);
@@ -6590,72 +6463,6 @@ fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
     };
 }
 
-
-fn exprAsType(expr: ast.Expr) ?ast.TypeExpr {
-    return switch (expr.kind) {
-        .ident => |ident| simpleType(ident.span, ident.text),
-        .grouped => |inner| exprAsType(inner.*),
-        else => null,
-    };
-}
-
-fn isPointerLikeType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .pointer, .raw_many_pointer => true,
-        .qualified => |node| isPointerLikeType(node.child.*),
-        else => false,
-    };
-}
-
-// True when `ty` is a `*dyn Trait` fat pointer (a two-word `{ data, vtable }` value).
-fn isDynTraitLlvmType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .dyn_trait => true,
-        .qualified => |node| isDynTraitLlvmType(node.child.*),
-        else => false,
-    };
-}
-
-fn alignForward(value: i128, alignment: i128) ?i128 {
-    if (alignment <= 0) return null;
-    const rem = @rem(value, alignment);
-    if (rem == 0) return value;
-    return std.math.add(i128, value, alignment - rem) catch null;
-}
-
-
-fn isPointerWidthIntegerTypeName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize");
-}
-
-fn isOpaqueAddressGenericName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "UserPtr") or
-        std.mem.eql(u8, name, "PhysPtr");
-}
-
-fn isPayloadDomainGenericName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "wrap") or
-        std.mem.eql(u8, name, "sat") or
-        std.mem.eql(u8, name, "serial") or
-        std.mem.eql(u8, name, "counter") or
-        std.mem.eql(u8, name, "Duration") or
-        // `Secret<T>` is a constant-time tag, fully transparent in codegen: it
-        // shares T's LLVM type, size, alignment, and (checked, not wrapping —
-        // it is not in isWrapDomainType/isSatDomainType) arithmetic. The
-        // secret-flow rules are enforced in sema.
-        std.mem.eql(u8, name, "Secret");
-}
-
-fn libraryScalarLlvmType(name: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, name, "Order")) return "i8";
-    if (std.mem.eql(u8, name, "Error")) return "i8";
-    if (std.mem.eql(u8, name, "AmbiguousSerialOrder")) return "i8";
-    if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return "i8";
-    if (std.mem.eql(u8, name, "ConversionError")) return "i8";
-    if (std.mem.eql(u8, name, "Overflow")) return "i8";
-    return null;
-}
-
 fn isResultConstructorCall(call: anytype) ?[]const u8 {
     if (call.type_args.len != 0 or call.args.len != 1) return null;
     const name = switch (call.callee.kind) {
@@ -6667,37 +6474,6 @@ fn isResultConstructorCall(call: anytype) ?[]const u8 {
         else => return null,
     };
     if (std.mem.eql(u8, name, "ok") or std.mem.eql(u8, name, "err")) return name;
-    return null;
-}
-
-fn trapHelperForCall(call: anytype) ?[]const u8 {
-    const callee = switch (call.callee.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| switch (inner.kind) {
-            .ident => |ident| ident.text,
-            else => return null,
-        },
-        else => return null,
-    };
-    if (!std.mem.eql(u8, callee, "trap") or call.type_args.len != 0 or call.args.len != 1) return null;
-    return switch (call.args[0].kind) {
-        .enum_literal => |literal| trapHelperForKind(literal.text),
-        .grouped => |inner| switch (inner.kind) {
-            .enum_literal => |literal| trapHelperForKind(literal.text),
-            else => null,
-        },
-        else => null,
-    };
-}
-
-fn trapHelperForKind(kind: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, kind, "Bounds")) return "mc_trap_Bounds";
-    if (std.mem.eql(u8, kind, "IntegerOverflow")) return "mc_trap_IntegerOverflow";
-    if (std.mem.eql(u8, kind, "DivideByZero")) return "mc_trap_DivideByZero";
-    if (std.mem.eql(u8, kind, "InvalidShift")) return "mc_trap_InvalidShift";
-    if (std.mem.eql(u8, kind, "InvalidRepresentation")) return "mc_trap_InvalidRepresentation";
-    if (std.mem.eql(u8, kind, "Assert")) return "mc_trap_Assert";
-    if (std.mem.eql(u8, kind, "Unreachable")) return "mc_trap_Unreachable";
     return null;
 }
 
@@ -6714,100 +6490,6 @@ fn taggedUnionConstructorName(callee: ast.Expr) ?[]const u8 {
 const taggedUnionPatternName = switch_lower.taggedUnionPatternName;
 const taggedUnionBindingPattern = switch_lower.taggedUnionArmBinding;
 
-
-fn binaryIsComparison(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .eq, .ne, .lt, .le, .gt, .ge => true,
-        else => false,
-    };
-}
-
-fn comparisonPredicate(op: ast.BinaryOp, signed: bool) ?[]const u8 {
-    return switch (op) {
-        .eq => "eq",
-        .ne => "ne",
-        .lt => if (signed) "slt" else "ult",
-        .le => if (signed) "sle" else "ule",
-        .gt => if (signed) "sgt" else "ugt",
-        .ge => if (signed) "sge" else "uge",
-        else => null,
-    };
-}
-
-fn floatComparisonPredicate(op: ast.BinaryOp) ?[]const u8 {
-    return switch (op) {
-        .eq => "oeq",
-        .ne => "une",
-        .lt => "olt",
-        .le => "ole",
-        .gt => "ogt",
-        .ge => "oge",
-        else => null,
-    };
-}
-
-fn normalizedIntLiteral(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
-    var cleaned: std.ArrayList(u8) = .empty;
-    for (literal) |ch| {
-        if (ch != '_') try cleaned.append(allocator, ch);
-    }
-    const text = try cleaned.toOwnedSlice(allocator);
-    const value = std.fmt.parseInt(i128, text, 0) catch return text;
-    return std.fmt.allocPrint(allocator, "{d}", .{value});
-}
-
-fn normalizedFloatLiteral(allocator: std.mem.Allocator, literal: []const u8, f32_target: bool) ![]const u8 {
-    var cleaned: std.ArrayList(u8) = .empty;
-    for (literal) |ch| {
-        if (ch != '_') try cleaned.append(allocator, ch);
-    }
-    const text = try cleaned.toOwnedSlice(allocator);
-    if (!f32_target) return text;
-    const parsed = std.fmt.parseFloat(f32, text) catch return text;
-    const widened: f64 = parsed;
-    const bits: u64 = @bitCast(widened);
-    return std.fmt.allocPrint(allocator, "0x{X:0>16}", .{bits});
-}
-
-fn charLiteralValue(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
-    const value = eval.parseCharLiteral(literal) orelse return error.UnsupportedLlvmEmission;
-    return std.fmt.allocPrint(allocator, "{d}", .{value});
-}
-
-fn literalArrayLenValue(expr: ast.Expr) ?u64 {
-    return switch (expr.kind) {
-        .int_literal => |literal| parseU64Literal(literal),
-        .grouped => |inner| literalArrayLenValue(inner.*),
-        else => null,
-    };
-}
-
-fn parseU64Literal(literal: []const u8) ?u64 {
-    var value: u64 = 0;
-    for (literal) |ch| {
-        if (ch == '_') continue;
-        if (ch < '0' or ch > '9') return null;
-        value = std.math.mul(u64, value, 10) catch return null;
-        value = std.math.add(u64, value, ch - '0') catch return null;
-    }
-    return value;
-}
-
-fn integerBits(ty: ast.TypeExpr) ?u16 {
-    const name = switch (ty.kind) {
-        .name => |name| name.text,
-        else => return null,
-    };
-    if (std.mem.eql(u8, name, "u8") or std.mem.eql(u8, name, "i8")) return 8;
-    if (std.mem.eql(u8, name, "u16") or std.mem.eql(u8, name, "i16")) return 16;
-    if (std.mem.eql(u8, name, "u32") or std.mem.eql(u8, name, "i32")) return 32;
-    if (std.mem.eql(u8, name, "u64") or std.mem.eql(u8, name, "i64")) return 64;
-    if (std.mem.eql(u8, name, "u128") or std.mem.eql(u8, name, "i128")) return 128;
-    if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return 64;
-    return null;
-}
-
-
 fn isBindCall(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .call => |call| isBindCallByNode(call),
@@ -6818,43 +6500,6 @@ fn isBindCall(expr: ast.Expr) bool {
 
 fn isBindCallByNode(call: anytype) bool {
     return call.type_args.len == 0 and call.args.len == 2 and isIdentNamed(call.callee.*, "bind");
-}
-
-fn isSignedInteger(ty: ast.TypeExpr) bool {
-    const name = switch (ty.kind) {
-        .name => |name| name.text,
-        else => return false,
-    };
-    return std.mem.startsWith(u8, name, "i") or std.mem.eql(u8, name, "isize");
-}
-
-fn isFloatType(ty: ast.TypeExpr) bool {
-    const name = switch (ty.kind) {
-        .name => |name| name.text,
-        else => return false,
-    };
-    return std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64");
-}
-
-fn signedMinLiteral(ty: ast.TypeExpr) ?[]const u8 {
-    const name = switch (ty.kind) {
-        .name => |name| name.text,
-        else => return null,
-    };
-    if (std.mem.eql(u8, name, "i8")) return "-128";
-    if (std.mem.eql(u8, name, "i16")) return "-32768";
-    if (std.mem.eql(u8, name, "i32")) return "-2147483648";
-    if (std.mem.eql(u8, name, "i64") or std.mem.eql(u8, name, "isize")) return "-9223372036854775808";
-    if (std.mem.eql(u8, name, "i128")) return "-170141183460469231731687303715884105728";
-    return null;
-}
-
-fn intrinsicBits(name: []const u8) ?u16 {
-    if (std.mem.endsWith(u8, name, ".i8")) return 8;
-    if (std.mem.endsWith(u8, name, ".i16")) return 16;
-    if (std.mem.endsWith(u8, name, ".i32")) return 32;
-    if (std.mem.endsWith(u8, name, ".i64")) return 64;
-    return null;
 }
 
 test "LLVM backend emits a backend_name alias for the override symbol" {
