@@ -28,6 +28,9 @@ size_t strlen(const char *s);
 #define TOOL_OP_FS_WRITE 6u
 #define TOOL_OP_FS_READ 7u
 #define TOOL_OP_FS_MKDIR 8u
+// CANCEL: complete the in-flight request whose id == arg with -E_CANCELED. Enqueues no new slot;
+// sys_submit returns 0 on accept, -E_DENIED if the target id is unknown to the kernel broker.
+#define TOOL_OP_CANCEL 3u
 typedef struct {
     uint32_t op;      // +0
     uint32_t flags;   // +4
@@ -89,6 +92,14 @@ static int g_bufidx[MAXREQ];      // for inflight entry j: its pool-buffer index
 static uint32_t g_outlens[MAXREQ]; // for inflight entry j: bytes the kernel reports staged (set on poll)
 static int g_inflight = 0;
 
+// The kernel request id of the MOST RECENT successful sys_submit (set by start_request_full on the
+// accept path). The JS prelude reads it via __host_last_id_raw() right after a host_call() so it can
+// build a cancel() closure bound to THIS request's id — exposing the otherwise-opaque id to JS
+// WITHOUT returning a {promise,id} object from a raw C binding (object construction in raw bindings
+// is fragile in the freestanding engine; pure-JS object literals in the prelude are proven safe).
+// Single-threaded JS + synchronous submit means this is read before any other submit can clobber it.
+static int64_t g_last_id = -1;
+
 // Reserve a free out-buffer from the pool, or -1 if none. Released when its completion is dispatched.
 static int alloc_outbuf(void) {
     for (int i = 0; i < MAXREQ; i++) {
@@ -131,7 +142,25 @@ static const char *HOST_PRELUDE =
     // structured error shape the agent already handles for host_async.
     "globalThis.host_fs_write = function (p, d) { return globalThis.__host_fs_write_raw(p, d).then(function (v) { return v; }, globalThis.__host_errify); };"
     "globalThis.host_fs_read = function (p) { return globalThis.__host_fs_read_raw(p).then(function (v) { return v; }, globalThis.__host_errify); };"
-    "globalThis.host_fs_mkdir = function (p) { return globalThis.__host_fs_mkdir_raw(p).then(function (v) { return v; }, globalThis.__host_errify); };";
+    "globalThis.host_fs_mkdir = function (p) { return globalThis.__host_fs_mkdir_raw(p).then(function (v) { return v; }, globalThis.__host_errify); };"
+    // host_call(n, delay): an AbortController-like handle over a cancellable async request. Returns a
+    // plain JS object { promise, cancel } built ENTIRELY in the prelude (object literals are proven
+    // safe in the freestanding engine — unlike returning an object from a raw C binding). It submits
+    // the request via the raw SUM binding, then reads THIS request's kernel id back via
+    // __host_last_id_raw() (single-threaded + synchronous submit guarantees the id is still current),
+    // and closes over it. Calling cancel() fires __host_cancel_raw(id) -> TOOL_OP_CANCEL, which the
+    // kernel completes with -E_CANCELED; the existing status<0 poll path rejects the promise, and
+    // __host_errify maps -125 to a structured { code:-125, name:'ECANCELED' }. Agents consume the
+    // rejection in CALLBACK style (.then(onResolve, onReject)) to stay clear of the await/reason-field
+    // freestanding quirk. cancel() is idempotent: a second call (or one after completion) just gets a
+    // -E_DENIED from the kernel (the slot is gone) and is harmless.
+    "globalThis.host_call = function (n, delay) {"
+    "  var rawp = globalThis.__host_async_raw(n, delay);"
+    "  var id = globalThis.__host_last_id_raw();"
+    "  var promise = rawp.then(function (v) { return v; }, globalThis.__host_errify);"
+    "  var cancel = function () { return globalThis.__host_cancel_raw(id); };"
+    "  return { promise: promise, cancel: cancel, id: id };"
+    "};";
 
 // Start a tool request: create the Promise first, check local capacity, submit a ToolReq, and
 // register the resolver (or reject on saturation / kernel -errno). Shared by ALL host bindings.
@@ -195,6 +224,7 @@ static JSValue start_request_full(JSContext *ctx, uint32_t op, uint64_t arg, int
     g_bufidx[g_inflight] = bi;
     g_outlens[g_inflight] = 0;
     g_inflight++;
+    g_last_id = id; // expose THIS request's id to JS (read by the prelude to build cancel())
     return promise;
 }
 
@@ -265,6 +295,35 @@ static JSValue js_host_fs_mkdir(JSContext *ctx, JSValueConst this_val, int argc,
     return start_request_full(ctx, TOOL_OP_FS_MKDIR, (uint64_t)plen, 0, payload, (uint32_t)plen, RES_KIND_SCALAR);
 }
 
+// __host_last_id_raw(): return the kernel request id of the most recent successful submit as a JS
+// number. The prelude calls it immediately after host_call()'s submit to capture that request's id
+// for a cancel() closure. Returns -1 if the last submit was rejected (no id was assigned).
+static JSValue js_host_last_id(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argc; (void)argv;
+    return JS_NewInt64(ctx, g_last_id);
+}
+
+// __host_cancel_raw(id): submit a TOOL_OP_CANCEL targeting the in-flight request `id`. The kernel
+// completes that request's slot with -E_CANCELED (ready immediately) and frees the broker slot; the
+// next event-loop poll delivers the -125 completion, which the existing status<0 path REJECTS — and
+// the prelude's __host_errify turns -125 into { code:-125, name:'ECANCELED' }. Returns the cancel
+// submit result (0 = accepted, negative errno e.g. -E_DENIED if the id is already gone/unknown).
+static JSValue js_host_cancel(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    int64_t id = -1;
+    if (argc > 0) JS_ToInt64(ctx, &id, argv[0]);
+    ToolReq req;
+    req.op = TOOL_OP_CANCEL;
+    req.flags = 0;
+    req.arg = (uint64_t)id; // the target in-flight request id
+    req.in_ptr = 0;
+    req.in_len = 0;
+    req.out_cap = 0;
+    req.out_ptr = 0;
+    int64_t rc = sys_submit((unsigned long)&req);
+    return JS_NewInt64(ctx, rc);
+}
+
 int main(void) {
     JSRuntime *rt = JS_NewRuntime();
     if (!rt) { emit("host: no runtime\n", 16); return 1; }
@@ -280,6 +339,8 @@ int main(void) {
     JS_SetPropertyStr(ctx, global, "__host_fs_write_raw", JS_NewCFunction(ctx, js_host_fs_write, "__host_fs_write_raw", 2));
     JS_SetPropertyStr(ctx, global, "__host_fs_read_raw", JS_NewCFunction(ctx, js_host_fs_read, "__host_fs_read_raw", 1));
     JS_SetPropertyStr(ctx, global, "__host_fs_mkdir_raw", JS_NewCFunction(ctx, js_host_fs_mkdir, "__host_fs_mkdir_raw", 1));
+    JS_SetPropertyStr(ctx, global, "__host_last_id_raw", JS_NewCFunction(ctx, js_host_last_id, "__host_last_id_raw", 0));
+    JS_SetPropertyStr(ctx, global, "__host_cancel_raw", JS_NewCFunction(ctx, js_host_cancel, "__host_cancel_raw", 1));
     JS_FreeValue(ctx, global);
 
     // Evaluate the host prelude (defines host_async = structured-error wrapper over the raw call).
@@ -404,6 +465,13 @@ int main(void) {
                 }
                 break;
             }
+        }
+        // The event loop only exits cleanly when g_inflight == 0 (no completion outstanding), so a
+        // clean exit IS the slot-reclamation proof: a cancelled request's completion was delivered
+        // (rejecting its Promise) and its inflight entry was compacted away. Emit the final count as
+        // a deterministic, greppable token so a gate can assert reclamation rather than infer it.
+        if (rc == 0 && g_inflight == 0) {
+            emit("host: inflight=0 (all slots reclaimed)\n", 39);
         }
         for (int i = 0; i < g_inflight; i++) {
             JS_FreeValue(ctx, g_resolvers[i]);
