@@ -53,10 +53,14 @@ mkdir -p "$SNAP_DIR"
 JOBS="$SNAP_DIR/jobs.txt"
 : > "$JOBS"
 count=0
+# Space-separated columns "sub file tag" (fixture paths contain no spaces). This
+# feeds `xargs -n3`, which passes the three columns as positional args — no fragile
+# IFS/here-string parsing inside the subshell (an earlier tab+read approach silently
+# dropped the path, making the snapshot vacuous).
 while IFS= read -r f; do
   [ -n "$f" ] || continue
-  printf 'emit-c\t%s\tc\n'      "$f" >> "$JOBS"
-  printf 'emit-llvm\t%s\tllvm\n' "$f" >> "$JOBS"
+  printf 'emit-c %s c\n'      "$f" >> "$JOBS"
+  printf 'emit-llvm %s llvm\n' "$f" >> "$JOBS"
   count=$((count + 1))
 done <<EOF
 $FIXTURE_LIST
@@ -64,8 +68,7 @@ EOF
 
 NPROC="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)"
 # Run jobs in parallel, then sort for a stable, order-independent snapshot.
-awk -F'\t' '{print}' "$JOBS" \
-  | xargs -P "$NPROC" -I{} bash -c 'IFS=$'"'"'\t'"'"' read -r s f t <<<"{}"; emit_one "$s" "$f" "$t"' \
+xargs -P "$NPROC" -n3 bash -c 'emit_one "$1" "$2" "$3"' _ < "$JOBS" \
   | LC_ALL=C sort > "$CUR"
 
 echo "snapshot: $count fixtures x 2 backends ($NPROC-way) -> $CUR"
