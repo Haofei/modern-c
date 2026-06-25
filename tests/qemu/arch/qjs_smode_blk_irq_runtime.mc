@@ -19,7 +19,7 @@ fn sbi_ecall(ext: u64, fid: u64, arg0: u64, arg1: u64) -> u64 {
     return result;
 }
 fn sbi_putchar(c: u8) -> void {
-    let _ignore: u64 = sbi_ecall(1, 0, c as u64, 0);
+    sbi_ecall(1, 0, c as u64, 0);
 }
 fn sbi_puts(s: *const u8) -> void {
     let base: usize = s as usize;
@@ -33,7 +33,7 @@ fn sbi_puts(s: *const u8) -> void {
     }
 }
 fn sbi_shutdown() -> void {
-    let _ignore: u64 = sbi_ecall(8, 0, 0, 0);
+    sbi_ecall(8, 0, 0, 0);
     while true {}
 }
 

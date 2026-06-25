@@ -51,6 +51,11 @@ FDT-described UART + timer + interrupt controller + storage + network
 ```
 
 The machine-readable profile lives in `kernel/platform/starfive_visionfive2/profile.mc`.
+When VisionFive 2 hardware is unavailable, `zig build riscv-qemu-validation` is the
+repeatable QEMU/OpenSBI surrogate gate. It validates the RISC-V S-mode platform,
+interrupt, virtio storage/network, confined QuickJS, broker, real TCP-backed
+`host_net_fetch`, and IRQ-backed production `SYS_POLL` paths across both backends,
+but it remains emulator evidence rather than real-board release evidence.
 
 ### 1.2 Out of scope
 
@@ -395,6 +400,8 @@ real S-mode virtio-net and virtio-blk PLIC interrupts.
 
 Tasks:
 
+- Keep `zig build riscv-qemu-validation` green as the focused QEMU/OpenSBI
+  board-surrogate gate until hardware validation is available.
 - Keep `blk-smode-irq-test`, `net-smode-irq-test`, `net-smode-rx-irq-test`, and their LLVM
   variants green as promoted `m0` evidence.
 - Keep `qjs-smode-net-irq-tool-test`, `qjs-smode-blk-irq-tool-test`, and their LLVM variants

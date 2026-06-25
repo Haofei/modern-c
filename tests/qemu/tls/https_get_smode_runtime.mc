@@ -96,7 +96,7 @@ fn sbi_ecall(ext: u64, fid: u64, arg0: u64, arg1: u64) -> u64 {
     return result;
 }
 fn uputc(c: u8) -> void {
-    let _ignore: u64 = sbi_ecall(1, 0, c as u64, 0); // legacy console putchar
+    sbi_ecall(1, 0, c as u64, 0); // legacy console putchar
 }
 fn uputs(s: *const u8) -> void {
     let base: usize = s as usize;
@@ -119,7 +119,7 @@ fn uputhex(v: u64) -> void {
     }
 }
 fn halt() -> void {
-    let _ignore: u64 = sbi_ecall(8, 0, 0, 0); // legacy shutdown
+    sbi_ecall(8, 0, 0, 0); // legacy shutdown
     while true {}
 }
 

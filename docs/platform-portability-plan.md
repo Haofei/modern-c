@@ -29,6 +29,7 @@ These are implemented and represented by build steps in the current tree:
 
 | Area | Current evidence |
 |---|---|
+| RISC-V QEMU surrogate validation | `riscv-qemu-validation` aggregates the RISC-V QEMU/OpenSBI S-mode boot, PLIC/timer, virtio-blk/net, confined QuickJS, brokered FS/network, real TCP-backed `host_net_fetch`, and IRQ-backed production `SYS_POLL` gates across C and LLVM backends. |
 | RISC-V S-mode boot and user path | OpenSBI S-mode boot, U-mode syscall/fault path, and confined QuickJS S-mode gates. |
 | Architecture selection seam | `arch-emit-test` emits portable core modules under `--arch=riscv64`, `--arch=x86_64`, and `--arch=aarch64`. |
 | Structured async broker ABI | `qjs-realtool-test` / `llvm-qjs-realtool-test` drive real capability-checked FS ops from pure JS over `SYS_SUBMIT` / `SYS_POLL`; `qjs-nettool-test` / `llvm-qjs-nettool-test` expose the brokered network fetch control plane through the same production JS/tool surface; `qjs-net-realtool-test` / `llvm-qjs-net-realtool-test` prove the TCP-backed transport variant with a guest HTTP fetch over virtio-net; `qjs-smode-net-irq-tool-test` / `llvm-qjs-smode-net-irq-tool-test` prove a JS `host_net_fetch` completion through production `SYS_POLL` from a real S-mode virtio-net PLIC interrupt; `qjs-smode-blk-irq-tool-test` / `llvm-qjs-smode-blk-irq-tool-test` prove a JS `host_fs_read` completion through production `SYS_POLL` from a real S-mode virtio-blk PLIC interrupt. |
@@ -79,13 +80,17 @@ Architecture-specific mechanisms that still need better generic hooks:
 
 ## 6. Test policy
 
-`zig build m0` is the required baseline for current platform claims. Tracking gates that
-exist but are intentionally outside `m0` are not release evidence until they are fixed and
-promoted.
+`zig build m0` is the required baseline for current platform claims. `zig build
+riscv-qemu-validation` is the focused board-surrogate gate for the selected RISC-V
+path when VisionFive 2 hardware is unavailable. Tracking gates that exist but are
+intentionally outside `m0` are not release evidence until they are fixed and promoted.
 
 Keep these distinctions explicit:
 
 - **Required gates:** build steps in `build/tiers.zig` under `m0`.
+- **RISC-V surrogate gate:** `riscv-qemu-validation`, also declared in
+  `build/tiers.zig`, aggregates the QEMU/OpenSBI evidence for the selected
+  board path.
 - **Tracking gates:** build steps registered in `build/qemu.zig` but not required by
   `m0`.
 - **Demo-scope gates:** tests that prove a mechanism in isolation but do not make a
@@ -111,7 +116,9 @@ This section is the authoritative platform backlog and priority order.
    The first hardware target is StarFive VisionFive 2, recorded in
    `kernel/platform/starfive_visionfive2/profile.mc`. The QEMU `virt` path is strong, but
    production now needs this profile validated on real hardware: DTB identity, UART, timer,
-   interrupts, storage, network, boot chain, watchdog, and soak expectations.
+   interrupts, storage, network, boot chain, watchdog, and soak expectations. Until that
+   hardware is available, keep `zig build riscv-qemu-validation` green as the repeatable
+   surrogate.
 
 2. **Complete S-mode interrupt and device wiring.**
    Core delivery is proven: timer interrupts, single-shot PLIC delivery, and re-armed PLIC

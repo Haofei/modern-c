@@ -77,6 +77,18 @@ zig build m0
 checks, package/toolchain tests, host-driver tests, and the QEMU kernel matrix.
 Tests that require external tools self-skip when the required tool is absent.
 
+The focused RISC-V board-surrogate validation gate is:
+
+```sh
+zig build riscv-qemu-validation
+```
+
+That gate runs the RISC-V QEMU `virt` + OpenSBI S-mode platform, IRQ, virtio-blk,
+virtio-net, confined QuickJS, real broker, TCP-backed `host_net_fetch`, and
+IRQ-backed `SYS_POLL` storage/network gates across both C and LLVM backends. It is
+the repeatable validation path when VisionFive 2 hardware is unavailable; it is
+not a substitute for final real-board boot and soak evidence.
+
 ## Development Environment
 
 The toolchain is Zig 0.16.0 plus clang/lld/llvm and QEMU (riscv64/aarch64/x86_64).
@@ -88,6 +100,7 @@ make docker-build          # build the dev image (selects amd64 or arm64 automat
 make fast                  # host-only inner-loop gate (~seconds), no QEMU
 make test                  # compiler unit + spec suite
 make m0                    # full milestone gate: clang + llvm + QEMU
+make run CMD='zig build riscv-qemu-validation' # focused RISC-V QEMU/OpenSBI surrogate
 make shell                 # interactive shell at /work
 make run CMD='zig build abi-test'
 ```
@@ -186,6 +199,7 @@ Covered areas include:
 Examples:
 
 ```sh
+zig build riscv-qemu-validation
 zig build qemu-test
 zig build llvm-qemu-test
 zig build kmain-test

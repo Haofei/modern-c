@@ -5,6 +5,44 @@ const h = @import("helpers.zig");
 // These look up the command steps the other modules registered, by name, via ctx.cmd().
 pub fn register(ctx: *h.Ctx) void {
     const b = ctx.b;
+    const riscv_qemu_validation = [_][]const u8{
+        "smode-timer-test",
+        "llvm-smode-timer-test",
+        "smode-plic-test",
+        "llvm-smode-plic-test",
+        "smode-plic-multishot-test",
+        "llvm-smode-plic-multishot-test",
+        "blk-smode-test",
+        "llvm-blk-smode-test",
+        "net-smode-test",
+        "llvm-net-smode-test",
+        "blk-smode-irq-test",
+        "llvm-blk-smode-irq-test",
+        "net-smode-irq-test",
+        "llvm-net-smode-irq-test",
+        "net-smode-rx-irq-test",
+        "llvm-net-smode-rx-irq-test",
+        "qjs-smode-confined-test",
+        "llvm-qjs-smode-confined-test",
+        "qjs-smode-agent-test",
+        "llvm-qjs-smode-agent-test",
+        "qjs-realtool-test",
+        "llvm-qjs-realtool-test",
+        "qjs-nettool-test",
+        "llvm-qjs-nettool-test",
+        "qjs-net-realtool-test",
+        "llvm-qjs-net-realtool-test",
+        "qjs-smode-net-irq-tool-test",
+        "llvm-qjs-smode-net-irq-tool-test",
+        "qjs-smode-blk-irq-tool-test",
+        "llvm-qjs-smode-blk-irq-tool-test",
+    };
+
+    const riscv_qemu_validation_step = b.step("riscv-qemu-validation", "Run the RISC-V QEMU/OpenSBI validation surrogate for the selected real-board path");
+    for (riscv_qemu_validation) |name| {
+        riscv_qemu_validation_step.dependOn(ctx.cmd(name));
+    }
+
     const m0_step = b.step("m0", "Run M0 conformance gates");
     // Fixture-contract lint guards the test corpus itself (reject EXPECT lines, sweep
     // OUT_OF_SCOPE soundness, host-tests.tsv well-formedness). It belongs in every

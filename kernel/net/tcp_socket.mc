@@ -231,25 +231,25 @@ fn sock_refill(s: *mut TcpSocket) -> u32 {
                 s.rxhold_len = n;
                 s.rxhold_pos = 0;
                 // Keep the window's rcv_nxt in step with the reassembler.
-                let _r: u32 = tcp_win_on_recv(&s.win, rcv, seg.payload_len as u32);
+                tcp_win_on_recv(&s.win, rcv, seg.payload_len as u32);
                 if tcp_flag_set(seg.flags, TCP_FIN) {
                     // FIN consumes one seq after the data; account it in both trackers.
                     s.win.rcv_nxt = s.win.rcv_nxt + 1;
                     s.reasm.rcv_nxt = s.reasm.rcv_nxt + 1;
                     s.rx_fin = true;
                 }
-                let _tx: bool = sock_tx(s, tcp_win_snd_nxt(&s.win), tcp_win_rcv_nxt(&s.win), TCP_ACK, 0, 0);
+                sock_tx(s, tcp_win_snd_nxt(&s.win), tcp_win_rcv_nxt(&s.win), TCP_ACK, 0, 0);
                 return 1;
             }
             // Out-of-order / duplicate: re-ACK our cumulative point and keep waiting.
-            let _dup: bool = sock_tx(s, tcp_win_snd_nxt(&s.win), tcp_win_rcv_nxt(&s.win), TCP_ACK, 0, 0);
+            sock_tx(s, tcp_win_snd_nxt(&s.win), tcp_win_rcv_nxt(&s.win), TCP_ACK, 0, 0);
         } else {
             // Pure control segment (a bare ACK, or a data-less FIN).
             if tcp_flag_set(seg.flags, TCP_FIN) {
                 if seg.seq == rcv {
                     s.win.rcv_nxt = s.win.rcv_nxt + 1;
                     s.reasm.rcv_nxt = s.reasm.rcv_nxt + 1;
-                    let _txf: bool = sock_tx(s, tcp_win_snd_nxt(&s.win), tcp_win_rcv_nxt(&s.win), TCP_ACK, 0, 0);
+                    sock_tx(s, tcp_win_snd_nxt(&s.win), tcp_win_rcv_nxt(&s.win), TCP_ACK, 0, 0);
                 }
                 return 0; // clean EOF
             }
