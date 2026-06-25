@@ -21,6 +21,7 @@ import "kernel/fs/agent_fs.mc";     // agent_fs_call (allowlist -> budget -> pat
 import "kernel/fs/treefs.mc";       // Tree + tree_init / tree_mkdir
 import "kernel/fs/fs_toolserver.mc"; // PathCap, pathcap_root, FS_WRITE/FS_READ
 import "kernel/core/ipc_trace.mc";  // IpcTrace audit sink (allow + deny verdicts)
+import "kernel/net/net_broker.mc";  // net_fetch + registry + NetCap (production tool surface op)
 import "std/mask.mc";               // Mask32 allowlist (mask32_zero/mask32_set)
 
 const SATP_SV39: u64 = 0x8000_0000_0000_0000;
@@ -85,6 +86,47 @@ global g_agent: AgentFs;        // the agent's FS authority: allowlist + budget 
 global g_fs_path: [FS_PATH_MAX]u8;  // kernel copy of the request path (agent_fs_call takes a kaddr)
 global g_fs_data: [RES_BYTES]u8;    // kernel copy of the write data / staging for read bytes
 global g_fs_ready: bool;        // app_build set up the broker world (defensive: deny if not)
+global g_fs_async_override_ready: bool;
+
+// ----- Brokered network tool world -----
+// The production JS host exposes `host_net_fetch(endpoint, token)` through the same
+// SYS_SUBMIT/SYS_POLL path as FS. This S-mode QuickJS image has no NIC attached yet, so it uses the
+// shared network broker control plane with registered mock endpoints (`net_fetch`). The TCP-backed
+// sibling (`net_fetch_tcp`) remains in `kernel/net/net_broker_tcp.mc` for NIC runtimes.
+const EP_WEB: u32 = 1;
+const EP_EVIL: u32 = 9;
+global g_net_t: ProcTable;
+global g_net_reg: EndpointRegistry;
+global g_net_sb: Sandbox;
+global g_net_cap: NetCap;
+global g_net_ready: bool;
+global g_net_override_ready: bool;
+global g_net_async_override_ready: bool;
+
+fn net_ep_web(req: u32) -> u32 { return req + 100; }
+fn net_ep_evil(req: u32) -> u32 { return req; }
+fn net_agent_worker() -> void {}
+
+fn net_override_noop_init() -> void {}
+fn net_override_noop_fetch(endpoint_id: u32, token: u32) -> i32 {
+    return E_DENIED as i32;
+}
+fn net_override_noop_submit(app_id: u64, endpoint_id: u32, token: u32) -> i32 {
+    return E_DENIED as i32;
+}
+fn fs_override_noop_init() -> void {}
+fn fs_override_noop_submit(app_id: u64, out_cap: u32) -> i32 {
+    return E_DENIED as i32;
+}
+fn poll_hook_noop() -> void {}
+
+global g_net_override_init: fn() -> void = net_override_noop_init;
+global g_net_override_fetch: fn(u32, u32) -> i32 = net_override_noop_fetch;
+global g_net_override_submit: fn(u64, u32, u32) -> i32 = net_override_noop_submit;
+global g_poll_hook: fn() -> void = poll_hook_noop;
+global g_fs_override_init: fn() -> void = fs_override_noop_init;
+global g_fs_override_submit: fn(u64, u32) -> i32 = fs_override_noop_submit;
+global g_fs_poll_hook: fn() -> void = poll_hook_noop;
 
 // Find a free slot, or COMP_CAP if all are active.
 fn broker_free_slot() -> usize {
@@ -194,6 +236,128 @@ fn is_fs_op(op: u32) -> bool {
     return op == TOOL_OP_FS_WRITE || op == TOOL_OP_FS_READ || op == TOOL_OP_FS_MKDIR;
 }
 
+fn net_err_to_errno(e: BrokerError) -> i32 {
+    switch e {
+        .Denied => { return E_DENIED as i32; }
+        .Budget => { return E_AGAIN as i32; }
+        .NoEndpoint => { return -2; } // ENOENT
+    }
+}
+
+fn is_net_op(op: u32) -> bool {
+    return op == TOOL_OP_NET_FETCH;
+}
+
+fn fs_path_is_irq_disk(path_len: usize) -> bool {
+    if path_len != 8 {
+        return false;
+    }
+    return g_fs_path[0] == 0x2F && g_fs_path[1] == 0x77 && g_fs_path[2] == 0x73 &&
+        g_fs_path[3] == 0x2F && g_fs_path[4] == 0x64 && g_fs_path[5] == 0x69 &&
+        g_fs_path[6] == 0x73 && g_fs_path[7] == 0x6B;
+}
+
+export fn app_net_override_set(init: fn() -> void, fetch: fn(u32, u32) -> i32) -> void {
+    g_net_override_init = init;
+    g_net_override_fetch = fetch;
+    g_net_override_ready = true;
+}
+
+export fn app_net_override_set_async(init: fn() -> void, submit: fn(u64, u32, u32) -> i32, pump: fn() -> void) -> void {
+    g_net_override_init = init;
+    g_net_override_submit = submit;
+    g_poll_hook = pump;
+    g_net_async_override_ready = true;
+    g_net_override_ready = true;
+}
+
+export fn app_net_async_complete(id: u64, status: i32, result: i32) -> void {
+    let slot: usize = broker_slot_by_id(id);
+    if slot == COMP_CAP {
+        return;
+    }
+    if g_slot_status[slot] == (E_CANCELED as i32) {
+        return;
+    }
+    g_slot_status[slot] = status;
+    g_slot_result[slot] = result;
+    g_slot_outlen[slot] = 0;
+    g_slot_ready[slot] = g_clock;
+}
+
+export fn app_fs_override_set_async(init: fn() -> void, submit: fn(u64, u32) -> i32, pump: fn() -> void) -> void {
+    g_fs_override_init = init;
+    g_fs_override_submit = submit;
+    g_fs_poll_hook = pump;
+    g_fs_async_override_ready = true;
+}
+
+export fn app_fs_async_complete_word(id: u64, status: i32, result: i32, out_len: u32) -> void {
+    let slot: usize = broker_slot_by_id(id);
+    if slot == COMP_CAP {
+        return;
+    }
+    if g_slot_status[slot] == (E_CANCELED as i32) {
+        return;
+    }
+    g_slot_status[slot] = status;
+    g_slot_result[slot] = result;
+    g_slot_outlen[slot] = 0;
+    if status == 0 {
+        var n: u32 = out_len;
+        if n > 4 {
+            n = 4;
+        }
+        if n > g_slot_outcap[slot] {
+            n = g_slot_outcap[slot];
+        }
+        let u: u32 = result as u32;
+        if n > 0 { g_slot_res[slot][0] = (u & 0xFF) as u8; }
+        if n > 1 { g_slot_res[slot][1] = ((u >> 8) & 0xFF) as u8; }
+        if n > 2 { g_slot_res[slot][2] = ((u >> 16) & 0xFF) as u8; }
+        if n > 3 { g_slot_res[slot][3] = ((u >> 24) & 0xFF) as u8; }
+        g_slot_outlen[slot] = n;
+    }
+    g_slot_ready[slot] = g_clock;
+}
+
+// Network-tool hooks. The generic QuickJS runtime uses the shared broker control plane with
+// mock endpoints so it does not need a NIC. A NIC-backed runtime registers an override with
+// app_net_override_set to route `host_net_fetch` through `net_fetch_tcp` instead.
+#[weak]
+export fn app_net_tool_init() -> void {
+    if g_net_override_ready {
+        g_net_override_init();
+        return;
+    }
+    proc_table_init(&g_net_t);
+    cap_audit_init();
+    endpoint_registry_init(&g_net_reg);
+    switch endpoint_register(&g_net_reg, EP_WEB, net_ep_web) { ok(s) => {} err(e) => {} }
+    switch endpoint_register(&g_net_reg, EP_EVIL, net_ep_evil) { ok(s) => {} err(e) => {} }
+    let full: Mask32 = mask32_from(0xFFFF_FFFF);
+    let no_tools: Mask32 = mask32_zero();
+    g_net_sb = agent_spawn(&g_net_t, 0x1000, net_agent_worker, full, full, no_tools, 0);
+    var net_allowed: Mask32 = mask32_zero();
+    mask32_set(&net_allowed, EP_WEB);
+    g_net_cap = .{ .allowed = net_allowed, .requests_left = 2 };
+    g_net_ready = true;
+}
+
+#[weak]
+export fn app_net_fetch_tool(endpoint_id: u32, token: u32) -> i32 {
+    if g_net_override_ready {
+        return g_net_override_fetch(endpoint_id, token);
+    }
+    if !g_net_ready {
+        return E_DENIED as i32;
+    }
+    switch net_fetch(&g_net_t, &g_net_reg, &g_net_sb, &g_net_cap, endpoint_id, token) {
+        ok(v) => { return v as i32; }
+        err(e) => { return net_err_to_errno(e); }
+    }
+}
+
 // SYS_SUBMIT helper for the REAL FS ops (M5b.2). The ToolReq has already been copied in and its
 // hard size bounds checked. We copy the request payload (path[+data]) into kernel buffers, map the
 // op to a TOOL_FS_* id, and call agent_fs_call — the capability front door (allowlist -> budget ->
@@ -276,6 +440,19 @@ fn fs_submit(req: *ToolReq) -> u64 {
     g_slot_ready[slot] = g_clock; // READY NOW — the first poll delivers the FS completion
     g_active_count = g_active_count + 1;
 
+    if g_fs_async_override_ready && req.op == TOOL_OP_FS_READ && fs_path_is_irq_disk(path_len) {
+        g_slot_ready[slot] = 0xFFFF_FFFF_FFFF_FFFF; // pending until the device-backed pump completes it
+        let rc_async: i32 = g_fs_override_submit(id, req.out_cap);
+        if rc_async == 0 {
+            return id;
+        }
+        g_slot_status[slot] = rc_async;
+        g_slot_result[slot] = 0;
+        g_slot_outlen[slot] = 0;
+        g_slot_ready[slot] = g_clock;
+        return id;
+    }
+
     switch agent_fs_call(&g_tree, &g_audit, &g_agent, tool_id, path_kaddr, path_len, 0, data_kaddr, n_arg, capacity) {
         ok(got) => {
             g_slot_status[slot] = 0;
@@ -303,6 +480,53 @@ fn fs_submit(req: *ToolReq) -> u64 {
             g_slot_result[slot] = 0;
             g_slot_outlen[slot] = 0;
         }
+    }
+    return id;
+}
+
+// SYS_SUBMIT helper for the brokered network op. arg = endpoint id; flags = request token/audit
+// size. The completion is READY NOW and carries the broker response scalar, or a mapped -errno.
+fn net_submit(req: *ToolReq) -> u64 {
+    if !g_net_ready && !g_net_override_ready && !g_net_async_override_ready {
+        return bitcast<u64>(E_DENIED);
+    }
+
+    let slot: usize = broker_free_slot();
+    if slot == COMP_CAP {
+        return bitcast<u64>(E_AGAIN);
+    }
+
+    let id: u64 = g_next_req;
+    g_next_req = g_next_req + 1;
+    g_slot_active[slot] = true;
+    g_slot_id[slot] = id;
+    g_slot_status[slot] = 0;
+    g_slot_result[slot] = 0;
+    g_slot_outptr[slot] = req.out_ptr;
+    g_slot_outcap[slot] = req.out_cap;
+    g_slot_outlen[slot] = 0;
+    g_slot_ready[slot] = g_clock; // sync default: first poll delivers the brokered completion
+    g_active_count = g_active_count + 1;
+
+    if g_net_async_override_ready {
+        g_slot_ready[slot] = 0xFFFF_FFFF_FFFF_FFFF; // pending until the device-backed pump completes it
+        let rc_async: i32 = g_net_override_submit(id, req.arg as u32, req.flags);
+        if rc_async == 0 {
+            return id;
+        }
+        g_slot_status[slot] = rc_async;
+        g_slot_result[slot] = 0;
+        g_slot_ready[slot] = g_clock;
+        return id;
+    }
+
+    let rc: i32 = app_net_fetch_tool(req.arg as u32, req.flags);
+    if rc >= 0 {
+            g_slot_status[slot] = 0;
+            g_slot_result[slot] = rc;
+    } else {
+        g_slot_status[slot] = rc;
+        g_slot_result[slot] = 0;
     }
     return id;
 }
@@ -350,6 +574,12 @@ fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
     // REAL FS ops (M5b.2): dispatch through the capability front door. These complete READY NOW.
     if is_fs_op(req.op) {
         return fs_submit(&req);
+    }
+
+    // Brokered network op: shared egress allowlist + budget + audit control plane, surfaced through
+    // the production JS SYS_SUBMIT/SYS_POLL tool ABI.
+    if is_net_op(req.op) {
+        return net_submit(&req);
     }
 
     // Op policy: only the known mock request ops are permitted (EACCES otherwise).
@@ -446,6 +676,8 @@ fn sys_poll(events_ptr: u64, max_arg: u64, timeout: u64) -> u64 {
     while steps < max_steps {
         steps = steps + 1;
         g_clock = g_clock + 1; // virtual time progresses, so every armed slot eventually becomes ready
+        g_poll_hook();
+        g_fs_poll_hook();
 
         // Inner drain: deliver ready slots (smallest ready tick, tie-break by id) until `want` is
         // reached or none are ready at this clock value.
@@ -578,6 +810,13 @@ export fn app_build(image_base: usize, image_len: usize, region_base: usize, reg
     mask32_set(&allow, TOOL_FS_READ); // NOT TOOL_FS_MKDIR — mkdir is the deny case
     g_agent = agent_fs_new(allow, 16, pathcap_root(AGENT_PID as u32, ws_idx, FS_WRITE | FS_READ));
     g_fs_ready = true;
+    if g_fs_async_override_ready {
+        g_fs_override_init();
+    }
+
+    // Production tool-surface network broker. The default weak hook registers mock endpoints;
+    // NIC-backed runtime gates override it with a TCP transport.
+    app_net_tool_init();
 
     let root: PAddr = page_table_root(&g_pt);
     return SATP_SV39 | ((pa_value(root) >> 12) as u64);

@@ -51,7 +51,10 @@ san_one() {
 }
 export -f san_one
 
-mapfile -t names < <(awk -F'\t' '/^#/{next} NF>=2 && $1!=""{print $1}' "$MANIFEST")
+names=()
+while IFS= read -r name; do
+    names+=("$name")
+done < <(awk -F'\t' '/^#/{next} NF>=2 && $1!=""{print $1}' "$MANIFEST")
 count="${#names[@]}"
 printf '%s\0' "${names[@]}" | xargs -0 -P "$JOBS" -I{} bash -c 'san_one "$@"' _ {}
 

@@ -9,6 +9,7 @@
 
 const ECALL_FROM_U: u64 = 8;
 const SYS_EXIT: u64 = 3; // handled here (returns control to the kernel)
+const SCAUSE_S_EXT: u64 = 0x8000_0000_0000_0009;
 const SCAUSE_INSTR_PAGE_FAULT: u64 = 12;
 const SCAUSE_LOAD_PAGE_FAULT: u64 = 13;
 const SCAUSE_STORE_PAGE_FAULT: u64 = 15;
@@ -22,6 +23,14 @@ const F_A7: usize = 120;
 // The MC syscall table (app_run_demo.mc) — identical to the M-mode path.
 extern fn syscall_setup() -> void;
 extern fn mc_syscall(number: u64, arg0: u64, arg1: u64, arg2: u64) -> u64;
+
+fn smode_external_irq_noop() -> void {}
+
+global g_smode_external_irq: fn() -> void = smode_external_irq_noop;
+
+export fn smode_external_irq_set(handler: fn() -> void) -> void {
+    g_smode_external_irq = handler;
+}
 
 global kernel_stack: [8192]u8;
 
@@ -96,6 +105,11 @@ export fn s_trap_entry(f: usize) -> void {
     let scause: u64 = read_csr_scause();
     let sepc: u64 = read_csr_sepc();
     let stval: u64 = read_csr_stval();
+
+    if scause == SCAUSE_S_EXT {
+        g_smode_external_irq();
+        return;
+    }
 
     if scause == ECALL_FROM_U {
         var a7: u64 = 0;

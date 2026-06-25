@@ -12,7 +12,8 @@ Related documents:
 - `docs/platform-portability-plan.md` — platform work for RISC-V S-mode, x86_64, and AArch64.
 - `docs/quickjs-agent-plan.md` — QuickJS as a confined U-mode agent.
 - `docs/agent-sandbox-milestone.md` — sandbox, broker, policy, and MCP milestones.
-- `docs/hardening-todo.md` — compiler/kernel hardening backlog.
+- `docs/todo.md` — consolidated current roadmap.
+- `docs/hardening-todo.md` — historical compiler/kernel hardening campaign record.
 - `docs/test-architecture.md` — test-system direction.
 
 ## 1. Definition of production
@@ -36,17 +37,20 @@ One board family
 + watchdog/recovery
 ```
 
-The likely first hardware target remains:
+The first hardware target is now selected as:
 
 ```text
-RV64GC
+StarFive VisionFive 2 (JH7110)
+64-bit RISC-V
 S-mode kernel
 OpenSBI firmware
 Sv39 virtual memory
 QEMU virt first
-then one real RISC-V board
-UART + timer + interrupt controller + storage + network
+then VisionFive 2 hardware validation
+FDT-described UART + timer + interrupt controller + storage + network
 ```
+
+The machine-readable profile lives in `kernel/platform/starfive_visionfive2/profile.mc`.
 
 ### 1.2 Out of scope
 
@@ -100,7 +104,21 @@ Current status:
 - S-mode timer interrupt delivery is proven (`smode-timer-test`, both backends).
 - S-mode external PLIC delivery is proven with a single-shot UART interrupt
   (`smode-plic-test`, both backends).
-- Some network/storage paths still depend on polling or demo-specific interrupt wiring.
+- A reusable S-mode PLIC dispatch shell exists at `kernel/drivers/irq/smode_plic.mc`;
+  the single-shot and multishot S-mode PLIC demos now route claim/complete through it.
+- Registered S-mode async IRQ completion gates pass on both backends for virtio-blk and
+  virtio-net TX/RX: `blk-smode-irq-test`, `llvm-blk-smode-irq-test`,
+  `net-smode-irq-test`, `llvm-net-smode-irq-test`, `net-smode-rx-irq-test`, and
+  `llvm-net-smode-rx-irq-test`. They drain completed broker ids through
+  `async_poll_many`, the kernel-side `SYS_POLL` shape, and are promoted into `m0`.
+- The production JS `host_net_fetch` surface has an S-mode IRQ-backed proof:
+  `qjs-smode-net-irq-tool-test` / `llvm-qjs-smode-net-irq-tool-test` complete the JS
+  request through `SYS_POLL` from a real virtio-net PLIC interrupt, and are promoted into
+  `m0`.
+- The production JS `host_fs_read` surface has the storage counterpart:
+  `qjs-smode-blk-irq-tool-test` / `llvm-qjs-smode-blk-irq-tool-test` complete the JS
+  request through `SYS_POLL` from a real virtio-blk PLIC interrupt, and are promoted into
+  `m0`.
 
 - The steady-state, re-armed external-interrupt path is now proven on **both** backends
   (`smode-plic-multishot-test`, in m0): the handler re-arms the UART source and takes 3
@@ -115,22 +133,27 @@ Former blocker (now resolved):
   misaligned vector trapped to the wrong PC. Fixed at the language level with the `#[align(N)]`
   attribute and a 4-byte alignment default for `#[naked]` functions. The repeated/preemptive
   S-mode interrupt path (R1b/R2) is therefore unblocked. See
-  `docs/smode-irq-cbackend-reset.md` and `docs/platform-portability-plan.md` §12 item 5.
+  `docs/platform-portability-plan.md` §12 "Do now" item 2.
 
 Production target:
 
-- A reusable S-mode PLIC driver.
+- Virtio-blk and virtio-net interrupts routed through the reusable S-mode PLIC dispatch.
 - Interrupt-driven virtio-blk completion.
-- Interrupt-driven virtio-net RX/TX completion.
+- Interrupt-driven virtio-net TX and RX completion.
 - Device interrupts integrated with the scheduler and async completion queue.
 - No busy polling in steady-state agent I/O.
 
 Acceptance gates:
 
 - `smode-plic-test` remains green.
-- A new interrupt-driven `blk-smode-irq-test` reads a sector by sleeping until completion.
-- A new interrupt-driven `net-smode-irq-test` receives a frame by sleeping until RX interrupt.
-- The async broker can complete a request from an interrupt-backed event, not from a polling loop.
+- `blk-smode-irq-test` reads a sector by sleeping until interrupt-backed completion.
+- `net-smode-irq-test` sends a frame and sleeps until interrupt-backed TX completion.
+- `net-smode-rx-irq-test` receives a frame by sleeping until interrupt-backed RX completion.
+- The async broker can complete a request from an interrupt-backed event and drain it through
+  `async_poll_many`, not from a polling loop.
+- Production agent syscall/tool-surface gates show the same interrupt-backed completion through
+  `SYS_POLL`: `qjs-smode-net-irq-tool-test` / `llvm-qjs-smode-net-irq-tool-test` for network
+  and `qjs-smode-blk-irq-tool-test` / `llvm-qjs-smode-blk-irq-tool-test` for storage.
 - QEMU tests assert that `wfi` is reached while waiting and that completion is interrupt-driven.
 
 Why this matters:
@@ -146,11 +169,17 @@ Current status:
 - Confined QuickJS exists.
 - Structured `SYS_SUBMIT` / `SYS_POLL` exists.
 - Real FS broker operations exist on the RISC-V reference path.
-- Network fetch and some cross-arch broker paths remain incomplete.
+- Real TCP-backed brokered network fetch is gated on the RISC-V reference path.
+- Brokered network fetch is exposed as `host_net_fetch` through the production JS
+  `SYS_SUBMIT` / `SYS_POLL` tool surface.
+- TCP-backed `host_net_fetch` is proven by `qjs-net-realtool-test` /
+  `llvm-qjs-net-realtool-test`: a pure-JS agent reaches a live HTTP server through
+  `net_fetch_tcp` over virtio-net, with denied egress and budget exhaustion covered.
+- The remaining production-surface gap is durable policy/audit semantics, out-of-process
+  tool transport, stable version/error rules, and cross-arch real-broker parity.
 
 Production target:
 
-- `net_fetch` as a first-class brokered tool.
 - Cross-arch real-FS broker parity.
 - Native tool catalog for the first appliance workload.
 - Out-of-process tool server transport.
@@ -167,7 +196,7 @@ Initial tool catalog:
 - `edit`
 - `exec` only if the product actually needs it
 - `checkpoint`
-- `net_fetch`
+- `net_fetch` / `host_net_fetch`
 
 Acceptance gates:
 
@@ -357,17 +386,19 @@ Goal: make the QEMU S-mode path behave like a real low-power kernel.
 
 Prerequisite — DONE: the C-backend async-IRQ "reset" that gated this phase has been
 root-caused and fixed (missing alignment on naked trap vectors; see §4.1 and
-`docs/smode-irq-cbackend-reset.md`). The steady-state, re-armed interrupt path now passes on
+`docs/platform-portability-plan.md` §12 "Do now" item 2). The steady-state, re-armed interrupt path now passes on
 both backends (`smode-plic-multishot-test`), so devices can be converted to interrupt-backed
-wait. The remaining P1 work is the reusable driver + virtio wiring below.
+wait. Reusable S-mode PLIC dispatch and async virtio-blk / virtio-net TX/RX IRQ demos now
+exist, pass on both backends, and drain completed broker ids through `async_poll_many`; the
+production JS network and storage tool surfaces now also have `SYS_POLL` completion proofs from
+real S-mode virtio-net and virtio-blk PLIC interrupts.
 
 Tasks:
 
-- Generalize `kernel/drivers/irq/plic.mc` for S-mode context.
-- Wire PLIC claim/complete into reusable interrupt dispatch.
-- Convert virtio-blk completion to interrupt-backed wait.
-- Convert virtio-net RX to interrupt-backed delivery.
-- Connect interrupt completions to `SYS_POLL`.
+- Keep `blk-smode-irq-test`, `net-smode-irq-test`, `net-smode-rx-irq-test`, and their LLVM
+  variants green as promoted `m0` evidence.
+- Keep `qjs-smode-net-irq-tool-test`, `qjs-smode-blk-irq-tool-test`, and their LLVM variants
+  green as promoted production `SYS_POLL` evidence.
 
 Exit criteria:
 
@@ -381,7 +412,8 @@ Goal: make the agent's external-effect model production-shaped.
 
 Tasks:
 
-- Implement `net_fetch` through the broker.
+- Keep the promoted TCP-backed network broker transport green through the production
+  JS/tool-catalog surface.
 - Add denied-network audit records.
 - Move tool execution behind real IPC transport.
 - Add MCP JSON-RPC envelope and descriptors.
@@ -442,7 +474,7 @@ Tasks:
 - Bring up boot, UART, timer, interrupts.
 - Bring up storage.
 - Bring up Ethernet.
-- Run brokered `net_fetch`.
+- Run brokered network fetch through the production agent surface.
 - Run watchdog.
 - Run power-cycle loop.
 - Measure memory footprint and idle power.
@@ -482,11 +514,11 @@ The first production claim should require all of these:
 - [ ] Kernel boots on the board in the intended privilege mode.
 - [ ] Timer and external interrupts work on the board.
 - [ ] Storage works with persistence tests.
-- [ ] Network works through brokered `net_fetch`.
+- [ ] Network works through the production brokered tool surface.
 - [ ] Agent runs confined with no ambient FS/network authority.
 - [ ] All external effects go through brokers.
 - [ ] Allowed and denied broker decisions are audited.
-- [ ] Per-agent memory, request, output, and network budgets exist.
+- [ ] Per-agent memory, request, output, and network budgets are enforced across the production paths.
 - [ ] Policy can revoke/throttle/kill a running agent.
 - [ ] Audit persists across reboot.
 - [ ] Policy persists across reboot.

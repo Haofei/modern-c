@@ -60,6 +60,8 @@ const TF_X0: usize = 0;
 const TF_X1: usize = 8;
 const TF_X2: usize = 16;
 const TF_X8: usize = 64;
+const TF_X29: usize = 29 * 8;
+const TF_X30: usize = 30 * 8;
 
 #[noinline]
 fn halt_forever() -> void {
@@ -102,6 +104,13 @@ fn read_spsr() -> u64 {
     var v: u64 = 0;
     #[unsafe_contract(precise_asm)] {
         unsafe { asm precise volatile { "mrs %0, spsr_el1" out("r") v: u64, clobber("memory") } }
+    }
+    return v;
+}
+fn read_sp_el0() -> u64 {
+    var v: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe { asm precise volatile { "mrs %0, sp_el0" out("r") v: u64, clobber("memory") } }
     }
     return v;
 }
@@ -178,6 +187,26 @@ export fn arm_qjs_syscall(frame: usize) -> void {
     let esr: u64 = read_esr();
     let ec: u64 = (esr >> 26) & 0x3f;
     if ec != 0x15 {
+        unsafe {
+            put_str(" frame.x0=");
+            put_hex64(raw.load<u64>(phys(frame + TF_X0)));
+            put_str(" x1=");
+            put_hex64(raw.load<u64>(phys(frame + TF_X1)));
+            put_str(" x2=");
+            put_hex64(raw.load<u64>(phys(frame + TF_X2)));
+            put_str(" x29=");
+            put_hex64(raw.load<u64>(phys(frame + TF_X29)));
+            put_str(" x30=");
+            put_hex64(raw.load<u64>(phys(frame + TF_X30)));
+            let usp: u64 = read_sp_el0();
+            put_str(" sp_el0=");
+            put_hex64(usp);
+            if usp != 0 {
+                put_str(" saved_lr=");
+                put_hex64(raw.load<u64>(phys(usp as usize)));
+            }
+            console_putc(10);
+        }
         arm_qjs_unexpected(0x100 | ec);
         return; // unreachable
     }

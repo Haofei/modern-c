@@ -295,6 +295,15 @@ zig build fuzz-determinism # emit-c / emit-llvm are byte-deterministic for the s
 zig build fuzz-pipeline    # every lowering/verify stage succeeds on a check-accepted program
 ```
 
+Additional standalone oracles exist for deeper runs:
+
+```sh
+zig build fuzz-metamorphic # semantics-preserving source transform must not change the result
+zig build fuzz-optlevel    # emitted C agrees at -O0 and -O2
+zig build fuzz-reference   # compiled output matches the independent Python reference interpreter
+zig build fuzz-corpus      # replay persisted regression seeds
+```
+
 A fuzzer failure prints the seed; reproduce with `tools/fuzz/mcfuzz.py gen <seed>` and minimize
 with `tools/fuzz/mcfuzz.py shrink --seed <seed> --oracle <name>`. The older one-shape generators
 (`diff-fuzz`/`move-fuzz`) reproduce via `tools/toolchain/mcgen.py <seed>` / `mcgen_move.py <seed>`.
@@ -362,7 +371,8 @@ links against libc and libm.
   `tools/net/`, `tools/lang/` - e2e test scripts
 - `tools/lib/` - data-driven host-driver harness and manifest
 - `demo/` - hardware and hosted demos
-- `docs/` - spec and TODO/roadmap notes
+- `docs/` - specs, reference docs, and roadmap notes; start at
+  [`docs/README.md`](docs/README.md)
 
 ## What Is Still Prototype Work
 
@@ -385,7 +395,7 @@ prototype work:
 - broader per-architecture production kernel hardening
 - full VFS/POSIX/network service completeness
 
-See [`docs/todo.md`](docs/todo.md) for the current follow-up list.
+See [`docs/todo.md`](docs/todo.md) for the current consolidated follow-up list.
 
 ## License
 

@@ -37,11 +37,17 @@ const KERNEL_GIGA_BASE: usize = 0x8000_0000;
 // same top-level slot as the agent's user pages (0x1_0000..), so it CANNOT be a gigapage; it
 // is a single 4 KiB supervisor page added to the existing interior table.
 const UART_MMIO_BASE: usize = 0x1000_0000;
+const PLIC_PRIORITY_PAGE: usize = 0x0c00_0000;
+const PLIC_ENABLE_S_PAGE: usize = 0x0c00_2000;
+const PLIC_CONTEXT_S_PAGE: usize = 0x0c20_1000;
+const VIRTIO_MMIO_SLOT0_BASE: usize = 0x1000_1000;
+const VIRTIO_MMIO_SLOT_STRIDE: usize = 0x1000;
+const VIRTIO_MMIO_SLOT_COUNT: usize = 8;
 
 // A small private heap, only for the interior page-table frames the UART 4 KiB mapping needs
 // (two tables at most: VPN1 + VPN0). Disjoint from the loader's `region`.
 global g_aux_heap: Heap;
-global g_aux_region: [16384]u8;
+global g_aux_region: [32768]u8;
 
 // Reconstruct the PageTable value whose root is the frame the satp points at. The satp word
 // is MODE | PPN(root>>12) (see riscv_aspace_of in paging.mc); the root PAddr is PPN<<12.
@@ -68,8 +74,17 @@ export fn qjs_smode_build(image_base: usize, image_len: usize, region_base: usiz
     // The UART MMIO page (supervisor-only): the agent's SYS_WRITE handler writes JS output
     // here via console_putc. A single 4 KiB page added to the existing VPN2-index-0 subtree;
     // interior tables come from a small private heap, storing PTEs into the same root frame.
-    g_aux_heap = heap_new(phys_range(pa((&g_aux_region[0]) as usize), 16384));
+    g_aux_heap = heap_new(phys_range(pa((&g_aux_region[0]) as usize), 32768));
     page_table_map(&pt, &g_aux_heap, va(UART_MMIO_BASE), pa(UART_MMIO_BASE), PTE_R | PTE_W);
+    page_table_map(&pt, &g_aux_heap, va(PLIC_PRIORITY_PAGE), pa(PLIC_PRIORITY_PAGE), PTE_R | PTE_W);
+    page_table_map(&pt, &g_aux_heap, va(PLIC_ENABLE_S_PAGE), pa(PLIC_ENABLE_S_PAGE), PTE_R | PTE_W);
+    page_table_map(&pt, &g_aux_heap, va(PLIC_CONTEXT_S_PAGE), pa(PLIC_CONTEXT_S_PAGE), PTE_R | PTE_W);
+    var vslot: usize = 0;
+    while vslot < VIRTIO_MMIO_SLOT_COUNT {
+        let base: usize = VIRTIO_MMIO_SLOT0_BASE + vslot * VIRTIO_MMIO_SLOT_STRIDE;
+        page_table_map(&pt, &g_aux_heap, va(base), pa(base), PTE_R | PTE_W);
+        vslot = vslot + 1;
+    }
     return satp;
 }
 

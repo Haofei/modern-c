@@ -9,8 +9,11 @@ to pick up later. See also memory `differential-testing.md`.
 The single biggest blind spot: **every value-oracle compares the two backends against
 each other** (differential, pipeline, sanitize, determinism all assume C≡LLVM ⇒ correct).
 (**Update:** the two independent oracles below — E1 reference interpreter and E2 metamorphic
-— are now **implemented** and wired into `m0` as `fuzz-reference` / `fuzz-metamorphic`. The
-remaining backlog is generator surface, where the differential oracles still apply.)
+— are now **implemented** as standalone build steps (`fuzz-reference` /
+`fuzz-metamorphic`). As of this docs pass, `build/tiers.zig` does not include them
+in `m0` or `fast`; either the gate or this note should change when that policy is
+decided. The remaining backlog is generator surface, where the differential
+oracles still apply.)
 
 They share the entire frontend, MIR verifier, and constant-folder, so a bug *there* is
 invisible to all of them. The >512-block verifier bug was only caught because `pipeline`
@@ -117,9 +120,9 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 
 | # | Item | Effort | Notes |
 |---|------|--------|-------|
-| E1 | **Reference interpreter** (eval `harness()` from AST/HIR, assert digest) | High | **Highest leverage** — catches bugs both backends share |
-| E2 | **Metamorphic/algebraic** (semantics-preserving transform → same digest) | Med | `x+0`, commutativity, dead branches; no 2nd backend |
-| E3 | Optimization-level differential | Low-Med | If backends expose `-O` levels |
+| E1 | **Reference interpreter** (eval generated subset, assert digest) | Done / expanding | Standalone `fuzz-reference`; highest leverage for bugs both backends share. Keep extending the interpreted subset as generator surface grows. |
+| E2 | **Metamorphic/algebraic** (semantics-preserving transform → same digest) | Done / expanding | Standalone `fuzz-metamorphic`; keep adding transforms for new constructs. |
+| E3 | Optimization-level differential | Done / expanding | Standalone `fuzz-optlevel`; keep widening the generated surface. |
 | E4 | Independent oracles on `facts`/`emit-map`/`lower-hir/-mir/-ir` | Med | Today only verify-hir/verify/emit-c/emit-llvm asserted |
 | E5 | Memory-safety oracle (ASan over pointer/slice programs) | Med | Depends on A4/A5 |
 | E6 | Round-trip / idempotence (re-parse, re-lower → stable) | Med | Printer/parser asymmetries |
@@ -179,9 +182,12 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 - **A9** capturing closures via `bind(&env, fn)` -> `closure(T)->R`.
 - **E3** optimization-level differential oracle (`fuzz-optlevel`): emitted C must give the same
   result at -O0 and -O2 (no optimization-sensitive UB).
+- **E1** reference interpreter (`fuzz-reference`): compiled output must match the independent
+  Python interpreter for the generated subset.
 
-**Tally: 19 coverage items + 2 new oracles (metamorphic, optlevel) + 3 real C-backend bugs found
-& fixed (INT64_MIN, narrow wrap-mul UB, f32 double-rounding). Nine oracles now gate `m0`-style.**
+**Tally: 19 coverage items + 3 standalone oracles (metamorphic, optlevel, reference) + 3 real
+C-backend bugs found & fixed (INT64_MIN, narrow wrap-mul UB, f32 double-rounding). The original
+core oracle family gates `m0`; the newer oracles are standalone until the tier policy is decided.**
 
 ### Blocked by missing backend support (can't be generated into runnable programs)
 
@@ -198,9 +204,9 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 
 ### Still open (largest — multi-session or architecture-gated)
 
-- **E1** reference interpreter — highest leverage, but a full *precise* interpreter of the
-  generated subset (all arithmetic domains, structs/arrays/enums/switch/loops/globals/tuples/
-  Result/pointers); high effort + high risk (a wrong interpreter yields false findings).
+- **E1 expansion** — the reference interpreter exists, but must keep growing with the generator
+  surface. The risk is now coverage and false findings in new interpreted constructs, not the
+  absence of the oracle.
 - **D5** multi-module — needs an import/module system (no such surface today).
 - **F1** coverage-guided — blocked by subprocess speed (needs persistent/in-process harness).
 - Misc lower-value: C6/C7 (mostly covered), D3/D6, E4/E5/E6/E7/E8, F2–F7, A10 (usize already

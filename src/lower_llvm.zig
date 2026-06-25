@@ -108,7 +108,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    try appendLlvmChecked(allocator, module, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm);
+    try appendLlvmChecked(allocator, module, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -116,10 +116,10 @@ pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
 }
 
 pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool) !void {
-    try appendLlvmChecked(allocator, module, out, source_path, .{ .optimize = optimize }, false);
+    try appendLlvmChecked(allocator, module, out, source_path, .{ .optimize = optimize }, false, .riscv64);
 }
 
-pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool) !void {
+pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch) !void {
     const optimize = checks.optimize;
     const ksan = checks.ksan;
     const msan = checks.msan;
@@ -130,8 +130,11 @@ pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: 
     const escaped_source_path = try escapedLlvmString(allocator, source_path);
     defer allocator.free(escaped_source_path);
     try out.print(allocator, "source_filename = \"{s}\"\n", .{escaped_source_path});
+    try out.print(allocator, "target datalayout = \"{s}\"\n", .{llvmTargetDataLayout(target_arch)});
+    try out.print(allocator, "target triple = \"{s}\"\n", .{llvmTargetTriple(target_arch)});
     try out.appendSlice(allocator, "; MC LLVM IR backend v0\n");
     try out.appendSlice(allocator, "; semantic source: verified MC MIR\n\n");
+    try emitTargetTypeDecls(allocator, out, target_arch);
     try emitTrapDecl(allocator, out, module);
 
     var ctx = LlvmEmitter{
@@ -169,6 +172,7 @@ pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: 
         .debug_functions = std.ArrayList(DebugFunction).empty,
         .debug_locations = std.ArrayList(DebugLocation).empty,
         .source_path = source_path,
+        .target_arch = target_arch,
         .ksan = ksan,
         .msan = msan,
         .csan = csan,
@@ -306,6 +310,7 @@ fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: a
     try out.appendSlice(allocator, "\n");
     // C-ABI varargs intrinsics (for `va.start`/`va.end`; `va.arg` uses the `va_arg` instr).
     try out.appendSlice(allocator, "declare void @llvm.va_start(ptr)\n");
+    try out.appendSlice(allocator, "declare void @llvm.va_copy(ptr, ptr)\n");
     try out.appendSlice(allocator, "declare void @llvm.va_end(ptr)\n\n");
     // Weak no-op `define`s for every sanitizer shadow hook so EVERY build links and behaves
     // identically when no sanitizer runtime is present. A linked runtime (the ksan/msan/csan
@@ -328,6 +333,30 @@ fn isKsanHook(name: []const u8) bool {
         if (std.mem.eql(u8, name, hook)) return true;
     }
     return false;
+}
+
+fn llvmTargetTriple(target_arch: backend_mod.TargetArch) []const u8 {
+    return switch (target_arch) {
+        .riscv64 => "riscv64-unknown-unknown-elf",
+        .x86_64 => "x86_64-unknown-unknown-elf",
+        .aarch64 => "aarch64-unknown-unknown-elf",
+    };
+}
+
+fn llvmTargetDataLayout(target_arch: backend_mod.TargetArch) []const u8 {
+    return switch (target_arch) {
+        .riscv64 => "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128",
+        .x86_64 => "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+        .aarch64 => "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32",
+    };
+}
+
+fn emitTargetTypeDecls(allocator: std.mem.Allocator, out: *std.ArrayList(u8), target_arch: backend_mod.TargetArch) !void {
+    switch (target_arch) {
+        .riscv64 => {},
+        .x86_64 => try out.appendSlice(allocator, "%mc.va_list.x86_64 = type { i32, i32, ptr, ptr }\n\n"),
+        .aarch64 => try out.appendSlice(allocator, "%mc.va_list.aarch64 = type { ptr, ptr, ptr, i32, i32 }\n\n"),
+    }
 }
 
 const LlvmEmitter = struct {
@@ -388,6 +417,7 @@ const LlvmEmitter = struct {
     current_debug_span: ?ast.Span = null,
     current_return_ty: ?ast.TypeExpr = null,
     source_path: []const u8,
+    target_arch: backend_mod.TargetArch,
     // KASAN profile (D2.1): when true, each raw.load/raw.store emits a
     // `call void @mc_ksan_check(i64 addr, i64 size)` before the volatile access, so a
     // poisoned (freed/redzone) access traps at access time. Default false = no hook call.
@@ -1022,7 +1052,12 @@ const LlvmEmitter = struct {
         self.defer_stack.clearRetainingCapacity();
         for (fn_decl.params) |param| {
             try self.local_types.put(param.name.text, param.ty);
-            if (self.isAggregateType(param.ty) or self.atomicPayloadType(param.ty) != null) {
+            if (self.isVaListType(param.ty)) {
+                const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{param.name.text});
+                try self.emitAlloca(ptr, "ptr");
+                try self.out.print(self.allocator, "  store ptr %{s}, ptr {s}\n", .{ param.name.text, ptr });
+                try self.local_slots.put(param.name.text, .{ .ty = param.ty, .ptr = ptr, .kind = .va_list_param });
+            } else if (self.isAggregateType(param.ty) or self.atomicPayloadType(param.ty) != null) {
                 const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{param.name.text});
                 try self.emitAlloca(ptr, try self.llvmType(param.ty));
                 try self.out.print(self.allocator, "  store {s} %{s}, ptr {s}\n", .{ try self.llvmType(param.ty), param.name.text, ptr });
@@ -1126,6 +1161,7 @@ const LlvmEmitter = struct {
 
     fn emitIdent(self: *LlvmEmitter, ident: ast.Ident) ![]const u8 {
         if (self.local_slots.get(ident.text)) |slot| {
+            if (self.isVaListType(slot.ty)) return try self.emitVaListValueFromSlot(slot);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(slot.ty), slot.ptr, try self.debugCallSuffix() });
             return result;
@@ -1140,6 +1176,160 @@ const LlvmEmitter = struct {
         }
         if (self.fn_sigs.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
         return try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text});
+    }
+
+    fn isVaListType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        const resolved = self.resolveAliasType(ty);
+        return switch (resolved.kind) {
+            .name => |name| std.mem.eql(u8, name.text, "va_list"),
+            else => false,
+        };
+    }
+
+    fn vaListStorageType(self: *LlvmEmitter) ![]const u8 {
+        return switch (self.target_arch) {
+            .riscv64 => "ptr",
+            .x86_64 => "[1 x %mc.va_list.x86_64]",
+            .aarch64 => "%mc.va_list.aarch64",
+        };
+    }
+
+    fn vaListCursorPtrFromStorage(self: *LlvmEmitter, storage_ptr: []const u8) ![]const u8 {
+        return switch (self.target_arch) {
+            .riscv64, .aarch64 => storage_ptr,
+            .x86_64 => blk: {
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr inbounds [1 x %mc.va_list.x86_64], ptr {s}, i64 0, i64 0\n", .{ result, storage_ptr });
+                break :blk result;
+            },
+        };
+    }
+
+    fn emitVaListValueFromSlot(self: *LlvmEmitter, slot: LocalSlot) ![]const u8 {
+        switch (slot.kind) {
+            .normal => return error.UnsupportedLlvmEmission,
+            .va_list_param => {
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = load ptr, ptr {s}{s}\n", .{ result, slot.ptr, try self.debugCallSuffix() });
+                return result;
+            },
+            .va_list_local => return switch (self.target_arch) {
+                .riscv64 => blk: {
+                    const result = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = load ptr, ptr {s}{s}\n", .{ result, slot.ptr, try self.debugCallSuffix() });
+                    break :blk result;
+                },
+                .x86_64, .aarch64 => try self.vaListCursorPtrFromStorage(slot.ptr),
+            },
+        }
+    }
+
+    fn vaListCursorPtrFromSlot(self: *LlvmEmitter, slot: LocalSlot) ![]const u8 {
+        switch (slot.kind) {
+            .normal => return error.UnsupportedLlvmEmission,
+            .va_list_local => return self.vaListCursorPtrFromStorage(slot.ptr),
+            .va_list_param => return switch (self.target_arch) {
+                .riscv64 => slot.ptr,
+                .x86_64, .aarch64 => try self.emitVaListValueFromSlot(slot),
+            },
+        }
+    }
+
+    fn emitVaListCursorForCopySource(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+        if (expr.kind == .ident) {
+            const ident = expr.kind.ident;
+            if (self.local_slots.get(ident.text)) |slot| {
+                if (self.isVaListType(slot.ty)) return self.vaListCursorPtrFromSlot(slot);
+            }
+        }
+        const value = try self.emitExpr(expr, simpleType(expr.span, "va_list"));
+        return switch (self.target_arch) {
+            .riscv64 => blk: {
+                const tmp = try self.nextTemp();
+                try self.emitAlloca(tmp, "ptr");
+                try self.out.print(self.allocator, "  store ptr {s}, ptr {s}{s}\n", .{ value, tmp, try self.debugCallSuffix() });
+                break :blk tmp;
+            },
+            .x86_64, .aarch64 => value,
+        };
+    }
+
+    fn emitVaListCursorArg(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+        return switch (expr.kind) {
+            .address_of => |inner| try self.emitAddressOf(inner.*),
+            .grouped => |inner| try self.emitVaListCursorArg(inner.*),
+            else => try self.emitExpr(expr, self.exprType(expr) orelse return error.UnsupportedLlvmEmission),
+        };
+    }
+
+    fn emitVaArg(self: *LlvmEmitter, ap_ptr: []const u8, ty: ast.TypeExpr) ![]const u8 {
+        if (self.target_arch == .aarch64) return try self.emitAarch64VaArg(ap_ptr, ty);
+
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = va_arg ptr {s}, {s}{s}\n", .{ result, ap_ptr, try self.llvmType(ty), try self.debugCallSuffix() });
+        return result;
+    }
+
+    fn emitAarch64VaArg(self: *LlvmEmitter, ap_ptr: []const u8, ty: ast.TypeExpr) ![]const u8 {
+        const result_ty = try self.llvmType(ty);
+        if (!std.mem.eql(u8, result_ty, "ptr")) {
+            const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+            if (bits != 32 and bits != 64) return error.UnsupportedLlvmEmission;
+        }
+
+        const result_slot = try self.nextTemp();
+        try self.emitAlloca(result_slot, result_ty);
+
+        const offs_ptr = try self.nextTemp();
+        const offs = try self.nextTemp();
+        const in_regs = try self.nextTemp();
+        const reg_label = try self.nextLabel("va_arg_reg");
+        const reg_use_label = try self.nextLabel("va_arg_reg_use");
+        const stack_label = try self.nextLabel("va_arg_stack");
+        const done_label = try self.nextLabel("va_arg_done");
+
+        try self.out.print(self.allocator, "  {s} = getelementptr %mc.va_list.aarch64, ptr {s}, i32 0, i32 3\n", .{ offs_ptr, ap_ptr });
+        try self.out.print(self.allocator, "  {s} = load i32, ptr {s}{s}\n", .{ offs, offs_ptr, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  {s} = icmp slt i32 {s}, 0\n", .{ in_regs, offs });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n", .{ in_regs, reg_label, stack_label, try self.debugCallSuffix() });
+
+        try self.out.print(self.allocator, "{s}:\n", .{reg_label});
+        const new_offs = try self.nextTemp();
+        const reg_fits = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = add i32 {s}, 8\n", .{ new_offs, offs });
+        try self.out.print(self.allocator, "  store i32 {s}, ptr {s}{s}\n", .{ new_offs, offs_ptr, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  {s} = icmp sle i32 {s}, 0\n", .{ reg_fits, new_offs });
+        try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n", .{ reg_fits, reg_use_label, stack_label, try self.debugCallSuffix() });
+
+        try self.out.print(self.allocator, "{s}:\n", .{reg_use_label});
+        const gr_top_ptr = try self.nextTemp();
+        const gr_top = try self.nextTemp();
+        const reg_addr = try self.nextTemp();
+        const reg_value = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr %mc.va_list.aarch64, ptr {s}, i32 0, i32 1\n", .{ gr_top_ptr, ap_ptr });
+        try self.out.print(self.allocator, "  {s} = load ptr, ptr {s}{s}\n", .{ gr_top, gr_top_ptr, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  {s} = getelementptr i8, ptr {s}, i32 {s}\n", .{ reg_addr, gr_top, offs });
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ reg_value, result_ty, reg_addr, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ result_ty, reg_value, result_slot, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ done_label, try self.debugCallSuffix() });
+
+        try self.out.print(self.allocator, "{s}:\n", .{stack_label});
+        const stack_ptr = try self.nextTemp();
+        const stack = try self.nextTemp();
+        const next_stack = try self.nextTemp();
+        const stack_value = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = getelementptr %mc.va_list.aarch64, ptr {s}, i32 0, i32 0\n", .{ stack_ptr, ap_ptr });
+        try self.out.print(self.allocator, "  {s} = load ptr, ptr {s}{s}\n", .{ stack, stack_ptr, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  {s} = getelementptr i8, ptr {s}, i64 8\n", .{ next_stack, stack });
+        try self.out.print(self.allocator, "  store ptr {s}, ptr {s}{s}\n", .{ next_stack, stack_ptr, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ stack_value, result_ty, stack, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ result_ty, stack_value, result_slot, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ done_label, try self.debugCallSuffix() });
+
+        try self.out.print(self.allocator, "{s}:\n", .{done_label});
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, result_ty, result_slot, try self.debugCallSuffix() });
+        return result;
     }
 
     fn emitBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) anyerror!bool {
@@ -1663,10 +1853,23 @@ const LlvmEmitter = struct {
         if (local.names.len != 1) return error.UnsupportedLlvmEmission;
         const init = local.init orelse return error.UnsupportedLlvmEmission;
         const ty = local.ty orelse self.exprType(init) orelse return error.UnsupportedLlvmEmission;
-        const llvm_ty = try self.llvmType(ty);
         const resolved_ty = self.resolveAliasType(ty);
         const name = local.names[0].text;
         const ptr = try self.nextBindingPtr(name);
+        if (self.isVaListType(ty)) {
+            try self.emitAlloca(ptr, try self.vaListStorageType());
+            try self.local_types.put(name, ty);
+            try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr, .kind = .va_list_local });
+            const dst = try self.vaListCursorPtrFromStorage(ptr);
+            if (init.kind == .call and isVaStartCall(init.kind.call.callee.*)) {
+                try self.out.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{dst});
+                return;
+            }
+            const src = try self.emitVaListCursorForCopySource(init);
+            try self.out.print(self.allocator, "  call void @llvm.va_copy(ptr {s}, ptr {s})\n", .{ dst, src });
+            return;
+        }
+        const llvm_ty = try self.llvmType(ty);
         try self.emitAlloca(ptr, llvm_ty);
         try self.local_types.put(name, ty);
         try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr });
@@ -1707,6 +1910,12 @@ const LlvmEmitter = struct {
         if (try self.emitMemberAssignment(target, value_expr)) return;
         if (assignmentIdent(target)) |ident| {
             if (self.local_slots.get(ident.text)) |slot| {
+                if (self.isVaListType(slot.ty)) {
+                    const dst = try self.vaListCursorPtrFromSlot(slot);
+                    const src = try self.emitVaListCursorForCopySource(value_expr);
+                    try self.out.print(self.allocator, "  call void @llvm.va_copy(ptr {s}, ptr {s})\n", .{ dst, src });
+                    return;
+                }
                 const llvm_ty = try self.llvmType(slot.ty);
                 const value = try self.emitExpr(value_expr, slot.ty);
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
@@ -2438,7 +2647,10 @@ const LlvmEmitter = struct {
     fn emitAddressOf(self: *LlvmEmitter, target: ast.Expr) ![]const u8 {
         switch (target.kind) {
             .ident => |ident| {
-                if (self.local_slots.get(ident.text)) |slot| return slot.ptr;
+                if (self.local_slots.get(ident.text)) |slot| {
+                    if (self.isVaListType(slot.ty)) return try self.vaListCursorPtrFromSlot(slot);
+                    return slot.ptr;
+                }
                 if (self.global_types.contains(ident.text)) return try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text});
                 // `&f` where f is a function: the function's address IS the symbol `@f`
                 // (a code pointer). Used for installing trap/entry vectors by address.
@@ -3233,18 +3445,13 @@ const LlvmEmitter = struct {
             return result;
         }
         if (vaCallMember(call.callee.*)) |va_name| {
-            // The cursor argument is `&ap` (a pointer to the va_list slot); its lowered value
-            // is exactly the slot pointer the VAARG legalizer / llvm.va_end want.
+            // The cursor argument is either `&ap` for a local va_list or a `*mut va_list`
+            // parameter. Normalize both to the ABI cursor pointer that va_arg / va_end want.
             if (call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const ap_ptr = switch (call.args[0].kind) {
-                .address_of => |inner| try self.emitAddressOf(inner.*),
-                else => try self.emitExpr(call.args[0], self.exprType(call.args[0]) orelse return error.UnsupportedLlvmEmission),
-            };
+            const ap_ptr = try self.emitVaListCursorArg(call.args[0]);
             if (std.mem.eql(u8, va_name, "arg")) {
                 if (call.type_args.len != 1) return error.UnsupportedLlvmEmission;
-                const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = va_arg ptr {s}, {s}{s}\n", .{ result, ap_ptr, try self.llvmType(call.type_args[0]), try self.debugCallSuffix() });
-                return result;
+                return try self.emitVaArg(ap_ptr, call.type_args[0]);
             }
             if (std.mem.eql(u8, va_name, "end")) {
                 try self.out.print(self.allocator, "  call void @llvm.va_end(ptr {s})\n", .{ap_ptr});
@@ -5855,6 +6062,13 @@ const LlvmEmitter = struct {
 const LocalSlot = struct {
     ty: ast.TypeExpr,
     ptr: []const u8,
+    kind: LocalSlotKind = .normal,
+};
+
+const LocalSlotKind = enum {
+    normal,
+    va_list_local,
+    va_list_param,
 };
 
 const FnSig = struct {

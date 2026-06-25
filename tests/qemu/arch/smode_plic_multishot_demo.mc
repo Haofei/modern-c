@@ -19,6 +19,7 @@
 
 import "kernel/arch/riscv64/sbi.mc";
 import "kernel/arch/riscv64/sbi_console.mc";
+import "kernel/drivers/irq/smode_plic.mc";
 
 const TARGET: u64 = 3;
 
@@ -29,12 +30,8 @@ const UART_IER_ETBEI: u8 = 0x02;
 const UART_IRQ: u32 = 10;
 
 // ----- PLIC, hart 0 S-mode context (context 1) on QEMU virt -----
-const PLIC_PRIORITY: usize = 0x0c00_0000;
-const PLIC_S_ENABLE: usize = 0x0c00_2080;
-const PLIC_S_THRESHOLD: usize = 0x0c20_1000;
-const PLIC_S_CLAIM: usize = 0x0c20_1004;
+const PLIC_BASE: usize = 0x0c00_0000;
 
-const SCAUSE_S_EXT: u64 = 0x8000_0000_0000_0009;
 const SIE_SEIE: u64 = 0x200;
 const SSTATUS_SIE: u64 = 0x2;
 
@@ -72,29 +69,15 @@ fn uart_mask() -> void {
     }
 }
 
-fn plic_s_setup() -> void {
-    unsafe {
-        raw.store<u32>(phys(PLIC_PRIORITY + (UART_IRQ as usize) * 4), 1);
-        raw.store<u32>(phys(PLIC_S_THRESHOLD), 0);
-        let cur: u32 = raw.load<u32>(phys(PLIC_S_ENABLE));
-        raw.store<u32>(phys(PLIC_S_ENABLE), cur | ((1 as u32) << UART_IRQ));
-    }
-}
-fn plic_s_claim() -> u32 {
-    unsafe { return raw.load<u32>(phys(PLIC_S_CLAIM)); }
-}
-fn plic_s_complete(line: u32) -> void {
-    unsafe { raw.store<u32>(phys(PLIC_S_CLAIM), line); }
-}
-
 // S-external handler: claim, mask the source (de-assert), fence, complete, count, and —
 // unless we have taken enough — RE-ARM the source for the next discrete interrupt.
 export fn s_ext_trap(scause: u64) -> void {
-    if scause == SCAUSE_S_EXT {
-        let src: u32 = plic_s_claim();
+    if smode_plic_is_external(scause) {
+        let plic: SModePlic = smode_plic_for_hart(PLIC_BASE, 0);
+        let src: u32 = smode_plic_claim(plic);
         uart_mask();
         io_fence();
-        plic_s_complete(src);
+        smode_plic_complete(plic, src);
         if src == UART_IRQ {
             g_irqs = g_irqs + 1;
             if g_irqs < TARGET {
@@ -124,7 +107,7 @@ export fn s_trap_vector() -> void {
 export fn s_entry(hartid: u64, dtb: u64) -> void {
     sbi_puts("smode-plic-multishot: re-armed S-mode external IRQ via PLIC under OpenSBI\n");
     write_stvec((&s_trap_vector) as usize);
-    plic_s_setup();
+    smode_plic_enable_line(smode_plic_for_hart(PLIC_BASE, 0), UART_IRQ, 1, 0);
     set_sie(SIE_SEIE);
     set_sstatus(SSTATUS_SIE);
     uart_arm_thre();

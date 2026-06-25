@@ -28,6 +28,7 @@
 
 import "kernel/arch/riscv64/sbi.mc";
 import "kernel/arch/riscv64/sbi_console.mc";
+import "kernel/drivers/irq/smode_plic.mc";
 
 const TARGET: u64 = 1;
 
@@ -39,13 +40,6 @@ const UART_IRQ: u32 = 10;              // QEMU virt UART0 PLIC source
 
 // ----- PLIC, hart 0 S-mode context (context 1) on QEMU virt -----
 const PLIC_BASE: usize = 0x0c00_0000;
-const PLIC_PRIORITY: usize = 0x0c00_0000;        // + line*4
-const PLIC_S_ENABLE: usize = 0x0c00_2080;        // hart 0 S-mode enable bitmap (ctx 1)
-const PLIC_S_THRESHOLD: usize = 0x0c20_1000;     // hart 0 S-mode priority threshold (ctx 1)
-const PLIC_S_CLAIM: usize = 0x0c20_1004;         // hart 0 S-mode claim/complete (ctx 1)
-
-// scause for an S-mode external interrupt: interrupt bit (63) set + cause 9.
-const SCAUSE_S_EXT: u64 = 0x8000_0000_0000_0009;
 
 // sie.SEIE = bit 9 (S-mode external interrupt enable); sstatus.SIE = bit 1.
 const SIE_SEIE: u64 = 0x200;
@@ -133,39 +127,18 @@ fn uart_mask() -> void {
     }
 }
 
-// ---- PLIC S-mode context helpers ----
-
-fn plic_s_setup() -> void {
-    unsafe {
-        // Source priority must be > threshold to be delivered.
-        raw.store<u32>(phys(PLIC_PRIORITY + (UART_IRQ as usize) * 4), 1);
-        // S-mode threshold 0 (let any positive priority through).
-        raw.store<u32>(phys(PLIC_S_THRESHOLD), 0);
-        // Enable the UART line in the S-mode context bitmap.
-        let cur: u32 = raw.load<u32>(phys(PLIC_S_ENABLE));
-        raw.store<u32>(phys(PLIC_S_ENABLE), cur | ((1 as u32) << UART_IRQ));
-    }
-}
-
-fn plic_s_claim() -> u32 {
-    unsafe { return raw.load<u32>(phys(PLIC_S_CLAIM)); }
-}
-
-fn plic_s_complete(line: u32) -> void {
-    unsafe { raw.store<u32>(phys(PLIC_S_CLAIM), line); }
-}
-
 // S-mode trap handler. On an S-external interrupt: claim the PLIC source, mask it at
 // the device (ETBEI=0) so it cannot re-fire, `io_fence` to order the de-assert
 // before the PLIC complete, complete, and count. Single-shot: it never re-arms (see
 // the file header). On ANY other cause (a real fault) fail closed: report and shut
 // down rather than spin.
 export fn s_ext_trap(scause: u64) -> void {
-    if scause == SCAUSE_S_EXT {
-        let src: u32 = plic_s_claim();
+    if smode_plic_is_external(scause) {
+        let plic: SModePlic = smode_plic_for_hart(PLIC_BASE, 0);
+        let src: u32 = smode_plic_claim(plic);
         uart_mask();            // de-assert the source (ETBEI=0) so it cannot re-fire...
         io_fence();             // ...ordered before the PLIC complete below
-        plic_s_complete(src);   // complete whatever we claimed (line gating)
+        smode_plic_complete(plic, src); // complete whatever we claimed
         if src == UART_IRQ {
             g_irqs = g_irqs + 1;
         }
@@ -194,7 +167,7 @@ export fn s_entry(hartid: u64, dtb: u64) -> void {
     write_stvec((&s_trap_vector) as usize);
 
     // Program the PLIC S-mode context to route UART line 10 to this hart.
-    plic_s_setup();
+    smode_plic_enable_line(smode_plic_for_hart(PLIC_BASE, 0), UART_IRQ, 1, 0);
 
     // Enable S-external interrupts (sie.SEIE), then global S-interrupts (sstatus.SIE).
     set_sie(SIE_SEIE);

@@ -62,7 +62,7 @@ boundary").
 | Timer-tick preemption | demonstrated in a demo runtime, NOT in the core scheduler | `tests/qemu/proc/preempt_demo.mc` (timer → `sched_yield`) |
 | SMP per-core run-queue + work-steal | a PRIMITIVE only, not an integrated confined-U-mode SMP scheduler | `kernel/core/smprq.mc` |
 | Message passing (Worker postMessage) | primitive present, NO internal locking | `kernel/lib/mailbox.mc` (post/take; blocking layered by the caller) |
-| Real TCP/HTTP transport | present, but **SYNCHRONOUS / poll-mode + blocking** — `virtio_net` serves frames in "poll mode"; `net_fetch_tcp` blocks connect→send→recv | `kernel/drivers/virtio/virtio_net.mc:497`, `kernel/net/net_broker.mc` |
+| Real TCP/HTTP transport | present, but **SYNCHRONOUS / poll-mode + blocking** — `virtio_net` serves frames in "poll mode"; `net_fetch_tcp` blocks connect→send→recv | `kernel/drivers/virtio/virtio_net.mc:497`, `kernel/net/net_broker_tcp.mc` |
 | Async I/O ABI: non-blocking submit + poll + completion path + front-end event loop | **PARTIAL (Phase 7)** — delivered: the JS event loop, the `SYS_SUBMIT`/`SYS_POLL` async ABI, Promise completion, backpressure/quotas, structured JS errors, and the real capability-checked FS broker from JS. PENDING: making **net-fetch completion-driven** (TCP/HTTP is still blocking poll-mode). | `qjs-async-test`, `qjs-io-test`, `qjs-agent-test`, `qjs-async-agent-test`, `qjs-realtool-test` |
 | Userspace thread spawn + Workers (CPU-parallel) + concurrency hardening | NOT done (Phase 8 — optional) | — |
 

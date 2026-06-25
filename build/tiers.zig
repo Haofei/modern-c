@@ -87,6 +87,14 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-qjs-smode-async-agent-test"));
     m0_step.dependOn(ctx.cmd("qjs-realtool-test"));
     m0_step.dependOn(ctx.cmd("llvm-qjs-realtool-test"));
+    m0_step.dependOn(ctx.cmd("qjs-nettool-test"));
+    m0_step.dependOn(ctx.cmd("llvm-qjs-nettool-test"));
+    m0_step.dependOn(ctx.cmd("qjs-net-realtool-test"));
+    m0_step.dependOn(ctx.cmd("llvm-qjs-net-realtool-test"));
+    m0_step.dependOn(ctx.cmd("qjs-smode-net-irq-tool-test"));
+    m0_step.dependOn(ctx.cmd("llvm-qjs-smode-net-irq-tool-test"));
+    m0_step.dependOn(ctx.cmd("qjs-smode-blk-irq-tool-test"));
+    m0_step.dependOn(ctx.cmd("llvm-qjs-smode-blk-irq-tool-test"));
     m0_step.dependOn(ctx.cmd("qjs-async-test"));
     m0_step.dependOn(ctx.cmd("llvm-qjs-async-test"));
     m0_step.dependOn(ctx.cmd("qjs-io-test"));
@@ -179,6 +187,9 @@ pub fn register(ctx: *h.Ctx) void {
     // C-backend async-IRQ reset, fixed by #[align(4)] on naked trap vectors).
     m0_step.dependOn(ctx.cmd("llvm-smode-plic-test"));
     m0_step.dependOn(ctx.cmd("llvm-smode-plic-multishot-test"));
+    m0_step.dependOn(ctx.cmd("llvm-blk-smode-irq-test"));
+    m0_step.dependOn(ctx.cmd("llvm-net-smode-irq-test"));
+    m0_step.dependOn(ctx.cmd("llvm-net-smode-rx-irq-test"));
     m0_step.dependOn(ctx.cmd("llvm-net-smode-test"));
     m0_step.dependOn(ctx.cmd("llvm-net-test"));
     m0_step.dependOn(ctx.cmd("llvm-nic-test"));
@@ -250,6 +261,9 @@ pub fn register(ctx: *h.Ctx) void {
     // gate for the former async-IRQ reset).
     m0_step.dependOn(ctx.cmd("smode-plic-test"));
     m0_step.dependOn(ctx.cmd("smode-plic-multishot-test"));
+    m0_step.dependOn(ctx.cmd("blk-smode-irq-test"));
+    m0_step.dependOn(ctx.cmd("net-smode-irq-test"));
+    m0_step.dependOn(ctx.cmd("net-smode-rx-irq-test"));
     m0_step.dependOn(ctx.cmd("net-smode-test"));
     // bearssl-smode-test revalidates the freestanding BearSSL SHA-256 + virtio-rng
     // entropy (the TLS crypto stack) under REAL OpenSBI in S-mode. Deterministic (no
@@ -391,11 +405,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("x86-qjs-test"));
     m0_step.dependOn(ctx.cmd("llvm-x86-qjs-test"));
     m0_step.dependOn(ctx.cmd("x86-qjs-async-test"));
-    // NOTE: llvm_x86_qjs_async is intentionally NOT in m0. The C-x86 async agent and the
-    // LLVM-x86 SYNC agent both pass; the LLVM-x86 ASYNC case faults inside QuickJS's Error-string
-    // handling during the heavy back-pressure burst (a separate x86-LLVM-backend codegen issue —
-    // the IDENTICAL MC broker logic passes under C-x86 and under LLVM-riscv). The build step
-    // exists (llvm-x86-qjs-async-test) for tracking, but is not gated until that is root-caused.
+    m0_step.dependOn(ctx.cmd("llvm-x86-qjs-async-test"));
     m0_step.dependOn(ctx.cmd("slotmap-test"));
     m0_step.dependOn(ctx.cmd("mask-test"));
     m0_step.dependOn(ctx.cmd("rights-test"));
@@ -426,19 +436,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-arm-user-test"));
     m0_step.dependOn(ctx.cmd("arm-qjs-test"));
     m0_step.dependOn(ctx.cmd("arm-qjs-async-test"));
-    // NOTE: the LLVM-aarch64 qjs cases (llvm-arm-qjs-test / llvm-arm-qjs-async-test) are
-    // intentionally NOT in m0. The C-aarch64 agent passes for BOTH the sync and the async agent
-    // (full EL0 confinement + svc host I/O + USER-EXIT), and the IDENTICAL MC fixture/libc passes
-    // under LLVM-riscv (llvm-qjs-agent-test) and the C-aarch64 path here. Under the LLVM backend on
-    // aarch64, however, even a trivial JS eval faults INSIDE the QuickJS workload: a data-dependent
-    // near-null deref (a software walk shows a data abort at lc_ld8 with FAR=0x1, reached via
-    // strlen of a pointer QuickJS computed as 1). The agent's address space, GOT relocations, and
-    // confinement all verify correct (the kernel maps EL1-only, the GOT entries hold the right
-    // global addresses), so this is an LLVM-aarch64 codegen divergence in the heavy QuickJS+MC-libc
-    // workload — the same FAMILY of backend gap as M7's ungated llvm-x86-qjs-async (there the C and
-    // LLVM-riscv paths pass but LLVM-x86 faults in QuickJS's Error-string handling). The build steps
-    // exist (llvm-arm-qjs-test / llvm-arm-qjs-async-test) for tracking, but are not gated until that
-    // aarch64-LLVM-backend issue is root-caused.
+    m0_step.dependOn(ctx.cmd("llvm-arm-qjs-test"));
+    m0_step.dependOn(ctx.cmd("llvm-arm-qjs-async-test"));
     m0_step.dependOn(ctx.cmd("liveupdate-test"));
     m0_step.dependOn(ctx.cmd("sbi-boot-test"));
     m0_step.dependOn(ctx.cmd("llvm-sbi-boot-test"));

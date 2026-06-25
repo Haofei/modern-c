@@ -115,11 +115,9 @@ agent-sandbox pieces:
   demos through BearSSL.
 - x86_64 (multiboot boot, 4-level paging, ring-3 user via `int 0x80`, LAPIC timer + PCI IRQ,
   confined QuickJS) and AArch64 (EL1 boot, stage-1 4 KB paging, EL0 user via `svc #0`, confined
-  QuickJS) — boot/paging/user gated on **both** backends. QuickJS gating is narrower: x86 **sync**
-  is C+LLVM-gated, x86 **async** is C-gated (the LLVM-x86 async case is tracking-only/ungated);
-  AArch64 QuickJS sync **and** async are C-gated, with LLVM tracking-only/ungated. The ungated LLVM
-  cases fault inside the QuickJS workload (known LLVM-backend codegen issues). Not full-kernel
-  parity with riscv64 (AArch64 IRQ controller still pending).
+  QuickJS) — boot/paging/user and QuickJS sync/async are gated on **both** backends. This is
+  still not full-kernel parity with riscv64: x86_64 lacks the full virtio-pci data path, and
+  AArch64 GIC/timer/virtio depth is still pending.
 - Demo-scale SMP/IPI/TLB-shootdown infrastructure.
 
 The current system proves an important point:
@@ -391,7 +389,7 @@ Milestones:
 6. ✓ Run user hello syscall test (`int 0x80`, bad ptr → `-EFAULT`).
 7. ◐ Add PCI + virtio-pci — PCI CAM enumeration done (`x86-pci-test` discovers the virtio-pci
    device, vendor `0x1AF4`); a full virtio-pci **driver** (queue setup + DMA) is the next depth.
-8. ✓ Run QuickJS agent (`x86-qjs-test`; C+LLVM sync, C async — LLVM async tracking-only).
+8. ✓ Run QuickJS agent (`x86-qjs-test`; C+LLVM sync/async).
 
 ### 9.3 AArch64 support
 
@@ -418,7 +416,7 @@ Milestones:
 6. ✓ Run user hello syscall test (`svc #0`, bad ptr → `-EFAULT`).
 7. ✗ Add GICv3 timer/interrupt support — *next* (the one remaining per-arch gap vs riscv64/x86).
 8. ✗ Reuse virtio-mmio core — *next* (no AArch64 virtio driver gate yet).
-9. ✓ Run QuickJS agent (`arm-qjs-test`; C sync + async — both LLVM cases tracking-only).
+9. ✓ Run QuickJS agent (`arm-qjs-test`; C+LLVM sync/async).
 
 ## 10. Architecture split
 
@@ -789,9 +787,8 @@ Done when:
 
 - ✓ The same pure JS agent runs on AArch64 (confined EL0 QuickJS).
 - ✓ The same broker conformance tests pass (sync + async).
-  *(C-gated on both the sync and async agent; the LLVM-aarch64 cases — `llvm-arm-qjs-test`,
-  `llvm-arm-qjs-async-test` — are tracking-only/ungated, excluded from `m0`: even a trivial JS
-  eval faults inside the QuickJS workload under the LLVM backend on aarch64.)*
+  *(C and LLVM are gated on both the sync and async agent; AArch64 LLVM uses target-aware
+  `va_list` storage plus explicit `va_arg` lowering for the general-register/stack ABI path.)*
 
 ### M11: edge appliance runtime
 

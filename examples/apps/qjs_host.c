@@ -31,6 +31,8 @@ size_t strlen(const char *s);
 #define TOOL_OP_FS_WRITE 6u
 #define TOOL_OP_FS_READ 7u
 #define TOOL_OP_FS_MKDIR 8u
+// Brokered network fetch: arg = endpoint id, flags = request token/audit size.
+#define TOOL_OP_NET_FETCH 9u
 // CANCEL: complete the in-flight request whose id == arg with -E_CANCELED. Enqueues no new slot;
 // sys_submit returns 0 on accept, -E_DENIED if the target id is unknown to the kernel broker.
 #define TOOL_OP_CANCEL 3u
@@ -148,6 +150,7 @@ static const char *HOST_PRELUDE =
     "globalThis.host_fs_write = function (p, d) { return globalThis.__host_fs_write_raw(p, d).then(function (v) { return v; }, globalThis.__host_errify); };"
     "globalThis.host_fs_read = function (p) { return globalThis.__host_fs_read_raw(p).then(function (v) { return v; }, globalThis.__host_errify); };"
     "globalThis.host_fs_mkdir = function (p) { return globalThis.__host_fs_mkdir_raw(p).then(function (v) { return v; }, globalThis.__host_errify); };"
+    "globalThis.host_net_fetch = function (endpoint, token) { return globalThis.__host_net_fetch_raw(endpoint, token).then(function (v) { return v; }, globalThis.__host_errify); };"
     // host_call(n, delay): an AbortController-like handle over a cancellable async request. Returns a
     // plain JS object { promise, cancel } built ENTIRELY in the prelude (object literals are proven
     // safe in the freestanding engine — unlike returning an object from a raw C binding). It submits
@@ -316,6 +319,15 @@ static JSValue js_host_fs_mkdir(JSContext *ctx, JSValueConst this_val, int argc,
     return start_request_full(ctx, TOOL_OP_FS_MKDIR, (uint64_t)plen, 0, payload, (uint32_t)plen, RES_KIND_SCALAR);
 }
 
+// host_net_fetch(endpoint, token): brokered network egress through the kernel's NetCap policy.
+// Resolves with the broker response scalar; rejects with structured EDENIED/EAGAIN/ENOENT errors.
+static JSValue js_host_net_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    int32_t endpoint = 0, token = 0;
+    if (argc > 0) JS_ToInt32(ctx, &endpoint, argv[0]);
+    if (argc > 1) JS_ToInt32(ctx, &token, argv[1]);
+    return start_request_full(ctx, TOOL_OP_NET_FETCH, (uint64_t)(uint32_t)endpoint, token, 0, 0, RES_KIND_SCALAR);
+}
+
 // __host_last_id_raw(): return the kernel request id of the most recent successful submit as a JS
 // number. The prelude calls it immediately after host_call()'s submit to capture that request's id
 // for a cancel() closure. Returns -1 if the last submit was rejected (no id was assigned).
@@ -361,6 +373,7 @@ int main(void) {
     JS_SetPropertyStr(ctx, global, "__host_fs_write_raw", JS_NewCFunction(ctx, js_host_fs_write, "__host_fs_write_raw", 2));
     JS_SetPropertyStr(ctx, global, "__host_fs_read_raw", JS_NewCFunction(ctx, js_host_fs_read, "__host_fs_read_raw", 1));
     JS_SetPropertyStr(ctx, global, "__host_fs_mkdir_raw", JS_NewCFunction(ctx, js_host_fs_mkdir, "__host_fs_mkdir_raw", 1));
+    JS_SetPropertyStr(ctx, global, "__host_net_fetch_raw", JS_NewCFunction(ctx, js_host_net_fetch, "__host_net_fetch_raw", 2));
     JS_SetPropertyStr(ctx, global, "__host_last_id_raw", JS_NewCFunction(ctx, js_host_last_id, "__host_last_id_raw", 0));
     JS_SetPropertyStr(ctx, global, "__host_cancel_raw", JS_NewCFunction(ctx, js_host_cancel, "__host_cancel_raw", 1));
     JS_FreeValue(ctx, global);

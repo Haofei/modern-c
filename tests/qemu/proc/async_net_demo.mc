@@ -49,8 +49,10 @@ const TARGET_IP: u32 = 0x0A00_0201; // 10.0.2.1 (the slirp gateway)
 
 global g_procs: ProcTable;
 global g_broker: AsyncBroker;
-global g_map: NetReqMap;
-global g_pool: NetBufPool;
+global g_tx_map: NetReqMap;
+global g_tx_pool: NetBufPool;
+global g_rx_map: NetReqMap;
+global g_rx_pool: NetBufPool;
 global g_rxq: Virtq;
 global g_rxdesc: DescTable;
 global g_rxavail: VringAvail;
@@ -164,8 +166,10 @@ export fn async_net_demo() -> u32 {
         .regs = regs,
         .rxq = &g_rxq,
         .txq = &g_txq,
-        .map = &g_map,
-        .pool = &g_pool,
+        .tx_map = &g_tx_map,
+        .tx_pool = &g_tx_pool,
+        .rx_map = &g_rx_map,
+        .rx_pool = &g_rx_pool,
         .broker = &g_broker,
         .procs = &g_procs,
     };

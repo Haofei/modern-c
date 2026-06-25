@@ -37,6 +37,23 @@ pub const Checks = struct {
     csan: bool = false,
 };
 
+/// Code-generation target architecture for backend details that are ABI-shaped
+/// rather than import-shaped. `--arch` already selects architecture-specific
+/// imports; LLVM lowering also needs the same target to pick the correct C ABI
+/// representation for things like `va_list`.
+pub const TargetArch = enum {
+    riscv64,
+    x86_64,
+    aarch64,
+};
+
+pub fn targetArchFromName(name: []const u8) ?TargetArch {
+    if (std.mem.eql(u8, name, "riscv64")) return .riscv64;
+    if (std.mem.eql(u8, name, "x86_64")) return .x86_64;
+    if (std.mem.eql(u8, name, "aarch64")) return .aarch64;
+    return null;
+}
+
 /// Options threaded from the CLI into a backend's lowering entry point. This is
 /// the union of everything any built-in backend needs; a given backend reads
 /// only the subset it supports (e.g. the LLVM backend ignores `profile`).
@@ -46,6 +63,9 @@ pub const LowerOptions = struct {
     /// Source path embedded in #line / !DILocation metadata; null means the
     /// backend picks its own default.
     source_path: ?[]const u8,
+    /// Target ABI used for backend lowering. Defaults to the historical RISC-V
+    /// path so existing invocations without `--arch` are unchanged.
+    target_arch: TargetArch = .riscv64,
     /// The `--checks=` instrumentation axis (optimize + the ksan/msan/csan
     /// sanitizer profiles), threaded as one value rather than four loose bools.
     checks: Checks = .{},

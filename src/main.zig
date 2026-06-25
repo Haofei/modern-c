@@ -250,6 +250,7 @@ pub fn main(init: std.process.Init) !void {
     // Bundle the build-safety / sanitizer axis into one value (see backend.Checks); this is
     // threaded as a unit so a positional drop (the original KCSAN-on-LLVM no-op) can't recur.
     const checks: backend.Checks = .{ .optimize = optimize, .ksan = ksan, .msan = msan, .csan = csan };
+    const target_arch = backend.targetArchFromName(arch_flag orelse "riscv64").?;
     if (check_fmt and !std.mem.eql(u8, command, "fmt")) return failUsage();
     // `--structs=` is consumed only by the struct-from-MC commands, which both require it.
     if (structs_flag != null and !needs_structs) return failUsage();
@@ -305,7 +306,7 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "emit-map")) {
         try runEmitMap(allocator, path, source, profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source, checks, stub_asm);
+        try runEmitLlvm(allocator, path, source, checks, stub_asm, target_arch);
     } else if (std.mem.eql(u8, command, "list-tests")) {
         try runListTests(allocator, path, source);
     } else if (is_emit_layout) {
@@ -737,7 +738,7 @@ fn runEmitMap(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     try writeStdout(output.items);
 }
 
-fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool) !void {
+fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch) !void {
     const optimize = checks.optimize;
     var diag = diagnostics.Reporter.init(allocator, path, source);
     defer diag.deinit();
@@ -772,7 +773,7 @@ fn runEmitLlvm(allocator: std.mem.Allocator, path: []const u8, source: []const u
     const be = backend.byName("llvm").?;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.lower(allocator, module, &output, .{ .profile = .kernel, .source_path = path, .checks = checks, .stub_asm = stub_asm });
+    try be.lower(allocator, module, &output, .{ .profile = .kernel, .source_path = path, .target_arch = target_arch, .checks = checks, .stub_asm = stub_asm });
     try writeStdout(output.items);
 }
 

@@ -45,12 +45,45 @@ LL="$TMP_DIR/module.ll"
 CHECKS_FLAG=()
 [ "${MC_CHECKS:-all}" != "all" ] && CHECKS_FLAG=(--checks="${MC_CHECKS}")
 # Arch-selection seam (R0b): MC_ARCH picks which arch a `kernel/arch/active/...` import
-# resolves to (default riscv64 in the compiler). Mirrors MC_CHECKS.
+# resolves to. When callers pass only llc's -mtriple, infer the same MC arch so LLVM lowering
+# gets target ABI details such as va_list storage right for user-libc/QuickJS objects too.
+EFFECTIVE_MC_ARCH="${MC_ARCH:-}"
+HAVE_MTRIPLE=0
+for arg in ${LLC_ARGS[@]+"${LLC_ARGS[@]}"}; do
+    case "$arg" in
+        -mtriple=*)
+            HAVE_MTRIPLE=1
+            if [ -z "$EFFECTIVE_MC_ARCH" ]; then
+                case "$arg" in
+                    -mtriple=riscv64*) EFFECTIVE_MC_ARCH="riscv64" ;;
+                    -mtriple=x86_64*) EFFECTIVE_MC_ARCH="x86_64" ;;
+                    -mtriple=aarch64*|-mtriple=arm64*) EFFECTIVE_MC_ARCH="aarch64" ;;
+                esac
+            fi
+            ;;
+    esac
+done
+if [ "$HAVE_MTRIPLE" -eq 0 ]; then
+    HOST_TRIPLE="${MC_HOST_TRIPLE:-}"
+    if [ -z "$HOST_TRIPLE" ]; then
+        HOST_TRIPLE="$("$LLC" --version | awk -F: '/Default target:/ { gsub(/^[ \t]+/, "", $2); print $2; exit }')"
+    fi
+    if [ -n "$HOST_TRIPLE" ]; then
+        LLC_ARGS+=("-mtriple=$HOST_TRIPLE")
+        if [ -z "$EFFECTIVE_MC_ARCH" ]; then
+            case "$HOST_TRIPLE" in
+                riscv64*) EFFECTIVE_MC_ARCH="riscv64" ;;
+                x86_64*) EFFECTIVE_MC_ARCH="x86_64" ;;
+                aarch64*|arm64*) EFFECTIVE_MC_ARCH="aarch64" ;;
+            esac
+        fi
+    fi
+fi
 ARCH_FLAG=()
-[ -n "${MC_ARCH:-}" ] && ARCH_FLAG=(--arch="${MC_ARCH}")
+[ -n "$EFFECTIVE_MC_ARCH" ] && ARCH_FLAG=(--arch="$EFFECTIVE_MC_ARCH")
 # Host-native logic tests of arch modules set MC_STUB_ASM=1 so inline asm lowers to a
 # host-neutral stub (the target ISA's mnemonics can't be assembled on the host).
 STUB_FLAG=()
 [ -n "${MC_STUB_ASM:-}" ] && STUB_FLAG=(--stub-asm)
 "$MCC" emit-llvm "$INPUT" ${CHECKS_FLAG[@]+"${CHECKS_FLAG[@]}"} ${ARCH_FLAG[@]+"${ARCH_FLAG[@]}"} ${STUB_FLAG[@]+"${STUB_FLAG[@]}"} > "$LL"
-"$LLC" -filetype=obj "$LL" -o "$OUT" "${LLC_ARGS[@]}"
+"$LLC" -filetype=obj "$LL" -o "$OUT" ${LLC_ARGS[@]+"${LLC_ARGS[@]}"}

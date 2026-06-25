@@ -224,10 +224,9 @@ that enables interrupts then jumps to `entry`.
 | **x86_64** | ✓ multiboot | ✓ ring-3 user + confined QuickJS¹ | ✓ (ring-3, `int 0x80`) | ✓ 4-level | ✓ LAPIC timer + PCI (CAM) | **GATED (boot/paging/user/IRQ; QuickJS¹); not full-kernel parity** |
 | **aarch64** | ✓ QEMU virt (EL1) | ✓ EL0 user + confined QuickJS¹ | ✓ (EL0, `svc #0`) | ✓ stage-1 4 KB | ✗ (no GIC/timer IRQ yet) | **GATED (boot/paging/user; QuickJS¹); IRQ pending** |
 
-¹ QuickJS gating is per-backend: **x86 sync** = C+LLVM-gated; **x86 async** = C-gated (LLVM-x86
-async is tracking-only, not in `m0`); **AArch64 sync + async** = C-gated (both LLVM-aarch64 QuickJS
-cases tracking-only, not in `m0`). The ungated LLVM cases fault *inside* the QuickJS workload — known
-LLVM-backend codegen issues (build steps exist for tracking; root-cause pending).
+¹ QuickJS gating is per-backend: **x86 sync + async** = C+LLVM-gated; **AArch64 sync + async** =
+C+LLVM-gated. The former LLVM tracking cases were promoted after target-aware `va_list` storage,
+target triples/data layouts, and explicit AArch64 `va_arg` lowering were proven under QEMU.
 
 ### 8.3 "Both backends" ≠ "both architectures"
 
@@ -385,7 +384,10 @@ agent_tool_call(t, reg, sb, tool_id, arg) -> Result<u32, ToolError>
   agent in U-mode drives the **real** capability-checked **FS** path through
   `SYS_SUBMIT`/`SYS_POLL` into `agent_fs_call` (allow/deny/audit) under S-mode. This *is* a
   real path on RISC-V/S-mode for the FS vector; the secret/sum demo paths and the in-process
-  mock above still coexist, and net-fetch from the JS surface is still pending.
+  mock above still coexist. A real TCP-backed network broker path exists; the production
+  JS/tool-catalog now exposes `host_net_fetch` over the broker control plane, with TCP-backed
+  transport integration gated. Both `host_net_fetch` and `host_fs_read` have S-mode
+  IRQ-backed `SYS_POLL` completion gates.
 
 Gates: `cap-test`, `agent-e2e-test` (legacy mock); `qjs-realtool-test` (confined-JS FS broker).
 
@@ -662,7 +664,8 @@ Beyond the type-system guarantees, the kernel ships an **opt-in hardening suite*
 analyses (UserPtr/Cap/Rights/Secret taint, definite-init, borrow-escape) and sanitizer
 profiles (ksan/kmsan/kcsan, heap redzones + stack canary), all **parity-gated**. Struct-layout
 drift between MC and mirrored C structs is a compile error via generated
-`_Static_assert(sizeof/offsetof)`. Backlog: [`../hardening-todo.md`](../hardening-todo.md).
+`_Static_assert(sizeof/offsetof)`. Current roadmap: [`../todo.md`](../todo.md);
+hardening campaign record: [`../hardening-todo.md`](../hardening-todo.md).
 
 ---
 
@@ -693,7 +696,7 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | mmap / demand paging / COW | mmap **GATED**; demand paging & COW **DEMO-SCOPE** (single-region / one-page) |
 | Process lifecycle, attenuation, endpoints | **GATED** · demo-scale (`MAX_PROCS=8`) |
 | Scheduler (RR/priority/fair-share, preemption) | **GATED**; SMP **DEMO-SCOPE** (`NCORES=2`) |
-| Agent sandbox + tool-call ABI | **GATED**. Legacy `agent_tool_call` transport **MOCK** (in-process, not a trust boundary); confined-JS **FS** broker **REAL** on RISC-V/S-mode (§10.3); net-fetch + out-of-process tool-server transport **pending** |
+| Agent sandbox + tool-call ABI | **GATED**. Legacy `agent_tool_call` transport **MOCK** (in-process, not a trust boundary); confined-JS **FS** broker **REAL** on RISC-V/S-mode (§10.3); brokered JS `host_net_fetch` is gated over the network broker control plane, the real TCP-backed transport (`qjs-net-realtool-test` / LLVM), and S-mode IRQ-backed `SYS_POLL` completion from virtio-net (`qjs-smode-net-irq-tool-test` / LLVM); JS `host_fs_read` is gated through S-mode IRQ-backed `SYS_POLL` completion from virtio-blk (`qjs-smode-blk-irq-tool-test` / LLVM); real TCP-backed network broker **GATED** in the RISC-V agent-net demo; out-of-process tool-server transport **pending** |
 | Capabilities, grants + delegation/cascade | **GATED** |
 | IPC (sync rendezvous + notify, endpoint-safe) | **GATED** (copying, not zero-copy) |
 | Resource governance: quota + OOM-kill + fault containment | **GATED** (mechanism under explicit charge sites; full allocator wiring follow-up) |
@@ -739,11 +742,13 @@ The safety keystone (governance) has landed. The open frontier, per the vision d
 - **Agent code execution** — *delivered*: QuickJS runs as a confined userspace ELF on all three
   arches (riscv64 M+S-mode, x86_64 ring-3, AArch64 EL0), evaluating pure-JS agents under kernel
   confinement (BearSSL was the C-linking precedent). The remaining roadmap is broader: wider
-  capability-tool coverage, a real `net_fetch` tool, cross-arch real-broker parity (x86/AArch64
-  still use a mock broker vs the RISC-V `agent_fs_call`), and optionally a second runtime (e.g. WASM).
+  capability-tool coverage, exposing the real network broker as a production JS/tool-catalog
+  operation, cross-arch real-broker parity (x86/AArch64 still need confined-agent runtimes that
+  reuse the shared broker), and optionally a second runtime (e.g. WASM).
 - **Allocator→charge wiring** — close the §9.6/§14 gap so governance enforces on every
   allocation path, not only explicit charge sites.
 - **IPC fast path** — co-designed with sampling provenance.
 - **Accelerator/CPU/IPC accounting** — extend governance beyond memory for on-host inference.
 
-Backlogs: [`../agent-os-todo.md`](../agent-os-todo.md), [`../hardening-todo.md`](../hardening-todo.md).
+Current roadmap: [`../todo.md`](../todo.md). Hardening campaign record:
+[`../hardening-todo.md`](../hardening-todo.md).

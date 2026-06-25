@@ -9,7 +9,7 @@
 # backend used to reset-loop here because the `#[naked]` trap vector could land 2-byte
 # aligned, and a RISC-V `stvec` base must be 4-byte aligned (its low two bits are the MODE
 # field). The fix is the `#[align(4)]` on the vector (and `#[naked]` defaulting to 4-byte
-# alignment); both backends now pass. See docs/smode-irq-cbackend-reset.md.
+# alignment); both backends now pass. See docs/platform-portability-plan.md §12 "Do now" item 2.
 #
 # PASS requires the OpenSBI banner + `SMODE-PLIC-OK` + `IRQS` == 3.
 #

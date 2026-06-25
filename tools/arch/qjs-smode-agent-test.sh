@@ -33,6 +33,7 @@ QJS="$HERE/third_party/quickjs"
 SRC="$HERE/tests/qemu/arch/qjs_smode_demo.mc"                     # kernel side (S-mode): loader/ABI + supervisor gigapage + UART page
 RUNTIME="$HERE/tests/qemu/arch/qjs_smode_confined_runtime.mc"  # S-mode bring-up under OpenSBI, now PURE MC
 USERMODE="$HERE/tests/qemu/arch/smode_usermode_runtime.mc"     # S-mode trap vector + syscall dispatch
+CTX_STUBS="$HERE/tests/qemu/mem/proc_ctx_stubs.mc"             # link-only process context externs
 HOST="$HERE/examples/apps/qjs_host.c"        # the FIXED generic host (never changes per agent)
 AGENT_JS="$HERE/$AGENT_JS_REL"               # the agent: PURE JS
 LDSCRIPT="$HERE/tests/qemu/sbi.ld"           # OpenSBI payload @ 0x80200000
@@ -97,13 +98,15 @@ KERNEL_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
 CFLAGS=("${KERNEL_CFLAGS[@]}")
 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/thread.o" "$WORK"
 kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
+kernel_boot_compile_mc_object "$BACKEND" "$CTX_STUBS" "$WORK/ctx_stubs.o" "$WORK"
 kernel_boot_compile_c_object "$USERMODE" "$WORK/usermode.o"
 "$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/app_image.c" -o "$WORK/app_image.o"
 "$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/agent_src.c" -o "$WORK/agent_src.o"
 K_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/k-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/usermode.o" \
-    "$WORK/runtime.o" "$WORK/thread.o" "$WORK/app_image.o" "$WORK/agent_src.o" $K_SUPPORT -o "$WORK/kernel.elf"
+    "$WORK/runtime.o" "$WORK/thread.o" "$WORK/ctx_stubs.o" \
+    "$WORK/app_image.o" "$WORK/agent_src.o" $K_SUPPORT -o "$WORK/kernel.elf"
 
 # Real OpenSBI (the default firmware): NO `-bios none`. OpenSBI boots our kernel in S-mode.
 OUT="$(timeout 120 "$QEMU" -machine virt -nographic -m 256M \

@@ -11,17 +11,16 @@ and lean on isolation/IPC/capabilities that Linux bolts on awkwardly.
 
 This kernel (an MC-language capability microkernel in the MINIX/seL4 lineage) already
 has the hard isolation primitives — capabilities, kernel-mediated IPC, address-space
-and linear-move type safety. What it lacks is the layer that turns "we can *isolate*
-agents" into "we can *safely host* agents": **resource governance, observability, and
-agent lifecycle.** That layer is the work.
+and linear-move type safety — plus the first agent-governance layer. The remaining work
+is turning that gated prototype surface into a production appliance: comprehensive
+resource charging, durable policy/audit, isolated tool-server transport, and a fixed
+platform profile.
 
-> **Implementation status:** that layer now exists. The full backlog in
-> [agent-os-todo.md](agent-os-todo.md) (resource governance incl. the live-reclaim
-> milestone, observability/provenance, capability attenuation, checkpoint/restore/migrate,
-> pause, fair-share, record/replay) is **implemented and validated on both backends**, and
-> the governance keystone **boots and runs under real QEMU emulation** (`agentos-test`).
-> The "State today" notes in the table below describe the *original* starting point (the
-> design rationale), not the current tree — see the backlog for what landed.
+> **Implementation status:** much of the original agent-OS backlog has landed:
+> resource-accounting primitives, live OOM reclaim, provenance/audit, capability
+> attenuation, checkpoint/restore/migrate seeds, pause/fair scheduling hooks, and
+> brokered FS/network demonstrations are gated. The table below now lists the remaining
+> current gaps; see [`todo.md`](todo.md) for the short operational roadmap.
 
 ---
 
@@ -47,9 +46,9 @@ These map onto three security functions — and onto the three roadmap pillars:
 
 The key insight: **capabilities alone do not stop tier 3.** A prompt-injected agent
 acts within its granted authority, so reachability bounds don't fire. The defenses that
-*do* matter against the hardest threat are exactly the two things this kernel is
-missing — governance (bound the damage) and observability (see it, revoke, kill). That
-is why they are P0/P1, not nice-to-haves.
+*do* matter against the hardest threat are governance (bound the damage) and
+observability (see it, revoke, kill). The kernel has prototype mechanisms for both;
+production still requires comprehensive coverage, persistence, and policy actuation.
 
 ---
 
@@ -57,38 +56,36 @@ is why they are P0/P1, not nice-to-haves.
 
 | P | Feature | Why agents need it | State today |
 |---|---------|--------------------|-------------|
-| **P0** | **Resource governance** — accounting + quotas + **live reclaim** (mem / CPU / IPC / accelerator) | A runaway or hijacked agent must not OOM/starve the host. The safety keystone. | **Absent** — `heap_free` is a no-op (bump allocator), no accounting, no quotas |
-| **P1** | **Observability / IPC provenance** — record the agent message + capability-use graph | Detect anomalous agents, audit, replay; the kernel mediates every message | Not present (but uniquely easy here) |
-| **P1** | **Capability delegation & attenuation** — spawn sub-agents with revocable, *reduced* authority | Agents orchestrate sub-agents; hand off least-privilege, revoke on misbehavior | Partial (grant tables exist — lean in) |
-| **P1** | **Agent lifecycle** — checkpoint / restore / pause / migrate | Agents are long-lived; snapshot for fault-tolerance, upgrade, scaling, "fork an agent" | Partial (service liveupdate only) |
-| **P1‑** | **Durable state (minimal)** — a checkpoint sink + small object store | Checkpoint/restore (P1) *needs* somewhere durable; an agent that can't survive restart isn't useful | Has FS, but not agent-shaped |
+| **P0** | **Resource governance completion** — allocator charging + CPU / IPC / accelerator budgets | A runaway or hijacked agent must not OOM/starve the host. The safety keystone. | Memory accounts, live OOM reclaim, and fault containment are gated; allocator-to-charge wiring and non-memory budgets remain. |
+| **P0** | **Durable policy and audit** — persist decisions, audit trails, and reboot explanations | Tier-3 defense needs evidence that survives crashes and policy changes that can act on live agents. | Provenance/audit and policy seeds are gated; production persistence and full revoke/throttle/kill integration remain. |
+| **P1** | **Production tool surface** — isolated tool server + stable catalog + JS network fetch | Agents should have no ambient FS/network authority; every external effect must be brokered and attributable. | Real FS broker, JS `host_net_fetch`, real TCP-backed network broker demos, and promoted TCP-backed JS net-tool gates exist; out-of-process transport, stable tool catalog, and durable policy/audit remain. |
+| **P1** | **Full-context agent lifecycle** — checkpoint / restore / pause / migrate | Agents are long-lived; snapshot for fault-tolerance, upgrade, scaling, "fork an agent." | Fd/account checkpoint/restore/migrate seeds exist; full execution context and production persistence remain. |
+| **P1-** | **Durable agent state** — checkpoint sink + small object/KV store | Checkpoint/restore needs somewhere durable; an agent that cannot survive restart is less useful. | Blob/KV/filesystem pieces exist; product-shaped persistent state and retention policy remain. |
 | **P2** | **Rich agent memory store** — content-addressed / KV for agent context | Persistent agent memory beyond checkpoints | — |
 | **P2** | **Fast agent↔agent / agent↔tool transport** — zero-copy, batched IPC | IPC is the hot path (tool calls, sub-agents) | Functional IPC, not optimized |
-| **P2** | **Admission & fair-share scheduling** — throttle/deprioritize misbehaving agents | Keep one agent from starving others | RR + priority + SMP (no fair-share/limits) |
-| **P3** | **Deterministic record/replay** | Debug non-deterministic agents | Not present |
+| **P2** | **Admission & fair-share scheduling** — throttle/deprioritize misbehaving agents | Keep one agent from starving others | Fair-pick and pause hooks exist; production CPU budgets and admission control remain. |
+| **P3** | **Deterministic record/replay** | Debug non-deterministic agents | Durable recorder seed exists; deterministic replay remains absent. |
 
 **Dependency edges the linear order hides:** *checkpoint/restore (P1) → durable sink
 (P1‑)*; *observability (P1) ⇄ fast transport (P2)* are a co-design pair, not
 independent (see below).
 
-### P0 in detail — the milestone is *live* reclaim, not cleanup
+### P0 in detail — the remaining milestone is comprehensive enforcement
 
 Be precise about what closes the threat. The thesis opens with "one runaway agent must
 not OOM the host" — and **the runaway is precisely the agent that never calls
-`proc_exit`.** So:
+`proc_exit`.** The live reclaim/OOM-kill mechanism exists now; the remaining production
+gap is making every relevant resource path feed it:
 
-- **Groundwork (necessary, not sufficient):** per-agent accounting (pages, IPC volume,
-  and **accelerator/compute** if inference is on-host — see Deployment), reclaim-all
-  **on exit**, and a quota checked at `alloc`/`send` returning a typed error instead of
-  exhausting the heap. *First host-testable slice.*
-- **The actual safety milestone:** **reclaim from a live agent** — asynchronous reclaim
-  under memory pressure, and **OOM-kill / throttle an over-quota agent that won't
-  yield.** This is what defends against the tier-1 runaway and the tier-3 hijack. It
-  touches the allocator, the process model, the scheduler, and failure semantics at
-  once — i.e. it is most of the remaining engineering, not a small increment.
+- **Comprehensive memory enforcement:** every allocator path charges the owning agent,
+  with typed quota failure instead of exhausting the heap.
+- **Non-memory enforcement:** IPC volume, request/result buffers, CPU/event-loop time, and
+  **accelerator/compute** if inference is on-host — see Deployment.
+- **Production actuation:** policy decisions can throttle, revoke, pause, or kill a live
+  agent and leave durable audit evidence.
 
-Reclaim-on-exit is the cleanup case and good groundwork; do not mistake shipping it for
-solving the keystone threat.
+Do not treat a demo gate as a production claim until the coverage is complete across the
+first appliance workload.
 
 ---
 
@@ -210,11 +207,10 @@ agents · **bound and reclaim** their resources (including a live runaway) · ro
 observe their IPC · delegate/attenuate capabilities · persist their state. Anything
 Linux does that isn't in service of *that* is out of scope.
 
-**Roadmap order:** resource-governance groundwork → **live reclaim (the safety
-milestone)** → observability (co-designed with the future fast path) → capability
-attenuation + agent lifecycle (with a minimal durable sink) → rich state, fast
-transport, fair-share. Start with the P0 groundwork slice; treat live reclaim, not
-reclaim-on-exit, as "done."
+**Roadmap order from here:** finish comprehensive resource charging and non-memory
+budgets → persist policy/audit → make the tool surface production-shaped and isolated
+→ complete lifecycle persistence → rich state, fast transport, and production
+admission control.
 
 ---
 
@@ -223,9 +219,10 @@ reclaim-on-exit, as "done."
 The kernel's job stops at *mechanism*; the *verdict* lives above it. Restating the
 threat-model conclusion as an architectural seam so we don't overclaim:
 
-- **The kernel provides** complete, tamper-evident **provenance** (every IPC message
-  and capability use, since it mediates them — P1.2/P1.3), and cheap, decisive
-  **levers**: revoke a capability, throttle, pause, OOM-kill, checkpoint/restore.
+- **The kernel provides** the mechanism for tamper-evident **provenance** (IPC,
+  capability, FS, and network mediation paths) and cheap, decisive **levers**:
+  revoke a capability, throttle, pause, OOM-kill, checkpoint/restore. Production work
+  is making coverage and persistence complete for the chosen appliance surface.
 - **The kernel does NOT decide** whether an agent is *misbehaving*. A prompt-injected
   (tier-3) agent acts **within** its granted authority, so no kernel rule fires —
   "this agent used a capability it was granted" is, by construction, allowed.
@@ -234,8 +231,8 @@ threat-model conclusion as an architectural seam so we don't overclaim:
   policy evaluation over the provenance stream, deciding *when* to pull a lever — is a
   **policy plane in the agent runtime, above the kernel.**
 
-So the kernel is the **sensor + actuator** (see everything, act instantly); the policy
-plane is the **controller** (decide). Keeping them separate is deliberate: it keeps the
-kernel small and auditable, and lets the policy plane evolve (or be swapped per
-deployment) without touching the trusted base. The kernel's obligation is to make the
-controller *possible* — total observability + zero-cost revocation/kill — not to be it.
+So the kernel is the **sensor + actuator**; the policy plane is the **controller**
+(decide). Keeping them separate is deliberate: it keeps the kernel small and auditable,
+and lets the policy plane evolve (or be swapped per deployment) without touching the
+trusted base. The kernel's obligation is to make the controller *possible* with
+bounded observability and cheap revocation/kill, not to be it.

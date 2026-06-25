@@ -41,8 +41,8 @@ export const MAX_INFLIGHT: u32 = 8;    // max concurrent pending requests (== co
 export const MAX_REQ_BYTES: u32 = 256; // max request-payload bytes copied IN per request
 export const MAX_RES_BYTES: u32 = 256; // max result-payload bytes copied OUT per request
 
-// Tool op selectors. Two families exist today: the MOCK smoke ops (1..5, below) and the REAL
-// capability-checked FS ops (6..8, further below); net/other compound ops will append here. The
+// Tool op selectors. Three families exist today: the MOCK smoke ops (1..5, below), the REAL
+// capability-checked FS ops (6..8, further below), and the brokered network op (9). The
 // mock broker reads req.flags as a DELAY in virtual ticks, so completions can become ready out of
 // submit order (a small delay finishes before a large one submitted earlier) — exercising the
 // event loop's real out-of-order/overlap behavior, not just immediately-queued completions.
@@ -67,6 +67,12 @@ export const TOOL_OP_SPURIOUS: u32 = 5; // TEST-ONLY: completes carrying a BOGUS
 export const TOOL_OP_FS_WRITE: u32 = 6; // write data to a path under the agent's workspace cap
 export const TOOL_OP_FS_READ: u32 = 7;  // read a path's bytes back (staged to out_ptr)
 export const TOOL_OP_FS_MKDIR: u32 = 8; // create a directory (DENIED unless allowlisted)
+
+// Brokered network fetch. The production agent runtime exposes this as a first-class JS tool op.
+// arg = endpoint id; flags = request token/audit size. The current S-mode QuickJS runtime dispatches
+// through the shared network broker policy + mock endpoint transport (`net_fetch`) because that image
+// has no NIC yet; `net_fetch_tcp` is the real transport sibling for NIC-backed runtimes.
+export const TOOL_OP_NET_FETCH: u32 = 9;
 
 // ToolReq: a tool/net request, copied IN from user memory on SYS_SUBMIT (single snapshot, so it
 // is TOCTOU-safe). `in_ptr`/`in_len` point at a request payload (validated <= MAX_REQ_BYTES);

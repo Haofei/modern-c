@@ -98,6 +98,9 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "blk-smode-test", "Build and run the virtio-blk driver reading a sector under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-smode-test", "Build and run the LLVM-lowered virtio-blk driver under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    _ = h.addScriptTest(ctx, "blk-smode-irq-test", "Build and run async virtio-blk completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/blk-smode-irq-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-blk-smode-irq-test", "Build and run LLVM-lowered async virtio-blk completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/blk-smode-irq-test.sh", "zig-out/bin/mcc", "llvm" });
+
     // Item (4): REAL S-mode timer-interrupt delivery under OpenSBI — a flat
     // S-mode kernel arms the SBI TIME extension, enables S-mode timer
     // interrupts, and counts ticks in its trap handler (re-arming each tick,
@@ -116,6 +119,12 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "net-smode-test", "Build and run the virtio-net RX/TX ARP+ping exchange under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/net-smode-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-net-smode-test", "Build and run the LLVM-lowered virtio-net RX/TX exchange under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/net-smode-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    _ = h.addScriptTest(ctx, "net-smode-irq-test", "Build and run async virtio-net TX completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/net-smode-irq-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-net-smode-irq-test", "Build and run LLVM-lowered async virtio-net TX completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/net-smode-irq-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    _ = h.addScriptTest(ctx, "net-smode-rx-irq-test", "Build and run async virtio-net RX completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/net-smode-rx-irq-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-net-smode-rx-irq-test", "Build and run LLVM-lowered async virtio-net RX completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/net-smode-rx-irq-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "udp-net-test", "Transmit a real UDP datagram over virtio-net under QEMU (pcap-verified)", &.{ "bash", "tools/net/udp-net-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-udp-net-test", "Transmit a real LLVM-lowered UDP datagram over virtio-net under QEMU", &.{ "bash", "tools/net/udp-net-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -812,6 +821,22 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "qjs-realtool-test", "M5b.2: a pure-JS agent drives the REAL capability-checked FS tool path (allow/deny/audit) over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
 
     _ = h.addScriptTest(ctx, "llvm-qjs-realtool-test", "M5b.2 (LLVM): a pure-JS agent drives the REAL capability-checked FS tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
+
+    _ = h.addScriptTest(ctx, "qjs-nettool-test", "M5b.3: a pure-JS agent drives the brokered network fetch tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_net_tool.js", "net: ok", "qjs-nettool" });
+
+    _ = h.addScriptTest(ctx, "llvm-qjs-nettool-test", "M5b.3 (LLVM): a pure-JS agent drives the brokered network fetch tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_net_tool.js", "net: ok", "qjs-nettool" });
+
+    _ = h.addScriptTest(ctx, "qjs-net-realtool-test", "M5b.4: a pure-JS agent drives host_net_fetch through the REAL TCP-backed broker transport over virtio-net", &.{ "bash", "tools/lang/qjs-net-realtool-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-qjs-net-realtool-test", "M5b.4 (LLVM): a pure-JS agent drives host_net_fetch through the REAL TCP-backed broker transport over virtio-net", &.{ "bash", "tools/lang/qjs-net-realtool-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    _ = h.addScriptTest(ctx, "qjs-smode-net-irq-tool-test", "M5b.5: a pure-JS host_net_fetch completes through production SYS_POLL from a real S-mode virtio-net PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-qjs-smode-net-irq-tool-test", "M5b.5 (LLVM): a pure-JS host_net_fetch completes through production SYS_POLL from a real S-mode virtio-net PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    _ = h.addScriptTest(ctx, "qjs-smode-blk-irq-tool-test", "M5b.6: a pure-JS host_fs_read completes through production SYS_POLL from a real S-mode virtio-blk PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-qjs-smode-blk-irq-tool-test", "M5b.6 (LLVM): a pure-JS host_fs_read completes through production SYS_POLL from a real S-mode virtio-blk PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // QuickJS-agent Phase 7: the EVENT LOOP. The confined agent evaluates a Promise chain and
     // drains the job queue (JS_ExecutePendingJob) — the microtask concurrency real agents need

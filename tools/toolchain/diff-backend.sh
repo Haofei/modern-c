@@ -85,7 +85,10 @@ C
 }
 export -f diff_one
 
-mapfile -t names < <(awk -F'\t' '/^#/{next} NF>=2 && $1!=""{print $1}' "$MANIFEST")
+names=()
+while IFS= read -r name; do
+    names+=("$name")
+done < <(awk -F'\t' '/^#/{next} NF>=2 && $1!=""{print $1}' "$MANIFEST")
 count="${#names[@]}"
 out="$(printf '%s\0' "${names[@]}" | xargs -0 -P "$JOBS" -I{} bash -c 'diff_one "$@"' _ {} 2>&1)" || true
 [ -n "$out" ] && printf '%s\n' "$out"

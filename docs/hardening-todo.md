@@ -1,5 +1,8 @@
 # Kernel-Language Hardening — Actionable Backlog
 
+> **Historical status.** The main hardening campaign described here is resolved
+> or explicitly deferred. For current open work, start with [`todo.md`](todo.md).
+
 A prioritized backlog for hardening MC **as a kernel language** — no hosted runtime, no GC, no
 userland allocator, so hardening must be **static** (type system, zero runtime cost), **cheap
 dynamic** (the trap model / sanitizers in the QEMU build), or **verification / hardware**.

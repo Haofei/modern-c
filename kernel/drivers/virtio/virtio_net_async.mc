@@ -1,22 +1,17 @@
-// kernel/drivers/virtio/virtio_net_async — an INTERRUPT-DRIVEN virtio-net TX. The companion to
+// kernel/drivers/virtio/virtio_net_async — an INTERRUPT-DRIVEN virtio-net TX/RX. The companion to
 // virtio_net.mc's `nic_tx_frame`, which POLLS the TX used ring in a `tx_wait_reclaim` loop. Here a
-// frame is submitted and the CPU sleeps; the device's TX used-ring interrupt (routed through the
-// PLIC) reaps the completion and `async_complete`s the broker request id, so an `async fn` can
-// `await` a real network device IRQ — proving async is device-backed for the NIC, not a poll loop.
+// frame send or one-shot receive is submitted and the CPU sleeps; the device's used-ring interrupt
+// (routed through the PLIC) reaps the completion and `async_complete`s the broker request id, so an
+// async poll/await can resolve from a real network device IRQ — proving async is device-backed for
+// the NIC, not a poll loop.
 //
 // This is the virtio-net analogue of virtio_blk_async.mc and reuses its exact shape: a fixed DMA
 // buffer pool (no per-send alloc/free — the leak fix), a desc-id ↔ broker-id map, an irq_context
 // reaper that only manipulates vq fields + broker calls, and an explicit capacity contract.
 //
-// WHY TX (and not RX) for the first device-async slice:
-//   A TX frame is a SINGLE descriptor (the whole virtio_net_hdr + Ethernet frame is one linear,
-//   device-READ buffer), so the completion token is exactly that one head descriptor id and the
-//   reaper frees it with the single-descriptor `vq_free_desc` (irq-safe, pure vq-field op). Under
-//   QEMU's `-netdev user` (slirp) the device consumes the submitted frame immediately and raises
-//   the TX queue's used-ring interrupt, so a TX completion is the cleanest, deterministic proof of
-//   device-driven async — it needs no inbound packet. An async RX would need something to elicit a
-//   reply; TX self-completes. (RX-async would be the same structure on queue 0 with a device-WRITE
-//   buffer; left for a follow-up.)
+// RX follows the same structure on queue 0 with a device-WRITE buffer. A caller submits a receive
+// request with a destination buffer; the IRQ copies the delivered Ethernet frame (past the 12-byte
+// virtio_net_hdr) into that destination and completes the broker id with the copied byte count.
 //
 // CAPACITY CONTRACT (NET_ASYNC_MAX, the honest in-flight ceiling for TX):
 //   A TX frame is NET_DESC_PER_FRAME = 1 descriptor. The TX queue has VRING_QSIZE = 8 descriptors,
@@ -74,6 +69,8 @@ struct NetReqMapEntry {
     desc_id: u16,
     pool_slot: usize,
     broker_id: u64,
+    dst: usize,
+    max: usize,
 }
 
 struct NetReqMap {
@@ -87,13 +84,15 @@ export fn net_map_init(m: *mut NetReqMap) -> void {
         m.e[i].desc_id = 0;
         m.e[i].pool_slot = 0;
         m.e[i].broker_id = 0;
+        m.e[i].dst = 0;
+        m.e[i].max = 0;
         i = i + 1;
     }
 }
 
 // Insert a submit-time record. Returns false if the table is full (the caller then cancels the
 // reserved broker slot and fails the submit).
-fn net_map_insert(m: *mut NetReqMap, desc_id: u16, pool_slot: usize, broker_id: u64) -> bool {
+fn net_map_insert(m: *mut NetReqMap, desc_id: u16, pool_slot: usize, broker_id: u64, dst: usize, max: usize) -> bool {
     var i: usize = 0;
     while i < MAP_LEN {
         if !m.e[i].present {
@@ -101,6 +100,8 @@ fn net_map_insert(m: *mut NetReqMap, desc_id: u16, pool_slot: usize, broker_id: 
             m.e[i].desc_id = desc_id;
             m.e[i].pool_slot = pool_slot;
             m.e[i].broker_id = broker_id;
+            m.e[i].dst = dst;
+            m.e[i].max = max;
             return true;
         }
         i = i + 1;
@@ -187,10 +188,12 @@ fn net_view(dev_addr: u64, len: usize) -> DeviceBuffer {
 // between the submit path and the ISR (the ISR reads it through `net_irq_reap`).
 struct NetAsyncDev {
     regs: MmioPtr<VirtioMmio>,
-    rxq: *mut Virtq, // set up so the device is fully live (queue 0 must exist), but not reaped here
+    rxq: *mut Virtq,
     txq: *mut Virtq,
-    map: *mut NetReqMap,
-    pool: *mut NetBufPool,
+    tx_map: *mut NetReqMap,
+    tx_pool: *mut NetBufPool,
+    rx_map: *mut NetReqMap,
+    rx_pool: *mut NetBufPool,
     broker: *mut AsyncBroker,
     procs: *mut ProcTable,
 }
@@ -200,8 +203,10 @@ struct NetAsyncDev {
 // (virtio requires every queue a device exposes to be configured before DRIVER_OK) but only the TX
 // queue is driven async here.
 export fn net_async_init(dev: *mut NetAsyncDev) -> Result<bool, bool> {
-    net_map_init(dev.map);
-    net_pool_init(dev.pool);
+    net_map_init(dev.tx_map);
+    net_map_init(dev.rx_map);
+    net_pool_init(dev.tx_pool);
+    net_pool_init(dev.rx_pool);
     switch virtio_init(dev.regs, VIRTIO_NET_DEVICE_ID, 0, VIRTIO_NET_F_VERSION_1_HI) {
         ok(up) => {}
         err(e) => { return err(false); }
@@ -234,7 +239,7 @@ export fn net_send_frame_async(dev: *mut NetAsyncDev, frame_ptr: usize, frame_le
     // HONEST back-pressure point: when all slots are taken, all 8 descriptors are in use and a
     // further send genuinely cannot be queued. Fail closed: release the broker slot and report
     // back-pressure.
-    let slot: usize = net_pool_claim(dev.pool);
+    let slot: usize = net_pool_claim(dev.tx_pool);
     if slot >= MAP_LEN {
         let _c: bool = async_cancel_slot(dev.broker, id);
         return ASYNC_NO_ID;
@@ -248,7 +253,7 @@ export fn net_send_frame_async(dev: *mut NetAsyncDev, frame_ptr: usize, frame_le
 
     // Copy the caller's frame into this slot's POOLED memory by re-minting a CpuBuffer view over its
     // stored CPU/bus addresses (the pool owns the memory; we only borrow it to write).
-    let view: CpuBuffer = net_slot_view(&dev.pool.s[slot], n);
+    let view: CpuBuffer = net_slot_view(&dev.tx_pool.s[slot], n);
     var i: usize = 0;
     while i < n {
         var b: u8 = 0;
@@ -265,7 +270,7 @@ export fn net_send_frame_async(dev: *mut NetAsyncDev, frame_ptr: usize, frame_le
     // Re-mint a device-buffer VIEW over the slot's stored bus address to submit. It is a VIEW, not an
     // owned handle: the pool keeps the memory alive, so vq_submit_tx consuming it (forget on success,
     // reclaim-as-no-op on error) does not free pool memory.
-    let txbuf: DeviceBuffer = net_view(dev.pool.s[slot].buf_dev, n);
+    let txbuf: DeviceBuffer = net_view(dev.tx_pool.s[slot].buf_dev, n);
 
     var head: u16 = 0;
     switch vq_submit_tx(dev.txq, txbuf) {
@@ -274,22 +279,58 @@ export fn net_send_frame_async(dev: *mut NetAsyncDev, frame_ptr: usize, frame_le
             // On error vq_submit_tx ran invalidate_for_cpu+free on the view; on the coherent
             // no-IOMMU model `free` is a no-op (pool memory untouched), so the slot is still valid —
             // release it and the broker slot and fail closed.
-            net_pool_release(dev.pool, slot);
+            net_pool_release(dev.tx_pool, slot);
             let _c: bool = async_cancel_slot(dev.broker, id);
             return ASYNC_NO_ID;
         }
     }
 
-    if !net_map_insert(dev.map, head, slot, id) {
+    if !net_map_insert(dev.tx_map, head, slot, id, 0, 0) {
         // Map full (cannot happen while in-flight ≤ MAP_LEN, but fail closed): the frame is already
         // queued. Cancel the broker slot so the id is unknown; the IRQ will reap the head, find no
         // map entry, free the descriptor, but NOT the pool slot — so release it here.
-        net_pool_release(dev.pool, slot);
+        net_pool_release(dev.tx_pool, slot);
         let _c: bool = async_cancel_slot(dev.broker, id);
         return ASYNC_NO_ID;
     }
 
     vq_kick(dev.regs, TX_QUEUE);
+    return id;
+}
+
+// Submit a one-shot ASYNC receive. The device writes into a pooled RX DMA buffer; when an RX used
+// entry arrives, the IRQ copies the Ethernet frame (excluding the virtio_net_hdr) into `dst`, caps
+// it at `max`, and completes this id with the copied byte count.
+export fn net_recv_frame_async(dev: *mut NetAsyncDev, dst: usize, max: usize) -> u64 {
+    let id: u64 = async_submit(dev.broker);
+    if id == ASYNC_NO_ID {
+        return ASYNC_NO_ID;
+    }
+
+    let slot: usize = net_pool_claim(dev.rx_pool);
+    if slot >= MAP_LEN {
+        let _c: bool = async_cancel_slot(dev.broker, id);
+        return ASYNC_NO_ID;
+    }
+
+    let rxbuf: DeviceBuffer = net_view(dev.rx_pool.s[slot].buf_dev, FRAME_BUF_LEN);
+    var head: u16 = 0;
+    switch vq_submit_rx(dev.rxq, rxbuf) {
+        ok(h) => { head = h; }
+        err(e) => {
+            net_pool_release(dev.rx_pool, slot);
+            let _c: bool = async_cancel_slot(dev.broker, id);
+            return ASYNC_NO_ID;
+        }
+    }
+
+    if !net_map_insert(dev.rx_map, head, slot, id, dst, max) {
+        net_pool_release(dev.rx_pool, slot);
+        let _c: bool = async_cancel_slot(dev.broker, id);
+        return ASYNC_NO_ID;
+    }
+
+    vq_kick(dev.regs, RX_QUEUE);
     return id;
 }
 
@@ -311,28 +352,34 @@ export const NET_TX_DONE: i32 = 1;
 // stale/duplicate completion — a safe no-op). Clearing `present` first makes a duplicate completion
 // for the same head find nothing, so the descriptor/slot are freed exactly once.
 #[irq_context]
-fn net_map_take(m: *mut NetReqMap, desc_id: u16, out_slot: *mut usize) -> u64 {
+fn net_map_take(m: *mut NetReqMap, desc_id: u16, out_slot: *mut usize, out_dst: *mut usize, out_max: *mut usize) -> u64 {
     var i: usize = 0;
     while i < MAP_LEN {
         if m.e[i].present && m.e[i].desc_id == desc_id {
             let id: u64 = m.e[i].broker_id;
             out_slot.* = m.e[i].pool_slot;
+            out_dst.* = m.e[i].dst;
+            out_max.* = m.e[i].max;
             m.e[i].present = false;
             return id;
         }
         i = i + 1;
     }
     out_slot.* = MAP_LEN;
+    out_dst.* = 0;
+    out_max.* = 0;
     return ASYNC_NO_ID;
 }
 
-// Reap one used-ring entry by hand: read the head id at the consumer cursor, advance the cursor.
-// Returns the head descriptor id, or 0xFFFF if the id is out of range (a misbehaving device — we
-// still advance to avoid wedging the ISR). Call only when `vq.used.idx != vq.last_used`.
+// Reap one used-ring entry by hand: read the head id and used length at the consumer cursor,
+// advance the cursor, and write the used length to `out_len`. Returns the head descriptor id, or
+// 0xFFFF if the id is out of range (a misbehaving device — we still advance to avoid wedging the
+// ISR). Call only when `vq.used.idx != vq.last_used`.
 #[irq_context]
-fn net_reap_one_head(vq: *mut Virtq) -> u16 {
+fn net_reap_one_head(vq: *mut Virtq, out_len: *mut u32) -> u16 {
     let slot: usize = (vq.last_used % VRING_QSIZE) as usize;
     let raw_id: u32 = vq.used.ring[slot].id;
+    out_len.* = vq.used.ring[slot].len;
     vq.last_used = vq.last_used + 1; // advance consumer cursor (wraps mod 2^16, depth ≤ 8)
     if raw_id >= VRING_QSIZE as u32 {
         return 0xFFFF;
@@ -340,23 +387,71 @@ fn net_reap_one_head(vq: *mut Virtq) -> u16 {
     return raw_id as u16;
 }
 
+#[irq_context]
+fn net_copy_rx_frame(pool: *mut NetBufPool, slot: usize, dst: usize, max: usize, used_len: u32) -> usize {
+    if slot >= MAP_LEN {
+        return 0;
+    }
+    var n: usize = 0;
+    let total: usize = used_len as usize;
+    if total > FRAME_AT {
+        n = total - FRAME_AT;
+        let cap: usize = FRAME_BUF_LEN - FRAME_AT;
+        if n > cap {
+            n = cap;
+        }
+        if n > max {
+            n = max;
+        }
+        var i: usize = 0;
+        let src: usize = pool.s[slot].buf_cpu + FRAME_AT;
+        while i < n {
+            var b: u8 = 0;
+            unsafe { b = raw.load<u8>(phys(src + i)); }
+            unsafe { raw.store<u8>(phys(dst + i), b); }
+            i = i + 1;
+        }
+    }
+    return n;
+}
+
 // THE DEVICE IRQ HANDLER. Called from the trap dispatcher when the virtio-net used-ring interrupt
-// fires (after the PLIC source is claimed by the caller). It reads interrupt_status, loops while the
-// TX used ring has new entries reaping each, translates the head id → broker id, frees the single
-// descriptor + pool slot, and `async_complete`s the broker id with NET_TX_DONE (waking the parked
-// awaiter). Then it ACKs the device interrupt. Returns how many completions it reaped (0 if this was
-// not a used-ring interrupt) so the caller can trace it. `#[irq_context]`: no heap, no blocking, no
-// buffer frees — only the annotated broker/vq calls plus field/MMIO loads.
-//
-// Only the TX queue is reaped here (this is the TX-async slice). An RX completion on queue 0 would
-// also set interrupt_status bit 0; since we post no RX buffers in the async demo, the RX used ring
-// stays empty (used.idx == last_used) and the TX loop is the only one that reaps anything.
+// fires (after the PLIC source is claimed by the caller). It reads interrupt_status, reaps pending
+// TX and RX used entries, translates each head id to a broker id, returns the descriptor/pool slot,
+// and `async_complete`s the broker id. TX completes with NET_TX_DONE; RX completes with the copied
+// Ethernet-frame byte count. Then it ACKs the device interrupt. Returns how many used entries it
+// reaped (0 if this was not a used-ring interrupt) so the caller can trace it. `#[irq_context]`: no
+// heap, no blocking, no DMA frees — only annotated broker/vq calls plus field/MMIO/raw accesses.
 #[irq_context]
 export fn net_irq_reap(dev: *mut NetAsyncDev) -> u32 {
     let regs: MmioPtr<VirtioMmio> = dev.regs;
     let st: u32 = regs.interrupt_status.read(.acquire);
     var reaped: u32 = 0;
     if (st & VIRTIO_INT_USED) != 0 {
+        let rxq: *mut Virtq = dev.rxq;
+        var rx_guard: usize = 0;
+        while rx_guard < VRING_QSIZE as usize {
+            if rxq.used.idx == rxq.last_used {
+                break;
+            }
+            rx_guard = rx_guard + 1;
+            var rx_used_len: u32 = 0;
+            let rx_head: u16 = net_reap_one_head(rxq, &rx_used_len);
+            if rx_head != 0xFFFF {
+                var rx_slot: usize = MAP_LEN;
+                var rx_dst: usize = 0;
+                var rx_max: usize = 0;
+                let rx_bid: u64 = net_map_take(dev.rx_map, rx_head, &rx_slot, &rx_dst, &rx_max);
+                if rx_bid != ASYNC_NO_ID {
+                    let rx_n: usize = net_copy_rx_frame(dev.rx_pool, rx_slot, rx_dst, rx_max, rx_used_len);
+                    vq_free_desc(rxq, rx_head);
+                    net_pool_release(dev.rx_pool, rx_slot);
+                    let _rx_ok: bool = async_complete(dev.broker, dev.procs, rx_bid, rx_n as i32);
+                }
+            }
+            reaped = reaped + 1;
+        }
+
         let vq: *mut Virtq = dev.txq;
         // Bounded by the queue depth (VRING_QSIZE): at most that many sends can be in flight, so at
         // most that many used entries can be pending — a hard bound for the irq_context verifier.
@@ -366,18 +461,21 @@ export fn net_irq_reap(dev: *mut NetAsyncDev) -> u32 {
                 break;
             }
             guard = guard + 1;
-            let head: u16 = net_reap_one_head(vq);
-            if head != 0xFFFF {
-                var slot: usize = MAP_LEN;
-                let bid: u64 = net_map_take(dev.map, head, &slot);
-                if bid != ASYNC_NO_ID {
+            var tx_used_len: u32 = 0;
+            let tx_head: u16 = net_reap_one_head(vq, &tx_used_len);
+            if tx_head != 0xFFFF {
+                var tx_slot: usize = MAP_LEN;
+                var tx_dst: usize = 0;
+                var tx_max: usize = 0;
+                let tx_bid: u64 = net_map_take(dev.tx_map, tx_head, &tx_slot, &tx_dst, &tx_max);
+                if tx_bid != ASYNC_NO_ID {
                     // A real in-flight frame we have not freed yet: return its single descriptor to
                     // the free list (replenishing the queue) and release the buffer-pool slot, then
                     // wake the awaiter. Doing this only on a present entry means a stale/duplicate
                     // completion frees nothing — no double-free.
-                    vq_free_desc(vq, head);
-                    net_pool_release(dev.pool, slot);
-                    let _ok: bool = async_complete(dev.broker, dev.procs, bid, NET_TX_DONE);
+                    vq_free_desc(vq, tx_head);
+                    net_pool_release(dev.tx_pool, tx_slot);
+                    let _tx_ok: bool = async_complete(dev.broker, dev.procs, tx_bid, NET_TX_DONE);
                 }
             }
             reaped = reaped + 1;

@@ -39,7 +39,12 @@ if [ "$BACKEND" = llvm ]; then command -v "$LLC" >/dev/null 2>&1 || skip "llc no
 command -v "$QEMU"    >/dev/null 2>&1 || skip "$QEMU not found"
 "$CLANG" --print-targets 2>/dev/null | grep -q aarch64 || skip "clang has no aarch64 target"
 
-WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+WORK="$(mktemp -d)"
+if [ "${KEEP_WORK:-0}" = 1 ]; then
+    echo "KEEP_WORK: $WORK" >&2
+else
+    trap 'rm -rf "$WORK"' EXIT
+fi
 HOST="$HERE/examples/apps/qjs_host.c"
 AGENT_JS="$HERE/$AGENT_JS_REL"
 
@@ -140,7 +145,7 @@ case "$BACKEND" in
     ;;
   llvm)
     MC_ARCH=aarch64 MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/qjs_arm_demo.mc" -o "$WORK/fixture.o" \
-      -mtriple=aarch64-unknown-elf -relocation-model=static -code-model=small
+      -mtriple=aarch64-unknown-elf -relocation-model=static -code-model=small -mattr=-neon
     $CLANG "${KCF[@]}" -x c -c /dev/null -o "$WORK/llvm-support.o"
     SUPPORT_OBJ="$WORK/llvm-support.o"
     ;;
@@ -155,7 +160,7 @@ case "$BACKEND" in
     ;;
   llvm)
     MC_ARCH=aarch64 MCC="$MCC" LLC="$LLC" "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$HERE/tests/arm/qjs_user_arm_runtime.mc" -o "$WORK/qjs_runtime.o" \
-      -mtriple=aarch64-unknown-elf -relocation-model=static -code-model=small
+      -mtriple=aarch64-unknown-elf -relocation-model=static -code-model=small -mattr=-neon
     ;;
 esac
 $CLANG "${KCF[@]}" -c "$WORK/app_image.c" -o "$WORK/app_image.o"
