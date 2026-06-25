@@ -219,8 +219,13 @@ Current status:
 - Capability checks, audit rings, and policy decision logic exist.
 - `persistent-audit-test` gates a BlobStore-backed checkpoint seed for policy metadata
   and drained audit events, including policy version and boot epoch metadata.
-- Production block-backed journal/reboot integration is still pending.
-- Policy actuation is partial: decisions exist, but live revoke/throttle/kill needs integration.
+- `block-persistent-audit-test` gates the same policy/audit checkpoint shape through the
+  generic `BlockDevice` trait, so the bytes survive a remount/reopen of block-backed storage
+  instead of only BlobStore memory.
+- `production-ops-test` gates watchdog/reboot-reason records and policy actuation state
+  transitions for throttle, revoke, and kill.
+- Production virtio-blk journal/reboot integration is still pending.
+- Policy actuation against live running agents is still pending.
 
 Production target:
 
@@ -243,13 +248,18 @@ Acceptance gates:
 
 Current status:
 
-- The kernel has agent bundle and runtime direction, but production update mechanics are not complete.
+- The kernel has agent bundle and runtime direction, but production loader/update mechanics are
+  not complete.
 - The **signature-verification primitive exists**: `kernel/crypto/rsa_verify.mc` is a thin MC
   binding over the vendored constant-time BearSSL "i31" engine for RSA-PKCS#1/SHA-256. The
   `rsa-verify-test` gate (both backends, in m0) verifies a real RSA-2048 signature and rejects a
   tampered signature and a wrong message. Crypto stays in the audited BearSSL library; MC only
-  marshals arguments. What remains for P4 is the bundle *format*, key management/rotation, and
-  wiring verification into the loader before untrusted bundles run.
+  marshals arguments.
+- `production-ops-test` gates bundle admission metadata: bundle kind/version, ABI version,
+  policy version, key id, signature presence/status, rejected bad ABI, rejected wrong key, and
+  two-slot rollback state after failed boot.
+- What remains for P4 is key management/rotation, auditing bundle identities, and wiring
+  RSA verification plus bundle admission into the loader before untrusted bundles run.
 
 Production target:
 
@@ -441,12 +451,13 @@ Goal: survive reboot and explain behavior.
 
 Tasks:
 
-- Add persistent policy store.
-- Add persistent audit log.
-- Add watchdog integration.
-- Add panic/reboot reason record.
+- Add persistent policy store. **Seed exists:** BlobStore and BlockDevice gates.
+- Add persistent audit log. **Seed exists:** BlobStore and BlockDevice gates.
+- Add watchdog integration. **State primitive exists:** `production-ops-test`.
+- Add panic/reboot reason record. **State primitive exists:** `production-ops-test`.
 - Add storage-full behavior for audit and policy.
-- Add policy actuation for revoke/throttle/kill.
+- Add policy actuation for revoke/throttle/kill. **State primitive exists:** `production-ops-test`;
+  live-agent wiring remains.
 
 Exit criteria:
 
@@ -461,11 +472,11 @@ Goal: make update and trust-chain behavior shippable.
 
 Tasks:
 
-- Define bundle format for kernel, policy, and agent.
-- Add signature verification.
-- Add version compatibility checks.
-- Add A/B or fallback update slot.
-- Add rollback after failed boot.
+- Define bundle format for kernel, policy, and agent. **Header/admission seed exists.**
+- Add signature verification. **Crypto primitive exists; loader wiring remains.**
+- Add version compatibility checks. **Admission seed exists.**
+- Add A/B or fallback update slot. **Two-slot rollback state exists.**
+- Add rollback after failed boot. **State transition gate exists.**
 - Add release manifest and reproducible image metadata.
 
 Exit criteria:
@@ -529,11 +540,16 @@ The first production claim should require all of these:
 - [ ] Allowed and denied broker decisions are audited.
 - [ ] Per-agent memory, request, output, and network budgets are enforced across the production paths.
 - [ ] Policy can revoke/throttle/kill a running agent.
+- [x] Policy actuation state transitions for revoke/throttle/kill are gated.
+- [x] BlockDevice-backed policy/audit checkpoint seed exists.
 - [ ] Audit persists across reboot.
 - [ ] Policy persists across reboot.
 - [ ] Watchdog and reboot reason work.
+- [x] Watchdog/reboot-reason state records are gated.
 - [ ] Signed agent bundles exist.
+- [x] Signed-bundle admission metadata and rejection semantics are gated.
 - [ ] Update rollback works.
+- [x] Two-slot rollback state transition is gated.
 - [ ] Syscall and broker fuzz tests exist.
 - [ ] Long QEMU soak passes.
 - [ ] Real-board soak passes.

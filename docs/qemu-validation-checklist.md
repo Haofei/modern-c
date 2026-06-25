@@ -8,6 +8,8 @@ Use this when VisionFive 2 hardware is unavailable.
 - Run `zig build riscv-qemu-validation` for the focused RISC-V OpenSBI/QEMU
   surrogate. On macOS, set `LLD` when Homebrew installs it outside `PATH`, for
   example `LLD=/opt/homebrew/opt/lld/bin/ld.lld zig build riscv-qemu-validation`.
+- Run `tools/qemu/riscv-qemu-soak-smoke.sh` before making a durability claim from
+  QEMU-only evidence. Set `MC_SOAK_ITERS=N` to raise the repeat count.
 - Run `zig build m0` before broad milestone or release claims.
 
 ## Required Tools
@@ -25,4 +27,4 @@ Use this when VisionFive 2 hardware is unavailable.
 
 QEMU evidence is a surrogate. It keeps the OpenSBI, FDT, interrupt, storage,
 network, and agent paths honest, but it is not a VisionFive 2 hardware boot or
-soak result.
+real long-duration soak result.

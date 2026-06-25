@@ -403,6 +403,12 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("policy-test"));
     // persistent-audit-test links + runs the BlobStore-backed policy/audit checkpoint substrate.
     m0_step.dependOn(ctx.cmd("persistent-audit-test"));
+    // block-persistent-audit-test moves the policy/audit checkpoint substrate onto BlockDevice.
+    m0_step.dependOn(ctx.cmd("block-persistent-audit-test"));
+    // agent-abi-test pins the versioned SYS_SUBMIT/SYS_POLL request/completion contract.
+    m0_step.dependOn(ctx.cmd("agent-abi-test"));
+    // production-ops-test gates bundle/update/watchdog/reboot/policy-actuation state transitions.
+    m0_step.dependOn(ctx.cmd("production-ops-test"));
     // netcap-test links + runs capability-gated network egress (milestone #3); LLVM side via llvm-host-suite-test.
     m0_step.dependOn(ctx.cmd("netcap-test"));
     // agent-containment-test links + runs the capstone M6-shape integration; LLVM side via llvm-host-suite-test.
