@@ -241,6 +241,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "agent-fs-test", "Agent FS tool front door: allowlist+budget gate over the path-capability server; M6-shape acceptance (deny+audit+attribute)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-fs-test" });
 
     _ = h.addScriptTest(ctx, "policy-test", "Policy plane: drain audit provenance into per-agent counters; denial pressure escalates Allow/Throttle/Revoke/Kill (M5 seed)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "policy-test" });
+    _ = h.addScriptTest(ctx, "persistent-audit-test", "Persistent policy/audit checkpoint: policy metadata and audited IPC events survive BlobStore reopen", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "persistent-audit-test" });
 
     _ = h.addScriptTest(ctx, "netcap-test", "Capability-gated network egress: default-deny NetCap, audited+attributed allow/deny, attenuation only narrows (milestone #3)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "netcap-test" });
 
@@ -320,6 +321,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-fdt-devices-test", "LLVM-lowered boot under OpenSBI + discover UART/PLIC/virtio-mmio via FDT", &.{ "bash", "tools/arch/fdt-devices-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "bootinfo-test", "Boot under OpenSBI + normalize FDT into the arch-neutral BootInfo (§3.1)", &.{ "bash", "tools/arch/bootinfo-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-bootinfo-test", "LLVM-lowered boot under OpenSBI + normalize FDT into the arch-neutral BootInfo", &.{ "bash", "tools/arch/bootinfo-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "visionfive2-readiness-test", "Boot under OpenSBI + validate the VisionFive 2 FDT-resource readiness adapter against QEMU", &.{ "bash", "tools/arch/visionfive2-readiness-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-visionfive2-readiness-test", "LLVM-lowered VisionFive 2 FDT-resource readiness adapter against QEMU", &.{ "bash", "tools/arch/visionfive2-readiness-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "uart-driver-test", "Boot under OpenSBI + discover UART base from FDT + drive first-class LSR-polled NS16550 driver", &.{ "bash", "tools/arch/uart-driver-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-uart-driver-test", "LLVM-lowered boot under OpenSBI + FDT-discovered first-class NS16550 driver", &.{ "bash", "tools/arch/uart-driver-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "smode-user-test", "S-mode U-mode hello under OpenSBI (SYS_WRITE + bad-ptr -EFAULT)", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "c" });

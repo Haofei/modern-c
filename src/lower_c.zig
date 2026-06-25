@@ -2441,11 +2441,18 @@ const CEmitter = struct {
     }
 
     fn emitParamDecl(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
+        try self.emitIgnoredLocalPrefix(name);
         try self.emitDeclarator(ty, name);
     }
 
     fn emitDeclarator(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
         try self.emitDeclaratorWithStyle(ty, name, .typedef_name);
+    }
+
+    fn emitIgnoredLocalPrefix(self: *CEmitter, name: []const u8) !void {
+        if (name.len > 0 and name[0] == '_') {
+            try self.out.appendSlice(self.allocator, "MC_UNUSED ");
+        }
     }
 
     fn emitStructFieldDeclarator(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
@@ -3424,6 +3431,7 @@ const CEmitter = struct {
                         }
                     }
                     try self.writeIndent();
+                    try self.emitIgnoredLocalPrefix(name.text);
                     if (local.ty) |decl_ty| {
                         try self.emitDeclarator(decl_ty, name.text);
                     } else {
@@ -3905,6 +3913,7 @@ const CEmitter = struct {
         defer temps.deinit(self.scratch.allocator());
 
         try self.writeIndent();
+        try self.emitIgnoredLocalPrefix(name);
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(call.callee.*, locals);
         try self.emitSequencedCallArgList(temps.items);
@@ -7472,6 +7481,10 @@ const CEmitter = struct {
                 return false;
             },
             .call => if (self.callReturnTypeForExpr(expr, locals)) |ty| isBoolType(ty) else false,
+            .index => {
+                if (self.operandEmitType(expr, locals)) |ty| return isBoolType(self.resolveAliasType(ty));
+                return false;
+            },
             // A bool-typed struct field — including a field of an array element
             // (`table[i].used`), resolved through operandEmitType so a `switch` on it
             // is cast to int (no -Wswitch-bool).
@@ -8306,6 +8319,7 @@ const CEmitter = struct {
         if (try self.emitSequencedCallLocalInit(name, return_ty, initializer, locals)) return true;
 
         try self.writeIndent();
+        try self.emitIgnoredLocalPrefix(name);
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(return_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(initializer, locals);
         try self.out.appendSlice(self.allocator, ";\n");
@@ -8535,6 +8549,7 @@ const CEmitter = struct {
         defer temps.deinit(self.scratch.allocator());
 
         try self.writeIndent();
+        try self.emitIgnoredLocalPrefix(name);
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(call.callee.*, locals);
         try self.emitSequencedCallArgList(temps.items);
@@ -9844,6 +9859,7 @@ const CEmitter = struct {
         defer temps.deinit(self.scratch.allocator());
 
         try self.writeIndent();
+        try self.emitIgnoredLocalPrefix(name);
         try self.out.print(self.allocator, "{s} {s} = ", .{ try self.cTypeFor(decl_ty, .typedef_name), try self.cIdent(name) });
         try self.emitExpr(call.callee.*, locals);
         try self.emitSequencedCallArgList(temps.items);
@@ -10736,6 +10752,9 @@ const CEmitter = struct {
                         if (std.mem.eql(u8, m.name.text, mname)) break :blk m.return_type;
                     }
                     break :blk null;
+                }
+                if (self.closureCalleeType(node.callee.*, locals)) |closure_ty| {
+                    break :blk closure_ty.kind.closure_type.ret.*;
                 }
                 const fn_name = calleeIdentName(node.callee.*) orelse break :blk null;
                 const info = self.functions.get(fn_name) orelse break :blk null;
@@ -13774,6 +13793,35 @@ test "C emission materializes closure callees once" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, ".code(mc_tmp") != null);
 }
 
+test "casts bool closure-call switch subjects" {
+    const source =
+        \\fn classify(pred: closure(u32) -> bool, x: u32) -> u32 {
+        \\    switch pred(x) {
+        \\        true => { return 1; },
+        \\        false => { return 0; },
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_closure_bool_switch.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch ((int)(({ mc_closure_bool_u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, ".code(mc_tmp") != null);
+}
+
 test "emits C for simple MMIO register access" {
     const source =
         \\extern mmio struct Uart16550 {
@@ -15297,6 +15345,44 @@ test "emits C for closed enum switch arms" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Irq mc_tmp0 = read_irq();\n    switch (mc_tmp0) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t classify_local_irq(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Irq irq = read_irq();\n    switch (irq) {") != null);
+}
+
+test "casts indexed bool switch subjects and marks ignored locals unused" {
+    const source =
+        \\extern fn tick() -> u64;
+        \\extern fn tick2(a: u64, b: u64) -> u64;
+        \\
+        \\fn ignore_call() -> void {
+        \\    let _ignore: u64 = tick();
+        \\    let _seq_ignore: u64 = tick2(1, 2);
+        \\}
+        \\
+        \\fn classify(flags: [2]bool, i: usize) -> u32 {
+        \\    switch flags[i] {
+        \\        true => { return 1; },
+        \\        false => { return 0; },
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "emit_c_bool_switch_unused.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendC(std.testing.allocator, module, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED uint64_t _ignore = tick();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED uint64_t _seq_ignore = tick2(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "switch ((int)(flags.elems[mc_check_index_usize(i, 2)])) {") != null);
 }
 
 test "emits C for target-typed enum literals" {

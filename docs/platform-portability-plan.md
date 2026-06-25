@@ -116,9 +116,10 @@ This section is the authoritative platform backlog and priority order.
    The first hardware target is StarFive VisionFive 2, recorded in
    `kernel/platform/starfive_visionfive2/profile.mc`. The QEMU `virt` path is strong, but
    production now needs this profile validated on real hardware: DTB identity, UART, timer,
-   interrupts, storage, network, boot chain, watchdog, and soak expectations. Until that
-   hardware is available, keep `zig build riscv-qemu-validation` green as the repeatable
-   surrogate.
+   interrupts, storage, network, boot chain, watchdog, and soak expectations.
+   `visionfive2-readiness-test` / `llvm-visionfive2-readiness-test` validate the profile's
+   FDT-resource adapter against QEMU, and `zig build riscv-qemu-validation` keeps that
+   repeatable surrogate green until hardware is available.
 
 2. **Complete S-mode interrupt and device wiring.**
    Core delivery is proven: timer interrupts, single-shot PLIC delivery, and re-armed PLIC

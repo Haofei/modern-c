@@ -36,6 +36,8 @@ pub fn register(ctx: *h.Ctx) void {
         "llvm-qjs-smode-net-irq-tool-test",
         "qjs-smode-blk-irq-tool-test",
         "llvm-qjs-smode-blk-irq-tool-test",
+        "visionfive2-readiness-test",
+        "llvm-visionfive2-readiness-test",
     };
 
     const riscv_qemu_validation_step = b.step("riscv-qemu-validation", "Run the RISC-V QEMU/OpenSBI validation surrogate for the selected real-board path");
@@ -399,6 +401,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("agent-fs-test"));
     // policy-test links + runs the policy-plane drainer (M5 seed); LLVM side via llvm-host-suite-test.
     m0_step.dependOn(ctx.cmd("policy-test"));
+    // persistent-audit-test links + runs the BlobStore-backed policy/audit checkpoint substrate.
+    m0_step.dependOn(ctx.cmd("persistent-audit-test"));
     // netcap-test links + runs capability-gated network egress (milestone #3); LLVM side via llvm-host-suite-test.
     m0_step.dependOn(ctx.cmd("netcap-test"));
     // agent-containment-test links + runs the capstone M6-shape integration; LLVM side via llvm-host-suite-test.

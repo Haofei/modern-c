@@ -23,10 +23,10 @@ extern fn agent_net_main(region_base: usize, region_len: usize) -> u32;
 // resolve. They are DEAD in this image (never called on the mock path) — minimal stubs suffice.
 export fn mc_read_ticks() -> u64 { return 0; }
 export fn mc_udelay(us: u32) -> void {}
-export fn mc_dma_alloc_base(len: usize) -> usize { return 0; }
-export fn mc_dma_free_base(dev_addr: usize, cpu_addr: usize, len: usize) -> void {}
-export fn mc_dma_clean_for_device_base(dev_addr: usize, cpu_addr: usize, len: usize) -> void {}
-export fn mc_dma_invalidate_for_cpu_base(dev_addr: usize, len: usize) -> usize { return dev_addr; }
+export fn mc_dma_alloc_base(_len: usize) -> usize { return 0; }
+export fn mc_dma_free_base(_dev_addr: usize, _cpu_addr: usize, _len: usize) -> void {}
+export fn mc_dma_clean_for_device_base(_dev_addr: usize, _cpu_addr: usize, _len: usize) -> void {}
+export fn mc_dma_invalidate_for_cpu_base(dev_addr: usize, _len: usize) -> usize { return dev_addr; }
 
 // Page-aligned heap region: over-allocated by a page so the base can be rounded up to a 4 KiB
 // boundary at runtime (MC has no align attribute). 262144 usable + one page of slack.

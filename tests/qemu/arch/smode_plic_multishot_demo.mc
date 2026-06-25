@@ -104,7 +104,7 @@ export fn s_trap_vector() -> void {
     }
 }
 
-export fn s_entry(hartid: u64, dtb: u64) -> void {
+export fn s_entry(_hartid: u64, _dtb: u64) -> void {
     sbi_puts("smode-plic-multishot: re-armed S-mode external IRQ via PLIC under OpenSBI\n");
     write_stvec((&s_trap_vector) as usize);
     smode_plic_enable_line(smode_plic_for_hart(PLIC_BASE, 0), UART_IRQ, 1, 0);

@@ -19,7 +19,7 @@ These are still useful as day-to-day references or rationale companions:
 |---|---|---|
 | Language interop | [`c-abi-interop.md`](c-abi-interop.md) | C ABI, symbols, strings, trap ABI, boundary diagnostics. |
 | Backend seam | [`backend-abstraction.md`](backend-abstraction.md) | Where C/LLVM backends plug into `mcc`. |
-| Testing | [`test-architecture.md`](test-architecture.md) | Fixture contracts, gate layers, and manifest discipline. |
+| Testing | [`test-architecture.md`](test-architecture.md), [`qemu-validation-checklist.md`](qemu-validation-checklist.md) | Fixture contracts, gate layers, manifest discipline, and the local/CI QEMU surrogate checklist. |
 | Unsafe/UB audit | [`unsafe-boundary.md`](unsafe-boundary.md), [`c-ub-matrix.md`](c-ub-matrix.md), [`lowering-coverage.md`](lowering-coverage.md) | Unsafe syntax, C-UB handling, and lowering coverage reports. |
 | Traits/async rationale | [`traits-design.md`](traits-design.md), [`async-plan.md`](async-plan.md) | Design reasoning behind implemented or mostly implemented features. |
 | Agent/kernel direction | [`future-kernel-plan.md`](future-kernel-plan.md), [`production-readiness-plan.md`](production-readiness-plan.md), [`platform-portability-plan.md`](platform-portability-plan.md), [`quickjs-agent-plan.md`](quickjs-agent-plan.md), [`agent-sandbox-milestone.md`](agent-sandbox-milestone.md) | Longer-form rationale, current plans, and milestone history. Prefer `todo.md` for the repo-wide short list. |

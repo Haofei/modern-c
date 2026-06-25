@@ -78,13 +78,13 @@ export fn mc_dma_alloc_base(len: usize) -> usize {
     }
     return base;
 }
-export fn mc_dma_free_base(dev_addr: usize, cpu_addr: usize, len: usize) -> void {
+export fn mc_dma_free_base(_dev_addr: usize, _cpu_addr: usize, _len: usize) -> void {
     g_dma_in_use = 0; // one-shot pool: free just releases the in-use flag (args unused)
 }
-export fn mc_dma_clean_for_device_base(dev_addr: usize, cpu_addr: usize, len: usize) -> void {
+export fn mc_dma_clean_for_device_base(_dev_addr: usize, _cpu_addr: usize, _len: usize) -> void {
     // identity-mapped, cache-coherent under QEMU: nothing to flush
 }
-export fn mc_dma_invalidate_for_cpu_base(dev_addr: usize, len: usize) -> usize {
+export fn mc_dma_invalidate_for_cpu_base(dev_addr: usize, _len: usize) -> usize {
     return dev_addr; // identity-mapped: the CPU address equals the device address
 }
 

@@ -124,7 +124,7 @@ export fn s_trap_vector() -> void {
     }
 }
 
-export fn s_entry(hartid: u64, dtb: u64) -> void {
+export fn s_entry(_hartid: u64, _dtb: u64) -> void {
     sbi_puts("smode-timer: S-mode under OpenSBI\n");
 
     // stvec in Direct mode (low 2 bits = 0): all traps vector to s_trap_vector.

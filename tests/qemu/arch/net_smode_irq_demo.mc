@@ -132,7 +132,7 @@ fn build_arp_frame() -> usize {
     return 12 + frame_len;
 }
 
-export fn s_entry(hartid: u64, dtb: u64) -> void {
+export fn s_entry(_hartid: u64, _dtb: u64) -> void {
     sbi_puts("net-smode-irq: interrupt-backed async virtio-net TX under OpenSBI\n");
     write_stvec((&s_trap_vector) as usize);
 

@@ -24,7 +24,7 @@ global g_avail: VringAvail;
 global g_used: VringUsed;
 global g_vq: Virtq;
 
-export fn s_entry(hartid: u64, dtb: u64) -> void {
+export fn s_entry(_hartid: u64, _dtb: u64) -> void {
     sbi_puts("blk: S-mode under OpenSBI\n");
 
     let regs: MmioPtr<VirtioMmio> = find_virtio_device(VIRTIO_ID_BLK);

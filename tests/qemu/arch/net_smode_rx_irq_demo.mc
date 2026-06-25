@@ -152,7 +152,7 @@ fn rx_looks_like_arp_reply(n: usize) -> bool {
     return true;
 }
 
-export fn s_entry(hartid: u64, dtb: u64) -> void {
+export fn s_entry(_hartid: u64, _dtb: u64) -> void {
     sbi_puts("net-smode-rxirq: interrupt-backed async virtio-net RX under OpenSBI\n");
     write_stvec((&s_trap_vector) as usize);
 

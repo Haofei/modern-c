@@ -71,14 +71,14 @@ export fn mc_dma_alloc_base(len: usize) -> usize {
 
 // dev_addr/cpu_addr are the std's DmaAddr/PAddr (pointer-sized); taken as usize here
 // (symbol matched by name). No-op: the bump pool is one-shot for this smoke test.
-export fn mc_dma_free_base(dev_addr: usize, cpu_addr: usize, len: usize) -> void {
+export fn mc_dma_free_base(_dev_addr: usize, _cpu_addr: usize, _len: usize) -> void {
 }
 
 // DMA ownership transitions — identity on QEMU's coherent memory.
-export fn mc_dma_clean_for_device_base(dev_addr: usize, cpu_addr: usize, len: usize) -> void {
+export fn mc_dma_clean_for_device_base(_dev_addr: usize, _cpu_addr: usize, _len: usize) -> void {
 }
 
-export fn mc_dma_invalidate_for_cpu_base(dev_addr: usize, len: usize) -> usize {
+export fn mc_dma_invalidate_for_cpu_base(dev_addr: usize, _len: usize) -> usize {
     // No-IOMMU: the bus address equals the CPU physical address.
     return dev_addr;
 }

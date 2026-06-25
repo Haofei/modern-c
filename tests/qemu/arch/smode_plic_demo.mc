@@ -161,7 +161,7 @@ export fn s_trap_vector() -> void {
     }
 }
 
-export fn s_entry(hartid: u64, dtb: u64) -> void {
+export fn s_entry(_hartid: u64, _dtb: u64) -> void {
     sbi_puts("smode-plic: S-mode external IRQ via PLIC under OpenSBI\n");
 
     write_stvec((&s_trap_vector) as usize);

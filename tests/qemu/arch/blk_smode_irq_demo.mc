@@ -103,7 +103,7 @@ export fn s_trap_vector() -> void {
     }
 }
 
-export fn s_entry(hartid: u64, dtb: u64) -> void {
+export fn s_entry(_hartid: u64, _dtb: u64) -> void {
     sbi_puts("blk-smode-irq: interrupt-backed async virtio-blk under OpenSBI\n");
     write_stvec((&s_trap_vector) as usize);
 

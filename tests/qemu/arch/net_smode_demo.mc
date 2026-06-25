@@ -32,7 +32,7 @@ global g_tx_used: VringUsed;
 global g_rxq: Virtq;
 global g_txq: Virtq;
 
-export fn s_entry(hartid: u64, dtb: u64) -> void {
+export fn s_entry(_hartid: u64, _dtb: u64) -> void {
     sbi_puts("net: S-mode under OpenSBI\n");
 
     let regs: MmioPtr<VirtioMmio> = find_virtio_device(VIRTIO_ID_NET);

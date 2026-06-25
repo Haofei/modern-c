@@ -217,7 +217,9 @@ Acceptance gates:
 Current status:
 
 - Capability checks, audit rings, and policy decision logic exist.
-- Persistent audit and policy storage are not yet a production subsystem.
+- `persistent-audit-test` gates a BlobStore-backed checkpoint seed for policy metadata
+  and drained audit events, including policy version and boot epoch metadata.
+- Production block-backed journal/reboot integration is still pending.
 - Policy actuation is partial: decisions exist, but live revoke/throttle/kill needs integration.
 
 Production target:
