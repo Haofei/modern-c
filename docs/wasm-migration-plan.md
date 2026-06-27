@@ -68,7 +68,7 @@ path), but no request that is allowed today becomes denied, or vice versa.
 | Layer | File(s) | Changes? |
 |---|---|---|
 | Syscall ABI (numbers + struct layout) | `user/abi.mc` (`SYS_*` numbers, `ToolReq`/`ToolEvent` layout) | **No** — frozen invariant |
-| Tool op catalog | `user/abi.mc` (`TOOL_OP_*` values) | **Append-only** — adds `TOOL_OP_RANDOM` (Phase 1); `TOOL_OP_NET_*` only if general sockets are later opted into (Phase 3 default reuses `TOOL_OP_NET_FETCH`) |
+| Tool op catalog | `user/abi.mc` (`TOOL_OP_*` values) | **Append-only** — will add `TOOL_OP_RANDOM` when real entropy is wired (not yet; current Phase 1 `random_get` is a test-only deterministic stub, so `user/abi.mc` has no `TOOL_OP_RANDOM` today); `TOOL_OP_NET_*` only if general sockets are later opted into (Phase 3 default reuses `TOOL_OP_NET_FETCH`) |
 | Kernel syscall dispatch | `kernel/core/syscall.mc`, the `sys_submit`/`sys_poll` handlers | **No** |
 | Capability broker (allow/deny decisions) | `kernel/fs/agent_fs.mc`, `kernel/fs/fs_toolserver.mc`, `kernel/net/net_broker.mc`, `kernel/net/netcap.mc` | **Decisions unchanged**; Phase 3 *adds* net-deny audit coverage (and a new net op handler only if general sockets are later opted into) |
 | Audit | `kernel/core/ipc_trace.mc` | **No** (reused by the new net-deny record) |
@@ -136,7 +136,7 @@ requests that flow through the existing brokers:
 | `fd_write` (stdout/stderr) | `SYS_WRITE` | console |
 | `proc_exit` | `SYS_EXIT` | — |
 | `clock_time_get`, `poll_oneoff` (timeout) | `TOOL_OP_TIMEOUT` + `SYS_POLL` | — |
-| `random_get` | (new `TOOL_OP_RANDOM` over kernel rng) | — |
+| `random_get` | eventual `TOOL_OP_RANDOM` over kernel rng (current Phase 1: test-only deterministic stub) | — |
 | `path_open` + `fd_read` on a preopen | `TOOL_OP_FS_READ` | `PathCap` (`fs_toolserver.mc`) |
 | `path_open` + `fd_write` on a preopen | `TOOL_OP_FS_WRITE` | `PathCap` |
 | `path_create_directory` | `TOOL_OP_FS_MKDIR` | `PathCap` |
@@ -643,7 +643,7 @@ The migration must **not** widen the trap surface. Rules:
 
 - The six syscalls (`SYS_WRITE/READ/GETPID/EXIT/SUBMIT/POLL`) stay frozen.
 - New capability operations are added as `TOOL_OP_*` values (append-only) in
-  `user/abi.mc`, never as new syscalls. Appending a `TOOL_OP_RANDOM` (Phase 1) or
+  `user/abi.mc`, never as new syscalls. Appending a future `TOOL_OP_RANDOM` (not yet added) or
   finer-grained FS/net ops is safe; renumbering existing ops or structs is not
   (the C host mirrors offsets byte-for-byte — see `user/abi.mc` ↔ `qjs_host.c`).
 - `ToolReq` (40 B) and `ToolEvent` (24 B) layouts are stable. If a WASI op needs
