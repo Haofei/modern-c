@@ -1251,6 +1251,25 @@ def _differential_compare(env, src_path, work):
     return None
 
 
+def _ubsan_runtime_available():
+    """True if clang can LINK a trivial program with -fsanitize=undefined. Some toolchains ship
+    clang without the compiler-rt sanitizer runtime for the host arch (e.g. Ubuntu clang on arm64),
+    so the sanitize oracle's link always fails — an unsupported environment, not a code finding."""
+    import tempfile, shutil
+    clang = os.environ.get("CLANG", "clang")
+    d = tempfile.mkdtemp()
+    try:
+        c = os.path.join(d, "p.c")
+        open(c, "w").write("int main(void){return 0;}\n")
+        return subprocess.run(
+            [clang, "-fsanitize=undefined", "-fno-sanitize-recover=all", c, "-o", os.path.join(d, "p")],
+            capture_output=True).returncode == 0
+    except Exception:
+        return False
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def oracle_sanitize(env, seed, src_path, work):
     """Compile the emitted C with UBSan and run; any report is a finding."""
     obj = os.path.join(work, "c.o")
@@ -1637,7 +1656,11 @@ def main():
         files = sorted(glob.glob(os.path.join(ROOT, "tools/fuzz/corpus", "*.mc")))
         if not files:
             print("SKIP: mcfuzz/corpus (no corpus files)"); return 0
-        checks = (("differential", oracle_differential), ("sanitize", oracle_sanitize))
+        checks = [("differential", oracle_differential)]
+        if _ubsan_runtime_available():
+            checks.append(("sanitize", oracle_sanitize))
+        else:
+            print("note: mcfuzz/corpus skipping sanitize oracle (UBSan runtime unavailable for this host arch)")
         fails = []
         for f in files:
             src = open(f).read()
@@ -1672,6 +1695,9 @@ def main():
         return 0
 
     oracle = ORACLES[args.oracle]
+    if args.oracle == "sanitize" and not _ubsan_runtime_available():
+        print("SKIP: mcfuzz/sanitize — UBSan runtime (compiler-rt) unavailable for this host arch")
+        return 0
     seeds = range(args.start, args.start + args.count)
     fails, suspects = [], []
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:

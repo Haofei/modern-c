@@ -16,6 +16,22 @@ HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "
 CLANG="${CLANG:-clang}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: sanitize-test (clang not found)"; exit 0; }
+
+# Environment gate: the sanitizer RUNTIME (compiler-rt: libclang_rt.asan/ubsan) must exist for the
+# host arch. Some toolchain packagings ship clang without it — notably Ubuntu's clang on arm64,
+# where a sanitized link fails with "cannot find .../libclang_rt.asan-<arch>.a". That is an
+# unsupported environment, not a code finding (exactly like the QEMU/LLVM gates skipping on a bare
+# host), so SKIP rather than report every fixture as a failure. CI runs this gate where the runtime
+# is present and still enforces it.
+_san_probe="$(mktemp -d)"
+printf 'int main(void){return 0;}\n' >"$_san_probe/p.c"
+if ! "$CLANG" -fsanitize=address,undefined "$_san_probe/p.c" -o "$_san_probe/p" >/dev/null 2>&1; then
+    rm -rf "$_san_probe"
+    echo "SKIP: sanitize-test — sanitizer runtime (compiler-rt) unavailable for this host arch"
+    exit 0
+fi
+rm -rf "$_san_probe"
+
 MANIFEST="$HERE/tools/lib/host-tests.tsv"
 
 export MCC HERE CLANG
