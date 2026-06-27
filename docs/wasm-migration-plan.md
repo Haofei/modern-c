@@ -1,6 +1,18 @@
 # WASM migration plan: from the QuickJS host to a general WASM/WASI runtime
 
-Status: **roadmap / direction document**.
+Status: **direction document + live implementation log.** The plan is being implemented; each
+phase section carries its own **Status:** line. Snapshot:
+
+- **Landed (gated on both backends in `m0`):** Phase 0 (`wasm-run-test`), Phase 1
+  (`wasm-wasi-hello-test`), Phase 2 (`wasm-realtool-test`), Phase 3a + net-deny audit
+  (`wasm-nettool-test`), Phase 4a JS-executes-on-WASM keystone (`wasm-js-agent-test`).
+- **Open:** Phase 3 real-TCP / S-mode-IRQ net variants; Phase 4b (JS *drives the broker* —
+  blocked on a larger confined heap); Phase 5 (async/fuel/budgets/P2 worlds); Phase 6 (full
+  parity sweep + cross-arch); Phase 7 (JS perf benchmark); Phase 8 (retire `qjs_host.c`).
+
+The remaining phases are still forward-looking; the prose in those sections describes intended
+work, not landed work, except where a **Status:** line says otherwise. The parity matrix in §5
+(Phase 6) tracks every gate's state.
 
 This document describes how to migrate the agent runtime from the current
 hand-written QuickJS C host (`examples/apps/qjs_host.c`) to a general WASM
@@ -214,21 +226,22 @@ baseline; fill them in before committing to WAMR over wasm3 (or vice versa).
 
 | Metric | Budget (set from baseline) | Measured at | Action if exceeded |
 |---|---|---|---|
-| **QuickJS baseline (image size + JS hello latency + RSS)** | recorded, not bounded — this *is* the reference all other rows are set from. **Measured (`qjs-run-test`, C backend, bare-metal `virt.ld`):** engine `.text` ≈ **780 KB** (799,490 B), `.data` 4,320 B, ELF file 1.84 MB; `.bss` 8.0 MB is the reserved heap/stack region in `virt.ld`, not steady-state footprint. JS hello = the `1+2*3==7` eval; end-to-end QEMU run is dominated by boot, not eval. (Confined `qjs_host` agent image to be measured at Phase 2.) | Phase 0, step 0 | n/a (measurement) |
+| **QuickJS baseline (image size + JS hello latency + RSS)** | recorded, not bounded — this *is* the reference all other rows are set from. **Measured (`qjs-run-test`, C backend, bare-metal `virt.ld`):** engine `.text` ≈ **780 KB** (799,490 B), `.data` 4,320 B, ELF file 1.84 MB; `.bss` 8.0 MB is the reserved heap/stack region in `virt.ld`, not steady-state footprint. JS hello = the `1+2*3==7` eval; end-to-end QEMU run is dominated by boot, not eval. (The confined `qjs_host` agent image was not separately measured; the bare-engine `.text` above bounds the engine cost, and the confined arena requirement is captured in Phase 4's note.) | Phase 0, step 0 | n/a (measurement) |
 | U-mode image size (engine + shim) | ≤ _N×_ the current `qjs_host` image; must fit `user.ld` at base `0x10000`. **Measured (`wasm-run-test`, C backend, bare engine, no shim yet):** wasm3 `.text` ≈ **89 KB** (90,946 B) vs QuickJS 780 KB → **N ≈ 0.11×** (~8.8× smaller). Guest `hello.wasm` 440 B. Huge headroom; revisit once the WASI shim + a real guest land (Phase 1–4). | Phase 0 | Prefer wasm3 (interpreter, tiny); if still over, AOT-trim or abort |
 | Per-instance linear memory | ≤ the agent's `heap-bytes` budget (`future-kernel-plan.md` §7) | Phase 1 | Cap instance memory; deny with the quota errno (see note) |
 | WASI hello latency vs native | ≤ _Mx_ the QuickJS hello path | Phase 1 | Acceptable for I/O-bound agents (most agent time is awaiting brokered I/O); if compute-bound, evaluate AOT (WAMR/w2c2) |
-| **JS-on-WASM (Javy) memory** | ≤ _P×_ native QuickJS | Phase 4 | See below — keep native QuickJS host behind a flag (Phase 7) |
-| **JS-on-WASM (Javy) latency** | ≤ _Q×_ native QuickJS | Phase 4 | Same |
+| **JS-on-WASM (Javy) memory** | ≤ _P×_ native QuickJS | Phase 7 benchmark | See below — keep native QuickJS host behind a flag if exceeded |
+| **JS-on-WASM (Javy) latency** | ≤ _Q×_ native QuickJS | Phase 7 benchmark | Same |
 
 **The Javy double-layering cost is real and must be measured, not assumed away.**
 Running JS via Javy means QuickJS is compiled to WASM and then interpreted by the
 WASM engine — two interpreter layers stacked (engine → QuickJS bytecode → JS),
 with QuickJS's heap living *inside* the WASM linear memory. Expect a meaningful
-memory and latency penalty versus today's native QuickJS host. Phase 4 must
-quantify it; §9 Q4 ("JS perf on WASM") is decided by these two rows, and Phase 7
-keeps the native QuickJS host behind a build flag if the JS path regresses past
-budget.
+memory and latency penalty versus today's native QuickJS host. Phase 4a proves JS
+executes on WASM; **Phase 7 is the benchmark decision point** for whether
+JS-on-WASM can replace native QuickJS for JS bundles. §9 Q4 ("JS perf on WASM") is
+decided by these two rows, and Phase 8 keeps the native QuickJS host behind a
+build flag if the JS path regresses past budget.
 
 ### Abort / rollback criteria
 
@@ -239,11 +252,11 @@ The migration has a defined off-ramp — it is not all-or-nothing:
 - **Hard aborts:** the engine cannot be built JIT-free for a target arch; or the
   Phase-0 image cannot be made to fit `user.ld`; or no engine meets the image
   budget even at wasm3's footprint.
-- **Soft stop (ship WASM for non-JS, keep native QuickJS for JS):** if Phase-4
-  Javy memory/latency regresses past budget but Phases 0–3 meet theirs, ship the
-  WASM runtime for `wasm` bundles and keep the native QuickJS host for `js`
-  bundles. This still delivers multi-language agents; only the "retire the host"
-  goal (Phase 7) is deferred.
+- **Soft stop (ship WASM for non-JS, keep native QuickJS for JS):** if the Phase-7
+  benchmark shows JS-on-WASM memory/latency regresses past budget but Phases 0–6
+  meet their parity gates, ship the WASM runtime for `wasm` bundles and keep the
+  native QuickJS host for `js` bundles. This still delivers multi-language agents;
+  only the "retire the host" goal (Phase 8) is deferred.
 
 ---
 
@@ -251,9 +264,10 @@ The migration has a defined off-ramp — it is not all-or-nothing:
 
 Each phase lands a deliverable plus one or more gates, on **both backends**
 (C + LLVM) per project convention, validated in Docker (host skips
-LLVM/QEMU/kernel gates; run the full gates in Docker via the
-`tools/toolchain/*.sh` scripts). New gates wire into
-`build/tiers.zig` next to the existing `qjs-*` gates.
+LLVM/QEMU/kernel gates; run a gate in Docker via
+`docker compose run --rm dev zig build <gate>`, e.g. `wasm-run-test`). The wasm gate
+scripts live under `tools/lang/` (e.g. `tools/lang/wasm-confined-test.sh`); new gates
+wire into `build/qemu.zig` and `build/tiers.zig` next to the existing `qjs-*` gates.
 
 New **build-host-only** toolchain dependencies this introduces (none ship on the
 device): a `wasm32-wasi` toolchain (wasi-sdk / clang) from Phase 1 to produce
@@ -372,20 +386,20 @@ Goal: WASI filesystem calls flow through the existing capability FS broker.
 broker `mkdir` deny (audited) **and** the outside-preopen escape refusal. Mirrors
 `qjs-realtool-test`.
 
-Status: **Phase 3a + net-deny audit DONE.** The shim exposes a fetch-only `net_fetch(endpoint,
-token)` MC host tool (module `mc`, not general WASI sockets) mapping to `TOOL_OP_NET_FETCH`
-through the net broker (egress allowlist → budget → endpoint); a WASM guest
-(`examples/apps/wasm/wasi_net.c`) reaches endpoint 1 (107/108), is **denied** endpoint 9
-(EDENIED), and is **budget-bounded** (EAGAIN) — the mirror of `qjs-nettool-test`, gated as
-`wasm-nettool-test` / `llvm-` in `m0`. The required **net-deny audit** is implemented:
-`net_broker.mc`'s `net_policy_admit` now records a blocked egress as a distinct `NET_DENY_TAG`
-event (append-only audit *coverage*; the decision is unchanged — still Denied, no budget, no
-packet), reaching FS-deny audit parity. The `agent-net-test` / `agent-net-real-test` gates
-assert the deny record; the WASM guest triggers the same audited deny path. **Remaining for
-Phase 3:** real-TCP (`wasm-net-realtool-test`) and S-mode IRQ (`wasm-smode-net-irq-tool-test`)
-variants.
-
 ### Phase 3 — Network via a fetch-only WASI surface → NetCap
+
+Status: **Phase 3a + net-deny audit DONE; real-TCP and S-mode-IRQ variants OPEN.** The shim
+exposes a fetch-only `net_fetch(endpoint, token)` MC host tool (module `mc`, not general WASI
+sockets) mapping to `TOOL_OP_NET_FETCH` through the net broker (egress allowlist → budget →
+endpoint); a WASM guest (`examples/apps/wasm/wasi_net.c`) reaches endpoint 1 (107/108), is
+**denied** endpoint 9 (EDENIED), and is **budget-bounded** (EAGAIN) — the mirror of
+`qjs-nettool-test`, gated as `wasm-nettool-test` / `llvm-` in `m0`. The required **net-deny
+audit** is implemented: `net_broker.mc`'s `net_policy_admit` now records a blocked egress as a
+distinct `NET_DENY_TAG` event (append-only audit *coverage*; the decision is unchanged — still
+Denied, no budget, no packet), reaching FS-deny audit parity. The `agent-net-test` /
+`agent-net-real-test` gates assert the deny record; the WASM guest triggers the same audited deny
+path. **Remaining for Phase 3:** real-TCP (`wasm-net-realtool-test`) and S-mode IRQ
+(`wasm-smode-net-irq-tool-test`) variants.
 
 Goal: WASI network egress flows through the net broker — **without reopening the
 network model.** General WASI sockets do not fit the current network op, and
@@ -499,6 +513,8 @@ does **not** yet assert broker/audit-trace parity.
 
 ### Phase 5 — Async, fuel, budgets, P2 worlds
 
+Status: **OPEN.**
+
 Goal: use WASM's strengths and align with the resource-budget model.
 
 - **Fuel metering** → CPU-ticks/event-loop budget (`future-kernel-plan.md` §7).
@@ -537,6 +553,9 @@ gates.
 
 ### Phase 6 — Differential parity sweep
 
+Status: **OPEN** (in progress — 5 of the Group-A substrate rows below are ☑; the rest, plus
+cross-arch, remain).
+
 Goal: the WASM path matches the QuickJS path on every scenario, both backends,
 all relevant architectures.
 
@@ -550,7 +569,7 @@ all relevant architectures.
 **Gate:** the full `wasm-*` family green in `m0` on both backends; the parity
 matrix below marked complete.
 
-**Parity matrix.** The contract for Phase 7 is: every `qjs-*` gate is either
+**Parity matrix.** The contract for Phase 8 is: every `qjs-*` gate is either
 matched by a `wasm-*` peer (same broker outcome + same audit trace, both
 backends) **or** explicitly classified as not needing one, with a reason. The
 gates split into two groups.
@@ -596,10 +615,47 @@ by the WASM engine's own bring-up:
 | `qjs-worker-test` | QuickJS worker feature | JS-language behavior → `wasm-js-agent-test` (verify Javy supports it; if not, document as a JS feature absent on the WASM path). |
 | `qjs-mc-host-test` | MC-hosted QuickJS variant | **TBD — classify in Phase 6** (confirm whether this exercises host glue that has a WASM analogue, or is QuickJS-host-specific and retired with the host). |
 
-Keep both tables current as `qjs-*` gates are added. Phase 7 may not start until
+Keep both tables current as `qjs-*` gates are added. Phase 8 may not start until
 every Group A row is ☑ and every Group B row has a confirmed disposition.
 
-### Phase 7 — Retire the QuickJS host (not QuickJS)
+### Phase 7 — JS performance benchmark: QuickJS-on-WASM vs native QuickJS
+
+Status: **OPEN.**
+
+Goal: decide with data whether JS bundles can default to QuickJS-on-WASM, or
+whether the native QuickJS host must remain for performance-sensitive JS agents.
+This is a release gate before retiring `qjs_host.c`; correctness parity alone is
+not enough.
+
+- Add a benchmark runner that executes the **same JS corpus** on both paths:
+  native QuickJS (`qjs_host.c`) and QuickJS compiled to `wasm32-wasi` running on
+  the WASM host. Use identical backend, QEMU mode, agent policy, and input data.
+- Benchmark at least:
+  - cold start + first eval latency;
+  - warm eval throughput;
+  - allocation/GC-heavy JS;
+  - JSON/object/array-heavy agent logic;
+  - JS host-API calls (`host_async`, `host_fs_*`, `host_net_fetch`) once Phase 4b
+    lands, measuring both latency and broker/audit parity.
+- Record memory separately from latency: U-mode image size, configured libc arena,
+  peak used heap/linear memory, and any loader segment pressure. The current 14 MiB
+  QuickJS-on-WASM arena requirement is a measured input, not an acceptable default
+  forever.
+- Produce a stable report artifact, e.g. `zig-out/wasm-js-bench.json`, containing
+  native values, WASM values, ratios, backend, QEMU mode, and git commit.
+- Decide explicit thresholds before Phase 8: `_P×_` memory and `_Q×_` latency from
+  §4. If JS-on-WASM exceeds them, keep native QuickJS behind a build/runtime flag
+  for `manifest.runtime = js`; do not retire `qjs_host.c`.
+
+**Gates:** `wasm-js-bench-test` / `llvm-wasm-js-bench-test` — emit the comparison
+report and fail if required measurements are missing or exceed the configured
+retirement thresholds. These gates should be deterministic enough for release
+qualification; they may use generous CI thresholds, but the production decision
+must use the target-board profile.
+
+### Phase 8 — Retire the QuickJS host (not QuickJS)
+
+Status: **OPEN** (gated on Phase 6 green + the Phase 7 benchmark decision).
 
 Goal: remove the hand-written JS-specific host once WASM has parity.
 
@@ -608,14 +664,16 @@ Goal: remove the hand-written JS-specific host once WASM has parity.
 - **Keep** QuickJS-the-engine, reborn as a WASM guest via Javy (Phase 4). JS
   agents keep working.
 - Optionally keep the native QuickJS host behind a build flag **only** if Phase-5
-  perf data shows the WASM JS path is unacceptable for a target board; otherwise
+  resource work or Phase-7 benchmark data shows the WASM JS path is unacceptable
+  for a target board; otherwise
   delete it. Decide with data, not by default.
 - Update `docs/future-kernel-plan.md` §11.1/§11.2, `docs/quickjs-agent-plan.md`,
   and `docs/todo.md` to reflect WASM as the primary runtime.
 
-> Do not start Phase 7 until Phase 6 is green. The QuickJS host is the only fully
-> gated runtime and the migration's differential oracle; it must not be removed
-> while it is still proving the WASM path.
+> Do not start Phase 8 until Phase 6 is green **and** the Phase-7 benchmark decision
+> is recorded. The QuickJS host is the only fully gated runtime and the migration's
+> differential oracle; it must not be removed while it is still proving the WASM path
+> or while JS-on-WASM performance is unresolved.
 
 ---
 
@@ -666,9 +724,9 @@ The migration must **not** widen the trap surface. Rules:
 | Engine pulls in host-OS assumptions (mmap, threads, JIT) | Use the engine's platform porting layer; interpreter/AOT only, no JIT; implement the porting shims against our libc/syscalls |
 | WASI surface creep reintroduces ambient authority | Curated WIT world (Phase 5); preopen-only fs; **fetch-only egress to allowlisted endpoints — no general sockets** until a consciously-scoped opt-in (Phase 3); explicitly document omitted interfaces |
 | Sync WASI over async kernel deadlocks the single-threaded guest | Reuse `ToolPump` submit-then-drain; the pattern is already proven by `user/agent_async.mc` |
-| Losing JS capability | Phase 4a proves JS *executes* on WASM (`wasm-js-agent-test`); full JS-agent **broker/audit parity** (Phase 4b) and the Phase 6 sweep are required before any QuickJS-host removal (Phase 7 is gated on Phase 6 green) |
+| Losing JS capability | Phase 4a proves JS *executes* on WASM (`wasm-js-agent-test`); full JS-agent **broker/audit parity** (Phase 4b), the Phase 6 sweep, and Phase 7 JS performance benchmark are required before any QuickJS-host removal (Phase 8 is gated on Phase 6 + Phase 7) |
 | Backend/arch divergence | Every gate runs on both backends; Phase 6 sweeps all three arches before `m0` inclusion |
-| Removing the oracle too early | Phase 7 is gated on Phase 6 green; migration-safety rule forbids early removal |
+| Removing the oracle too early | Phase 8 is gated on Phase 6 green plus the Phase-7 benchmark decision; migration-safety rule forbids early removal |
 
 ---
 
@@ -681,8 +739,9 @@ The migration must **not** widen the trap surface. Rules:
    target board profile before committing.
 3. **w2c2 path.** Is compiling `.wasm` → C through MC's own C backend worth the
    parity-machinery integration? Evaluate in Phase 5.
-4. **JS perf on WASM.** Does Javy-on-WASM meet target-board latency, or must a
-   native QuickJS host survive behind a flag? Decide with Phase-5 data.
+4. **JS perf on WASM.** Does QuickJS-on-WASM meet target-board memory and latency
+   budgets, or must a native QuickJS host survive behind a flag? Decide with
+   Phase-7 benchmark data.
 5. **Fuel source.** WAMR instruction budget vs wasmi fuel vs interpreter-tick
    counting — which integrates cleanest with the existing budget manager?
 
