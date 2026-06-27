@@ -29,6 +29,7 @@ extern fn strchr(s: *const u8, c: i32) -> *mut u8;
 global g_buf: [64]u8;
 global g_buf2: [64]u8;
 global g_mv: [8]u8;
+global g_mv_down: [8]u8;
 
 export fn test_main() -> void {
     put_str("cstr: exercising MC mem/string core\n");
@@ -80,6 +81,15 @@ export fn test_main() -> void {
     let mv2: *mut u8 = &g_mv[2];
     memmove(mv2, mvc, 4); // region [2..6) becomes A B C D
     if !(g_mv[2] == 'A' && g_mv[3] == 'B' && g_mv[4] == 'C' && g_mv[5] == 'D') { pass = 0; }
+
+    // memmove with overlap (shift left by 2 within a buffer). This is the dst<src case that must
+    // copy forward even though memcpy/mem_copy would reject the overlap.
+    g_mv_down[0] = 'A'; g_mv_down[1] = 'B'; g_mv_down[2] = 'C'; g_mv_down[3] = 'D';
+    g_mv_down[4] = 'E'; g_mv_down[5] = 'F'; g_mv_down[6] = 0;
+    let mv_down_dst: *mut u8 = &g_mv_down[0];
+    let mv_down_src: *const u8 = &g_mv_down[2];
+    memmove(mv_down_dst, mv_down_src, 4); // region [0..4) becomes C D E F
+    if !(g_mv_down[0] == 'C' && g_mv_down[1] == 'D' && g_mv_down[2] == 'E' && g_mv_down[3] == 'F') { pass = 0; }
 
     if pass != 0 {
         put_str("CSTR-OK\n");
