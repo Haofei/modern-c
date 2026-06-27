@@ -8,10 +8,12 @@
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
-HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/test-env.sh"
+HERE="$(mc_repo_root)"
 LLVM_AS="${LLVM_AS:-llvm-as}"
 LLC="${LLC:-llc}"
-JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
+JOBS="${JOBS:-$(mc_host_jobs)}"
 
 command -v "$LLVM_AS" >/dev/null 2>&1 || { echo "SKIP: llvm-kernel-test (llvm-as not found)"; exit 0; }
 command -v "$LLC" >/dev/null 2>&1 || { echo "SKIP: llvm-kernel-test (llc not found)"; exit 0; }
@@ -53,8 +55,9 @@ llk_one() {
 }
 export -f llk_one
 
-mapfile -t modules < <(find "$HERE/kernel" -name '*.mc' ! -path '*/kernel/bad/*' | sort)
-count="${#modules[@]}"
-printf '%s\0' "${modules[@]}" | xargs -0 -P "$JOBS" -I{} bash -c 'llk_one "$@"' _ {}
+modules_file="$WORK/modules.list"
+find "$HERE/kernel" -name '*.mc' ! -path '*/kernel/bad/*' | sort >"$modules_file"
+count="$(mc_count_lines "$modules_file")"
+tr '\n' '\0' <"$modules_file" | xargs -0 -P "$JOBS" -I{} bash -c 'llk_one "$@"' _ {}
 
 echo "PASS: llvm-kernel-test - $count kernel modules emit assemblable LLVM IR and non-empty target objects"

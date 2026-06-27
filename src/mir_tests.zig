@@ -1,0 +1,3786 @@
+const std = @import("std");
+
+const diagnostics = @import("diagnostics.zig");
+const parser = @import("parser.zig");
+const mir = @import("mir.zig");
+
+const Block = mir.Block;
+const ContractRegion = mir.ContractRegion;
+const Function = mir.Function;
+const Instruction = mir.Instruction;
+const Module = mir.Module;
+const RangeFact = mir.RangeFact;
+const TrapEdge = mir.TrapEdge;
+const TrapKind = mir.TrapKind;
+const ValueType = mir.ValueType;
+
+fn functionByName(module: mir.Module, name: []const u8) ?mir.Function {
+    for (module.functions) |function| {
+        if (std.mem.eql(u8, function.name, name)) return function;
+    }
+    return null;
+}
+
+fn functionHasInstruction(function: mir.Function, kind: mir.Instruction.Kind, detail: []const u8) bool {
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == kind and std.mem.eql(u8, instruction.detail, detail)) return true;
+        }
+    }
+    return false;
+}
+
+fn countTrapEdges(function: mir.Function, kind: mir.TrapKind) usize {
+    var count: usize = 0;
+    for (function.trap_edges) |edge| {
+        if (edge.kind == kind) count += 1;
+    }
+    return count;
+}
+
+fn valueTypeName(ty: mir.ValueType) []const u8 {
+    return switch (ty) {
+        .void => "void",
+        .never => "never",
+        .bool => "bool",
+        .value => "value",
+        .integer => |name| name,
+        .float => |name| name,
+        .slice => |name| name,
+        .array => |name| name,
+        .closed_enum => |name| name,
+        .open_enum => |name| name,
+        .struct_ => |name| name,
+        .result => "Result",
+        .contract => "contract",
+        .branch => "branch",
+        .trap => "language_trap",
+        .unknown => "unknown",
+        else => "aggregate",
+    };
+}
+
+test "MIR resolves type aliases for checked ints and arithmetic domains" {
+    const source =
+        \\type Count = u32;
+        \\type HashWord = wrap<u32>;
+        \\type Level = sat<u8>;
+        \\
+        \\fn checked_alias_add(a: Count, b: Count) -> Count {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn wrap_alias_add(a: HashWord, b: HashWord) -> HashWord {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn sat_alias_add(a: Level, b: Level) -> Level {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn wrap_cast_add(a: u32, b: u32) -> HashWord {
+        \\    return (a as HashWord) + (b as HashWord);
+        \\}
+        \\
+        \\fn sat_cast_add(a: u8, b: u8) -> Level {
+        \\    return (a as Level) + (b as Level);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_alias_domains.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const checked_fn = functionByName(typed_mir, "checked_alias_add").?;
+    const wrap_fn = functionByName(typed_mir, "wrap_alias_add").?;
+    const sat_fn = functionByName(typed_mir, "sat_alias_add").?;
+    const wrap_cast_fn = functionByName(typed_mir, "wrap_cast_add").?;
+    const sat_cast_fn = functionByName(typed_mir, "sat_cast_add").?;
+
+    try std.testing.expect(functionHasInstruction(checked_fn, .add_overflow, "add"));
+    try std.testing.expect(!functionHasInstruction(wrap_fn, .add_overflow, "add"));
+    try std.testing.expect(!functionHasInstruction(sat_fn, .add_overflow, "add"));
+    try std.testing.expect(!functionHasInstruction(wrap_cast_fn, .add_overflow, "add"));
+    try std.testing.expect(!functionHasInstruction(sat_cast_fn, .add_overflow, "add"));
+    try std.testing.expectEqual(@as(usize, 0), wrap_fn.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 0), sat_fn.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 0), wrap_cast_fn.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 0), sat_cast_fn.trap_edges.len);
+}
+
+test "OPT const-index bounds-check elision drops only provably-dead Bounds trap edges" {
+    const source =
+        \\fn const_index(a: [4]u32) -> u32 {
+        \\    return a[2];
+        \\}
+        \\fn var_index(a: [4]u32, i: usize) -> u32 {
+        \\    return a[i];
+        \\}
+        \\fn const_div(x: u32) -> u32 {
+        \\    return x / 7;
+        \\}
+        \\fn var_div(x: u32, y: u32) -> u32 {
+        \\    return x / y;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_opt_bounds.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    // Default mir.build keeps each check and its trap edge (Bounds for the indices, DivideByZero
+    // for the divisions).
+    var base = try mir.build(std.testing.allocator, module);
+    defer base.deinit();
+    try std.testing.expectEqual(@as(usize, 1), functionByName(base, "const_index").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(base, "var_index").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(base, "const_div").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(base, "var_div").?.trap_edges.len);
+
+    // Optimized mir.build elides the provably-dead checks — the in-range constant index (2 < 4)
+    // and the unsigned division by a non-zero literal (/ 7) — but keeps the variable index's
+    // and variable divisor's checks; the proofs are conservative.
+    var opt = try mir.buildOpt(std.testing.allocator, module, .{ .optimize = true });
+    defer opt.deinit();
+    try std.testing.expectEqual(@as(usize, 0), functionByName(opt, "const_index").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(opt, "var_index").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 0), functionByName(opt, "const_div").?.trap_edges.len);
+    try std.testing.expectEqual(@as(usize, 1), functionByName(opt, "var_div").?.trap_edges.len);
+}
+
+test "MIR verifier reports arithmetic-domain misuse" {
+    const source =
+        \\type HashWord = wrap<u32>;
+        \\type Level = sat<u8>;
+        \\type Seq = serial<u32>;
+        \\type Ticks = counter<u64>;
+        \\
+        \\fn reject_wrap_checked_mix(a: HashWord, b: u32) -> HashWord {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn reject_sat_bitwise(a: Level, b: Level) -> Level {
+        \\    return a & b;
+        \\}
+        \\
+        \\fn reject_wrap_div(a: HashWord, b: HashWord) -> HashWord {
+        \\    return a / b;
+        \\}
+        \\
+        \\fn reject_serial_checked_mix(a: Seq, b: u32) -> Seq {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn reject_counter_bitwise(a: Ticks, b: Ticks) -> Ticks {
+        \\    return a & b;
+        \\}
+        \\
+        \\fn reject_cast_wrap_checked_mix(a: u32, b: u32) -> HashWord {
+        \\    return (a as HashWord) + b;
+        \\}
+        \\
+        \\fn reject_cast_sat_bitwise(a: u8, b: u8) -> Level {
+        \\    return (a as Level) & (b as Level);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_arith_domains.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    try mir.verify(std.testing.allocator, module, &reporter);
+
+    var found_mix = false;
+    var found_division = false;
+    var found_bitwise: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_ARITH_POLICY_MIX") != null) found_mix = true;
+        if (std.mem.indexOf(u8, diag.message, "E_ARITH_DOMAIN_DIVISION") != null) found_division = true;
+        if (std.mem.indexOf(u8, diag.message, "E_BITWISE_ARITH_DOMAIN_OPERAND") != null) found_bitwise += 1;
+    }
+    try std.testing.expect(found_mix);
+    try std.testing.expect(found_division);
+    try std.testing.expect(found_bitwise >= 2);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_wrap_checked_mix pass=core finding=arith_policy_mix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_sat_bitwise pass=core finding=bitwise_arith_domain_operand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_wrap_div pass=core finding=arith_domain_division") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_serial_checked_mix pass=core finding=arith_policy_mix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_counter_bitwise pass=core finding=bitwise_arith_domain_operand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_wrap_checked_mix pass=core finding=arith_policy_mix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_sat_bitwise pass=core finding=bitwise_arith_domain_operand") != null);
+}
+
+test "MIR verifier reports invalid operator operands" {
+    const source =
+        \\fn reject_unsigned_negation(x: u32) -> u32 {
+        \\    return -x;
+        \\}
+        \\
+        \\fn reject_integer_not(n: u32) -> bool {
+        \\    return !n;
+        \\}
+        \\
+        \\fn reject_integer_logical_and(flag: bool, n: u32) -> bool {
+        \\    return flag && n;
+        \\}
+        \\
+        \\fn reject_signed_bitwise(a: i32, b: i32) -> i32 {
+        \\    return a & b;
+        \\}
+        \\
+        \\fn reject_bool_bitwise(a: bool, b: bool) -> bool {
+        \\    return a & b;
+        \\}
+        \\
+        \\fn reject_pointer_bitwise(a: *mut u8, b: *mut u8) -> *mut u8 {
+        \\    return a & b;
+        \\}
+        \\
+        \\fn reject_null_bitwise() -> void {
+        \\    let value = null & null;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_operator_operands.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    try mir.verify(std.testing.allocator, module, &reporter);
+
+    var found_unsigned_negation = false;
+    var found_bool_operator: usize = 0;
+    var found_signed_bitwise = false;
+    var found_bool_bitwise = false;
+    var found_pointer_bitwise = false;
+    var found_operator_operand = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_UNSIGNED_NEGATION") != null) found_unsigned_negation = true;
+        if (std.mem.indexOf(u8, diag.message, "E_BOOL_OPERATOR_OPERAND") != null) found_bool_operator += 1;
+        if (std.mem.indexOf(u8, diag.message, "E_BITWISE_SIGNED_OPERAND") != null) found_signed_bitwise = true;
+        if (std.mem.indexOf(u8, diag.message, "E_BITWISE_BOOL_OPERAND") != null) found_bool_bitwise = true;
+        if (std.mem.indexOf(u8, diag.message, "E_BITWISE_POINTER_OPERAND") != null) found_pointer_bitwise = true;
+        if (std.mem.indexOf(u8, diag.message, "E_OPERATOR_OPERAND") != null) found_operator_operand = true;
+    }
+    try std.testing.expect(found_unsigned_negation);
+    try std.testing.expect(found_bool_operator >= 2);
+    try std.testing.expect(found_signed_bitwise);
+    try std.testing.expect(found_bool_bitwise);
+    try std.testing.expect(found_pointer_bitwise);
+    try std.testing.expect(found_operator_operand);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unsigned_negation pass=core finding=unsigned_negation") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_not pass=core finding=bool_operator_operand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_logical_and pass=core finding=bool_operator_operand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_signed_bitwise pass=core finding=bitwise_signed_operand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_bool_bitwise pass=core finding=bitwise_bool_operand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_pointer_bitwise pass=core finding=bitwise_pointer_operand") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_null_bitwise pass=core finding=operator_operand") != null);
+}
+
+test "MIR verifier reports binary numeric compatibility errors" {
+    const source =
+        \\fn reject_signed_unsigned_arithmetic(a: i32, b: u32) -> i32 {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn reject_unsigned_signed_comparison(a: u32, b: i32) -> bool {
+        \\    return a < b;
+        \\}
+        \\
+        \\fn reject_integer_width_arithmetic(a: u16, b: u32) -> u16 {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn reject_signed_width_comparison(a: i16, b: i32) -> bool {
+        \\    return a == b;
+        \\}
+        \\
+        \\fn reject_f32_f64_mix(a: f32, b: f64) -> f64 {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn reject_float_int_mix(a: f32, b: u32) -> f32 {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn reject_float_remainder(a: f64, b: f64) -> f64 {
+        \\    return a % b;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_numeric_compat.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    try mir.verify(std.testing.allocator, module, &reporter);
+
+    var signed_unsigned_count: usize = 0;
+    var promotion_count: usize = 0;
+    var no_implicit_count: usize = 0;
+    var operator_operand_found = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_SIGNED_UNSIGNED_MIX") != null) signed_unsigned_count += 1;
+        if (std.mem.indexOf(u8, diag.message, "E_NO_IMPLICIT_INTEGER_PROMOTION") != null) promotion_count += 1;
+        if (std.mem.indexOf(u8, diag.message, "E_NO_IMPLICIT_CONVERSION") != null) no_implicit_count += 1;
+        if (std.mem.indexOf(u8, diag.message, "E_OPERATOR_OPERAND") != null) operator_operand_found = true;
+    }
+    try std.testing.expect(signed_unsigned_count >= 2);
+    try std.testing.expect(promotion_count >= 2);
+    try std.testing.expect(no_implicit_count >= 2);
+    try std.testing.expect(operator_operand_found);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_signed_unsigned_arithmetic pass=core finding=signed_unsigned_mix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unsigned_signed_comparison pass=core finding=signed_unsigned_mix") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_width_arithmetic pass=core finding=integer_promotion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_signed_width_comparison pass=core finding=integer_promotion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_f32_f64_mix pass=core finding=float_binary_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_float_int_mix pass=core finding=float_binary_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_float_remainder pass=core finding=operator_operand") != null);
+}
+
+test "builds typed MIR CFG with explicit trap edge" {
+    const source =
+        \\#[no_lang_trap]
+        \\fn checked_add(a: u32, b: u32) -> u32 {
+        \\    return a + b;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_cfg.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), typed_mir.functions.len);
+    try std.testing.expect(typed_mir.functions[0].blocks.len >= 2);
+    try std.testing.expectEqual(@as(usize, 1), typed_mir.functions[0].trap_edges.len);
+    try std.testing.expectEqual(TrapKind.IntegerOverflow, typed_mir.functions[0].trap_edges[0].kind);
+}
+
+test "MIR records complete checked binary trap edges for division remainder and shifts" {
+    const source =
+        \\fn unsigned_div(a: u32, b: u32) -> u32 {
+        \\    return a / b;
+        \\}
+        \\
+        \\fn unsigned_rem(a: u32, b: u32) -> u32 {
+        \\    return a % b;
+        \\}
+        \\
+        \\fn signed_div(a: i32, b: i32) -> i32 {
+        \\    return a / b;
+        \\}
+        \\
+        \\fn signed_rem(a: i32, b: i32) -> i32 {
+        \\    return a % b;
+        \\}
+        \\
+        \\fn checked_shl(a: u32, b: u32) -> u32 {
+        \\    return a << b;
+        \\}
+        \\
+        \\fn checked_shr(a: u32, b: u32) -> u32 {
+        \\    return a >> b;
+        \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn reject_no_lang_div(a: u32, b: u32) -> u32 {
+        \\    return a / b;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_binary_traps.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const unsigned_div_fn = functionByName(typed_mir, "unsigned_div").?;
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(unsigned_div_fn, .DivideByZero));
+    try std.testing.expectEqual(@as(usize, 0), countTrapEdges(unsigned_div_fn, .IntegerOverflow));
+
+    const unsigned_rem_fn = functionByName(typed_mir, "unsigned_rem").?;
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(unsigned_rem_fn, .DivideByZero));
+    try std.testing.expectEqual(@as(usize, 0), countTrapEdges(unsigned_rem_fn, .IntegerOverflow));
+
+    const signed_div_fn = functionByName(typed_mir, "signed_div").?;
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(signed_div_fn, .DivideByZero));
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(signed_div_fn, .IntegerOverflow));
+
+    const signed_rem_fn = functionByName(typed_mir, "signed_rem").?;
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(signed_rem_fn, .DivideByZero));
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(signed_rem_fn, .IntegerOverflow));
+
+    const checked_shl_fn = functionByName(typed_mir, "checked_shl").?;
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(checked_shl_fn, .InvalidShift));
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(checked_shl_fn, .IntegerOverflow));
+
+    const checked_shr_fn = functionByName(typed_mir, "checked_shr").?;
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(checked_shr_fn, .InvalidShift));
+    try std.testing.expectEqual(@as(usize, 0), countTrapEdges(checked_shr_fn, .IntegerOverflow));
+
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var found_no_lang = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_NO_LANG_TRAP_EDGE") != null) found_no_lang = true;
+    }
+    try std.testing.expect(found_no_lang);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=signed_div pass=trap finding=trap_edge detail=DivideByZero") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=signed_div pass=trap finding=trap_edge detail=IntegerOverflow") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_shl pass=trap finding=trap_edge detail=InvalidShift") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_shl pass=trap finding=trap_edge detail=IntegerOverflow") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_shr pass=trap finding=trap_edge detail=InvalidShift") != null);
+}
+
+test "MIR const_get fixed indexing has no bounds trap edge" {
+    const source =
+        \\#[no_lang_trap]
+        \\fn fixed(xs: [2]u32) -> u32 {
+        \\    return xs.const_get<1>();
+        \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn rejected(xs: [2]u32, i: usize) -> u32 {
+        \\    return xs[i];
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_const_get.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const fixed_fn = functionByName(typed_mir, "fixed").?;
+    const rejected_fn = functionByName(typed_mir, "rejected").?;
+    try std.testing.expect(functionHasInstruction(fixed_fn, .index, "const_get"));
+    try std.testing.expectEqual(@as(usize, 0), countTrapEdges(fixed_fn, .Bounds));
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(rejected_fn, .Bounds));
+
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    try std.testing.expect(reporter.has_errors);
+    var no_lang_count: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_NO_LANG_TRAP_EDGE") != null) no_lang_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), no_lang_count);
+}
+
+test "MIR verifier reports no_lang_trap, fallthrough, contract, and irq findings" {
+    const source =
+        \\fn missing_return(flag: bool) -> u32 {
+        \\    if let value = null {
+        \\        return 1;
+        \\    }
+        \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn checked_add(a: u32, b: u32) -> u32 {
+        \\    return a + b;
+        \\}
+        \\
+        \\fn blocking() -> void {}
+        \\
+        \\#[irq_context]
+        \\fn irq_entry() -> void {
+        \\    blocking();
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_verify.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    try mir.verify(std.testing.allocator, module, &reporter);
+
+    var found_missing_return = false;
+    var found_no_lang_trap = false;
+    var found_irq = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_RETURN_MISSING") != null) found_missing_return = true;
+        if (std.mem.indexOf(u8, diag.message, "E_NO_LANG_TRAP_EDGE") != null) found_no_lang_trap = true;
+        if (std.mem.indexOf(u8, diag.message, "E_IRQ_CONTEXT_CALL") != null) found_irq = true;
+    }
+    try std.testing.expect(found_missing_return);
+    try std.testing.expect(found_no_lang_trap);
+    try std.testing.expect(found_irq);
+}
+
+test "MIR verifier requires matching unsafe contract kind" {
+    const source =
+        \\fn wrong_overflow_contract(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(noalias)]
+        \\    {
+        \\        return unchecked.add(a, b);
+        \\    }
+        \\}
+        \\
+        \\fn wrong_noalias_contract(p: *mut u8, n: usize) -> *mut u8 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return compiler.assume_noalias_unchecked(p, n);
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_contract_kind.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    try mir.verify(std.testing.allocator, module, &reporter);
+
+    var count: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_UNCHECKED_OUTSIDE_CONTRACT") != null) count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
+}
+
+test "MIR verifier reports strict unsafe effects outside unsafe blocks" {
+    const source =
+        \\extern mmio struct Uart16550 {
+        \\    thr: Reg<u8, .write>,
+        \\}
+        \\
+        \\fn reject_raw_store(addr: PAddr, value: u64) -> void {
+        \\    raw.store<u64>(addr, value);
+        \\}
+        \\
+        \\fn reject_mmio_map(pa: PAddr) -> void {
+        \\    mmio.map<Uart16550>(pa);
+        \\}
+        \\
+        \\fn reject_asm() -> void {
+        \\    asm opaque volatile {
+        \\        "cli"
+        \\    }
+        \\}
+        \\
+        \\fn reject_raw_many_deref(p: [*]mut u8) -> u8 {
+        \\    return p.*;
+        \\}
+        \\
+        \\fn accept_unsafe_effects(addr: PAddr, value: u64, pa: PAddr) -> void {
+        \\    unsafe {
+        \\        raw.store<u64>(addr, value);
+        \\        mmio.map<Uart16550>(pa);
+        \\        asm opaque volatile {
+        \\            "cli"
+        \\        }
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_strict_unsafe.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    try mir.verify(std.testing.allocator, module, &reporter);
+
+    var unsafe_required_count: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_UNSAFE_REQUIRED") != null) unsafe_required_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 4), unsafe_required_count);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_raw_store pass=unsafe finding=unsafe_required detail=raw.store") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_mmio_map pass=unsafe finding=unsafe_required detail=mmio.map") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_asm pass=unsafe finding=unsafe_required detail=asm.opaque") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_raw_many_deref pass=unsafe finding=unsafe_required detail=raw_many.deref") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_unsafe_effects pass=unsafe finding=unsafe_required") == null);
+}
+
+test "MIR context verifier handles extern irq callees and ordinary store name" {
+    const source =
+        \\packed bits UartLsr: u8 {
+        \\    tx_empty: bool,
+        \\}
+        \\
+        \\extern mmio struct Uart16550 {
+        \\    thr: Reg<u8, .write>,
+        \\    lsr: RegBits<u8, UartLsr, .read>,
+        \\}
+        \\
+        \\#[irq_context]
+        \\extern fn irq_poll() -> void;
+        \\
+        \\type IrqCounter = atomic<u32>;
+        \\type IrqUart = MmioPtr<Uart16550>;
+        \\
+        \\fn store() -> void {}
+        \\
+        \\#[irq_context]
+        \\fn accepted_irq() -> void {
+        \\    irq_poll();
+        \\}
+        \\
+        \\#[irq_context]
+        \\fn accepted_atomic(flag: atomic<u32>, counter: IrqCounter, value: u32) -> void {
+        \\    flag.store(value, .release);
+        \\    counter.fetch_add(value, .acq_rel);
+        \\}
+        \\
+        \\#[irq_context]
+        \\fn accepted_mmio(uart: IrqUart, value: u8) -> void {
+        \\    uart.thr.write(value, .release);
+        \\    let status = uart.lsr.read(.acquire);
+        \\}
+        \\
+        \\#[irq_context]
+        \\fn accepted_builtins(addr: usize, token: u32) -> void {
+        \\    unsafe {
+        \\        raw.store<u32>(phys(addr), 0);
+        \\        forget_unchecked(token);
+        \\    }
+        \\}
+        \\
+        \\#[irq_context]
+        \\fn rejected_store_name() -> void {
+        \\    store();
+        \\}
+        \\
+        \\#[irq_context]
+        \\fn rejected_blocking(n: usize, path: u32) -> void {
+        \\    lock.acquire();
+        \\    heap.alloc(n);
+        \\    device.wait_irq();
+        \\    fs.read(path);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_irq.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    try mir.verify(std.testing.allocator, module, &reporter);
+
+    var irq_call_count: usize = 0;
+    var irq_blocking_count: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_IRQ_CONTEXT_CALL") != null) irq_call_count += 1;
+        if (std.mem.indexOf(u8, diag.message, "E_IRQ_CONTEXT_BLOCKING") != null) irq_blocking_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), irq_call_count);
+    try std.testing.expectEqual(@as(usize, 4), irq_blocking_count);
+    try std.testing.expectEqual(@as(usize, 5), reporter.diagnostics.items.len);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const accepted_mmio_fn = functionByName(typed_mir, "accepted_mmio").?;
+    try std.testing.expect(functionHasInstruction(accepted_mmio_fn, .call, "mmio.write"));
+    try std.testing.expect(functionHasInstruction(accepted_mmio_fn, .call, "mmio.read"));
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=rejected_store_name pass=context finding=irq_call detail=store") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=rejected_blocking pass=context finding=irq_blocking detail=lock.acquire") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=rejected_blocking pass=context finding=irq_blocking detail=heap.alloc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=rejected_blocking pass=context finding=irq_blocking detail=device.wait_irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=rejected_blocking pass=context finding=irq_blocking detail=fs.read") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accepted_irq pass=context finding=irq_call detail=irq_poll") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accepted_atomic pass=context finding=irq_call") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accepted_mmio pass=context finding=irq_call") == null);
+    // Pure builtins (`phys` address-cast as a call-arg, `forget_unchecked` discard) are
+    // non-blocking and must NOT be flagged on an irq_context path — the plic.mc regression.
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accepted_builtins pass=context finding=irq_call") == null);
+}
+
+test "MIR verifier enforces typed MMIO register access modes" {
+    const source =
+        \\packed bits Status: u8 {
+        \\    ready: bool,
+        \\}
+        \\
+        \\type TxReg = Reg<u8, .write>;
+        \\type StatusReg = RegBits<u8, Status, .read>;
+        \\
+        \\extern mmio struct Uart {
+        \\    tx: TxReg,
+        \\    status: StatusReg,
+        \\    ctrl: Reg<u8, .read_write>,
+        \\}
+        \\
+        \\fn reject_read_write_only(uart: MmioPtr<Uart>) -> u8 {
+        \\    return uart.tx.read(.relaxed);
+        \\}
+        \\
+        \\fn reject_write_read_only(uart: MmioPtr<Uart>, value: u8) -> void {
+        \\    uart.status.write(value, .relaxed);
+        \\}
+        \\
+        \\fn accept_read_write(uart: MmioPtr<Uart>, value: u8) -> u8 {
+        \\    uart.ctrl.write(value, .relaxed);
+        \\    return uart.ctrl.read(.relaxed);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_mmio_access.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const reject_read_fn = functionByName(typed_mir, "reject_read_write_only").?;
+    const reject_write_fn = functionByName(typed_mir, "reject_write_read_only").?;
+    const accept_fn = functionByName(typed_mir, "accept_read_write").?;
+    try std.testing.expect(functionHasInstruction(reject_read_fn, .call, "mmio.read"));
+    try std.testing.expect(functionHasInstruction(reject_read_fn, .mmio_check, "read"));
+    try std.testing.expect(functionHasInstruction(reject_write_fn, .call, "mmio.write"));
+    try std.testing.expect(functionHasInstruction(reject_write_fn, .mmio_check, "write"));
+    try std.testing.expect(functionHasInstruction(accept_fn, .call, "mmio.write"));
+    try std.testing.expect(functionHasInstruction(accept_fn, .call, "mmio.read"));
+    try std.testing.expect(!functionHasInstruction(accept_fn, .mmio_check, "read"));
+    try std.testing.expect(!functionHasInstruction(accept_fn, .mmio_check, "write"));
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_read_write_only pass=mmio finding=access_forbidden op=read") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_write_read_only pass=mmio finding=access_forbidden op=write") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_read_write pass=mmio finding=access_forbidden") == null);
+
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var mmio_errors: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_MMIO_ACCESS_FORBIDDEN") != null) mmio_errors += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), mmio_errors);
+}
+
+test "MIR models local callee values as indirect calls" {
+    const source =
+        \\#[no_lang_trap]
+        \\fn reject_indirect_no_lang_trap(callee: u32) -> void {
+        \\    callee();
+        \\}
+        \\
+        \\#[irq_context]
+        \\fn reject_indirect_irq(callee: u32) -> void {
+        \\    callee();
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_indirect_call.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const no_trap_fn = functionByName(typed_mir, "reject_indirect_no_lang_trap").?;
+    const irq_fn = functionByName(typed_mir, "reject_indirect_irq").?;
+    try std.testing.expect(functionHasInstruction(no_trap_fn, .indirect_call, "callee"));
+    try std.testing.expect(functionHasInstruction(irq_fn, .indirect_call, "callee"));
+
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+
+    var found_no_lang_trap = false;
+    var found_irq = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_NO_LANG_TRAP_EDGE") != null) found_no_lang_trap = true;
+        if (std.mem.indexOf(u8, diag.message, "E_IRQ_CONTEXT_CALL") != null) found_irq = true;
+    }
+    try std.testing.expect(found_no_lang_trap);
+    try std.testing.expect(found_irq);
+}
+
+test "MIR CFG loop control uses explicit jump successors" {
+    const source =
+        \\fn loop_control(flag: bool) -> void {
+        \\    while flag {
+        \\        continue;
+        \\    }
+        \\    while flag {
+        \\        break;
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_loop_cfg.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const function = typed_mir.functions[0];
+    var jump_blocks: usize = 0;
+    for (function.blocks) |block| {
+        for (block.successors) |successor| try std.testing.expect(successor < function.blocks.len);
+        switch (block.terminator) {
+            .jump => |target| {
+                jump_blocks += 1;
+                var listed = false;
+                for (block.successors) |successor| {
+                    if (successor == target) listed = true;
+                }
+                try std.testing.expect(listed);
+            },
+            .trap_ => try std.testing.expectEqual(@as(usize, 0), block.successors.len),
+            .return_, .unreachable_ => try std.testing.expectEqual(@as(usize, 0), block.successors.len),
+            else => {},
+        }
+    }
+    try std.testing.expect(jump_blocks >= 2);
+}
+
+test "MIR verifier rejects malformed CFG structure" {
+    var instructions = [_]Instruction{};
+    var successors = [_]usize{99};
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var blocks = [_]Block{
+        .{
+            .id = 0,
+            .kind = "entry",
+            .instructions = instructions[0..],
+            .successors = successors[0..],
+            .terminator = .{ .jump = 99 },
+        },
+    };
+    var functions = [_]Function{
+        .{
+            .name = "bad_cfg",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_cfg.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_MIR_CFG") != null);
+}
+
+test "MIR verifier rejects block id mismatch in CFG" {
+    var instructions = [_]Instruction{};
+    var successors = [_]usize{};
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var blocks = [_]Block{
+        .{
+            .id = 7,
+            .kind = "entry",
+            .instructions = instructions[0..],
+            .successors = successors[0..],
+            .terminator = .{ .return_ = .void },
+        },
+    };
+    var functions = [_]Function{
+        .{
+            .name = "bad_block_id",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_block_id.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_MIR_CFG") != null);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFactsFromMir(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=bad_block_id pass=cfg finding=malformed_cfg") != null);
+}
+
+test "MIR verifier rejects fallthrough successors and trap kind mismatch" {
+    var instructions = [_]Instruction{};
+    var successors = [_]usize{1};
+    var trap_successors = [_]usize{};
+    var blocks = [_]Block{
+        .{
+            .id = 0,
+            .kind = "entry",
+            .instructions = instructions[0..],
+            .successors = successors[0..],
+            .terminator = .fallthrough,
+        },
+        .{
+            .id = 1,
+            .kind = "trap",
+            .instructions = instructions[0..],
+            .successors = trap_successors[0..],
+            .terminator = .{ .trap_ = .Bounds },
+        },
+    };
+    var trap_edges = [_]TrapEdge{
+        .{ .from_block = 0, .trap_block = 1, .kind = .IntegerOverflow, .source = .checked_arithmetic, .line = 1, .column = 1 },
+    };
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "bad_cfg",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_cfg_2.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_MIR_CFG") != null);
+}
+
+test "MIR records no_overflow range facts for unchecked add contract" {
+    const source =
+        \\fn accumulate(a: u32, b: u32) -> u32 {
+        \\    var sum: u32 = a;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        sum = unchecked.add(sum, b);
+        \\    }
+        \\    return sum;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_range.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), typed_mir.functions[0].range_facts.len);
+    const fact = typed_mir.functions[0].range_facts[0];
+    try std.testing.expectEqualStrings("sum", fact.target);
+    try std.testing.expectEqualStrings("add", fact.op);
+    try std.testing.expectEqualStrings("sum", fact.left);
+    try std.testing.expectEqualStrings("b", fact.right);
+    try std.testing.expectEqualStrings("u32", valueTypeName(fact.result_ty));
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accumulate pass=range finding=no_overflow_range target=sum op=add left=sum right=b") != null);
+}
+
+test "MIR range facts are top-level and no_overflow operations are known" {
+    const source =
+        \\struct Counter {
+        \\    next: u32,
+        \\}
+        \\
+        \\fn id(value: u32) -> u32 { return value; }
+        \\
+        \\fn nested(a: u32, b: u32) -> u32 {
+        \\    var sum: u32 = 0;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        sum = id(unchecked.add(a, b));
+        \\    }
+        \\    return sum;
+        \\}
+        \\
+        \\fn cast_call_arg(a: u32, b: u32) -> u32 {
+        \\    var sum: u32 = 0;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        sum = id(unchecked.add(a, b) as u32);
+        \\    }
+        \\    return sum;
+        \\}
+        \\
+        \\fn grouped_return(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return (unchecked.add(a, b));
+        \\    }
+        \\}
+        \\
+        \\fn cast_return(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return unchecked.add(a, b) as u32;
+        \\    }
+        \\}
+        \\
+        \\fn cast_local(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        let value: u32 = unchecked.add(a, b) as u32;
+        \\        return value;
+        \\    }
+        \\}
+        \\
+        \\fn cast_inferred_local(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        let inferred = unchecked.add(a, b) as u32;
+        \\        return inferred;
+        \\    }
+        \\}
+        \\
+        \\fn grouped_assign(a: u32, b: u32) -> u32 {
+        \\    var sum: u32 = a;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        sum = (unchecked.mul(sum, b));
+        \\    }
+        \\    return sum;
+        \\}
+        \\
+        \\fn cast_assign(a: u32, b: u32) -> u32 {
+        \\    var sum: u32 = a;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        sum = unchecked.mul(sum, b) as u32;
+        \\    }
+        \\    return sum;
+        \\}
+        \\
+        \\fn nested_binary(a: u32, b: u32, c: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return (unchecked.add(a, b)) + c;
+        \\    }
+        \\}
+        \\
+        \\fn aggregate_array_fact(a: u32, b: u32) -> [1]u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return .{ unchecked.add(a, b) };
+        \\    }
+        \\}
+        \\
+        \\fn cast_aggregate_array_fact(a: u32, b: u32) -> [1]u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return .{ unchecked.add(a, b) as u32 };
+        \\    }
+        \\}
+        \\
+        \\fn aggregate_field_fact(a: u32, b: u32) -> Counter {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return .{ .next = unchecked.mul(a, b) };
+        \\    }
+        \\}
+        \\
+        \\fn cast_aggregate_field_fact(a: u32, b: u32) -> Counter {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return .{ .next = unchecked.mul(a, b) as u32 };
+        \\    }
+        \\}
+        \\
+        \\fn known_ops(a: u32, b: u32) -> u32 {
+        \\    var sum: u32 = a;
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        sum = unchecked.sub(sum, b);
+        \\        sum = unchecked.mul(sum, b);
+        \\    }
+        \\    return sum;
+        \\}
+        \\
+        \\fn unknown_op(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)]
+        \\    {
+        \\        return unchecked.foo(a, b);
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_range_top_level.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const nested_fn = functionByName(typed_mir, "nested").?;
+    try std.testing.expectEqual(@as(usize, 1), nested_fn.range_facts.len);
+    try std.testing.expectEqualStrings("call_arg", nested_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("add", nested_fn.range_facts[0].op);
+    const cast_call_arg_fn = functionByName(typed_mir, "cast_call_arg").?;
+    try std.testing.expectEqual(@as(usize, 1), cast_call_arg_fn.range_facts.len);
+    try std.testing.expectEqualStrings("call_arg", cast_call_arg_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("add", cast_call_arg_fn.range_facts[0].op);
+    const grouped_return_fn = functionByName(typed_mir, "grouped_return").?;
+    try std.testing.expectEqual(@as(usize, 1), grouped_return_fn.range_facts.len);
+    try std.testing.expectEqualStrings("value", grouped_return_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("add", grouped_return_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("u32", valueTypeName(grouped_return_fn.range_facts[0].result_ty));
+    const cast_return_fn = functionByName(typed_mir, "cast_return").?;
+    try std.testing.expectEqual(@as(usize, 1), cast_return_fn.range_facts.len);
+    try std.testing.expectEqualStrings("value", cast_return_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("add", cast_return_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("u32", valueTypeName(cast_return_fn.range_facts[0].result_ty));
+    const cast_local_fn = functionByName(typed_mir, "cast_local").?;
+    try std.testing.expectEqual(@as(usize, 1), cast_local_fn.range_facts.len);
+    try std.testing.expectEqualStrings("value", cast_local_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("add", cast_local_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("u32", valueTypeName(cast_local_fn.range_facts[0].result_ty));
+    const cast_inferred_local_fn = functionByName(typed_mir, "cast_inferred_local").?;
+    try std.testing.expectEqual(@as(usize, 1), cast_inferred_local_fn.range_facts.len);
+    try std.testing.expectEqualStrings("inferred", cast_inferred_local_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("add", cast_inferred_local_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("u32", valueTypeName(cast_inferred_local_fn.range_facts[0].result_ty));
+    const grouped_assign_fn = functionByName(typed_mir, "grouped_assign").?;
+    try std.testing.expectEqual(@as(usize, 1), grouped_assign_fn.range_facts.len);
+    try std.testing.expectEqualStrings("sum", grouped_assign_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("mul", grouped_assign_fn.range_facts[0].op);
+    const cast_assign_fn = functionByName(typed_mir, "cast_assign").?;
+    try std.testing.expectEqual(@as(usize, 1), cast_assign_fn.range_facts.len);
+    try std.testing.expectEqualStrings("sum", cast_assign_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("mul", cast_assign_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("u32", valueTypeName(cast_assign_fn.range_facts[0].result_ty));
+    const nested_binary_fn = functionByName(typed_mir, "nested_binary").?;
+    try std.testing.expectEqual(@as(usize, 1), nested_binary_fn.range_facts.len);
+    try std.testing.expectEqualStrings("binary_operand", nested_binary_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("add", nested_binary_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("u32", valueTypeName(nested_binary_fn.range_facts[0].result_ty));
+    const aggregate_array_fn = functionByName(typed_mir, "aggregate_array_fact").?;
+    try std.testing.expectEqual(@as(usize, 1), aggregate_array_fn.range_facts.len);
+    try std.testing.expectEqualStrings("aggregate_element", aggregate_array_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("add", aggregate_array_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("u32", valueTypeName(aggregate_array_fn.range_facts[0].result_ty));
+    const cast_aggregate_array_fn = functionByName(typed_mir, "cast_aggregate_array_fact").?;
+    try std.testing.expectEqual(@as(usize, 1), cast_aggregate_array_fn.range_facts.len);
+    try std.testing.expectEqualStrings("aggregate_element", cast_aggregate_array_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("add", cast_aggregate_array_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("u32", valueTypeName(cast_aggregate_array_fn.range_facts[0].result_ty));
+    const aggregate_field_fn = functionByName(typed_mir, "aggregate_field_fact").?;
+    try std.testing.expectEqual(@as(usize, 1), aggregate_field_fn.range_facts.len);
+    try std.testing.expectEqualStrings("next", aggregate_field_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("mul", aggregate_field_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("u32", valueTypeName(aggregate_field_fn.range_facts[0].result_ty));
+    const cast_aggregate_field_fn = functionByName(typed_mir, "cast_aggregate_field_fact").?;
+    try std.testing.expectEqual(@as(usize, 1), cast_aggregate_field_fn.range_facts.len);
+    try std.testing.expectEqualStrings("next", cast_aggregate_field_fn.range_facts[0].target);
+    try std.testing.expectEqualStrings("mul", cast_aggregate_field_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("u32", valueTypeName(cast_aggregate_field_fn.range_facts[0].result_ty));
+    const known_ops_fn = functionByName(typed_mir, "known_ops").?;
+    try std.testing.expectEqual(@as(usize, 2), known_ops_fn.range_facts.len);
+    try std.testing.expectEqualStrings("sub", known_ops_fn.range_facts[0].op);
+    try std.testing.expectEqualStrings("mul", known_ops_fn.range_facts[1].op);
+
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var found_unknown = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_UNCHECKED_OUTSIDE_CONTRACT") != null) found_unknown = true;
+    }
+    try std.testing.expect(found_unknown);
+}
+
+test "MIR verifier reports address-class deref and operations" {
+    const source =
+        \\extern fn make_paddr() -> PAddr;
+        \\
+        \\fn reject_paddr_deref(pa: PAddr) -> u8 {
+        \\    return pa.*;
+        \\}
+        \\
+        \\fn reject_vaddr_deref(va: VAddr) -> u8 {
+        \\    return va.*;
+        \\}
+        \\
+        \\fn reject_user_ptr_deref(buf: UserPtr<u8>) -> u8 {
+        \\    return buf.*;
+        \\}
+        \\
+        \\fn reject_mmio_ptr_deref(uart: MmioPtr<Uart>) -> Uart {
+        \\    return uart.*;
+        \\}
+        \\
+        \\fn reject_dma_addr_deref(addr: DmaAddr) -> u8 {
+        \\    return addr.*;
+        \\}
+        \\
+        \\fn reject_phys_ptr_deref(ptr: PhysPtr<Page>) -> Page {
+        \\    return ptr.*;
+        \\}
+        \\
+        \\fn reject_call_deref() -> u8 {
+        \\    return make_paddr().*;
+        \\}
+        \\
+        \\fn reject_paddr_arithmetic(addr: PAddr, offset: usize) -> PAddr {
+        \\    return addr + offset;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_address.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    try mir.verify(std.testing.allocator, module, &reporter);
+
+    const expected = [_][]const u8{
+        "E_PADDR_DEREF",
+        "E_VADDR_DEREF",
+        "E_USER_PTR_DEREF",
+        "E_MMIO_PTR_DEREF",
+        "E_DMA_ADDR_DEREF",
+        "E_PHYS_PTR_DEREF",
+        "E_ADDRESS_CLASS_OPERATION",
+    };
+    for (expected) |code| {
+        var found = false;
+        for (reporter.diagnostics.items) |diag| {
+            if (std.mem.indexOf(u8, diag.message, code) != null) found = true;
+        }
+        try std.testing.expect(found);
+    }
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_paddr_deref pass=address finding=direct_deref class=PAddr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_call_deref pass=address finding=direct_deref class=PAddr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_paddr_arithmetic pass=address finding=opaque_operation detail=add") != null);
+}
+
+test "MIR verifier reports address-class conversion mismatches" {
+    const source =
+        \\extern fn takes_paddr(addr: PAddr) -> void;
+        \\
+        \\fn reject_dma_addr_return(addr: DmaAddr) -> PAddr {
+        \\    return addr;
+        \\}
+        \\
+        \\fn reject_dma_addr_as_vaddr(addr: DmaAddr) -> VAddr {
+        \\    return addr;
+        \\}
+        \\
+        \\fn reject_paddr_as_vaddr(addr: PAddr) -> VAddr {
+        \\    return addr;
+        \\}
+        \\
+        \\fn reject_dma_addr_local(addr: DmaAddr) -> void {
+        \\    let pa: PAddr = addr;
+        \\}
+        \\
+        \\fn reject_dma_addr_assignment(addr: DmaAddr, fallback: PAddr) -> void {
+        \\    var pa: PAddr = fallback;
+        \\    pa = addr;
+        \\}
+        \\
+        \\fn reject_dma_addr_call_arg(addr: DmaAddr) -> void {
+        \\    takes_paddr(addr);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_address_conversion.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    try mir.verify(std.testing.allocator, module, &reporter);
+
+    const expected = [_][]const u8{
+        "E_DMA_ADDR_NOT_PADDR",
+        "E_DMA_ADDR_NOT_VADDR",
+        "E_ADDRESS_CLASS_MISMATCH",
+    };
+    for (expected) |code| {
+        var found = false;
+        for (reporter.diagnostics.items) |diag| {
+            if (std.mem.indexOf(u8, diag.message, code) != null) found = true;
+        }
+        try std.testing.expect(found);
+    }
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_dma_addr_return pass=address finding=address_class_mismatch source=DmaAddr target=PAddr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_dma_addr_as_vaddr pass=address finding=address_class_mismatch source=DmaAddr target=VAddr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_paddr_as_vaddr pass=address finding=address_class_mismatch source=PAddr target=VAddr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_dma_addr_local pass=address finding=address_class_mismatch source=DmaAddr target=PAddr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_dma_addr_assignment pass=address finding=address_class_mismatch source=DmaAddr target=PAddr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_dma_addr_call_arg pass=address finding=address_class_mismatch source=DmaAddr target=PAddr") != null);
+}
+
+test "MIR emits representation checks for nonnull pointer and closed enum call results" {
+    const source =
+        \\enum Irq: u8 {
+        \\    timer,
+        \\}
+        \\
+        \\open enum DeviceState: u8 {
+        \\    ready,
+        \\}
+        \\
+        \\struct Packet {
+        \\    ptr: *mut u8,
+        \\    irq: Irq,
+        \\    state: DeviceState,
+        \\}
+        \\
+        \\extern fn make_ptr() -> *mut u8;
+        \\extern fn make_irq() -> Irq;
+        \\extern fn make_state() -> DeviceState;
+        \\extern fn make_ptrs() -> [2]*mut u8;
+        \\extern fn make_irqs() -> [2]Irq;
+        \\extern fn make_packet() -> Packet;
+        \\
+        \\fn use_ptr() -> *mut u8 {
+        \\    return make_ptr();
+        \\}
+        \\
+        \\fn use_irq() -> Irq {
+        \\    return make_irq();
+        \\}
+        \\
+        \\fn use_open_enum() -> DeviceState {
+        \\    return make_state();
+        \\}
+        \\
+        \\fn use_ptr_param(p: *mut u8) -> *mut u8 {
+        \\    return p;
+        \\}
+        \\
+        \\fn use_irq_param(irq: Irq) -> Irq {
+        \\    return irq;
+        \\}
+        \\
+        \\fn use_packet_ptr(packet: Packet) -> *mut u8 {
+        \\    return packet.ptr;
+        \\}
+        \\
+        \\fn use_packet_irq(packet: Packet) -> Irq {
+        \\    return packet.irq;
+        \\}
+        \\
+        \\fn use_packet_open_enum(packet: Packet) -> DeviceState {
+        \\    return packet.state;
+        \\}
+        \\
+        \\fn use_copied_packet_ptr(packet: Packet) -> *mut u8 {
+        \\    let copy = packet;
+        \\    return copy.ptr;
+        \\}
+        \\
+        \\fn use_copied_packet_irq(packet: Packet) -> Irq {
+        \\    let copy = packet;
+        \\    return copy.irq;
+        \\}
+        \\
+        \\fn use_copied_call_packet_ptr() -> *mut u8 {
+        \\    let copy = make_packet();
+        \\    return copy.ptr;
+        \\}
+        \\
+        \\fn use_copied_call_packet_irq() -> Irq {
+        \\    let copy = make_packet();
+        \\    return copy.irq;
+        \\}
+        \\
+        \\fn use_packet_ptr_deref(packet: Packet) -> u8 {
+        \\    return packet.ptr.*;
+        \\}
+        \\
+        \\fn compare_packet_ptrs(left: Packet, right: Packet) -> bool {
+        \\    return left.ptr == right.ptr;
+        \\}
+        \\
+        \\fn compare_irq_values(left: Packet, right: Packet) -> bool {
+        \\    return left.irq == right.irq;
+        \\}
+        \\
+        \\fn compare_irq_literal(irq: Irq) -> bool {
+        \\    return .timer == irq;
+        \\}
+        \\
+        \\fn use_array_ptr(values: [2]*mut u8) -> *mut u8 {
+        \\    return values[0];
+        \\}
+        \\
+        \\fn use_array_irq(values: [2]Irq) -> Irq {
+        \\    return values[0];
+        \\}
+        \\
+        \\fn use_copied_array_ptr(values: [2]*mut u8) -> *mut u8 {
+        \\    let copy = values;
+        \\    return copy[0];
+        \\}
+        \\
+        \\fn use_copied_array_irq(values: [2]Irq) -> Irq {
+        \\    let copy = values;
+        \\    return copy[0];
+        \\}
+        \\
+        \\fn use_call_array_ptr() -> *mut u8 {
+        \\    return make_ptrs()[0];
+        \\}
+        \\
+        \\fn use_call_array_irq() -> Irq {
+        \\    return make_irqs()[0];
+        \\}
+        \\
+        \\fn use_copied_call_array_ptr() -> *mut u8 {
+        \\    let copy = make_ptrs();
+        \\    return copy[0];
+        \\}
+        \\
+        \\fn use_copied_call_array_irq() -> Irq {
+        \\    let copy = make_irqs();
+        \\    return copy[0];
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_representation.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const use_ptr_fn = functionByName(typed_mir, "use_ptr").?;
+    const use_irq_fn = functionByName(typed_mir, "use_irq").?;
+    const use_open_enum_fn = functionByName(typed_mir, "use_open_enum").?;
+    const use_ptr_param_fn = functionByName(typed_mir, "use_ptr_param").?;
+    const use_irq_param_fn = functionByName(typed_mir, "use_irq_param").?;
+    const use_packet_ptr_fn = functionByName(typed_mir, "use_packet_ptr").?;
+    const use_packet_irq_fn = functionByName(typed_mir, "use_packet_irq").?;
+    const use_packet_open_enum_fn = functionByName(typed_mir, "use_packet_open_enum").?;
+    const use_copied_packet_ptr_fn = functionByName(typed_mir, "use_copied_packet_ptr").?;
+    const use_copied_packet_irq_fn = functionByName(typed_mir, "use_copied_packet_irq").?;
+    const use_copied_call_packet_ptr_fn = functionByName(typed_mir, "use_copied_call_packet_ptr").?;
+    const use_copied_call_packet_irq_fn = functionByName(typed_mir, "use_copied_call_packet_irq").?;
+    const use_packet_ptr_deref_fn = functionByName(typed_mir, "use_packet_ptr_deref").?;
+    const compare_packet_ptrs_fn = functionByName(typed_mir, "compare_packet_ptrs").?;
+    const compare_irq_values_fn = functionByName(typed_mir, "compare_irq_values").?;
+    const compare_irq_literal_fn = functionByName(typed_mir, "compare_irq_literal").?;
+    const use_array_ptr_fn = functionByName(typed_mir, "use_array_ptr").?;
+    const use_array_irq_fn = functionByName(typed_mir, "use_array_irq").?;
+    const use_copied_array_ptr_fn = functionByName(typed_mir, "use_copied_array_ptr").?;
+    const use_copied_array_irq_fn = functionByName(typed_mir, "use_copied_array_irq").?;
+    const use_call_array_ptr_fn = functionByName(typed_mir, "use_call_array_ptr").?;
+    const use_call_array_irq_fn = functionByName(typed_mir, "use_call_array_irq").?;
+    const use_copied_call_array_ptr_fn = functionByName(typed_mir, "use_copied_call_array_ptr").?;
+    const use_copied_call_array_irq_fn = functionByName(typed_mir, "use_copied_call_array_irq").?;
+    try std.testing.expect(functionHasInstruction(use_ptr_fn, .representation_check, "nonnull_pointer"));
+    try std.testing.expect(functionHasInstruction(use_irq_fn, .representation_check, "Irq"));
+    try std.testing.expect(!functionHasInstruction(use_open_enum_fn, .representation_check, "DeviceState"));
+    try std.testing.expect(functionHasInstruction(use_ptr_param_fn, .typed_load, "p"));
+    try std.testing.expect(functionHasInstruction(use_ptr_param_fn, .representation_check, "nonnull_pointer"));
+    try std.testing.expect(functionHasInstruction(use_irq_param_fn, .typed_load, "irq"));
+    try std.testing.expect(functionHasInstruction(use_irq_param_fn, .representation_check, "Irq"));
+    try std.testing.expect(functionHasInstruction(use_packet_ptr_fn, .typed_load, "ptr"));
+    try std.testing.expect(functionHasInstruction(use_packet_ptr_fn, .representation_check, "nonnull_pointer"));
+    try std.testing.expect(functionHasInstruction(use_packet_irq_fn, .typed_load, "irq"));
+    try std.testing.expect(functionHasInstruction(use_packet_irq_fn, .representation_check, "Irq"));
+    try std.testing.expect(!functionHasInstruction(use_packet_open_enum_fn, .representation_check, "DeviceState"));
+    try std.testing.expect(functionHasInstruction(use_copied_packet_ptr_fn, .typed_load, "ptr"));
+    try std.testing.expect(functionHasInstruction(use_copied_packet_ptr_fn, .representation_check, "nonnull_pointer"));
+    try std.testing.expect(functionHasInstruction(use_copied_packet_irq_fn, .typed_load, "irq"));
+    try std.testing.expect(functionHasInstruction(use_copied_packet_irq_fn, .representation_check, "Irq"));
+    try std.testing.expect(functionHasInstruction(use_copied_call_packet_ptr_fn, .typed_load, "ptr"));
+    try std.testing.expect(functionHasInstruction(use_copied_call_packet_ptr_fn, .representation_check, "nonnull_pointer"));
+    try std.testing.expect(functionHasInstruction(use_copied_call_packet_irq_fn, .typed_load, "irq"));
+    try std.testing.expect(functionHasInstruction(use_copied_call_packet_irq_fn, .representation_check, "Irq"));
+    try std.testing.expect(functionHasInstruction(use_packet_ptr_deref_fn, .typed_load, "ptr"));
+    try std.testing.expect(functionHasInstruction(use_packet_ptr_deref_fn, .representation_check, "nonnull_pointer"));
+    try std.testing.expect(functionHasInstruction(compare_packet_ptrs_fn, .representation_use, "binary_operand"));
+    try std.testing.expect(functionHasInstruction(compare_irq_values_fn, .representation_use, "binary_operand"));
+    try std.testing.expect(functionHasInstruction(compare_irq_literal_fn, .representation_use, "binary_operand"));
+    try std.testing.expect(functionHasInstruction(use_array_ptr_fn, .typed_load, "index"));
+    try std.testing.expect(functionHasInstruction(use_array_ptr_fn, .representation_check, "nonnull_pointer"));
+    try std.testing.expect(functionHasInstruction(use_array_irq_fn, .typed_load, "index"));
+    try std.testing.expect(functionHasInstruction(use_array_irq_fn, .representation_check, "Irq"));
+    try std.testing.expect(functionHasInstruction(use_copied_array_ptr_fn, .typed_load, "index"));
+    try std.testing.expect(functionHasInstruction(use_copied_array_ptr_fn, .representation_check, "nonnull_pointer"));
+    try std.testing.expect(functionHasInstruction(use_copied_array_irq_fn, .typed_load, "index"));
+    try std.testing.expect(functionHasInstruction(use_copied_array_irq_fn, .representation_check, "Irq"));
+    try std.testing.expect(functionHasInstruction(use_call_array_ptr_fn, .typed_load, "index"));
+    try std.testing.expect(functionHasInstruction(use_call_array_ptr_fn, .representation_check, "nonnull_pointer"));
+    try std.testing.expect(functionHasInstruction(use_call_array_irq_fn, .typed_load, "index"));
+    try std.testing.expect(functionHasInstruction(use_call_array_irq_fn, .representation_check, "Irq"));
+    try std.testing.expect(functionHasInstruction(use_copied_call_array_ptr_fn, .typed_load, "index"));
+    try std.testing.expect(functionHasInstruction(use_copied_call_array_ptr_fn, .representation_check, "nonnull_pointer"));
+    try std.testing.expect(functionHasInstruction(use_copied_call_array_irq_fn, .typed_load, "index"));
+    try std.testing.expect(functionHasInstruction(use_copied_call_array_irq_fn, .representation_check, "Irq"));
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_ptr pass=representation finding=representation_check type=nonnull_pointer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_irq pass=representation finding=representation_check type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_ptr_param pass=representation finding=typed_load detail=p type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_irq_param pass=representation finding=typed_load detail=irq type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_packet_ptr pass=representation finding=typed_load detail=ptr type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_packet_irq pass=representation finding=typed_load detail=irq type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_copied_packet_ptr pass=representation finding=typed_load detail=ptr type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_copied_packet_irq pass=representation finding=typed_load detail=irq type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_copied_call_packet_ptr pass=representation finding=typed_load detail=ptr type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_copied_call_packet_irq pass=representation finding=typed_load detail=irq type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_packet_ptr_deref pass=representation finding=representation_use detail=deref_base type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=compare_packet_ptrs pass=representation finding=representation_use detail=binary_operand type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=compare_irq_values pass=representation finding=representation_use detail=binary_operand type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=compare_irq_literal pass=representation finding=representation_use detail=binary_operand type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=compare_irq_literal pass=representation finding=representation_use detail=binary_operand type=value") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_array_ptr pass=representation finding=typed_load detail=index type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_array_irq pass=representation finding=typed_load detail=index type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_copied_array_ptr pass=representation finding=typed_load detail=index type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_copied_array_irq pass=representation finding=typed_load detail=index type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_call_array_ptr pass=representation finding=typed_load detail=index type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_call_array_irq pass=representation finding=typed_load detail=index type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_copied_call_array_ptr pass=representation finding=typed_load detail=index type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_copied_call_array_irq pass=representation finding=typed_load detail=index type=Irq") != null);
+
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+}
+
+test "MIR representation checks emit invalid-representation trap edges" {
+    const source =
+        \\enum Irq: u8 {
+        \\    timer,
+        \\}
+        \\
+        \\open enum DeviceState: u8 {
+        \\    ready,
+        \\}
+        \\
+        \\fn checked_ptr_param(p: *mut u8) -> *mut u8 {
+        \\    return p;
+        \\}
+        \\
+        \\fn checked_irq_param(irq: Irq) -> Irq {
+        \\    return irq;
+        \\}
+        \\
+        \\fn checked_open_enum(state: DeviceState) -> DeviceState {
+        \\    return state;
+        \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn reject_no_lang_ptr_param(p: *mut u8) -> *mut u8 {
+        \\    return p;
+        \\}
+        \\
+        \\#[no_lang_trap]
+        \\fn reject_no_lang_irq_param(irq: Irq) -> Irq {
+        \\    return irq;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_representation_traps.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    const checked_ptr_fn = functionByName(typed_mir, "checked_ptr_param").?;
+    const checked_irq_fn = functionByName(typed_mir, "checked_irq_param").?;
+    const checked_open_fn = functionByName(typed_mir, "checked_open_enum").?;
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(checked_ptr_fn, .InvalidRepresentation));
+    try std.testing.expectEqual(@as(usize, 1), countTrapEdges(checked_irq_fn, .InvalidRepresentation));
+    try std.testing.expectEqual(@as(usize, 0), countTrapEdges(checked_open_fn, .InvalidRepresentation));
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_ptr_param pass=trap finding=trap_edge detail=InvalidRepresentation source=representation_check") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_irq_param pass=trap finding=trap_edge detail=InvalidRepresentation source=representation_check") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_open_enum pass=trap finding=trap_edge detail=InvalidRepresentation") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_no_lang_ptr_param pass=trap finding=trap_edge detail=InvalidRepresentation source=representation_check no_lang_trap=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_no_lang_irq_param pass=trap finding=trap_edge detail=InvalidRepresentation source=representation_check no_lang_trap=true") != null);
+
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var no_lang_count: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_NO_LANG_TRAP_EDGE") != null) no_lang_count += 1;
+    }
+    try std.testing.expect(no_lang_count >= 2);
+}
+
+test "MIR verifier rejects missing representation check" {
+    var instructions = [_]Instruction{
+        .{ .kind = .call, .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } }, .detail = "make_ptr", .line = 1, .column = 1 },
+    };
+    var successors = [_]usize{};
+    var blocks = [_]Block{
+        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
+    };
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "missing_rep_check",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "missing_rep_check.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_REPRESENTATION_CHECK_MISSING") != null);
+}
+
+test "MIR verifier rejects missing representation check on indirect call" {
+    var instructions = [_]Instruction{
+        .{ .kind = .indirect_call, .result_ty = .{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } }, .detail = "callee", .line = 1, .column = 1 },
+    };
+    var successors = [_]usize{};
+    var blocks = [_]Block{
+        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
+    };
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "missing_indirect_rep_check",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "missing_indirect_rep_check.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_REPRESENTATION_CHECK_MISSING") != null);
+}
+
+test "MIR verifier rejects missing representation check on typed load" {
+    var instructions = [_]Instruction{
+        .{ .kind = .typed_load, .result_ty = .{ .closed_enum = "Irq" }, .detail = "irq", .line = 1, .column = 1 },
+    };
+    var successors = [_]usize{};
+    var blocks = [_]Block{
+        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
+    };
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "missing_load_rep_check",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "missing_load_rep_check.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_REPRESENTATION_CHECK_MISSING") != null);
+}
+
+test "MIR verifier requires representation checks to dominate sensitive returns" {
+    const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
+    var entry_instructions = [_]Instruction{};
+    var then_instructions = [_]Instruction{
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .line = 2, .column = 5 },
+    };
+    var else_instructions = [_]Instruction{
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .line = 3, .column = 5 },
+    };
+    var join_instructions = [_]Instruction{
+        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value", .line = 4, .column = 5 },
+    };
+    var entry_successors = [_]usize{ 1, 2 };
+    var then_successors = [_]usize{3};
+    var else_successors = [_]usize{3};
+    var join_successors = [_]usize{};
+    var blocks = [_]Block{
+        .{ .id = 0, .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = 1, .false_block = 2 } } },
+        .{ .id = 1, .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = 3 } },
+        .{ .id = 2, .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = 3 } },
+        .{ .id = 3, .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .{ .return_ = ptr_ty } },
+    };
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "dominated_return",
+            .return_ty = ptr_ty,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "dominated_return.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+}
+
+test "MIR verifier rejects representation return when one predecessor lacks check" {
+    const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
+    var entry_instructions = [_]Instruction{};
+    var then_instructions = [_]Instruction{
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .line = 2, .column = 5 },
+    };
+    var else_instructions = [_]Instruction{};
+    var join_instructions = [_]Instruction{
+        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value", .line = 4, .column = 5 },
+    };
+    var entry_successors = [_]usize{ 1, 2 };
+    var then_successors = [_]usize{3};
+    var else_successors = [_]usize{3};
+    var join_successors = [_]usize{};
+    var blocks = [_]Block{
+        .{ .id = 0, .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = 1, .false_block = 2 } } },
+        .{ .id = 1, .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = 3 } },
+        .{ .id = 2, .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = 3 } },
+        .{ .id = 3, .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .{ .return_ = ptr_ty } },
+    };
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "undominated_return",
+            .return_ty = ptr_ty,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "undominated_return.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_REPRESENTATION_CHECK_MISSING") != null);
+}
+
+test "MIR verifier matches representation identity across predecessor paths" {
+    const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
+    var entry_instructions = [_]Instruction{};
+    var then_instructions = [_]Instruction{
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .value_id = "p", .line = 2, .column = 5 },
+    };
+    var else_instructions = [_]Instruction{
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .value_id = "p", .line = 3, .column = 5 },
+    };
+    var join_instructions = [_]Instruction{
+        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .value_id = "p", .line = 4, .column = 5 },
+    };
+    var entry_successors = [_]usize{ 1, 2 };
+    var then_successors = [_]usize{3};
+    var else_successors = [_]usize{3};
+    var join_successors = [_]usize{};
+    var blocks = [_]Block{
+        .{ .id = 0, .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = 1, .false_block = 2 } } },
+        .{ .id = 1, .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = 3 } },
+        .{ .id = 2, .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = 3 } },
+        .{ .id = 3, .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .fallthrough },
+    };
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "identity_dominated_use",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "identity_dominated_use.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+}
+
+test "MIR verifier rejects predecessor representation check for wrong identity" {
+    const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
+    var entry_instructions = [_]Instruction{};
+    var then_instructions = [_]Instruction{
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .value_id = "p", .line = 2, .column = 5 },
+    };
+    var else_instructions = [_]Instruction{
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .value_id = "q", .line = 3, .column = 5 },
+    };
+    var join_instructions = [_]Instruction{
+        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .value_id = "p", .line = 4, .column = 5 },
+    };
+    var entry_successors = [_]usize{ 1, 2 };
+    var then_successors = [_]usize{3};
+    var else_successors = [_]usize{3};
+    var join_successors = [_]usize{};
+    var blocks = [_]Block{
+        .{ .id = 0, .kind = "entry", .instructions = entry_instructions[0..], .successors = entry_successors[0..], .terminator = .{ .branch = .{ .true_block = 1, .false_block = 2 } } },
+        .{ .id = 1, .kind = "then", .instructions = then_instructions[0..], .successors = then_successors[0..], .terminator = .{ .jump = 3 } },
+        .{ .id = 2, .kind = "else", .instructions = else_instructions[0..], .successors = else_successors[0..], .terminator = .{ .jump = 3 } },
+        .{ .id = 3, .kind = "join", .instructions = join_instructions[0..], .successors = join_successors[0..], .terminator = .fallthrough },
+    };
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "wrong_identity_predecessor_use",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "wrong_identity_predecessor_use.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_REPRESENTATION_CHECK_MISSING") != null);
+}
+
+test "MIR verifier requires representation checks to dominate non-return typed uses" {
+    const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
+    var instructions = [_]Instruction{
+        .{ .kind = .typed_load, .result_ty = ptr_ty, .detail = "p", .line = 1, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .line = 1, .column = 5 },
+        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "assignment", .line = 1, .column = 9 },
+    };
+    var successors = [_]usize{};
+    var blocks = [_]Block{
+        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
+    };
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "checked_non_return_use",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "checked_non_return_use.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+}
+
+test "MIR verifier rejects missing representation check on non-return typed use" {
+    const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
+    var instructions = [_]Instruction{
+        .{ .kind = .representation_use, .result_ty = ptr_ty, .detail = "call_arg", .line = 1, .column = 9 },
+    };
+    var successors = [_]usize{};
+    var blocks = [_]Block{
+        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .fallthrough },
+    };
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "missing_non_return_use_check",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "missing_non_return_use_check.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_REPRESENTATION_CHECK_MISSING") != null);
+}
+
+test "MIR verifier rejects representation check for the wrong value identity" {
+    const ptr_ty = ValueType{ .pointer = .{ .kind = .single, .mutability = .mut, .child = "u8" } };
+    var instructions = [_]Instruction{
+        .{ .kind = .typed_load, .result_ty = ptr_ty, .detail = "checked_ptr", .value_id = "checked_ptr", .line = 1, .column = 5 },
+        .{ .kind = .representation_check, .result_ty = ptr_ty, .detail = "nonnull_pointer", .value_id = "checked_ptr", .line = 1, .column = 9 },
+        .{ .kind = .return_value, .result_ty = ptr_ty, .detail = "value", .value_id = "unchecked_ptr", .line = 2, .column = 5 },
+    };
+    var successors = [_]usize{};
+    var blocks = [_]Block{
+        .{ .id = 0, .kind = "entry", .instructions = instructions[0..], .successors = successors[0..], .terminator = .{ .return_ = ptr_ty } },
+    };
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var functions = [_]Function{
+        .{
+            .name = "wrong_identity_return",
+            .return_ty = ptr_ty,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "wrong_identity_return.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_REPRESENTATION_CHECK_MISSING") != null);
+}
+
+test "MIR target representation checks see through casts" {
+    const source =
+        \\struct PtrPacket {
+        \\    ptr: *mut u8,
+        \\}
+        \\
+        \\extern fn make_ptr() -> *mut u8;
+        \\extern fn take_ptr(value: *mut u8) -> void;
+        \\
+        \\fn cast_pointer_return() -> *mut u8 {
+        \\    return make_ptr() as *mut u8;
+        \\}
+        \\
+        \\fn cast_pointer_local() -> *mut u8 {
+        \\    let p: *mut u8 = make_ptr() as *mut u8;
+        \\    return p;
+        \\}
+        \\
+        \\fn cast_pointer_assignment() -> *mut u8 {
+        \\    var p: *mut u8 = make_ptr();
+        \\    p = make_ptr() as *mut u8;
+        \\    return p;
+        \\}
+        \\
+        \\fn cast_pointer_call_arg() -> void {
+        \\    take_ptr(make_ptr() as *mut u8);
+        \\}
+        \\
+        \\fn cast_pointer_aggregate_field() -> PtrPacket {
+        \\    return .{ .ptr = make_ptr() as *mut u8 };
+        \\}
+        \\
+        \\fn cast_pointer_aggregate_element() -> [1]*mut u8 {
+        \\    return .{ make_ptr() as *mut u8 };
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_cast_representation.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_return pass=representation finding=representation_check type=nonnull_pointer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_local pass=representation finding=representation_use detail=initializer type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_assignment pass=representation finding=representation_use detail=assignment type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_call_arg pass=representation finding=representation_use detail=call_arg type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_aggregate_field pass=representation finding=representation_use detail=aggregate_field type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_aggregate_element pass=representation finding=representation_use detail=aggregate_element type=*mut") != null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+}
+
+test "MIR verifier reports nullability conversion violations" {
+    const source =
+        \\extern fn make_nullable() -> ?*mut u8;
+        \\
+        \\fn reject_null_local() -> *mut u8 {
+        \\    let p: *mut u8 = null;
+        \\    return p;
+        \\}
+        \\
+        \\fn reject_null_assignment(fallback: *mut u8) -> *mut u8 {
+        \\    var p: *mut u8 = fallback;
+        \\    p = null;
+        \\    return p;
+        \\}
+        \\
+        \\fn reject_nullable_return(maybe: ?*mut u8) -> *mut u8 {
+        \\    return maybe;
+        \\}
+        \\
+        \\fn reject_nullable_call_return() -> *mut u8 {
+        \\    return make_nullable();
+        \\}
+        \\
+        \\fn accept_nonnull_to_nullable(p: *mut u8) -> ?*mut u8 {
+        \\    return p;
+        \\}
+        \\
+        \\fn accept_null_nullable() -> ?*mut u8 {
+        \\    return null;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_nullability.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_null_local pass=nullability finding=null_to_nonnull") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_null_assignment pass=nullability finding=null_to_nonnull") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_nullable_return pass=nullability finding=nullable_to_nonnull") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_nullable_call_return pass=nullability finding=nullable_to_nonnull") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_nonnull_to_nullable pass=nullability") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_null_nullable pass=nullability") == null);
+
+    try mir.verify(std.testing.allocator, module, &reporter);
+    var found_null_to_nonnull = false;
+    var found_nullable_to_nonnull = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_NULL_NON_NULL_POINTER") != null) found_null_to_nonnull = true;
+        if (std.mem.indexOf(u8, diag.message, "E_NO_IMPLICIT_POINTER_CONVERSION") != null) found_nullable_to_nonnull = true;
+    }
+    try std.testing.expect(found_null_to_nonnull);
+    try std.testing.expect(found_nullable_to_nonnull);
+}
+
+test "MIR verifier reports general return local and assignment conversions" {
+    const source =
+        \\extern fn make_u32() -> u32;
+        \\extern fn make_mut_u8_pointer() -> *mut u8;
+        \\extern fn make_c_void_pointer() -> *mut c_void;
+        \\extern fn takes_u32(value: u32) -> void;
+        \\extern fn takes_mut_pointer(value: *mut u8) -> void;
+        \\extern fn takes_c_void_pointer(value: *mut c_void) -> void;
+        \\extern struct Packet {
+        \\    value: u32,
+        \\    ptr: *mut u8,
+        \\}
+        \\
+        \\fn accept_matching_return() -> u32 {
+        \\    return make_u32();
+        \\}
+        \\
+        \\fn reject_return_type() -> i32 {
+        \\    return make_u32();
+        \\}
+        \\
+        \\fn reject_local_initializer() -> void {
+        \\    let value: i32 = make_u32();
+        \\}
+        \\
+        \\fn reject_assignment() -> void {
+        \\    var value: i32 = 0;
+        \\    value = make_u32();
+        \\}
+        \\
+        \\fn accept_nonnull_to_nullable(p: *mut u8) -> ?*mut u8 {
+        \\    return p;
+        \\}
+        \\
+        \\fn reject_return_pointer_conversion(p: *mut u8) -> *const u8 {
+        \\    return p;
+        \\}
+        \\
+        \\fn reject_return_pointer_element_conversion(p: *mut u8) -> *mut u16 {
+        \\    return p;
+        \\}
+        \\
+        \\fn reject_return_c_void_conversion(p: *mut c_void) -> *mut u8 {
+        \\    return p;
+        \\}
+        \\
+        \\fn reject_initializer_pointer_conversion(p: *mut u8) -> void {
+        \\    let q: *const u8 = p;
+        \\}
+        \\
+        \\fn reject_initializer_pointer_element_conversion(p: *mut u8) -> void {
+        \\    let q: *mut u16 = p;
+        \\}
+        \\
+        \\fn reject_initializer_c_void_conversion(p: *mut u8) -> void {
+        \\    let q: *mut c_void = p;
+        \\}
+        \\
+        \\fn reject_nullable_initializer_pointer_conversion(p: *mut u8) -> void {
+        \\    let q: ?*const u8 = p;
+        \\}
+        \\
+        \\fn reject_call_argument_type(flag: bool) -> void {
+        \\    takes_u32(flag);
+        \\}
+        \\
+        \\fn reject_call_argument_pointer(p: *const u8) -> void {
+        \\    takes_mut_pointer(p);
+        \\}
+        \\
+        \\fn reject_call_argument_c_void(p: *mut u8) -> void {
+        \\    takes_c_void_pointer(p);
+        \\}
+        \\
+        \\fn reject_assert_condition_type(value: u32) -> void {
+        \\    assert(value);
+        \\}
+        \\
+        \\fn reject_while_condition_type(value: u32) -> void {
+        \\    while value {
+        \\        break;
+        \\    }
+        \\}
+        \\
+        \\fn reject_for_base_type(value: u32) -> void {
+        \\    for x in value {
+        \\    }
+        \\}
+        \\
+        \\fn reject_index_base_type(value: u32, index: usize) -> u8 {
+        \\    return value[index];
+        \\}
+        \\
+        \\fn reject_index_operand_type(values: []const u8, flag: bool) -> u8 {
+        \\    return values[flag];
+        \\}
+        \\
+        \\fn reject_direct_call_return_pointer_element() -> *mut u16 {
+        \\    return make_mut_u8_pointer();
+        \\}
+        \\
+        \\fn reject_direct_call_return_c_void() -> *mut u8 {
+        \\    return make_c_void_pointer();
+        \\}
+        \\
+        \\fn reject_member_assignment_pointer_conversion(p: *const u8) -> void {
+        \\    var packet: Packet = uninit;
+        \\    packet.ptr = p;
+        \\}
+        \\
+        \\fn reject_deref_assignment_type(p: *mut u32, flag: bool) -> void {
+        \\    p.* = flag;
+        \\}
+        \\
+        \\fn reject_index_assignment_pointer(xs: []mut *mut u8, p: *const u8) -> void {
+        \\    xs[0] = p;
+        \\}
+        \\
+        \\fn reject_cast_return_type() -> u32 {
+        \\    return make_u32() as i32;
+        \\}
+        \\
+        \\fn reject_cast_local_initializer() -> void {
+        \\    let value: u32 = make_u32() as i32;
+        \\}
+        \\
+        \\fn reject_cast_assignment() -> void {
+        \\    var value: u32 = 0;
+        \\    value = make_u32() as i32;
+        \\}
+        \\
+        \\fn reject_cast_call_argument() -> void {
+        \\    takes_u32(make_u32() as i32);
+        \\}
+        \\
+        \\fn reject_cast_nullable_to_nonnull(maybe: ?*mut u8) -> *mut u8 {
+        \\    return maybe as ?*mut u8;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_conversions.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_matching_return pass=conversion") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_nonnull_to_nullable pass=conversion") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_type pass=conversion finding=return_type_mismatch source_type=u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_local_initializer pass=conversion finding=initializer_type_mismatch source_type=u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assignment pass=conversion finding=assignment_type_mismatch source_type=u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_pointer_conversion pass=conversion finding=return_pointer_conversion source_type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_pointer_element_conversion pass=conversion finding=return_pointer_conversion source_type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_c_void_conversion pass=conversion finding=return_c_void_conversion source_type=*mut c_void") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_initializer_pointer_conversion pass=conversion finding=initializer_pointer_conversion source_type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_initializer_pointer_element_conversion pass=conversion finding=initializer_pointer_conversion source_type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_initializer_c_void_conversion pass=conversion finding=initializer_c_void_conversion source_type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_nullable_initializer_pointer_conversion pass=conversion finding=initializer_pointer_conversion source_type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_call_argument_type pass=conversion finding=call_arg_type_mismatch source_type=bool") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_call_argument_pointer pass=conversion finding=call_arg_pointer_conversion source_type=*const") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_call_argument_c_void pass=conversion finding=call_arg_c_void_conversion source_type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assert_condition_type pass=conversion finding=condition_type_mismatch source_type=u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_while_condition_type pass=conversion finding=condition_type_mismatch source_type=u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_for_base_type pass=conversion finding=for_base_not_iterable source_type=u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_index_base_type pass=conversion finding=index_base_not_array_or_slice source_type=u32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_index_operand_type pass=conversion finding=index_not_usize source_type=bool") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_direct_call_return_pointer_element pass=conversion finding=return_pointer_conversion source_type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_direct_call_return_c_void pass=conversion finding=return_c_void_conversion source_type=*mut c_void") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_member_assignment_pointer_conversion pass=conversion finding=assignment_pointer_conversion source_type=*const") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_deref_assignment_type pass=conversion finding=assignment_type_mismatch source_type=bool") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_index_assignment_pointer pass=conversion finding=assignment_pointer_conversion source_type=*const") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_return_type pass=conversion finding=return_type_mismatch source_type=i32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_local_initializer pass=conversion finding=initializer_type_mismatch source_type=i32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_assignment pass=conversion finding=assignment_type_mismatch source_type=i32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_call_argument pass=conversion finding=call_arg_type_mismatch source_type=i32") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_nullable_to_nonnull pass=nullability finding=nullable_to_nonnull") != null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+
+    var found_return_mismatch = false;
+    var found_no_implicit = false;
+    var found_pointer_conversion = false;
+    var found_c_void_conversion = false;
+    var found_condition = false;
+    var found_for_base = false;
+    var found_index_base = false;
+    var found_index_operand = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_RETURN_TYPE_MISMATCH") != null) found_return_mismatch = true;
+        if (std.mem.indexOf(u8, diag.message, "E_NO_IMPLICIT_CONVERSION") != null) found_no_implicit = true;
+        if (std.mem.indexOf(u8, diag.message, "E_NO_IMPLICIT_POINTER_CONVERSION") != null) found_pointer_conversion = true;
+        if (std.mem.indexOf(u8, diag.message, "E_C_VOID_CONVERSION") != null) found_c_void_conversion = true;
+        if (std.mem.indexOf(u8, diag.message, "E_CONDITION_NOT_BOOL") != null) found_condition = true;
+        if (std.mem.indexOf(u8, diag.message, "E_FOR_BASE_NOT_ARRAY_OR_SLICE") != null) found_for_base = true;
+        if (std.mem.indexOf(u8, diag.message, "E_INDEX_BASE_NOT_ARRAY_OR_SLICE") != null) found_index_base = true;
+        if (std.mem.indexOf(u8, diag.message, "E_INDEX_NOT_USIZE") != null) found_index_operand = true;
+    }
+    try std.testing.expect(found_return_mismatch);
+    try std.testing.expect(found_no_implicit);
+    try std.testing.expect(found_pointer_conversion);
+    try std.testing.expect(found_c_void_conversion);
+    try std.testing.expect(found_condition);
+    try std.testing.expect(found_for_base);
+    try std.testing.expect(found_index_base);
+    try std.testing.expect(found_index_operand);
+}
+
+test "MIR verifier reports invalid assignment targets for immutable locals and const views" {
+    const source =
+        \\extern struct Packet {
+        \\    value: u32,
+        \\}
+        \\
+        \\extern fn local_array() -> [4]u32;
+        \\
+        \\fn accept_assign_to_var() -> u32 {
+        \\    var x: u32 = 1;
+        \\    x = 2;
+        \\    return x;
+        \\}
+        \\
+        \\fn reject_assign_to_let() -> u32 {
+        \\    let x: u32 = 1;
+        \\    x = 2;
+        \\    return x;
+        \\}
+        \\
+        \\fn reject_assign_to_param(x: u32) -> u32 {
+        \\    x = 2;
+        \\    return x;
+        \\}
+        \\
+        \\fn reject_assign_to_param_field(packet: Packet) -> u32 {
+        \\    packet.value = 2;
+        \\    return packet.value;
+        \\}
+        \\
+        \\fn reject_assign_to_let_array_element(i: usize, value: u32) -> u32 {
+        \\    let xs = local_array();
+        \\    xs[i] = value;
+        \\    return xs[i];
+        \\}
+        \\
+        \\fn reject_assign_through_const_pointer(p: *const u32, value: u32) -> void {
+        \\    p.* = value;
+        \\}
+        \\
+        \\fn reject_assign_through_const_slice(xs: []const u32, i: usize, value: u32) -> void {
+        \\    xs[i] = value;
+        \\}
+        \\
+        \\fn reject_assign_field_through_const_pointer(packet: *const Packet, value: u32) -> void {
+        \\    packet.*.value = value;
+        \\}
+        \\
+        \\fn reject_assign_through_cast_const_pointer(p: *mut u32, value: u32) -> void {
+        \\    (p as *const u32).* = value;
+        \\}
+        \\
+        \\fn reject_assign_through_cast_const_raw_many(p: [*]mut u32, value: u32) -> void {
+        \\    (p as [*]const u32).* = value;
+        \\}
+        \\
+        \\fn reject_assign_through_cast_const_slice(xs: []mut u32, i: usize, value: u32) -> void {
+        \\    (xs as []const u32)[i] = value;
+        \\}
+        \\
+        \\fn reject_assign_field_through_cast_const_pointer(packet: *mut Packet, value: u32) -> void {
+        \\    (packet as *const Packet).*.value = value;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_assignment_targets.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_assign_to_var pass=core finding=assign_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_to_let pass=core finding=assign_to_immutable_local") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_to_param pass=core finding=assign_to_immutable_local") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_to_param_field pass=core finding=assign_to_immutable_local") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_to_let_array_element pass=core finding=assign_to_immutable_local") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_through_const_pointer pass=core finding=assign_through_const_view") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_through_const_slice pass=core finding=assign_through_const_view") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_field_through_const_pointer pass=core finding=assign_through_const_view") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_through_cast_const_pointer pass=core finding=assign_through_const_view") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_through_cast_const_raw_many pass=core finding=assign_through_const_view") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_through_cast_const_slice pass=core finding=assign_through_const_view") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_field_through_cast_const_pointer pass=core finding=assign_through_const_view") != null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var found_immutable = false;
+    var found_const_view = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_ASSIGN_TO_IMMUTABLE_LOCAL") != null) found_immutable = true;
+        if (std.mem.indexOf(u8, diag.message, "E_ASSIGN_THROUGH_CONST_VIEW") != null) found_const_view = true;
+    }
+    try std.testing.expect(found_immutable);
+    try std.testing.expect(found_const_view);
+}
+
+test "MIR verifier reports integer literal range conversions" {
+    const source =
+        \\extern fn takes_u8(value: u8) -> void;
+        \\
+        \\fn accept_literals() -> u8 {
+        \\    let a: u8 = 255;
+        \\    let b: i8 = -128;
+        \\    takes_u8(0xff);
+        \\    return 255;
+        \\}
+        \\
+        \\fn reject_return_literal() -> u8 {
+        \\    return 256;
+        \\}
+        \\
+        \\fn reject_local_literal() -> u8 {
+        \\    let y: u8 = 0x100;
+        \\    return 0;
+        \\}
+        \\
+        \\fn reject_negative_unsigned() -> u8 {
+        \\    let y: u8 = -1;
+        \\    return 0;
+        \\}
+        \\
+        \\fn reject_i8_high() -> i8 {
+        \\    let y: i8 = 128;
+        \\    return 0;
+        \\}
+        \\
+        \\fn reject_i8_low() -> i8 {
+        \\    let y: i8 = -129;
+        \\    return 0;
+        \\}
+        \\
+        \\fn reject_assignment_literal() -> void {
+        \\    var y: u8 = 0;
+        \\    y = 300;
+        \\}
+        \\
+        \\fn reject_call_arg_literal() -> void {
+        \\    takes_u8(999);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_integer_literals.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_literals pass=conversion") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_local_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_negative_unsigned pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_i8_high pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_i8_low pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assignment_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_call_arg_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+
+    var found_literal_range = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_INTEGER_LITERAL_OUT_OF_RANGE") != null) found_literal_range = true;
+    }
+    try std.testing.expect(found_literal_range);
+}
+
+test "MIR verifier recurses into target typed aggregate literal conversions" {
+    const source =
+        \\struct Packet {
+        \\    tag: u8,
+        \\    ptr: *mut u8,
+        \\    bytes: [2]u8,
+        \\}
+        \\
+        \\struct PtrPacket {
+        \\    ptr: *mut u8,
+        \\}
+        \\
+        \\packed bits Flags: u8 {
+        \\    ready: bool,
+        \\    busy: bool,
+        \\}
+        \\
+        \\type Byte = u8;
+        \\type Bytes = [2]Byte;
+        \\type PacketAlias = Packet;
+        \\type BytePtr = *mut Byte;
+        \\type FlagsAlias = Flags;
+        \\
+        \\extern fn make_ptr() -> *mut u8;
+        \\extern fn make_alias_ptr() -> BytePtr;
+        \\extern fn take_bytes(value: [2]u8) -> void;
+        \\extern fn take_alias_bytes(value: Bytes) -> void;
+        \\extern fn take_flags(value: FlagsAlias) -> void;
+        \\
+        \\fn accept_aggregate_literals() -> Packet {
+        \\    let xs: [2]u8 = .{1, 2};
+        \\    return .{ .tag = 255, .ptr = make_ptr(), .bytes = xs };
+        \\}
+        \\
+        \\fn accept_pointer_aggregate_field(cell: u8) -> PtrPacket {
+        \\    return .{ .ptr = &cell };
+        \\}
+        \\
+        \\fn accept_pointer_aggregate_element(cell: u8) -> [2]*mut u8 {
+        \\    return .{ &cell, &cell };
+        \\}
+        \\
+        \\fn accept_member_aggregate_field(packet: Packet) -> PtrPacket {
+        \\    return .{ .ptr = packet.ptr };
+        \\}
+        \\
+        \\fn accept_index_aggregate_field(values: [2]*mut u8) -> PtrPacket {
+        \\    return .{ .ptr = values[0] };
+        \\}
+        \\
+        \\fn reject_struct_fields() -> Packet {
+        \\    return .{ .tag = 300, .ptr = null, .bytes = .{1, 999} };
+        \\}
+        \\
+        \\fn reject_local_array_element() -> void {
+        \\    let xs: [2]u8 = .{1, 300};
+        \\}
+        \\
+        \\fn reject_assignment_array_element() -> void {
+        \\    var xs: [2]u8 = uninit;
+        \\    xs = .{1, 400};
+        \\}
+        \\
+        \\fn reject_call_array_element() -> void {
+        \\    take_bytes(.{1, 500});
+        \\}
+        \\
+        \\fn reject_short_array() -> [2]u8 {
+        \\    return .{1};
+        \\}
+        \\
+        \\fn reject_long_array() -> [2]u8 {
+        \\    return .{1, 2, 3};
+        \\}
+        \\
+        \\fn reject_missing_struct_field() -> Packet {
+        \\    return .{ .tag = 1, .ptr = make_ptr() };
+        \\}
+        \\
+        \\fn reject_duplicate_struct_field() -> Packet {
+        \\    return .{ .tag = 1, .ptr = make_ptr(), .tag = 2, .bytes = .{1, 2} };
+        \\}
+        \\
+        \\fn reject_unknown_struct_field() -> Packet {
+        \\    return .{ .tag = 1, .ptr = make_ptr(), .extra = 2, .bytes = .{1, 2} };
+        \\}
+        \\
+        \\fn accept_alias_aggregate_literals() -> PacketAlias {
+        \\    let xs: Bytes = .{1, 2};
+        \\    return .{ .tag = 3, .ptr = make_alias_ptr(), .bytes = xs };
+        \\}
+        \\
+        \\fn reject_alias_array_element() -> Bytes {
+        \\    return .{1, 600};
+        \\}
+        \\
+        \\fn reject_alias_struct_fields() -> PacketAlias {
+        \\    return .{ .tag = 700, .ptr = null, .bytes = .{1, 2} };
+        \\}
+        \\
+        \\fn reject_alias_call_array_element() -> void {
+        \\    take_alias_bytes(.{1, 800});
+        \\}
+        \\
+        \\fn reject_cast_array_element() -> Bytes {
+        \\    return (.{1, 900} as Bytes);
+        \\}
+        \\
+        \\fn reject_cast_short_array() -> Bytes {
+        \\    return (.{1} as Bytes);
+        \\}
+        \\
+        \\fn reject_cast_struct_fields() -> PacketAlias {
+        \\    return (.{ .tag = 901, .ptr = null, .bytes = .{1, 2} } as PacketAlias);
+        \\}
+        \\
+        \\fn reject_cast_missing_struct_field() -> PacketAlias {
+        \\    return (.{ .tag = 1, .ptr = make_ptr() } as PacketAlias);
+        \\}
+        \\
+        \\fn accept_packed_bits_literals() -> FlagsAlias {
+        \\    let flags: FlagsAlias = .{ .ready = true, .busy = false };
+        \\    take_flags(.{ .ready = flags.ready, .busy = true });
+        \\    return flags;
+        \\}
+        \\
+        \\fn reject_packed_bits_field_type() -> FlagsAlias {
+        \\    return .{ .ready = 1, .busy = false };
+        \\}
+        \\
+        \\fn reject_packed_bits_missing_field() -> FlagsAlias {
+        \\    return .{ .ready = true };
+        \\}
+        \\
+        \\fn reject_packed_bits_duplicate_field() -> FlagsAlias {
+        \\    return .{ .ready = true, .ready = false, .busy = false };
+        \\}
+        \\
+        \\fn reject_packed_bits_unknown_field() -> FlagsAlias {
+        \\    return .{ .ready = true, .missing = false, .busy = false };
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_aggregate_literals.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_aggregate_literals pass=conversion") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_aggregate_literals pass=nullability") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_pointer_aggregate_field pass=representation finding=representation_use detail=aggregate_field type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_pointer_aggregate_element pass=representation finding=representation_use detail=aggregate_element type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_member_aggregate_field pass=representation finding=representation_use detail=aggregate_field type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_index_aggregate_field pass=representation finding=representation_use detail=aggregate_field type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_struct_fields pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_struct_fields pass=nullability finding=null_to_nonnull") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_local_array_element pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assignment_array_element pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_call_array_element pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_short_array pass=aggregate finding=array_literal_length type=array") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_long_array pass=aggregate finding=array_literal_length type=array") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_missing_struct_field pass=aggregate finding=struct_literal_missing_field type=Packet") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_duplicate_struct_field pass=aggregate finding=struct_literal_duplicate_field type=Packet") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unknown_struct_field pass=aggregate finding=struct_literal_unknown_field type=Packet") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_alias_aggregate_literals pass=conversion") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_alias_aggregate_literals pass=nullability") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_alias_array_element pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_alias_struct_fields pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_alias_struct_fields pass=nullability finding=null_to_nonnull") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_alias_call_array_element pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_array_element pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_short_array pass=aggregate finding=array_literal_length type=array") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_struct_fields pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_struct_fields pass=nullability finding=null_to_nonnull") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_missing_struct_field pass=aggregate finding=struct_literal_missing_field type=Packet") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_packed_bits_literals pass=conversion") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_packed_bits_literals pass=aggregate") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_packed_bits_field_type pass=conversion finding=return_type_mismatch source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_packed_bits_missing_field pass=aggregate finding=struct_literal_missing_field type=Flags") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_packed_bits_duplicate_field pass=aggregate finding=struct_literal_duplicate_field type=Flags") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_packed_bits_unknown_field pass=aggregate finding=struct_literal_unknown_field type=Flags") != null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+
+    var found_literal_range = false;
+    var found_null_to_nonnull = false;
+    var found_array_length = false;
+    var found_missing_field = false;
+    var found_duplicate_field = false;
+    var found_unknown_field = false;
+    var found_return_mismatch = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_INTEGER_LITERAL_OUT_OF_RANGE") != null) found_literal_range = true;
+        if (std.mem.indexOf(u8, diag.message, "E_NULL_NON_NULL_POINTER") != null) found_null_to_nonnull = true;
+        if (std.mem.indexOf(u8, diag.message, "E_ARRAY_LITERAL_LENGTH") != null) found_array_length = true;
+        if (std.mem.indexOf(u8, diag.message, "E_STRUCT_LITERAL_MISSING_FIELD") != null) found_missing_field = true;
+        if (std.mem.indexOf(u8, diag.message, "E_DUPLICATE_STRUCT_LITERAL_FIELD") != null) found_duplicate_field = true;
+        if (std.mem.indexOf(u8, diag.message, "E_UNKNOWN_STRUCT_FIELD") != null) found_unknown_field = true;
+        if (std.mem.indexOf(u8, diag.message, "E_RETURN_TYPE_MISMATCH") != null) found_return_mismatch = true;
+    }
+    try std.testing.expect(found_literal_range);
+    try std.testing.expect(found_null_to_nonnull);
+    try std.testing.expect(found_array_length);
+    try std.testing.expect(found_missing_field);
+    try std.testing.expect(found_duplicate_field);
+    try std.testing.expect(found_unknown_field);
+    try std.testing.expect(found_return_mismatch);
+}
+
+test "MIR verifier validates typed global aggregate initializers" {
+    const source =
+        \\struct GlobalPacket {
+        \\    tag: u8,
+        \\    ptr: *mut u8,
+        \\    bytes: [2]u8,
+        \\}
+        \\
+        \\packed bits GlobalFlags: u8 {
+        \\    ready: bool,
+        \\    busy: bool,
+        \\}
+        \\
+        \\type GlobalBytes = [2]u8;
+        \\type GlobalPacketAlias = GlobalPacket;
+        \\type GlobalFlagsAlias = GlobalFlags;
+        \\
+        \\global ok_bytes: GlobalBytes = .{1, 2};
+        \\global ok_raw_flags: GlobalFlagsAlias = 0xff;
+        \\global reject_global_array_element: GlobalBytes = .{1, 300};
+        \\global reject_global_array_shape: GlobalBytes = .{1};
+        \\global reject_global_struct_fields: GlobalPacketAlias = .{ .tag = 400, .ptr = null, .bytes = .{1, 999} };
+        \\global reject_global_struct_missing: GlobalPacketAlias = .{ .tag = 1, .ptr = null };
+        \\global reject_global_flags_type: GlobalFlagsAlias = .{ .ready = 1, .busy = false };
+        \\global reject_global_flags_missing: GlobalFlagsAlias = .{ .ready = true };
+        \\global reject_raw_flags_range: GlobalFlagsAlias = 0x100;
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_global_aggregates.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=ok_bytes pass=conversion") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=ok_bytes pass=aggregate") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=ok_raw_flags pass=conversion") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_global_array_element pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_global_array_shape pass=aggregate finding=array_literal_length type=array") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_global_struct_fields pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_global_struct_fields pass=nullability finding=null_to_nonnull") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_global_struct_missing pass=aggregate finding=struct_literal_missing_field type=GlobalPacket") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_global_flags_type pass=conversion finding=initializer_type_mismatch source_type=comptime_int") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_global_flags_missing pass=aggregate finding=struct_literal_missing_field type=GlobalFlags") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_raw_flags_range pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+
+    var found_literal_range = false;
+    var found_array_length = false;
+    var found_null_to_nonnull = false;
+    var found_missing_field = false;
+    var found_no_implicit = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_INTEGER_LITERAL_OUT_OF_RANGE") != null) found_literal_range = true;
+        if (std.mem.indexOf(u8, diag.message, "E_ARRAY_LITERAL_LENGTH") != null) found_array_length = true;
+        if (std.mem.indexOf(u8, diag.message, "E_NULL_NON_NULL_POINTER") != null) found_null_to_nonnull = true;
+        if (std.mem.indexOf(u8, diag.message, "E_STRUCT_LITERAL_MISSING_FIELD") != null) found_missing_field = true;
+        if (std.mem.indexOf(u8, diag.message, "E_NO_IMPLICIT_CONVERSION") != null) found_no_implicit = true;
+    }
+    try std.testing.expect(found_literal_range);
+    try std.testing.expect(found_array_length);
+    try std.testing.expect(found_null_to_nonnull);
+    try std.testing.expect(found_missing_field);
+    try std.testing.expect(found_no_implicit);
+}
+
+test "MIR verifier reports unhandled Result expressions and locals" {
+    const source =
+        \\extern fn make_result_u32() -> Result<u32, Error>;
+        \\
+        \\fn reject_unhandled_result_statement() -> void {
+        \\    make_result_u32();
+        \\}
+        \\
+        \\fn reject_unhandled_result_local() -> void {
+        \\    let result = make_result_u32();
+        \\}
+        \\
+        \\fn reject_defer_unhandled_result() -> void {
+        \\    defer make_result_u32();
+        \\}
+        \\
+        \\fn reject_switch_arm_unhandled_result(flag: bool) -> void {
+        \\    switch flag {
+        \\        true => make_result_u32(),
+        \\        false => {},
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_result_unhandled.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unhandled_result_statement pass=result finding=unhandled_result") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unhandled_result_local pass=result finding=unhandled_result") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_defer_unhandled_result pass=result finding=unhandled_result") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_switch_arm_unhandled_result pass=result finding=unhandled_result") != null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var unhandled_count: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_UNHANDLED_RESULT") != null) unhandled_count += 1;
+    }
+    try std.testing.expect(unhandled_count >= 4);
+}
+
+test "MIR verifier accepts Result locals handled by try if-let-else and switch" {
+    const source =
+        \\struct ResultBox {
+        \\    value: u32,
+        \\}
+        \\
+        \\extern fn make_result_u32() -> Result<u32, Error>;
+        \\
+        \\fn accept_handled_result_local() -> u32 {
+        \\    let result = make_result_u32();
+        \\    return result?;
+        \\}
+        \\
+        \\fn accept_if_let_else_result() -> void {
+        \\    let result = make_result_u32();
+        \\    if let ok(value) = result {
+        \\        let copy: u32 = value;
+        \\    } else {
+        \\        let fallback: u32 = 0;
+        \\    }
+        \\}
+        \\
+        \\fn accept_result_switch_handles_both_tags() -> void {
+        \\    let result = make_result_u32();
+        \\    switch result {
+        \\        ok(value) => {
+        \\            let copy: u32 = value;
+        \\        },
+        \\        err(e) => {
+        \\            let fallback: u32 = 0;
+        \\        },
+        \\    }
+        \\}
+        \\
+        \\fn accept_array_literal_result_local() -> void {
+        \\    let result = make_result_u32();
+        \\    let values: [1]u32 = .{ result? };
+        \\}
+        \\
+        \\fn accept_struct_literal_result_local() -> void {
+        \\    let result = make_result_u32();
+        \\    let boxed: ResultBox = .{ .value = result? };
+        \\}
+        \\
+        \\fn accept_switch_arm_body_result_local(flag: bool) -> u32 {
+        \\    let result = make_result_u32();
+        \\    switch flag {
+        \\        true => {
+        \\            return result?;
+        \\        },
+        \\        false => {
+        \\            return 0;
+        \\        },
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_result_handled.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "pass=result finding=unhandled_result") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_handled_result_local pass=result finding=try_handled") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_array_literal_result_local pass=result finding=try_handled") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_struct_literal_result_local pass=result finding=try_handled") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_switch_arm_body_result_local pass=result finding=try_handled") != null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+}
+
+test "MIR verifier reports invalid if-let and switch Result patterns" {
+    const source =
+        \\extern fn make_result_u32() -> Result<u32, Error>;
+        \\
+        \\enum Status {
+        \\    ready,
+        \\    waiting,
+        \\}
+        \\
+        \\fn reject_if_let_optional_required(value: u32) -> void {
+        \\    if let x = value {
+        \\    }
+        \\}
+        \\
+        \\fn reject_if_let_result_required(maybe: ?*mut u8) -> void {
+        \\    if let ok(value) = maybe {
+        \\    }
+        \\}
+        \\
+        \\fn reject_if_let_result_tag(result: Result<u32, Error>) -> void {
+        \\    if let ready(value) = result {
+        \\    }
+        \\}
+        \\
+        \\fn reject_if_let_narrow_pattern(status: Status) -> void {
+        \\    if let .ready = status {
+        \\    }
+        \\}
+        \\
+        \\fn reject_switch_result_tag(result: Result<u32, Error>) -> void {
+        \\    switch result {
+        \\        ready(value) => {},
+        \\        _ => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_switch_result_required(value: u32) -> void {
+        \\    switch value {
+        \\        .ok => {},
+        \\        _ => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_switch_multi_binding_arm(result: Result<u32, Error>) -> void {
+        \\    switch result {
+        \\        ok(value), err(error_value) => {},
+        \\        _ => {},
+        \\    }
+        \\}
+        \\
+        \\fn accept_valid_result_patterns() -> void {
+        \\    let result = make_result_u32();
+        \\    if let ok(value) = result {
+        \\    }
+        \\    switch result {
+        \\        ok(value) => {},
+        \\        err(error_value) => {},
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_branch_patterns.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_if_let_optional_required pass=result finding=if_let_optional_required") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_if_let_result_required pass=result finding=if_let_result_required") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_if_let_result_tag pass=result finding=if_let_result_tag") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_if_let_narrow_pattern pass=result finding=if_let_narrow_pattern") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_switch_result_tag pass=result finding=switch_result_tag") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_switch_result_required pass=result finding=switch_result_required") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_switch_multi_binding_arm pass=result finding=switch_multi_binding_arm") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_valid_result_patterns pass=result finding=if_let_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_valid_result_patterns pass=result finding=switch_") == null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var found_if_optional = false;
+    var found_if_required = false;
+    var found_if_tag = false;
+    var found_if_narrow = false;
+    var found_switch_tag = false;
+    var found_switch_required = false;
+    var found_switch_multi = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_IF_LET_OPTIONAL_REQUIRED") != null) found_if_optional = true;
+        if (std.mem.indexOf(u8, diag.message, "E_IF_LET_RESULT_REQUIRED") != null) found_if_required = true;
+        if (std.mem.indexOf(u8, diag.message, "E_IF_LET_RESULT_TAG") != null) found_if_tag = true;
+        if (std.mem.indexOf(u8, diag.message, "E_IF_LET_NARROW_PATTERN") != null) found_if_narrow = true;
+        if (std.mem.indexOf(u8, diag.message, "E_SWITCH_RESULT_TAG") != null) found_switch_tag = true;
+        if (std.mem.indexOf(u8, diag.message, "E_SWITCH_RESULT_REQUIRED") != null) found_switch_required = true;
+        if (std.mem.indexOf(u8, diag.message, "E_SWITCH_MULTI_BINDING_ARM") != null) found_switch_multi = true;
+    }
+    try std.testing.expect(found_if_optional);
+    try std.testing.expect(found_if_required);
+    try std.testing.expect(found_if_tag);
+    try std.testing.expect(found_if_narrow);
+    try std.testing.expect(found_switch_tag);
+    try std.testing.expect(found_switch_required);
+    try std.testing.expect(found_switch_multi);
+}
+
+test "MIR verifier reports duplicate switch cases" {
+    const source =
+        \\fn reject_bool_duplicate(flag: bool) -> void {
+        \\    switch flag {
+        \\        true => {},
+        \\        true => {},
+        \\        false => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_integer_duplicate(value: u32) -> void {
+        \\    switch value {
+        \\        1 => {},
+        \\        0x1 => {},
+        \\        _ => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_result_duplicate(result: Result<u32, Error>) -> void {
+        \\    switch result {
+        \\        ok(value) => {},
+        \\        .ok => {},
+        \\        err(error_value) => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_case_after_wildcard(value: u32) -> void {
+        \\    switch value {
+        \\        _ => {},
+        \\        2 => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_same_arm_wildcard_cover(value: u32) -> void {
+        \\    switch value {
+        \\        _, 3 => {},
+        \\    }
+        \\}
+        \\
+        \\fn accept_distinct_switches(flag: bool, value: u32, result: Result<u32, Error>) -> void {
+        \\    switch flag {
+        \\        true => {},
+        \\        false => {},
+        \\    }
+        \\    switch value {
+        \\        1 => {},
+        \\        2 => {},
+        \\        _ => {},
+        \\    }
+        \\    switch result {
+        \\        ok(value) => {},
+        \\        err(error_value) => {},
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_switch_duplicates.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_bool_duplicate pass=core finding=duplicate_switch_case") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_duplicate pass=core finding=duplicate_switch_case") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_duplicate pass=core finding=duplicate_switch_case") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_case_after_wildcard pass=core finding=duplicate_switch_case") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_same_arm_wildcard_cover pass=core finding=duplicate_switch_case") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_distinct_switches pass=core finding=duplicate_switch_case") == null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var duplicate_count: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_DUPLICATE_SWITCH_CASE") != null) duplicate_count += 1;
+    }
+    try std.testing.expect(duplicate_count >= 5);
+}
+
+test "MIR verifier reports switch literal pattern type mismatches" {
+    const source =
+        \\enum Irq {
+        \\    timer,
+        \\    keyboard,
+        \\}
+        \\
+        \\fn reject_bool_switch_integer_pattern(flag: bool) -> void {
+        \\    switch flag {
+        \\        1 => {},
+        \\        _ => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_integer_switch_bool_pattern(value: u32) -> void {
+        \\    switch value {
+        \\        true => {},
+        \\        _ => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_enum_switch_literal_pattern(irq: Irq) -> void {
+        \\    switch irq {
+        \\        1 => {},
+        \\        _ => {},
+        \\    }
+        \\}
+        \\
+        \\fn accept_scalar_switch_literals(flag: bool, value: u32) -> void {
+        \\    switch flag {
+        \\        true => {},
+        \\        false => {},
+        \\    }
+        \\    switch value {
+        \\        1 => {},
+        \\        2 => {},
+        \\        _ => {},
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_switch_literal_patterns.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_bool_switch_integer_pattern pass=core finding=switch_literal_type_mismatch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_switch_bool_pattern pass=core finding=switch_literal_type_mismatch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_enum_switch_literal_pattern pass=core finding=switch_literal_type_mismatch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_scalar_switch_literals pass=core finding=switch_literal_type_mismatch") == null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var mismatch_count: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_NO_IMPLICIT_CONVERSION") != null) mismatch_count += 1;
+    }
+    try std.testing.expect(mismatch_count >= 3);
+}
+
+test "MIR verifier validates enum switch cases and closed enum exhaustiveness" {
+    const source =
+        \\enum Irq {
+        \\    timer,
+        \\    keyboard,
+        \\}
+        \\
+        \\open enum OpenError: u8 {
+        \\    fault = 1,
+        \\    busy = 2,
+        \\}
+        \\
+        \\fn reject_closed_enum_nonexhaustive(irq: Irq) -> void {
+        \\    switch irq {
+        \\        .timer => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_closed_enum_unknown_case(irq: Irq) -> void {
+        \\    switch irq {
+        \\        .missing => {},
+        \\        _ => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_open_enum_unknown_case(error_value: OpenError) -> void {
+        \\    switch error_value {
+        \\        .missing => {},
+        \\        _ => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_enum_duplicate_case(irq: Irq) -> void {
+        \\    switch irq {
+        \\        .timer => {},
+        \\        .timer => {},
+        \\        .keyboard => {},
+        \\    }
+        \\}
+        \\
+        \\fn accept_closed_enum_exhaustive(irq: Irq) -> void {
+        \\    switch irq {
+        \\        .timer => {},
+        \\        .keyboard => {},
+        \\    }
+        \\}
+        \\
+        \\fn accept_closed_enum_wildcard(irq: Irq) -> void {
+        \\    switch irq {
+        \\        .timer => {},
+        \\        _ => {},
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_enum_switch.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_closed_enum_nonexhaustive pass=core finding=closed_enum_switch_exhaustive") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_closed_enum_unknown_case pass=core finding=unknown_enum_case") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_open_enum_unknown_case pass=core finding=unknown_enum_case") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_enum_duplicate_case pass=core finding=duplicate_switch_case") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_closed_enum_exhaustive pass=representation finding=representation_use detail=switch_subject type=Irq") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_closed_enum_exhaustive pass=core") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_closed_enum_wildcard pass=core") == null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var found_nonexhaustive = false;
+    var found_unknown = false;
+    var found_duplicate = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_CLOSED_ENUM_SWITCH_EXHAUSTIVE") != null) found_nonexhaustive = true;
+        if (std.mem.indexOf(u8, diag.message, "E_UNKNOWN_ENUM_CASE") != null) found_unknown = true;
+        if (std.mem.indexOf(u8, diag.message, "E_DUPLICATE_SWITCH_CASE") != null) found_duplicate = true;
+    }
+    try std.testing.expect(found_nonexhaustive);
+    try std.testing.expect(found_unknown);
+    try std.testing.expect(found_duplicate);
+}
+
+test "MIR verifier validates tagged union switch cases" {
+    const source =
+        \\union Token {
+        \\    int: i64,
+        \\    ident: []const u8,
+        \\    eof,
+        \\}
+        \\
+        \\type TokenAlias = Token;
+        \\
+        \\fn reject_unknown_union_case(token: Token) -> void {
+        \\    switch token {
+        \\        .missing => {},
+        \\        .int => {},
+        \\        .ident => {},
+        \\        .eof => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_payloadless_union_case_binding(token: Token) -> void {
+        \\    switch token {
+        \\        int(value) => {},
+        \\        ident(name) => {},
+        \\        eof(value) => {},
+        \\    }
+        \\}
+        \\
+        \\fn reject_duplicate_union_case(token: TokenAlias) -> void {
+        \\    switch token {
+        \\        int(value) => {},
+        \\        .int => {},
+        \\        .ident => {},
+        \\        .eof => {},
+        \\    }
+        \\}
+        \\
+        \\fn accept_union_patterns(token: TokenAlias) -> void {
+        \\    switch token {
+        \\        int(value) => {},
+        \\        ident(name) => {},
+        \\        .eof => {},
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_union_switch.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unknown_union_case pass=core finding=unknown_union_case") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_payloadless_union_case_binding pass=core finding=union_case_has_no_payload") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_duplicate_union_case pass=core finding=duplicate_switch_case") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_union_patterns pass=core") == null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var found_unknown = false;
+    var found_payloadless = false;
+    var found_duplicate = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_UNKNOWN_UNION_CASE") != null) found_unknown = true;
+        if (std.mem.indexOf(u8, diag.message, "E_UNION_CASE_HAS_NO_PAYLOAD") != null) found_payloadless = true;
+        if (std.mem.indexOf(u8, diag.message, "E_DUPLICATE_SWITCH_CASE") != null) found_duplicate = true;
+    }
+    try std.testing.expect(found_unknown);
+    try std.testing.expect(found_payloadless);
+    try std.testing.expect(found_duplicate);
+}
+
+test "MIR verifier reports Result reassignment and invalid try operands" {
+    const source =
+        \\extern fn make_result_u32() -> Result<u32, Error>;
+        \\extern fn make_void() -> void;
+        \\
+        \\fn reject_overwrite_unhandled_result() -> u32 {
+        \\    var result = make_result_u32();
+        \\    result = make_result_u32();
+        \\    return result?;
+        \\}
+        \\
+        \\fn accept_assignment_handled_later() -> u32 {
+        \\    var result: Result<u32, Error> = make_result_u32();
+        \\    result?;
+        \\    result = make_result_u32();
+        \\    return result?;
+        \\}
+        \\
+        \\fn reject_void_direct_call_try() -> void {
+        \\    return make_void()?;
+        \\}
+        \\
+        \\fn reject_integer_try(n: u32) -> u32 {
+        \\    return n?;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_result_reassign_try.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_overwrite_unhandled_result pass=result finding=unhandled_result") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_assignment_handled_later pass=result finding=unhandled_result") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_void_direct_call_try pass=result finding=try_requires_result_or_nullable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_try pass=result finding=try_requires_result_or_nullable") != null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var found_unhandled = false;
+    var found_invalid_try = false;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_UNHANDLED_RESULT") != null) found_unhandled = true;
+        if (std.mem.indexOf(u8, diag.message, "E_TRY_REQUIRES_RESULT_OR_NULLABLE") != null) found_invalid_try = true;
+    }
+    try std.testing.expect(found_unhandled);
+    try std.testing.expect(found_invalid_try);
+}
+
+test "MIR verifier reports Result try payload return mismatches" {
+    const source =
+        \\extern fn make_result_u32() -> Result<u32, Error>;
+        \\extern fn make_result_pointer() -> Result<*mut u8, Error>;
+        \\extern fn make_result_c_void_pointer() -> Result<*mut c_void, Error>;
+        \\extern fn make_result_u16_pointer() -> Result<*mut u16, Error>;
+        \\extern fn make_result_bytes() -> Result<[2]u8, Error>;
+        \\extern fn make_nullable_mut_pointer() -> ?*mut u8;
+        \\extern fn make_nullable_c_void_pointer() -> ?*mut c_void;
+        \\extern fn takes_const_pointer(value: *const u8) -> void;
+        \\
+        \\struct PointerBox {
+        \\    ptr: *const u8,
+        \\}
+        \\
+        \\fn accept_result_try_payload() -> u32 {
+        \\    return make_result_u32()?;
+        \\}
+        \\
+        \\fn accept_result_pointer_try_payload() -> *mut u8 {
+        \\    return make_result_pointer()?;
+        \\}
+        \\
+        \\fn accept_nullable_pointer_try_payload() -> *mut u8 {
+        \\    return make_nullable_mut_pointer()?;
+        \\}
+        \\
+        \\fn reject_result_try_payload() -> *mut u8 {
+        \\    return make_result_u32()?;
+        \\}
+        \\
+        \\fn reject_pointer_payload_to_integer() -> u32 {
+        \\    return make_result_pointer()?;
+        \\}
+        \\
+        \\fn reject_result_pointer_payload_conversion() -> *const u8 {
+        \\    return make_result_pointer()?;
+        \\}
+        \\
+        \\fn reject_result_pointer_payload_element_conversion() -> *mut u16 {
+        \\    return make_result_pointer()?;
+        \\}
+        \\
+        \\fn reject_result_c_void_payload_conversion() -> *mut u8 {
+        \\    return make_result_c_void_pointer()?;
+        \\}
+        \\
+        \\fn reject_result_typed_to_c_void_payload_conversion() -> *mut c_void {
+        \\    return make_result_pointer()?;
+        \\}
+        \\
+        \\fn reject_nullable_pointer_payload_conversion() -> *const u8 {
+        \\    return make_nullable_mut_pointer()?;
+        \\}
+        \\
+        \\fn reject_nullable_c_void_payload_conversion() -> *mut u8 {
+        \\    return make_nullable_c_void_pointer()?;
+        \\}
+        \\
+        \\fn reject_result_try_local_initializer() -> void {
+        \\    let ptr: *const u8 = make_result_pointer()?;
+        \\}
+        \\
+        \\fn reject_result_try_assignment(fallback: *const u8) -> void {
+        \\    var ptr: *const u8 = fallback;
+        \\    ptr = make_result_pointer()?;
+        \\}
+        \\
+        \\fn reject_result_try_call_arg() -> void {
+        \\    takes_const_pointer(make_result_pointer()?);
+        \\}
+        \\
+        \\fn reject_result_try_aggregate_field() -> PointerBox {
+        \\    return .{ .ptr = make_result_pointer()? };
+        \\}
+        \\
+        \\fn reject_cast_result_try_payload() -> *const u8 {
+        \\    return (make_result_pointer()? as *const u8);
+        \\}
+        \\
+        \\fn reject_cast_result_try_local_initializer() -> void {
+        \\    let ptr: *const u8 = (make_result_pointer()? as *const u8);
+        \\}
+        \\
+        \\fn reject_cast_result_try_assignment(fallback: *const u8) -> void {
+        \\    var ptr: *const u8 = fallback;
+        \\    ptr = (make_result_pointer()? as *const u8);
+        \\}
+        \\
+        \\fn reject_cast_result_try_call_arg() -> void {
+        \\    takes_const_pointer(make_result_pointer()? as *const u8);
+        \\}
+        \\
+        \\fn reject_cast_result_try_aggregate_field() -> PointerBox {
+        \\    return .{ .ptr = make_result_pointer()? as *const u8 };
+        \\}
+        \\
+        \\fn reject_inferred_result_array_try_index() -> *mut u8 {
+        \\    let bytes = make_result_bytes()?;
+        \\    return bytes[0];
+        \\}
+        \\
+        \\fn reject_if_let_result_array_binding() -> *mut u8 {
+        \\    if let ok(bytes) = make_result_bytes() {
+        \\        return bytes[0];
+        \\    } else {
+        \\        return make_result_pointer()?;
+        \\    }
+        \\}
+        \\
+        \\fn reject_switch_result_array_binding() -> *mut u8 {
+        \\    let result = make_result_bytes();
+        \\    switch result {
+        \\        ok(bytes) => {
+        \\            return bytes[0];
+        \\        },
+        \\        err(e) => {
+        \\            return make_result_pointer()?;
+        \\        },
+        \\    }
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_result_payload.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_result_try_payload pass=result finding=try_payload_type_mismatch") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_result_pointer_try_payload pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_nullable_pointer_try_payload pass=result finding=try_payload_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_result_pointer_try_payload pass=representation finding=representation_use detail=try_unwrap type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_nullable_pointer_try_payload pass=representation finding=representation_use detail=try_unwrap type=*mut") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_try_payload pass=result finding=try_payload_type_mismatch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_pointer_payload_to_integer pass=result finding=try_payload_type_mismatch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_pointer_payload_conversion pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_pointer_payload_element_conversion pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_c_void_payload_conversion pass=result finding=try_payload_c_void_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_typed_to_c_void_payload_conversion pass=result finding=try_payload_c_void_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_nullable_pointer_payload_conversion pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_nullable_c_void_payload_conversion pass=result finding=try_payload_c_void_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_try_local_initializer pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_try_assignment pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_try_call_arg pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_try_aggregate_field pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_result_try_payload pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_result_try_local_initializer pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_result_try_assignment pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_result_try_call_arg pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_result_try_aggregate_field pass=result finding=try_payload_pointer_conversion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_inferred_result_array_try_index pass=conversion finding=return_type_mismatch source_type=u8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_if_let_result_array_binding pass=conversion finding=return_type_mismatch source_type=u8") != null);
+    try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_switch_result_array_binding pass=conversion finding=return_type_mismatch source_type=u8") != null);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.verifyBuiltMir(typed_mir, &reporter);
+    var mismatch_count: usize = 0;
+    var pointer_conversion_count: usize = 0;
+    var c_void_conversion_count: usize = 0;
+    for (reporter.diagnostics.items) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "E_RETURN_TYPE_MISMATCH") != null) mismatch_count += 1;
+        if (std.mem.indexOf(u8, diag.message, "E_NO_IMPLICIT_POINTER_CONVERSION") != null) pointer_conversion_count += 1;
+        if (std.mem.indexOf(u8, diag.message, "E_C_VOID_CONVERSION") != null) c_void_conversion_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 5), mismatch_count);
+    try std.testing.expectEqual(@as(usize, 12), pointer_conversion_count);
+    try std.testing.expectEqual(@as(usize, 3), c_void_conversion_count);
+}

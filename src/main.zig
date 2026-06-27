@@ -2,24 +2,35 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const backend = @import("backend.zig");
+const cli = @import("cli.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
+const eval_tests = @import("eval_tests.zig");
 const fmt = @import("fmt.zig");
 const hir = @import("hir.zig");
+const hir_tests = @import("hir_tests.zig");
 const ir = @import("ir.zig");
+const ir_tests = @import("ir_tests.zig");
 const lexer = @import("lexer.zig");
+const lexer_tests = @import("lexer_tests.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
+const lower_c_tests = @import("lower_c_tests.zig");
 // Lowering-coverage instrumentation (hardening V3.2). Zero-cost unless the
 // `MC_LOWER_COV` env var is set; `tools/toolchain/lowering-coverage.sh` injects the
 // per-function `lower_cov.hit(...)` probes into the two backend files at build time.
 const lower_cov = @import("lower_cov.zig");
 const lower_llvm = @import("lower_llvm.zig");
+const lower_llvm_tests = @import("lower_llvm_tests.zig");
 const mir = @import("mir.zig");
+const mir_tests = @import("mir_tests.zig");
 const monomorphize = @import("monomorphize.zig");
+const monomorphize_tests = @import("monomorphize_tests.zig");
 const async_lower = @import("async_lower.zig");
 const parser = @import("parser.zig");
+const parser_tests = @import("parser_tests.zig");
 const sema = @import("sema.zig");
+const sema_tests = @import("sema_tests.zig");
 const spec_tests = @import("spec_tests.zig");
 const symbols = @import("symbols.zig");
 
@@ -99,162 +110,11 @@ pub fn main(init: std.process.Init) !void {
     _ = args.next();
     const command = args.next() orelse return failUsage();
     const path = args.next() orelse return failUsage();
-    // Optional flags follow the path. `emit-c` and `emit-map` accept:
-    // `--profile=kernel` (default) or `--profile=hosted` (the *target* axis).
-    var profile: lower_c.Profile = .kernel;
-    var saw_profile_flag = false;
-    // Build-safety profile (orthogonal to the target `--profile`): `--checks=all` is the
-    // SAFE default (keep every trap check); `--checks=elide-proven` is the RELEASE build
-    // (the fact-gated MIR optimizer drops only provably-dead checks, annex E.4). `optimize`
-    // is the single bool that selects RELEASE; `--optimize` is a deprecated alias.
-    var optimize = false;
-    // KASAN profile (D2.1): when set (`--checks=ksan`), instrumented memory accesses
-    // (raw.load/raw.store — the pointer-deref / raw-access path) emit a shadow-memory
-    // check that traps on a poisoned (freed/redzone) access. Orthogonal to `optimize`;
-    // default builds leave it off, so no instrumentation hook is CALLED (the inert weak
-    // stubs are always present, so the bytes differ from a no-hooks build).
-    var ksan = false;
-    // KMSAN profile (D2.2): when set (`--checks=msan`), builds on the ksan shadow to track
-    // initialized-ness of heap bytes. It implies the ksan access instrumentation (so loads
-    // still consult the shadow), and additionally wraps every raw.store with
-    // `mc_ksan_store(addr, size)` which marks the written bytes initialized. The msan runtime
-    // poisons fresh heap allocations as UNINIT; a load of still-uninit bytes traps. Default
-    // builds leave it off, so no instrumentation hook is called (inert weak stubs persist).
-    var msan = false;
-    // KCSAN profile (D2.3): when set (`--checks=csan`), instruments the unsynchronized
-    // raw.load/raw.store path with a data-race watchpoint (mc_csan_read/mc_csan_write) on the
-    // shadow. Mutually exclusive with ksan/msan; default builds leave it off (no hook called).
-    var csan = false;
-    // True once any sanitizer profile token (ksan/msan/csan) is seen, so combination
-    // validity can be checked once after parsing all `--checks=` tokens.
-    var saw_checks_flag = false;
-    var check_fmt = false;
-    // `emit-layout --structs=A,B,C`: the comma-separated structs whose MC layout is asserted.
-    var structs_flag: ?[]const u8 = null;
-    // Arch-selection seam (R0b): `--arch=riscv64|x86_64|aarch64` picks which arch a
-    // `import "kernel/arch/active/..."` resolves to. Null => loader default (riscv64), so the
-    // existing riscv builds need no flag; only x86/aarch64 builds pass it.
-    var arch_flag: ?[]const u8 = null;
-    var saw_arch_flag = false;
-    // Platform-selection seam (kernel-layering Wave 0): `--platform=qemu_virt` picks which
-    // board a `import "kernel/platform/active/..."` resolves to. Null => loader default
-    // (qemu_virt), so existing builds need no flag; only alternate boards pass it.
-    var platform_flag: ?[]const u8 = null;
-    var saw_platform_flag = false;
-    // `--stub-asm` (test-only): lower inline asm to a host-neutral stub so an arch
-    // module's portable logic can be built/run host-natively. Only the emit commands
-    // accept it; kernel builds never pass it (so their asm is emitted unchanged).
-    var stub_asm = false;
-    var saw_stub_asm_flag = false;
-    while (args.next()) |flag| {
-        if (std.mem.startsWith(u8, flag, "--arch=")) {
-            saw_arch_flag = true;
-            const value = flag["--arch=".len..];
-            if (std.mem.eql(u8, value, "riscv64") or std.mem.eql(u8, value, "x86_64") or
-                std.mem.eql(u8, value, "aarch64"))
-            {
-                arch_flag = value;
-            } else {
-                return failUsage();
-            }
-        } else if (std.mem.startsWith(u8, flag, "--platform=")) {
-            saw_platform_flag = true;
-            const value = flag["--platform=".len..];
-            if (std.mem.eql(u8, value, "qemu_virt")) {
-                platform_flag = value;
-            } else {
-                return failUsage();
-            }
-        } else if (std.mem.startsWith(u8, flag, "--structs=")) {
-            structs_flag = flag["--structs=".len..];
-        } else if (std.mem.startsWith(u8, flag, "--profile=")) {
-            saw_profile_flag = true;
-            const value = flag["--profile=".len..];
-            if (std.mem.eql(u8, value, "kernel")) {
-                profile = .kernel;
-            } else if (std.mem.eql(u8, value, "hosted")) {
-                profile = .hosted;
-            } else {
-                return failUsage();
-            }
-        } else if (std.mem.startsWith(u8, flag, "--checks=")) {
-            saw_checks_flag = true;
-            // Comma-separated tokens so the build-safety axis (`all`/`elide-proven`)
-            // composes with the orthogonal `ksan` profile, e.g. `--checks=ksan` or
-            // `--checks=ksan,elide-proven`. Default (no `ksan` token) leaves ksan off.
-            const value = flag["--checks=".len..];
-            var tokens = std.mem.splitScalar(u8, value, ',');
-            while (tokens.next()) |tok| {
-                if (std.mem.eql(u8, tok, "all")) {
-                    optimize = false;
-                } else if (std.mem.eql(u8, tok, "elide-proven")) {
-                    optimize = true;
-                } else if (std.mem.eql(u8, tok, "ksan")) {
-                    ksan = true;
-                } else if (std.mem.eql(u8, tok, "msan")) {
-                    // KMSAN (D2.2) builds on the ksan shadow and implies its instrumentation.
-                    msan = true;
-                    ksan = true;
-                } else if (std.mem.eql(u8, tok, "csan")) {
-                    // KCSAN (D2.3): data-race watchpoint on the unsynchronized raw path.
-                    csan = true;
-                } else {
-                    return failUsage();
-                }
-            }
-        } else if (std.mem.eql(u8, flag, "--optimize")) {
-            // Deprecated alias for `--checks=elide-proven`.
-            saw_checks_flag = true;
-            optimize = true;
-        } else if (std.mem.eql(u8, flag, "--check")) {
-            check_fmt = true;
-        } else if (std.mem.eql(u8, flag, "--stub-asm")) {
-            saw_stub_asm_flag = true;
-            stub_asm = true;
-        } else {
-            return failUsage();
-        }
-    }
-    // `--profile` (target axis) is consumed only by the C artifact commands; `--checks=`
-    // / `--optimize` (the build-safety axis: SAFE vs RELEASE, fact-gated MIR optimizer,
-    // annex E) by the MIR-level and code-emitting commands; `--check` only by `fmt`. A
-    // flag on any other command is an error.
-    const is_c_artifact_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map");
-    const accepts_checks = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir") or
-        std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
-    const is_emit_layout = std.mem.eql(u8, command, "emit-layout");
-    const is_emit_c_struct = std.mem.eql(u8, command, "emit-c-struct");
-    const needs_structs = is_emit_layout or is_emit_c_struct;
-    if (saw_profile_flag and !is_c_artifact_command) return failUsage();
-    if (saw_checks_flag and !accepts_checks) return failUsage();
-    // `--stub-asm` only affects code emission, so it is meaningful solely on the two
-    // emit commands. Reject it elsewhere rather than silently ignoring it.
-    const is_emit_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-llvm");
-    if (saw_stub_asm_flag and !is_emit_command) return failUsage();
-    // `--arch` affects import resolution, so it is meaningful on any command that flattens
-    // imports through the loader (the same set that accepts `--checks`, which are the compile
-    // commands). Reject it elsewhere rather than silently ignoring it.
-    if (saw_arch_flag and !accepts_checks) return failUsage();
-    // `--platform` affects import resolution exactly like `--arch`, so it is meaningful only on
-    // the import-flattening (compile) commands. Reject it elsewhere rather than silently ignoring.
-    if (saw_platform_flag and !accepts_checks) return failUsage();
-    // The sanitizer profiles are not all independently combinable: a single raw.load/
-    // raw.store wraps exactly one shadow protocol. msan implies ksan (composable), but
-    // csan is mutually exclusive with ksan/msan — `--checks=ksan,csan` (or `msan,csan`)
-    // previously SILENTLY dropped csan (the C if-chain is exclusive; the LLVM path
-    // ignored csan entirely). Reject the combination loudly instead of no-opping.
-    if (csan and (ksan or msan)) {
-        std.debug.print("error: --checks=csan cannot be combined with ksan/msan (a single raw access wraps one shadow protocol)\n", .{});
-        return failUsage();
-    }
-    // Bundle the build-safety / sanitizer axis into one value (see backend.Checks); this is
-    // threaded as a unit so a positional drop (the original KCSAN-on-LLVM no-op) can't recur.
-    const checks: backend.Checks = .{ .optimize = optimize, .ksan = ksan, .msan = msan, .csan = csan };
-    const target_arch = backend.targetArchFromName(arch_flag orelse "riscv64").?;
-    if (check_fmt and !std.mem.eql(u8, command, "fmt")) return failUsage();
-    // `--structs=` is consumed only by the struct-from-MC commands, which both require it.
-    if (structs_flag != null and !needs_structs) return failUsage();
-    if (needs_structs and structs_flag == null) return failUsage();
+    const options = cli.Options.parse(command, &args) catch |err| switch (err) {
+        error.InvalidArgs => return failUsage(),
+    };
+    const is_emit_layout = cli.Options.isEmitLayout(command);
+    const is_emit_c_struct = cli.Options.isEmitCStruct(command);
 
     const root_source = try std.Io.Dir.cwd().readFileAlloc(init.io, path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(root_source);
@@ -262,7 +122,7 @@ pub fn main(init: std.process.Init) !void {
     // `fmt` operates on the raw file (not the import-flattened source) and is token-preserving;
     // it bypasses the parse/sema pipeline entirely.
     if (std.mem.eql(u8, command, "fmt")) {
-        try runFmt(allocator, path, root_source, check_fmt);
+        try runFmt(allocator, path, root_source, options.check_fmt);
         return;
     }
 
@@ -274,7 +134,7 @@ pub fn main(init: std.process.Init) !void {
         for (boundaries.items) |b| allocator.free(b.path);
         boundaries.deinit(allocator);
     }
-    const source = try loader.loadCombinedSourceWithBoundaries(allocator, init.io, path, root_source, &boundaries, arch_flag, platform_flag);
+    const source = try loader.loadCombinedSourceWithBoundaries(allocator, init.io, path, root_source, &boundaries, options.arch_flag, options.platform_flag);
     defer allocator.free(source);
     combined_boundaries = boundaries.items;
     defer combined_boundaries = null;
@@ -294,25 +154,25 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "verify-hir")) {
         try runVerifyHir(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-mir")) {
-        try runLowerMir(allocator, path, source, optimize);
+        try runLowerMir(allocator, path, source, options.checks.optimize);
     } else if (std.mem.eql(u8, command, "verify")) {
-        try runVerify(allocator, path, source, optimize);
+        try runVerify(allocator, path, source, options.checks.optimize);
     } else if (std.mem.eql(u8, command, "lower-ir")) {
         try runLowerIr(allocator, path, source);
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(allocator, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        try runEmitC(allocator, path, source, profile, checks, stub_asm);
+        try runEmitC(allocator, path, source, options.profile, options.checks, options.stub_asm);
     } else if (std.mem.eql(u8, command, "emit-map")) {
-        try runEmitMap(allocator, path, source, profile);
+        try runEmitMap(allocator, path, source, options.profile);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(allocator, path, source, checks, stub_asm, target_arch);
+        try runEmitLlvm(allocator, path, source, options.checks, options.stub_asm, options.targetArch());
     } else if (std.mem.eql(u8, command, "list-tests")) {
         try runListTests(allocator, path, source);
     } else if (is_emit_layout) {
-        try runEmitLayout(allocator, path, source, structs_flag.?);
+        try runEmitLayout(allocator, path, source, options.structs_flag.?);
     } else if (is_emit_c_struct) {
-        try runEmitCStruct(allocator, path, source, structs_flag.?);
+        try runEmitCStruct(allocator, path, source, options.structs_flag.?);
     } else {
         return failUsage();
     }
@@ -910,18 +770,28 @@ fn parseModuleOrReport(source: []const u8, allocator: std.mem.Allocator, diag: *
 test {
     _ = diagnostics;
     _ = eval;
+    _ = eval_tests;
     _ = ast;
     _ = backend;
     _ = hir;
+    _ = hir_tests;
     _ = ir;
+    _ = ir_tests;
     _ = lexer;
+    _ = lexer_tests;
     _ = loader;
     _ = lower_c;
+    _ = lower_c_tests;
     _ = lower_llvm;
+    _ = lower_llvm_tests;
     _ = mir;
+    _ = mir_tests;
     _ = monomorphize;
+    _ = monomorphize_tests;
     _ = async_lower;
     _ = parser;
+    _ = parser_tests;
     _ = sema;
+    _ = sema_tests;
     _ = spec_tests;
 }

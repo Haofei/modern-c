@@ -1,17 +1,37 @@
-//! C backend — atomic ordering + memory-fence helper classifiers.
+//! C backend atomic helpers.
 //!
-//! Pure (no `CEmitter` state) helpers that classify atomic memory orderings,
-//! map them to the C `__ATOMIC_*` constants, validate atomic payload types, and
-//! resolve `fence.*` calls to their runtime barrier helpers. Extracted verbatim
-//! from `lower_c.zig` as part of the Phase-2a structural split; behavior is
-//! unchanged. Call sites in the spine reference these through re-export aliases.
+//! Classifies atomic memory orderings, maps them to C `__ATOMIC_*` constants,
+//! validates atomic payload types, resolves `fence.*` helpers, and emits the
+//! small atomic builtin call forms through a narrow emitter callback context.
 
 const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const lower_c_model = @import("lower_c_model.zig");
+const lower_c_shape = @import("lower_c_shape.zig");
 
 const isIdentNamed = ast_query.isIdentNamed;
+const memberCallee = ast_query.memberCallee;
+const typeName = ast_query.typeName;
+const GlobalInfo = lower_c_model.GlobalInfo;
+const LocalInfo = lower_c_model.LocalInfo;
+const atomicPayloadOfType = lower_c_shape.atomicPayloadOfType;
+const genericChildType = lower_c_shape.genericChildType;
+
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
+pub const ExprIsPointerFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool;
+
+pub const EmitContext = struct {
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    globals: *const std.StringHashMap(GlobalInfo),
+    emit_ctx: *anyopaque,
+    emit_expr: EmitExprFn,
+    operand_emit_type: OperandEmitTypeFn,
+    expr_is_pointer: ExprIsPointerFn,
+};
 
 pub fn orderingArg(args: []ast.Expr) []const u8 {
     for (args) |arg| {
@@ -72,6 +92,107 @@ pub fn isAtomicIntegerPayload(name: []const u8) bool {
         std.mem.eql(u8, name, "i32") or
         std.mem.eql(u8, name, "i64") or
         std.mem.eql(u8, name, "isize");
+}
+
+// Payload type name of an `atomic<T>` place referenced by `expr`, or null if
+// `expr` is not an atomic local/global/member.
+pub fn atomicLocalPayload(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    const name = switch (expr.kind) {
+        .ident => |ident| ident.text,
+        .grouped => |inner| return atomicLocalPayload(ctx, inner.*, locals),
+        .member => {
+            if (ctx.operand_emit_type(ctx.emit_ctx, expr, locals)) |field_ty| {
+                if (genericChildType(field_ty, "atomic")) |child| return typeName(child);
+            }
+            return null;
+        },
+        else => return null,
+    };
+    if (locals) |local_set| {
+        if (local_set.get(name)) |info| {
+            if (info.source_ty) |source_ty| {
+                if (atomicPayloadOfType(source_ty)) |child| return typeName(child);
+            }
+        }
+    }
+    if (ctx.globals.get(name)) |global| {
+        if (global.source_ty) |source_ty| {
+            if (atomicPayloadOfType(source_ty)) |child| return typeName(child);
+        }
+    }
+    return null;
+}
+
+pub fn emitAtomicInitCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    const member = memberCallee(call.callee.*) orelse return false;
+    if (!isIdentNamed(member.base.*, "atomic")) return false;
+    if (!std.mem.eql(u8, member.name.text, "init")) return false;
+    if (call.args.len != 1) return false;
+    try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+    return true;
+}
+
+pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    const member = memberCallee(call.callee.*) orelse return false;
+    const payload = atomicLocalPayload(ctx, member.base.*, locals) orelse return false;
+    const op = member.name.text;
+    if (std.mem.eql(u8, op, "load")) {
+        const ordering = atomicOrderingArg(call.args, 0);
+        if (!isAtomicLoadOrdering(ordering)) return false;
+        const order_c = atomicOrderCConstant(ordering) orelse return false;
+        try ctx.out.appendSlice(ctx.allocator, "__atomic_load_n(");
+        try emitAtomicAddr(ctx, member.base.*, locals);
+        try ctx.out.print(ctx.allocator, ", {s})", .{order_c});
+        return true;
+    }
+    if (std.mem.eql(u8, op, "store")) {
+        if (call.args.len < 1) return false;
+        const ordering = atomicOrderingArg(call.args, 1);
+        if (!isAtomicStoreOrdering(ordering)) return false;
+        const order_c = atomicOrderCConstant(ordering) orelse return false;
+        try ctx.out.appendSlice(ctx.allocator, "__atomic_store_n(");
+        try emitAtomicAddr(ctx, member.base.*, locals);
+        try ctx.out.appendSlice(ctx.allocator, ", ");
+        try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+        try ctx.out.print(ctx.allocator, ", {s})", .{order_c});
+        return true;
+    }
+    if (std.mem.eql(u8, op, "fetch_add") or std.mem.eql(u8, op, "fetch_sub")) {
+        if (call.args.len < 1) return false;
+        if (!isAtomicIntegerPayload(payload)) return false;
+        const ordering = atomicOrderingArg(call.args, 1);
+        const order_c = atomicOrderCConstant(ordering) orelse return false;
+        const builtin = if (std.mem.eql(u8, op, "fetch_sub")) "__atomic_fetch_sub(" else "__atomic_fetch_add(";
+        try ctx.out.appendSlice(ctx.allocator, builtin);
+        try emitAtomicAddr(ctx, member.base.*, locals);
+        try ctx.out.appendSlice(ctx.allocator, ", ");
+        try ctx.emit_expr(ctx.emit_ctx, call.args[0], locals);
+        try ctx.out.print(ctx.allocator, ", {s})", .{order_c});
+        return true;
+    }
+    return false;
+}
+
+fn emitAtomicAddr(ctx: EmitContext, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {
+    if (ctx.expr_is_pointer(ctx.emit_ctx, base, locals)) {
+        try ctx.emit_expr(ctx.emit_ctx, base, locals);
+    } else {
+        try ctx.out.append(ctx.allocator, '&');
+        try emitAtomicBaseAddr(ctx, base, locals);
+    }
+}
+
+fn emitAtomicBaseAddr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    switch (expr.kind) {
+        .ident => |ident| try ctx.out.appendSlice(ctx.allocator, ident.text),
+        .grouped => |inner| try emitAtomicBaseAddr(ctx, inner.*, locals),
+        .member => |m| {
+            try emitAtomicBaseAddr(ctx, m.base.*, locals);
+            try ctx.out.appendSlice(ctx.allocator, if (ctx.expr_is_pointer(ctx.emit_ctx, m.base.*, locals)) "->" else ".");
+            try ctx.out.appendSlice(ctx.allocator, m.name.text);
+        },
+        else => return error.UnsupportedCEmission,
+    }
 }
 
 pub fn fenceHelperForCall(callee: ast.Expr) ?[]const u8 {

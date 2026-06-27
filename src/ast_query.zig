@@ -80,6 +80,77 @@ pub fn isUninitLiteral(expr: ast.Expr) bool {
     };
 }
 
+/// True when an expression tree contains a `?` result/nullable propagation expression.
+pub fn exprHandlesAnyResult(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .try_expr => true,
+        .grouped, .address_of, .deref => |inner| exprHandlesAnyResult(inner.*),
+        .block => |block| blockHandlesAnyResult(block),
+        .array_literal => |items| {
+            for (items) |item| {
+                if (exprHandlesAnyResult(item)) return true;
+            }
+            return false;
+        },
+        .struct_literal => |fields| {
+            for (fields) |field| {
+                if (exprHandlesAnyResult(field.value)) return true;
+            }
+            return false;
+        },
+        .unary => |node| exprHandlesAnyResult(node.expr.*),
+        .binary => |node| exprHandlesAnyResult(node.left.*) or exprHandlesAnyResult(node.right.*),
+        .cast => |node| exprHandlesAnyResult(node.value.*),
+        .call => |node| callHandlesAnyResult(node),
+        .index => |node| exprHandlesAnyResult(node.base.*) or exprHandlesAnyResult(node.index.*),
+        .slice => |node| exprHandlesAnyResult(node.base.*) or exprHandlesAnyResult(node.start.*) or exprHandlesAnyResult(node.end.*),
+        .member => |node| exprHandlesAnyResult(node.base.*),
+        else => false,
+    };
+}
+
+pub fn blockHandlesAnyResult(block: ast.Block) bool {
+    for (block.items) |stmt| {
+        if (stmtHandlesAnyResult(stmt)) return true;
+    }
+    return false;
+}
+
+pub fn stmtHandlesAnyResult(stmt: ast.Stmt) bool {
+    return switch (stmt.kind) {
+        .let_decl, .var_decl => |local| if (local.init) |expr| exprHandlesAnyResult(expr) else false,
+        .loop => |node| (if (node.iterable) |iterable| exprHandlesAnyResult(iterable) else false) or blockHandlesAnyResult(node.body),
+        .if_let => |node| exprHandlesAnyResult(node.value) or blockHandlesAnyResult(node.then_block) or (if (node.else_block) |else_block| blockHandlesAnyResult(else_block) else false),
+        .@"switch" => |node| switchHandlesAnyResult(node),
+        .unsafe_block, .comptime_block, .block => |block| blockHandlesAnyResult(block),
+        .contract_block => |contract| blockHandlesAnyResult(contract.block),
+        .@"return" => |maybe| if (maybe) |expr| exprHandlesAnyResult(expr) else false,
+        .@"break", .@"continue", .asm_stmt => false,
+        .@"defer", .expr, .assert => |expr| exprHandlesAnyResult(expr),
+        .assignment => |node| exprHandlesAnyResult(node.target) or exprHandlesAnyResult(node.value),
+    };
+}
+
+pub fn switchHandlesAnyResult(node: ast.Switch) bool {
+    if (exprHandlesAnyResult(node.subject)) return true;
+    for (node.arms) |arm| {
+        const handles = switch (arm.body) {
+            .block => |block| blockHandlesAnyResult(block),
+            .expr => |expr| exprHandlesAnyResult(expr),
+        };
+        if (handles) return true;
+    }
+    return false;
+}
+
+pub fn callHandlesAnyResult(call: anytype) bool {
+    if (exprHandlesAnyResult(call.callee.*)) return true;
+    for (call.args) |arg| {
+        if (exprHandlesAnyResult(arg)) return true;
+    }
+    return false;
+}
+
 /// True when `name` is a `Result` narrowing tag (`ok` / `err`).
 pub fn isResultNarrowingTag(name: []const u8) bool {
     return std.mem.eql(u8, name, "ok") or std.mem.eql(u8, name, "err");
@@ -229,6 +300,22 @@ pub fn isSatPreservingBinary(op: ast.BinaryOp) bool {
     };
 }
 
+/// True for the binary operators whose result a wrapping type preserves.
+pub fn isWrapPreservingBinary(op: ast.BinaryOp) bool {
+    return switch (op) {
+        .add, .sub, .mul, .bit_and, .bit_or, .bit_xor => true,
+        else => false,
+    };
+}
+
+/// True when any declaration attribute is `#[no_lang_trap]`.
+pub fn hasNoLangTrap(attrs: []const ast.Attr) bool {
+    for (attrs) |attr| {
+        if (std.meta.activeTag(attr.kind) == .no_lang_trap) return true;
+    }
+    return false;
+}
+
 // ── Intrinsic-call recognition with their result shapes ───────────────────────────────────
 
 const builtin_zero_span = diagnostics.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
@@ -295,6 +382,54 @@ pub fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| ident.text,
         .grouped => |inner| calleeIdentName(inner.*),
+        else => null,
+    };
+}
+
+/// A call expression, through grouping.
+pub const CallExpr = struct {
+    callee: *ast.Expr,
+    type_args: []ast.TypeExpr,
+    args: []ast.Expr,
+};
+
+pub fn callExpr(expr: ast.Expr) ?CallExpr {
+    return switch (expr.kind) {
+        .call => |node| .{ .callee = node.callee, .type_args = node.type_args, .args = node.args },
+        .grouped => |inner| callExpr(inner.*),
+        else => null,
+    };
+}
+
+/// A member expression (`base.name`), through grouping.
+pub const MemberExpr = struct { base: *ast.Expr, name: ast.Ident };
+
+pub fn memberExpr(expr: ast.Expr) ?MemberExpr {
+    return switch (expr.kind) {
+        .member => |node| .{ .base = node.base, .name = node.name },
+        .grouped => |inner| memberExpr(inner.*),
+        else => null,
+    };
+}
+
+/// An index expression (`base[index]`), through grouping.
+pub const IndexExpr = struct { base: *ast.Expr, index: *ast.Expr };
+
+pub fn indexExpr(expr: ast.Expr) ?IndexExpr {
+    return switch (expr.kind) {
+        .index => |node| .{ .base = node.base, .index = node.index },
+        .grouped => |inner| indexExpr(inner.*),
+        else => null,
+    };
+}
+
+/// A member callee expression (`base.name(...)`), through grouping.
+pub const MemberCallee = struct { base: *ast.Expr, name: ast.Ident };
+
+pub fn memberCallee(expr: ast.Expr) ?MemberCallee {
+    return switch (expr.kind) {
+        .member => |node| .{ .base = node.base, .name = node.name },
+        .grouped => |inner| memberCallee(inner.*),
         else => null,
     };
 }
@@ -439,6 +574,14 @@ pub fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCa
         if (std.mem.eql(u8, case.name.text, name)) return case;
     }
     return null;
+}
+
+pub fn dynCalleeMethodName(callee: ast.Expr) ?[]const u8 {
+    return switch (callee.kind) {
+        .member => |m| m.name.text,
+        .grouped => |inner| dynCalleeMethodName(inner.*),
+        else => null,
+    };
 }
 
 /// The access mode of an MMIO register: which of read/write the hardware permits. The

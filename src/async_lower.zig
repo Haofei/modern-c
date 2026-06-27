@@ -64,56 +64,35 @@
 
 const std = @import("std");
 const ast = @import("ast.zig");
+const async_ast = @import("async_ast.zig");
+const async_query = @import("async_query.zig");
 const diagnostics = @import("diagnostics.zig");
 
-const zspan = diagnostics.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
-
-fn id(text: []const u8) ast.Ident {
-    return .{ .text = text, .span = zspan };
-}
-
-fn ptr(arena: std.mem.Allocator, comptime T: type, value: T) !*T {
-    const p = try arena.create(T);
-    p.* = value;
-    return p;
-}
-
-fn nameType(arena: std.mem.Allocator, text: []const u8) !ast.TypeExpr {
-    _ = arena;
-    return .{ .span = zspan, .kind = .{ .name = id(text) } };
-}
-
-fn mutPtrType(arena: std.mem.Allocator, child: ast.TypeExpr) !ast.TypeExpr {
-    return .{ .span = zspan, .kind = .{ .pointer = .{ .mutability = .mut, .child = try ptr(arena, ast.TypeExpr, child) } } };
-}
-
-fn identExpr(text: []const u8) ast.Expr {
-    return .{ .span = zspan, .kind = .{ .ident = id(text) } };
-}
-
-fn intExpr(text: []const u8) ast.Expr {
-    return .{ .span = zspan, .kind = .{ .int_literal = text } };
-}
-
-fn memberExpr(arena: std.mem.Allocator, base: ast.Expr, field: []const u8) !ast.Expr {
-    return .{ .span = zspan, .kind = .{ .member = .{ .base = try ptr(arena, ast.Expr, base), .name = id(field) } } };
-}
-
-fn addrOf(arena: std.mem.Allocator, inner: ast.Expr) !ast.Expr {
-    return .{ .span = zspan, .kind = .{ .address_of = try ptr(arena, ast.Expr, inner) } };
-}
-
-fn selfMember(arena: std.mem.Allocator, field: []const u8) !ast.Expr {
-    return memberExpr(arena, identExpr("self"), field);
-}
-
-fn callExpr(arena: std.mem.Allocator, callee: []const u8, args: []ast.Expr) !ast.Expr {
-    return .{ .span = zspan, .kind = .{ .call = .{
-        .callee = try ptr(arena, ast.Expr, identExpr(callee)),
-        .type_args = &.{},
-        .args = args,
-    } } };
-}
+const addrOf = async_ast.addrOf;
+const arrayElemTypeName = async_ast.arrayElemTypeName;
+const assignStmt = async_ast.assignStmt;
+const awaitStepCall = async_query.awaitStepCall;
+const blockContainsAwait = async_query.blockContainsAwait;
+const boolPattern = async_ast.boolPattern;
+const callExpr = async_ast.callExpr;
+const dupIdents = async_ast.dupIdents;
+const id = async_ast.id;
+const identExpr = async_ast.identExpr;
+const ifElseBlock = async_ast.ifElseBlock;
+const ifNotReturnFalse = async_ast.ifNotReturnFalse;
+const ifStateEq = async_ast.ifStateEq;
+const intExpr = async_ast.intExpr;
+const isScalarIntName = async_ast.isScalarIntName;
+const mutPtrType = async_ast.mutPtrType;
+const nameType = async_ast.nameType;
+const paramCarrierTypeName = async_ast.paramCarrierTypeName;
+const ptr = async_ast.ptr;
+const selfMember = async_ast.selfMember;
+const stmtContainsAwait = async_query.stmtContainsAwait;
+const typeName = async_ast.typeName;
+const unwrapToAwaitCall = async_query.unwrapToAwaitCall;
+const whileTrueBlock = async_ast.whileTrueBlock;
+const zspan = async_ast.zspan;
 
 const Error = std.mem.Allocator.Error || error{AsyncLowerFailed};
 
@@ -215,43 +194,6 @@ fn boolPatternValue(arm: ast.SwitchArm) ?bool {
             .bool_literal => |b| b,
             else => null,
         },
-        else => null,
-    };
-}
-
-// Returns the type-name a `*TypeExpr` denotes if it is a bare nominal name, else null.
-fn typeName(t: ast.TypeExpr) ?[]const u8 {
-    return switch (t.kind) {
-        .name => |n| n.text,
-        else => null,
-    };
-}
-
-// E2: for an array type `[N]Elem`, return `Elem`'s bare type name (else null). Used so a struct
-// field / param of array-of-future type lets `await arr[i]` resolve to the element future type.
-fn arrayElemTypeName(t: ast.TypeExpr) ?[]const u8 {
-    return switch (t.kind) {
-        .array => |a| typeName(a.child.*),
-        else => null,
-    };
-}
-
-// E2: the bare CARRIER type name a PARAM type denotes for await-base resolution. Peels the pointer/
-// qualifier wrappers a param commonly carries (`*mut T`, `*T`, `[*]T`, `mut T`, slices) so that a
-// param declared `*mut [N]Fut` / `*mut Ctx` resolves to its underlying carrier:
-//   - lands on a bare `name`  -> that name (a struct/future type; lets `await p.fut` resolve),
-//   - lands on an `array`     -> the ELEMENT type name (lets `await p[i]` resolve, matching how a
-//                                struct's array FIELD is recorded under the field name).
-// This is the same convention `structTypeOf` consumes for `.member` (struct) and `.index` (element)
-// bases, so a param works uniformly whether the future lives behind a pointer or directly.
-fn paramCarrierTypeName(t: ast.TypeExpr) ?[]const u8 {
-    return switch (t.kind) {
-        .name => |n| n.text,
-        .array => |a| typeName(a.child.*),
-        .qualified => |q| paramCarrierTypeName(q.child.*),
-        .pointer => |p| paramCarrierTypeName(p.child.*),
-        .raw_many_pointer => |p| paramCarrierTypeName(p.child.*),
-        .slice => |s| paramCarrierTypeName(s.child.*),
         else => null,
     };
 }
@@ -401,7 +343,10 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
         while (fit.next()) |k| {
             var present = false;
             for (module.qualified_owners) |o| {
-                if (std.mem.eql(u8, o, k.*)) { present = true; break; }
+                if (std.mem.eql(u8, o, k.*)) {
+                    present = true;
+                    break;
+                }
             }
             if (!present) try owners.append(arena, k.*);
         }
@@ -416,14 +361,26 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
 // Coverage spans the ordinary stmt/expr shapes a driver uses (calls, control flow, decls). ----
 fn patchUfcsStmt(arena: std.mem.Allocator, s: ast.Stmt, futs: *std.StringHashMap(void)) void {
     switch (s.kind) {
-        .let_decl, .var_decl => |l| { if (l.init) |e| patchUfcsExpr(arena, e, futs); },
-        .assignment => |a| { patchUfcsExpr(arena, a.target, futs); patchUfcsExpr(arena, a.value, futs); },
+        .let_decl, .var_decl => |l| {
+            if (l.init) |e| patchUfcsExpr(arena, e, futs);
+        },
+        .assignment => |a| {
+            patchUfcsExpr(arena, a.target, futs);
+            patchUfcsExpr(arena, a.value, futs);
+        },
         .expr => |e| patchUfcsExpr(arena, e, futs),
-        .@"return" => |e| { if (e) |x| patchUfcsExpr(arena, x, futs); },
+        .@"return" => |e| {
+            if (e) |x| patchUfcsExpr(arena, x, futs);
+        },
         .assert => |e| patchUfcsExpr(arena, e, futs),
         .@"defer" => |e| patchUfcsExpr(arena, e, futs),
-        .block, .unsafe_block, .comptime_block => |b| { for (b.items) |it| patchUfcsStmt(arena, it, futs); },
-        .loop => |lp| { if (lp.iterable) |it| patchUfcsExpr(arena, it, futs); for (lp.body.items) |it| patchUfcsStmt(arena, it, futs); },
+        .block, .unsafe_block, .comptime_block => |b| {
+            for (b.items) |it| patchUfcsStmt(arena, it, futs);
+        },
+        .loop => |lp| {
+            if (lp.iterable) |it| patchUfcsExpr(arena, it, futs);
+            for (lp.body.items) |it| patchUfcsStmt(arena, it, futs);
+        },
         .if_let => |il| {
             patchUfcsExpr(arena, il.value, futs);
             for (il.then_block.items) |it| patchUfcsStmt(arena, it, futs);
@@ -432,11 +389,15 @@ fn patchUfcsStmt(arena: std.mem.Allocator, s: ast.Stmt, futs: *std.StringHashMap
         .@"switch" => |sw| {
             patchUfcsExpr(arena, sw.subject, futs);
             for (sw.arms) |arm| switch (arm.body) {
-                .block => |b| { for (b.items) |it| patchUfcsStmt(arena, it, futs); },
+                .block => |b| {
+                    for (b.items) |it| patchUfcsStmt(arena, it, futs);
+                },
                 .expr => |e| patchUfcsExpr(arena, e, futs),
             };
         },
-        .contract_block => |cb| { for (cb.block.items) |it| patchUfcsStmt(arena, it, futs); },
+        .contract_block => |cb| {
+            for (cb.block.items) |it| patchUfcsStmt(arena, it, futs);
+        },
         else => {},
     }
 }
@@ -445,12 +406,23 @@ fn patchUfcsStmt(arena: std.mem.Allocator, s: ast.Stmt, futs: *std.StringHashMap
 // "poll" }`, overwrite it with `ident(G__poll)`.
 fn patchUfcsExpr(arena: std.mem.Allocator, e: ast.Expr, futs: *std.StringHashMap(void)) void {
     switch (e.kind) {
-        .grouped, .address_of, .deref => |inner| { patchUfcsOne(arena, inner, futs); },
+        .grouped, .address_of, .deref => |inner| {
+            patchUfcsOne(arena, inner, futs);
+        },
         .unary => |u| patchUfcsOne(arena, u.expr, futs),
-        .binary => |b| { patchUfcsOne(arena, b.left, futs); patchUfcsOne(arena, b.right, futs); },
+        .binary => |b| {
+            patchUfcsOne(arena, b.left, futs);
+            patchUfcsOne(arena, b.right, futs);
+        },
         .cast => |c| patchUfcsOne(arena, c.value, futs),
-        .call => |c| { patchUfcsOne(arena, c.callee, futs); for (c.args) |*a| patchUfcsOne(arena, a, futs); },
-        .index => |ix| { patchUfcsOne(arena, ix.base, futs); patchUfcsOne(arena, ix.index, futs); },
+        .call => |c| {
+            patchUfcsOne(arena, c.callee, futs);
+            for (c.args) |*a| patchUfcsOne(arena, a, futs);
+        },
+        .index => |ix| {
+            patchUfcsOne(arena, ix.base, futs);
+            patchUfcsOne(arena, ix.index, futs);
+        },
         .member => |m| patchUfcsOne(arena, m.base, futs),
         .try_expr => |t| patchUfcsOne(arena, t.operand, futs),
         else => {},
@@ -2280,8 +2252,7 @@ fn resolveAwait(low: *Lowerer, span: diagnostics.Span, e: ast.Expr) Error!Resolv
             }
         }
     }
-    const fut_type = futureTypeOf(low, e) orelse return low.fail(span,
-        "E_ASYNC_AWAIT_UNRESOLVED: `await e` requires `e`'s future type be resolvable without sema — a call `g(args)`/`Owner.m(args)`, a parenthesized such expr, a struct-FIELD future `base.fut`, or an array element `arr[i]` (base a param/field of a known struct/array-of-future type); `*dyn Future` await and other expression shapes are deferred (Phase E)", .{});
+    const fut_type = futureTypeOf(low, e) orelse return low.fail(span, "E_ASYNC_AWAIT_UNRESOLVED: `await e` requires `e`'s future type be resolvable without sema — a call `g(args)`/`Owner.m(args)`, a parenthesized such expr, a struct-FIELD future `base.fut`, or an array element `arr[i]` (base a param/field of a known struct/array-of-future type); `*dyn Future` await and other expression shapes are deferred (Phase E)", .{});
     const take = try std.fmt.allocPrint(low.arena, "{s}_take_result", .{fut_type});
     const cancel = try std.fmt.allocPrint(low.arena, "{s}_cancel", .{fut_type});
     // The result type is unknown here; callers fall back to the binding's `: T` annotation.
@@ -2345,93 +2316,6 @@ fn collectArm(low: *Lowerer, blk: ast.Block, field_base: usize, steps: *std.Arra
             return low.fail(stmt.span, "E_ASYNC_BRANCH_UNSUPPORTED: in async v0 an if/else arm may contain only a LEADING run of `let x = await call;` then straight-line code (no awaits nested in loops, switches, or deeper control flow)", .{});
         try tail.append(arena, stmt);
     }
-}
-
-// `let x = await E;` (or `var`) — return the awaited EXPRESSION `E` if this stmt is exactly that.
-// (E2: `E` is any future-valued expr — a call, a struct-field future, an index, a parenthesized
-// such expr — not only a plain call. `resolveAwait`/`futureTypeOf` decide if its type is resolvable.)
-fn awaitStepCall(stmt: ast.Stmt) ?ast.Expr {
-    const ld = switch (stmt.kind) {
-        .let_decl, .var_decl => |l| l,
-        else => return null,
-    };
-    const init_expr = ld.init orelse return null;
-    return switch (init_expr.kind) {
-        .await_expr => |inner| inner.*,
-        // `let x = (await c)?;` — a try-propagating await. The parens make a `grouped` node, so
-        // unwrap try -> grouped* -> await -> the awaited expr.
-        .try_expr => |t| unwrapToAwaitCall(t.operand.*),
-        else => null,
-    };
-}
-
-// Unwrap `grouped`/`await` layers to the awaited EXPRESSION: `(await g(x))` / `await g(x)` -> `g(x)`,
-// `(await ctx.fut)` -> `ctx.fut`. (E2: the awaited inner may be any future-valued expr.)
-fn unwrapToAwaitCall(e: ast.Expr) ?ast.Expr {
-    return switch (e.kind) {
-        .await_expr => |inner| inner.*,
-        .grouped => |inner| unwrapToAwaitCall(inner.*),
-        else => null,
-    };
-}
-
-// Does the statement contain an `await` anywhere (used to reject awaits outside the leading run)?
-fn stmtContainsAwait(stmt: ast.Stmt) bool {
-    return switch (stmt.kind) {
-        .let_decl, .var_decl => |l| if (l.init) |e| exprContainsAwait(e) else false,
-        .@"return" => |e| if (e) |x| exprContainsAwait(x) else false,
-        .expr => |e| exprContainsAwait(e),
-        .assignment => |a| exprContainsAwait(a.target) or exprContainsAwait(a.value),
-        .assert => |e| exprContainsAwait(e),
-        .@"defer" => |e| exprContainsAwait(e),
-        // Any control-flow construct in v0 conservatively "contains await" only if it actually
-        // does; but v0 forbids awaits inside them, so a true here yields a clear diagnostic.
-        else => stmtControlContainsAwait(stmt),
-    };
-}
-
-fn stmtControlContainsAwait(stmt: ast.Stmt) bool {
-    return switch (stmt.kind) {
-        .block, .unsafe_block, .comptime_block => |b| blockContainsAwait(b),
-        .loop => |l| blockContainsAwait(l.body) or (if (l.iterable) |it| exprContainsAwait(it) else false),
-        .if_let => |il| exprContainsAwait(il.value) or blockContainsAwait(il.then_block) or (if (il.else_block) |eb| blockContainsAwait(eb) else false),
-        .@"switch" => |sw| blk: {
-            if (exprContainsAwait(sw.subject)) break :blk true;
-            for (sw.arms) |arm| {
-                const has = switch (arm.body) {
-                    .block => |b| blockContainsAwait(b),
-                    .expr => |e| exprContainsAwait(e),
-                };
-                if (has) break :blk true;
-            }
-            break :blk false;
-        },
-        .contract_block => |cb| blockContainsAwait(cb.block),
-        else => false,
-    };
-}
-
-fn blockContainsAwait(b: ast.Block) bool {
-    for (b.items) |s| if (stmtContainsAwait(s)) return true;
-    return false;
-}
-
-fn exprContainsAwait(e: ast.Expr) bool {
-    return switch (e.kind) {
-        .await_expr => true,
-        .grouped, .address_of, .deref => |inner| exprContainsAwait(inner.*),
-        .unary => |u| exprContainsAwait(u.expr.*),
-        .binary => |b| exprContainsAwait(b.left.*) or exprContainsAwait(b.right.*),
-        .cast => |c| exprContainsAwait(c.value.*),
-        .call => |c| blk: {
-            for (c.args) |a| if (exprContainsAwait(a)) break :blk true;
-            break :blk exprContainsAwait(c.callee.*);
-        },
-        .index => |ix| exprContainsAwait(ix.base.*) or exprContainsAwait(ix.index.*),
-        .member => |m| exprContainsAwait(m.base.*),
-        .try_expr => |t| exprContainsAwait(t.operand.*),
-        else => false,
-    };
 }
 
 // Emit the suspend-or-take prologue of an await step into `blk`:
@@ -2630,76 +2514,6 @@ fn stmtFormsSelfBorrow(s: ast.Stmt) bool {
     };
 }
 
-fn assignStmt(target: ast.Expr, value: ast.Expr) ast.Stmt {
-    return .{ .span = zspan, .kind = .{ .assignment = .{ .target = target, .value = value } } };
-}
-
-fn boolPattern(value: bool) ast.Pattern {
-    return .{ .span = zspan, .kind = .{ .literal = .{ .span = zspan, .kind = .{ .bool_literal = value } } } };
-}
-
-// Build a boolean `if cond { body }` exactly as the parser desugars it: a `switch` on the bool
-// with a `true => { body }` arm and an empty `false => {}` arm. This keeps generated control flow
-// on the same lowering path the backends already exercise (no new construct).
-fn ifCondBlock(arena: std.mem.Allocator, cond: ast.Expr, body: []ast.Stmt) Error!ast.Stmt {
-    var arms = try arena.alloc(ast.SwitchArm, 2);
-    var true_pats = try arena.alloc(ast.Pattern, 1);
-    true_pats[0] = boolPattern(true);
-    var false_pats = try arena.alloc(ast.Pattern, 1);
-    false_pats[0] = boolPattern(false);
-    arms[0] = .{ .patterns = true_pats, .body = .{ .block = .{ .span = zspan, .items = body } } };
-    arms[1] = .{ .patterns = false_pats, .body = .{ .block = .{ .span = zspan, .items = &.{} } } };
-    return .{ .span = zspan, .kind = .{ .@"switch" = .{ .subject = cond, .arms = arms } } };
-}
-
-// `while true { <body> }` — the back-edge wrapper for a loop-bearing poll. A body state sets
-// `self.state` BACKWARD (to the loop head) and the while re-runs the if-state chain from the top.
-fn whileTrueBlock(body: []ast.Stmt) Error!ast.Stmt {
-    return .{ .span = zspan, .kind = .{ .loop = .{
-        .kind = .@"while",
-        .label = null,
-        .iterable = .{ .span = zspan, .kind = .{ .bool_literal = true } },
-        .body = .{ .span = zspan, .items = body },
-    } } };
-}
-
-// `if cond { then } else { els }` as the parser's 2-arm bool `switch` desugar.
-fn ifElseBlock(arena: std.mem.Allocator, cond: ast.Expr, then_body: []ast.Stmt, else_body: []ast.Stmt) Error!ast.Stmt {
-    var arms = try arena.alloc(ast.SwitchArm, 2);
-    var true_pats = try arena.alloc(ast.Pattern, 1);
-    true_pats[0] = boolPattern(true);
-    var false_pats = try arena.alloc(ast.Pattern, 1);
-    false_pats[0] = boolPattern(false);
-    arms[0] = .{ .patterns = true_pats, .body = .{ .block = .{ .span = zspan, .items = then_body } } };
-    arms[1] = .{ .patterns = false_pats, .body = .{ .block = .{ .span = zspan, .items = else_body } } };
-    return .{ .span = zspan, .kind = .{ .@"switch" = .{ .subject = cond, .arms = arms } } };
-}
-
-// `if !r { return false; }`
-fn ifNotReturnFalse(arena: std.mem.Allocator) Error!ast.Stmt {
-    const not_r: ast.Expr = .{ .span = zspan, .kind = .{ .unary = .{ .op = .logical_not, .expr = try ptr(arena, ast.Expr, identExpr("r")) } } };
-    var body = try arena.alloc(ast.Stmt, 1);
-    body[0] = .{ .span = zspan, .kind = .{ .@"return" = .{ .span = zspan, .kind = .{ .bool_literal = false } } } };
-    return ifCondBlock(arena, not_r, body);
-}
-
-// `if self.state == N { <body> }`
-fn ifStateEq(arena: std.mem.Allocator, n: usize, body: []ast.Stmt) Error!ast.Stmt {
-    const n_str = try std.fmt.allocPrint(arena, "{d}", .{n});
-    const cond: ast.Expr = .{ .span = zspan, .kind = .{ .binary = .{
-        .op = .eq,
-        .left = try ptr(arena, ast.Expr, try selfMember(arena, "state")),
-        .right = try ptr(arena, ast.Expr, intExpr(n_str)),
-    } } };
-    return ifCondBlock(arena, cond, body);
-}
-
-fn dupIdents(arena: std.mem.Allocator, names: []const []const u8) Error![]ast.Ident {
-    var out = try arena.alloc(ast.Ident, names.len);
-    for (names, 0..) |n, i| out[i] = id(n);
-    return out;
-}
-
 // A definite-init zero for a captured SCALAR field, or null for a non-scalar (a `Result`, struct,
 // pointer, …). The constructor zero-inits scalar fields only; non-scalar fields are left unwritten,
 // which is sound because (a) sema def-init tracks only scalar `uninit` vars, not aggregate fields,
@@ -2712,12 +2526,6 @@ fn zeroFor(low: *Lowerer, ty: ast.TypeExpr) Error!?ast.Expr {
     if (std.mem.eql(u8, tn, "bool")) return .{ .span = zspan, .kind = .{ .bool_literal = false } };
     if (isScalarIntName(tn)) return intExpr("0");
     return null; // a struct/aggregate nominal -> not def-init-tracked, skip
-}
-
-fn isScalarIntName(tn: []const u8) bool {
-    const names = [_][]const u8{ "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "usize", "isize", "char" };
-    for (names) |n| if (std.mem.eql(u8, tn, n)) return true;
-    return false;
 }
 
 // Append `self.<field> = <zero>;` only when the field type has a scalar zero (see zeroFor).

@@ -1,17 +1,189 @@
 const std = @import("std");
 
+const array_len = @import("array_len.zig");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
-const type_layout = @import("layout.zig");
 const numeric = @import("numeric.zig");
-const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const loader = @import("loader.zig");
 const sema_move = @import("sema_move.zig");
 
-// Scalar type layout shared across the passes (see `layout.zig`).
-const scalarLayout = type_layout.scalarLayout;
+const sema_model = @import("sema_model.zig");
+const sema_builtin = @import("sema_builtin.zig");
+const sema_call = @import("sema_call.zig");
+const sema_decl = @import("sema_decl.zig");
+const sema_expr = @import("sema_expr.zig");
+const sema_flow = @import("sema_flow.zig");
+const sema_lookup = @import("sema_lookup.zig");
+const sema_reflect = @import("sema_reflect.zig");
+const sema_type = @import("sema_type.zig");
+
+pub const Context = sema_model.Context;
+pub const MoveSlot = sema_model.MoveSlot;
+pub const TypeClass = sema_model.TypeClass;
+const MmioStruct = sema_model.MmioStruct;
+const MmioFieldInfo = sema_model.MmioFieldInfo;
+const StructInfo = sema_model.StructInfo;
+const LayoutFieldInfo = sema_model.LayoutFieldInfo;
+const EnumInfo = sema_model.EnumInfo;
+const UnionInfo = sema_model.UnionInfo;
+const FunctionInfo = sema_model.FunctionInfo;
+const GlobalInfo = sema_model.GlobalInfo;
+const UnsafeContracts = sema_model.UnsafeContracts;
+const LocalInfo = sema_model.LocalInfo;
+const BindingOrigin = sema_model.BindingOrigin;
+const AddressOrigin = sema_model.AddressOrigin;
+const Scope = sema_model.Scope;
+const TypeMode = sema_model.TypeMode;
+const ReflectEnv = sema_reflect.ReflectEnv;
+
+const arithmeticDomainsImplicitlyMix = sema_type.arithmeticDomainsImplicitlyMix;
+const addressOfOperand = sema_expr.addressOfOperand;
+const arrayLiteralItems = sema_expr.arrayLiteralItems;
+const backendNameAttr = sema_decl.backendNameAttr;
+const byteViewCallReturnClass = sema_call.byteViewCallReturnClass;
+const blockContainsTry = sema_flow.blockContainsTry;
+const blockTerminatesNormally = sema_flow.blockTerminatesNormally;
+const callContainsTry = sema_flow.callContainsTry;
+const classifyType = sema_type.classifyType;
+pub const classifyTypeCtx = sema_type.classifyTypeCtx;
+const comptimeErrorMessage = sema_builtin.comptimeErrorMessage;
+const comptimeUsizeValue = array_len.comptimeUsizeValue;
+const constGetIndexArg = array_len.constGetIndexArg;
+const constIndexLiteral = array_len.constIndexLiteral;
+const declHasTrivialDrop = sema_decl.declHasTrivialDrop;
+const declIsPublic = sema_decl.declIsPublic;
+const declName = sema_decl.declName;
+const divModProvablySafe = sema_type.divModProvablySafe;
+const domainOperationArgCount = sema_type.domainOperationArgCount;
+const equalityOperandsCompatible = sema_type.equalityOperandsCompatible;
+const enumLiteralName = sema_builtin.enumLiteralName;
+const exprContainsTry = sema_flow.exprContainsTry;
+const findImplMethod = sema_decl.findImplMethod;
+const findTraitMethod = sema_decl.findTraitMethod;
+const fixedArrayType = array_len.fixedArrayType;
+const genericHasStoragePayload = sema_builtin.genericHasStoragePayload;
+const genericHoldsArgsByValue = sema_builtin.genericHoldsArgsByValue;
+const genericTypeExpectedArgs = sema_builtin.genericTypeExpectedArgs;
+const hasBoundedContext = sema_decl.hasBoundedContext;
+const hasIrqContext = sema_decl.hasIrqContext;
+const hasMaySleep = sema_decl.hasMaySleep;
+const hasNaked = sema_decl.hasNaked;
+const hasNoLangTrap = sema_decl.hasNoLangTrap;
+const isArithmeticBinary = sema_type.isArithmeticBinary;
+const isArithmeticDomain = sema_type.isArithmeticDomain;
+const isArithmeticDomainTypeName = sema_builtin.isArithmeticDomainTypeName;
+const isArithmeticOperand = sema_type.isArithmeticOperand;
+const isArrayLiteral = sema_expr.isArrayLiteral;
+const isBitwiseBinary = sema_type.isBitwiseBinary;
+const isBitwiseOperand = sema_type.isBitwiseOperand;
+const isBitcastCallName = sema_builtin.isBitcastCallName;
+const isBuiltinFunctionName = sema_builtin.isBuiltinFunctionName;
+const isBuiltinNamespaceMember = sema_builtin.isBuiltinNamespaceMember;
+const isCAbiOpaqueBoundary = sema_builtin.isCAbiOpaqueBoundary;
+const isCheckedInt = sema_type.isCheckedInt;
+const isCheckedSigned = sema_type.isCheckedSigned;
+const isCheckedUnsigned = sema_type.isCheckedUnsigned;
+const isComparisonBinary = sema_type.isComparisonBinary;
+const isComptimeForbiddenCall = sema_builtin.isComptimeForbiddenCall;
+const isConstStorageType = sema_type.isConstStorageType;
+const isCVoidPointerClass = sema_type.isCVoidPointerClass;
+const isDeclassifyCallName = sema_builtin.isDeclassifyCallName;
+const isDerefablePointerClass = sema_type.isDerefablePointerClass;
+const isDiagnosticNeutralOperand = sema_type.isDiagnosticNeutralOperand;
+const isDmaBufMode = sema_builtin.isDmaBufMode;
+const isFixedUnsignedMmioWidth = sema_type.isFixedUnsignedMmioWidth;
+const isFloat = sema_type.isFloat;
+const isFloatish = sema_type.isFloatish;
+pub const isForgetUncheckedCall = sema_builtin.isForgetUncheckedCall;
+const isForbiddenBitwisePolicy = sema_type.isForbiddenBitwisePolicy;
+const isForbiddenOrderingDomain = sema_type.isForbiddenOrderingDomain;
+pub const isIntegerLike = sema_type.isIntegerLike;
+const isNullableValue = sema_type.isNullableValue;
+const isIndexType = sema_type.isIndexType;
+const isIndexableBase = sema_type.isIndexableBase;
+const isForIterableBase = sema_type.isForIterableBase;
+const isConditionType = sema_type.isConditionType;
+const isConversionName = sema_type.isConversionName;
+const isCounterOperationName = sema_type.isCounterOperationName;
+const isTryOperand = sema_type.isTryOperand;
+const tryResultType = sema_type.tryResultType;
+const isTypeStaticMember = sema_call.isTypeStaticMember;
+const isFloatScalarName = sema_type.isFloatScalarName;
+const isIntegerScalarName = sema_type.isIntegerScalarName;
+const isNarrowingConversionName = sema_type.isNarrowingConversionName;
+const isOpaqueAddressClass = sema_type.isOpaqueAddressClass;
+const isAddressClass = sema_type.isAddressClass;
+const isBitcastLayoutClass = sema_type.isBitcastLayoutClass;
+const isSerialOperationName = sema_type.isSerialOperationName;
+const isKnownGenericTypeName = sema_builtin.isKnownGenericTypeName;
+const isKnownLayoutType = sema_lookup.isKnownLayoutType;
+const isKnownTypeName = sema_lookup.isKnownTypeName;
+const isLanguageTrapKind = sema_builtin.isLanguageTrapKind;
+const isLogicalBinary = sema_type.isLogicalBinary;
+const isMmioAccessMode = sema_builtin.isMmioAccessMode;
+const isNoTrapArithmeticDomainOp = sema_type.isNoTrapArithmeticDomainOp;
+const isNonNullPointerLike = sema_type.isNonNullPointerLike;
+const isNullLiteral = sema_expr.isNullLiteral;
+const isNonTrappingFloatOp = sema_type.isNonTrappingFloatOp;
+const isNullablePointerLike = sema_type.isNullablePointerLike;
+const isOrderedComparisonOperand = sema_type.isOrderedComparisonOperand;
+const isPointerLikeClass = sema_type.isPointerLikeClass;
+pub const isPointerLike = sema_type.isPointerLike;
+const isPointerArithmeticBinary = sema_type.isPointerArithmeticBinary;
+const isPackedBitsTypeName = sema_lookup.isPackedBitsTypeName;
+const isRuntimePointerDerefClass = sema_type.isRuntimePointerDerefClass;
+const isSingleObjectPointerLike = sema_type.isSingleObjectPointerLike;
+const isStaticGlobalInitializer = sema_expr.isStaticGlobalInitializer;
+const isStructLiteral = sema_expr.isStructLiteral;
+const maybeUninitPayloadType = sema_type.maybeUninitPayloadType;
+pub const nullableInnerType = sema_type.nullableInnerType;
+const isTrapCall = sema_builtin.isTrapCall;
+const isTrapBinary = sema_type.isTrapBinary;
+const isTrappingConversionCall = sema_builtin.isTrappingConversionCall;
+const isTypeName = sema_builtin.isTypeName;
+const isUnsafeOperationCall = sema_builtin.isUnsafeOperationCall;
+const isUnwrapCall = sema_builtin.isUnwrapCall;
+const isValueLevelDecl = sema_decl.isValueLevelDecl;
+const mathBuiltinCallReturnClass = sema_builtin.mathBuiltinCallReturnClass;
+const mathBuiltinFloatClass = sema_builtin.mathBuiltinFloatClass;
+const mergeArithmetic = sema_type.mergeArithmetic;
+const knownMmioStructName = sema_lookup.knownMmioStructName;
+const knownPackedBitsName = sema_lookup.knownPackedBitsName;
+const layoutFieldInfo = sema_lookup.layoutFieldInfo;
+const parseArrayLen = array_len.parseArrayLen;
+const sameTypeSyntax = sema_type.sameTypeSyntax;
+const viewElementType = sema_type.viewElementType;
+const viewType = sema_type.viewType;
+const ReflectionKind = sema_builtin.ReflectionKind;
+const ReflectionTarget = sema_builtin.ReflectionTarget;
+const reflectionGenericHasWrongArity = sema_builtin.reflectionGenericHasWrongArity;
+const reflectionKind = sema_builtin.reflectionKind;
+const reflectionRequiresField = sema_builtin.reflectionRequiresField;
+const reflectionReturnClass = sema_builtin.reflectionReturnClass;
+const reflectionTypeExprFromArg = sema_builtin.reflectionTypeExprFromArg;
+const reflectionFieldFromCall = sema_reflect.reflectionFieldFromCall;
+const reflectionTypeFromCall = sema_reflect.reflectionTypeFromCall;
+const reduceCallReturnClass = sema_call.reduceCallReturnClass;
+const resolveAliasType = sema_type.resolveAliasType;
+pub const resultPayloadType = sema_type.resultPayloadType;
+const resultLocalHandledLater = sema_flow.resultLocalHandledLater;
+const stmtContainsTry = sema_flow.stmtContainsTry;
+const structLiteralFields = sema_expr.structLiteralFields;
+const stmtHandlesResultLocal = sema_flow.stmtHandlesResultLocal;
+const stmtTerminatesNormally = sema_flow.stmtTerminatesNormally;
+const switchBoolLiteralValue = sema_flow.switchBoolLiteralValue;
+const switchContainsTry = sema_flow.switchContainsTry;
+const switchCoversAllEnumCases = sema_flow.switchCoversAllEnumCases;
+const switchCoversAllUnionCases = sema_flow.switchCoversAllUnionCases;
+const switchTerminatesNormally = sema_flow.switchTerminatesNormally;
+const staticTypeBaseClass = sema_call.staticTypeBaseClass;
+const traitIsObjectSafe = sema_decl.traitIsObjectSafe;
+const typeStaticCallReturnClass = sema_call.typeStaticCallReturnClass;
+const secretPayloadType = sema_builtin.secretPayloadType;
+const uncheckedRequirement = sema_builtin.uncheckedRequirement;
+pub const isDropCall = sema_builtin.isDropCall;
 
 // Pure AST-shape queries shared with `mir.zig`/`lower_c.zig` (see `ast_query.zig`). The shared
 // `isIdentNamed` is grouping-transparent (was not, here, before consolidation).
@@ -24,17 +196,17 @@ const mmioMapCallPayloadType = ast_query.mmioMapCallPayloadType;
 const exprIsIdentNamed = ast_query.exprIsIdentNamed;
 const isResultNarrowingTag = ast_query.isResultNarrowingTag;
 const localDeclaresName = ast_query.localDeclaresName;
-const resultIfLetHandlesLocal = ast_query.resultIfLetHandlesLocal;
-const resultSwitchHandlesLocal = ast_query.resultSwitchHandlesLocal;
-const boolLiteralValue = ast_query.boolLiteralValue;
 const isUninitLiteral = ast_query.isUninitLiteral;
 const typeName = ast_query.typeName;
 const isRawManyPointerType = ast_query.isRawManyPointerType;
 const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
-const isArithmeticLayoutGeneric = ast_query.isArithmeticLayoutGeneric;
 const mmioPointee = ast_query.mmioPointee;
 const reduceCallKind = ast_query.reduceCallKind;
 const constU8SliceType = ast_query.constU8SliceType;
+const callExpr = ast_query.callExpr;
+const calleeIdentName = ast_query.calleeIdentName;
+const memberCallee = ast_query.memberCallee;
+const memberExpr = ast_query.memberExpr;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const DmaBufInfo = ast_query.DmaBufInfo;
 const dmaBufInfo = ast_query.dmaBufInfo;
@@ -45,10 +217,8 @@ const LiteralValue = numeric.LiteralValue;
 const IntBounds = numeric.IntBounds;
 const maxUnsigned = numeric.maxUnsigned;
 const signedBounds = numeric.signedBounds;
-const parseUsizeLiteral = numeric.parseUsizeLiteral;
-const parseCharLiteral = numeric.parseCharLiteral;
 const integerLiteralValue = numeric.integerLiteralValue;
-const alignForward = numeric.alignForward;
+const atomicPayloadType = sema_type.atomicPayloadType;
 
 pub const Checker = struct {
     reporter: *diagnostics.Reporter,
@@ -230,6 +400,7 @@ pub const Checker = struct {
             .tagged_unions = &tagged_unions,
             .enums = &enums,
             .aliases = &type_aliases,
+            .const_fns = &const_fns,
         };
         self.reflect_env = &reflect_env;
         defer self.reflect_env = null;
@@ -237,12 +408,13 @@ pub const Checker = struct {
         var const_globals = std.StringHashMap(eval.ComptimeValue).init(self.reporter.allocator);
         defer eval.deinitConstGlobals(self.reporter.allocator, &const_globals);
         eval.collectConstGlobalsWithOptions(self.reporter.allocator, module, &const_fns, &const_globals, .{
-            .reflect = comptimeReflectThunk,
-            .reflect_ctx = self,
+            .reflect = sema_reflect.comptimeReflectThunk,
+            .reflect_ctx = &reflect_env,
         }) catch {
             self.oom = true;
         };
         self.const_globals = &const_globals;
+        reflect_env.const_globals = &const_globals;
         defer self.const_globals = null;
 
         var const_global_widths = std.StringHashMap(u16).init(self.reporter.allocator);
@@ -985,8 +1157,10 @@ pub const Checker = struct {
     fn seedComptimeScope(self: *Checker, scope: *eval.ComptimeScope) void {
         scope.funcs = self.const_fns;
         scope.globals = self.const_globals;
-        scope.reflect = comptimeReflectThunk;
-        scope.reflect_ctx = self;
+        if (self.reflect_env) |env| {
+            scope.reflect = sema_reflect.comptimeReflectThunk;
+            scope.reflect_ctx = @constCast(env);
+        }
         if (self.const_global_widths) |widths| {
             var it = widths.iterator();
             while (it.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
@@ -1543,256 +1717,6 @@ pub const Checker = struct {
                 else => {},
             }
         }
-    }
-
-    // --- Comptime reflection layout model (section 22) ----------------------
-    //
-    // Folds layout reflection to a constant ONLY where the result is provably
-    // the same as the C-ABI value clang computes for the lowered type: scalar,
-    // pointer, fixed-array, enum/packed repr, and ordered struct/field layouts.
-    // Anything else returns null, so the assertion simply does not fold (no
-    // false positive/negative).
-
-    // eval.ReflectFn thunk: `self` is passed as the opaque context.
-    fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
-        const self: *Checker = @ptrCast(@alignCast(ctx orelse return null));
-        return self.comptimeReflect(call);
-    }
-
-    fn comptimeReflect(self: *Checker, call: ast.Expr) ?i128 {
-        const node = switch (call.kind) {
-            .call => |n| n,
-            else => return null,
-        };
-        const kind = reflectionKind(node.callee.*) orelse return null;
-        const ty = reflectionTypeFromCall(node) orelse return null;
-        return switch (kind) {
-            .size => self.comptimeSizeOf(ty, 0),
-            .alignment => self.comptimeAlignOf(ty, 0),
-            .field_offset => self.comptimeFieldOffset(ty, reflectionFieldFromCall(node) orelse return null, 0),
-            .bit_offset => self.comptimeBitOffset(ty, reflectionFieldFromCall(node) orelse return null, 0),
-            .repr => self.comptimeReprOf(ty, 0),
-            else => null,
-        };
-    }
-
-    fn comptimeSizeOf(self: *Checker, ty: ast.TypeExpr, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        switch (ty.kind) {
-            .name => |name| {
-                if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
-                if (self.reflect_env) |env| {
-                    if (env.aliases.get(name.text)) |aliased| return self.comptimeSizeOf(aliased, depth + 1);
-                    if (env.structs.get(name.text)) |info| return self.comptimeStructSize(info, depth);
-                    if (env.tagged_unions.get(name.text)) |info| return self.comptimeTaggedUnionSize(info, depth);
-                    if (env.enums.get(name.text)) |info| {
-                        const repr = info.repr orelse simpleNameType("isize", ty.span);
-                        return self.comptimeSizeOf(repr, depth + 1);
-                    }
-                }
-                return null;
-            },
-            .pointer, .raw_many_pointer => return 8,
-            .slice => return 16,
-            .generic => |g| {
-                if (isPointerLikeGeneric(g.base.text)) return 8;
-                if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
-                if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeSizeOf(g.args[0], depth + 1);
-                if ((std.mem.eql(u8, g.base.text, "atomic") or std.mem.eql(u8, g.base.text, "MaybeUninit")) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
-                if (isArithmeticLayoutGeneric(g.base.text) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
-                return null;
-            },
-            .array => |node| {
-                const len = parseArrayLen(node.len, self.const_fns, self.const_globals) orelse return null;
-                const elem = self.comptimeSizeOf(node.child.*, depth + 1) orelse return null;
-                return @as(i128, @intCast(len)) * elem;
-            },
-            .qualified => |node| return self.comptimeSizeOf(node.child.*, depth + 1),
-            else => return null,
-        }
-    }
-
-    fn comptimeAlignOf(self: *Checker, ty: ast.TypeExpr, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        switch (ty.kind) {
-            .name => |name| {
-                if (scalarLayout(name.text)) |layout| return @intCast(layout.alignment);
-                if (self.reflect_env) |env| {
-                    if (env.aliases.get(name.text)) |aliased| return self.comptimeAlignOf(aliased, depth + 1);
-                    if (env.structs.get(name.text)) |info| return self.comptimeStructAlign(info, depth);
-                    if (env.tagged_unions.get(name.text)) |info| return self.comptimeTaggedUnionAlign(info, depth);
-                    if (env.enums.get(name.text)) |info| {
-                        const repr = info.repr orelse simpleNameType("isize", ty.span);
-                        return self.comptimeAlignOf(repr, depth + 1);
-                    }
-                }
-                return null;
-            },
-            .pointer, .raw_many_pointer, .slice => return 8,
-            .generic => |g| {
-                if (isPointerLikeGeneric(g.base.text)) return 8;
-                if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
-                if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeAlignOf(g.args[0], depth + 1);
-                if ((std.mem.eql(u8, g.base.text, "atomic") or std.mem.eql(u8, g.base.text, "MaybeUninit")) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
-                if (isArithmeticLayoutGeneric(g.base.text) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
-                return null;
-            },
-            .array => |node| return self.comptimeAlignOf(node.child.*, depth + 1),
-            .qualified => |node| return self.comptimeAlignOf(node.child.*, depth + 1),
-            else => return null,
-        }
-    }
-
-    // C-ABI struct layout over the supported reflection subset. Explicit
-    // `@offset(N)` fields are honored for MMIO register maps.
-    fn comptimeStructSize(self: *Checker, info: StructInfo, depth: usize) ?i128 {
-        const layout = self.comptimeStructLayout(info, null, depth) orelse return null;
-        return layout.size;
-    }
-
-    fn comptimeStructAlign(self: *Checker, info: StructInfo, depth: usize) ?i128 {
-        var max_align: i128 = 1;
-        var it = info.fields.valueIterator();
-        while (it.next()) |field_ty| {
-            const alignment = self.comptimeAlignOf(field_ty.*, depth + 1) orelse return null;
-            if (alignment > max_align) max_align = alignment;
-        }
-        return max_align;
-    }
-
-    const TaggedUnionPayloadLayout = struct {
-        has_payload: bool,
-        size: i128,
-        alignment: i128,
-    };
-
-    fn comptimeTaggedUnionSize(self: *Checker, info: UnionInfo, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        const payload = self.comptimeTaggedUnionPayloadLayout(info, depth + 1) orelse return null;
-        var offset: i128 = c_tagged_union_tag_size;
-        var max_align: i128 = c_tagged_union_tag_align;
-        if (payload.has_payload) {
-            if (payload.alignment > max_align) max_align = payload.alignment;
-            offset = alignForward(offset, payload.alignment) orelse return null;
-            offset += payload.size;
-        }
-        return alignForward(offset, max_align);
-    }
-
-    fn comptimeTaggedUnionAlign(self: *Checker, info: UnionInfo, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        const payload = self.comptimeTaggedUnionPayloadLayout(info, depth + 1) orelse return null;
-        return if (payload.has_payload and payload.alignment > c_tagged_union_tag_align)
-            payload.alignment
-        else
-            c_tagged_union_tag_align;
-    }
-
-    fn comptimeTaggedUnionPayloadLayout(self: *Checker, info: UnionInfo, depth: usize) ?TaggedUnionPayloadLayout {
-        var has_payload = false;
-        var max_size: i128 = 0;
-        var max_align: i128 = 1;
-        var it = info.cases.valueIterator();
-        while (it.next()) |maybe_payload| {
-            const payload_ty = maybe_payload.* orelse continue;
-            has_payload = true;
-            const size = self.comptimeSizeOf(payload_ty, depth + 1) orelse return null;
-            const alignment = self.comptimeAlignOf(payload_ty, depth + 1) orelse return null;
-            if (alignment <= 0) return null;
-            if (size > max_size) max_size = size;
-            if (alignment > max_align) max_align = alignment;
-        }
-        return .{
-            .has_payload = has_payload,
-            .size = alignForward(max_size, max_align) orelse return null,
-            .alignment = max_align,
-        };
-    }
-
-    fn comptimeFieldOffset(self: *Checker, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        const name = typeName(ty) orelse return null;
-        const env = self.reflect_env orelse return null;
-        if (env.aliases.get(name)) |aliased| return self.comptimeFieldOffset(aliased, field, depth + 1);
-        if (env.structs.get(name)) |info| {
-            const layout = self.comptimeStructLayout(info, field, depth + 1) orelse return null;
-            return layout.field_offset;
-        }
-        if (env.overlay_unions.get(name)) |info| {
-            if (info.fields.contains(field)) return 0;
-        }
-        return null;
-    }
-
-    fn comptimeBitOffset(self: *Checker, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        const name = typeName(ty) orelse return null;
-        const env = self.reflect_env orelse return null;
-        if (env.aliases.get(name)) |aliased| return self.comptimeBitOffset(aliased, field, depth + 1);
-        if (env.packed_bits.get(name)) |info| {
-            for (info.ordered, 0..) |packed_field, bit| {
-                if (std.mem.eql(u8, packed_field.name.text, field)) return @intCast(bit);
-            }
-            return null;
-        }
-        const byte_offset = self.comptimeFieldOffset(ty, field, depth + 1) orelse return null;
-        return byte_offset * 8;
-    }
-
-    fn comptimeReprOf(self: *Checker, ty: ast.TypeExpr, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        switch (ty.kind) {
-            .name => |name| {
-                if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
-                const env = self.reflect_env orelse return null;
-                if (env.aliases.get(name.text)) |aliased| return self.comptimeReprOf(aliased, depth + 1);
-                if (env.enums.get(name.text)) |info| {
-                    const repr = info.repr orelse simpleNameType("isize", ty.span);
-                    return self.comptimeSizeOf(repr, depth + 1);
-                }
-                if (env.packed_bits.get(name.text)) |info| {
-                    const repr = info.repr orelse return null;
-                    return self.comptimeSizeOf(repr, depth + 1);
-                }
-                if (env.tagged_unions.contains(name.text)) return c_tagged_union_tag_size;
-                return self.comptimeSizeOf(ty, depth + 1);
-            },
-            .pointer, .raw_many_pointer, .slice, .array, .generic => return self.comptimeSizeOf(ty, depth + 1),
-            .qualified => |node| return self.comptimeReprOf(node.child.*, depth + 1),
-            else => return null,
-        }
-    }
-
-    const ComptimeStructLayout = struct {
-        size: i128,
-        field_offset: ?i128 = null,
-    };
-
-    fn comptimeStructLayout(self: *Checker, info: StructInfo, want_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
-        var offset: i128 = 0;
-        var max_align: i128 = 1;
-        var found: ?i128 = null;
-        for (info.ordered) |field| {
-            const size = self.comptimeSizeOf(field.ty, depth + 1) orelse return null;
-            const alignment = self.comptimeAlignOf(field.ty, depth + 1) orelse return null;
-            if (alignment <= 0) return null;
-            if (alignment > max_align) max_align = alignment;
-            if (field.offset) |explicit| {
-                const explicit_offset: i128 = @intCast(explicit);
-                if (explicit_offset < offset) return null;
-                offset = explicit_offset;
-            } else {
-                offset = alignForward(offset, alignment) orelse return null;
-            }
-            if (want_field) |wanted| {
-                if (std.mem.eql(u8, field.name.text, wanted)) found = offset;
-            }
-            offset += size;
-        }
-        return .{
-            .size = alignForward(offset, max_align) orelse return null,
-            .field_offset = found,
-        };
     }
 
     // Returns the folded comptime value of `expr`, or null if it is not a
@@ -2978,14 +2902,7 @@ pub const Checker = struct {
     }
 
     fn checkMmioRegisterAccessCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
-        const member = switch (callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| {
-                self.checkMmioRegisterAccessCall(span, inner.*, args, ctx);
-                return;
-            },
-            else => return,
-        };
+        const member = memberExpr(callee) orelse return;
         if (!std.mem.eql(u8, member.name.text, "read") and !std.mem.eql(u8, member.name.text, "write")) return;
         const info = mmioRegisterMemberInfo(member.base.*, ctx) orelse return;
         if (std.mem.eql(u8, member.name.text, "read")) {
@@ -3011,14 +2928,7 @@ pub const Checker = struct {
     }
 
     fn checkAtomicCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
-        const member = switch (callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| {
-                self.checkAtomicCall(span, inner.*, args, ctx);
-                return;
-            },
-            else => return,
-        };
+        const member = memberExpr(callee) orelse return;
 
         if (isIdentNamed(member.base.*, "atomic") and std.mem.eql(u8, member.name.text, "init")) {
             if (args.len != 1) {
@@ -3064,14 +2974,7 @@ pub const Checker = struct {
     }
 
     fn checkMaybeUninitCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
-        const member = switch (callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| {
-                self.checkMaybeUninitCall(span, inner.*, args, ctx);
-                return;
-            },
-            else => return,
-        };
+        const member = memberExpr(callee) orelse return;
         if (!std.mem.eql(u8, member.name.text, "write") and !std.mem.eql(u8, member.name.text, "assume_init")) return;
         const payload_ty = maybeUninitPayloadTypeForValue(member.base.*, ctx) orelse return;
         if (std.mem.eql(u8, member.name.text, "write")) {
@@ -3136,14 +3039,7 @@ pub const Checker = struct {
     }
 
     fn checkDmaCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
-        const member = switch (callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| {
-                self.checkDmaCall(span, inner.*, args, ctx);
-                return;
-            },
-            else => return,
-        };
+        const member = memberExpr(callee) orelse return;
 
         if (isIdentNamed(member.base.*, "cache")) {
             if (!std.mem.eql(u8, member.name.text, "clean") and !std.mem.eql(u8, member.name.text, "invalidate")) return;
@@ -3188,14 +3084,7 @@ pub const Checker = struct {
     }
 
     fn checkTypeStaticCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
-        const member = switch (callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| {
-                self.checkTypeStaticCall(span, inner.*, args, ctx);
-                return;
-            },
-            else => return,
-        };
+        const member = memberExpr(callee) orelse return;
         const class = staticTypeBaseClass(member.base.*, ctx) orelse return;
         const op = member.name.text;
 
@@ -3245,14 +3134,7 @@ pub const Checker = struct {
     }
 
     fn checkResidueCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
-        const member = switch (callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| {
-                self.checkResidueCall(span, inner.*, args, ctx);
-                return;
-            },
-            else => return,
-        };
+        const member = memberExpr(callee) orelse return;
         if (!std.mem.eql(u8, member.name.text, "residue")) return;
         const ty = exprResultType(member.base.*, ctx) orelse exprStorageType(member.base.*, ctx) orelse return;
         const class = classifyTypeCtx(ty, ctx);
@@ -3380,11 +3262,8 @@ pub const Checker = struct {
     }
 
     fn dmaCallReturnClass(self: *Checker, callee: ast.Expr, ctx: Context) ?TypeClass {
-        const member = switch (callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| return self.dmaCallReturnClass(inner.*, ctx),
-            else => return null,
-        };
+        _ = self;
+        const member = memberExpr(callee) orelse return null;
         _ = dmaBufInfoForValue(member.base.*, ctx) orelse return null;
         if (std.mem.eql(u8, member.name.text, "dma_addr")) return .dma_addr;
         if (std.mem.eql(u8, member.name.text, "as_slice")) return .slice;
@@ -4352,11 +4231,7 @@ pub const Checker = struct {
     // True when `callee` is `recv.method` whose receiver `recv` is a nullable trait object
     // (`?*dyn Trait`) — a dispatch that must be narrowed before it is legal.
     fn nullableDynDispatchReceiver(callee: ast.Expr, ctx: Context) bool {
-        const member = switch (callee.kind) {
-            .member => |m| m,
-            .grouped => |inner| return nullableDynDispatchReceiver(inner.*, ctx),
-            else => return false,
-        };
+        const member = memberExpr(callee) orelse return false;
         const base_ty = exprDeclaredType(member.base.*, ctx) orelse exprResultType(member.base.*, ctx) orelse return false;
         return switch (resolveAliasType(base_ty, ctx).kind) {
             .nullable => |child| resolveAliasType(child.*, ctx).kind == .dyn_trait,
@@ -4365,11 +4240,7 @@ pub const Checker = struct {
     }
 
     fn dynDispatchSig(self: *Checker, callee: ast.Expr, ctx: Context) ?ast.TraitMethodSig {
-        const member = switch (callee.kind) {
-            .member => |m| m,
-            .grouped => |inner| return self.dynDispatchSig(inner.*, ctx),
-            else => return null,
-        };
+        const member = memberExpr(callee) orelse return null;
         const base_ty = exprDeclaredType(member.base.*, ctx) orelse return null;
         const resolved_base = resolveAliasType(base_ty, ctx);
         // The receiver may be the trait object itself (`dyn Trait`) OR a pointer to it
@@ -4808,11 +4679,7 @@ pub const Checker = struct {
     }
 
     fn checkEnumRawCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []const ast.Expr, ctx: Context) ?TypeClass {
-        const member = switch (callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| return self.checkEnumRawCall(span, inner.*, args, ctx),
-            else => return null,
-        };
+        const member = memberExpr(callee) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "raw")) return null;
         const base_ty = exprResultType(member.base.*, ctx) orelse return null;
         const enum_info = enumInfoForType(base_ty, ctx) orelse return null;
@@ -5681,7 +5548,7 @@ pub const Checker = struct {
                     // The async lowering flagged this arm: its bound name shadows an enclosing local it
                     // lifted to a future-struct field, hidden from this scope. Now that the resolved
                     // subject type confirms the bare `.bind` DOES bind (nullable), the source-level
-                    // shadow is a real E_DUPLICATE_LOCAL — which a non-async fn reports directly. (For a
+                    // shadow is a real E_DUPLICATE_LOCAL, which a non-async fn reports directly. (For a
                     // non-nullable subject we never reach here, so the valid catch-all form is accepted.)
                     if (dup_local_if_binds) {
                         self.errorCode(ident.span, "E_DUPLICATE_LOCAL", "local bindings must have unique names in the current scope");
@@ -5700,463 +5567,11 @@ pub const Checker = struct {
     }
 };
 
-pub const Context = struct {
-    no_lang_trap: bool = false,
-    // C2: the enclosing function runs in IRQ/atomic context (`#[irq_context]`/
-    // `#[atomic]`); calling a `#[may_sleep]` op is "sleeping in interrupt".
-    irq_context: bool = false,
-    // T(term)1 + traits-design review #2: the enclosing function is `#[bounded]`
-    // (or IRQ/atomic, which is also bounded). An INDIRECT call (fn pointer, closure,
-    // or `*dyn` dispatch) is rejected here — the termination check cannot see through
-    // it, so `dyn` cannot smuggle unbounded behavior into a bounded context.
-    bounded: bool = false,
-    in_unsafe: bool = false,
-    in_comptime: bool = false,
-    returns_never: bool = false,
-    returns_void: bool = false,
-    return_ty: ?ast.TypeExpr = null,
-    return_kind: TypeClass = .void,
-    loop_depth: usize = 0,
-    unsafe_contracts: UnsafeContracts = .{},
-    scope: ?*Scope = null,
-    allow_mmio_register_type: bool = false,
-    mmio_structs: ?*const std.StringHashMap(MmioStruct) = null,
-    mmio_params: ?*const std.StringHashMap([]const u8) = null,
-    structs: ?*const std.StringHashMap(StructInfo) = null,
-    packed_bits: ?*const std.StringHashMap(LayoutFieldInfo) = null,
-    overlay_unions: ?*const std.StringHashMap(LayoutFieldInfo) = null,
-    tagged_unions: ?*const std.StringHashMap(UnionInfo) = null,
-    enums: ?*const std.StringHashMap(EnumInfo) = null,
-    type_aliases: ?*const std.StringHashMap(ast.TypeExpr) = null,
-    functions: ?*const std.StringHashMap(FunctionInfo) = null,
-    globals: ?*const std.StringHashMap(GlobalInfo) = null,
-    // Trait declarations, for resolving a `*dyn Trait` dispatch's return type in
-    // exprResultType (so a dispatch result flows into a typed binding). Optional: when
-    // absent, dyn-dispatch return-type lookup gracefully no-ops.
-    trait_decls: ?*const std.StringHashMap(ast.TraitDecl) = null,
-    // `const fn` bodies, for evaluating comptime const-fn calls (e.g. when a
-    // const-fn result drives a fixed-array length — section 22 comptime↔type).
-    const_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
-    // Folded `const NAME: T = …` global values, for resolving named compile-time
-    // constants in comptime contexts and array lengths.
-    const_globals: ?*const std.StringHashMap(eval.ComptimeValue) = null,
-    // Names of the current function's `comptime T: type` type parameters
-    // (user-defined generics, section 22); valid as type names in its body.
-    type_params: ?*const std.StringHashMap(void) = null,
-};
-
-const MmioStruct = struct {
-    fields: std.StringHashMap(MmioFieldInfo),
-};
-
-const MmioFieldInfo = struct {
-    access: MmioRegisterAccess,
-};
-
-const StructInfo = struct {
-    fields: std.StringHashMap(ast.TypeExpr),
-    ordered: []const ast.Field,
-    // `opaque struct` — fields are private to the struct's associated functions.
-    is_opaque: bool = false,
-};
-
-// Liveness slot for a linear `move` binding (section 18.1 / annex D.7).
-pub const MoveSlot = struct {
-    live: bool,
-    span: diagnostics.Span,
-    // Reserved by a `defer` to be consumed at scope end: not a leak, not movable.
-    deferred: bool = false,
-    // The binding's declared/inferred type, when known — used to look up a `move` field's
-    // type for place-sensitive field-move tracking. Null for synthetic field place keys.
-    ty: ?ast.TypeExpr = null,
-    // T1.2: if this binding is a pointer/reference DERIVED from a tracked `move` binding
-    // (taken via `&x` and bound to `let p = &x`), this is the referent's binding name. The
-    // alias is itself a borrow — not a linear resource (`live`/leak rules do not apply to it)
-    // — but reading through it (`*p`, `peek(p)`) after the referent was moved out is a
-    // use-after-move (a stale derived alias). Null for non-alias bindings.
-    alias_of: ?[]const u8 = null,
-    // T1.2 (conservative rejection): a borrow of this move binding (or of one of its
-    // subfields/elements) has been stored into MEMORY — an aggregate field, an array
-    // element, or aliased through a subfield place — somewhere we cannot prove dead. Unlike
-    // a tracked scalar pointer local (`let p = &t`, tracked by the stale-alias mechanism),
-    // such an escaped borrow is unreachable to the use-after-move tracker, so we instead
-    // refuse to MOVE the binding while this is set (the borrow could still be read after the
-    // move). Holds the span of the escaping store, for the diagnostic. Null when no borrow
-    // has escaped into untracked memory.
-    escaped_borrow: ?diagnostics.Span = null,
-    // Set when this alias was formed by taking the address of the move binding ITSELF
-    // (`let p = &o;`, or copied from such an alias `let q = p;`), so dereferencing it
-    // reconstitutes the whole move value: `*p` IS `o`. Moving `*p` out by value (e.g.
-    // `own_free(T, *p)`) is then a move-out THROUGH the alias — unsound, because the
-    // checker tracks the owning binding, not the pointee, so it can neither stop a later
-    // free of `o` (a double-free) nor a use of the now moved-from pointee. The move-out
-    // is rejected in moveConsume's `.deref` arm. False for DERIVED aliases (`p = f(&o)`,
-    // `p = &o.field`) where `*p` is sub-data, not the move binding — those stay borrows.
-    full_deref_alias: bool = false,
-};
-
-const LayoutFieldInfo = struct {
-    fields: std.StringHashMap(ast.TypeExpr),
-    ordered: []const ast.Field,
-    repr: ?ast.TypeExpr = null,
-};
-
-const EnumInfo = struct {
-    cases: std.StringHashMap(void),
-    is_open: bool,
-    repr: ?ast.TypeExpr,
-};
-
-const UnionInfo = struct {
-    cases: std.StringHashMap(?ast.TypeExpr),
-};
-
-const FunctionInfo = struct {
-    params: []const ast.Param,
-    return_ty: ?ast.TypeExpr,
-    no_lang_trap: bool = false,
-    is_const: bool = false,
-    // C2: this function is a sleepable op (`#[may_sleep]`) — calling it from an
-    // `#[irq_context]`/`#[atomic]` function is a compile error.
-    may_sleep: bool = false,
-    // C2: this function itself runs in IRQ/atomic context (`#[irq_context]`/
-    // `#[atomic_context]`). An irq-context caller may ONLY call other irq-context
-    // functions (or non-blocking primitives) — this mirrors the MIR verifier's
-    // `E_IRQ_CONTEXT_CALL` discipline so `mcc check` and `mcc verify` agree.
-    irq_context: bool = false,
-};
-
-const GlobalInfo = struct {
-    ty: ast.TypeExpr,
-};
-
-const UnsafeContracts = struct {
-    no_overflow: bool = false,
-    noalias_contract: bool = false,
-    precise_asm: bool = false,
-
-    fn with(self: UnsafeContracts, attr: ast.Attr) UnsafeContracts {
-        var next = self;
-        switch (attr.kind) {
-            .unsafe_contract => |contract| {
-                if (std.mem.eql(u8, contract.name.text, "no_overflow")) next.no_overflow = true;
-                if (std.mem.eql(u8, contract.name.text, "noalias")) next.noalias_contract = true;
-                if (std.mem.eql(u8, contract.name.text, "precise_asm")) next.precise_asm = true;
-            },
-            .no_lang_trap, .naked, .@"noinline", .weak, .named, .backend_name, .origin, .section, .@"align" => {},
-        }
-        return next;
-    }
-
-    fn has(self: UnsafeContracts, required: ContractKind) bool {
-        return switch (required) {
-            .no_overflow => self.no_overflow,
-            .noalias_contract => self.noalias_contract,
-            .precise_asm => self.precise_asm,
-        };
-    }
-};
-
-const ContractKind = enum {
-    no_overflow,
-    noalias_contract,
-    precise_asm,
-};
-
-const LocalInfo = struct {
-    class: TypeClass,
-    mutable: bool,
-    ty: ?ast.TypeExpr,
-    origin: BindingOrigin,
-    address_origin: AddressOrigin = .none,
-};
-
-const BindingOrigin = enum {
-    param,
-    local,
-};
-
-const AddressOrigin = enum {
-    none,
-    local,
-};
-
-const Scope = std.StringHashMap(LocalInfo);
-
 fn copyScope(source: *const Scope, dest: *Scope) !void {
     var it = source.iterator();
     while (it.next()) |entry| {
         try dest.put(entry.key_ptr.*, entry.value_ptr.*);
     }
-}
-
-// Whether a declaration is part of its module's PUBLIC surface: explicitly `pub`, an
-// `export fn` (external linkage), or an `extern` declaration (an external symbol). Anything
-// else in a strict module is file-private.
-fn declIsPublic(decl: ast.Decl) bool {
-    if (decl.is_pub) return true;
-    return switch (decl.kind) {
-        .fn_decl => |f| f.exported,
-        .extern_fn => true,
-        else => false,
-    };
-}
-
-fn declName(decl: ast.Decl) ast.Ident {
-    return switch (decl.kind) {
-        .fn_decl, .extern_fn => |fn_decl| fn_decl.name,
-        .type_alias => |alias| alias.name,
-        .struct_decl => |struct_decl| struct_decl.name,
-        .enum_decl => |enum_decl| enum_decl.name,
-        .union_decl => |union_decl| union_decl.name,
-        .packed_bits_decl => |packed_bits| packed_bits.name,
-        .overlay_union_decl => |overlay_union| overlay_union.name,
-        .opaque_decl => |name| name,
-        .global_decl => |global| global.name,
-        .trait_decl => |t| t.name,
-        // impl_trait is filtered out before declName is called.
-        .impl_trait => |it| it.trait_name,
-    };
-}
-
-// A declaration that introduces a value-level top-level name (function or global), as opposed
-// to a type-level name. Used to reserve qualified-owner names against value shadows.
-fn isValueLevelDecl(kind: ast.Decl.Kind) bool {
-    return switch (kind) {
-        .fn_decl, .extern_fn, .global_decl => true,
-        else => false,
-    };
-}
-
-const TypeClass = enum {
-    unknown,
-    checked_u8,
-    checked_u16,
-    checked_u32,
-    checked_u64,
-    checked_u128,
-    checked_usize,
-    checked_i8,
-    checked_i16,
-    checked_i32,
-    checked_i64,
-    checked_i128,
-    checked_isize,
-    wrap,
-    sat,
-    serial,
-    counter,
-    pointer,
-    raw_many_pointer,
-    slice,
-    array,
-    c_void_pointer,
-    nullable_pointer,
-    nullable_c_void_pointer,
-    // `?*dyn Trait` — a nullable trait object. Same two-word {data, vtable}
-    // layout as `*dyn Trait`; `none` is the niche `data == null`. Eligible for
-    // `if let` / switch narrowing and `?` unwrap like the thin nullables, but its
-    // niche test and codegen are on the data word, not the whole value.
-    nullable_dyn_trait,
-    paddr,
-    vaddr,
-    dma_addr,
-    user_ptr,
-    mmio_ptr,
-    phys_ptr,
-    // `Secret<T>` — a constant-time key/crypto-material tag. Carries T's value
-    // and arithmetic but FORBIDS secret-dependent control flow and memory
-    // access (branch/switch condition, array index, pointer offset, deref) so a
-    // secret value can never steer a timing- or cache-observable decision.
-    secret,
-    atomic,
-    dma_buf,
-    result,
-    fn_pointer,
-    never,
-    void,
-    bool,
-    null_literal,
-    int_literal,
-    f32,
-    f64,
-    float_literal,
-    duration,
-    order,
-};
-
-const TypeMode = enum {
-    normal,
-    storage,
-    return_type,
-    ffi_opaque_pointer,
-};
-
-fn findImplMethod(methods: []const ast.ImplTraitMethod, name: []const u8) ?ast.ImplTraitMethod {
-    for (methods) |m| {
-        if (std.mem.eql(u8, m.name.text, name)) return m;
-    }
-    return null;
-}
-
-fn findTraitMethod(methods: []const ast.TraitMethodSig, name: []const u8) ?ast.TraitMethodSig {
-    for (methods) |m| {
-        if (std.mem.eql(u8, m.name.text, name)) return m;
-    }
-    return null;
-}
-
-// A trait is object-safe (usable as `*dyn Trait`, traits-design §5) iff every method
-// (1) takes `self` by pointer (`*Self`/`*mut Self`) — not `move self`, not by value —
-// and (2) is non-generic (no `comptime` parameters). A finite rodata vtable cannot
-// hold infinite monomorphizations, and you cannot move out of a borrowed `*dyn`.
-fn traitIsObjectSafe(t: ast.TraitDecl) bool {
-    for (t.methods) |m| {
-        switch (m.self_mode) {
-            .by_ptr, .by_mut_ptr => {},
-            else => return false, // move self / by value / no self → not object-safe
-        }
-        for (m.params) |p| {
-            if (p.is_comptime) return false; // a generic method → not object-safe
-        }
-    }
-    return true;
-}
-
-fn hasNoLangTrap(attrs: []ast.Attr) bool {
-    for (attrs) |attr| {
-        if (std.meta.activeTag(attr.kind) == .no_lang_trap) return true;
-    }
-    return false;
-}
-
-fn hasNaked(attrs: []ast.Attr) bool {
-    for (attrs) |attr| {
-        if (std.meta.activeTag(attr.kind) == .naked) return true;
-    }
-    return false;
-}
-
-// C2 (IRQ/atomic-context discipline): bare `#[name]` attributes parse as `.named`.
-// `#[irq_context]` marks a function that runs in interrupt/atomic context;
-// `#[may_sleep]` marks an op that may block (heap alloc, mutex/lock acquire,
-// scheduler yield). An irq-context fn may not call a may_sleep op. (`atomic` is a
-// reserved keyword, so the synonym attribute name is `#[atomic_context]`.)
-fn hasNamedAttr(attrs: []ast.Attr, name: []const u8) bool {
-    for (attrs) |attr| switch (attr.kind) {
-        .named => |id| if (std.mem.eql(u8, id.text, name)) return true,
-        else => {},
-    };
-    return false;
-}
-
-fn hasIrqContext(attrs: []ast.Attr) bool {
-    return hasNamedAttr(attrs, "irq_context") or hasNamedAttr(attrs, "atomic_context");
-}
-
-fn hasMaySleep(attrs: []ast.Attr) bool {
-    return hasNamedAttr(attrs, "may_sleep");
-}
-
-// T(term)1: `#[bounded]` opts a function into the bounded-loop / no-unbounded-
-// recursion check (so does `#[irq_context]`/`#[atomic_context]`, since a kernel
-// must never hang in an interrupt). Every loop in such a function must match a
-// recognized statically-bounded shape (or carry a `break`), and the function may
-// not recurse into itself. See `checkTermination`.
-fn hasBoundedContext(attrs: []ast.Attr) bool {
-    return hasIrqContext(attrs) or hasNamedAttr(attrs, "bounded");
-}
-
-fn backendNameAttr(attrs: []ast.Attr) ?[]const u8 {
-    for (attrs) |attr| switch (attr.kind) {
-        .backend_name => |name| return name,
-        else => {},
-    };
-    return null;
-}
-
-fn isTrapBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .add, .sub, .mul, .div, .mod, .shl, .shr => true,
-        else => false,
-    };
-}
-
-fn isArithmeticBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .add, .sub, .mul, .div, .mod => true,
-        else => false,
-    };
-}
-
-fn isPointerArithmeticBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .add, .sub => true,
-        else => false,
-    };
-}
-
-fn isBitwiseBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .bit_and, .bit_or, .bit_xor, .shl, .shr => true,
-        else => false,
-    };
-}
-
-fn isLogicalBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .logical_and, .logical_or => true,
-        else => false,
-    };
-}
-
-fn isComparisonBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .eq, .ne, .lt, .le, .gt, .ge => true,
-        else => false,
-    };
-}
-
-fn isCheckedInt(kind: TypeClass) bool {
-    return isCheckedUnsigned(kind) or isCheckedSigned(kind);
-}
-
-pub fn isIntegerLike(kind: TypeClass) bool {
-    return isCheckedInt(kind) or kind == .int_literal;
-}
-
-// Sema mirror of the MIR builder's `divModProvablySafe` (annex E): a `div`/`mod` by a
-// non-zero integer-literal divisor cannot divide by zero, and for a signed dividend it
-// cannot hit the only checked overflow (`INT_MIN / -1`) unless the divisor is `-1`. So
-// under `--optimize` such an operation is non-trapping and allowed in `#[no_lang_trap]`.
-// Conservative (false unless provable), so it can never admit a real trap.
-fn divModProvablySafe(op: ast.BinaryOp, left: TypeClass, divisor: ast.Expr) bool {
-    if (op != .div and op != .mod) return false;
-    const d = integerLiteralValue(divisor) orelse return false;
-    if (d.magnitude == 0) return false;
-    if (isCheckedSigned(left)) return !(d.negative and d.magnitude == 1);
-    return !d.negative;
-}
-
-fn isCheckedUnsigned(kind: TypeClass) bool {
-    return switch (kind) {
-        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_u128, .checked_usize => true,
-        else => false,
-    };
-}
-
-fn isCheckedSigned(kind: TypeClass) bool {
-    return switch (kind) {
-        .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_i128, .checked_isize => true,
-        else => false,
-    };
-}
-
-pub fn isPointerLike(kind: TypeClass) bool {
-    return switch (kind) {
-        .pointer, .raw_many_pointer, .slice, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer => true,
-        else => false,
-    };
 }
 
 // An ordinary kernel pointer the `*` operator will dereference into kernel memory.
@@ -6207,187 +5622,6 @@ fn opacityStructNameOf(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
-fn isDerefablePointerClass(kind: TypeClass) bool {
-    return switch (kind) {
-        .pointer, .raw_many_pointer, .slice, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer => true,
-        else => false,
-    };
-}
-
-fn isRuntimePointerDerefClass(kind: TypeClass) bool {
-    return switch (kind) {
-        .pointer, .raw_many_pointer, .c_void_pointer, .nullable_pointer, .nullable_c_void_pointer, .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
-        else => false,
-    };
-}
-
-fn isNonNullPointerLike(kind: TypeClass) bool {
-    return switch (kind) {
-        .pointer, .raw_many_pointer, .c_void_pointer => true,
-        else => false,
-    };
-}
-
-fn isSingleObjectPointerLike(kind: TypeClass) bool {
-    return switch (kind) {
-        .pointer, .c_void_pointer => true,
-        else => false,
-    };
-}
-
-fn isNullablePointerLike(kind: TypeClass) bool {
-    return switch (kind) {
-        .nullable_pointer, .nullable_c_void_pointer => true,
-        else => false,
-    };
-}
-
-fn isForbiddenBitwisePolicy(kind: TypeClass) bool {
-    return switch (kind) {
-        .sat, .serial, .counter => true,
-        else => false,
-    };
-}
-
-fn isForbiddenOrderingDomain(kind: TypeClass) bool {
-    return switch (kind) {
-        .wrap, .serial, .counter => true,
-        else => false,
-    };
-}
-
-fn isArithmeticDomain(kind: TypeClass) bool {
-    return switch (kind) {
-        .wrap, .sat, .serial, .counter => true,
-        else => false,
-    };
-}
-
-fn isFloat(kind: TypeClass) bool {
-    return kind == .f32 or kind == .f64;
-}
-
-fn isFloatish(kind: TypeClass) bool {
-    return isFloat(kind) or kind == .float_literal;
-}
-
-// IEEE floating-point arithmetic never raises a language trap: division by zero
-// and overflow yield infinities or NaN rather than `.DivideByZero`/`.IntegerOverflow`.
-fn isNonTrappingFloatOp(op: ast.BinaryOp, left: TypeClass, right: TypeClass) bool {
-    if (!isFloatish(left) or !isFloatish(right)) return false;
-    if (!isFloat(left) and !isFloat(right)) return false;
-    return switch (op) {
-        .add, .sub, .mul, .div => true,
-        else => false,
-    };
-}
-
-fn isDiagnosticNeutralOperand(kind: TypeClass) bool {
-    return kind == .unknown or kind == .never;
-}
-
-fn isArithmeticOperand(kind: TypeClass) bool {
-    return isDiagnosticNeutralOperand(kind) or isIntegerLike(kind) or isArithmeticDomain(kind) or isFloatish(kind) or kind == .secret;
-}
-
-fn isBitwiseOperand(kind: TypeClass) bool {
-    return isDiagnosticNeutralOperand(kind) or isCheckedUnsigned(kind) or kind == .int_literal or kind == .wrap or kind == .secret;
-}
-
-fn isOrderedComparisonOperand(kind: TypeClass) bool {
-    return isArithmeticOperand(kind);
-}
-
-fn isEqualityOperand(kind: TypeClass) bool {
-    return isDiagnosticNeutralOperand(kind) or
-        isIntegerLike(kind) or
-        isArithmeticDomain(kind) or
-        isFloatish(kind) or
-        kind == .bool or
-        kind == .secret or
-        isPointerLike(kind) or
-        kind == .null_literal;
-}
-
-fn equalityOperandsCompatible(left: TypeClass, right: TypeClass) bool {
-    if (!isEqualityOperand(left) or !isEqualityOperand(right)) return false;
-    if (isDiagnosticNeutralOperand(left) or isDiagnosticNeutralOperand(right)) return true;
-    // A secret may be compared against another secret or an integer literal; the
-    // result is itself secret (see checkExpr) so it cannot reach a branch.
-    if (left == .secret or right == .secret) {
-        return (left == .secret or isIntegerLike(left)) and (right == .secret or isIntegerLike(right));
-    }
-    if (left == .null_literal or right == .null_literal) return isPointerLike(left) or isPointerLike(right);
-    if (left == .bool or right == .bool) return left == .bool and right == .bool;
-    if (isPointerLike(left) or isPointerLike(right)) return isPointerLike(left) and isPointerLike(right);
-    if (isArithmeticDomain(left) or isArithmeticDomain(right)) return left == right;
-    if (isFloatish(left) or isFloatish(right)) return floatOperandsCompatible(left, right);
-    return isIntegerLike(left) and isIntegerLike(right);
-}
-
-fn floatOperandsCompatible(left: TypeClass, right: TypeClass) bool {
-    if (!isFloatish(left) or !isFloatish(right)) return false;
-    if (isFloat(left) and isFloat(right)) return left == right;
-    return true; // at least one operand is an adaptable float literal
-}
-
-fn arithmeticDomainsImplicitlyMix(left: TypeClass, right: TypeClass) bool {
-    if (left == .unknown or right == .unknown or left == .never or right == .never) return false;
-    if (isArithmeticDomain(left) or isArithmeticDomain(right)) return left != right;
-    return false;
-}
-
-fn isNoTrapArithmeticDomainOp(op: ast.BinaryOp, left: TypeClass, right: TypeClass) bool {
-    if (left != right) return false;
-    return switch (left) {
-        .wrap => switch (op) {
-            .add, .sub, .mul => true,
-            else => false,
-        },
-        .sat => switch (op) {
-            .add, .sub, .mul => true,
-            else => false,
-        },
-        else => false,
-    };
-}
-
-fn mergeArithmetic(left: TypeClass, right: TypeClass) TypeClass {
-    // Secret taint propagates: any operation involving a secret yields a secret,
-    // so derived values stay constant-time-constrained (no declassification by
-    // arithmetic). `declassify`/`reveal` (behind unsafe) is the only escape.
-    if (left == .secret or right == .secret) return .secret;
-    if (left == .f64 or right == .f64) return .f64;
-    if (left == .f32 or right == .f32) return .f32;
-    if (left == .float_literal or right == .float_literal) return .float_literal;
-    if (left == .wrap or right == .wrap) return .wrap;
-    if (left == .sat or right == .sat) return .sat;
-    if (isCheckedSigned(left)) return left;
-    if (isCheckedSigned(right)) return right;
-    if (isCheckedUnsigned(left)) return left;
-    if (isCheckedUnsigned(right)) return right;
-    return .unknown;
-}
-
-fn classifyType(ty: ast.TypeExpr) TypeClass {
-    return switch (ty.kind) {
-        .name => |name| classifyTypeName(name.text),
-        .pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .pointer,
-        .raw_many_pointer => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .raw_many_pointer,
-        .slice => |node| if (isTypeName(node.child.*, "c_void")) .c_void_pointer else .slice,
-        .array => .array,
-        .nullable => |child| classifyNullableType(child.*),
-        .qualified => |node| classifyType(node.child.*),
-        .generic => |node| classifyGenericTypeName(node.base.text),
-        .fn_pointer => .fn_pointer,
-        else => .unknown,
-    };
-}
-
-pub fn classifyTypeCtx(ty: ast.TypeExpr, ctx: Context) TypeClass {
-    return classifyType(resolveAliasType(ty, ctx));
-}
-
 // Definite-init (S0.1) tracks only single-storage SCALAR vars: a whole-variable
 // assignment definitely initializes them, and a plain read is a use of the whole
 // value. Aggregates (arrays, structs, unions, slices, results, …) are filled
@@ -6402,93 +5636,9 @@ fn diIsScalarType(ty: ast.TypeExpr, ctx: Context) bool {
     };
 }
 
-fn resolveAliasType(ty: ast.TypeExpr, ctx: Context) ast.TypeExpr {
-    return resolveAliasTypeDepth(ty, ctx, 0);
-}
-
-fn resolveAliasTypeDepth(ty: ast.TypeExpr, ctx: Context, depth: usize) ast.TypeExpr {
-    if (depth > 64) return ty;
-    return switch (ty.kind) {
-        .name => |name| {
-            const aliases = ctx.type_aliases orelse return ty;
-            const target = aliases.get(name.text) orelse return ty;
-            if (typeName(target)) |target_name| {
-                if (std.mem.eql(u8, target_name, name.text)) return ty;
-            }
-            return resolveAliasTypeDepth(target, ctx, depth + 1);
-        },
-        .qualified => |node| resolveAliasTypeDepth(node.child.*, ctx, depth),
-        else => ty,
-    };
-}
-
-fn classifyNullableType(child: ast.TypeExpr) TypeClass {
-    return switch (classifyType(child)) {
-        .c_void_pointer => .nullable_c_void_pointer,
-        .pointer, .raw_many_pointer => .nullable_pointer,
-        // A `*dyn Trait` classifies as `.unknown` (dispatch keys off the TypeExpr
-        // kind, not the class), so recognize the trait-object niche explicitly.
-        else => if (isDynTraitTypeExpr(child)) .nullable_dyn_trait else .unknown,
-    };
-}
-
-// True when `ty` is a `*dyn Trait` fat pointer (possibly behind `const`/`mut`
-// qualifiers). Alias resolution is not applied here (classifyType has no ctx); a
-// direct `?*dyn Trait` is the supported form.
-fn isDynTraitTypeExpr(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .dyn_trait => true,
-        .qualified => |node| isDynTraitTypeExpr(node.child.*),
-        else => false,
-    };
-}
-
-pub fn nullableInnerType(ty: ast.TypeExpr) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .nullable => |child| child.*,
-        .qualified => |node| nullableInnerType(node.child.*),
-        else => null,
-    };
-}
-
-pub fn resultPayloadType(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .generic => |node| {
-            if (!std.mem.eql(u8, node.base.text, "Result") or node.args.len != 2) return null;
-            if (std.mem.eql(u8, tag, "ok")) return node.args[0];
-            if (std.mem.eql(u8, tag, "err")) return node.args[1];
-            return null;
-        },
-        .qualified => |node| resultPayloadType(node.child.*, tag),
-        else => null,
-    };
-}
-
-fn atomicPayloadType(ty: ast.TypeExpr) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .generic => |node| {
-            if (!std.mem.eql(u8, node.base.text, "atomic") or node.args.len != 1) return null;
-            return node.args[0];
-        },
-        .qualified => |node| atomicPayloadType(node.child.*),
-        else => null,
-    };
-}
-
 fn atomicPayloadTypeForValue(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
     return atomicPayloadType(resolveAliasType(ty, ctx));
-}
-
-fn maybeUninitPayloadType(ty: ast.TypeExpr) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .generic => |node| {
-            if (!std.mem.eql(u8, node.base.text, "MaybeUninit") or node.args.len != 1) return null;
-            return node.args[0];
-        },
-        .qualified => |node| maybeUninitPayloadType(node.child.*),
-        else => null,
-    };
 }
 
 fn maybeUninitPayloadTypeForValue(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
@@ -6499,118 +5649,6 @@ fn maybeUninitPayloadTypeForValue(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
 fn dmaBufInfoForValue(expr: ast.Expr, ctx: Context) ?DmaBufInfo {
     const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
     return dmaBufInfo(resolveAliasType(ty, ctx));
-}
-
-// Resolves a member base that names a scalar integer or arithmetic-domain type
-// (directly or through a type alias), for static operations like `TcpSeq.before(a, b)`
-// or `u8.try_from(x)`. Returns null when the base is a value binding or does not
-// name such a type.
-fn staticTypeBaseClass(base: ast.Expr, ctx: Context) ?TypeClass {
-    const ident = switch (base.kind) {
-        .ident => |id| id,
-        .grouped => |inner| return staticTypeBaseClass(inner.*, ctx),
-        else => return null,
-    };
-    if (ctx.scope) |scope| {
-        if (scope.get(ident.text) != null) return null;
-    }
-    const resolved = resolveAliasType(simpleNameType(ident.text, ident.span), ctx);
-    const class = classifyType(resolved);
-    if (isCheckedInt(class) or isArithmeticDomain(class)) return class;
-    return null;
-}
-
-fn isConversionName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "from") or
-        std.mem.eql(u8, name, "try_from") or
-        std.mem.eql(u8, name, "trap_from") or
-        std.mem.eql(u8, name, "wrap_from") or
-        std.mem.eql(u8, name, "sat_from") or
-        std.mem.eql(u8, name, "from_mod");
-}
-
-fn isNarrowingConversionName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "try_from") or
-        std.mem.eql(u8, name, "trap_from") or
-        std.mem.eql(u8, name, "wrap_from") or
-        std.mem.eql(u8, name, "sat_from");
-}
-
-fn isSerialOperationName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "before") or
-        std.mem.eql(u8, name, "after") or
-        std.mem.eql(u8, name, "distance") or
-        std.mem.eql(u8, name, "compare");
-}
-
-fn isCounterOperationName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "delta_mod") or
-        std.mem.eql(u8, name, "elapsed_assume_within") or
-        std.mem.eql(u8, name, "elapsed_bounded");
-}
-
-// Number of arguments a serial/counter domain operation takes. The first two are
-// always the domain operands; a third (where present) is an external interval.
-fn domainOperationArgCount(op: []const u8) usize {
-    if (std.mem.eql(u8, op, "elapsed_assume_within") or std.mem.eql(u8, op, "elapsed_bounded")) return 3;
-    return 2;
-}
-
-fn isTypeStaticMember(member: anytype, ctx: Context) bool {
-    return staticTypeBaseClass(member.base.*, ctx) != null;
-}
-
-fn isIntegerScalarName(name: []const u8) bool {
-    return switch (classifyTypeName(name)) {
-        .checked_u8, .checked_u16, .checked_u32, .checked_u64, .checked_u128, .checked_usize, .checked_i8, .checked_i16, .checked_i32, .checked_i64, .checked_i128, .checked_isize => true,
-        else => false,
-    };
-}
-
-fn isFloatScalarName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64");
-}
-
-fn reduceCallReturnClass(call: anytype, ctx: Context) ?TypeClass {
-    const kind = reduceCallKind(call.callee.*) orelse return null;
-    return switch (kind) {
-        .sum_checked => .result,
-        .sum_left, .sum_fast => if (call.type_args.len == 1) classifyTypeCtx(call.type_args[0], ctx) else .unknown,
-    };
-}
-
-fn byteViewCallReturnClass(call: anytype) ?TypeClass {
-    const kind = byteViewCallKind(call.callee.*) orelse return null;
-    return switch (kind) {
-        .as_bytes => .slice,
-        .bytes_equal => .bool,
-    };
-}
-
-fn typeStaticCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return typeStaticCallReturnClass(inner.*, ctx),
-        else => return null,
-    };
-    const class = staticTypeBaseClass(member.base.*, ctx) orelse return null;
-    const op = member.name.text;
-    if (std.mem.eql(u8, op, "try_from")) return .result;
-    if (std.mem.eql(u8, op, "from_mod")) return if (class == .wrap) .wrap else null;
-    if (std.mem.eql(u8, op, "from") or
-        std.mem.eql(u8, op, "trap_from") or
-        std.mem.eql(u8, op, "wrap_from") or
-        std.mem.eql(u8, op, "sat_from")) return class;
-    if (class == .serial) {
-        if (std.mem.eql(u8, op, "before") or std.mem.eql(u8, op, "after")) return .bool;
-        if (std.mem.eql(u8, op, "distance")) return .wrap;
-        if (std.mem.eql(u8, op, "compare")) return .result;
-    } else if (class == .counter) {
-        if (std.mem.eql(u8, op, "delta_mod")) return .wrap;
-        if (std.mem.eql(u8, op, "elapsed_assume_within")) return .duration;
-        if (std.mem.eql(u8, op, "elapsed_bounded")) return .result;
-    }
-    return null;
 }
 
 fn wrapValueInnerType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
@@ -6624,22 +5662,14 @@ fn wrapValueInnerType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
 
 // `.residue()` exposes the raw modulo representative of a wrap<T> value (section 5.2).
 fn residueCallReturnClass(callee: ast.Expr, ctx: Context) ?TypeClass {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return residueCallReturnClass(inner.*, ctx),
-        else => return null,
-    };
+    const member = memberExpr(callee) orelse return null;
     if (!std.mem.eql(u8, member.name.text, "residue")) return null;
     const inner = wrapValueInnerType(member.base.*, ctx) orelse return null;
     return classifyTypeCtx(inner, ctx);
 }
 
 fn atomicCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return atomicCallReturnType(inner.*, ctx),
-        else => return null,
-    };
+    const member = memberExpr(callee) orelse return null;
     if (std.mem.eql(u8, member.name.text, "load") or std.mem.eql(u8, member.name.text, "fetch_add") or std.mem.eql(u8, member.name.text, "fetch_sub")) {
         return atomicPayloadTypeForValue(member.base.*, ctx);
     }
@@ -6647,11 +5677,7 @@ fn atomicCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
 }
 
 fn maybeUninitCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return maybeUninitCallReturnType(inner.*, ctx),
-        else => return null,
-    };
+    const member = memberExpr(callee) orelse return null;
     if (!std.mem.eql(u8, member.name.text, "assume_init")) return null;
     return maybeUninitPayloadTypeForValue(member.base.*, ctx);
 }
@@ -6668,11 +5694,8 @@ fn bitcastCallReturnType(call: anytype) ?ast.TypeExpr {
 
 // `raw.load<T>(addr)` reads a `T` from a raw address (the dual of `raw.store`).
 fn isRawLoadCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |m| isIdentNamed(m.base.*, "raw") and std.mem.eql(u8, m.name.text, "load"),
-        .grouped => |inner| isRawLoadCall(inner.*),
-        else => false,
-    };
+    const member = memberExpr(callee) orelse return false;
+    return isIdentNamed(member.base.*, "raw") and std.mem.eql(u8, member.name.text, "load");
 }
 
 fn rawLoadCallReturnType(call: anytype) ?ast.TypeExpr {
@@ -6683,11 +5706,8 @@ fn rawLoadCallReturnType(call: anytype) ?ast.TypeExpr {
 // `va.arg<T>(&ap)` yields a `T` (the next C-ABI variadic slot); `va.start()` yields a
 // `va_list`; `va.end(&ap)` yields void. These give the call its result type.
 fn vaCallName(callee: ast.Expr) ?[]const u8 {
-    return switch (callee.kind) {
-        .member => |m| if (isIdentNamed(m.base.*, "va")) m.name.text else null,
-        .grouped => |inner| vaCallName(inner.*),
-        else => null,
-    };
+    const member = memberExpr(callee) orelse return null;
+    return if (isIdentNamed(member.base.*, "va")) member.name.text else null;
 }
 
 fn vaCallReturnType(call: anytype) ?ast.TypeExpr {
@@ -6705,11 +5725,8 @@ fn vaCallReturnType(call: anytype) ?ast.TypeExpr {
 // `raw.ptr<T>(addr)` mints a `*mut T` from a raw address — the typed-pointer companion
 // of raw.load/store (used to view an allocation as a typed object: Arc blocks, etc.).
 fn isRawPtrCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |m| isIdentNamed(m.base.*, "raw") and std.mem.eql(u8, m.name.text, "ptr"),
-        .grouped => |inner| isRawPtrCall(inner.*),
-        else => false,
-    };
+    const member = memberExpr(callee) orelse return false;
+    return isIdentNamed(member.base.*, "raw") and std.mem.eql(u8, member.name.text, "ptr");
 }
 
 fn tryPayloadType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
@@ -6825,21 +5842,9 @@ const TaggedUnionConstructorCall = struct {
 };
 
 fn taggedUnionConstructorCall(expr: ast.Expr) ?TaggedUnionConstructorCall {
-    return switch (expr.kind) {
-        .call => |node| blk: {
-            const ident = switch (node.callee.kind) {
-                .ident => |ident| ident,
-                .grouped => |inner| switch (inner.kind) {
-                    .ident => |ident| ident,
-                    else => break :blk null,
-                },
-                else => break :blk null,
-            };
-            break :blk .{ .name = ident, .args = node.args };
-        },
-        .grouped => |inner| taggedUnionConstructorCall(inner.*),
-        else => null,
-    };
+    const call = callExpr(expr) orelse return null;
+    const name = calleeIdentName(call.callee.*) orelse return null;
+    return .{ .name = .{ .text = name, .span = call.callee.*.span }, .args = call.args };
 }
 
 fn isKnownTaggedUnionConstructorName(name: []const u8, ctx: Context) bool {
@@ -6854,47 +5859,6 @@ fn isKnownTaggedUnionConstructorName(name: []const u8, ctx: Context) bool {
 fn taggedUnionConstructorIsFunction(name: []const u8, ctx: Context) bool {
     const functions = ctx.functions orelse return false;
     return functions.contains(name);
-}
-
-fn classifyGenericTypeName(name: []const u8) TypeClass {
-    if (std.mem.eql(u8, name, "Result")) return .result;
-    if (std.mem.eql(u8, name, "atomic")) return .atomic;
-    if (std.mem.eql(u8, name, "DmaBuf")) return .dma_buf;
-    if (std.mem.eql(u8, name, "UserPtr")) return .user_ptr;
-    if (std.mem.eql(u8, name, "MmioPtr")) return .mmio_ptr;
-    if (std.mem.eql(u8, name, "PhysPtr")) return .phys_ptr;
-    if (std.mem.eql(u8, name, "Secret")) return .secret;
-    if (std.mem.eql(u8, name, "wrap")) return .wrap;
-    if (std.mem.eql(u8, name, "sat")) return .sat;
-    if (std.mem.eql(u8, name, "serial")) return .serial;
-    if (std.mem.eql(u8, name, "counter")) return .counter;
-    if (std.mem.eql(u8, name, "Duration")) return .duration;
-    return .unknown;
-}
-
-fn classifyTypeName(name: []const u8) TypeClass {
-    if (std.mem.eql(u8, name, "u8")) return .checked_u8;
-    if (std.mem.eql(u8, name, "u16")) return .checked_u16;
-    if (std.mem.eql(u8, name, "u32")) return .checked_u32;
-    if (std.mem.eql(u8, name, "u64")) return .checked_u64;
-    if (std.mem.eql(u8, name, "u128")) return .checked_u128;
-    if (std.mem.eql(u8, name, "usize")) return .checked_usize;
-    if (std.mem.eql(u8, name, "i8")) return .checked_i8;
-    if (std.mem.eql(u8, name, "i16")) return .checked_i16;
-    if (std.mem.eql(u8, name, "i32")) return .checked_i32;
-    if (std.mem.eql(u8, name, "i64")) return .checked_i64;
-    if (std.mem.eql(u8, name, "i128")) return .checked_i128;
-    if (std.mem.eql(u8, name, "isize")) return .checked_isize;
-    if (std.mem.eql(u8, name, "f32")) return .f32;
-    if (std.mem.eql(u8, name, "f64")) return .f64;
-    if (std.mem.eql(u8, name, "Order")) return .order;
-    if (std.mem.eql(u8, name, "never")) return .never;
-    if (std.mem.eql(u8, name, "void")) return .void;
-    if (std.mem.eql(u8, name, "bool")) return .bool;
-    if (std.mem.eql(u8, name, "PAddr")) return .paddr;
-    if (std.mem.eql(u8, name, "VAddr")) return .vaddr;
-    if (std.mem.eql(u8, name, "DmaAddr")) return .dma_addr;
-    return .unknown;
 }
 
 fn canInitialize(target: TypeClass, initializer: TypeClass) bool {
@@ -6954,173 +5918,6 @@ fn enumValueFits(value: EnumValueKey, bounds: IntBounds) bool {
     return value.magnitude <= bounds.max;
 }
 
-// A non-negative integer-literal array index value, or null if the index is not a literal.
-fn constIndexLiteral(index: ast.Expr) ?usize {
-    return switch (index.kind) {
-        .int_literal => |literal| parseUsizeLiteral(literal),
-        .grouped => |inner| constIndexLiteral(inner.*),
-        else => null,
-    };
-}
-
-fn parseArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
-    return switch (expr.kind) {
-        .int_literal => |literal| parseUsizeLiteral(literal),
-        .char_literal => |literal| if (parseCharLiteral(literal)) |value|
-            if (value <= std.math.maxInt(usize)) @intCast(value) else null
-        else
-            null,
-        .grouped => |inner| parseArrayLen(inner.*, funcs, globals),
-        .binary => |node| {
-            const left = parseArrayLen(node.left.*, funcs, globals) orelse return null;
-            const right = parseArrayLen(node.right.*, funcs, globals) orelse return null;
-            return switch (node.op) {
-                .add => std.math.add(usize, left, right) catch null,
-                .sub => std.math.sub(usize, left, right) catch null,
-                .mul => std.math.mul(usize, left, right) catch null,
-                .div => if (right == 0) null else @divTrunc(left, right),
-                .mod => if (right == 0) null else @mod(left, right),
-                .shl => if (right >= @bitSizeOf(usize)) null else std.math.shl(usize, left, right),
-                .shr => if (right >= @bitSizeOf(usize)) null else left >> @intCast(right),
-                else => null,
-            };
-        },
-        // Section 22 comptime↔type feedback: a `const fn` result or a named
-        // `const` global can drive a fixed-array length, e.g. `[align_up(3, 4)]u8`
-        // or `[CAP]u8`.
-        .call, .ident => comptimeUsizeValue(expr, funcs, globals),
-        else => null,
-    };
-}
-
-// Fold a comptime expression to a usize using the const-fn evaluator. A
-// stack buffer backs the evaluator's scopes so this stays a free function
-// (callable from the type-level array-length helpers without a Checker).
-fn comptimeUsizeValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
-    if (funcs == null and globals == null) return null;
-    var buf: [64 * 1024]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buf);
-    var scope = eval.ComptimeScope.init(fba.allocator());
-    scope.funcs = funcs;
-    scope.globals = globals;
-    return switch (eval.foldComptimeExpr(&scope, expr)) {
-        .value => |v| switch (v) {
-            .int => |n| if (n >= 0 and n <= std.math.maxInt(usize)) @intCast(n) else null,
-            .void, .boolean, .float, .tag, .bytes, .array, .@"struct" => null,
-        },
-        else => null,
-    };
-}
-
-fn isArrayLiteral(expr: ast.Expr) bool {
-    return arrayLiteralItems(expr) != null;
-}
-
-fn arrayLiteralItems(expr: ast.Expr) ?[]const ast.Expr {
-    return switch (expr.kind) {
-        .array_literal => |items| items,
-        .grouped => |inner| arrayLiteralItems(inner.*),
-        else => null,
-    };
-}
-
-fn isStructLiteral(expr: ast.Expr) bool {
-    return structLiteralFields(expr) != null;
-}
-
-fn structLiteralFields(expr: ast.Expr) ?[]const ast.StructLiteralField {
-    return switch (expr.kind) {
-        .struct_literal => |fields| fields,
-        .grouped => |inner| structLiteralFields(inner.*),
-        else => null,
-    };
-}
-
-fn isNullLiteral(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .null_literal => true,
-        .grouped => |inner| isNullLiteral(inner.*),
-        else => false,
-    };
-}
-
-fn isStaticGlobalInitializer(expr: ast.Expr, ctx: Context) bool {
-    return switch (expr.kind) {
-        .int_literal, .float_literal, .bool_literal, .null_literal, .void_literal, .enum_literal, .string_literal, .char_literal => true,
-        .ident => |ident| (if (ctx.globals) |globals| globals.contains(ident.text) else false) or
-            (if (ctx.functions) |functions| functions.contains(ident.text) else false),
-        .unary => |node| node.op == .neg and (integerLiteralValue(node.expr.*) != null or negativeFloatLiteralOperand(node.expr.*)),
-        // An explicit conversion of a static operand (`0 as u32`) is itself static;
-        // the comptime folder applies the cast, and the C backend emits it inline.
-        .cast => |node| isStaticGlobalInitializer(node.value.*, ctx),
-        .grouped => |inner| isStaticGlobalInitializer(inner.*, ctx),
-        .address_of => |inner| isStaticGlobalAddressTarget(inner.*, ctx),
-        .array_literal => |items| allStaticGlobalInitializerItems(items, ctx),
-        .struct_literal => |fields| allStaticGlobalInitializerFields(fields, ctx),
-        // `atomic.init(<static>)` lowers to a plain `= value` initializer, so a
-        // global atomic with a static seed (e.g. an interrupt-shared counter) is a
-        // valid static global.
-        .call => |node| isAtomicInitCallee(node.callee.*) and node.args.len == 1 and isStaticGlobalInitializer(node.args[0], ctx),
-        else => false,
-    };
-}
-
-fn negativeFloatLiteralOperand(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .float_literal => true,
-        .grouped => |inner| negativeFloatLiteralOperand(inner.*),
-        else => false,
-    };
-}
-
-fn isAtomicInitCallee(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |m| isIdentNamed(m.base.*, "atomic") and std.mem.eql(u8, m.name.text, "init"),
-        .grouped => |inner| isAtomicInitCallee(inner.*),
-        else => false,
-    };
-}
-
-fn allStaticGlobalInitializerItems(items: []const ast.Expr, ctx: Context) bool {
-    for (items) |item| {
-        if (!isStaticGlobalInitializer(item, ctx)) return false;
-    }
-    return true;
-}
-
-fn allStaticGlobalInitializerFields(fields: []const ast.StructLiteralField, ctx: Context) bool {
-    for (fields) |field| {
-        if (!isStaticGlobalInitializer(field.value, ctx)) return false;
-    }
-    return true;
-}
-
-fn isStaticGlobalAddressTarget(expr: ast.Expr, ctx: Context) bool {
-    return switch (expr.kind) {
-        .ident => |ident| if (ctx.globals) |globals| globals.contains(ident.text) else false,
-        .member => |node| isStaticGlobalAddressTarget(node.base.*, ctx),
-        .index => |node| isStaticGlobalAddressTarget(node.base.*, ctx) and isStaticGlobalInitializer(node.index.*, ctx),
-        .grouped => |inner| isStaticGlobalAddressTarget(inner.*, ctx),
-        else => false,
-    };
-}
-
-fn isAddressOfExpr(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .address_of => true,
-        .grouped => |inner| isAddressOfExpr(inner.*),
-        else => false,
-    };
-}
-
-fn addressOfOperand(expr: ast.Expr) ?*ast.Expr {
-    return switch (expr.kind) {
-        .address_of => |inner| inner,
-        .grouped => |inner| addressOfOperand(inner.*),
-        else => null,
-    };
-}
-
 fn addressableStorageType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
     return switch (expr.kind) {
         .ident => |ident| {
@@ -7166,78 +5963,6 @@ fn addressableStorageIsMutable(expr: ast.Expr, ctx: Context) bool {
         .grouped => |inner| addressableStorageIsMutable(inner.*, ctx),
         else => false,
     };
-}
-
-fn isNullableValue(kind: TypeClass) bool {
-    return switch (kind) {
-        .nullable_pointer, .nullable_c_void_pointer, .nullable_dyn_trait => true,
-        else => false,
-    };
-}
-
-fn isIndexType(kind: TypeClass) bool {
-    return switch (kind) {
-        .checked_usize, .int_literal, .never, .unknown => true,
-        else => false,
-    };
-}
-
-fn isIndexableBase(kind: TypeClass) bool {
-    return switch (kind) {
-        .array, .slice, .never, .unknown => true,
-        else => false,
-    };
-}
-
-fn isForIterableBase(kind: TypeClass) bool {
-    return switch (kind) {
-        .array, .slice, .never, .unknown => true,
-        else => false,
-    };
-}
-
-fn isConditionType(kind: TypeClass) bool {
-    return switch (kind) {
-        .bool, .never, .unknown => true,
-        else => false,
-    };
-}
-
-fn isTryOperand(kind: TypeClass) bool {
-    return switch (kind) {
-        .result, .nullable_pointer, .nullable_c_void_pointer, .nullable_dyn_trait, .never, .unknown => true,
-        else => false,
-    };
-}
-
-fn tryResultType(kind: TypeClass) TypeClass {
-    return switch (kind) {
-        .nullable_pointer => .pointer,
-        .nullable_c_void_pointer => .c_void_pointer,
-        // The narrowed `*dyn Trait` carries no specific class — dispatch keys off
-        // the narrowed binding's TypeExpr (the `.dyn_trait` child), like a bare dyn.
-        .nullable_dyn_trait => .unknown,
-        .result => .unknown,
-        else => kind,
-    };
-}
-
-fn isOpaqueAddressClass(kind: TypeClass) bool {
-    return switch (kind) {
-        .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
-        else => false,
-    };
-}
-
-fn isAddressClass(kind: TypeClass) bool {
-    return switch (kind) {
-        .paddr, .vaddr, .dma_addr, .user_ptr, .mmio_ptr, .phys_ptr => true,
-        else => false,
-    };
-}
-
-fn isBitcastLayoutClass(kind: TypeClass) bool {
-    return isCheckedInt(kind) or isFloat(kind) or kind == .bool or isPointerLike(kind) or isAddressClass(kind);
 }
 
 fn isBitcastLayoutType(ty: ast.TypeExpr, ctx: Context) bool {
@@ -7318,17 +6043,10 @@ fn deinitEnums(enums: *std.StringHashMap(EnumInfo)) void {
 }
 
 fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
-    const member = switch (target.kind) {
-        .member => |node| node,
-        .grouped => |inner| return isMmioRegisterTarget(inner.*, ctx),
-        else => return false,
-    };
+    const member = memberExpr(target) orelse return false;
     if (mmioRegisterMemberInfo(target, ctx) != null) return true;
     if (isMmioRegisterTarget(member.base.*, ctx)) return true;
-    const base_name = switch (member.base.kind) {
-        .ident => |ident| ident.text,
-        else => return false,
-    };
+    const base_name = calleeIdentName(member.base.*) orelse return false;
     const mmio_params = ctx.mmio_params orelse return false;
     const struct_name = mmio_params.get(base_name) orelse return false;
     const mmio_structs = ctx.mmio_structs orelse return false;
@@ -7337,11 +6055,7 @@ fn isMmioRegisterTarget(target: ast.Expr, ctx: Context) bool {
 }
 
 fn isMmioRegisterAccessCall(callee: ast.Expr, ctx: Context) bool {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| return isMmioRegisterAccessCall(inner.*, ctx),
-        else => return false,
-    };
+    const member = memberExpr(callee) orelse return false;
     if (!std.mem.eql(u8, member.name.text, "read") and !std.mem.eql(u8, member.name.text, "write")) return false;
     return mmioRegisterMemberInfo(member.base.*, ctx) != null;
 }
@@ -7362,15 +6076,8 @@ fn isDmaOperationMember(member: anytype, ctx: Context) bool {
 }
 
 fn mmioRegisterMemberInfo(expr: ast.Expr, ctx: Context) ?MmioFieldInfo {
-    const member = switch (expr.kind) {
-        .member => |node| node,
-        .grouped => |inner| return mmioRegisterMemberInfo(inner.*, ctx),
-        else => return null,
-    };
-    const base_name = switch (member.base.kind) {
-        .ident => |ident| ident.text,
-        else => return null,
-    };
+    const member = memberExpr(expr) orelse return null;
+    const base_name = calleeIdentName(member.base.*) orelse return null;
     const mmio_params = ctx.mmio_params orelse return null;
     const struct_name = mmio_params.get(base_name) orelse return null;
     const mmio_structs = ctx.mmio_structs orelse return null;
@@ -7399,14 +6106,7 @@ fn isAssignableDerefOperand(expr: ast.Expr) bool {
 
 fn isRawManyOffsetCallSyntax(call: anytype) bool {
     if (call.type_args.len != 0 or call.args.len != 1) return false;
-    const member = switch (call.callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| switch (inner.kind) {
-            .member => |node| node,
-            else => return false,
-        },
-        else => return false,
-    };
+    const member = memberCallee(call.callee.*) orelse return false;
     return std.mem.eql(u8, member.name.text, "offset");
 }
 
@@ -7560,14 +6260,9 @@ fn boolTypeExpr(span: diagnostics.Span) ast.TypeExpr {
 // The float result type of a pass-through math builtin call (`__builtin_sqrtf` -> f32,
 // `__builtin_sqrt` -> f64), so a `let x: f32 = __builtin_sqrtf(..)` typechecks.
 fn mathBuiltinReturnType(callee: ast.Expr) ?ast.TypeExpr {
-    return switch (callee.kind) {
-        .ident => |ident| blk: {
-            const name = if (mathBuiltinFloatClass(ident.text)) |class| (if (class == .f32) "f32" else "f64") else break :blk null;
-            break :blk ast.TypeExpr{ .span = ident.span, .kind = .{ .name = .{ .text = name, .span = ident.span } } };
-        },
-        .grouped => |inner| mathBuiltinReturnType(inner.*),
-        else => null,
-    };
+    const callee_name = calleeIdentName(callee) orelse return null;
+    const name = if (mathBuiltinFloatClass(callee_name)) |class| (if (class == .f32) "f32" else "f64") else return null;
+    return ast.TypeExpr{ .span = callee.span, .kind = .{ .name = .{ .text = name, .span = callee.span } } };
 }
 
 fn byteViewCallReturnType(call: anytype) ?ast.TypeExpr {
@@ -7587,11 +6282,8 @@ fn isConstU8SliceType(ty: ast.TypeExpr) bool {
 }
 
 fn constGetMember(callee: ast.Expr) ?struct { base: *ast.Expr, name: ast.Ident } {
-    return switch (callee.kind) {
-        .member => |node| if (std.mem.eql(u8, node.name.text, "const_get")) .{ .base = node.base, .name = node.name } else null,
-        .grouped => |inner| constGetMember(inner.*),
-        else => null,
-    };
+    const member = memberExpr(callee) orelse return null;
+    return if (std.mem.eql(u8, member.name.text, "const_get")) .{ .base = member.base, .name = member.name } else null;
 }
 
 const ConstGetInfo = struct {
@@ -7618,36 +6310,9 @@ fn constGetReturnType(call: anytype, ctx: Context) ?ast.TypeExpr {
     return info.element_ty;
 }
 
-const FixedArrayInfo = struct {
-    len: usize,
-    child: ast.TypeExpr,
-};
-
-fn fixedArrayType(ty: ast.TypeExpr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?FixedArrayInfo {
-    return switch (ty.kind) {
-        .array => |node| .{ .len = parseArrayLen(node.len, funcs, globals) orelse return null, .child = node.child.* },
-        .qualified => |node| fixedArrayType(node.child.*, funcs, globals),
-        else => null,
-    };
-}
-
-fn constGetIndexArg(ty: ast.TypeExpr) ?usize {
-    return switch (ty.kind) {
-        .name => |name| parseUsizeLiteral(name.text),
-        else => null,
-    };
-}
-
 fn rawManyOffsetReturnType(call: anytype, ctx: Context) ?ast.TypeExpr {
     if (call.type_args.len != 0) return null;
-    const member = switch (call.callee.kind) {
-        .member => |node| node,
-        .grouped => |inner| switch (inner.kind) {
-            .member => |node| node,
-            else => return null,
-        },
-        else => return null,
-    };
+    const member = memberCallee(call.callee.*) orelse return null;
     if (!std.mem.eql(u8, member.name.text, "offset")) return null;
     const base_ty = exprResultType(member.base.*, ctx) orelse return null;
     return if (isRawManyPointerTypeCtx(base_ty, ctx)) base_ty else null;
@@ -7727,13 +6392,9 @@ pub fn directCallReturnType(callee: ast.Expr, ctx: Context) ?ast.TypeExpr {
 }
 
 fn directCallFunction(callee: ast.Expr, ctx: Context) ?FunctionInfo {
-    const ident = switch (callee.kind) {
-        .ident => |ident| ident,
-        .grouped => |inner| return directCallFunction(inner.*, ctx),
-        else => return null,
-    };
+    const name = calleeIdentName(callee) orelse return null;
     const functions = ctx.functions orelse return null;
-    return functions.get(ident.text);
+    return functions.get(name);
 }
 
 // A direct call to a function declared `-> never` diverges: control never returns
@@ -7847,11 +6508,7 @@ fn functionMatchesFnPointer(fn_name: []const u8, expected: ast.TypeExpr, ctx: Co
 }
 
 fn directCallName(callee: ast.Expr) ?[]const u8 {
-    return switch (callee.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| directCallName(inner.*),
-        else => null,
-    };
+    return calleeIdentName(callee);
 }
 
 fn updateAssignmentAddressOrigin(target: ast.Expr, value: ast.Expr, ctx: Context) void {
@@ -8114,10 +6771,6 @@ fn placeOutlivesFrame(expr: ast.Expr, ctx: Context) bool {
     };
 }
 
-fn isPointerLikeClass(class: TypeClass) bool {
-    return isNonNullPointerLike(class) or isNullablePointerLike(class);
-}
-
 fn indexedLocalArrayStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span {
     const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return null;
     if (!isArrayType(ty)) return null;
@@ -8135,44 +6788,6 @@ fn indexedLocalArrayStorageRoot(expr: ast.Expr, ctx: Context) ?diagnostics.Span 
     };
 }
 
-fn isConstStorageType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .pointer => |node| node.mutability == .@"const",
-        .raw_many_pointer => |node| node.mutability == .@"const",
-        .slice => |node| node.mutability == .@"const",
-        .nullable => |child| isConstStorageType(child.*),
-        .qualified => |node| isConstStorageType(node.child.*),
-        else => false,
-    };
-}
-
-const ViewKind = enum {
-    pointer,
-    raw_many_pointer,
-    slice,
-};
-
-const ViewType = struct {
-    kind: ViewKind,
-    mutability: ast.Mutability,
-    nullable: bool = false,
-};
-
-fn viewType(ty: ast.TypeExpr) ?ViewType {
-    return switch (ty.kind) {
-        .pointer => |node| .{ .kind = .pointer, .mutability = node.mutability },
-        .raw_many_pointer => |node| .{ .kind = .raw_many_pointer, .mutability = node.mutability },
-        .slice => |node| .{ .kind = .slice, .mutability = node.mutability },
-        .nullable => |child| {
-            var view = viewType(child.*) orelse return null;
-            view.nullable = true;
-            return view;
-        },
-        .qualified => |node| viewType(node.child.*),
-        else => null,
-    };
-}
-
 fn pointerComparableTypesCtx(left: ast.TypeExpr, right: ast.TypeExpr, ctx: Context) bool {
     const resolved_left = resolveAliasType(left, ctx);
     const resolved_right = resolveAliasType(right, ctx);
@@ -8182,17 +6797,6 @@ fn pointerComparableTypesCtx(left: ast.TypeExpr, right: ast.TypeExpr, ctx: Conte
     const left_child = viewElementType(resolved_left) orelse return false;
     const right_child = viewElementType(resolved_right) orelse return false;
     return sameTypeSyntaxCtx(left_child, right_child, ctx);
-}
-
-fn viewElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .pointer => |node| node.child.*,
-        .raw_many_pointer => |node| node.child.*,
-        .slice => |node| node.child.*,
-        .nullable => |child| viewElementType(child.*),
-        .qualified => |node| viewElementType(node.child.*),
-        else => null,
-    };
 }
 
 fn implicitPointerViewConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {
@@ -8228,151 +6832,8 @@ fn implicitCVoidPointerConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr,
     return target_is_c_void != source_is_c_void;
 }
 
-fn isCVoidPointerClass(kind: TypeClass) bool {
-    return switch (kind) {
-        .c_void_pointer, .nullable_c_void_pointer => true,
-        else => false,
-    };
-}
-
-fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {
-    if (std.meta.activeTag(left.kind) != std.meta.activeTag(right.kind)) return false;
-    return switch (left.kind) {
-        .name => |left_name| std.mem.eql(u8, left_name.text, switch (right.kind) {
-            .name => |right_name| right_name.text,
-            else => unreachable,
-        }),
-        .enum_literal => |left_name| std.mem.eql(u8, left_name.text, switch (right.kind) {
-            .enum_literal => |right_name| right_name.text,
-            else => unreachable,
-        }),
-        .member => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .member => |node| node,
-                else => unreachable,
-            };
-            break :blk sameTypeSyntax(left_node.base.*, right_node.base.*) and
-                std.mem.eql(u8, left_node.field.text, right_node.field.text);
-        },
-        .nullable => |left_child| sameTypeSyntax(left_child.*, switch (right.kind) {
-            .nullable => |right_child| right_child.*,
-            else => unreachable,
-        }),
-        .qualified => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .qualified => |node| node,
-                else => unreachable,
-            };
-            break :blk left_node.mutability == right_node.mutability and
-                sameTypeSyntax(left_node.child.*, right_node.child.*);
-        },
-        .pointer => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .pointer => |node| node,
-                else => unreachable,
-            };
-            break :blk left_node.mutability == right_node.mutability and
-                sameTypeSyntax(left_node.child.*, right_node.child.*);
-        },
-        .raw_many_pointer => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .raw_many_pointer => |node| node,
-                else => unreachable,
-            };
-            break :blk left_node.mutability == right_node.mutability and
-                sameTypeSyntax(left_node.child.*, right_node.child.*);
-        },
-        .slice => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .slice => |node| node,
-                else => unreachable,
-            };
-            break :blk left_node.mutability == right_node.mutability and
-                sameTypeSyntax(left_node.child.*, right_node.child.*);
-        },
-        .array => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .array => |node| node,
-                else => unreachable,
-            };
-            break :blk sameExprSyntax(left_node.len, right_node.len) and
-                sameTypeSyntax(left_node.child.*, right_node.child.*);
-        },
-        .generic => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .generic => |node| node,
-                else => unreachable,
-            };
-            if (!std.mem.eql(u8, left_node.base.text, right_node.base.text)) break :blk false;
-            if (left_node.args.len != right_node.args.len) break :blk false;
-            for (left_node.args, right_node.args) |left_arg, right_arg| {
-                if (!sameTypeSyntax(left_arg, right_arg)) break :blk false;
-            }
-            break :blk true;
-        },
-        .fn_pointer => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .fn_pointer => |node| node,
-                else => unreachable,
-            };
-            if (left_node.params.len != right_node.params.len) break :blk false;
-            for (left_node.params, right_node.params) |left_param, right_param| {
-                if (!sameTypeSyntax(left_param, right_param)) break :blk false;
-            }
-            break :blk sameTypeSyntax(left_node.ret.*, right_node.ret.*);
-        },
-        .closure_type => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .closure_type => |node| node,
-                else => unreachable,
-            };
-            if (left_node.params.len != right_node.params.len) break :blk false;
-            for (left_node.params, right_node.params) |left_param, right_param| {
-                if (!sameTypeSyntax(left_param, right_param)) break :blk false;
-            }
-            break :blk sameTypeSyntax(left_node.ret.*, right_node.ret.*);
-        },
-        .dyn_trait => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .dyn_trait => |node| node,
-                else => unreachable,
-            };
-            break :blk left_node.mutability == right_node.mutability and
-                std.mem.eql(u8, left_node.trait_name.text, right_node.trait_name.text);
-        },
-    };
-}
-
 fn sameTypeSyntaxCtx(left: ast.TypeExpr, right: ast.TypeExpr, ctx: Context) bool {
     return sameTypeSyntax(resolveAliasType(left, ctx), resolveAliasType(right, ctx));
-}
-
-fn sameExprSyntax(left: ast.Expr, right: ast.Expr) bool {
-    if (std.meta.activeTag(left.kind) != std.meta.activeTag(right.kind)) return false;
-    return switch (left.kind) {
-        .ident => |left_ident| std.mem.eql(u8, left_ident.text, switch (right.kind) {
-            .ident => |right_ident| right_ident.text,
-            else => unreachable,
-        }),
-        .int_literal => |left_text| std.mem.eql(u8, left_text, switch (right.kind) {
-            .int_literal => |right_text| right_text,
-            else => unreachable,
-        }),
-        .bool_literal => |left_value| left_value == switch (right.kind) {
-            .bool_literal => |right_value| right_value,
-            else => unreachable,
-        },
-        .null_literal, .uninit_literal, .unreachable_expr, .void_literal => true,
-        .enum_literal => |left_ident| std.mem.eql(u8, left_ident.text, switch (right.kind) {
-            .enum_literal => |right_ident| right_ident.text,
-            else => unreachable,
-        }),
-        .grouped => |left_inner| sameExprSyntax(left_inner.*, switch (right.kind) {
-            .grouped => |right_inner| right_inner.*,
-            else => unreachable,
-        }),
-        else => false,
-    };
 }
 
 fn mmioFieldInfoFromType(ty: ast.TypeExpr) ?MmioFieldInfo {
@@ -8390,415 +6851,10 @@ fn mmioFieldInfoFromType(ty: ast.TypeExpr) ?MmioFieldInfo {
     return .{ .access = access };
 }
 
-fn uncheckedRequirement(expr: ast.Expr) ?ContractKind {
-    return switch (expr.kind) {
-        .member => |node| {
-            if (isIdentNamed(node.base.*, "unchecked")) return .no_overflow;
-            if (isIdentNamed(node.base.*, "compiler") and std.mem.eql(u8, node.name.text, "assume_noalias_unchecked")) return .noalias_contract;
-            return null;
-        },
-        .ident => |ident| if (std.mem.eql(u8, ident.text, "assume_noalias_unchecked")) .noalias_contract else null,
-        else => null,
-    };
-}
-
-fn isUnsafeOperationCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |node| {
-            if (isIdentNamed(node.base.*, "raw") and (std.mem.eql(u8, node.name.text, "store") or std.mem.eql(u8, node.name.text, "load"))) return true;
-            // raw.ptr mints a typed pointer from an address (like phys() makes a PAddr);
-            // it needs no unsafe block — dereferencing the result is the checked part.
-            if (isIdentNamed(node.base.*, "mmio") and std.mem.eql(u8, node.name.text, "map")) return true;
-            // va.arg reads an untyped C-ABI slot (the only `va.*` that can read wrong/garbage
-            // if the format/type disagree); start/end are bookkeeping. Gate the read.
-            if (isIdentNamed(node.base.*, "va") and std.mem.eql(u8, node.name.text, "arg")) return true;
-            return false;
-        },
-        .grouped => |inner| isUnsafeOperationCall(inner.*),
-        else => false,
-    };
-}
-
-fn isBuiltinNamespaceMember(member: anytype) bool {
-    const base = switch (member.base.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| switch (inner.kind) {
-            .ident => |ident| ident.text,
-            else => return false,
-        },
-        else => return false,
-    };
-    if (std.mem.eql(u8, base, "raw")) return std.mem.eql(u8, member.name.text, "store") or std.mem.eql(u8, member.name.text, "load") or std.mem.eql(u8, member.name.text, "ptr");
-    // C-ABI varargs cursor intrinsics (the printf-family interop boundary): `va.start()`
-    // mints a cursor in a variadic fn, `va.arg<T>(&ap)` pulls the next typed argument,
-    // `va.end(&ap)` finalizes. Unchecked ABI ops, gated by `unsafe` (isUnsafeOperationCall).
-    if (std.mem.eql(u8, base, "va")) return std.mem.eql(u8, member.name.text, "start") or std.mem.eql(u8, member.name.text, "arg") or std.mem.eql(u8, member.name.text, "end");
-    if (std.mem.eql(u8, base, "fence")) return std.mem.eql(u8, member.name.text, "full") or std.mem.eql(u8, member.name.text, "acquire") or std.mem.eql(u8, member.name.text, "release");
-    if (std.mem.eql(u8, base, "mmio")) return std.mem.eql(u8, member.name.text, "map");
-    if (std.mem.eql(u8, base, "unchecked")) return isUncheckedNoOverflowMember(member.name.text);
-    if (std.mem.eql(u8, base, "wrapping")) return std.mem.eql(u8, member.name.text, "add");
-    if (std.mem.eql(u8, base, "reduce")) return std.mem.eql(u8, member.name.text, "sum_checked") or std.mem.eql(u8, member.name.text, "sum_left") or std.mem.eql(u8, member.name.text, "sum_fast");
-    if (std.mem.eql(u8, base, "mem")) return std.mem.eql(u8, member.name.text, "as_bytes") or std.mem.eql(u8, member.name.text, "bytes_equal");
-    if (std.mem.eql(u8, base, "compiler")) return std.mem.eql(u8, member.name.text, "assume_noalias_unchecked");
-    if (std.mem.eql(u8, base, "cpu")) return std.mem.eql(u8, member.name.text, "pause");
-    if (std.mem.eql(u8, base, "atomic")) return std.mem.eql(u8, member.name.text, "init");
-    if (std.mem.eql(u8, base, "cache")) return std.mem.eql(u8, member.name.text, "clean") or std.mem.eql(u8, member.name.text, "invalidate");
-    if (std.mem.eql(u8, base, "lock")) return std.mem.eql(u8, member.name.text, "acquire");
-    if (std.mem.eql(u8, base, "heap")) return std.mem.eql(u8, member.name.text, "alloc");
-    if (std.mem.eql(u8, base, "device")) return std.mem.eql(u8, member.name.text, "wait_irq");
-    if (std.mem.eql(u8, base, "fs")) return std.mem.eql(u8, member.name.text, "read");
-    return false;
-}
-
-fn isUncheckedNoOverflowMember(name: []const u8) bool {
-    return std.mem.eql(u8, name, "add") or
-        std.mem.eql(u8, name, "sub") or
-        std.mem.eql(u8, name, "mul");
-}
-
-// The message text of a `comptime_error("…")` call (quotes stripped), or null if `expr` is
-// not that form. Used to surface a custom comptime diagnostic.
-fn comptimeErrorMessage(expr: ast.Expr) ?[]const u8 {
-    const call = switch (expr.kind) {
-        .call => |node| node,
-        .grouped => |inner| return comptimeErrorMessage(inner.*),
-        else => return null,
-    };
-    if (!isIdentNamed(call.callee.*, "comptime_error") or call.args.len != 1) return null;
-    return switch (call.args[0].kind) {
-        .string_literal => |lit| if (lit.len >= 2) lit[1 .. lit.len - 1] else lit,
-        else => null,
-    };
-}
-
-fn isBuiltinFunctionName(name: []const u8) bool {
-    if (std.mem.eql(u8, name, "trap")) return true;
-    if (std.mem.eql(u8, name, "comptime_error")) return true; // section 22: comptime diagnostic
-    if (std.mem.eql(u8, name, "drop")) return true;
-    if (std.mem.eql(u8, name, "forget_unchecked")) return true;
-    if (std.mem.eql(u8, name, "bind")) return true; // closure construction
-    if (std.mem.eql(u8, name, "unwrap")) return true;
-    if (std.mem.eql(u8, name, "bitcast")) return true;
-    if (std.mem.eql(u8, name, "phys")) return true;
-    if (std.mem.eql(u8, name, "ok")) return true;
-    if (std.mem.eql(u8, name, "err")) return true;
-    if (std.mem.eql(u8, name, "size_of")) return true;
-    if (std.mem.eql(u8, name, "sizeof")) return true;
-    if (std.mem.eql(u8, name, "alignof")) return true;
-    if (std.mem.eql(u8, name, "field_offset")) return true;
-    if (std.mem.eql(u8, name, "field_type")) return true;
-    if (std.mem.eql(u8, name, "bit_offset")) return true;
-    if (std.mem.eql(u8, name, "repr_of")) return true;
-    if (mathBuiltinFloatClass(name) != null) return true;
-    return false;
-}
-
-// Pass-through clang math builtins MC accepts unchanged: `__builtin_sqrtf` (f32->f32) and
-// `__builtin_sqrt` (f64->f64). They typecheck as a single-float-argument call returning the
-// matching float class, and the C backend emits them verbatim (clang provides them natively).
-fn mathBuiltinFloatClass(name: []const u8) ?TypeClass {
-    if (std.mem.eql(u8, name, "__builtin_sqrtf")) return .f32;
-    if (std.mem.eql(u8, name, "__builtin_sqrt")) return .f64;
-    return null;
-}
-
-fn mathBuiltinCallReturnClass(callee: ast.Expr) ?TypeClass {
-    return switch (callee.kind) {
-        .ident => |ident| mathBuiltinFloatClass(ident.text),
-        .grouped => |inner| mathBuiltinCallReturnClass(inner.*),
-        else => null,
-    };
-}
-
-fn isBitcastCallName(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, "bitcast"),
-        .grouped => |inner| isBitcastCallName(inner.*),
-        else => false,
-    };
-}
-
-fn isDeclassifyCallName(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, "declassify") or std.mem.eql(u8, ident.text, "reveal"),
-        .grouped => |inner| isDeclassifyCallName(inner.*),
-        else => false,
-    };
-}
-
-// The payload type T of a `Secret<T>` type expression, or null if `ty` is not a
-// `Secret<...>`. (`ty` should already be alias-resolved.)
-fn secretPayloadType(ty: ast.TypeExpr) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .generic => |node| if (std.mem.eql(u8, node.base.text, "Secret") and node.args.len == 1) node.args[0] else null,
-        .qualified => |node| secretPayloadType(node.child.*),
-        else => null,
-    };
-}
-
-fn isComptimeForbiddenCall(callee: ast.Expr) bool {
-    return isUnsafeOperationCall(callee) or isCpuPauseCall(callee) or isFenceCall(callee);
-}
-
-fn isFenceCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |node| isIdentNamed(node.base.*, "fence") and
-            (std.mem.eql(u8, node.name.text, "full") or std.mem.eql(u8, node.name.text, "acquire") or std.mem.eql(u8, node.name.text, "release")),
-        .grouped => |inner| isFenceCall(inner.*),
-        else => false,
-    };
-}
-
-fn isCpuPauseCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |node| isIdentNamed(node.base.*, "cpu") and std.mem.eql(u8, node.name.text, "pause"),
-        .grouped => |inner| isCpuPauseCall(inner.*),
-        else => false,
-    };
-}
-
-const ReflectionKind = enum {
-    size,
-    alignment,
-    field_offset,
-    field_type,
-    bit_offset,
-    repr,
-};
-
-const ReflectionTarget = struct {
-    ty: ast.TypeExpr,
-    args: []const ast.Expr,
-};
-
-fn reflectionKind(callee: ast.Expr) ?ReflectionKind {
-    return switch (callee.kind) {
-        .ident => |ident| {
-            if (std.mem.eql(u8, ident.text, "size_of") or std.mem.eql(u8, ident.text, "sizeof")) return .size;
-            if (std.mem.eql(u8, ident.text, "alignof")) return .alignment;
-            if (std.mem.eql(u8, ident.text, "field_offset")) return .field_offset;
-            if (std.mem.eql(u8, ident.text, "field_type")) return .field_type;
-            if (std.mem.eql(u8, ident.text, "bit_offset")) return .bit_offset;
-            if (std.mem.eql(u8, ident.text, "repr_of")) return .repr;
-            return null;
-        },
-        .grouped => |inner| return reflectionKind(inner.*),
-        else => null,
-    };
-}
-
-fn reflectionTypeExprFromArg(expr: ast.Expr) ?ast.TypeExpr {
-    return switch (expr.kind) {
-        .ident => |ident| .{ .span = ident.span, .kind = .{ .name = ident } },
-        .grouped => |inner| reflectionTypeExprFromArg(inner.*),
-        else => null,
-    };
-}
-
-// Type registries used by the comptime reflection layout model.
-const ReflectEnv = struct {
-    structs: *const std.StringHashMap(StructInfo),
-    packed_bits: *const std.StringHashMap(LayoutFieldInfo),
-    overlay_unions: *const std.StringHashMap(LayoutFieldInfo),
-    tagged_unions: *const std.StringHashMap(UnionInfo),
-    enums: *const std.StringHashMap(EnumInfo),
-    aliases: *const std.StringHashMap(ast.TypeExpr),
-};
-
-// The C backend lowers tagged unions as a C enum tag followed by an optional
-// payload union. Clang/GCC use a 32-bit enum for this generated tag on the
-// supported LP64 targets.
-const c_tagged_union_tag_size: i128 = 4;
-const c_tagged_union_tag_align: i128 = 4;
-
-// Extract the reflected type from a reflection call's `type_args` or first arg.
-fn reflectionTypeFromCall(node: anytype) ?ast.TypeExpr {
-    if (node.type_args.len == 1) return node.type_args[0];
-    if (node.args.len >= 1) return reflectionTypeExprFromArg(node.args[0]);
-    return null;
-}
-
-fn reflectionFieldFromCall(node: anytype) ?[]const u8 {
-    const field_expr = if (node.type_args.len == 1) blk: {
-        if (node.args.len != 1) return null;
-        break :blk node.args[0];
-    } else blk: {
-        if (node.args.len != 2) return null;
-        break :blk node.args[1];
-    };
-    const field = enumLiteralName(field_expr) orelse return null;
-    return field.text;
-}
-
-fn reflectionRequiresField(kind: ReflectionKind) bool {
-    return switch (kind) {
-        .field_offset, .field_type, .bit_offset => true,
-        .size, .alignment, .repr => false,
-    };
-}
-
-fn reflectionReturnClass(kind: ReflectionKind) TypeClass {
-    return switch (kind) {
-        .size, .alignment, .field_offset, .bit_offset, .repr => .checked_usize,
-        .field_type => .unknown,
-    };
-}
-
-fn isKnownLayoutType(ty: ast.TypeExpr, ctx: Context) bool {
-    return switch (ty.kind) {
-        .name => |name| isPrimitiveLayoutType(name.text) or
-            knownStructName(name.text, ctx) or
-            knownPackedBitsName(name.text, ctx) or
-            knownOverlayUnionName(name.text, ctx) or
-            knownTaggedUnionName(name.text, ctx) or
-            knownEnumName(name.text, ctx) or
-            // A `comptime T: type` parameter is layout-capable once monomorphized;
-            // `sizeof(T)`/`alignof(T)` in a generic body resolve per instantiation.
-            (if (ctx.type_params) |tp| tp.contains(name.text) else false),
-        .pointer, .raw_many_pointer, .slice, .array, .nullable => true,
-        .fn_pointer => true, // a function pointer has pointer layout
-        .closure_type => true, // a closure is a fixed {code, env} aggregate
-        .dyn_trait => true, // a *dyn Trait is a fixed {data, vtable} aggregate
-        .qualified => |node| isKnownLayoutType(node.child.*, ctx),
-        .generic => |node| isKnownLayoutGeneric(node, ctx),
-        .member, .enum_literal => false,
-    };
-}
-
-fn isPrimitiveLayoutType(name: []const u8) bool {
-    return classifyTypeName(name) != .unknown;
-}
-
-fn isKnownTypeName(name: []const u8, ctx: Context) bool {
-    if (classifyTypeName(name) != .unknown) return true;
-    if (std.mem.eql(u8, name, "Error")) return true;
-    if (std.mem.eql(u8, name, "AmbiguousSerialOrder")) return true;
-    if (std.mem.eql(u8, name, "AmbiguousCounterInterval")) return true;
-    if (std.mem.eql(u8, name, "ConversionError")) return true;
-    if (std.mem.eql(u8, name, "Overflow")) return true;
-    // `type` is the meta-type of a `comptime T: type` parameter; `T` and friends
-    // are valid type names inside the generic function (section 22).
-    if (std.mem.eql(u8, name, "type")) return true;
-    if (ctx.type_params) |tps| {
-        if (tps.contains(name)) return true;
-    }
-    // IrqOff (§19.1): a capability type witnessing that interrupts are disabled.
-    // A function requiring a disabled-interrupt critical section takes a
-    // `cs: IrqOff` parameter, so the operation cannot be written without one.
-    if (std.mem.eql(u8, name, "IrqOff")) return true;
-    if (std.mem.eql(u8, name, "c_void")) return true;
-    // `va_list` — the C-ABI varargs cursor type for the `va.*` interop intrinsics.
-    if (std.mem.eql(u8, name, "va_list")) return true;
-    if (knownStructName(name, ctx)) return true;
-    if (knownPackedBitsName(name, ctx)) return true;
-    if (knownOverlayUnionName(name, ctx)) return true;
-    if (knownTaggedUnionName(name, ctx)) return true;
-    if (knownEnumName(name, ctx)) return true;
-    if (ctx.type_aliases) |type_aliases| {
-        if (type_aliases.contains(name)) return true;
-    }
-    return false;
-}
-
-fn isKnownGenericTypeName(name: []const u8) bool {
-    if (classifyGenericTypeName(name) != .unknown) return true;
-    if (std.mem.eql(u8, name, "Reg")) return true;
-    if (std.mem.eql(u8, name, "RegBits")) return true;
-    if (std.mem.eql(u8, name, "DmaBuf")) return true;
-    if (std.mem.eql(u8, name, "MaybeUninit")) return true;
-    if (std.mem.eql(u8, name, "atomic")) return true;
-    return false;
-}
-
-fn isArithmeticDomainTypeName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "wrap") or
-        std.mem.eql(u8, name, "sat") or
-        std.mem.eql(u8, name, "serial") or
-        std.mem.eql(u8, name, "counter");
-}
-
-// Built-in generics that store their type arguments by value (so they embed a `move` resource
-// when an argument does). `Result<T,E>` carries its ok/err payload inline; nullable `?T` and
-// arrays are handled structurally elsewhere.
-fn genericHoldsArgsByValue(name: []const u8) bool {
-    return std.mem.eql(u8, name, "Result");
-}
-
-fn genericHasStoragePayload(name: []const u8) bool {
-    return std.mem.eql(u8, name, "MaybeUninit") or
-        std.mem.eql(u8, name, "atomic") or
-        std.mem.eql(u8, name, "UserPtr") or
-        std.mem.eql(u8, name, "MmioPtr") or
-        std.mem.eql(u8, name, "PhysPtr") or
-        std.mem.eql(u8, name, "DmaBuf");
-}
-
-fn isFixedUnsignedMmioWidth(ty: ast.TypeExpr) bool {
-    const name = typeName(ty) orelse return false;
-    return std.mem.eql(u8, name, "u8") or
-        std.mem.eql(u8, name, "u16") or
-        std.mem.eql(u8, name, "u32") or
-        std.mem.eql(u8, name, "u64");
-}
-
-fn isPackedBitsTypeName(ty: ast.TypeExpr, ctx: Context) bool {
-    const name = typeName(ty) orelse return false;
-    return knownPackedBitsName(name, ctx);
-}
-
-fn isMmioAccessMode(mode: []const u8) bool {
-    return std.mem.eql(u8, mode, "read") or
-        std.mem.eql(u8, mode, "write") or
-        std.mem.eql(u8, mode, "read_write");
-}
-
-fn isDmaBufMode(mode: []const u8) bool {
-    return std.mem.eql(u8, mode, "coherent") or
-        std.mem.eql(u8, mode, "noncoherent");
-}
-
-fn knownMmioStructName(name: []const u8, ctx: Context) bool {
-    const mmio_structs = ctx.mmio_structs orelse return false;
-    return mmio_structs.contains(name);
-}
-
-fn knownStructName(name: []const u8, ctx: Context) bool {
-    const structs = ctx.structs orelse return false;
-    return structs.contains(name);
-}
-
-fn knownPackedBitsName(name: []const u8, ctx: Context) bool {
-    const packed_bits = ctx.packed_bits orelse return false;
-    return packed_bits.contains(name);
-}
-
 fn packedBitsInfoForType(ty: ast.TypeExpr, ctx: Context) ?LayoutFieldInfo {
     const name = typeName(ty) orelse return null;
     const packed_bits = ctx.packed_bits orelse return null;
     return packed_bits.get(name);
-}
-
-fn knownOverlayUnionName(name: []const u8, ctx: Context) bool {
-    const overlay_unions = ctx.overlay_unions orelse return false;
-    return overlay_unions.contains(name);
-}
-
-fn knownTaggedUnionName(name: []const u8, ctx: Context) bool {
-    const tagged_unions = ctx.tagged_unions orelse return false;
-    return tagged_unions.contains(name);
-}
-
-fn layoutFieldInfo(name: []const u8, ctx: Context) ?LayoutFieldInfo {
-    if (ctx.structs) |structs| {
-        if (structs.get(name)) |info| return .{ .fields = info.fields, .ordered = info.ordered, .repr = null };
-    }
-    if (ctx.packed_bits) |packed_bits| {
-        if (packed_bits.get(name)) |info| return info;
-    }
-    if (ctx.overlay_unions) |overlay_unions| {
-        if (overlay_unions.get(name)) |info| return info;
-    }
-    return null;
 }
 
 // Gap #1 [secret overlay-reinterpret]: an `overlay union` whose arms ALIAS the same bytes.
@@ -8815,55 +6871,6 @@ fn overlayUnionTypeHasSecretArm(base_ty: ast.TypeExpr, ctx: Context) bool {
         if (classifyTypeCtx(field_ty.*, ctx) == .secret) return true;
     }
     return false;
-}
-
-fn knownEnumName(name: []const u8, ctx: Context) bool {
-    const enums = ctx.enums orelse return false;
-    return enums.contains(name);
-}
-
-fn isKnownLayoutGeneric(node: anytype, ctx: Context) bool {
-    const expected = genericTypeExpectedArgs(node.base.text) orelse return false;
-    if (node.args.len != expected) return false;
-    for (node.args) |arg| {
-        if (arg.kind == .enum_literal) continue;
-        if (!isKnownLayoutType(arg, ctx)) return false;
-    }
-    return true;
-}
-
-fn reflectionGenericHasWrongArity(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .generic => |node| if (genericTypeExpectedArgs(node.base.text)) |expected| node.args.len != expected else false,
-        .qualified => |node| reflectionGenericHasWrongArity(node.child.*),
-        else => false,
-    };
-}
-
-fn genericTypeExpectedArgs(name: []const u8) ?usize {
-    if (std.mem.eql(u8, name, "Reg")) return 2;
-    if (std.mem.eql(u8, name, "RegBits")) return 3;
-    if (std.mem.eql(u8, name, "MmioPtr")) return 1;
-    if (std.mem.eql(u8, name, "UserPtr")) return 1;
-    if (std.mem.eql(u8, name, "PhysPtr")) return 1;
-    if (std.mem.eql(u8, name, "DmaBuf")) return 2;
-    if (std.mem.eql(u8, name, "MaybeUninit")) return 1;
-    if (std.mem.eql(u8, name, "atomic")) return 1;
-    if (std.mem.eql(u8, name, "Result")) return 2;
-    if (std.mem.eql(u8, name, "wrap")) return 1;
-    if (std.mem.eql(u8, name, "sat")) return 1;
-    if (std.mem.eql(u8, name, "serial")) return 1;
-    if (std.mem.eql(u8, name, "counter")) return 1;
-    if (std.mem.eql(u8, name, "Duration")) return 1;
-    return null;
-}
-
-fn isUnwrapCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, "unwrap"),
-        .member => |node| std.mem.eql(u8, node.name.text, "unwrap"),
-        else => false,
-    };
 }
 
 // `unwrap(x)` yields the payload of a nullable `x` — the non-null inner type (e.g.
@@ -8894,81 +6901,6 @@ fn dynDispatchReturnType(node: anytype, ctx: Context) ?ast.TypeExpr {
     const trait = td.get(dyn.trait_name.text) orelse return null;
     const m = findTraitMethod(trait.methods, member.name.text) orelse return null;
     return m.return_type;
-}
-
-fn isTrapCall(callee: ast.Expr) bool {
-    return isIdentNamed(callee, "trap");
-}
-
-pub fn isDropCall(callee: ast.Expr) bool {
-    return isIdentNamed(callee, "drop");
-}
-
-// Whether a declaration carries `#[trivial_drop]` (the author's assertion that a `move`
-// resource's completion needs no release, making `drop` of it a safe final use).
-fn declHasTrivialDrop(decl: ast.Decl) bool {
-    for (decl.attrs) |attr| {
-        switch (attr.kind) {
-            .named => |n| if (std.mem.eql(u8, n.text, "trivial_drop")) return true,
-            else => {},
-        }
-    }
-    return false;
-}
-
-// `forget_unchecked(x)` consumes a linear `move` value WITHOUT running any release —
-// the unsafe escape hatch for the tail of a destructor / a transfer API that has already
-// moved the resource's contents elsewhere (e.g. recorded a DMA buffer's address before
-// discarding the husk). Unlike `drop`, it is legal on a resource, but only in `unsafe`.
-pub fn isForgetUncheckedCall(callee: ast.Expr) bool {
-    return isIdentNamed(callee, "forget_unchecked");
-}
-
-// `trap_from` is the only conversion builtin that raises a language (range) trap;
-// the other conversions/domain ops are pure casts/clamps/Result and never trap.
-fn isTrappingConversionCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .member => |node| std.mem.eql(u8, node.name.text, "trap_from"),
-        .grouped => |inner| isTrappingConversionCall(inner.*),
-        else => false,
-    };
-}
-
-fn isLanguageTrapKind(name: []const u8) bool {
-    const names = [_][]const u8{
-        "Bounds",
-        "NullUnwrap",
-        "IntegerOverflow",
-        "DivideByZero",
-        "InvalidShift",
-        "InvalidRepresentation",
-        "Assert",
-        "Unreachable",
-    };
-    for (names) |known| {
-        if (std.mem.eql(u8, name, known)) return true;
-    }
-    return false;
-}
-
-fn isCAbiOpaqueBoundary(ty: ast.TypeExpr) bool {
-    return isTypeName(ty, "void") or isTypeName(ty, "c_void");
-}
-
-fn isTypeName(ty: ast.TypeExpr, name: []const u8) bool {
-    return switch (ty.kind) {
-        .name => |ident| std.mem.eql(u8, ident.text, name),
-        .qualified => |node| isTypeName(node.child.*, name),
-        else => false,
-    };
-}
-
-fn enumLiteralName(expr: ast.Expr) ?ast.Ident {
-    return switch (expr.kind) {
-        .enum_literal => |literal| literal,
-        .grouped => |inner| enumLiteralName(inner.*),
-        else => null,
-    };
 }
 
 fn fallthroughSpan(block: ast.Block, ctx: Context) ?diagnostics.Span {
@@ -9042,56 +6974,6 @@ fn switchMayFallThrough(node: ast.Switch, ctx: Context) bool {
     return !has_wildcard and !(has_result_ok and has_result_err);
 }
 
-fn switchBoolLiteralValue(pattern: ast.Pattern) ?bool {
-    return switch (pattern.kind) {
-        .literal => |expr| boolLiteralValue(expr),
-        else => null,
-    };
-}
-
-fn switchCoversAllEnumCases(node: ast.Switch, enum_info: EnumInfo) bool {
-    var cases = enum_info.cases.keyIterator();
-    while (cases.next()) |case_name| {
-        if (!switchCoversEnumCase(node, case_name.*)) return false;
-    }
-    return true;
-}
-
-fn switchCoversEnumCase(node: ast.Switch, case_name: []const u8) bool {
-    for (node.arms) |arm| {
-        for (arm.patterns) |pattern| {
-            switch (pattern.kind) {
-                .tag => |tag| if (std.mem.eql(u8, tag.text, case_name)) return true,
-                .wildcard => return true,
-                .tag_bind, .literal, .bind => {},
-            }
-        }
-    }
-    return false;
-}
-
-fn switchCoversAllUnionCases(node: ast.Switch, union_info: UnionInfo) bool {
-    var cases = union_info.cases.keyIterator();
-    while (cases.next()) |case_name| {
-        if (!switchCoversUnionCase(node, case_name.*)) return false;
-    }
-    return true;
-}
-
-fn switchCoversUnionCase(switch_node: ast.Switch, case_name: []const u8) bool {
-    for (switch_node.arms) |arm| {
-        for (arm.patterns) |pattern| {
-            switch (pattern.kind) {
-                .tag => |tag| if (std.mem.eql(u8, tag.text, case_name)) return true,
-                .tag_bind => |tag_bind| if (std.mem.eql(u8, tag_bind.tag.text, case_name)) return true,
-                .wildcard => return true,
-                .literal, .bind => {},
-            }
-        }
-    }
-    return false;
-}
-
 fn switchBodyMayFallThrough(body: ast.SwitchBody, ctx: Context) bool {
     return switch (body) {
         .block => |block| fallthroughSpan(block, ctx) != null,
@@ -9107,64 +6989,6 @@ pub fn exprMayFallThrough(expr: ast.Expr, ctx: Context) bool {
         .block => |block| fallthroughSpan(block, ctx) != null,
         else => true,
     };
-}
-
-fn blockContainsTry(block: ast.Block) bool {
-    for (block.items) |stmt| {
-        if (stmtContainsTry(stmt)) return true;
-    }
-    return false;
-}
-
-fn stmtContainsTry(stmt: ast.Stmt) bool {
-    return switch (stmt.kind) {
-        .let_decl, .var_decl => |local| if (local.init) |expr| exprContainsTry(expr) else false,
-        .loop => |node| (if (node.iterable) |iterable| exprContainsTry(iterable) else false) or blockContainsTry(node.body),
-        .if_let => |node| exprContainsTry(node.value) or blockContainsTry(node.then_block) or
-            (if (node.else_block) |else_block| blockContainsTry(else_block) else false),
-        .@"switch" => |node| switchContainsTry(node),
-        .unsafe_block, .comptime_block, .block => |block| blockContainsTry(block),
-        .contract_block => |contract| blockContainsTry(contract.block),
-        .@"return" => |maybe| if (maybe) |expr| exprContainsTry(expr) else false,
-        .@"break", .@"continue" => false,
-        .@"defer", .expr, .assert => |expr| exprContainsTry(expr),
-        .assignment => |node| exprContainsTry(node.target) or exprContainsTry(node.value),
-        .asm_stmt => false,
-    };
-}
-
-fn switchContainsTry(node: ast.Switch) bool {
-    if (exprContainsTry(node.subject)) return true;
-    for (node.arms) |arm| {
-        const body_contains_try = switch (arm.body) {
-            .block => |block| blockContainsTry(block),
-            .expr => |expr| exprContainsTry(expr),
-        };
-        if (body_contains_try) return true;
-    }
-    return false;
-}
-
-fn exprContainsTry(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .try_expr => true,
-        .grouped, .address_of, .deref => |inner| exprContainsTry(inner.*),
-        .block => |block| blockContainsTry(block),
-        .unary => |node| exprContainsTry(node.expr.*),
-        .binary => |node| exprContainsTry(node.left.*) or exprContainsTry(node.right.*),
-        .cast => |node| exprContainsTry(node.value.*),
-        .call => |node| callContainsTry(node),
-        .index => |node| exprContainsTry(node.base.*) or exprContainsTry(node.index.*),
-        .member => |node| exprContainsTry(node.base.*),
-        else => false,
-    };
-}
-
-fn resultLocalHandledLater(name: []const u8, stmts: []const ast.Stmt) bool {
-    for (stmts) |stmt| {
-        if (stmtHandlesResultLocal(name, stmt)) return true;
-    }
-    return false;
 }
 
 fn resultLocalHasPendingValueBefore(name: []const u8, stmts: []const ast.Stmt, ctx: Context) bool {
@@ -9205,105 +7029,6 @@ fn assignmentResultLocalName(target: ast.Expr, ctx: Context) ?ast.Ident {
         .grouped => |inner| assignmentResultLocalName(inner.*, ctx),
         else => null,
     };
-}
-
-fn stmtHandlesResultLocal(name: []const u8, stmt: ast.Stmt) bool {
-    return switch (stmt.kind) {
-        .let_decl, .var_decl => |local| if (local.init) |expr| exprHandlesResultLocal(name, expr) else false,
-        .loop => |node| if (node.iterable) |iterable| exprHandlesResultLocal(name, iterable) else false,
-        .if_let => |node| resultIfLetHandlesLocal(name, node) or exprHandlesResultLocal(name, node.value),
-        .@"switch" => |node| resultSwitchHandlesLocal(name, node) or exprHandlesResultLocal(name, node.subject),
-        .unsafe_block, .comptime_block, .block => |block| blockHandlesResultLocal(name, block),
-        .contract_block => |contract| blockHandlesResultLocal(name, contract.block),
-        .@"return" => |maybe| if (maybe) |expr| exprHandlesResultLocal(name, expr) else false,
-        .@"break", .@"continue", .asm_stmt => false,
-        .@"defer", .expr, .assert => |expr| exprHandlesResultLocal(name, expr),
-        .assignment => |node| exprHandlesResultLocal(name, node.target) or exprHandlesResultLocal(name, node.value),
-    };
-}
-
-fn blockHandlesResultLocal(name: []const u8, block: ast.Block) bool {
-    for (block.items) |stmt| {
-        if (stmtHandlesResultLocal(name, stmt)) return true;
-    }
-    return false;
-}
-
-fn stmtTerminatesNormally(stmt: ast.Stmt) bool {
-    return switch (stmt.kind) {
-        .@"return", .@"break", .@"continue", .asm_stmt => true,
-        .expr => |expr| exprTerminatesNormally(expr),
-        .block, .unsafe_block, .comptime_block => |block| blockTerminatesNormally(block),
-        .contract_block => |contract| blockTerminatesNormally(contract.block),
-        .if_let => |node| node.else_block != null and
-            blockTerminatesNormally(node.then_block) and
-            blockTerminatesNormally(node.else_block.?),
-        .@"switch" => |node| switchTerminatesNormally(node),
-        else => false,
-    };
-}
-
-fn blockTerminatesNormally(block: ast.Block) bool {
-    for (block.items) |stmt| {
-        if (stmtTerminatesNormally(stmt)) return true;
-    }
-    return false;
-}
-
-fn switchTerminatesNormally(node: ast.Switch) bool {
-    var has_wildcard = false;
-    for (node.arms) |arm| {
-        for (arm.patterns) |pattern| {
-            if (pattern.kind == .wildcard) has_wildcard = true;
-        }
-        const body_terminates = switch (arm.body) {
-            .block => |block| blockTerminatesNormally(block),
-            .expr => |expr| exprTerminatesNormally(expr),
-        };
-        if (!body_terminates) return false;
-    }
-    return has_wildcard;
-}
-
-fn exprTerminatesNormally(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .unreachable_expr => true,
-        .grouped => |inner| exprTerminatesNormally(inner.*),
-        .call => |node| isTrapCall(node.callee.*),
-        .block => |block| blockTerminatesNormally(block),
-        else => false,
-    };
-}
-
-fn exprHandlesResultLocal(name: []const u8, expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .try_expr => |inner| exprIsIdentNamed(inner.operand.*, name) or exprHandlesResultLocal(name, inner.operand.*),
-        .grouped, .address_of, .deref => |inner| exprHandlesResultLocal(name, inner.*),
-        .block => |block| blockHandlesResultLocal(name, block),
-        .unary => |node| exprHandlesResultLocal(name, node.expr.*),
-        .binary => |node| exprHandlesResultLocal(name, node.left.*) or exprHandlesResultLocal(name, node.right.*),
-        .cast => |node| exprHandlesResultLocal(name, node.value.*),
-        .call => |node| callHandlesResultLocal(name, node),
-        .index => |node| exprHandlesResultLocal(name, node.base.*) or exprHandlesResultLocal(name, node.index.*),
-        .member => |node| exprHandlesResultLocal(name, node.base.*),
-        else => false,
-    };
-}
-
-fn callHandlesResultLocal(name: []const u8, node: anytype) bool {
-    if (exprHandlesResultLocal(name, node.callee.*)) return true;
-    for (node.args) |arg| {
-        if (exprHandlesResultLocal(name, arg)) return true;
-    }
-    return false;
-}
-
-fn callContainsTry(node: anytype) bool {
-    if (exprContainsTry(node.callee.*)) return true;
-    for (node.args) |arg| {
-        if (exprContainsTry(arg)) return true;
-    }
-    return false;
 }
 
 fn blockContainsDeferControlFlow(block: ast.Block, ctx: Context) bool {
@@ -9363,139 +7088,6 @@ fn callContainsDeferControlFlow(node: anytype, ctx: Context) bool {
     if (exprContainsDeferControlFlow(node.callee.*, ctx)) return true;
     for (node.args) |arg| {
         if (exprContainsDeferControlFlow(arg, ctx)) return true;
-    }
-    return false;
-}
-
-test "rejects nested MMIO register field assignment" {
-    const source =
-        \\packed bits UartLsr: u8 {
-        \\    data_ready: bool,
-        \\    tx_empty: bool,
-        \\}
-        \\
-        \\extern mmio struct Uart16550 {
-        \\    lsr: RegBits<u8, UartLsr, .read>,
-        \\}
-        \\
-        \\fn set_lsr(uart: MmioPtr<Uart16550>, flag: bool) -> void {
-        \\    uart.lsr.tx_empty = flag;
-        \\}
-    ;
-
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "nested_mmio_register_field_assignment.mc", source);
-    defer reporter.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var checker = Checker.init(&reporter);
-    checker.checkModule(module);
-
-    try std.testing.expect(reporter.has_errors);
-    try std.testing.expect(hasDiagnosticCode(&reporter, "E_MMIO_DIRECT_ASSIGN"));
-}
-
-test "type checks packed bits fields as bool" {
-    const source =
-        \\packed bits Status: u8 {
-        \\    ready: bool,
-        \\}
-        \\
-        \\fn read_ready(status: Status) -> bool {
-        \\    return status.ready;
-        \\}
-        \\
-        \\fn write_ready(status: Status, flag: bool) -> Status {
-        \\    var next: Status = status;
-        \\    next.ready = flag;
-        \\    return next;
-        \\}
-        \\
-        \\fn reject_read_ready_as_u32(status: Status) -> u32 {
-        \\    return status.ready;
-        \\}
-        \\
-        \\fn reject_unknown(status: Status) -> bool {
-        \\    return status.missing;
-        \\}
-        \\
-        \\fn reject_write_u32(status: Status, value: u32) -> Status {
-        \\    var next: Status = status;
-        \\    next.ready = value;
-        \\    return next;
-        \\}
-        \\
-        \\fn reject_write_literal(status: Status) -> Status {
-        \\    var next: Status = status;
-        \\    next.ready = 1;
-        \\    return next;
-        \\}
-    ;
-
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "packed_bits_field_typing.mc", source);
-    defer reporter.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var checker = Checker.init(&reporter);
-    checker.checkModule(module);
-
-    try std.testing.expect(reporter.has_errors);
-    try std.testing.expect(hasDiagnosticCode(&reporter, "E_RETURN_TYPE_MISMATCH"));
-    try std.testing.expect(hasDiagnosticCode(&reporter, "E_UNKNOWN_STRUCT_FIELD"));
-    try std.testing.expect(hasDiagnosticCode(&reporter, "E_NO_IMPLICIT_CONVERSION"));
-}
-
-test "const_get requires in-bounds fixed array index" {
-    const source =
-        \\fn accept(xs: [2]u32) -> u32 {
-        \\    return xs.const_get<1>();
-        \\}
-        \\
-        \\fn reject_oob(xs: [2]u32) -> u32 {
-        \\    return xs.const_get<2>();
-        \\}
-        \\
-        \\fn reject_base(xs: []const u32) -> u32 {
-        \\    return xs.const_get<0>();
-        \\}
-    ;
-
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "const_get.mc", source);
-    defer reporter.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var checker = Checker.init(&reporter);
-    checker.checkModule(module);
-
-    try std.testing.expect(reporter.has_errors);
-    try std.testing.expect(hasDiagnosticCode(&reporter, "E_CONST_GET_BOUNDS"));
-    try std.testing.expect(hasDiagnosticCode(&reporter, "E_CONST_GET_BASE"));
-    try std.testing.expect(!hasDiagnosticCode(&reporter, "E_UNKNOWN_FUNCTION"));
-}
-
-fn hasDiagnosticCode(reporter: *const diagnostics.Reporter, code: []const u8) bool {
-    for (reporter.diagnostics.items) |diagnostic| {
-        if (std.mem.indexOf(u8, diagnostic.message, code) != null) return true;
     }
     return false;
 }

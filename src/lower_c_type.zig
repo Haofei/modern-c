@@ -9,9 +9,126 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const lower_c_alias = @import("lower_c_alias.zig");
+const lower_c_model = @import("lower_c_model.zig");
 
 const typeName = ast_query.typeName;
 const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
+
+const MmioStruct = lower_c_model.MmioStruct;
+const PackedBitsInfo = lower_c_model.PackedBitsInfo;
+const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
+const StructTypeStyle = lower_c_model.StructTypeStyle;
+
+pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8;
+pub const ArrayTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, len_expr: ast.Expr) anyerror![]const u8;
+pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8;
+pub const TypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
+pub const DynTypeNameFn = *const fn (ctx: *anyopaque, trait_name: []const u8) anyerror![]const u8;
+
+pub const TypeEmitContext = struct {
+    scratch: std.mem.Allocator,
+    type_aliases: *const std.StringHashMap(ast.TypeExpr),
+    enums: *const std.StringHashMap(ast.EnumDecl),
+    packed_bits: *const std.StringHashMap(PackedBitsInfo),
+    overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
+    tagged_unions: *const std.StringHashMap(ast.UnionDecl),
+    structs: *const std.StringHashMap(ast.StructDecl),
+    mmio_structs: *const std.StringHashMap(MmioStruct),
+    fn_ptr_types: *std.StringHashMap(ast.TypeExpr),
+    closure_types: *std.StringHashMap(ast.TypeExpr),
+    emit_ctx: *anyopaque,
+    slice_type_name: SliceTypeNameFn,
+    array_type_name: ArrayTypeNameFn,
+    result_type_name: ResultTypeNameFn,
+    fn_ptr_type_name: TypeNameFn,
+    closure_type_name: TypeNameFn,
+    dyn_type_name: DynTypeNameFn,
+};
+
+pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExpr, style: StructTypeStyle) anyerror!void {
+    if (lower_c_alias.aliasTargetType(ctx.type_aliases, ty)) |target| return appendType(ctx, out, target, style);
+    switch (ty.kind) {
+        .pointer => |node| return appendPointerType(ctx, out, node.child.*, node.mutability, style),
+        .raw_many_pointer => |node| return appendPointerType(ctx, out, node.child.*, node.mutability, style),
+        .slice => |node| return out.appendSlice(ctx.scratch, try ctx.slice_type_name(ctx.emit_ctx, node.child.*, node.mutability)),
+        .array => |node| return out.appendSlice(ctx.scratch, try ctx.array_type_name(ctx.emit_ctx, node.child.*, node.len)),
+        .nullable => |child| return appendType(ctx, out, child.*, style),
+        .qualified => |node| return appendType(ctx, out, node.child.*, style),
+        .generic => |node| {
+            if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
+                return out.appendSlice(ctx.scratch, try ctx.result_type_name(ctx.emit_ctx, node.args[0], node.args[1]));
+            }
+            if ((std.mem.eql(u8, node.base.text, "wrap") or
+                std.mem.eql(u8, node.base.text, "sat") or
+                std.mem.eql(u8, node.base.text, "serial") or
+                std.mem.eql(u8, node.base.text, "counter") or
+                // `Secret<T>` is a transparent constant-time tag: it emits as T.
+                std.mem.eql(u8, node.base.text, "Secret") or
+                std.mem.eql(u8, node.base.text, "Duration")) and node.args.len == 1)
+            {
+                return appendType(ctx, out, node.args[0], style);
+            }
+            if (std.mem.eql(u8, node.base.text, "atomic") and node.args.len == 1) {
+                return appendType(ctx, out, node.args[0], style);
+            }
+            if (std.mem.eql(u8, node.base.text, "MaybeUninit") and node.args.len == 1) {
+                return appendType(ctx, out, node.args[0], style);
+            }
+            if ((std.mem.eql(u8, node.base.text, "Reg") or std.mem.eql(u8, node.base.text, "RegBits")) and node.args.len >= 1) {
+                return appendType(ctx, out, node.args[0], style);
+            }
+            if (std.mem.eql(u8, node.base.text, "DmaBuf") and node.args.len == 2) {
+                return appendPointerType(ctx, out, node.args[0], .mut, style);
+            }
+            if (std.mem.eql(u8, node.base.text, "UserPtr") or std.mem.eql(u8, node.base.text, "PhysPtr")) {
+                return out.appendSlice(ctx.scratch, "uintptr_t");
+            }
+            if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1) {
+                const pointee = typeName(node.args[0]) orelse return out.appendSlice(ctx.scratch, "void *");
+                if (ctx.mmio_structs.contains(pointee)) {
+                    try out.appendSlice(ctx.scratch, pointee);
+                    return out.appendSlice(ctx.scratch, " volatile *");
+                }
+            }
+        },
+        .fn_pointer => {
+            const name = try ctx.fn_ptr_type_name(ctx.emit_ctx, ty);
+            if (!ctx.fn_ptr_types.contains(name)) try ctx.fn_ptr_types.put(name, ty);
+            return out.appendSlice(ctx.scratch, name);
+        },
+        .closure_type => {
+            const name = try ctx.closure_type_name(ctx.emit_ctx, ty);
+            if (!ctx.closure_types.contains(name)) try ctx.closure_types.put(name, ty);
+            return out.appendSlice(ctx.scratch, name);
+        },
+        // A `*dyn Trait` lowers to its fat-pointer typedef `mc_dyn_Trait`
+        // (`struct { void *data; const VT_Trait *vtable; }`).
+        .dyn_trait => |node| return out.appendSlice(ctx.scratch, try ctx.dyn_type_name(ctx.emit_ctx, node.trait_name.text)),
+        else => {},
+    }
+    if (typeName(ty)) |name| {
+        if (std.mem.eql(u8, name, "c_void")) return out.appendSlice(ctx.scratch, "void");
+        if (ctx.enums.contains(name)) return out.appendSlice(ctx.scratch, name);
+        if (ctx.packed_bits.contains(name)) return out.appendSlice(ctx.scratch, name);
+        if (ctx.overlay_unions.contains(name)) return out.appendSlice(ctx.scratch, name);
+        if (ctx.tagged_unions.contains(name)) return out.appendSlice(ctx.scratch, name);
+        if (ctx.structs.contains(name)) {
+            if (style == .struct_tag) try out.appendSlice(ctx.scratch, "struct ");
+            return out.appendSlice(ctx.scratch, name);
+        }
+    }
+    try out.appendSlice(ctx.scratch, cType(ty));
+}
+
+pub fn appendPointerType(ctx: TypeEmitContext, out: *std.ArrayList(u8), child: ast.TypeExpr, mutability: ast.Mutability, style: StructTypeStyle) anyerror!void {
+    try appendType(ctx, out, child, style);
+    if (mutability == .@"const") {
+        try out.appendSlice(ctx.scratch, " const *");
+    } else {
+        try out.appendSlice(ctx.scratch, " *");
+    }
+}
 
 pub fn cType(ty: ast.TypeExpr) []const u8 {
     switch (ty.kind) {
@@ -262,6 +379,11 @@ pub fn isCKeyword(name: []const u8) bool {
         if (std.mem.eql(u8, name, keyword)) return true;
     }
     return false;
+}
+
+pub fn cPayloadFieldName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
+    if (!isCKeyword(name)) return name;
+    return std.fmt.allocPrint(allocator, "{s}_", .{name});
 }
 
 pub fn isNumericStorageType(ty: ast.TypeExpr) bool {

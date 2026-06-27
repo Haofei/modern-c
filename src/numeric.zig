@@ -78,6 +78,20 @@ pub fn parseUsizeLiteral(literal: []const u8) ?usize {
     return std.fmt.parseInt(usize, cleaned[0..len], 0) catch null;
 }
 
+/// `parseIntegerLiteral` narrowed to `i128`, accepting MC digit separators.
+pub fn parseI128Literal(raw: []const u8) ?i128 {
+    var cleaned: [160]u8 = undefined;
+    if (raw.len > cleaned.len) return null;
+    var len: usize = 0;
+    for (raw) |ch| {
+        if (ch != '_') {
+            cleaned[len] = ch;
+            len += 1;
+        }
+    }
+    return std.fmt.parseInt(i128, cleaned[0..len], 0) catch null;
+}
+
 /// The code-point value of a char literal (`'a'`, `'\n'`, …), or null if it is not a
 /// single-character or recognized-escape literal.
 pub fn parseCharLiteral(literal: []const u8) ?u128 {

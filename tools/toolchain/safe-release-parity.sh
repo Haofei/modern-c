@@ -20,16 +20,17 @@
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
-HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/test-env.sh"
+HERE="$(mc_repo_root)"
 CLANG="${CLANG:-clang}"
-command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: safe-release-parity (clang not found)"; exit 0; }
+mc_require_cmd "safe-release-parity" "$CLANG"
 
 SRC="$HERE/tests/toolchain/opt_index_demo.mc"
 ENTRY="opt_index_demo"
 EXPECT=65
 
-LINK_FLAGS=()
-[ "$(uname -s)" = "Linux" ] && LINK_FLAGS=(-no-pie)
+LINK_FLAGS_STR="$(mc_link_flags)"
 
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 
@@ -38,7 +39,7 @@ printf '#include <stdint.h>\n#include <stdio.h>\nextern uint32_t %s(void);\nint 
 build_run() {
     local checks="$1" tag="$2"
     "$MCC" emit-c "$SRC" --checks="$checks" > "$W/$tag.c"
-    "$CLANG" -std=c11 ${LINK_FLAGS[@]+"${LINK_FLAGS[@]}"} "$W/driver.c" "$W/$tag.c" -o "$W/$tag.app"
+    "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/$tag.c" -o "$W/$tag.app"
     "$W/$tag.app"
 }
 

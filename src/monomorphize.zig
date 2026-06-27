@@ -59,7 +59,7 @@ const StructInstance = struct {
     generated: bool = false,
 };
 
-const CloneCtx = struct {
+pub const CloneCtx = struct {
     arena: std.mem.Allocator,
     subst: ?*const Subst = null,
     // Set during the module-rewrite pass to rewrite type-generic call sites and
@@ -891,54 +891,4 @@ fn cloneTypeSlice(ctx: *const CloneCtx, types: []const ast.TypeExpr) anyerror![]
     var out = try ctx.arena.alloc(ast.TypeExpr, types.len);
     for (types, 0..) |t, i| out[i] = try cloneType(ctx, t);
     return out;
-}
-
-const testing = std.testing;
-const zero_span = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
-
-test "cloneType substitutes a comptime parameter in an array length" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    var subst = Subst.init(testing.allocator);
-    defer subst.deinit();
-    try subst.put("N", .{ .int = 4 });
-
-    const elem = try ast.makePtr(a, ast.TypeExpr{ .span = zero_span, .kind = .{ .name = .{ .text = "u8", .span = zero_span } } });
-    const n_ident = ast.Expr{ .span = zero_span, .kind = .{ .ident = .{ .text = "N", .span = zero_span } } };
-    const ty = ast.TypeExpr{ .span = zero_span, .kind = .{ .array = .{ .len = n_ident, .child = elem } } };
-
-    var ctx = CloneCtx{ .arena = a, .subst = &subst };
-    const cloned = try cloneType(&ctx, ty);
-    try testing.expectEqualStrings("4", cloned.kind.array.len.kind.int_literal);
-    try testing.expectEqualStrings("u8", cloned.kind.array.child.kind.name.text);
-}
-
-test "cloneExpr substitutes comptime params and preserves other idents" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    var subst = Subst.init(testing.allocator);
-    defer subst.deinit();
-    try subst.put("N", .{ .int = 8 });
-
-    const left = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .ident = .{ .text = "N", .span = zero_span } } });
-    const right = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .ident = .{ .text = "i", .span = zero_span } } });
-    const expr = ast.Expr{ .span = zero_span, .kind = .{ .binary = .{ .op = .add, .left = left, .right = right } } };
-
-    const cloned = try cloneExpr(a, expr, &subst);
-    try testing.expectEqualStrings("8", cloned.kind.binary.left.kind.int_literal);
-    try testing.expectEqualStrings("i", cloned.kind.binary.right.kind.ident.text);
-}
-
-test "transform is a no-op when there are no type-generic functions" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const decls = try a.alloc(ast.Decl, 0);
-    const module = ast.Module{ .decls = decls };
-    const out = try transform(a, module);
-    try testing.expectEqual(@as(usize, 0), out.decls.len);
 }

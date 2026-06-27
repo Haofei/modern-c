@@ -9,6 +9,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const ast_query = @import("ast_query.zig");
 
 const lower_c_type = @import("lower_c_type.zig");
 const checkedTypeSuffix = lower_c_type.checkedTypeSuffix;
@@ -127,11 +128,7 @@ pub fn trapHelperForCall(call: anytype) ?[]const u8 {
 }
 
 pub fn isTrapCallee(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, "trap"),
-        .grouped => |inner| isTrapCallee(inner.*),
-        else => false,
-    };
+    return ast_query.isIdentNamed(expr, "trap");
 }
 
 pub fn trapHelperForKind(kind: []const u8) ?[]const u8 {

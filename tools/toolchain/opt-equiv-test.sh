@@ -14,18 +14,29 @@
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
-HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/test-env.sh"
+HERE="$(mc_repo_root)"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
-command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: opt-equiv-test (clang not found)"; exit 0; }
-command -v "$LLC"   >/dev/null 2>&1 || { echo "SKIP: opt-equiv-test (llc not found)"; exit 0; }
+mc_require_cmd "opt-equiv-test" "$CLANG"
+mc_require_cmd "opt-equiv-test" "$LLC"
 
 SRC="$HERE/tests/toolchain/opt_index_demo.mc"
 ENTRY="opt_index_demo"
 EXPECT=65
 
-LINK_FLAGS=()
-[ "$(uname -s)" = "Linux" ] && LINK_FLAGS=(-no-pie)
+LINK_FLAGS_STR="$(mc_link_flags)"
+
+# emit-llvm defaults to the riscv64 target triple (the kernel arch), but opt-equiv builds and RUNS
+# the program on the dev host. So the LLVM path must target the HOST arch — otherwise llc emits a
+# foreign-ISA object the host linker rejects ("Relocations in generic ELF (EM: 243): wrong format").
+# (emit-c is portable C, so the C path needs no such flag.) Map uname -m to the MC arch name.
+case "$(uname -m)" in
+    aarch64|arm64) HOST_MC_ARCH=aarch64 ;;
+    x86_64|amd64)  HOST_MC_ARCH=x86_64 ;;
+    *)             HOST_MC_ARCH=riscv64 ;;
+esac
 
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 
@@ -46,11 +57,11 @@ build_run() {
     local backend="$1" optflag="$2" tag="$3"
     if [ "$backend" = "c" ]; then
         "$MCC" emit-c "$SRC" $optflag > "$W/$tag.c"
-        "$CLANG" -std=c11 "${LINK_FLAGS[@]}" "$W/driver.c" "$W/$tag.c" -o "$W/$tag.app"
+        "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/$tag.c" -o "$W/$tag.app"
     else
-        "$MCC" emit-llvm "$SRC" $optflag > "$W/$tag.ll"
+        "$MCC" emit-llvm "$SRC" $optflag --arch="$HOST_MC_ARCH" > "$W/$tag.ll"
         "$LLC" -filetype=obj "$W/$tag.ll" -o "$W/$tag.o"
-        "$CLANG" -std=c11 "${LINK_FLAGS[@]}" "$W/driver.c" "$W/trap_stubs.c" "$W/$tag.o" -o "$W/$tag.app"
+        "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/trap_stubs.c" "$W/$tag.o" -o "$W/$tag.app"
     fi
     "$W/$tag.app"
 }

@@ -3,7 +3,6 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const eval = @import("eval.zig");
-const type_layout = @import("layout.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 
@@ -16,6 +15,7 @@ const ByteViewCallKind = ast_query.ByteViewCallKind;
 const byteViewCallKind = ast_query.byteViewCallKind;
 const byteViewAddressTarget = ast_query.byteViewAddressTarget;
 const calleeIdentName = ast_query.calleeIdentName;
+const memberExpr = ast_query.memberExpr;
 const isCpuPauseCall = ast_query.isCpuPauseCall;
 const isRawLoadCall = ast_query.isRawLoadCall;
 const vaCallMember = ast_query.vaCallMember;
@@ -25,22 +25,20 @@ const isRawStoreCall = ast_query.isRawStoreCall;
 const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
 const isStringLiteralTarget = ast_query.isStringLiteralTarget;
 const isMmioStructAbi = ast_query.isMmioStructAbi;
-const reflectionFieldName = ast_query.reflectionFieldName;
 const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
 const overlayArrayElementType = ast_query.overlayArrayElementType;
 const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
 const taggedUnionCase = ast_query.taggedUnionCase;
-const scalarLayout = type_layout.scalarLayout;
-const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 
 const backend_mod = @import("backend.zig");
+const lower_llvm_alias = @import("lower_llvm_alias.zig");
+const lower_llvm_lookup = @import("lower_llvm_lookup.zig");
+const lower_llvm_shape = @import("lower_llvm_shape.zig");
 
 // Phase-2c split: pure type-mapping/classification helpers moved verbatim to
 // `lower_llvm_type.zig`. Re-exported here so call sites read unchanged.
 const lower_llvm_type = @import("lower_llvm_type.zig");
 const simpleType = lower_llvm_type.simpleType;
-const exprAsType = lower_llvm_type.exprAsType;
-const isPointerLikeType = lower_llvm_type.isPointerLikeType;
 const isDynTraitLlvmType = lower_llvm_type.isDynTraitLlvmType;
 const alignForward = lower_llvm_type.alignForward;
 const isPointerWidthIntegerTypeName = lower_llvm_type.isPointerWidthIntegerTypeName;
@@ -51,7 +49,6 @@ const typeNameEql = lower_llvm_type.typeNameEql;
 const secretInnerType = lower_llvm_type.secretInnerType;
 const constGetIndexArg = lower_llvm_type.constGetIndexArg;
 const rawScalarTypeName = lower_llvm_type.rawScalarTypeName;
-const literalArrayLenValue = lower_llvm_type.literalArrayLenValue;
 const parseU64Literal = lower_llvm_type.parseU64Literal;
 const integerBits = lower_llvm_type.integerBits;
 const isSignedInteger = lower_llvm_type.isSignedInteger;
@@ -73,7 +70,62 @@ const trapHelperForKind = lower_llvm_op.trapHelperForKind;
 const normalizedIntLiteral = lower_llvm_op.normalizedIntLiteral;
 const normalizedFloatLiteral = lower_llvm_op.normalizedFloatLiteral;
 const charLiteralValue = lower_llvm_op.charLiteralValue;
-const hexDigit = lower_llvm_op.hexDigit;
+
+// LLVM module prelude emission and target metadata.
+const lower_llvm_prelude = @import("lower_llvm_prelude.zig");
+const emitTrapDecl = lower_llvm_prelude.emitTrapDecl;
+const emitTargetTypeDecls = lower_llvm_prelude.emitTargetTypeDecls;
+const isKsanHook = lower_llvm_prelude.isKsanHook;
+const llvmTargetDataLayout = lower_llvm_prelude.targetDataLayout;
+const llvmTargetTriple = lower_llvm_prelude.targetTriple;
+
+// LLVM textual escaping, inline-asm spelling, debug line normalization, and
+// declaration attribute helpers.
+const lower_llvm_text = @import("lower_llvm_text.zig");
+const debugColumn = lower_llvm_text.debugColumn;
+const debugLine = lower_llvm_text.debugLine;
+const effectiveAlign = lower_llvm_text.effectiveAlign;
+const escapedLlvmString = lower_llvm_text.escapedLlvmString;
+const hasNakedAttr = lower_llvm_text.hasNakedAttr;
+const hasNoinlineAttr = lower_llvm_text.hasNoinlineAttr;
+const hasWeakAttr = lower_llvm_text.hasWeakAttr;
+const llvmAsmClobbers = lower_llvm_text.llvmAsmClobbers;
+const llvmOpaqueAsmTemplate = lower_llvm_text.llvmOpaqueAsmTemplate;
+const llvmPreciseAsmConstraints = lower_llvm_text.llvmPreciseAsmConstraints;
+const llvmPreciseAsmTemplate = lower_llvm_text.llvmPreciseAsmTemplate;
+const llvmStringLiteralBytes = lower_llvm_text.llvmStringLiteralBytes;
+const sectionAttr = lower_llvm_text.sectionAttr;
+
+// LLVM backend AST/call-shape queries and small pure lowering helpers.
+const lower_llvm_query = @import("lower_llvm_query.zig");
+const assignmentIdent = lower_llvm_query.assignmentIdent;
+const bitcastTargetType = lower_llvm_query.bitcastTargetType;
+const builtinCallReturnType = lower_llvm_query.builtinCallReturnType;
+const comptimeStructFieldValue = lower_llvm_query.comptimeStructFieldValue;
+const derefTarget = lower_llvm_query.derefTarget;
+const implMethodMangledLlvm = lower_llvm_query.implMethodMangledLlvm;
+const isAssumeNoaliasCall = lower_llvm_query.isAssumeNoaliasCall;
+const isBindCall = lower_llvm_query.isBindCall;
+const isBindCallByNode = lower_llvm_query.isBindCallByNode;
+const isDeclassifyCall = lower_llvm_query.isDeclassifyCall;
+const isDropCall = lower_llvm_query.isDropCall;
+const isPhysCall = lower_llvm_query.isPhysCall;
+const isResultConstructorCall = lower_llvm_query.isResultConstructorCall;
+const isUninitExpr = lower_llvm_query.isUninitExpr;
+const llvmTraitIsObjectSafe = lower_llvm_query.llvmTraitIsObjectSafe;
+const memberCallee = lower_llvm_query.memberCallee;
+const packedBitsClearMask = lower_llvm_query.packedBitsClearMask;
+const packedBitsMask = lower_llvm_query.packedBitsMask;
+const reflectionCallKind = lower_llvm_query.reflectionCallKind;
+const structFieldIndex = lower_llvm_query.structFieldIndex;
+const structLiteralField = lower_llvm_query.structLiteralField;
+const taggedUnionConstructorName = lower_llvm_query.taggedUnionConstructorName;
+const traitMethodIndex = lower_llvm_query.traitMethodIndex;
+
+// LLVM backend model records used by the emitter implementation.
+const lower_llvm_model = @import("lower_llvm_model.zig");
+const lower_llvm_reflect = @import("lower_llvm_reflect.zig");
+const LlvmReflectEnv = lower_llvm_reflect.ReflectEnv;
 
 // Phase-2c split: atomic-ordering & fence helpers moved verbatim to
 // `lower_llvm_atomic.zig`. Re-exported here so call sites read unchanged.
@@ -87,6 +139,36 @@ const fenceOrderingForCall = lower_llvm_atomic.fenceOrderingForCall;
 const isAtomicInitCall = lower_llvm_atomic.isAtomicInitCall;
 const isAtomicInitExpr = lower_llvm_atomic.isAtomicInitExpr;
 const atomicInitValue = lower_llvm_atomic.atomicInitValue;
+const LocalSlot = lower_llvm_model.LocalSlot;
+const LocalSlotKind = lower_llvm_model.LocalSlotKind;
+const FnSig = lower_llvm_model.FnSig;
+const BindThunk = lower_llvm_model.BindThunk;
+const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
+const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
+const OverlayLayout = lower_llvm_model.OverlayLayout;
+const TaggedUnionLayout = lower_llvm_model.TaggedUnionLayout;
+const MmioFieldInfo = lower_llvm_model.MmioFieldInfo;
+const MmioAccessInfo = lower_llvm_model.MmioAccessInfo;
+const MmioFencePlacement = lower_llvm_model.MmioFencePlacement;
+const DmaBufInfo = lower_llvm_model.DmaBufInfo;
+const DmaBufCallInfo = lower_llvm_model.DmaBufCallInfo;
+const DmaCacheCallInfo = lower_llvm_model.DmaCacheCallInfo;
+const ArgValue = lower_llvm_model.ArgValue;
+const StringLiteralGlobal = lower_llvm_model.StringLiteralGlobal;
+const DebugFunction = lower_llvm_model.DebugFunction;
+const DebugLocation = lower_llvm_model.DebugLocation;
+const LoopLabels = lower_llvm_model.LoopLabels;
+const RawManyOffsetInfo = lower_llvm_model.RawManyOffsetInfo;
+const EnumRawCallInfo = lower_llvm_model.EnumRawCallInfo;
+const DomainResidueCallInfo = lower_llvm_model.DomainResidueCallInfo;
+const DomainOpCallInfo = lower_llvm_model.DomainOpCallInfo;
+const ConversionCallInfo = lower_llvm_model.ConversionCallInfo;
+const ReduceCallInfo = lower_llvm_model.ReduceCallInfo;
+const ConstGetCallInfo = lower_llvm_model.ConstGetCallInfo;
+const IntRange = lower_llvm_model.IntRange;
+const AtomicCallInfo = lower_llvm_model.AtomicCallInfo;
+const MaybeUninitCallInfo = lower_llvm_model.MaybeUninitCallInfo;
+const ResultTypeInfo = lower_llvm_model.ResultTypeInfo;
 
 /// Construct the `Backend` registry entry for the LLVM backend. The LLVM
 /// backend is profile-agnostic and has no source-map artifact.
@@ -190,9 +272,10 @@ pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: 
         }
     }
     try ctx.preRegisterTypeDecls(module);
+    var reflect_env = ctx.reflectEnv();
     try eval.collectConstGlobalsWithOptions(allocator, module, &ctx.const_fns, &ctx.const_globals, .{
-        .reflect = llvmComptimeReflectThunk,
-        .reflect_ctx = &ctx,
+        .reflect = lower_llvm_reflect.comptimeReflectThunk,
+        .reflect_ctx = &reflect_env,
     });
     try ctx.collectConstGlobalWidths(module);
     for (module.decls) |decl| {
@@ -259,104 +342,6 @@ pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: 
     try ctx.emitStringLiteralGlobals();
     try ctx.emitIntrinsicDecls();
     try ctx.emitDebugMetadata();
-}
-
-// The sanitizer shadow-hook symbols. SINGLE source of truth: this one list drives both the
-// weak no-op `define`s in `emitTrapDecl` AND `isKsanHook` (which suppresses a redundant MC
-// `extern fn` `declare` of these), so the two can never drift — the original KCSAN bug was
-// partly that csan was absent from one such list. Names: the KASAN poison/unpoison/check hooks
-// (D2.1), the KMSAN init-tracking store hook (D2.2), and the KCSAN read/write watchpoint hooks
-// (D2.3). All get weak no-op defaults the linked runtime overrides with strong definitions.
-const sanitizer_hooks = [_][]const u8{
-    "mc_ksan_poison",
-    "mc_ksan_unpoison",
-    "mc_ksan_check",
-    "mc_ksan_store",
-    "mc_csan_read",
-    "mc_csan_write",
-};
-
-// True if the MODULE ITSELF provides a `fn` definition (a body) whose name is `hook`. A pure-MC
-// sanitizer runtime does `export fn mc_ksan_check(...) {...}`; in that case we must NOT also emit
-// our auto weak no-op `define`, or the symbol would be doubly-defined (invalid IR). Only a body
-// counts — an `extern fn` declaration (handled by `isKsanHook`) does not provide a definition.
-fn moduleDefinesHook(module: ast.Module, hook: []const u8) bool {
-    for (module.decls) |decl| {
-        if (decl.kind == .fn_decl) {
-            const fn_decl = decl.kind.fn_decl;
-            if (fn_decl.body != null and std.mem.eql(u8, fn_decl.name.text, hook)) return true;
-        }
-    }
-    return false;
-}
-
-fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: ast.Module) !void {
-    // The checked-arithmetic / bounds / unreachable trap hooks. Like the C backend (which emits
-    // them as per-unit `static inline ... __builtin_trap()`), emit a WEAK trapping `define` for
-    // each in EVERY LLVM object: a default build self-provides a halting handler (llvm.trap ->
-    // an illegal instruction), so no external object has to supply them. A module that defines a
-    // hook itself (a custom handler) overrides via its strong `export fn`; a linked C runtime with
-    // STRONG definitions likewise wins over these weak ones.
-    try out.appendSlice(allocator, "declare void @llvm.trap()\n");
-    const trap_hooks = [_][]const u8{
-        "mc_trap_IntegerOverflow",       "mc_trap_DivideByZero", "mc_trap_InvalidShift",
-        "mc_trap_InvalidRepresentation", "mc_trap_Bounds",       "mc_trap_Assert",
-        "mc_trap_NullUnwrap",            "mc_trap_Unreachable",
-    };
-    for (trap_hooks) |hook| {
-        if (moduleDefinesHook(module, hook)) continue;
-        try out.print(allocator, "define weak void @{s}() noreturn {{\n  call void @llvm.trap()\n  unreachable\n}}\n", .{hook});
-    }
-    try out.appendSlice(allocator, "\n");
-    // C-ABI varargs intrinsics (for `va.start`/`va.end`; `va.arg` uses the `va_arg` instr).
-    try out.appendSlice(allocator, "declare void @llvm.va_start(ptr)\n");
-    try out.appendSlice(allocator, "declare void @llvm.va_copy(ptr, ptr)\n");
-    try out.appendSlice(allocator, "declare void @llvm.va_end(ptr)\n\n");
-    // Weak no-op `define`s for every sanitizer shadow hook so EVERY build links and behaves
-    // identically when no sanitizer runtime is present. A linked runtime (the ksan/msan/csan
-    // profiles) provides STRONG definitions that override these; a default build never calls
-    // them. See `sanitizer_hooks`.
-    for (sanitizer_hooks) |hook| {
-        // If the module defines this hook itself (a pure-MC sanitizer runtime), yield to that
-        // definition: its `export fn` is emitted through normal MIR emission. Emitting the auto
-        // weak `define` here too would doubly-define the symbol.
-        if (moduleDefinesHook(module, hook)) continue;
-        try out.print(allocator, "define weak void @{s}(i64 %a, i64 %b) {{\n  ret void\n}}\n", .{hook});
-    }
-    try out.appendSlice(allocator, "\n");
-}
-
-// A sanitizer shadow-hook symbol gets a weak no-op `define` above, so an MC `extern fn` of the
-// same name must NOT also be `declare`d (a `declare` + a `define` of one symbol is invalid IR).
-fn isKsanHook(name: []const u8) bool {
-    for (sanitizer_hooks) |hook| {
-        if (std.mem.eql(u8, name, hook)) return true;
-    }
-    return false;
-}
-
-fn llvmTargetTriple(target_arch: backend_mod.TargetArch) []const u8 {
-    return switch (target_arch) {
-        .riscv64 => "riscv64-unknown-unknown-elf",
-        .x86_64 => "x86_64-unknown-unknown-elf",
-        .aarch64 => "aarch64-unknown-unknown-elf",
-    };
-}
-
-fn llvmTargetDataLayout(target_arch: backend_mod.TargetArch) []const u8 {
-    return switch (target_arch) {
-        .riscv64 => "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128",
-        .x86_64 => "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
-        .aarch64 => "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32",
-    };
-}
-
-fn emitTargetTypeDecls(allocator: std.mem.Allocator, out: *std.ArrayList(u8), target_arch: backend_mod.TargetArch) !void {
-    switch (target_arch) {
-        .riscv64 => {},
-        .x86_64 => try out.appendSlice(allocator, "%mc.va_list.x86_64 = type { i32, i32, ptr, ptr }\n\n"),
-        .aarch64 => try out.appendSlice(allocator, "%mc.va_list.aarch64 = type { ptr, ptr, ptr, i32, i32 }\n\n"),
-    }
 }
 
 const LlvmEmitter = struct {
@@ -809,20 +794,31 @@ const LlvmEmitter = struct {
         var fba = std.heap.FixedBufferAllocator.init(&buf);
         var scope = eval.ComptimeScope.init(fba.allocator());
         defer scope.deinit();
-        self.seedConstFoldScope(&scope);
+        var reflect_env = self.reflectEnv();
+        self.seedConstFoldScope(&scope, &reflect_env);
         return switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => |v| eval.cloneComptimeValue(self.scratch.allocator(), v) catch null,
             else => null,
         };
     }
 
-    fn seedConstFoldScope(self: *LlvmEmitter, scope: *eval.ComptimeScope) void {
-        scope.funcs = &self.const_fns;
-        scope.globals = &self.const_globals;
-        scope.reflect = llvmComptimeReflectThunk;
-        scope.reflect_ctx = self;
-        var widths = self.const_global_widths.iterator();
-        while (widths.next()) |entry| scope.bindWidth(entry.key_ptr.*, entry.value_ptr.*);
+    fn seedConstFoldScope(self: *LlvmEmitter, scope: *eval.ComptimeScope, reflect_env: *LlvmReflectEnv) void {
+        _ = self;
+        lower_llvm_reflect.seedConstFoldScope(reflect_env, scope);
+    }
+
+    fn reflectEnv(self: *LlvmEmitter) LlvmReflectEnv {
+        return .{
+            .type_aliases = &self.type_aliases,
+            .enum_types = &self.enum_types,
+            .packed_bits = &self.packed_bits,
+            .overlay_unions = &self.overlay_unions,
+            .tagged_unions = &self.tagged_unions,
+            .struct_types = &self.struct_types,
+            .const_fns = &self.const_fns,
+            .const_globals = &self.const_globals,
+            .const_global_widths = &self.const_global_widths,
+        };
     }
 
     fn comptimeValueInitializer(self: *LlvmEmitter, value: eval.ComptimeValue, target_ty: ast.TypeExpr) anyerror![]const u8 {
@@ -2526,10 +2522,7 @@ const LlvmEmitter = struct {
     fn switchLiteralValue(self: *LlvmEmitter, expr: ast.Expr, subject_ty: ast.TypeExpr) ![]const u8 {
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
-            .char_literal => |literal| if (eval.parseCharLiteral(literal)) |value|
-                try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value})
-            else
-                error.UnsupportedLlvmEmission,
+            .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
             .enum_literal => |literal| if (self.enumDeclForType(subject_ty)) |enum_decl|
                 try self.enumCaseValueByName(enum_decl, literal.text)
             else
@@ -3238,11 +3231,7 @@ const LlvmEmitter = struct {
 
     // If `callee` is `d.method` where `d` has a `*dyn Trait` type, return its TraitDecl.
     fn dynDispatchTrait(self: *LlvmEmitter, callee: ast.Expr) ?ast.TraitDecl {
-        const member = switch (callee.kind) {
-            .member => |m| m,
-            .grouped => |inner| return self.dynDispatchTrait(inner.*),
-            else => return null,
-        };
+        const member = memberExpr(callee) orelse return null;
         const base_ty = self.exprType(member.base.*) orelse return null;
         const trait_name = switch (self.resolveAliasType(base_ty).kind) {
             .dyn_trait => |d| d.trait_name.text,
@@ -3254,14 +3243,7 @@ const LlvmEmitter = struct {
     // `d.method(args)` -> load the method slot from `d.vtable`, call it with `d.data`
     // first. A genuine load-through-vtable indirect call (no devirtualization).
     fn emitDynDispatch(self: *LlvmEmitter, call: anytype, trait: ast.TraitDecl) ![]const u8 {
-        const member = switch (call.callee.*.kind) {
-            .member => |m| m,
-            .grouped => |inner| switch (inner.*.kind) {
-                .member => |m| m,
-                else => return error.UnsupportedLlvmEmission,
-            },
-            else => return error.UnsupportedLlvmEmission,
-        };
+        const member = memberCallee(call) orelse return error.UnsupportedLlvmEmission;
         const slot = traitMethodIndex(trait, member.name.text) orelse return error.UnsupportedLlvmEmission;
         const msig = trait.methods[slot];
         const dyn_ty = self.exprType(member.base.*) orelse return error.UnsupportedLlvmEmission;
@@ -4756,46 +4738,19 @@ const LlvmEmitter = struct {
     }
 
     fn nullableInnerType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .nullable => |child| child.*,
-            else => null,
-        };
+        return lower_llvm_shape.nullableInnerType(&self.type_aliases, ty);
     }
 
     fn atomicPayloadType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .generic => |node| {
-                if (!std.mem.eql(u8, node.base.text, "atomic") or node.args.len != 1) return null;
-                return node.args[0];
-            },
-            .qualified => |node| self.atomicPayloadType(node.child.*),
-            else => null,
-        };
+        return lower_llvm_shape.atomicPayloadType(&self.type_aliases, ty);
     }
 
     fn maybeUninitPayloadType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .generic => |node| {
-                if (!std.mem.eql(u8, node.base.text, "MaybeUninit") or node.args.len != 1) return null;
-                return node.args[0];
-            },
-            .qualified => |node| self.maybeUninitPayloadType(node.child.*),
-            else => null,
-        };
+        return lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, ty);
     }
 
     fn mmioAccessInfo(self: *LlvmEmitter, call: anytype) ?MmioAccessInfo {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         const op = if (std.mem.eql(u8, member.name.text, "read"))
             "read"
         else if (std.mem.eql(u8, member.name.text, "write"))
@@ -4860,45 +4815,19 @@ const LlvmEmitter = struct {
     }
 
     fn resultInfo(self: *LlvmEmitter, ty: ast.TypeExpr) ?ResultTypeInfo {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .generic => |node| {
-                if (!std.mem.eql(u8, node.base.text, "Result") or node.args.len != 2) return null;
-                return .{ .ok_ty = node.args[0], .err_ty = node.args[1] };
-            },
-            .qualified => |node| self.resultInfo(node.child.*),
-            else => null,
-        };
+        return lower_llvm_shape.resultInfo(&self.type_aliases, ty);
     }
 
     fn domainPayloadType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .generic => |node| {
-                if (!isPayloadDomainGenericName(node.base.text) or node.args.len != 1) return null;
-                return node.args[0];
-            },
-            .qualified => |node| self.domainPayloadType(node.child.*),
-            else => null,
-        };
+        return lower_llvm_shape.domainPayloadType(&self.type_aliases, ty);
     }
 
     fn isWrapDomainType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .generic => |node| std.mem.eql(u8, node.base.text, "wrap") and node.args.len == 1,
-            .qualified => |node| self.isWrapDomainType(node.child.*),
-            else => false,
-        };
+        return lower_llvm_shape.isWrapDomainType(&self.type_aliases, ty);
     }
 
     fn isSatDomainType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .generic => |node| std.mem.eql(u8, node.base.text, "sat") and node.args.len == 1,
-            .qualified => |node| self.isSatDomainType(node.child.*),
-            else => false,
-        };
+        return lower_llvm_shape.isSatDomainType(&self.type_aliases, ty);
     }
 
     fn atomicStorageLlvmType(self: *LlvmEmitter, payload_ty: ast.TypeExpr) ![]const u8 {
@@ -4946,43 +4875,24 @@ const LlvmEmitter = struct {
     }
 
     fn structDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.StructDecl {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .name => |name| self.struct_types.get(name.text),
-            else => null,
-        };
+        return lower_llvm_lookup.structDeclForType(&self.type_aliases, &self.struct_types, ty);
     }
 
     fn packedBitsInfoForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?PackedBitsInfo {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .name => |name| self.packed_bits.get(name.text),
-            else => null,
-        };
+        return lower_llvm_lookup.packedBitsInfoForType(&self.type_aliases, &self.packed_bits, ty);
     }
 
     fn overlayInfoForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?OverlayUnionInfo {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .name => |name| self.overlay_unions.get(name.text),
-            else => null,
-        };
+        return lower_llvm_lookup.overlayInfoForType(&self.type_aliases, &self.overlay_unions, ty);
     }
 
     fn taggedUnionForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.UnionDecl {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .name => |name| self.tagged_unions.get(name.text),
-            else => null,
-        };
+        return lower_llvm_lookup.taggedUnionForType(&self.type_aliases, &self.tagged_unions, ty);
     }
 
     fn taggedUnionCaseIndex(self: *LlvmEmitter, union_decl: ast.UnionDecl, case_name: []const u8) ?usize {
         _ = self;
-        for (union_decl.cases, 0..) |case, i| {
-            if (std.mem.eql(u8, case.name.text, case_name)) return i;
-        }
-        return null;
+        return lower_llvm_lookup.taggedUnionCaseIndex(union_decl, case_name);
     }
 
     fn taggedUnionLlvmType(self: *LlvmEmitter, union_decl: ast.UnionDecl) ![]const u8 {
@@ -4995,24 +4905,8 @@ const LlvmEmitter = struct {
     }
 
     fn taggedUnionLayout(self: *LlvmEmitter, union_decl: ast.UnionDecl, depth: usize) ?TaggedUnionLayout {
-        const payload_size = self.taggedUnionPayloadSize(union_decl, depth + 1) orelse return null;
-        const payload_align = self.taggedUnionPayloadAlignment(union_decl, depth + 1) orelse return null;
-        if (payload_align != 1 and payload_align != 2 and payload_align != 4 and payload_align != 8) return null;
-        var payload_offset: i128 = 4;
-        payload_offset = alignForward(payload_offset, @intCast(payload_align)) orelse return null;
-        const payload_offset_u64: u64 = @intCast(payload_offset);
-        const aligned_payload_size = alignForward(@intCast(payload_size), @intCast(payload_align)) orelse return null;
-        const size = alignForward(payload_offset + aligned_payload_size, @intCast(@max(@as(u64, 4), payload_align))) orelse return null;
-        const storage_count = @as(u64, @intCast(aligned_payload_size)) / payload_align;
-        return .{
-            .size = @intCast(size),
-            .alignment = @max(@as(u64, 4), payload_align),
-            .payload_size = payload_size,
-            .payload_alignment = payload_align,
-            .padding_size = payload_offset_u64 - 4,
-            .storage_count = @max(@as(u64, 1), storage_count),
-            .payload_field_index = if (payload_offset_u64 == 4) 1 else 2,
-        };
+        var env = self.reflectEnv();
+        return lower_llvm_reflect.taggedUnionLayout(&env, union_decl, depth);
     }
 
     fn taggedUnionPayloadStorageType(self: *LlvmEmitter, layout: TaggedUnionLayout) ![]const u8 {
@@ -5020,34 +4914,9 @@ const LlvmEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i{d}]", .{ layout.storage_count, bits });
     }
 
-    fn taggedUnionPayloadSize(self: *LlvmEmitter, union_decl: ast.UnionDecl, depth: usize) ?u64 {
-        if (depth > 32) return null;
-        var size: u64 = 1;
-        for (union_decl.cases) |case| {
-            const ty = case.ty orelse continue;
-            const payload_size = self.comptimeSizeOf(ty, depth + 1) orelse return null;
-            size = @max(size, @as(u64, @intCast(payload_size)));
-        }
-        return size;
-    }
-
-    fn taggedUnionPayloadAlignment(self: *LlvmEmitter, union_decl: ast.UnionDecl, depth: usize) ?u64 {
-        if (depth > 32) return null;
-        var alignment: u64 = 1;
-        for (union_decl.cases) |case| {
-            const ty = case.ty orelse continue;
-            const payload_alignment = self.comptimeAlignOf(ty, depth + 1) orelse return null;
-            alignment = @max(alignment, @as(u64, @intCast(payload_alignment)));
-        }
-        return alignment;
-    }
-
     fn packedBitsFieldIndex(self: *LlvmEmitter, info: PackedBitsInfo, field_name: []const u8) ?usize {
         _ = self;
-        for (info.fields, 0..) |field, i| {
-            if (std.mem.eql(u8, field.name.text, field_name)) return i;
-        }
-        return null;
+        return lower_llvm_lookup.packedBitsFieldIndex(info, field_name);
     }
 
     fn packedBitsBaseAddress(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
@@ -5063,25 +4932,15 @@ const LlvmEmitter = struct {
     }
 
     fn enumDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.EnumDecl {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .name => |name| self.enum_types.get(name.text),
-            else => null,
-        };
+        return lower_llvm_lookup.enumDeclForType(&self.type_aliases, &self.enum_types, ty);
     }
 
     fn memberBaseStructType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .pointer => |node| node.child.*,
-            .generic => |node| if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1) node.args[0] else ty,
-            else => ty,
-        };
+        return lower_llvm_lookup.memberBaseStructType(&self.type_aliases, ty);
     }
 
     fn memberBaseStructDecl(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.StructDecl {
-        const struct_ty = self.memberBaseStructType(ty) orelse return null;
-        return self.structDeclForType(struct_ty);
+        return lower_llvm_lookup.memberBaseStructDecl(&self.type_aliases, &self.struct_types, ty);
     }
 
     fn enumReprType(enum_decl: ast.EnumDecl) ast.TypeExpr {
@@ -5108,10 +4967,7 @@ const LlvmEmitter = struct {
     fn enumLiteralValue(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
-            .char_literal => |literal| if (eval.parseCharLiteral(literal)) |value|
-                try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value})
-            else
-                error.UnsupportedLlvmEmission,
+            .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
             .grouped => |inner| try self.enumLiteralValue(inner.*),
             .unary => |node| blk: {
                 if (node.op != .neg) break :blk error.UnsupportedLlvmEmission;
@@ -5177,10 +5033,7 @@ const LlvmEmitter = struct {
     }
 
     fn resolveAliasType(self: *LlvmEmitter, ty: ast.TypeExpr) ast.TypeExpr {
-        return switch (ty.kind) {
-            .name => |name| if (self.type_aliases.get(name.text)) |aliased| self.resolveAliasType(aliased) else ty,
-            else => ty,
-        };
+        return lower_llvm_alias.resolveAliasType(&self.type_aliases, ty);
     }
 
     fn structLlvmType(self: *LlvmEmitter, struct_decl: ast.StructDecl) anyerror![]const u8 {
@@ -5291,11 +5144,8 @@ const LlvmEmitter = struct {
     }
 
     fn directCallName(self: *LlvmEmitter, callee: ast.Expr) ?[]const u8 {
-        return switch (callee.kind) {
-            .ident => |ident| if (self.fn_sigs.contains(ident.text)) ident.text else null,
-            .grouped => |inner| self.directCallName(inner.*),
-            else => null,
-        };
+        const name = calleeIdentName(callee) orelse return null;
+        return if (self.fn_sigs.contains(name)) name else null;
     }
 
     fn fnPointerCalleeType(self: *LlvmEmitter, callee: ast.Expr) ?ast.TypeExpr {
@@ -5354,15 +5204,8 @@ const LlvmEmitter = struct {
         // so a dispatch used directly as a switch/if subject (`if self.inner.poll() { ... }`) fell
         // through to the unsupported path — the C backend handled it, the LLVM backend did not.
         if (self.dynDispatchTrait(call.callee.*)) |trait| {
-            const mname = switch (call.callee.*.kind) {
-                .member => |m| m.name.text,
-                .grouped => |inner| switch (inner.*.kind) {
-                    .member => |m| m.name.text,
-                    else => return null,
-                },
-                else => return null,
-            };
-            const slot = traitMethodIndex(trait, mname) orelse return null;
+            const member = memberCallee(call) orelse return null;
+            const slot = traitMethodIndex(trait, member.name.text) orelse return null;
             return trait.methods[slot].return_type orelse simpleType(call.callee.*.span, "void");
         }
         if (self.constGetCallInfo(call)) |info| return info.element_ty;
@@ -5414,14 +5257,7 @@ const LlvmEmitter = struct {
     }
 
     fn enumRawCallInfo(self: *LlvmEmitter, call: anytype) ?EnumRawCallInfo {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "raw")) return null;
         const enum_ty = self.exprType(member.base.*) orelse return null;
         const enum_decl = self.enumDeclForType(enum_ty) orelse return null;
@@ -5430,14 +5266,7 @@ const LlvmEmitter = struct {
     }
 
     fn domainResidueCallInfo(self: *LlvmEmitter, call: anytype) ?DomainResidueCallInfo {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "residue")) return null;
         const domain_ty = self.exprType(member.base.*) orelse return null;
         const payload_ty = self.domainPayloadType(domain_ty) orelse return null;
@@ -5451,14 +5280,7 @@ const LlvmEmitter = struct {
     }
 
     fn conversionCallInfo(self: *LlvmEmitter, call: anytype) ?ConversionCallInfo {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "from") and
             !std.mem.eql(u8, member.name.text, "wrap_from") and
             !std.mem.eql(u8, member.name.text, "from_mod") and
@@ -5479,14 +5301,7 @@ const LlvmEmitter = struct {
 
     fn domainOpCallInfo(self: *LlvmEmitter, call: anytype) ?DomainOpCallInfo {
         if (call.type_args.len != 0) return null;
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         const op = member.name.text;
         const is_serial_op = std.mem.eql(u8, op, "before") or
             std.mem.eql(u8, op, "after") or
@@ -5525,14 +5340,7 @@ const LlvmEmitter = struct {
     }
 
     fn reduceCallInfo(self: *LlvmEmitter, call: anytype) ?ReduceCallInfo {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         if (!isIdentNamed(member.base.*, "reduce")) return null;
         const op = member.name.text;
         if (!std.mem.eql(u8, op, "sum_checked") and !std.mem.eql(u8, op, "sum_left") and !std.mem.eql(u8, op, "sum_fast")) return null;
@@ -5547,14 +5355,7 @@ const LlvmEmitter = struct {
 
     fn constGetCallInfo(self: *LlvmEmitter, call: anytype) ?ConstGetCallInfo {
         if (call.type_args.len != 1) return null;
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "const_get")) return null;
         const index = constGetIndexArg(call.type_args[0]) orelse return null;
         const base_ty = self.exprType(member.base.*) orelse return null;
@@ -5578,14 +5379,7 @@ const LlvmEmitter = struct {
     }
 
     fn atomicCallInfo(self: *LlvmEmitter, call: anytype) ?AtomicCallInfo {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "load") and
             !std.mem.eql(u8, member.name.text, "store") and
             !std.mem.eql(u8, member.name.text, "fetch_add") and
@@ -5617,14 +5411,7 @@ const LlvmEmitter = struct {
     }
 
     fn maybeUninitCallInfo(self: *LlvmEmitter, call: anytype) ?MaybeUninitCallInfo {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "write") and
             !std.mem.eql(u8, member.name.text, "assume_init"))
         {
@@ -5636,14 +5423,7 @@ const LlvmEmitter = struct {
     }
 
     fn dmaCacheCallInfo(self: *LlvmEmitter, call: anytype) ?DmaCacheCallInfo {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         if (!isIdentNamed(member.base.*, "cache")) return null;
         if (!std.mem.eql(u8, member.name.text, "clean") and !std.mem.eql(u8, member.name.text, "invalidate")) return null;
         if (call.args.len != 1) return null;
@@ -5653,14 +5433,7 @@ const LlvmEmitter = struct {
     }
 
     fn dmaBufCallInfo(self: *LlvmEmitter, call: anytype) ?DmaBufCallInfo {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "dma_addr") and !std.mem.eql(u8, member.name.text, "as_slice")) return null;
         const dma_ty = self.exprType(member.base.*) orelse return null;
         const info = self.dmaBufInfo(dma_ty) orelse return null;
@@ -5724,207 +5497,30 @@ const LlvmEmitter = struct {
     }
 
     fn arrayLenValue(self: *LlvmEmitter, expr: ast.Expr) ?u64 {
-        if (literalArrayLenValue(expr)) |len| return len;
-        var buf: [64 * 1024]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&buf);
-        var scope = eval.ComptimeScope.init(fba.allocator());
-        defer scope.deinit();
-        self.seedConstFoldScope(&scope);
-        return switch (eval.foldComptimeExpr(&scope, expr)) {
-            .value => |value| switch (value) {
-                .int => |n| if (n >= 0 and n <= std.math.maxInt(u64)) @intCast(n) else null,
-                else => null,
-            },
-            else => null,
-        };
-    }
-
-    fn comptimeReflect(self: *LlvmEmitter, call: ast.Expr) ?i128 {
-        const node = switch (call.kind) {
-            .call => |n| n,
-            else => return null,
-        };
-        const kind = reflectionCallKind(node.callee.*) orelse return null;
-        const ty = self.reflectionTypeArg(node) orelse return null;
-        const field_arg_index: usize = if (node.type_args.len == 1) 0 else 1;
-        return switch (kind) {
-            .size => self.comptimeSizeOf(ty, 0),
-            .repr => self.comptimeReprOf(ty, 0),
-            .alignment => self.comptimeAlignOf(ty, 0),
-            .field_offset => if (field_arg_index < node.args.len) self.comptimeFieldOffset(ty, reflectionFieldName(node.args[field_arg_index]) orelse return null, 0) else null,
-            .bit_offset => if (field_arg_index < node.args.len) self.comptimeBitOffset(ty, reflectionFieldName(node.args[field_arg_index]) orelse return null) else null,
-        };
-    }
-
-    fn reflectionTypeArg(self: *LlvmEmitter, node: anytype) ?ast.TypeExpr {
-        _ = self;
-        if (node.type_args.len == 1) return node.type_args[0];
-        if (node.type_args.len != 0 or node.args.len == 0) return null;
-        return exprAsType(node.args[0]);
+        var env = self.reflectEnv();
+        return lower_llvm_reflect.arrayLenValue(&env, expr);
     }
 
     fn reflectionCallValue(self: *LlvmEmitter, call: anytype) ?[]const u8 {
         const expr: ast.Expr = .{ .span = call.callee.*.span, .kind = .{ .call = call } };
-        const value = self.comptimeReflect(expr) orelse return null;
+        var env = self.reflectEnv();
+        const value = lower_llvm_reflect.comptimeReflect(&env, expr) orelse return null;
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value}) catch null;
     }
 
-    fn comptimeBitOffset(self: *LlvmEmitter, ty: ast.TypeExpr, field: []const u8) ?i128 {
-        if (self.packedBitsInfoForType(ty)) |info| {
-            const index = self.packedBitsFieldIndex(info, field) orelse return null;
-            return @intCast(index);
-        }
-        const byte_offset = self.comptimeFieldOffset(ty, field, 0) orelse return null;
-        return byte_offset * 8;
-    }
-
-    fn comptimeReprOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        const resolved_ty = self.resolveAliasType(ty);
-        return switch (resolved_ty.kind) {
-            .name => |name| {
-                if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeSizeOf(enumReprType(enum_decl), depth + 1);
-                if (self.tagged_unions.get(name.text) != null) return 4;
-                return self.comptimeSizeOf(resolved_ty, depth + 1);
-            },
-            .qualified => |node| self.comptimeReprOf(node.child.*, depth + 1),
-            else => self.comptimeSizeOf(resolved_ty, depth + 1),
-        };
-    }
-
     fn comptimeSizeOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        return switch (ty.kind) {
-            .name => |name| {
-                if (scalarLayout(name.text)) |layout| return @intCast(layout.size);
-                if (self.type_aliases.get(name.text)) |aliased| return self.comptimeSizeOf(aliased, depth + 1);
-                if (self.overlay_unions.get(name.text)) |info| return @intCast(info.size);
-                if (self.tagged_unions.get(name.text)) |union_decl| {
-                    const layout = self.taggedUnionLayout(union_decl, depth + 1) orelse return null;
-                    return @intCast(layout.size);
-                }
-                if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructSize(struct_decl, depth + 1);
-                if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeSizeOf(enumReprType(enum_decl), depth + 1);
-                if (self.packed_bits.get(name.text)) |info| return self.comptimeSizeOf(info.repr, depth + 1);
-                if (libraryScalarLlvmType(name.text) != null) return 1;
-                return null;
-            },
-            .pointer, .raw_many_pointer => 8,
-            .dyn_trait => 16,
-            .nullable => |child| if (isPointerLikeType(child.*)) 8 else if (isDynTraitLlvmType(child.*)) 16 else null,
-            .slice => 16,
-            .generic => |g| {
-                if (std.mem.eql(u8, g.base.text, "Result") and g.args.len == 2) {
-                    const ok_size = self.comptimeResultPayloadSizeOf(g.args[0], depth + 1) orelse return null;
-                    const err_size = self.comptimeResultPayloadSizeOf(g.args[1], depth + 1) orelse return null;
-                    const ok_align = self.comptimeResultPayloadAlignOf(g.args[0], depth + 1) orelse return null;
-                    const err_align = self.comptimeResultPayloadAlignOf(g.args[1], depth + 1) orelse return null;
-                    const max_align = @max(@max(ok_align, err_align), 1);
-                    var offset: i128 = 1;
-                    offset = alignForward(offset, ok_align) orelse return null;
-                    offset += ok_size;
-                    offset = alignForward(offset, err_align) orelse return null;
-                    offset += err_size;
-                    return alignForward(offset, max_align);
-                }
-                if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
-                if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
-                if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
-                if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
-                if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeSizeOf(g.args[0], depth + 1);
-                if (std.mem.eql(u8, g.base.text, "MmioPtr") and g.args.len == 1) return 8;
-                if (isPayloadDomainGenericName(g.base.text) and g.args.len == 1) return self.comptimeSizeOf(g.args[0], depth + 1);
-                return null;
-            },
-            .array => |node| {
-                const len = self.arrayLenValue(node.len) orelse return null;
-                const elem = self.comptimeSizeOf(node.child.*, depth + 1) orelse return null;
-                return @as(i128, @intCast(len)) * elem;
-            },
-            .qualified => |node| self.comptimeSizeOf(node.child.*, depth + 1),
-            else => null,
-        };
+        var env = self.reflectEnv();
+        return lower_llvm_reflect.comptimeSizeOf(&env, ty, depth);
     }
 
     fn comptimeAlignOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        return switch (ty.kind) {
-            .name => |name| {
-                if (scalarLayout(name.text)) |layout| return @intCast(layout.alignment);
-                if (self.type_aliases.get(name.text)) |aliased| return self.comptimeAlignOf(aliased, depth + 1);
-                if (self.overlay_unions.get(name.text)) |info| return @intCast(info.alignment);
-                if (self.tagged_unions.get(name.text)) |union_decl| {
-                    const layout = self.taggedUnionLayout(union_decl, depth + 1) orelse return null;
-                    return @intCast(layout.alignment);
-                }
-                if (self.struct_types.get(name.text)) |struct_decl| return self.comptimeStructAlign(struct_decl, depth + 1);
-                if (self.enum_types.get(name.text)) |enum_decl| return self.comptimeAlignOf(enumReprType(enum_decl), depth + 1);
-                if (self.packed_bits.get(name.text)) |info| return self.comptimeAlignOf(info.repr, depth + 1);
-                if (libraryScalarLlvmType(name.text) != null) return 1;
-                return null;
-            },
-            .pointer, .raw_many_pointer, .slice => 8,
-            .dyn_trait => 8,
-            .nullable => |child| if (isPointerLikeType(child.*)) 8 else if (isDynTraitLlvmType(child.*)) 8 else null,
-            .generic => |g| {
-                if (std.mem.eql(u8, g.base.text, "Result") and g.args.len == 2) {
-                    const ok_align = self.comptimeResultPayloadAlignOf(g.args[0], depth + 1) orelse return null;
-                    const err_align = self.comptimeResultPayloadAlignOf(g.args[1], depth + 1) orelse return null;
-                    return @max(@max(ok_align, err_align), 1);
-                }
-                if (isOpaqueAddressGenericName(g.base.text) and g.args.len == 1) return 8;
-                if (std.mem.eql(u8, g.base.text, "DmaBuf") and g.args.len == 2) return 8;
-                if (std.mem.eql(u8, g.base.text, "atomic") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
-                if (std.mem.eql(u8, g.base.text, "MaybeUninit") and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
-                if ((std.mem.eql(u8, g.base.text, "Reg") or std.mem.eql(u8, g.base.text, "RegBits")) and g.args.len >= 1) return self.comptimeAlignOf(g.args[0], depth + 1);
-                if (std.mem.eql(u8, g.base.text, "MmioPtr") and g.args.len == 1) return 8;
-                if (isPayloadDomainGenericName(g.base.text) and g.args.len == 1) return self.comptimeAlignOf(g.args[0], depth + 1);
-                return null;
-            },
-            .array => |node| self.comptimeAlignOf(node.child.*, depth + 1),
-            .qualified => |node| self.comptimeAlignOf(node.child.*, depth + 1),
-            else => null,
-        };
-    }
-
-    fn comptimeResultPayloadSizeOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
-        if (typeNameEql(self.resolveAliasType(ty), "void")) return 1;
-        return self.comptimeSizeOf(ty, depth + 1);
-    }
-
-    fn comptimeResultPayloadAlignOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
-        if (typeNameEql(self.resolveAliasType(ty), "void")) return 1;
-        return self.comptimeAlignOf(ty, depth + 1);
-    }
-
-    fn comptimeStructSize(self: *LlvmEmitter, struct_decl: ast.StructDecl, depth: usize) ?i128 {
-        const layout = self.comptimeStructLayout(struct_decl, null, depth + 1) orelse return null;
-        return layout.size;
-    }
-
-    fn comptimeStructAlign(self: *LlvmEmitter, struct_decl: ast.StructDecl, depth: usize) ?i128 {
-        const layout = self.comptimeStructLayout(struct_decl, null, depth + 1) orelse return null;
-        return layout.alignment;
+        var env = self.reflectEnv();
+        return lower_llvm_reflect.comptimeAlignOf(&env, ty, depth);
     }
 
     fn comptimeFieldOffset(self: *LlvmEmitter, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
-        if (depth > 32) return null;
-        const name = typeName(ty) orelse return null;
-        if (self.type_aliases.get(name)) |aliased| return self.comptimeFieldOffset(aliased, field, depth + 1);
-        if (self.struct_types.get(name)) |struct_decl| {
-            const layout = self.comptimeStructLayout(struct_decl, field, depth + 1) orelse return null;
-            return layout.field_offset;
-        }
-        if (self.overlay_unions.get(name)) |info| {
-            for (info.fields) |overlay_field| {
-                if (std.mem.eql(u8, overlay_field.name.text, field)) return 0;
-            }
-        }
-        return null;
-    }
-
-    fn comptimeStructLayout(self: *LlvmEmitter, struct_decl: ast.StructDecl, wanted_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
-        return type_layout.comptimeStructLayout(*LlvmEmitter, self, struct_decl, wanted_field, depth, comptimeSizeOf, comptimeAlignOf);
+        var env = self.reflectEnv();
+        return lower_llvm_reflect.comptimeFieldOffset(&env, ty, field, depth);
     }
 
     fn integerBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
@@ -6028,14 +5624,7 @@ const LlvmEmitter = struct {
     }
 
     fn rawManyOffsetCallInfo(self: *LlvmEmitter, call: anytype) ?RawManyOffsetInfo {
-        const member = switch (call.callee.kind) {
-            .member => |node| node,
-            .grouped => |inner| switch (inner.kind) {
-                .member => |node| node,
-                else => return null,
-            },
-            else => return null,
-        };
+        const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "offset")) return null;
         const base_ty = self.exprType(member.base.*) orelse return null;
         const element_ty = switch (self.resolveAliasType(base_ty).kind) {
@@ -6059,192 +5648,6 @@ const LlvmEmitter = struct {
     }
 };
 
-const LocalSlot = struct {
-    ty: ast.TypeExpr,
-    ptr: []const u8,
-    kind: LocalSlotKind = .normal,
-};
-
-const LocalSlotKind = enum {
-    normal,
-    va_list_local,
-    va_list_param,
-};
-
-const FnSig = struct {
-    ret: ast.TypeExpr,
-    params: []const ast.Param,
-    debug_id: ?usize = null,
-};
-
-// A generated env-widening thunk for a scalar-env `bind`. `fname` is the real
-// target; the thunk takes the env as `ptr`, narrows it back to the scalar env
-// type via `ptrtoint`, and forwards the remaining arguments.
-const BindThunk = struct {
-    fname: []const u8,
-    sig: FnSig,
-};
-
-const PackedBitsInfo = struct {
-    repr: ast.TypeExpr,
-    fields: []const ast.Field,
-};
-
-const OverlayUnionInfo = struct {
-    fields: []const ast.Field,
-    size: u64,
-    alignment: u64,
-};
-
-const OverlayLayout = struct {
-    size: u64,
-    alignment: u64,
-};
-
-const TaggedUnionLayout = struct {
-    size: u64,
-    alignment: u64,
-    payload_size: u64,
-    payload_alignment: u64,
-    padding_size: u64,
-    storage_count: u64,
-    payload_field_index: u8,
-};
-
-const MmioFieldInfo = struct {
-    storage_ty: ast.TypeExpr,
-    value_ty: ast.TypeExpr,
-};
-
-const MmioAccessInfo = struct {
-    op: []const u8,
-    base: ast.Expr,
-    struct_ty: ast.TypeExpr,
-    storage_ty: ast.TypeExpr,
-    value_ty: ast.TypeExpr,
-    offset: u64,
-};
-
-const MmioFencePlacement = enum {
-    before_store,
-    after_load,
-};
-
-const DmaBufInfo = struct {
-    payload_ty: ast.TypeExpr,
-};
-
-const DmaBufCallInfo = struct {
-    base: ast.Expr,
-    op: []const u8,
-    dma_ty: ast.TypeExpr,
-    payload_ty: ast.TypeExpr,
-};
-
-const DmaCacheCallInfo = struct {
-    op: []const u8,
-    dma_ty: ast.TypeExpr,
-};
-
-const ArgValue = struct {
-    ty: ast.TypeExpr,
-    value: []const u8,
-};
-
-const StringLiteralGlobal = struct {
-    name: []const u8,
-    escaped_bytes: []const u8,
-    len: usize,
-};
-
-const DebugFunction = struct {
-    id: usize,
-    name: []const u8,
-    line: usize,
-    column: usize,
-};
-
-const DebugLocation = struct {
-    id: usize,
-    scope: usize,
-    line: usize,
-    column: usize,
-};
-
-const LoopLabels = struct {
-    break_label: []const u8,
-    continue_label: []const u8,
-    cleanup_start: usize,
-};
-
-const RawManyOffsetInfo = struct {
-    base: ast.Expr,
-    base_ty: ast.TypeExpr,
-    element_ty: ast.TypeExpr,
-};
-
-const EnumRawCallInfo = struct {
-    base: ast.Expr,
-    enum_ty: ast.TypeExpr,
-    repr_ty: ast.TypeExpr,
-};
-
-const DomainResidueCallInfo = struct {
-    base: ast.Expr,
-    domain_ty: ast.TypeExpr,
-    payload_ty: ast.TypeExpr,
-};
-
-const DomainOpCallInfo = struct {
-    domain_ty: ast.TypeExpr,
-    payload_ty: ast.TypeExpr,
-    return_ty: ast.TypeExpr,
-    op: []const u8,
-};
-
-const ConversionCallInfo = struct {
-    target_ty: ast.TypeExpr,
-    op: []const u8,
-};
-
-const ReduceCallInfo = struct {
-    element_ty: ast.TypeExpr,
-    return_ty: ast.TypeExpr,
-    op: []const u8,
-};
-
-const ConstGetCallInfo = struct {
-    base: ast.Expr,
-    array_ty: ast.TypeExpr,
-    element_ty: ast.TypeExpr,
-    index: u64,
-};
-
-const IntRange = struct {
-    min: i128,
-    max: i128,
-};
-
-const AtomicCallInfo = struct {
-    base: ast.Expr,
-    op: []const u8,
-    payload_ty: ast.TypeExpr,
-    // True when the base is a `*atomic<T>` (the atomic accessed by pointer): the pointer value
-    // is the atomic's address, rather than the base needing `&place`.
-    base_is_pointer: bool = false,
-};
-
-const MaybeUninitCallInfo = struct {
-    base: ast.Expr,
-    op: []const u8,
-    payload_ty: ast.TypeExpr,
-};
-
-const ResultTypeInfo = struct {
-    ok_ty: ast.TypeExpr,
-    err_ty: ast.TypeExpr,
-};
-
 // Result/tagged-union arm-pattern shapes are classified by the shared, AST-only `switch_lower`
 // module; these aliases keep the existing call sites in this file reading unchanged.
 const ResultSwitchPattern = switch_lower.ResultArmPattern;
@@ -6258,514 +5661,7 @@ fn restoreLocal(map: anytype, key: []const u8, old: anytype) !void {
     }
 }
 
-fn assignmentIdent(target: ast.Expr) ?ast.Ident {
-    return switch (target.kind) {
-        .ident => |ident| ident,
-        .grouped => |inner| assignmentIdent(inner.*),
-        else => null,
-    };
-}
-
-fn derefTarget(target: ast.Expr) ?ast.Expr {
-    return switch (target.kind) {
-        .deref => |inner| inner.*,
-        .grouped => |inner| derefTarget(inner.*),
-        else => null,
-    };
-}
-
-fn structFieldIndex(struct_decl: ast.StructDecl, field_name: []const u8) ?usize {
-    for (struct_decl.fields, 0..) |field, i| {
-        if (std.mem.eql(u8, field.name.text, field_name)) return i;
-    }
-    return null;
-}
-
-fn structLiteralField(fields: []const ast.StructLiteralField, field_name: []const u8) ?ast.Expr {
-    for (fields) |field| {
-        if (std.mem.eql(u8, field.name.text, field_name)) return field.value;
-    }
-    return null;
-}
-
-fn hasNakedAttr(attrs: []const ast.Attr) bool {
-    for (attrs) |attr| {
-        if (std.meta.activeTag(attr.kind) == .naked) return true;
-    }
-    return false;
-}
-
-fn hasWeakAttr(attrs: []const ast.Attr) bool {
-    for (attrs) |attr| {
-        if (std.meta.activeTag(attr.kind) == .weak) return true;
-    }
-    return false;
-}
-
-fn hasNoinlineAttr(attrs: []const ast.Attr) bool {
-    for (attrs) |attr| {
-        if (std.meta.activeTag(attr.kind) == .@"noinline") return true;
-    }
-    return false;
-}
-
-// The `#[section("...")]` target name, or null if the declaration has no section attribute.
-fn sectionAttr(attrs: []const ast.Attr) ?[]const u8 {
-    for (attrs) |attr| {
-        if (attr.kind == .section) return attr.kind.section;
-    }
-    return null;
-}
-
-// Effective alignment for a function: the explicit `#[align(N)]` value if present, else 4 for a
-// `#[naked]` function (trap-vector / entry code whose address goes into an alignment-sensitive
-// register — e.g. a RISC-V `stvec`/`mtvec` base must be 4-byte aligned), else null. When both
-// apply, the larger wins. Mirrors lower_c.zig's effectiveAlign so the backends stay in parity.
-fn effectiveAlign(attrs: []const ast.Attr) ?u32 {
-    var explicit: ?u32 = null;
-    for (attrs) |attr| {
-        if (attr.kind == .@"align") explicit = attr.kind.@"align";
-    }
-    const naked_min: ?u32 = if (hasNakedAttr(attrs)) 4 else null;
-    if (explicit) |e| {
-        if (naked_min) |n| return @max(e, n);
-        return e;
-    }
-    return naked_min;
-}
-
-// The slot index of trait method `name` (the vtable lists methods in declaration order).
-fn traitMethodIndex(trait: ast.TraitDecl, name: []const u8) ?usize {
-    for (trait.methods, 0..) |m, i| {
-        if (std.mem.eql(u8, m.name.text, name)) return i;
-    }
-    return null;
-}
-
-// Mirrors sema.traitIsObjectSafe — the backend emits a vtable only for object-safe traits.
-fn llvmTraitIsObjectSafe(t: ast.TraitDecl) bool {
-    for (t.methods) |m| {
-        switch (m.self_mode) {
-            .by_ptr, .by_mut_ptr => {},
-            else => return false,
-        }
-        for (m.params) |p| if (p.is_comptime) return false;
-    }
-    return true;
-}
-
-// The mangled `Type__m` free function an impl provides for trait method `name`.
-fn implMethodMangledLlvm(methods: []const ast.ImplTraitMethod, name: []const u8) ?[]const u8 {
-    for (methods) |m| {
-        if (std.mem.eql(u8, m.name.text, name)) return m.mangled;
-    }
-    return null;
-}
-
-fn debugLine(span: ast.Span) usize {
-    return if (span.line == 0) 1 else span.line;
-}
-
-fn debugColumn(span: ast.Span) usize {
-    return if (span.column == 0) 1 else span.column;
-}
-
-fn escapedLlvmString(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    var escaped: std.ArrayList(u8) = .empty;
-    for (text) |ch| {
-        switch (ch) {
-            '\\' => try escaped.appendSlice(allocator, "\\5C"),
-            '"' => try escaped.appendSlice(allocator, "\\22"),
-            '\n' => try escaped.appendSlice(allocator, "\\0A"),
-            '\r' => try escaped.appendSlice(allocator, "\\0D"),
-            '\t' => try escaped.appendSlice(allocator, "\\09"),
-            else => try escaped.append(allocator, ch),
-        }
-    }
-    return escaped.toOwnedSlice(allocator);
-}
-
-const LlvmStringBytes = struct {
-    escaped: []const u8,
-    len: usize,
-};
-
-fn llvmAsmTemplate(allocator: std.mem.Allocator, templates: []const []const u8) ![]const u8 {
-    var escaped: std.ArrayList(u8) = .empty;
-    for (templates, 0..) |template, i| {
-        if (i != 0) try escaped.appendSlice(allocator, "\\0A\\09");
-        try appendLlvmStringLiteralBody(allocator, &escaped, template, null);
-    }
-    return escaped.toOwnedSlice(allocator);
-}
-
-// Opaque (operand-less, incl. `#[naked]`) asm: like `llvmAsmTemplate`, but a literal `$` — e.g.
-// a `$0x23` immediate or `$$0x202` — must be escaped to `$$` for LLVM IR inline asm, where a
-// single `$` introduces an operand reference. There are no operands, so `%reg` register names
-// (and `%%` if any) pass through unchanged. (The precise path does its own `$` escaping inline,
-// so this is only for the opaque/naked path.)
-fn llvmOpaqueAsmTemplate(allocator: std.mem.Allocator, templates: []const []const u8) ![]const u8 {
-    const template = try llvmAsmTemplate(allocator, templates);
-    var converted: std.ArrayList(u8) = .empty;
-    var i: usize = 0;
-    while (i < template.len) {
-        // `%%reg` (GCC-extended-asm escaping, emitted by emit-c for a clobber-bearing opaque
-        // block) -> a single `%reg` in LLVM IR inline asm. Without this, `%%ax` reaches the
-        // assembler as `%%ax` and is rejected as an invalid register name. Naked basic-asm
-        // blocks already use a single `%reg`, which passes through unchanged.
-        if (template[i] == '%' and i + 1 < template.len and template[i + 1] == '%') {
-            try converted.append(allocator, '%');
-            i += 2;
-            continue;
-        }
-        // A literal `$` (e.g. a `$0x23` immediate in basic/naked asm) -> `$$`, since a single
-        // `$` introduces an operand reference in LLVM IR inline asm (opaque asm has none).
-        if (template[i] == '$') {
-            try converted.appendSlice(allocator, "$$");
-            i += 1;
-            continue;
-        }
-        try converted.append(allocator, template[i]);
-        i += 1;
-    }
-    return converted.toOwnedSlice(allocator);
-}
-
-fn llvmPreciseAsmTemplate(allocator: std.mem.Allocator, templates: []const []const u8) ![]const u8 {
-    const template = try llvmAsmTemplate(allocator, templates);
-    var converted: std.ArrayList(u8) = .empty;
-    var i: usize = 0;
-    while (i < template.len) {
-        // `%N` operand reference -> LLVM `$N`. The MC/GCC-extended-asm spelling of a
-        // positional operand becomes LLVM IR inline-asm's `$N` form.
-        if (template[i] == '%' and i + 1 < template.len and std.ascii.isDigit(template[i + 1])) {
-            try converted.append(allocator, '$');
-            i += 1;
-            while (i < template.len and std.ascii.isDigit(template[i])) : (i += 1) {
-                try converted.append(allocator, template[i]);
-            }
-            continue;
-        }
-        // `%%` literal-percent (GCC-extended-asm escaping, used before a hard register
-        // name such as `%%rax`) -> a single `%` in LLVM IR inline asm, whose literal
-        // percent is unescaped. Without this, a template-mov into a fixed register
-        // (`mov %0, %%rax`) — the only way to pin an operand to a specific x86 register
-        // given that precise-asm operands lower to generic `r` — would reach the
-        // assembler as `%%rax` and be rejected as an invalid register name.
-        if (template[i] == '%' and i + 1 < template.len and template[i + 1] == '%') {
-            try converted.append(allocator, '%');
-            i += 2;
-            continue;
-        }
-        // A literal `$` must be escaped as `$$` in LLVM IR inline-asm templates.
-        if (template[i] == '$') {
-            try converted.appendSlice(allocator, "$$");
-            i += 1;
-            continue;
-        }
-        try converted.append(allocator, template[i]);
-        i += 1;
-    }
-    return converted.toOwnedSlice(allocator);
-}
-
-fn llvmAsmClobbers(allocator: std.mem.Allocator, clobbers: []const []const u8) ![]const u8 {
-    var constraints: std.ArrayList(u8) = .empty;
-    if (clobbers.len == 0) {
-        try constraints.appendSlice(allocator, "~{memory}");
-        return constraints.toOwnedSlice(allocator);
-    }
-    for (clobbers, 0..) |clobber, i| {
-        const name = try stringLiteralText(allocator, clobber);
-        if (i != 0) try constraints.append(allocator, ',');
-        try constraints.print(allocator, "~{{{s}}}", .{name});
-    }
-    return constraints.toOwnedSlice(allocator);
-}
-
-fn llvmPreciseAsmConstraints(allocator: std.mem.Allocator, asm_stmt: ast.AsmStmt) ![]const u8 {
-    var constraints: std.ArrayList(u8) = .empty;
-    var first = true;
-    for (asm_stmt.outputs) |_| {
-        if (!first) try constraints.append(allocator, ',');
-        first = false;
-        try constraints.appendSlice(allocator, "=r");
-    }
-    for (asm_stmt.inputs) |_| {
-        if (!first) try constraints.append(allocator, ',');
-        first = false;
-        try constraints.append(allocator, 'r');
-    }
-    for (asm_stmt.clobbers) |clobber| {
-        const name = try stringLiteralText(allocator, clobber);
-        if (!first) try constraints.append(allocator, ',');
-        first = false;
-        try constraints.print(allocator, "~{{{s}}}", .{name});
-    }
-    return constraints.toOwnedSlice(allocator);
-}
-
-fn llvmStringLiteralBytes(allocator: std.mem.Allocator, literal: []const u8) !LlvmStringBytes {
-    var escaped: std.ArrayList(u8) = .empty;
-    var len: usize = 0;
-    try appendLlvmStringLiteralBody(allocator, &escaped, literal, &len);
-    try appendLlvmStringByte(allocator, &escaped, 0);
-    len += 1;
-    return .{ .escaped = try escaped.toOwnedSlice(allocator), .len = len };
-}
-
-fn stringLiteralText(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
-    var escaped: std.ArrayList(u8) = .empty;
-    try appendLlvmStringLiteralBody(allocator, &escaped, literal, null);
-    return escaped.toOwnedSlice(allocator);
-}
-
-fn appendLlvmStringLiteralBody(allocator: std.mem.Allocator, escaped: *std.ArrayList(u8), literal: []const u8, maybe_len: ?*usize) !void {
-    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return error.UnsupportedLlvmEmission;
-    var i: usize = 1;
-    while (i + 1 < literal.len) {
-        const byte = if (literal[i] == '\\') blk: {
-            i += 1;
-            if (i + 1 >= literal.len) return error.UnsupportedLlvmEmission;
-            break :blk switch (literal[i]) {
-                '\\' => @as(u8, '\\'),
-                '\'' => @as(u8, '\''),
-                '"' => @as(u8, '"'),
-                '0' => @as(u8, 0),
-                'n' => @as(u8, '\n'),
-                'r' => @as(u8, '\r'),
-                't' => @as(u8, '\t'),
-                else => return error.UnsupportedLlvmEmission,
-            };
-        } else literal[i];
-        try appendLlvmStringByte(allocator, escaped, byte);
-        if (maybe_len) |len| len.* += 1;
-        i += 1;
-    }
-}
-
-fn appendLlvmStringByte(allocator: std.mem.Allocator, escaped: *std.ArrayList(u8), byte: u8) !void {
-    switch (byte) {
-        '\\' => try escaped.appendSlice(allocator, "\\5C"),
-        '"' => try escaped.appendSlice(allocator, "\\22"),
-        0 => try escaped.appendSlice(allocator, "\\00"),
-        32...33, 35...91, 93...126 => try escaped.append(allocator, byte),
-        else => {
-            try escaped.append(allocator, '\\');
-            try escaped.append(allocator, hexDigit(byte >> 4));
-            try escaped.append(allocator, hexDigit(byte & 0x0f));
-        },
-    }
-}
-
-fn packedBitsMask(bit_index: usize) u64 {
-    return @as(u64, 1) << @intCast(bit_index);
-}
-
-fn packedBitsClearMask(info: PackedBitsInfo, bit_index: usize) ?u64 {
-    const bits = integerBits(info.repr) orelse return null;
-    if (bits >= 64) return ~packedBitsMask(bit_index);
-    return ((@as(u64, 1) << @intCast(bits)) - 1) & ~packedBitsMask(bit_index);
-}
-
-fn builtinCallReturnType(call: anytype) ?ast.TypeExpr {
-    if (isPhysCall(call.callee.*) and call.type_args.len == 0 and call.args.len == 1) return simpleType(call.callee.*.span, "PAddr");
-    if (isAssumeNoaliasCall(call) and call.type_args.len == 0 and call.args.len == 2) return null;
-    if (isRawLoadCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1) return call.type_args[0];
-    if (isRawPtrCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1) {
-        const child = @constCast(&call.type_args[0]);
-        return .{
-            .span = call.callee.*.span,
-            .kind = .{ .pointer = .{ .mutability = .mut, .child = child } },
-        };
-    }
-    return null;
-}
-
-fn isDeclassifyCall(call: anytype) bool {
-    const name = switch (call.callee.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| switch (inner.kind) {
-            .ident => |ident| ident.text,
-            else => return false,
-        },
-        else => return false,
-    };
-    return std.mem.eql(u8, name, "declassify") or std.mem.eql(u8, name, "reveal");
-}
-
-fn isAssumeNoaliasCall(call: anytype) bool {
-    return switch (call.callee.kind) {
-        .member => |member| std.mem.eql(u8, member.name.text, "assume_noalias_unchecked") and isIdentNamed(member.base.*, "compiler"),
-        .ident => |ident| std.mem.eql(u8, ident.text, "compiler.assume_noalias_unchecked") or std.mem.eql(u8, ident.text, "assume_noalias_unchecked"),
-        .grouped => |inner| switch (inner.kind) {
-            .call => |inner_call| isAssumeNoaliasCall(inner_call),
-            else => false,
-        },
-        else => false,
-    };
-}
-
-fn isPhysCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, "phys"),
-        .grouped => |inner| isPhysCall(inner.*),
-        else => false,
-    };
-}
-
-// `drop(x)` and `forget_unchecked(x)` lower identically — evaluate the operand and
-// discard it (linearity is a compile-time concept). They differ only in the checker:
-// `forget_unchecked` is the unsafe form legal on a linear resource.
-fn isDropCall(callee: ast.Expr) bool {
-    return isIdentNamed(callee, "drop") or isIdentNamed(callee, "forget_unchecked");
-}
-
-fn isUninitExpr(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .uninit_literal => true,
-        .grouped => |inner| isUninitExpr(inner.*),
-        else => false,
-    };
-}
-
-fn comptimeStructFieldValue(fields: []const eval.ComptimeStructField, name: []const u8) ?eval.ComptimeValue {
-    for (fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return field.value;
-    }
-    return null;
-}
-
-fn bitcastTargetType(call: anytype) ?ast.TypeExpr {
-    const callee = switch (call.callee.kind) {
-        .ident => |ident| ident,
-        .grouped => |inner| switch (inner.kind) {
-            .ident => |ident| ident,
-            else => return null,
-        },
-        else => return null,
-    };
-    if (!std.mem.eql(u8, callee.text, "bitcast") or call.type_args.len != 1) return null;
-    return call.type_args[0];
-}
-
-fn llvmComptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
-    const self: *LlvmEmitter = @ptrCast(@alignCast(ctx orelse return null));
-    return self.comptimeReflect(call);
-}
-
-const ReflectionCallKind = enum {
-    size,
-    repr,
-    alignment,
-    field_offset,
-    bit_offset,
-};
-
-fn reflectionCallKind(callee: ast.Expr) ?ReflectionCallKind {
-    return switch (callee.kind) {
-        .ident => |ident| {
-            if (std.mem.eql(u8, ident.text, "size_of") or std.mem.eql(u8, ident.text, "sizeof")) return .size;
-            if (std.mem.eql(u8, ident.text, "repr_of")) return .repr;
-            if (std.mem.eql(u8, ident.text, "alignof")) return .alignment;
-            if (std.mem.eql(u8, ident.text, "field_offset")) return .field_offset;
-            if (std.mem.eql(u8, ident.text, "bit_offset")) return .bit_offset;
-            return null;
-        },
-        .grouped => |inner| reflectionCallKind(inner.*),
-        else => null,
-    };
-}
-
-fn isResultConstructorCall(call: anytype) ?[]const u8 {
-    if (call.type_args.len != 0 or call.args.len != 1) return null;
-    const name = switch (call.callee.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| switch (inner.kind) {
-            .ident => |ident| ident.text,
-            else => return null,
-        },
-        else => return null,
-    };
-    if (std.mem.eql(u8, name, "ok") or std.mem.eql(u8, name, "err")) return name;
-    return null;
-}
-
 const resultSwitchPattern = switch_lower.resultArmPattern;
-
-fn taggedUnionConstructorName(callee: ast.Expr) ?[]const u8 {
-    return switch (callee.kind) {
-        .ident => |ident| ident.text,
-        .grouped => |inner| taggedUnionConstructorName(inner.*),
-        else => null,
-    };
-}
 
 const taggedUnionPatternName = switch_lower.taggedUnionPatternName;
 const taggedUnionBindingPattern = switch_lower.taggedUnionArmBinding;
-
-fn isBindCall(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .call => |call| isBindCallByNode(call),
-        .grouped => |inner| isBindCall(inner.*),
-        else => false,
-    };
-}
-
-fn isBindCallByNode(call: anytype) bool {
-    return call.type_args.len == 0 and call.args.len == 2 and isIdentNamed(call.callee.*, "bind");
-}
-
-test "LLVM backend emits a backend_name alias for the override symbol" {
-    const source =
-        \\#[backend_name("rss_helper_x")]
-        \\fn helper(x: u64) -> u64 { return x + 1; }
-        \\export fn harness() -> u64 { return helper(7); }
-    ;
-
-    var reporter = @import("diagnostics.zig").Reporter.init(std.testing.allocator, "bn_llvm.mc", source);
-    defer reporter.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = @import("parser.zig").Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(std.testing.allocator);
-    try appendLlvm(std.testing.allocator, module, &output);
-    // The function keeps its source name; the override is exposed via a module-level alias.
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal i64 @helper(i64 %x)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "@rss_helper_x = alias i64 (i64), ptr @helper") != null);
-}
-
-test "LLVM backend emits checked integer add from MIR-gated source" {
-    const source =
-        \\fn add_one(value: u32) -> u32 {
-        \\    return value + 1;
-        \\}
-    ;
-
-    var reporter = @import("diagnostics.zig").Reporter.init(std.testing.allocator, "llvm_smoke.mc", source);
-    defer reporter.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = @import("parser.zig").Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(std.testing.allocator);
-    try appendLlvm(std.testing.allocator, module, &output);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal i32 @add_one(i32 %value)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "@llvm.uadd.with.overflow.i32") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "call void @mc_trap_IntegerOverflow()") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, " nsw ") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, " nuw ") == null);
-}

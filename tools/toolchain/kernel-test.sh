@@ -9,9 +9,11 @@
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
-HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/test-env.sh"
+HERE="$(mc_repo_root)"
 CLANG="${CLANG:-clang}"
-JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
+JOBS="${JOBS:-$(mc_host_jobs)}"
 
 # A missing toolchain/target normally SKIPs (so host dev without a riscv64 clang stays
 # green), but a CONFORMANCE tier (c1) requires the riscv64 compile to actually run — there
@@ -71,9 +73,10 @@ kt_compile_one() {
 }
 export -f kt_compile_one
 
-mapfile -t modules < <(find "$HERE/kernel" -name '*.mc' ! -path '*/kernel/bad/*' | sort)
-count="${#modules[@]}"
-printf '%s\0' "${modules[@]}" | xargs -0 -P "$JOBS" -I{} bash -c 'kt_compile_one "$@"' _ {}
+modules_file="$WORK/modules.list"
+find "$HERE/kernel" -name '*.mc' ! -path '*/kernel/bad/*' | sort >"$modules_file"
+count="$(mc_count_lines "$modules_file")"
+tr '\n' '\0' <"$modules_file" | xargs -0 -P "$JOBS" -I{} bash -c 'kt_compile_one "$@"' _ {}
 
 # 2. Typestate misuses must be rejected with the error their EXPECT: line names (parallel).
 kt_reject_one() {
@@ -98,9 +101,10 @@ export -f kt_reject_one
 
 rejects=0
 if compgen -G "$HERE/kernel/bad/*.mc" >/dev/null; then
-    mapfile -t bads < <(find "$HERE/kernel/bad" -name '*.mc' | sort)
-    rejects="${#bads[@]}"
-    printf '%s\0' "${bads[@]}" | xargs -0 -P "$JOBS" -I{} bash -c 'kt_reject_one "$@"' _ {}
+    bads_file="$WORK/bads.list"
+    find "$HERE/kernel/bad" -name '*.mc' | sort >"$bads_file"
+    rejects="$(mc_count_lines "$bads_file")"
+    tr '\n' '\0' <"$bads_file" | xargs -0 -P "$JOBS" -I{} bash -c 'kt_reject_one "$@"' _ {}
 fi
 
 echo "PASS: kernel-test — $count kernel modules compile for their target ISA; $rejects typestate misuses rejected"

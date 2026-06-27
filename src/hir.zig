@@ -1,8 +1,22 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
+const mir_syntax = @import("mir_syntax.zig");
 const parser = @import("parser.zig");
+
+const contractName = ast_query.contractName;
+const exprTerminates = mir_syntax.exprTerminates;
+const exprText = mir_syntax.exprText;
+const hasNoLangTrap = ast_query.hasNoLangTrap;
+const isSatPreservingBinary = ast_query.isSatPreservingBinary;
+const isSatType = ast_query.isSatType;
+const isTrapCall = mir_syntax.isTrapCall;
+const isUnwrapCall = mir_syntax.isUnwrapCall;
+const isWrapPreservingBinary = ast_query.isWrapPreservingBinary;
+const isWrapType = ast_query.isWrapType;
+const patternText = mir_syntax.patternText;
 
 pub const Instruction = struct {
     kind: []const u8,
@@ -528,15 +542,6 @@ const FunctionBuilder = struct {
     }
 };
 
-fn exprTerminates(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .unreachable_expr => true,
-        .grouped => |inner| exprTerminates(inner.*),
-        .call => |node| isTrapCall(node.callee.*),
-        else => false,
-    };
-}
-
 fn functionFallsThrough(function: Function) ?SourcePoint {
     var stack_buf: [256]usize = undefined;
     var seen_buf: [256]bool = [_]bool{false} ** 256;
@@ -603,68 +608,6 @@ fn binaryTrapKind(op: ast.BinaryOp) []const u8 {
     };
 }
 
-fn isWrapType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .generic => |node| std.mem.eql(u8, node.base.text, "wrap"),
-        .qualified => |node| isWrapType(node.child.*),
-        else => false,
-    };
-}
-
-fn isSatType(ty: ast.TypeExpr) bool {
-    return switch (ty.kind) {
-        .generic => |node| std.mem.eql(u8, node.base.text, "sat"),
-        .qualified => |node| isSatType(node.child.*),
-        else => false,
-    };
-}
-
-fn isWrapPreservingBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .add, .sub, .mul, .bit_and, .bit_or, .bit_xor => true,
-        else => false,
-    };
-}
-
-fn isSatPreservingBinary(op: ast.BinaryOp) bool {
-    return switch (op) {
-        .add, .sub, .mul => true,
-        else => false,
-    };
-}
-
-fn exprText(expr: ast.Expr) []const u8 {
-    return switch (expr.kind) {
-        .ident => |ident| ident.text,
-        .int_literal => "int",
-        .float_literal => "float",
-        .string_literal => "string",
-        .char_literal => "char",
-        .bool_literal => "bool",
-        .null_literal => "null",
-        .uninit_literal => "uninit",
-        .unreachable_expr => "unreachable",
-        .void_literal => "void",
-        .enum_literal => |ident| ident.text,
-        .array_literal => "array_literal",
-        .struct_literal => "struct_literal",
-        .call => |node| exprText(node.callee.*),
-        .member => |node| node.name.text,
-        .grouped => |inner| exprText(inner.*),
-        else => @tagName(expr.kind),
-    };
-}
-
-fn patternText(pattern: ast.Pattern) []const u8 {
-    return switch (pattern.kind) {
-        .wildcard => "_",
-        .bind => |ident| ident.text,
-        .tag => |ident| ident.text,
-        .tag_bind => |node| node.tag.text,
-        .literal => "literal",
-    };
-}
-
 fn typeText(ty: ast.TypeExpr) []const u8 {
     return switch (ty.kind) {
         .name => |name| name.text,
@@ -683,168 +626,10 @@ fn typeText(ty: ast.TypeExpr) []const u8 {
     };
 }
 
-fn isTrapCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, "trap"),
-        .grouped => |inner| isTrapCall(inner.*),
-        else => false,
-    };
-}
-
-fn isUnwrapCall(callee: ast.Expr) bool {
-    return switch (callee.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, "unwrap"),
-        .grouped => |inner| isUnwrapCall(inner.*),
-        else => false,
-    };
-}
-
 fn directCalleeName(callee: ast.Expr) ?[]const u8 {
     return switch (callee.kind) {
         .ident => |ident| ident.text,
         .grouped => |inner| directCalleeName(inner.*),
         else => null,
     };
-}
-
-fn contractName(attr: ast.Attr) []const u8 {
-    return switch (attr.kind) {
-        .unsafe_contract => |contract| contract.name.text,
-        .no_lang_trap, .naked, .@"noinline", .weak, .named, .backend_name, .origin, .section, .@"align" => "unknown",
-    };
-}
-
-fn hasNoLangTrap(attrs: []const ast.Attr) bool {
-    for (attrs) |attr| {
-        if (std.meta.activeTag(attr.kind) == .no_lang_trap) return true;
-    }
-    return false;
-}
-
-test "builds HIR CFG for branches and loops" {
-    const source =
-        \\fn branch(result: Result<u32, Error>, flag: bool) -> u32 {
-        \\    if let ok(value) = result {
-        \\        return value;
-        \\    } else {
-        \\        while flag {
-        \\            return 0;
-        \\        }
-        \\    }
-        \\    return 1;
-        \\}
-    ;
-
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "hir_cfg.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var hir = try build(std.testing.allocator, module);
-    defer hir.deinit();
-
-    try std.testing.expectEqual(@as(usize, 1), hir.functions.len);
-    try std.testing.expect(hir.functions[0].blocks.len >= 5);
-}
-
-test "HIR verifier reports fallthrough and no_lang_trap trap edges" {
-    const source =
-        \\fn missing_return(flag: bool) -> u32 {
-        \\    if let value = null {
-        \\        return 1;
-        \\    }
-        \\}
-        \\
-        \\#[no_lang_trap]
-        \\fn checked_add(a: u32, b: u32) -> u32 {
-        \\    return a + b;
-        \\}
-        \\
-        \\#[no_lang_trap]
-        \\fn wrapping_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> {
-        \\    return a + b;
-        \\}
-        \\
-        \\#[no_lang_trap]
-        \\fn saturating_add(a: sat<u32>, b: sat<u32>) -> sat<u32> {
-        \\    return a + b;
-        \\}
-        \\
-        \\#[no_lang_trap]
-        \\fn wrapping_neg(a: wrap<u32>) -> wrap<u32> {
-        \\    return -a;
-        \\}
-        \\
-        \\fn trapping_add(a: u32, b: u32) -> u32 {
-        \\    return a + b;
-        \\}
-        \\
-        \\#[no_lang_trap]
-        \\fn calls_trapping(a: u32, b: u32) -> u32 {
-        \\    return trapping_add(a, b);
-        \\}
-    ;
-
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "hir_verify.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var facts: std.ArrayList(u8) = .empty;
-    defer facts.deinit(std.testing.allocator);
-    try appendVerificationFacts(std.testing.allocator, module, &facts);
-
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "hir verify fn=missing_return finding=fallthrough") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "hir verify fn=checked_add finding=trap_edge detail=IntegerOverflow no_lang_trap=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "hir verify fn=calls_trapping finding=trap_edge detail=CallMayTrap no_lang_trap=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "hir verify fn=wrapping_add finding=trap_edge") == null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "hir verify fn=saturating_add finding=trap_edge") == null);
-    try std.testing.expect(std.mem.indexOf(u8, facts.items, "hir verify fn=wrapping_neg finding=trap_edge") == null);
-}
-
-test "HIR verifier reports structured diagnostics" {
-    const source =
-        \\fn missing_return(flag: bool) -> u32 {
-        \\    if let value = null {
-        \\        return 1;
-        \\    }
-        \\}
-        \\
-        \\#[no_lang_trap]
-        \\fn checked_add(a: u32, b: u32) -> u32 {
-        \\    return a + b;
-        \\}
-    ;
-
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "hir_verify_diagnostics.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    try verify(std.testing.allocator, module, &reporter);
-
-    try std.testing.expect(reporter.has_errors);
-    var found_missing_return = false;
-    var found_no_lang_trap = false;
-    for (reporter.diagnostics.items) |diag| {
-        if (std.mem.indexOf(u8, diag.message, "E_RETURN_MISSING") != null) found_missing_return = true;
-        if (std.mem.indexOf(u8, diag.message, "E_NO_LANG_TRAP_EDGE") != null) found_no_lang_trap = true;
-    }
-    try std.testing.expect(found_missing_return);
-    try std.testing.expect(found_no_lang_trap);
 }

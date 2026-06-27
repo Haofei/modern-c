@@ -13,7 +13,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
-const eval = @import("eval.zig");
+const numeric = @import("numeric.zig");
 
 const isIdentNamed = ast_query.isIdentNamed;
 
@@ -139,7 +139,7 @@ pub fn normalizedFloatLiteral(allocator: std.mem.Allocator, literal: []const u8,
 }
 
 pub fn charLiteralValue(allocator: std.mem.Allocator, literal: []const u8) ![]const u8 {
-    const value = eval.parseCharLiteral(literal) orelse return error.UnsupportedLlvmEmission;
+    const value = numeric.parseCharLiteral(literal) orelse return error.UnsupportedLlvmEmission;
     return std.fmt.allocPrint(allocator, "{d}", .{value});
 }
 

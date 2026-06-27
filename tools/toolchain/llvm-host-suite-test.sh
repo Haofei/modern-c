@@ -6,17 +6,16 @@ set -euo pipefail
 MCC="${1:-zig-out/bin/mcc}"
 shift || true
 
-HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/test-env.sh"
+HERE="$(mc_repo_root)"
 MANIFEST="$HERE/tools/lib/host-tests.tsv"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
-LINK_FLAGS=()
+LINK_FLAGS_STR="$(mc_link_flags)"
 
-command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: llvm-host-suite-test (clang not found)"; exit 0; }
-command -v "$LLC" >/dev/null 2>&1 || { echo "SKIP: llvm-host-suite-test (llc not found)"; exit 0; }
-if [ "$(uname -s)" = "Linux" ]; then
-    LINK_FLAGS=(-no-pie)
-fi
+mc_require_cmd "llvm-host-suite-test" "$CLANG"
+mc_require_cmd "llvm-host-suite-test" "$LLC"
 
 if [ "$#" -gt 0 ]; then
     TESTS=("$@")
@@ -58,6 +57,17 @@ for name in "${TESTS[@]}"; do
     spec="$(field "$name" 4)"
     desc="$(field "$name" 6)"
 
+    # tests/llvm/* are C-vs-LLVM *differential* regression fixtures: success means the two
+    # backends AGREE (and a buggy build crashes), which is exactly what diff-backend.sh checks.
+    # Their run-function returns a checksum (it must stay data-dependent so the optimizer can't
+    # delete the loop being tested), so they can't satisfy this suite's entry-mode "returns 1"
+    # contract. Cross-backend agreement is verified by diff-backend; skip them here.
+    case "$fixture" in
+        tests/llvm/*)
+            echo "SKIP: llvm-host-suite-test - $name (C/LLVM differential fixture; verified by diff-backend)"
+            continue ;;
+    esac
+
     WORK="$(mktemp -d)"
     trap 'rm -rf "$WORK"' EXIT
 
@@ -75,7 +85,7 @@ for name in "${TESTS[@]}"; do
     esac
 
     trap_stubs "$WORK/trap_stubs.c"
-    "$CLANG" -std=c11 -Wall -Wextra "${LINK_FLAGS[@]}" "$WORK/driver.c" "$WORK/trap_stubs.c" "$WORK/mod.o" -o "$WORK/app"
+    "$CLANG" -std=c11 -Wall -Wextra $LINK_FLAGS_STR "$WORK/driver.c" "$WORK/trap_stubs.c" "$WORK/mod.o" -o "$WORK/app"
     if OUT="$("$WORK/app")"; then
         [ -n "$OUT" ] && printf '%s\n' "$OUT"
         echo "PASS: llvm-host-suite-test - $name - $desc"
