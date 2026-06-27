@@ -365,6 +365,19 @@ Goal: WASI filesystem calls flow through the existing capability FS broker.
 **plus** a denied-path case asserting an audit deny event. Mirrors
 `qjs-realtool-test`.
 
+Status: **Phase 3a + net-deny audit DONE.** The shim exposes a fetch-only `net_fetch(endpoint,
+token)` MC host tool (module `mc`, not general WASI sockets) mapping to `TOOL_OP_NET_FETCH`
+through the net broker (egress allowlist → budget → endpoint); a WASM guest
+(`examples/apps/wasm/wasi_net.c`) reaches endpoint 1 (107/108), is **denied** endpoint 9
+(EDENIED), and is **budget-bounded** (EAGAIN) — the mirror of `qjs-nettool-test`, gated as
+`wasm-nettool-test` / `llvm-` in `m0`. The required **net-deny audit** is implemented:
+`net_broker.mc`'s `net_policy_admit` now records a blocked egress as a distinct `NET_DENY_TAG`
+event (append-only audit *coverage*; the decision is unchanged — still Denied, no budget, no
+packet), reaching FS-deny audit parity. The `agent-net-test` / `agent-net-real-test` gates
+assert the deny record; the WASM guest triggers the same audited deny path. **Remaining for
+Phase 3:** real-TCP (`wasm-net-realtool-test`) and S-mode IRQ (`wasm-smode-net-irq-tool-test`)
+variants.
+
 ### Phase 3 — Network via a fetch-only WASI surface → NetCap
 
 Goal: WASI network egress flows through the net broker — **without reopening the

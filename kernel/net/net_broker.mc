@@ -20,8 +20,9 @@
 //                     kernel/net/tcp_socket, sends the request bytes, and drains the response —
 //                     real packets on the wire under QEMU (tests/qemu/proc/agent_net_real_demo).
 // Both entry points run policy IDENTICALLY: Denied BEFORE Budget BEFORE NoEndpoint; a denied
-// destination spends no budget, sends NO packet, and is NOT audited as a real egress. The control
-// plane is real in BOTH; only net_fetch's packet send is mocked.
+// destination spends no budget and sends NO packet — but the blocked attempt IS recorded as a
+// separate DENY event (NET_DENY_TAG), so it is observable without being counted as a real egress
+// (NET_TAG). The control plane is real in BOTH; only net_fetch's packet send is mocked.
 //
 // This layer is self-contained: it does NOT modify agent.mc or Process. The agent's NETWORK
 // capability (`NetCap`: egress allowlist + request budget) lives here, layered beside the
@@ -50,6 +51,12 @@ const MAX_ENDPOINTS: usize = 8;
 // The tag stamped on every audited network egress, so net egress is distinguishable from tool/kcall
 // use in the shared capability-use trace. (0x0E7 — a distinctive "net egress" marker.)
 const NET_TAG: u32 = 0x0E7;
+
+// The tag stamped on an audited DENIED egress attempt (a blocked exfil). Distinct from NET_TAG so a
+// deny record is separable from a real egress in the same trace. Added for FS-deny audit parity
+// (docs/wasm-migration-plan.md Phase 3): a denied destination still spends no budget and sends no
+// packet, but the attempt is now observable. (0x0E8 — the "net egress DENIED" marker.)
+const NET_DENY_TAG: u32 = 0x0E8;
 
 // One registered endpoint: a stable id, the slot-occupied flag, AND BOTH transport descriptors so
 // either dispatch can resolve the SAME registry entry:
@@ -200,9 +207,13 @@ export fn endpoint_handler_at(reg: *mut EndpointRegistry, slot: usize) -> fn(u32
 // Returns ok(slot) once steps 1–5 have all succeeded (so the caller need only dispatch); err(...)
 // otherwise, with NO side effects (no audit, no charge) on any failure path.
 export fn net_policy_admit(t: *mut ProcTable, reg: *mut EndpointRegistry, sb: *mut Sandbox, nc: *mut NetCap, endpoint_id: u32, req: u32) -> Result<usize, BrokerError> {
-    // 1. egress check: not in the agent's egress allowlist ⇒ Denied (the exfil block — no side
-    //    effects, no budget spent, no egress audited, NO packet on the wire).
+    // 1. egress check: not in the agent's egress allowlist ⇒ Denied (the exfil block — no budget
+    //    spent, NO packet on the wire). The blocked attempt IS recorded as a DENY event (distinct
+    //    NET_DENY_TAG, separable from a real egress's NET_TAG) so exfil attempts are observable,
+    //    reaching FS-deny audit parity (docs/wasm-migration-plan.md Phase 3). The DECISION is
+    //    unchanged: still Denied, still no budget spent, still no packet — only audit COVERAGE grows.
     if !mask32_contains(&nc.allowed, endpoint_id) {
+        ipc_trace_record(cap_audit(), proc_pid_at(t, sb.slot), endpoint_id, NET_DENY_TAG, req);
         return err(.Denied);
     }
     // 2. budget check: out of network-request budget ⇒ Budget (resource bound).

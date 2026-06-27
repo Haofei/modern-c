@@ -210,26 +210,30 @@ export fn agent_net_real_main(
         }
     }
 
-    // --- audit: exactly the TWO DISPATCHED egresses (web, web), each carrying the agent's pid
-    // (from), the endpoint id (to), and NET_TAG. The Denied (evil) + Budget calls left no entry. ---
+    // --- audit: the TWO DISPATCHED egresses (web, web; NET_TAG) PLUS the blocked evil attempt, now
+    // recorded as a DENY event (NET_DENY_TAG) for FS-deny audit parity (docs/wasm-migration-plan.md
+    // Phase 3). Order = call order: web(7), evil(deny, EP_EVIL/999), web(8). The Budget call (the
+    // last web) was never dispatched and is not a deny, so it leaves no entry. ---
     let aud: *mut IpcTrace = cap_audit();
     var audit_ok: bool = true;
-    if ipc_trace_len(aud) != 2 { audit_ok = false; }
-    let expect_req: [2]u32 = .{ 7, 8 };
+    if ipc_trace_len(aud) != 3 { audit_ok = false; }
+    let expect_ep:  [3]u32 = .{ EP_WEB, EP_EVIL, EP_WEB };
+    let expect_req: [3]u32 = .{ 7, 999, 8 };
+    let expect_tag: [3]u32 = .{ NET_TAG, NET_DENY_TAG, NET_TAG };
     var i: usize = 0;
-    while i < 2 {
+    while i < 3 {
         switch ipc_trace_drain(aud) {
             ok(ev) => {
-                if ev.from != agent_pid { audit_ok = false; }   // caller = the agent
-                if ev.to != EP_WEB { audit_ok = false; }        // only the web endpoint was reached
-                if ev.tag != NET_TAG { audit_ok = false; }      // net egress tag
+                if ev.from != agent_pid { audit_ok = false; }     // caller = the agent
+                if ev.to != expect_ep[i] { audit_ok = false; }    // endpoint reached / attempted
+                if ev.tag != expect_tag[i] { audit_ok = false; }  // net egress vs net-deny tag
                 if ev.size != expect_req[i] { audit_ok = false; }
             }
             err(e) => { audit_ok = false; }
         }
         i = i + 1;
     }
-    if ipc_trace_len(aud) != 0 { audit_ok = false; } // drained dry — no Denied/Budget (evil) entries
+    if ipc_trace_len(aud) != 0 { audit_ok = false; } // drained dry — the Budget call leaves no entry
     if audit_ok {
         stages = stages | 0x8;
         uart_putc(0x41); // 'A'

@@ -126,28 +126,31 @@ fn run_net() -> bool {
         err(e) => { if e != .Budget { pass = false; } say(0x42); } // 'B'
     }
 
-    // --- audit: exactly the THREE DISPATCHED egresses were recorded (llm, metrics, llm), each
-    // carrying the agent's pid (from), the endpoint id (to), and NET_TAG (tag); size = the request.
-    // The Denied (evil) and Budget calls were never dispatched, so they leave no audit entry. ---
+    // --- audit: the THREE DISPATCHED egresses (llm, metrics, llm; NET_TAG) PLUS the blocked evil
+    // attempt, now recorded as a DENY event (NET_DENY_TAG) for FS-deny audit parity
+    // (docs/wasm-migration-plan.md Phase 3). Each carries the agent's pid (from), the endpoint id
+    // (to), the tag, and size = the request. Order = call order: llm, metrics, evil(deny), llm. The
+    // Budget call (the last llm) was never dispatched and is not a deny, so it leaves no entry. ---
     let aud: *mut IpcTrace = cap_audit();
-    if ipc_trace_len(aud) != 3 { pass = false; }
-    let expect_ep: [3]u32 = .{ 1, 2, 1 };
-    let expect_req: [3]u32 = .{ 7, 5, 8 };
+    if ipc_trace_len(aud) != 4 { pass = false; }
+    let expect_ep:  [4]u32 = .{ 1, 2, 9, 1 };
+    let expect_req: [4]u32 = .{ 7, 5, 999, 8 };
+    let expect_tag: [4]u32 = .{ NET_TAG, NET_TAG, NET_DENY_TAG, NET_TAG };
     var i: usize = 0;
-    while i < 3 {
+    while i < 4 {
         switch ipc_trace_drain(aud) {
             ok(ev) => {
                 if ev.from != agent_pid { pass = false; }     // caller = the agent
-                if ev.to != expect_ep[i] { pass = false; }    // endpoint id reached
-                if ev.tag != NET_TAG { pass = false; }        // net egress tag
+                if ev.to != expect_ep[i] { pass = false; }    // endpoint id reached / attempted
+                if ev.tag != expect_tag[i] { pass = false; }  // net egress vs net-deny tag
                 if ev.size != expect_req[i] { pass = false; } // the request
             }
             err(e) => { pass = false; }
         }
         i = i + 1;
     }
-    if ipc_trace_len(aud) != 0 { pass = false; } // drained dry — no Denied/Budget entries (evil absent)
-    if pass { say(0x41); } // 'A' — audit correct (exactly the dispatched egress transcript)
+    if ipc_trace_len(aud) != 0 { pass = false; } // drained dry — the Budget call leaves no entry
+    if pass { say(0x41); } // 'A' — audit correct (egress transcript + the blocked-exfil deny record)
 
     return pass;
 }
