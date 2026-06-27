@@ -796,6 +796,16 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-wasm-run-test", "WASM-agent Phase 0 (LLVM): build wasm3 freestanding and run a real wasm32 module that prints via a WASI fd_write->SYS_WRITE import under QEMU", &.{ "bash", "tools/lang/wasm-run-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    // WASM-agent Phase 1 (docs/wasm-migration-plan.md §5): run a STOCK wasm32-wasi guest CONFINED.
+    // Build wasm3 + the WASI Preview 1 shim (examples/apps/wasm/wasi_shim) + the all-MC libc + the
+    // generic wasm_host into a U-mode ELF, load it with the real elf_loader into an isolated Sv39
+    // space (kernel UNMAPPED), and run an embedded `zig cc -target wasm32-wasi` printf hello —
+    // reaching the kernel only through SYS_WRITE/SYS_EXIT. The mirror of qjs-confined-test. Both
+    // backends.
+    _ = h.addScriptTest(ctx, "wasm-wasi-hello-test", "WASM-agent Phase 1: run a stock wasm32-wasi guest confined in an isolated U-mode Sv39 space via the WASI P1 shim under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-wasm-wasi-hello-test", "WASM-agent Phase 1 (LLVM): run a stock wasm32-wasi guest confined via the WASI P1 shim under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.

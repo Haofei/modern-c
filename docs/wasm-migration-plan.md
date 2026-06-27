@@ -300,6 +300,19 @@ Mirrors `qjs-run-test`.
 
 ### Phase 1 — Minimal WASI Preview 1 shim
 
+Status: **DONE.** `examples/apps/wasm/wasi_shim.c` implements the WASI P1 import set
+(`fd_write`/`fd_read`→`SYS_WRITE`/`SYS_READ`, `fd_close`, `fd_seek`, `fd_fdstat_get`,
+`proc_exit`, `clock_time_get`, `clock_res_get`, `random_get`, `environ_*`/`args_*` empty,
+`fd_prestat_get`→`EBADF` (no preopens yet), `sched_yield`, `poll_oneoff`→`ENOTSUP`), with a
+centralized kernel-errno→WASI-errno table (`wasi.h`). The generic `examples/apps/wasm_host.c`
+links the shim into any guest. A **stock `wasm32-wasi` `printf` hello**, built unmodified by
+`zig cc -target wasm32-wasi` (zig's wasi-libc), runs **confined** in an isolated Sv39 U-mode
+space, reaching the kernel only via `SYS_WRITE`/`SYS_EXIT`. Gated as `wasm-wasi-hello-test` /
+`llvm-wasm-wasi-hello-test`, both in `m0`. No kernel/syscall/broker change; no new
+`TOOL_OP_*` (the hello path never calls `random_get`, so `TOOL_OP_RANDOM` is deferred to the
+first guest that needs real entropy — `clock_time_get` uses a monotonic counter and
+`random_get` a documented non-crypto stub until then).
+
 Goal: a real `wasm32-wasi` module built by an off-the-shelf toolchain runs.
 
 - Implement the WASI P1 import set needed for a hello-world `wasm32-wasi`
@@ -477,7 +490,7 @@ prove):
 | Scenario | QuickJS gate | WASM peer | Status |
 |---|---|---|---|
 | Run + print | `qjs-run-test` | `wasm-run-test` | ☑ (Phase 0 landed; both backends in `m0`) |
-| Confined eval | `qjs-confined-test` | `wasm-wasi-hello-test` | ☐ |
+| Confined eval | `qjs-confined-test` | `wasm-wasi-hello-test` | ☑ (Phase 1 landed; both backends in `m0`) |
 | S-mode confined | `qjs-smode-confined-test` | `wasm-smode-confined-test` | ☐ |
 | Agent (syscall-driven) | `qjs-agent-test` | `wasm-agent-test` | ☐ |
 | Agent smoke | `qjs-agent-smoke-test` | `wasm-agent-smoke-test` | ☐ |
