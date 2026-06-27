@@ -15,6 +15,7 @@ BACKEND="${2:-c}"
 GUEST_REL="${3:-examples/apps/wasm/wasi_hello.c}"  # a stock wasm32-wasi program
 EXPECT="${4:-WASI-HELLO=ok}"                       # the guest's printf marker
 NAME_BASE="${5:-wasm-wasi-hello}"
+GUEST_KIND="${6:-wasi}"                            # "wasi" (single .c) | "qjs" (QuickJS-on-wasm)
 CLANG="${CLANG:-clang}"
 LLD="${LLD:-ld.lld}"
 LLC="${LLC:-llc}"
@@ -39,11 +40,20 @@ kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# ---- 0. The guest: a stock wasm32-wasi binary, built UNMODIFIED by the off-the-shelf toolchain ----
+# ---- 0. The guest: a wasm32-wasi binary, built by the off-the-shelf toolchain (zig + wasi-libc) ----
 # The SOURCE is unmodified; we only cap the wasm stack (zig defaults it to ~16 MB of initial linear
-# memory, which would exceed the confined agent's 8 MiB libc arena). 256 KiB is ample for a hello
-# and gives a ~320 KiB initial memory the wasm3 engine allocates from the arena.
-"$ZIG" cc -target wasm32-wasi -O2 -s -Wl,-z,stack-size=262144 "$HERE/$GUEST_REL" -o "$WORK/guest.wasm"
+# memory, which would exceed the confined agent's 8 MiB libc arena). The guest's initial memory is
+# then allocated by the wasm3 engine from that arena; QuickJS-on-wasm grows it via memory.grow.
+if [ "$GUEST_KIND" = qjs ]; then
+    # KEYSTONE: JavaScript on the WASM path — the repo's vendored QuickJS compiled to wasm32-wasi
+    # (the Javy approach, built with the toolchain we have). The guest .c + the 4 QuickJS TUs.
+    QJS="$HERE/third_party/quickjs"
+    "$ZIG" cc -target wasm32-wasi -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
+        "$HERE/$GUEST_REL" "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c \
+        -o "$WORK/guest.wasm"
+else
+    "$ZIG" cc -target wasm32-wasi -O2 -s -Wl,-z,stack-size=262144 "$HERE/$GUEST_REL" -o "$WORK/guest.wasm"
+fi
 {
     echo "const unsigned char wasm_blob[] = {"
     od -An -v -tu1 "$WORK/guest.wasm" | awk '{ for (i = 1; i <= NF; i++) printf "%s,", $i }'

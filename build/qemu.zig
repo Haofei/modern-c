@@ -825,6 +825,16 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-wasm-nettool-test", "WASM-agent Phase 3 (LLVM): a WASM guest drives the brokered fetch-only network egress tool (allow/deny/budget) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_net.c", "net: ok", "wasm-nettool" });
 
+    // WASM-agent Phase 4 KEYSTONE (docs/wasm-migration-plan.md §5): JavaScript on the WASM path.
+    // The repo's vendored QuickJS compiled to wasm32-wasi (the Javy approach — Javy IS QuickJS-ng
+    // on wasm32-wasi — built with zig cc + wasi-libc since the Javy binary is unavailable here) runs
+    // a representative JS program (recursion + objects + JSON + closures) on the wasm3 host + WASI
+    // shim, confined. Proves JS agents survive the migration ("keep JS, retire the hack"). Both
+    // backends. (The 6th arg selects the QuickJS-on-wasm guest build.)
+    _ = h.addScriptTest(ctx, "wasm-js-agent-test", "WASM-agent Phase 4 keystone: JavaScript (QuickJS compiled to wasm32-wasi) runs on the wasm3 runtime confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_js.c", "js: ok", "wasm-js-agent", "qjs" });
+
+    _ = h.addScriptTest(ctx, "llvm-wasm-js-agent-test", "WASM-agent Phase 4 keystone (LLVM): JavaScript (QuickJS compiled to wasm32-wasi) runs on the wasm3 runtime confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js.c", "js: ok", "wasm-js-agent", "qjs" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.

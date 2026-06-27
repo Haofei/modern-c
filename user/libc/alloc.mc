@@ -23,8 +23,12 @@ import "std/mem.mc";
 import "user/libc/lcommon.mc";
 
 // Arena size. Lives in .bss, so the cost is page-table coverage, not file size. QuickJS runtime
-// init + evaluation needs several MiB.
-const ARENA_BYTES: usize = 8388608; // 8 MiB
+// init + evaluation needs several MiB; the WASM path needs more — the wasm3 engine allocates its
+// per-function M3 code pages AND the guest's linear memory from this heap, and QuickJS-on-wasm
+// (the Phase-4 keystone, docs/wasm-migration-plan.md §4 "Javy double-layering cost") stacks a JS
+// heap inside that linear memory on top. 32 MiB covers both; it is NOBITS .bss (no file cost), and
+// the confined images run under QEMU -m 256.
+const ARENA_BYTES: usize = 14680064; // 14 MiB
 
 // 16-byte header in front of every user block: keeps the user pointer 16-aligned and stores
 // the total (header + payload) block size so free() can return it to the free-list.

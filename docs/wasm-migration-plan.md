@@ -439,6 +439,26 @@ merits when a guest demands it.
 
 ### Phase 4 — JS-on-WASM (the QuickJS-host equivalence proof)
 
+Status: **DONE (keystone).** JavaScript runs on the WASM path. The plan defines Javy as
+"QuickJS-ng compiled to `wasm32-wasi`"; the Javy binary isn't available in this build
+environment, so the repo's already-vendored QuickJS (`third_party/quickjs`) is compiled to
+`wasm32-wasi` with the toolchain we have (`zig cc -target wasm32-wasi`, linking zig's
+wasi-libc) — the **same QuickJS-on-wasm artifact**, with no opaque prebuilt tool.
+`examples/apps/wasm/wasi_js.c` evals a representative JS program (recursion + objects + arrays
++ JSON + closures → `82`) and runs **confined** on the wasm3 host + WASI shim. Gated as
+`wasm-js-agent-test` / `llvm-`, both in `m0`. This proves JS agents survive the migration —
+the central "keep JS, retire the hack" thesis.
+
+The **Javy double-layering cost** the plan flagged in §4 is now measured and real: wasm3
+allocates per-function M3 code pages for the ~1 MB QuickJS module *plus* QuickJS's own JS heap
+inside the wasm linear memory. That pushed the confined agent's libc arena from 8 MiB to
+14 MiB (`user/libc/alloc.mc`) — still under the elf_loader's 16 MiB-per-segment cap
+(`MAX_SEGMENT_PAGES`), so no loader/hardening change was needed. A larger JS heap (beyond the
+16 MiB segment cap) would need a kernel-grown heap (sbrk) — a noted future item, not required
+for the keystone. **Still open for Phase 4:** re-exposing the JS `host_fs_*`/`host_net_fetch`
+surface to the in-wasm JS for full broker/audit-trace parity (the JS-calls-broker path); the
+engine-equivalence half (JS executes on WASM) is proven here.
+
 Goal: prove existing JS agents survive the migration, so retiring the JS-specific
 host loses no capability.
 
