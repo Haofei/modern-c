@@ -806,6 +806,16 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-wasm-wasi-hello-test", "WASM-agent Phase 1 (LLVM): run a stock wasm32-wasi guest confined via the WASI P1 shim under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    // WASM-agent Phase 2 (docs/wasm-migration-plan.md §5): WASI filesystem via preopen -> PathCap.
+    // A stock wasm32-wasi guest does POSIX file I/O (open/write/read/close + mkdir) which wasi-libc
+    // lowers to path_open/fd_read/fd_write/path_create_directory against the "/ws" preopen; the shim
+    // routes these to TOOL_OP_FS_* through agent_fs_call (allowlist -> budget -> path-cap, allow+deny
+    // audit). Write/read round-trip is ALLOWED; mkdir is DENIED (not allowlisted) and the guest
+    // observes EACCES — the WASM mirror of qjs-realtool-test. Both backends.
+    _ = h.addScriptTest(ctx, "wasm-realtool-test", "WASM-agent Phase 2: a stock wasm32-wasi guest drives the real capability-checked FS tool path (allow + deny audit) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_fs.c", "fs: ok", "wasm-realtool" });
+
+    _ = h.addScriptTest(ctx, "llvm-wasm-realtool-test", "WASM-agent Phase 2 (LLVM): a stock wasm32-wasi guest drives the real capability-checked FS tool path (allow + deny audit) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_fs.c", "fs: ok", "wasm-realtool" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.

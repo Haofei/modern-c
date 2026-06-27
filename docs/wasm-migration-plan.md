@@ -334,6 +334,22 @@ binary runs unmodified. Mirrors `qjs-confined-test`.
 
 ### Phase 2 — Filesystem via preopen → PathCap
 
+Status: **DONE.** The shim (`wasi_shim.c`) now exposes a single `/ws` **preopen** (fd 3) via
+`fd_prestat_get`/`fd_prestat_dir_name`, with `path_open` resolving guest-relative paths under
+it and `fd_read`/`fd_write`/`fd_seek`/`fd_close`/`fd_fdstat_get`/`path_create_directory`
+routed to `TOOL_OP_FS_READ`/`FS_WRITE`/`FS_MKDIR` over `SYS_SUBMIT`/`SYS_POLL` (a synchronous
+submit-then-poll bridge; `tool_abi.h` mirrors the `ToolReq`/`ToolEvent` layout). A **stock
+`wasm32-wasi`** guest doing POSIX `open`/`write`/`read`/`close` + `mkdir`
+(`examples/apps/wasm/wasi_fs.c`) drives the real broker: the write/read round-trip is
+**allowed** (returns `hi`), and `mkdir` is **denied** (`TOOL_OP_FS_MKDIR` not in the agent's
+allowlist) — the guest observes `EACCES` (mapped from the broker's `-E_DENIED`) and the deny is
+recorded by `agent_fs_call`→`ipc_trace`, exactly as the JS path. Gated as `wasm-realtool-test`
+/ `llvm-wasm-realtool-test`, both in `m0`, reusing the confined harness with the FS broker
+already wired in `app_run_demo.mc`. No kernel/syscall/broker/ABI change. (The kernel FS tool is
+whole-file — no offset in the `ToolReq` ABI — so the shim buffers writes and flushes on close,
+and serves reads from a per-fd cache; large/seekable files need an offset wire, a future
+broker-side item, not a Phase 2 requirement.)
+
 Goal: WASI filesystem calls flow through the existing capability FS broker.
 
 - Map WASI preopened directories to `PathCap`s minted by the kernel for the
@@ -498,7 +514,7 @@ prove):
 | Async agent | `qjs-async-agent-test` | `wasm-async-agent-test` | ☐ |
 | S-mode async agent | `qjs-smode-async-agent-test` | `wasm-smode-async-agent-test` | ☐ |
 | Broker agent | `qjs-broker-agent-test` | `wasm-broker-agent-test` | ☐ |
-| FS tool (allow + deny audit) | `qjs-realtool-test` | `wasm-realtool-test` | ☐ |
+| FS tool (allow + deny audit) | `qjs-realtool-test` | `wasm-realtool-test` | ☑ (Phase 2 landed; both backends in `m0`) |
 | Net fetch (mock) | `qjs-nettool-test` | `wasm-nettool-test` | ☐ |
 | Net fetch (real TCP) | `qjs-net-realtool-test` | `wasm-net-realtool-test` | ☐ |
 | S-mode net IRQ | `qjs-smode-net-irq-tool-test` | `wasm-smode-net-irq-tool-test` | ☐ |

@@ -20,6 +20,7 @@
 #define WASI_EFAULT        21
 #define WASI_EINVAL        28
 #define WASI_EIO           29
+#define WASI_EMFILE        33
 #define WASI_ENOENT        44
 #define WASI_ENOMEM        48
 #define WASI_ENOBUFS       42
@@ -40,6 +41,18 @@
 #define WASI_FILETYPE_SOCKET_DGRAM     5
 #define WASI_FILETYPE_SOCKET_STREAM    6
 #define WASI_FILETYPE_SYMBOLIC_LINK    7
+
+// __wasi_rights_t bits (only the ones the shim inspects).
+#define WASI_RIGHTS_FD_READ  (1ull << 1)
+#define WASI_RIGHTS_FD_WRITE (1ull << 6)
+
+// __wasi_whence_t.
+#define WASI_WHENCE_SET 0
+#define WASI_WHENCE_CUR 1
+#define WASI_WHENCE_END 2
+
+// __wasi_preopentype_t.
+#define WASI_PREOPENTYPE_DIR 0
 
 // __wasi_clockid_t.
 #define WASI_CLOCK_REALTIME            0
