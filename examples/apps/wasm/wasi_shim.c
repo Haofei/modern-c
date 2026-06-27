@@ -99,9 +99,31 @@ static uint32_t join_path(unsigned char *dst, const wasm_fd_t *base, const char 
 
 // --- synchronous bridge over the async Tool ABI -----------------------------------------------
 
-// Submit one ToolReq, then poll until that id completes (FS ops are ready-immediately, so the
-// first poll delivers; the spin bound guards a missing completion). Returns ToolEvent.status
-// (negative kernel errno) on failure, else the scalar result; *out_len gets staged-byte count.
+typedef struct { long status; long result; uint32_t out_len; } tool_result_t;
+
+// Submit one fully-built ToolReq, then poll until that id completes (brokered ops are
+// ready-immediately, so the first poll delivers; the spin bound guards a missing completion).
+static tool_result_t submit_and_wait(ToolReq *req) {
+    tool_result_t tr = { -110, 0, 0 };  // default E_TIMEDOUT
+    long id = sys_submit((unsigned long)(uintptr_t)req);
+    if (id < 0) { tr.status = id; return tr; }
+
+    ToolEvent ev[4];
+    for (int spin = 0; spin < 1024; spin++) {
+        long c = sys_poll((unsigned long)(uintptr_t)ev, 4, 0);
+        if (c < 0) { tr.status = c; return tr; }
+        for (long i = 0; i < c; i++) {
+            if (ev[i].id == (uint64_t)id) {
+                tr.status = ev[i].status; tr.result = ev[i].result; tr.out_len = ev[i].out_len;
+                return tr;
+            }
+        }
+    }
+    return tr;
+}
+
+// A capability-checked FS op: build [path][data] payload, submit, wait. Returns ToolEvent.status
+// (negative kernel errno) on failure, else the scalar result; *out_len gets the staged-byte count.
 static long tool_call(uint32_t op, const unsigned char *path, uint32_t plen,
                       const unsigned char *data, uint32_t dlen,
                       unsigned char *out, uint32_t out_cap, uint32_t *out_len) {
@@ -118,22 +140,20 @@ static long tool_call(uint32_t op, const unsigned char *path, uint32_t plen,
     req.in_len = plen + dlen;
     if (out_cap) { req.out_cap = out_cap; req.out_ptr = (uint64_t)(uintptr_t)out; }
 
-    long id = sys_submit((unsigned long)(uintptr_t)&req);
-    if (id < 0) return id;
+    tool_result_t tr = submit_and_wait(&req);
+    if (out_len) *out_len = tr.out_len;
+    if (tr.status < 0) return tr.status;
+    return tr.result;
+}
 
-    ToolEvent ev[4];
-    for (int spin = 0; spin < 1024; spin++) {
-        long c = sys_poll((unsigned long)(uintptr_t)ev, 4, 0);
-        if (c < 0) return c;
-        for (long i = 0; i < c; i++) {
-            if (ev[i].id == (uint64_t)id) {
-                if (out_len) *out_len = ev[i].out_len;
-                if (ev[i].status < 0) return ev[i].status;
-                return ev[i].result;
-            }
-        }
-    }
-    return -110;  // E_TIMEDOUT (completion never arrived)
+// A brokered scalar op (no payload), e.g. TOOL_OP_NET_FETCH: arg + flags in, scalar result out.
+static long tool_call_scalar(uint32_t op, uint32_t arg, uint32_t flags) {
+    ToolReq req;
+    for (unsigned i = 0; i < sizeof(req); i++) ((unsigned char *)&req)[i] = 0;
+    req.op = op; req.arg = arg; req.flags = flags;
+    tool_result_t tr = submit_and_wait(&req);
+    if (tr.status < 0) return tr.status;
+    return tr.result;
 }
 
 // --- console / process ------------------------------------------------------------------------
@@ -461,6 +481,23 @@ m3ApiRawFunction(wasi_poll_oneoff) {
     m3ApiReturn(WASI_ENOTSUP);  // event polling lands with native async (Phase 5)
 }
 
+// --- MC host tool surface (non-WASI): brokered network fetch ----------------------------------
+
+// net_fetch(endpoint, token) -> result. The WASM analogue of the JS host_net_fetch: a FETCH-ONLY
+// egress surface over the kernel's pre-registered endpoint-id + NetCap machinery
+// (docs/wasm-migration-plan.md Phase 3) — NOT general sockets. Maps onto TOOL_OP_NET_FETCH
+// (arg = endpoint id, flags = request token). Returns the broker's scalar response (>=0), or a
+// negative kernel errno directly (-E_DENIED = not allowlisted, -E_AGAIN = budget exhausted); the
+// guest is MC-aware, exactly as a JS agent calling host_net_fetch is. Imported under module "mc"
+// (the MC host tool surface), distinct from "wasi_snapshot_preview1".
+m3ApiRawFunction(host_net_fetch) {
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(uint32_t, endpoint)
+    m3ApiGetArg(uint32_t, token)
+    long r = tool_call_scalar(TOOL_OP_NET_FETCH, endpoint, token);
+    m3ApiReturn((int32_t)r);
+}
+
 // --- linker -----------------------------------------------------------------------------------
 
 typedef struct { const char *name; const char *sig; M3RawCall fn; } wasi_entry_t;
@@ -497,5 +534,8 @@ M3Result wasm_wasi_link(IM3Module module) {
         // A guest that does not import this function is fine; any other error is fatal.
         if (r && r != m3Err_functionLookupFailed) return r;
     }
+    // MC host tool surface (non-WASI): the fetch-only network egress tool.
+    M3Result rn = m3_LinkRawFunction(module, "mc", "net_fetch", "i(ii)", &host_net_fetch);
+    if (rn && rn != m3Err_functionLookupFailed) return rn;
     return m3Err_none;
 }

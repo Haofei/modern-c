@@ -816,6 +816,15 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-wasm-realtool-test", "WASM-agent Phase 2 (LLVM): a stock wasm32-wasi guest drives the real capability-checked FS tool path (allow + deny audit) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_fs.c", "fs: ok", "wasm-realtool" });
 
+    // WASM-agent Phase 3 (docs/wasm-migration-plan.md §5): brokered FETCH-ONLY network egress via
+    // NetCap. A WASM guest calls the MC host tool net_fetch(endpoint, token) (module "mc", not
+    // general WASI sockets), which the shim maps to TOOL_OP_NET_FETCH through the net broker
+    // (egress allowlist -> budget -> endpoint). Endpoint 1 allowed (107/108), endpoint 9 DENIED
+    // (EDENIED), budget exhaustion (EAGAIN) — the WASM mirror of qjs-nettool-test. Both backends.
+    _ = h.addScriptTest(ctx, "wasm-nettool-test", "WASM-agent Phase 3: a WASM guest drives the brokered fetch-only network egress tool (allow/deny/budget) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_net.c", "net: ok", "wasm-nettool" });
+
+    _ = h.addScriptTest(ctx, "llvm-wasm-nettool-test", "WASM-agent Phase 3 (LLVM): a WASM guest drives the brokered fetch-only network egress tool (allow/deny/budget) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_net.c", "net: ok", "wasm-nettool" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.
