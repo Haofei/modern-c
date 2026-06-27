@@ -55,10 +55,17 @@ fn malloc_addr(size: usize) -> usize {
         return 0;
     }
     let total: usize = size + HEADER;
-    if heap_available(&g_heap) < total {
-        return 0; // fail closed rather than trapping
+    // C malloc must return NULL on failure, NEVER trap. `heap_alloc` is the INFALLIBLE allocator —
+    // it traps (unreachable) on exhaustion / no-fit, and a plain `heap_available >= total` pre-check
+    // does not match its real requirement (alignment slack), so a near-full or fragmented heap could
+    // pass the check yet trap inside heap_alloc. That trap is reachable from untrusted guest code
+    // (e.g. a WASM engine's allocations) and surfaces as an illegal-instruction crash. Route through
+    // the FALLIBLE `heap_try_alloc` and fail closed (return NULL) on any error instead.
+    var block: PAddr = uninit;
+    switch heap_try_alloc(&g_heap, total, HEADER) {
+        ok(b) => { block = b; }
+        err(e) => { return 0; }
     }
-    let block: PAddr = heap_alloc(&g_heap, total, HEADER);
     unsafe {
         raw.store<usize>(block, total); // header: total block size
     }

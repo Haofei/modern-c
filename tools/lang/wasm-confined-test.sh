@@ -38,7 +38,7 @@ TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-$NAME_BASE-test" || echo "$NAME_
 kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+if [ "${KEEP_WORK:-0}" = 1 ]; then echo "KEEP_WORK: $WORK" >&2; else trap 'rm -rf "$WORK"' EXIT; fi
 
 # ---- 0. The guest: a wasm32-wasi binary, built by the off-the-shelf toolchain (zig + wasi-libc) ----
 # The SOURCE is unmodified; we only cap the wasm stack (zig defaults it to ~16 MB of initial linear

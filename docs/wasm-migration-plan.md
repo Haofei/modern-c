@@ -483,16 +483,30 @@ inside the wasm linear memory. That pushed the confined agent's libc arena from 
 for the keystone. **Still open for Phase 4:** re-exposing the JS `host_fs_*`/`host_net_fetch`
 surface to the in-wasm JS for full broker/audit-trace parity (the JS-calls-broker path). A
 prototype guest (QuickJS-on-wasm that imports `mc.net_fetch` and registers it as a JS function)
-was built, but it **hard-crashes inside the very first `JS_NewRuntime()` call** — before any
-broker call, registration, or `net_fetch` use. This was initially mis-attributed to the 14 MiB
-arena ceiling; a controlled test **disproved that** (raising the confined region to 32 MiB, the
-segment cap to 32 MiB, and the arena to 24 MiB did not help — it still crashes at
-`JS_NewRuntime`). So the blocker is **not** heap size: it is an undiagnosed interaction between
-wasm3 and this particular QuickJS-on-wasm module (the extra import / registered C function), and
-it needs dedicated wasm3-level debugging, not memory provisioning. The broker path itself is
-already proven on the WASM runtime from C guests (`wasm-realtool-test`, `wasm-nettool-test`), and
-JS execution is proven by `wasm-js-agent-test`; only the JS-drives-broker *combination* is
-blocked, on that wasm3 crash.
+was built and **debugged in depth**; it is blocked on a deeper bug. Findings (via a U-mode
+trap-cause dump + `objdump`):
+
+- The crash is an **illegal-instruction trap** (`mcause=2`) at an `unimp` that LLVM emits for the
+  `unreachable` trap path of the host libc `heap_alloc` — i.e. an **early `malloc` inside the
+  QuickJS-on-wasm path traps** instead of returning.
+- Ruled out, each by controlled test: **arena size** (24 MiB still crashes), **native C stack**
+  (4 MiB still crashes), **the syscalls** (stubbing `host_net_fetch` to a constant still crashes),
+  and **link failure** (`mc.net_fetch` links; the guest reaches its `main`).
+- The real cause is therefore **host-libc-heap corruption** specific to this module — most likely
+  a wasm3 out-of-bounds linear-memory write into the host arena that damages the free list, after
+  which the next allocation fails. It needs dedicated wasm3 memory-safety debugging (e.g. building
+  the agent's libc heap with the redzone/KASAN variant to catch the overflow at its source).
+
+A real **hardening bug was found and fixed along the way**: `malloc` was calling the *infallible*
+`heap_alloc`, which traps on allocation failure — a C-contract violation reachable from any
+untrusted guest. `user/libc/alloc.mc` now routes through the fallible `heap_try_alloc` and returns
+NULL on failure (it can no longer turn an allocation failure into an illegal-instruction crash).
+This does not fix 4b (the underlying corruption then surfaces as a downstream NULL-deref), but it
+is correct independently.
+
+The broker path itself is already proven on the WASM runtime from C guests (`wasm-realtool-test`,
+`wasm-nettool-test`), and JS execution is proven by `wasm-js-agent-test`; only the
+JS-drives-broker *combination* is blocked, on that wasm3 memory-corruption bug.
 
 Goal: prove existing JS agents survive the migration, so retiring the JS-specific
 host loses no capability.
