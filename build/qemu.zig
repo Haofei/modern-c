@@ -844,6 +844,25 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-wasm-js-nettool-test", "WASM-agent Phase 4b (LLVM): a JS agent (QuickJS-on-wasm) drives the brokered network tool (allow/deny/budget) from JavaScript, confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js_net.c", "js-net: ok", "wasm-js-nettool", "qjs" });
 
+    // WASM-agent Phase 5 (docs/wasm-migration-plan.md §5): native async over the tool ABI. A WASM
+    // guest uses the mc.tool_submit / mc.tool_poll surface to keep multiple ops in flight and drain
+    // completions by id — mirrors the QuickJS async agents.
+    //   async  : 12 overlapping SUM ops; 8 accepted + complete, 4 denied -E_AGAIN (ok=8 rejected=4).
+    //   cancel : a slow op cancelled (TOOL_OP_CANCEL) completes -E_CANCELED while a fast one resolves.
+    //   quota  : the 9th submit on a full 8-deep queue returns exactly -E_AGAIN.
+    //   spurious: the spurious op's completion carries a bogus id the guest must detect.
+    _ = h.addScriptTest(ctx, "wasm-async-agent-test", "WASM-agent Phase 5: overlapping async tool ops + back-pressure (ok=8 rejected=4) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-async-agent" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-async-agent-test", "WASM-agent Phase 5 (LLVM): overlapping async tool ops + back-pressure confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-async-agent" });
+
+    _ = h.addScriptTest(ctx, "wasm-cancel-test", "WASM-agent Phase 5: cancel an in-flight async tool op (structured -E_CANCELED) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_cancel.c", "cancel: ok", "wasm-cancel" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-cancel-test", "WASM-agent Phase 5 (LLVM): cancel an in-flight async tool op confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_cancel.c", "cancel: ok", "wasm-cancel" });
+
+    _ = h.addScriptTest(ctx, "wasm-quota-agent-test", "WASM-agent Phase 5: tool-ABI back-pressure surfaces as -E_AGAIN confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_quota.c", "quota: ok", "wasm-quota-agent" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-quota-agent-test", "WASM-agent Phase 5 (LLVM): tool-ABI back-pressure surfaces as -E_AGAIN confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_quota.c", "quota: ok", "wasm-quota-agent" });
+
+    _ = h.addScriptTest(ctx, "wasm-spurious-agent-test", "WASM-agent Phase 5: a spurious completion's unknown id is detected confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_spurious.c", "spurious: ok", "wasm-spurious-agent" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-spurious-agent-test", "WASM-agent Phase 5 (LLVM): a spurious completion's unknown id is detected confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_spurious.c", "spurious: ok", "wasm-spurious-agent" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.

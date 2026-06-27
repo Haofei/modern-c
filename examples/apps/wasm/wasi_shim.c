@@ -498,6 +498,46 @@ m3ApiRawFunction(host_net_fetch) {
     m3ApiReturn((int32_t)r);
 }
 
+// --- MC host tool surface (non-WASI): native async (overlapping submit + poll) -----------------
+// The WASM analogue of the JS host's __host_async_raw + the agent_async ToolPump (Phase 5). A guest
+// submits payload-less mock/broker ops and matches their completions by id itself, so multiple ops
+// can be in flight at once and complete out of order.
+
+// mc.tool_submit(op, arg, flags) -> i64. Non-blocking submit of a payload-less op (e.g.
+// TOOL_OP_SUM, TOOL_OP_TIMEOUT, TOOL_OP_CANCEL whose arg is the target id). `flags` is the broker
+// delay in virtual ticks (drives out-of-order completion). Returns the request id (>=0), 0 for an
+// accepted CANCEL (no new id), or a negative kernel errno (e.g. -E_AGAIN = -11 when the 8-deep
+// in-flight queue is full).
+m3ApiRawFunction(host_tool_submit) {
+    m3ApiReturnType(int64_t)
+    m3ApiGetArg(uint32_t, op)
+    m3ApiGetArg(uint32_t, arg)
+    m3ApiGetArg(uint32_t, flags)
+    ToolReq req;
+    for (unsigned i = 0; i < sizeof(req); i++) ((unsigned char *)&req)[i] = 0;
+    req.op = op; req.arg = arg; req.flags = flags;
+    long id = sys_submit((unsigned long)(uintptr_t)&req);
+    m3ApiReturn((int64_t)id);
+}
+
+// mc.tool_poll(out) -> i32. Drain ONE ready completion (advancing the broker clock one tick) into
+// the 16-byte record at `out`: { u64 id @0, i32 status @8, i32 result @12 }. Returns 1 if a
+// completion was written, 0 if none is ready, or a negative errno on a pointer fault. The guest
+// loops this and dispatches by id (the WASM analogue of the host event loop's SYS_POLL drain).
+m3ApiRawFunction(host_tool_poll) {
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(uint8_t *, out)
+    ToolEvent ev;
+    long n = sys_poll((unsigned long)(uintptr_t)&ev, 1, 1);  // timeout 1: advance the clock for delayed ops
+    if (n < 0) m3ApiReturn((int32_t)n);
+    if (n == 0) m3ApiReturn(0);
+    m3ApiCheckMem(out, 16);
+    m3ApiWriteMem64(out + 0, ev.id);
+    m3ApiWriteMem32(out + 8, (uint32_t)ev.status);
+    m3ApiWriteMem32(out + 12, (uint32_t)ev.result);
+    m3ApiReturn(1);
+}
+
 // --- linker -----------------------------------------------------------------------------------
 
 typedef struct { const char *name; const char *sig; M3RawCall fn; } wasi_entry_t;
@@ -534,8 +574,12 @@ M3Result wasm_wasi_link(IM3Module module) {
         // A guest that does not import this function is fine; any other error is fatal.
         if (r && r != m3Err_functionLookupFailed) return r;
     }
-    // MC host tool surface (non-WASI): the fetch-only network egress tool.
+    // MC host tool surface (non-WASI): the fetch-only network egress tool + the async submit/poll.
     M3Result rn = m3_LinkRawFunction(module, "mc", "net_fetch", "i(ii)", &host_net_fetch);
     if (rn && rn != m3Err_functionLookupFailed) return rn;
+    M3Result rs = m3_LinkRawFunction(module, "mc", "tool_submit", "I(iii)", &host_tool_submit);
+    if (rs && rs != m3Err_functionLookupFailed) return rs;
+    M3Result rp = m3_LinkRawFunction(module, "mc", "tool_poll", "i(i)", &host_tool_poll);
+    if (rp && rp != m3Err_functionLookupFailed) return rp;
     return m3Err_none;
 }

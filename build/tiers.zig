@@ -129,6 +129,14 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-wasm-js-agent-test"));
     m0_step.dependOn(ctx.cmd("wasm-js-nettool-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-js-nettool-test"));
+    m0_step.dependOn(ctx.cmd("wasm-async-agent-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-async-agent-test"));
+    m0_step.dependOn(ctx.cmd("wasm-cancel-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-cancel-test"));
+    m0_step.dependOn(ctx.cmd("wasm-quota-agent-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-quota-agent-test"));
+    m0_step.dependOn(ctx.cmd("wasm-spurious-agent-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-spurious-agent-test"));
     m0_step.dependOn(ctx.cmd("qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("llvm-qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("qjs-smode-confined-test"));

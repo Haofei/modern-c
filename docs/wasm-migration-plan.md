@@ -6,8 +6,9 @@ phase section carries its own **Status:** line. Snapshot:
 - **Landed (gated on both backends in `m0`):** Phase 0 (`wasm-run-test`), Phase 1
   (`wasm-wasi-hello-test`), Phase 2 (`wasm-realtool-test`), Phase 3a + net-deny audit
   (`wasm-nettool-test`), Phase 4a JS-executes-on-WASM (`wasm-js-agent-test`), Phase 4b
-  JS-agent-drives-broker (`wasm-js-nettool-test`).
-- **Open:** Phase 3 real-TCP / S-mode-IRQ net variants; Phase 5 (async/fuel/budgets/P2 worlds);
+  JS-agent-drives-broker (`wasm-js-nettool-test`), Phase 5 native async
+  (`wasm-async-agent-test`/`wasm-cancel-test`/`wasm-quota-agent-test`/`wasm-spurious-agent-test`).
+- **Open:** Phase 3 real-TCP / S-mode-IRQ net variants; Phase 5 remainder (fuel / quota-errno / linear-memory cap / P2 worlds);
   Phase 6 (full parity sweep + cross-arch); Phase 7 (JS perf benchmark); Phase 8 (retire
   `qjs_host.c`).
 
@@ -526,7 +527,16 @@ the net path establishes the JS→broker mechanism.)
 
 ### Phase 5 — Async, fuel, budgets, P2 worlds
 
-Status: **OPEN.**
+Status: **Native async DONE; fuel / quota-errno / P2 worlds OPEN.** The shim exposes an async
+tool surface — `mc.tool_submit(op, arg, flags)` and `mc.tool_poll(out)` (`wasi_shim.c`) — the
+WASM analogue of the JS host's async path / `agent_async.mc`'s `ToolPump`: a guest keeps
+multiple ops in flight and drains completions by id. Four guests mirror the QuickJS async
+agents and are gated (both backends, in `m0`): `wasm-async-agent-test` (12 overlapping SUM ops →
+ok=8 / rejected=4 back-pressure), `wasm-cancel-test` (`TOOL_OP_CANCEL` → `-E_CANCELED` while a
+peer resolves), `wasm-quota-agent-test` (9th submit on a full queue → exactly `-E_AGAIN`),
+`wasm-spurious-agent-test` (a bogus completion id is detected). **Still open:** fuel metering,
+the quota-errno decision (`E_QUOTA` vs overload), the linear-memory cap, and curated WASI
+Preview 2 worlds.
 
 Goal: use WASM's strengths and align with the resource-budget model.
 
@@ -599,7 +609,7 @@ prove):
 | Agent (syscall-driven) | `qjs-agent-test` | `wasm-agent-test` | ☐ |
 | Agent smoke | `qjs-agent-smoke-test` | `wasm-agent-smoke-test` | ☐ |
 | S-mode agent | `qjs-smode-agent-test` | `wasm-smode-agent-test` | ☐ |
-| Async agent | `qjs-async-agent-test` | `wasm-async-agent-test` | ☐ |
+| Async agent | `qjs-async-agent-test` | `wasm-async-agent-test` | ☑ (Phase 5 landed; both backends in `m0`) |
 | S-mode async agent | `qjs-smode-async-agent-test` | `wasm-smode-async-agent-test` | ☐ |
 | Broker agent | `qjs-broker-agent-test` | `wasm-broker-agent-test` | ☐ |
 | FS tool (allow + deny audit) | `qjs-realtool-test` | `wasm-realtool-test` | ☑ (Phase 2 landed; both backends in `m0`) |
@@ -607,10 +617,10 @@ prove):
 | Net fetch (real TCP) | `qjs-net-realtool-test` | `wasm-net-realtool-test` | ☐ |
 | S-mode net IRQ | `qjs-smode-net-irq-tool-test` | `wasm-smode-net-irq-tool-test` | ☐ |
 | S-mode blk IRQ | `qjs-smode-blk-irq-tool-test` | `wasm-smode-blk-irq-tool-test` | ☐ |
-| Quota / backpressure | `qjs-quota-agent-test` | `wasm-quota-agent-test` | ☐ |
-| Cancel | `qjs-cancel-test` | `wasm-cancel-test` | ☐ |
+| Quota / backpressure | `qjs-quota-agent-test` | `wasm-quota-agent-test` | ☑ (Phase 5 landed; both backends in `m0`) |
+| Cancel | `qjs-cancel-test` | `wasm-cancel-test` | ☑ (Phase 5 landed; both backends in `m0`) |
 | Cancel edges | `qjs-cancel-edges-test` | `wasm-cancel-edges-test` | ☐ |
-| Spurious completion id | `qjs-spurious-agent-test` | `wasm-spurious-agent-test` | ☐ |
+| Spurious completion id | `qjs-spurious-agent-test` | `wasm-spurious-agent-test` | ☑ (Phase 5 landed; both backends in `m0`) |
 | Cross-arch x86_64 | `x86-qjs-test` / `x86-qjs-async-test` | `wasm-*` x86_64 peers | ☐ |
 | Cross-arch aarch64 | `arm-qjs-test` / `arm-qjs-async-test` | `wasm-*` aarch64 peers | ☐ |
 
