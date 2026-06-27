@@ -786,6 +786,16 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-qjs-run-test", "QuickJS-agent Phase 4 (LLVM): build QuickJS freestanding and evaluate JS under QEMU", &.{ "bash", "tools/lang/qjs-run-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    // WASM-agent Phase 0 (docs/wasm-migration-plan.md §5): the spike that proves a general WASM
+    // engine confines, links, and reaches the kernel — the mirror of qjs-run-test. Build the
+    // vendored wasm3 interpreter (third_party/wasm3) freestanding against the all-MC libc, link
+    // the confined wasm3 front-end (examples/apps/wasm_agent.c), and run a real wasm32 module
+    // (built by clang --target=wasm32 + wasm-ld) that prints via a WASI fd_write import mapped to
+    // SYS_WRITE, then proc_exit. Both backends.
+    _ = h.addScriptTest(ctx, "wasm-run-test", "WASM-agent Phase 0: build wasm3 freestanding against the all-MC libc and run a real wasm32 module that prints via a WASI fd_write->SYS_WRITE import under QEMU", &.{ "bash", "tools/lang/wasm-run-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-wasm-run-test", "WASM-agent Phase 0 (LLVM): build wasm3 freestanding and run a real wasm32 module that prints via a WASI fd_write->SYS_WRITE import under QEMU", &.{ "bash", "tools/lang/wasm-run-test.sh", "zig-out/bin/mcc", "llvm" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.

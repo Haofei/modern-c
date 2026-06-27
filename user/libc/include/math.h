@@ -90,12 +90,14 @@ long long llrint(double);
 long   lround(double);
 long long llround(double);
 
-/* float variants QuickJS may touch */
+/* float variants QuickJS and the wasm3 interpreter may touch */
 float fabsf(float);
 float floorf(float);
 float ceilf(float);
 float sqrtf(float);
 float roundf(float);
 float truncf(float);
+float copysignf(float, float);
+float rintf(float);
 
 #endif /* _MATH_H */

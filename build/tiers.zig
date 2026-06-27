@@ -117,6 +117,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_step.dependOn(ctx.cmd("qjs-run-test"));
     m0_step.dependOn(ctx.cmd("llvm-qjs-run-test"));
+    m0_step.dependOn(ctx.cmd("wasm-run-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-run-test"));
     m0_step.dependOn(ctx.cmd("qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("llvm-qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("qjs-smode-confined-test"));
