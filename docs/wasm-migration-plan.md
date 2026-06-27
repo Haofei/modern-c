@@ -482,15 +482,17 @@ inside the wasm linear memory. That pushed the confined agent's libc arena from 
 16 MiB segment cap) would need a kernel-grown heap (sbrk) — a noted future item, not required
 for the keystone. **Still open for Phase 4:** re-exposing the JS `host_fs_*`/`host_net_fetch`
 surface to the in-wasm JS for full broker/audit-trace parity (the JS-calls-broker path). A
-prototype (JS → a registered C `net_fetch` → the `mc.net_fetch` import → broker) was built and
-works mechanically, but adding it on top of `JS_NewContext` pushes the confined agent past the
-14 MiB arena ceiling (an unchecked wasm3 allocation then faults), and that ceiling is itself
-bounded by the elf_loader's 16 MiB-per-segment cap. So JS-drives-broker-**confined** is blocked
-on a larger confined heap (kernel-grown heap / sbrk, or a raised segment cap — a deliberate
-hardening-bound decision). The broker path itself is already proven on the WASM runtime from C
-guests (`wasm-realtool-test`, `wasm-nettool-test`), and JS execution is proven here; only the
-JS+broker+confined *combination* awaits the heap-growth work. The engine-equivalence half (JS
-executes on WASM) is proven.
+prototype guest (QuickJS-on-wasm that imports `mc.net_fetch` and registers it as a JS function)
+was built, but it **hard-crashes inside the very first `JS_NewRuntime()` call** — before any
+broker call, registration, or `net_fetch` use. This was initially mis-attributed to the 14 MiB
+arena ceiling; a controlled test **disproved that** (raising the confined region to 32 MiB, the
+segment cap to 32 MiB, and the arena to 24 MiB did not help — it still crashes at
+`JS_NewRuntime`). So the blocker is **not** heap size: it is an undiagnosed interaction between
+wasm3 and this particular QuickJS-on-wasm module (the extra import / registered C function), and
+it needs dedicated wasm3-level debugging, not memory provisioning. The broker path itself is
+already proven on the WASM runtime from C guests (`wasm-realtool-test`, `wasm-nettool-test`), and
+JS execution is proven by `wasm-js-agent-test`; only the JS-drives-broker *combination* is
+blocked, on that wasm3 crash.
 
 Goal: prove existing JS agents survive the migration, so retiring the JS-specific
 host loses no capability.

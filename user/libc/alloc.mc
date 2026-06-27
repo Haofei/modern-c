@@ -26,8 +26,9 @@ import "user/libc/lcommon.mc";
 // init + evaluation needs several MiB; the WASM path needs more — the wasm3 engine allocates its
 // per-function M3 code pages AND the guest's linear memory from this heap, and QuickJS-on-wasm
 // (the Phase-4 keystone, docs/wasm-migration-plan.md §4 "Javy double-layering cost") stacks a JS
-// heap inside that linear memory on top. 32 MiB covers both; it is NOBITS .bss (no file cost), and
-// the confined images run under QEMU -m 256.
+// heap inside that linear memory on top. 14 MiB is the most that fits the confined agent: it sits
+// just under the elf_loader's 16 MiB-per-segment cap (with the 512 KiB stack) and within the
+// confined runtime's 16 MiB frame region. NOBITS .bss (no file cost); QEMU runs with -m 256.
 const ARENA_BYTES: usize = 14680064; // 14 MiB
 
 // 16-byte header in front of every user block: keeps the user pointer 16-aligned and stores
