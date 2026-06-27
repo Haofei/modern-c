@@ -666,7 +666,7 @@ The migration must **not** widen the trap surface. Rules:
 | Engine pulls in host-OS assumptions (mmap, threads, JIT) | Use the engine's platform porting layer; interpreter/AOT only, no JIT; implement the porting shims against our libc/syscalls |
 | WASI surface creep reintroduces ambient authority | Curated WIT world (Phase 5); preopen-only fs; **fetch-only egress to allowlisted endpoints — no general sockets** until a consciously-scoped opt-in (Phase 3); explicitly document omitted interfaces |
 | Sync WASI over async kernel deadlocks the single-threaded guest | Reuse `ToolPump` submit-then-drain; the pattern is already proven by `user/agent_async.mc` |
-| Losing JS capability | Phase 4 keystone gate proves JS-on-WASM parity before any QuickJS-host removal |
+| Losing JS capability | Phase 4a proves JS *executes* on WASM (`wasm-js-agent-test`); full JS-agent **broker/audit parity** (Phase 4b) and the Phase 6 sweep are required before any QuickJS-host removal (Phase 7 is gated on Phase 6 green) |
 | Backend/arch divergence | Every gate runs on both backends; Phase 6 sweeps all three arches before `m0` inclusion |
 | Removing the oracle too early | Phase 7 is gated on Phase 6 green; migration-safety rule forbids early removal |
 

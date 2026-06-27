@@ -47,7 +47,9 @@ int main(void) {
     // ever reaching the host or the broker. This is the capability mapping "no preopen = no cap".
     int efd = open("/etc/passwd", O_RDONLY);
     if (efd >= 0) { printf("fs: FAIL outside-preopen UNEXPECTEDLY opened\n"); close(efd); return 1; }
-    printf("fs: outside-preopen refused (errno=%d)\n", errno);
+    // wasi-libc returns ENOENT for a path under no preopen (it has no capability to resolve it).
+    if (errno != ENOENT) { printf("fs: FAIL outside-preopen wrong errno %d\n", errno); return 1; }
+    printf("fs: outside-preopen refused ENOENT\n");
 
     printf("fs: ok\n");
     return 0;
