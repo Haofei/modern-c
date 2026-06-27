@@ -456,8 +456,16 @@ inside the wasm linear memory. That pushed the confined agent's libc arena from 
 (`MAX_SEGMENT_PAGES`), so no loader/hardening change was needed. A larger JS heap (beyond the
 16 MiB segment cap) would need a kernel-grown heap (sbrk) — a noted future item, not required
 for the keystone. **Still open for Phase 4:** re-exposing the JS `host_fs_*`/`host_net_fetch`
-surface to the in-wasm JS for full broker/audit-trace parity (the JS-calls-broker path); the
-engine-equivalence half (JS executes on WASM) is proven here.
+surface to the in-wasm JS for full broker/audit-trace parity (the JS-calls-broker path). A
+prototype (JS → a registered C `net_fetch` → the `mc.net_fetch` import → broker) was built and
+works mechanically, but adding it on top of `JS_NewContext` pushes the confined agent past the
+14 MiB arena ceiling (an unchecked wasm3 allocation then faults), and that ceiling is itself
+bounded by the elf_loader's 16 MiB-per-segment cap. So JS-drives-broker-**confined** is blocked
+on a larger confined heap (kernel-grown heap / sbrk, or a raised segment cap — a deliberate
+hardening-bound decision). The broker path itself is already proven on the WASM runtime from C
+guests (`wasm-realtool-test`, `wasm-nettool-test`), and JS execution is proven here; only the
+JS+broker+confined *combination* awaits the heap-growth work. The engine-equivalence half (JS
+executes on WASM) is proven.
 
 Goal: prove existing JS agents survive the migration, so retiring the JS-specific
 host loses no capability.
@@ -567,7 +575,7 @@ by the WASM engine's own bring-up:
 | QuickJS gate | What it tests | Why no direct WASM peer |
 |---|---|---|
 | `qjs-alloc-test` | QuickJS arena allocator | Engine-internal; the WASM engine has its own allocator (proven in Phase 0). QuickJS's allocator still runs *inside* `wasm-js-agent-test`. |
-| `qjs-async-test` | pure JS async/await semantics | JS-language behavior → covered by `wasm-js-agent-test`; runtime-level async is covered by `wasm-async-agent-test` above. |
+| `qjs-async-test` | pure JS async/await semantics | JS-language behavior → covered by `wasm-js-agent-test` (landed: QuickJS-on-wasm runs real JS); runtime-level async is covered by `wasm-async-agent-test` above. |
 | `qjs-io-test` | QuickJS JS I/O feature | JS-language behavior → `wasm-js-agent-test`. |
 | `qjs-worker-test` | QuickJS worker feature | JS-language behavior → `wasm-js-agent-test` (verify Javy supports it; if not, document as a JS feature absent on the WASM path). |
 | `qjs-mc-host-test` | MC-hosted QuickJS variant | **TBD — classify in Phase 6** (confirm whether this exercises host glue that has a WASM analogue, or is QuickJS-host-specific and retired with the host). |
