@@ -36,11 +36,18 @@ int main(void) {
     }
     printf("fs: read=%s\n", buf);
 
-    // mkdir must be DENIED (not allowlisted)
+    // Broker-level deny: mkdir is not in the agent's tool allowlist -> E_DENIED -> EACCES.
     int r = mkdir("/ws/sub", 0755);
     if (r == 0) { printf("fs: FAIL mkdir UNEXPECTEDLY allowed\n"); return 1; }
     if (errno != EACCES) { printf("fs: FAIL mkdir denied wrong errno %d\n", errno); return 1; }
     printf("fs: mkdir denied EACCES\n");
+
+    // Preopen-level deny (no cap = no access): a path with no matching preopen (outside /ws) is
+    // refused by the WASI preopen sandbox itself — wasi-libc returns an error without the request
+    // ever reaching the host or the broker. This is the capability mapping "no preopen = no cap".
+    int efd = open("/etc/passwd", O_RDONLY);
+    if (efd >= 0) { printf("fs: FAIL outside-preopen UNEXPECTEDLY opened\n"); close(efd); return 1; }
+    printf("fs: outside-preopen refused (errno=%d)\n", errno);
 
     printf("fs: ok\n");
     return 0;

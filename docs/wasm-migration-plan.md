@@ -28,10 +28,11 @@ remaining work (`docs/platform-portability-plan.md`,
 `docs/future-kernel-plan.md` §9.1/§19). The precondition that §11.2 set for WASM
 ("do not add WASM before the capability broker is solid") is satisfied.
 
-Note one current asymmetry the migration must account for: **FS denials are
-audited, but net-broker denials are not** — `net_broker.mc` records only admitted
-egresses (`net_policy_admit` audits after the allowlist check passes; a denied
-destination "spends no budget, sends no packet, and is not audited"). See Phase 3.
+Historical asymmetry the migration had to account for (now resolved): **FS denials were
+audited, but net-broker denials were not** — `net_broker.mc` recorded only admitted egresses.
+Phase 3b fixed this: `net_policy_admit` now records a denied destination as a distinct
+`NET_DENY_TAG` event (it still spends no budget and sends no packet — only audit *coverage*
+grew), reaching FS-deny parity. See Phase 3.
 
 The current QuickJS host is a JS-only, hand-written C host. It works and is the
 differential oracle, but it has two limits:
@@ -302,8 +303,10 @@ Mirrors `qjs-run-test`.
 
 Status: **DONE.** `examples/apps/wasm/wasi_shim.c` implements the WASI P1 import set
 (`fd_write`/`fd_read`→`SYS_WRITE`/`SYS_READ`, `fd_close`, `fd_seek`, `fd_fdstat_get`,
-`proc_exit`, `clock_time_get`, `clock_res_get`, `random_get`, `environ_*`/`args_*` empty,
-`fd_prestat_get`→`EBADF` (no preopens yet), `sched_yield`, `poll_oneoff`→`ENOTSUP`), with a
+`proc_exit`, `clock_time_get` (monotonic counter, not wall-clock), `clock_res_get`,
+`random_get` (**test-only deterministic stub — NOT cryptographic**; real entropy awaits
+`TOOL_OP_RANDOM`), `environ_*`/`args_*` empty, `fd_prestat_get`→`EBADF` (no preopens yet),
+`sched_yield`, `poll_oneoff`→`ENOTSUP`), with a
 centralized kernel-errno→WASI-errno table (`wasi.h`). The generic `examples/apps/wasm_host.c`
 links the shim into any guest. A **stock `wasm32-wasi` `printf` hello**, built unmodified by
 `zig cc -target wasm32-wasi` (zig's wasi-libc), runs **confined** in an isolated Sv39 U-mode
@@ -343,7 +346,9 @@ submit-then-poll bridge; `tool_abi.h` mirrors the `ToolReq`/`ToolEvent` layout).
 (`examples/apps/wasm/wasi_fs.c`) drives the real broker: the write/read round-trip is
 **allowed** (returns `hi`), and `mkdir` is **denied** (`TOOL_OP_FS_MKDIR` not in the agent's
 allowlist) — the guest observes `EACCES` (mapped from the broker's `-E_DENIED`) and the deny is
-recorded by `agent_fs_call`→`ipc_trace`, exactly as the JS path. Gated as `wasm-realtool-test`
+recorded by `agent_fs_call`→`ipc_trace`, exactly as the JS path. The guest also attempts a path
+with **no matching preopen** (`/etc/passwd`) and the WASI preopen sandbox refuses it (`ENOENT`)
+before it reaches the host — the "no preopen = no cap = no access" mapping. Gated as `wasm-realtool-test`
 / `llvm-wasm-realtool-test`, both in `m0`, reusing the confined harness with the FS broker
 already wired in `app_run_demo.mc`. No kernel/syscall/broker/ABI change. (The kernel FS tool is
 whole-file — no offset in the `ToolReq` ABI — so the shim buffers writes and flushes on close,
@@ -357,12 +362,14 @@ Goal: WASI filesystem calls flow through the existing capability FS broker.
 - Implement `path_open`, `fd_read`, `fd_write`, `fd_seek`, `path_create_directory`,
   `fd_filestat_get` over `TOOL_OP_FS_READ`/`FS_WRITE`/`FS_MKDIR` through
   `agent_fs_call` (allowlist → budget → path-cap).
-- Verify denial paths: a path outside the preopen returns a WASI `errno` derived
-  from the broker's `-E_DENIED`/`-E_NOCAP`, and the denial is audited
-  (`ipc_trace.mc`) exactly like the JS path.
+- Verify the **two distinct denial layers**: (a) a **broker** deny — an op the agent is not
+  allowlisted for (`mkdir`/`TOOL_OP_FS_MKDIR`) returns a WASI `errno` derived from `-E_DENIED`
+  and is audited (`ipc_trace.mc`) exactly like the JS path; (b) a **preopen** deny — a path with
+  no matching preopen (outside `/ws`) is refused by the WASI preopen sandbox itself
+  ("no preopen = no cap = no access"), before the request reaches the host or broker.
 
-**Gate:** `wasm-realtool-test` / `llvm-…` — file write+read through the broker;
-**plus** a denied-path case asserting an audit deny event. Mirrors
+**Gate:** `wasm-realtool-test` / `llvm-…` — file write+read through the broker; **plus** the
+broker `mkdir` deny (audited) **and** the outside-preopen escape refusal. Mirrors
 `qjs-realtool-test`.
 
 Status: **Phase 3a + net-deny audit DONE.** The shim exposes a fetch-only `net_fetch(endpoint,
@@ -411,12 +418,13 @@ per-request destination policy — a much larger surface.
   with **zero change to the kernel network model** — no new ops, no struct
   changes, no new destination policy. (Carrying real HTTP bodies, like arbitrary
   sockets, belongs to the deferred general-net work below.)
-- **Net-deny audit (required, currently absent).** Unlike the FS broker, the net
-  broker does **not** audit denied destinations — `net_policy_admit` records only
-  admitted egresses. For an audit-focused kernel, a blocked exfil attempt should
-  be observable. Add a deny-path audit record to `net_broker.mc` so net reaches
-  FS-deny parity. (Append-only audit *coverage*; no allow/deny decision changes.
-  Broker work, not WASM work, but Phase 3 depends on it.)
+- **Net-deny audit (required) — DONE (Phase 3b).** The net broker previously did **not**
+  audit denied destinations (`net_policy_admit` recorded only admitted egresses), unlike the
+  FS broker. For an audit-focused kernel a blocked exfil attempt must be observable, so
+  `net_policy_admit` now records a deny-path audit event (`NET_DENY_TAG`) in `net_broker.mc`,
+  reaching FS-deny parity. (Append-only audit *coverage*; no allow/deny decision changed — the
+  call is still Denied, no budget spent, no packet sent. Broker work, not WASM work; the
+  `agent-net-test` / `agent-net-real-test` gates assert the deny record.)
 - Mock transport first (mirrors `qjs-nettool-test`), then real TCP over
   virtio-net (mirrors `qjs-net-realtool-test`), then S-mode IRQ-backed
   completion through `SYS_POLL` (mirrors `qjs-smode-net-irq-tool-test`).
@@ -439,15 +447,18 @@ merits when a guest demands it.
 
 ### Phase 4 — JS-on-WASM (the QuickJS-host equivalence proof)
 
-Status: **DONE (keystone).** JavaScript runs on the WASM path. The plan defines Javy as
-"QuickJS-ng compiled to `wasm32-wasi`"; the Javy binary isn't available in this build
-environment, so the repo's already-vendored QuickJS (`third_party/quickjs`) is compiled to
-`wasm32-wasi` with the toolchain we have (`zig cc -target wasm32-wasi`, linking zig's
-wasi-libc) — the **same QuickJS-on-wasm artifact**, with no opaque prebuilt tool.
-`examples/apps/wasm/wasi_js.c` evals a representative JS program (recursion + objects + arrays
-+ JSON + closures → `82`) and runs **confined** on the wasm3 host + WASI shim. Gated as
-`wasm-js-agent-test` / `llvm-`, both in `m0`. This proves JS agents survive the migration —
-the central "keep JS, retire the hack" thesis.
+Status: **Phase 4a (engine equivalence) DONE; Phase 4b (JS host-API broker parity) OPEN.**
+JavaScript *executes* on the WASM path (4a). The plan defines Javy as "QuickJS-ng compiled to
+`wasm32-wasi`"; the Javy binary isn't available in this build environment, so the repo's
+already-vendored QuickJS (`third_party/quickjs`) is compiled to `wasm32-wasi` with the toolchain
+we have (`zig cc -target wasm32-wasi`, linking zig's wasi-libc) — the **same QuickJS-on-wasm
+artifact**, with no opaque prebuilt tool. `examples/apps/wasm/wasi_js.c` evals a representative
+JS program (recursion + objects + arrays + JSON + closures → `82`) and runs **confined** on the
+wasm3 host + WASI shim. Gated as `wasm-js-agent-test` / `llvm-`, both in `m0`. This proves the
+engine-equivalence half: JS is preserved on the WASM runtime ("keep JS, retire the hack").
+**Phase 4b — the JS agent calling `host_fs_*`/`host_net_fetch` to produce the same broker/audit
+trace as the QuickJS host — is NOT yet done** (see the blocker below); `wasm-js-agent-test`
+proves JS executes, not full JS-agent host-API parity.
 
 The **Javy double-layering cost** the plan flagged in §4 is now measured and real: wasm3
 allocates per-function M3 code pages for the ~1 MB QuickJS module *plus* QuickJS's own JS heap
@@ -477,10 +488,14 @@ host loses no capability.
   `TOOL_OP_*` as today.
 - Run the existing JS agent scenarios on the WASM path.
 
-**Gate:** `wasm-js-agent-test` / `llvm-…` — an existing JS agent runs on the WASM
-runtime and produces the same observable broker/audit trace as the QuickJS host.
-This is the keystone gate: it demonstrates JS is preserved (per the
-already-decided "keep JS, retire the hack" direction).
+**Gate (4a, landed):** `wasm-js-agent-test` / `llvm-…` — JavaScript (QuickJS compiled to
+`wasm32-wasi`) executes on the WASM runtime, confined. Demonstrates JS is preserved (the
+"keep JS, retire the hack" direction).
+
+**Gate (4b, pending):** the keystone proper — an existing JS *agent* runs on the WASM runtime
+and produces the **same observable broker/audit trace** as the QuickJS host (the JS calls
+`host_fs_*`/`host_net_fetch`). Blocked on a larger confined heap (see below); `wasm-js-agent-test`
+does **not** yet assert broker/audit-trace parity.
 
 ### Phase 5 — Async, fuel, budgets, P2 worlds
 
@@ -568,8 +583,9 @@ prove):
 | Cross-arch aarch64 | `arm-qjs-test` / `arm-qjs-async-test` | `wasm-*` aarch64 peers | ☐ |
 
 **B. QuickJS-engine / JS-language gates — no direct WASM-engine peer**; JS
-behavior is instead proven collectively on the WASM path by the Phase-4 keystone
-`wasm-js-agent-test` (Javy = QuickJS-on-WASM), or is engine-internal and replaced
+behavior is instead proven collectively on the WASM path by the Phase-4a gate
+`wasm-js-agent-test` (Javy = QuickJS-on-WASM — JS *executes*; full JS host-API/broker
+parity is the still-open Phase 4b), or is engine-internal and replaced
 by the WASM engine's own bring-up:
 
 | QuickJS gate | What it tests | Why no direct WASM peer |
