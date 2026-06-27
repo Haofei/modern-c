@@ -21,10 +21,12 @@ const RT_KERNEL_VA: usize = 0x8000_0000;
 // Backing store for the agent's page tables + the per-page frames the loader
 // allocates, page-aligned. A `[N]u8` global is .bss-resident (no file cost); the loader
 // only needs a 4 KiB-aligned base, which app_build derives from the region pointer.
-// Sized to 12 MiB so it can back a confined C app whose freestanding libc (user/libc, shared
-// with the QuickJS host) carries an 8 MiB malloc arena in .bss — the loader maps the whole
-// PT_LOAD memsz, so the region must exceed the app's largest segment plus its page tables.
-const RT_REGION_LEN: usize = 12582912; // 12 MiB
+// Sized to 16 MiB so it can back a confined C app whose freestanding libc (user/libc, shared with
+// the QuickJS/WASM hosts) carries a 14 MiB malloc arena in .bss (raised from 8 MiB for the
+// QuickJS-on-WASM keystone, user/libc/alloc.mc) — the loader maps the whole PT_LOAD memsz, so the
+// region must exceed the app's largest segment plus its page tables. Matches the other confined
+// runtimes' 16 MiB region.
+const RT_REGION_LEN: usize = 16 * 1024 * 1024; // 16 MiB
 
 // Defined in the shared M-mode bring-up runtime (context_runtime.c).
 extern fn mc_halt() -> void;
@@ -50,7 +52,7 @@ extern fn mc_app_image() -> usize;
 extern fn mc_app_image_len() -> usize;
 
 // 1 MiB physical region the kernel carves the agent's page tables + frames from.
-global g_region: [12582912]u8;
+global g_region: [16781312]u8; // 16 MiB + 4 KiB (page-align headroom)
 
 // Map app_build's typed status (LS_*) to a human marker, so a load failure says WHY
 // (not a bare fail).
