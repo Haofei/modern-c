@@ -835,6 +835,15 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-wasm-js-agent-test", "WASM-agent Phase 4 keystone (LLVM): JavaScript (QuickJS compiled to wasm32-wasi) runs on the wasm3 runtime confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js.c", "js: ok", "wasm-js-agent", "qjs" });
 
+    // WASM-agent Phase 4b (docs/wasm-migration-plan.md §5): a JS AGENT drives the kernel broker on
+    // the WASM path. QuickJS-on-wasm registers net_fetch() as a JS global backed by the mc.net_fetch
+    // import, which the shim routes to TOOL_OP_NET_FETCH; the JS observes the broker's allow (107/108)
+    // / deny (EDENIED) / budget (EAGAIN) decisions — the WASM mirror of qjs-nettool-test, but driven
+    // from JS. Full JS-agent broker parity, completing the keystone. Both backends.
+    _ = h.addScriptTest(ctx, "wasm-js-nettool-test", "WASM-agent Phase 4b: a JS agent (QuickJS-on-wasm) drives the brokered network tool (allow/deny/budget) from JavaScript, confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_js_net.c", "js-net: ok", "wasm-js-nettool", "qjs" });
+
+    _ = h.addScriptTest(ctx, "llvm-wasm-js-nettool-test", "WASM-agent Phase 4b (LLVM): a JS agent (QuickJS-on-wasm) drives the brokered network tool (allow/deny/budget) from JavaScript, confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js_net.c", "js-net: ok", "wasm-js-nettool", "qjs" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.

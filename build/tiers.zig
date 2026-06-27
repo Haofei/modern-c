@@ -127,6 +127,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-wasm-nettool-test"));
     m0_step.dependOn(ctx.cmd("wasm-js-agent-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-js-agent-test"));
+    m0_step.dependOn(ctx.cmd("wasm-js-nettool-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-js-nettool-test"));
     m0_step.dependOn(ctx.cmd("qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("llvm-qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("qjs-smode-confined-test"));

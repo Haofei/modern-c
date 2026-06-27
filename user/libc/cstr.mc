@@ -32,8 +32,17 @@ export fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
         return lc_as_ptr(d);
     }
     if d < s {
-        // forward copy is safe when the destination is below the source
-        mem_copy(pa(d), pa(s), n);
+        // Destination below source: a FORWARD copy (low->high) is correct even when the ranges
+        // overlap. Do it directly here — do NOT delegate to mem_copy, which `unreachable`-traps on
+        // ANY overlap (it is a non-overlapping primitive). A real overlapping forward memmove —
+        // e.g. a guest WASM `memory.copy` relocating a large buffer down in memory — is valid and
+        // must not trap. (This was the Phase-4b crash: QuickJS-on-wasm did a ~9 MiB overlapping
+        // memory.copy, wasm3 routed it to this memmove, and the old mem_copy delegation trapped.)
+        var i: usize = 0;
+        while i < n {
+            lc_st8(d + i, lc_ld8(s + i));
+            i = i + 1;
+        }
     } else {
         // overlapping with dst above src: copy backwards
         var i: usize = n;

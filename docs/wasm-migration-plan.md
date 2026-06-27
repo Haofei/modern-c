@@ -5,10 +5,11 @@ phase section carries its own **Status:** line. Snapshot:
 
 - **Landed (gated on both backends in `m0`):** Phase 0 (`wasm-run-test`), Phase 1
   (`wasm-wasi-hello-test`), Phase 2 (`wasm-realtool-test`), Phase 3a + net-deny audit
-  (`wasm-nettool-test`), Phase 4a JS-executes-on-WASM keystone (`wasm-js-agent-test`).
-- **Open:** Phase 3 real-TCP / S-mode-IRQ net variants; Phase 4b (JS *drives the broker* —
-  blocked on a larger confined heap); Phase 5 (async/fuel/budgets/P2 worlds); Phase 6 (full
-  parity sweep + cross-arch); Phase 7 (JS perf benchmark); Phase 8 (retire `qjs_host.c`).
+  (`wasm-nettool-test`), Phase 4a JS-executes-on-WASM (`wasm-js-agent-test`), Phase 4b
+  JS-agent-drives-broker (`wasm-js-nettool-test`).
+- **Open:** Phase 3 real-TCP / S-mode-IRQ net variants; Phase 5 (async/fuel/budgets/P2 worlds);
+  Phase 6 (full parity sweep + cross-arch); Phase 7 (JS perf benchmark); Phase 8 (retire
+  `qjs_host.c`).
 
 The remaining phases are still forward-looking; the prose in those sections describes intended
 work, not landed work, except where a **Status:** line says otherwise. The parity matrix in §5
@@ -461,8 +462,8 @@ merits when a guest demands it.
 
 ### Phase 4 — JS-on-WASM (the QuickJS-host equivalence proof)
 
-Status: **Phase 4a (engine equivalence) DONE; Phase 4b (JS host-API broker parity) OPEN.**
-JavaScript *executes* on the WASM path (4a). The plan defines Javy as "QuickJS-ng compiled to
+Status: **Phase 4a (engine equivalence) DONE; Phase 4b (JS-agent broker parity) DONE.**
+JavaScript *executes* on the WASM path (4a) **and a JS agent drives the kernel broker** (4b). The plan defines Javy as "QuickJS-ng compiled to
 `wasm32-wasi`"; the Javy binary isn't available in this build environment, so the repo's
 already-vendored QuickJS (`third_party/quickjs`) is compiled to `wasm32-wasi` with the toolchain
 we have (`zig cc -target wasm32-wasi`, linking zig's wasi-libc) — the **same QuickJS-on-wasm
@@ -470,9 +471,11 @@ artifact**, with no opaque prebuilt tool. `examples/apps/wasm/wasi_js.c` evals a
 JS program (recursion + objects + arrays + JSON + closures → `82`) and runs **confined** on the
 wasm3 host + WASI shim. Gated as `wasm-js-agent-test` / `llvm-`, both in `m0`. This proves the
 engine-equivalence half: JS is preserved on the WASM runtime ("keep JS, retire the hack").
-**Phase 4b — the JS agent calling `host_fs_*`/`host_net_fetch` to produce the same broker/audit
-trace as the QuickJS host — is NOT yet done** (see the blocker below); `wasm-js-agent-test`
-proves JS executes, not full JS-agent host-API parity.
+**Phase 4b is now also done:** `examples/apps/wasm/wasi_js_net.c` (QuickJS-on-wasm) registers a
+`net_fetch()` JS global backed by the `mc.net_fetch` import; the JS observes the broker's allow
+(107/108) / **deny** (EDENIED) / **budget** (EAGAIN) decisions — full JS-agent broker parity, the
+WASM mirror of `qjs-nettool-test` driven from JavaScript. Gated as `wasm-js-nettool-test` /
+`llvm-`, both in `m0`.
 
 The **Javy double-layering cost** the plan flagged in §4 is now measured and real: wasm3
 allocates per-function M3 code pages for the ~1 MB QuickJS module *plus* QuickJS's own JS heap
@@ -480,33 +483,27 @@ inside the wasm linear memory. That pushed the confined agent's libc arena from 
 14 MiB (`user/libc/alloc.mc`) — still under the elf_loader's 16 MiB-per-segment cap
 (`MAX_SEGMENT_PAGES`), so no loader/hardening change was needed. A larger JS heap (beyond the
 16 MiB segment cap) would need a kernel-grown heap (sbrk) — a noted future item, not required
-for the keystone. **Still open for Phase 4:** re-exposing the JS `host_fs_*`/`host_net_fetch`
-surface to the in-wasm JS for full broker/audit-trace parity (the JS-calls-broker path). A
-prototype guest (QuickJS-on-wasm that imports `mc.net_fetch` and registers it as a JS function)
-was built and **debugged in depth**; it is blocked on a deeper bug. Findings (via a U-mode
-trap-cause dump + `objdump`):
+for the keystone. **Phase 4b root cause (found and fixed).** The JS-drives-broker prototype
+initially hard-crashed with an illegal-instruction trap. Debugged via a U-mode trap-cause dump +
+`objdump`, and after ruling out — each by controlled test — **arena size** (24 MiB still crashed),
+**native stack** (4 MiB), **the syscalls** (a stubbed `net_fetch` still crashed), and **link
+failure**, the fault was localized to MC's **`memmove`** (`user/libc/cstr.mc`), reached from
+wasm3's `op_MemCopy` (the wasm `memory.copy` handler). The bug: `memmove`'s `d < s` branch
+delegated to `mem_copy` (`std/mem.mc`), which `unreachable`-**traps on any overlapping range** — it
+is a non-overlapping primitive. But a **forward** copy is correct under overlap when `d < s`, so a
+large overlapping `memory.copy` (here QuickJS-on-wasm relocating a ~9 MiB buffer downward) trapped.
+**Fix:** `memmove` now does its own forward byte copy for `d < s` instead of calling `mem_copy`
+(`user/libc/cstr.mc`). The keystone never exercised that copy, which is why it surfaced only with
+the JS-drives-broker guest.
 
-- The crash is an **illegal-instruction trap** (`mcause=2`) at an `unimp` that LLVM emits for the
-  `unreachable` trap path of the host libc `heap_alloc` — i.e. an **early `malloc` inside the
-  QuickJS-on-wasm path traps** instead of returning.
-- Ruled out, each by controlled test: **arena size** (24 MiB still crashes), **native C stack**
-  (4 MiB still crashes), **the syscalls** (stubbing `host_net_fetch` to a constant still crashes),
-  and **link failure** (`mc.net_fetch` links; the guest reaches its `main`).
-- The real cause is therefore **host-libc-heap corruption** specific to this module — most likely
-  a wasm3 out-of-bounds linear-memory write into the host arena that damages the free list, after
-  which the next allocation fails. It needs dedicated wasm3 memory-safety debugging (e.g. building
-  the agent's libc heap with the redzone/KASAN variant to catch the overflow at its source).
-
-A real **hardening bug was found and fixed along the way**: `malloc` was calling the *infallible*
+A second, independent **hardening bug was fixed along the way**: `malloc` called the *infallible*
 `heap_alloc`, which traps on allocation failure — a C-contract violation reachable from any
 untrusted guest. `user/libc/alloc.mc` now routes through the fallible `heap_try_alloc` and returns
-NULL on failure (it can no longer turn an allocation failure into an illegal-instruction crash).
-This does not fix 4b (the underlying corruption then surfaces as a downstream NULL-deref), but it
-is correct independently.
+NULL on failure.
 
-The broker path itself is already proven on the WASM runtime from C guests (`wasm-realtool-test`,
-`wasm-nettool-test`), and JS execution is proven by `wasm-js-agent-test`; only the
-JS-drives-broker *combination* is blocked, on that wasm3 memory-corruption bug.
+So Phase 4 is complete: JS executes on WASM (`wasm-js-agent-test`) **and** a JS agent drives the
+broker with allow/deny/budget parity (`wasm-js-nettool-test`). The broker path is independently
+proven from C guests (`wasm-realtool-test`, `wasm-nettool-test`).
 
 Goal: prove existing JS agents survive the migration, so retiring the JS-specific
 host loses no capability.
@@ -522,10 +519,10 @@ host loses no capability.
 `wasm32-wasi`) executes on the WASM runtime, confined. Demonstrates JS is preserved (the
 "keep JS, retire the hack" direction).
 
-**Gate (4b, pending):** the keystone proper — an existing JS *agent* runs on the WASM runtime
-and produces the **same observable broker/audit trace** as the QuickJS host (the JS calls
-`host_fs_*`/`host_net_fetch`). Blocked on a larger confined heap (see below); `wasm-js-agent-test`
-does **not** yet assert broker/audit-trace parity.
+**Gate (4b, landed):** `wasm-js-nettool-test` / `llvm-…` — a JS *agent* (QuickJS-on-wasm) calls
+`net_fetch()` and observes the broker's allow/deny/budget decisions, the same broker outcome as the
+QuickJS host's `qjs-nettool-test`, driven from JavaScript. (FS-from-JS can be added the same way;
+the net path establishes the JS→broker mechanism.)
 
 ### Phase 5 — Async, fuel, budgets, P2 worlds
 
@@ -619,8 +616,8 @@ prove):
 
 **B. QuickJS-engine / JS-language gates — no direct WASM-engine peer**; JS
 behavior is instead proven collectively on the WASM path by the Phase-4a gate
-`wasm-js-agent-test` (Javy = QuickJS-on-WASM — JS *executes*; full JS host-API/broker
-parity is the still-open Phase 4b), or is engine-internal and replaced
+`wasm-js-agent-test` (Javy = QuickJS-on-WASM — JS *executes*) plus `wasm-js-nettool-test`
+(Phase 4b — a JS agent drives the broker), or is engine-internal and replaced
 by the WASM engine's own bring-up:
 
 | QuickJS gate | What it tests | Why no direct WASM peer |
@@ -740,7 +737,7 @@ The migration must **not** widen the trap surface. Rules:
 | Engine pulls in host-OS assumptions (mmap, threads, JIT) | Use the engine's platform porting layer; interpreter/AOT only, no JIT; implement the porting shims against our libc/syscalls |
 | WASI surface creep reintroduces ambient authority | Curated WIT world (Phase 5); preopen-only fs; **fetch-only egress to allowlisted endpoints — no general sockets** until a consciously-scoped opt-in (Phase 3); explicitly document omitted interfaces |
 | Sync WASI over async kernel deadlocks the single-threaded guest | Reuse `ToolPump` submit-then-drain; the pattern is already proven by `user/agent_async.mc` |
-| Losing JS capability | Phase 4a proves JS *executes* on WASM (`wasm-js-agent-test`); full JS-agent **broker/audit parity** (Phase 4b), the Phase 6 sweep, and Phase 7 JS performance benchmark are required before any QuickJS-host removal (Phase 8 is gated on Phase 6 + Phase 7) |
+| Losing JS capability | Phase 4a proves JS *executes* on WASM (`wasm-js-agent-test`) and Phase 4b proves a JS agent drives the broker (`wasm-js-nettool-test`); the Phase 6 sweep and Phase 7 JS performance benchmark are still required before any QuickJS-host removal (Phase 8 is gated on Phase 6 + Phase 7) |
 | Backend/arch divergence | Every gate runs on both backends; Phase 6 sweeps all three arches before `m0` inclusion |
 | Removing the oracle too early | Phase 8 is gated on Phase 6 green plus the Phase-7 benchmark decision; migration-safety rule forbids early removal |
 
