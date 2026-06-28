@@ -818,6 +818,12 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wamr-fuel-test", "WASM engine swap: WAMR deterministic instruction-fuel — a confined guest is terminated at a low instruction limit and completes at a high one, under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wamr/burn.c", "examples/apps/wamr_fuel_host.c", "WAMR-FUEL: ok", "wamr-fuel", "burn" });
     _ = h.addScriptTest(ctx, "llvm-wamr-fuel-test", "WASM engine swap (LLVM): WAMR deterministic instruction-fuel under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wamr/burn.c", "examples/apps/wamr_fuel_host.c", "WAMR-FUEL: ok", "wamr-fuel", "burn" });
 
+    // WASM engine swap: WAMR drives the kernel broker (SYS_SUBMIT/SYS_POLL) from a confined agent —
+    // an async SUM tool op resolves by id (result=7) over the mc tool ABI. Proves WAMR runs real
+    // broker AGENTS (not just compute), the core agent-runtime capability for replacing wasm3.
+    _ = h.addScriptTest(ctx, "wamr-agent-test", "WASM engine swap: a confined WAMR agent drives the broker (async SUM over SYS_SUBMIT/SYS_POLL) under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wamr/agent.c", "examples/apps/wamr_agent_host.c", "agent: ok", "wamr-agent", "agent_main" });
+    _ = h.addScriptTest(ctx, "llvm-wamr-agent-test", "WASM engine swap (LLVM): a confined WAMR agent drives the broker over SYS_SUBMIT/SYS_POLL under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wamr/agent.c", "examples/apps/wamr_agent_host.c", "agent: ok", "wamr-agent", "agent_main" });
+
     // WASM-agent Phase 1 (docs/wasm-migration-plan.md §5): run a STOCK wasm32-wasi guest CONFINED.
     // Build wasm3 + the WASI Preview 1 shim (examples/apps/wasm/wasi_shim) + the all-MC libc + the
     // generic wasm_host into a U-mode ELF, load it with the real elf_loader into an isolated Sv39

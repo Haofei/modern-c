@@ -86,7 +86,7 @@ compile_wamr "$WC/iwasm/interpreter/wasm_loader.c" "$WORK/w_loader.o"
 "$CLANG" "${APP_CFLAGS[@]}" -c "$WC/iwasm/common/arch/invokeNative_riscv.S" -o "$WORK/w_tramp.o"; WOBJS+=("$WORK/w_tramp.o")
 
 # The confined host front-end (sees wasm_blob.h + WAMR's public header).
-"$CLANG" "${APP_CFLAGS[@]}" -I"$WC/iwasm/include" -I"$WORK" -c "$HOST" -o "$WORK/host.o"
+"$CLANG" "${APP_CFLAGS[@]}" -I"$WC/iwasm/include" -I"$HERE/examples/apps/wasm" -I"$WORK" -c "$HOST" -o "$WORK/host.o"
 
 # crt0 + app_traps are PURE MC: emit-c then compile with the app CFLAGS.
 "$MCC" emit-c "$HERE/user/runtime/crt0.mc" > "$WORK/crt0_gen.c"
