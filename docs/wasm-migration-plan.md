@@ -607,11 +607,11 @@ prove):
 | Confined eval | `qjs-confined-test` | `wasm-wasi-hello-test` | ☑ (Phase 1 landed; both backends in `m0`) |
 | S-mode confined | `qjs-smode-confined-test` | `wasm-smode-confined-test` | ☐ |
 | Agent (syscall-driven) | `qjs-agent-test` | `wasm-agent-test` | ☐ |
-| Agent smoke | `qjs-agent-smoke-test` | `wasm-agent-smoke-test` | ☐ |
+| Agent smoke | `qjs-agent-smoke-test` | `wasm-agent-smoke-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | S-mode agent | `qjs-smode-agent-test` | `wasm-smode-agent-test` | ☐ |
 | Async agent | `qjs-async-agent-test` | `wasm-async-agent-test` | ☑ (Phase 5 landed; both backends in `m0`) |
 | S-mode async agent | `qjs-smode-async-agent-test` | `wasm-smode-async-agent-test` | ☐ |
-| Broker agent | `qjs-broker-agent-test` | `wasm-broker-agent-test` | ☐ |
+| Broker agent | `qjs-broker-agent-test` | `wasm-broker-agent-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | FS tool (allow + deny audit) | `qjs-realtool-test` | `wasm-realtool-test` | ☑ (Phase 2 landed; both backends in `m0`) |
 | Net fetch (mock) | `qjs-nettool-test` | `wasm-nettool-test` | ☑ (Phase 3a landed; both backends in `m0`) |
 | Net fetch (real TCP) | `qjs-net-realtool-test` | `wasm-net-realtool-test` | ☐ |
@@ -619,7 +619,7 @@ prove):
 | S-mode blk IRQ | `qjs-smode-blk-irq-tool-test` | `wasm-smode-blk-irq-tool-test` | ☐ |
 | Quota / backpressure | `qjs-quota-agent-test` | `wasm-quota-agent-test` | ☑ (Phase 5 landed; both backends in `m0`) |
 | Cancel | `qjs-cancel-test` | `wasm-cancel-test` | ☑ (Phase 5 landed; both backends in `m0`) |
-| Cancel edges | `qjs-cancel-edges-test` | `wasm-cancel-edges-test` | ☐ |
+| Cancel edges | `qjs-cancel-edges-test` | `wasm-cancel-edges-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | Spurious completion id | `qjs-spurious-agent-test` | `wasm-spurious-agent-test` | ☑ (Phase 5 landed; both backends in `m0`) |
 | Cross-arch x86_64 | `x86-qjs-test` / `x86-qjs-async-test` | `wasm-*` x86_64 peers | ☐ |
 | Cross-arch aarch64 | `arm-qjs-test` / `arm-qjs-async-test` | `wasm-*` aarch64 peers | ☐ |

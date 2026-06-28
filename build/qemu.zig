@@ -863,6 +863,20 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wasm-spurious-agent-test", "WASM-agent Phase 5: a spurious completion's unknown id is detected confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_spurious.c", "spurious: ok", "wasm-spurious-agent" });
     _ = h.addScriptTest(ctx, "llvm-wasm-spurious-agent-test", "WASM-agent Phase 5 (LLVM): a spurious completion's unknown id is detected confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_spurious.c", "spurious: ok", "wasm-spurious-agent" });
 
+    // WASM-agent Phase 6 (docs/wasm-migration-plan.md §5): substrate peers of the qjs agent gates,
+    // proving the WASM path reaches the SAME confined-agent surface. agent-smoke walks the whole
+    // happy path in one run (async SUM resolve + capability-checked FS round-trip + timeout cancel);
+    // cancel-edges asserts the broker rejects ill-formed cancels (post-completion + never-submitted
+    // -> -E_DENIED). Both are stock wasm32-wasi guests, both backends.
+    _ = h.addScriptTest(ctx, "wasm-agent-smoke-test", "WASM-agent Phase 6: a confined WASM guest walks the async happy path (SUM resolve + FS round-trip + timeout cancel) under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_smoke.c", "smoke: ok", "wasm-agent-smoke" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-agent-smoke-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest walks the async happy path (SUM + FS + timeout cancel) under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_smoke.c", "smoke: ok", "wasm-agent-smoke" });
+
+    _ = h.addScriptTest(ctx, "wasm-cancel-edges-test", "WASM-agent Phase 6: the broker rejects ill-formed cancels (post-completion + never-submitted -> -E_DENIED) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_cancel_edges.c", "cancel-edges: ok", "wasm-cancel-edges" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-cancel-edges-test", "WASM-agent Phase 6 (LLVM): the broker rejects ill-formed cancels (post-completion + never-submitted -> -E_DENIED) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_cancel_edges.c", "cancel-edges: ok", "wasm-cancel-edges" });
+
+    _ = h.addScriptTest(ctx, "wasm-broker-agent-test", "WASM-agent Phase 6: out-of-order broker completion (slow-then-fast submit -> fast resolves first, order=FS) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_broker.c", "broker-agent: order=FS", "wasm-broker-agent" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-broker-agent-test", "WASM-agent Phase 6 (LLVM): out-of-order broker completion (slow-then-fast submit -> fast resolves first, order=FS) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_broker.c", "broker-agent: order=FS", "wasm-broker-agent" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.
