@@ -153,6 +153,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-wasm-smode-net-irq-tool-test"));
     m0_step.dependOn(ctx.cmd("wasm-smode-blk-irq-tool-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-smode-blk-irq-tool-test"));
+    m0_step.dependOn(ctx.cmd("wasm-net-realtool-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-net-realtool-test"));
     m0_step.dependOn(ctx.cmd("qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("llvm-qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("qjs-smode-confined-test"));

@@ -897,6 +897,12 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wasm-smode-blk-irq-tool-test", "WASM-agent Phase 6: a confined WASM guest's fs_read completes via a real S-mode virtio-blk PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-wasm-smode-blk-irq-tool-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest's fs_read completes via a real S-mode virtio-blk PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    // WASM-agent Phase 6 real-TCP peer: a confined WASM guest's net_fetch reaches a LIVE HTTP server
+    // through the kernel's real TCP transport over virtio-net (validated by UART marker + HTTP access
+    // log + pcap). Mirrors qjs-net-realtool-test. Self-skips if python3 is unavailable.
+    _ = h.addScriptTest(ctx, "wasm-net-realtool-test", "WASM-agent Phase 6: a confined WASM guest's net_fetch reaches a live HTTP server through the real TCP-backed broker over virtio-net under QEMU", &.{ "bash", "tools/lang/wasm-net-realtool-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-net-realtool-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest's net_fetch reaches a live HTTP server through the real TCP-backed broker over virtio-net under QEMU", &.{ "bash", "tools/lang/wasm-net-realtool-test.sh", "zig-out/bin/mcc", "llvm" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.
