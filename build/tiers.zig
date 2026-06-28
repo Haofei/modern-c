@@ -143,6 +143,12 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-wasm-cancel-edges-test"));
     m0_step.dependOn(ctx.cmd("wasm-broker-agent-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-broker-agent-test"));
+    m0_step.dependOn(ctx.cmd("wasm-smode-confined-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-smode-confined-test"));
+    m0_step.dependOn(ctx.cmd("wasm-smode-agent-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-smode-agent-test"));
+    m0_step.dependOn(ctx.cmd("wasm-smode-async-agent-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-smode-async-agent-test"));
     m0_step.dependOn(ctx.cmd("qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("llvm-qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("qjs-smode-confined-test"));

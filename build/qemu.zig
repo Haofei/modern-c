@@ -877,6 +877,18 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wasm-broker-agent-test", "WASM-agent Phase 6: out-of-order broker completion (slow-then-fast submit -> fast resolves first, order=FS) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_broker.c", "broker-agent: order=FS", "wasm-broker-agent" });
     _ = h.addScriptTest(ctx, "llvm-wasm-broker-agent-test", "WASM-agent Phase 6 (LLVM): out-of-order broker completion (slow-then-fast submit -> fast resolves first, order=FS) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_broker.c", "broker-agent: order=FS", "wasm-broker-agent" });
 
+    // WASM-agent Phase 6 S-mode peers (docs/wasm-migration-plan.md §5): the same confined WASM agent
+    // ELF, but the kernel runs in S-mode under REAL OpenSBI (kernel mapped supervisor-only). Mirrors
+    // the qjs-smode-* gates; one parameterized script covers confined / agent / async-agent by guest.
+    _ = h.addScriptTest(ctx, "wasm-smode-confined-test", "WASM-agent Phase 6: a WASM guest runs CONFINED under REAL OpenSBI (S-mode), kernel supervisor-only, under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-smode-confined-test", "WASM-agent Phase 6 (LLVM): a WASM guest runs CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    _ = h.addScriptTest(ctx, "wasm-smode-agent-test", "WASM-agent Phase 6: a WASM agent walks the async happy path (SUM + FS + timeout cancel) CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_smoke.c", "smoke: ok", "wasm-smode-agent" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-smode-agent-test", "WASM-agent Phase 6 (LLVM): a WASM agent walks the async happy path CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_smoke.c", "smoke: ok", "wasm-smode-agent" });
+
+    _ = h.addScriptTest(ctx, "wasm-smode-async-agent-test", "WASM-agent Phase 6: overlapping async tool ops + back-pressure (ok=8 rejected=4) CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-smode-async-agent" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-smode-async-agent-test", "WASM-agent Phase 6 (LLVM): overlapping async tool ops + back-pressure CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-smode-async-agent" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.

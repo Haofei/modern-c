@@ -605,12 +605,12 @@ prove):
 |---|---|---|---|
 | Run + print | `qjs-run-test` | `wasm-run-test` | ☑ (Phase 0 landed; both backends in `m0`) |
 | Confined eval | `qjs-confined-test` | `wasm-wasi-hello-test` | ☑ (Phase 1 landed; both backends in `m0`) |
-| S-mode confined | `qjs-smode-confined-test` | `wasm-smode-confined-test` | ☐ |
+| S-mode confined | `qjs-smode-confined-test` | `wasm-smode-confined-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | Agent (syscall-driven) | `qjs-agent-test` | `wasm-agent-test` | ☐ |
 | Agent smoke | `qjs-agent-smoke-test` | `wasm-agent-smoke-test` | ☑ (Phase 6 landed; both backends in `m0`) |
-| S-mode agent | `qjs-smode-agent-test` | `wasm-smode-agent-test` | ☐ |
+| S-mode agent | `qjs-smode-agent-test` | `wasm-smode-agent-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | Async agent | `qjs-async-agent-test` | `wasm-async-agent-test` | ☑ (Phase 5 landed; both backends in `m0`) |
-| S-mode async agent | `qjs-smode-async-agent-test` | `wasm-smode-async-agent-test` | ☐ |
+| S-mode async agent | `qjs-smode-async-agent-test` | `wasm-smode-async-agent-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | Broker agent | `qjs-broker-agent-test` | `wasm-broker-agent-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | FS tool (allow + deny audit) | `qjs-realtool-test` | `wasm-realtool-test` | ☑ (Phase 2 landed; both backends in `m0`) |
 | Net fetch (mock) | `qjs-nettool-test` | `wasm-nettool-test` | ☑ (Phase 3a landed; both backends in `m0`) |
