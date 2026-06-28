@@ -533,7 +533,7 @@ the net path establishes the JS→broker mechanism.)
 
 ### Phase 5 — Async, fuel, budgets, P2 worlds
 
-Status: **Native async + linear-memory cap + quota-errno DONE; fuel + P2 worlds OPEN.** The shim exposes an async
+Status: **Native async + linear-memory cap + quota-errno + CPU-runaway watchdog DONE; deterministic fuel + P2 worlds OPEN.** The shim exposes an async
 tool surface — `mc.tool_submit(op, arg, flags)` and `mc.tool_poll(out)` (`wasi_shim.c`) — the
 WASM analogue of the JS host's async path / `agent_async.mc`'s `ToolPump`: a guest keeps
 multiple ops in flight and drains completions by id. Four guests mirror the QuickJS async
@@ -545,13 +545,17 @@ and curated WASI Preview 2 worlds.
 
 Goal: use WASM's strengths and align with the resource-budget model.
 
-- **Fuel metering** → CPU-ticks/event-loop budget (`future-kernel-plan.md` §7). **OPEN —
-  engine constraint.** wasm3 (the vendored engine) has **no built-in instruction fuel**, so
-  true per-instance CPU metering needs an engine-level mechanism — either instrumenting wasm3's
-  interpreter loop with a decrementing budget, or swapping to an engine with native fuel (wasmi)
-  / an instruction budget (WAMR). Not faked; recorded as the remaining Phase-5 gap. (Wall-clock
-  preemption via the timer IRQ is a separate, coarser backstop and is not a substitute for
-  deterministic fuel.)
+- **Fuel metering** → CPU-ticks/event-loop budget (`future-kernel-plan.md` §7). **Coarse
+  watchdog DONE; deterministic fuel OPEN (engine constraint).** A machine-timer **CPU-runaway
+  watchdog** is now implemented + gated — `wasm-watchdog-test` / `llvm-wasm-watchdog-test` (in
+  `m0`): the M-mode runtime arms a timer that preempts the U-mode agent every ~100 ms and, past
+  an opt-in `mc_watchdog_ticks()` budget, KILLS a runaway agent (`wasi_runaway.c` — an infinite
+  loop that never syscalls), so an untrusted agent cannot wedge the system (it fails closed
+  instead of hanging). It is **opt-in** (weak default 0 → disarmed → zero change for other
+  confined gates). This is a coarse, wall-clock liveness bound, **not** deterministic fuel:
+  **deterministic per-instruction fuel remains OPEN** and needs an engine-level mechanism —
+  instrumenting wasm3's interpreter loop with a decrementing budget, or swapping to an engine
+  with native fuel (wasmi) / an instruction budget (WAMR). Not faked.
 - **Quota errno. DECIDED: map to the existing errno set (option b); no `E_QUOTA` added.** The
   frozen errno set — `E_AGAIN` (-11), `E_DENIED` (-13), `E_FAULT` (-14), `E_NOCAP` (-105),
   `E_TIMEDOUT` (-110), `E_CANCELED` (-125) — already expresses the two real cases: **transient

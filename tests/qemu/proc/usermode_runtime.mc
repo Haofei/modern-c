@@ -61,11 +61,51 @@ fn write_mepc(v: u64) -> void {
     #[unsafe_contract(precise_asm)] { unsafe { asm precise volatile { "csrw mepc, %0" in("r") v: u64, clobber("memory") } } }
 }
 
+// ---- CPU-runaway watchdog (Phase-5 coarse liveness bound; NOT deterministic fuel) ----
+// A machine-timer interrupt preempts the U-mode agent every WD_INTERVAL mtime ticks; after
+// `mc_watchdog_ticks()` preemptions WITHOUT the agent exiting, the agent is killed (the machine
+// halts after a marker). This bounds a runaway/infinite-loop agent's CPU so an untrusted agent
+// cannot wedge the system. It is OPT-IN: the weak default returns 0 (timer never armed → zero
+// change for every existing confined gate); the watchdog gate links a strong override returning a
+// small budget. QEMU's CLINT: mtime @ 0x0200_BFF8, hart-0 mtimecmp @ 0x0200_4000; mtime is 10 MHz.
+const CLINT_MTIME: usize = 0x0200_BFF8;
+const CLINT_MTIMECMP: usize = 0x0200_4000;
+const WD_INTERVAL: u64 = 1_000_000; // ~100 ms of emulated time per preemption
+const MTIE: u64 = 0x80;             // mie.MTIE (machine timer interrupt enable)
+
+global g_wd_count: u64 = 0;
+
+// Opt-in budget: number of timer preemptions an agent may accrue before it is killed. The weak
+// default (0) keeps the watchdog disarmed; the watchdog gate provides a strong override.
+#[weak]
+export fn mc_watchdog_ticks() -> u64 { return 0; }
+
+fn wd_read_mtime() -> u64 {
+    var v: u64 = 0;
+    unsafe { v = raw.load<u64>(phys(CLINT_MTIME)); }
+    return v;
+}
+fn wd_arm_next() -> void {
+    unsafe { raw.store<u64>(phys(CLINT_MTIMECMP), wd_read_mtime() + WD_INTERVAL); }
+}
+fn wd_enable() -> void {
+    #[unsafe_contract(precise_asm)] { unsafe { asm precise volatile { "csrs mie, %0" in("r") MTIE: u64, clobber("memory") } } }
+}
+
 // Dispatcher: an interrupt (high bit set) services the UART-RX IRQ; an ecall from U/M routes
 // SYS_EXIT here and everything else through the MC syscall table. Any other trap fails closed.
 export fn trap_entry(f: usize) -> void {
     let mcause: u64 = read_mcause();
     if (mcause & MCAUSE_INT_BIT) != 0 {
+        if (mcause & 0xff) == 7 { // machine timer interrupt — the CPU-runaway watchdog
+            g_wd_count = g_wd_count + 1;
+            if g_wd_count >= mc_watchdog_ticks() {
+                puts_("\nWATCHDOG-KILL: agent exceeded its CPU budget\n");
+                mc_halt(); // never returns: the runaway agent is terminated, system fails closed
+            }
+            wd_arm_next(); // rearm for the next preemption
+            return;
+        }
         if (mcause & 0xff) == 11 { // machine external interrupt
             var irq: u32 = 0;
             unsafe { irq = raw.load<u32>(phys(PLIC_CLAIM)); } // claim
@@ -169,4 +209,10 @@ export fn usermode_setup() -> void {
     write_csr_mtvec((&trap_vector) as usize);
     write_csr_mscratch((&kernel_stack[0]) as usize + 8192);
     syscall_setup();
+    // Arm the CPU-runaway watchdog only when a budget is configured (opt-in; default off).
+    if mc_watchdog_ticks() > 0 {
+        g_wd_count = 0;
+        wd_arm_next();
+        wd_enable();
+    }
 }

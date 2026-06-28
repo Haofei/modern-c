@@ -116,8 +116,17 @@ kernel_boot_compile_c_object "$USERMODE" "$WORK/usermode.o"
 "$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/app_image.c" -o "$WORK/app_image.o"
 K_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/k-support.o")"
 kernel_boot_compile_rt "$WORK/freestanding.o"
+# Phase-5 CPU-runaway watchdog (only when WD_TICKS is set): link a STRONG mc_watchdog_ticks override
+# (budget = WD_TICKS timer preemptions) over the weak default in usermode_runtime.mc, arming the
+# machine-timer watchdog. Otherwise no object is added and the watchdog stays disarmed.
+WD_OBJ=""
+if [ -n "${WD_TICKS:-}" ]; then
+    printf 'unsigned long mc_watchdog_ticks(void){ return %sUL; }\n' "$WD_TICKS" > "$WORK/wd_cfg.c"
+    "$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/wd_cfg.c" -o "$WORK/wd_cfg.o"
+    WD_OBJ="$WORK/wd_cfg.o"
+fi
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/usermode.o" \
-    "$WORK/runtime.o" "$WORK/thread.o" "$WORK/app_image.o" $K_SUPPORT -o "$WORK/kernel.elf"
+    "$WORK/runtime.o" "$WORK/thread.o" "$WORK/app_image.o" $WD_OBJ $K_SUPPORT -o "$WORK/kernel.elf"
 
 _bt0=$(date +%s%N 2>/dev/null || echo 0)
 OUT="$(timeout 120 "$QEMU" -machine virt -bios none -nographic -m 256 \
@@ -133,6 +142,19 @@ fi
 echo "--- kernel UART output ---"
 printf '%s\n' "$OUT"
 echo "--------------------------"
+
+# Watchdog mode (WD_TICKS set): success is a CONFINED agent that the watchdog KILLED — the runaway
+# never reaches SYS_EXIT, so we require CONFINED + the kill marker ($EXPECT) and explicitly do NOT
+# require USER-EXIT (a clean exit here would mean the watchdog failed to fire).
+if [ -n "${WD_TICKS:-}" ]; then
+    if printf '%s' "$OUT" | grep -q "CONFINED: kernel unmapped in agent space" \
+       && printf '%s' "$OUT" | grep -q "$EXPECT"; then
+        echo "PASS: $TEST_NAME — $BACKEND backend: a confined runaway WASM agent (infinite CPU loop, no syscalls) was preempted by the machine-timer watchdog and KILLED after its CPU budget; the system failed closed instead of hanging"
+        exit 0
+    fi
+    echo "FAIL: $TEST_NAME — expected 'CONFINED...' and the watchdog kill marker '$EXPECT'"
+    exit 1
+fi
 
 # PASS requires: the kernel is unmapped in the host's space (CONFINED); the stock wasm32-wasi guest
 # ran on the wasm3 engine and printed its marker — copied out through the agent page table by

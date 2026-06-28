@@ -930,6 +930,12 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wasm-memcap-test", "WASM-agent Phase 5: a confined WASM guest's linear memory is bounded; OOM is graceful (malloc->NULL, no trap) under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_memcap.c", "memcap: ok", "wasm-memcap" });
     _ = h.addScriptTest(ctx, "llvm-wasm-memcap-test", "WASM-agent Phase 5 (LLVM): a confined WASM guest's linear memory is bounded; OOM is graceful under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_memcap.c", "memcap: ok", "wasm-memcap" });
 
+    // WASM-agent Phase 5 CPU-runaway watchdog: a runaway agent (infinite loop, no syscalls) is
+    // preempted by the machine-timer watchdog and KILLED past its CPU budget — a coarse liveness
+    // bound (NOT deterministic fuel) proving an untrusted agent cannot wedge the system.
+    _ = h.addScriptTest(ctx, "wasm-watchdog-test", "WASM-agent Phase 5: a confined runaway WASM agent is preempted + killed by the machine-timer CPU watchdog under QEMU", &.{ "bash", "tools/lang/wasm-watchdog-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-watchdog-test", "WASM-agent Phase 5 (LLVM): a confined runaway WASM agent is preempted + killed by the machine-timer CPU watchdog under QEMU", &.{ "bash", "tools/lang/wasm-watchdog-test.sh", "zig-out/bin/mcc", "llvm" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.
