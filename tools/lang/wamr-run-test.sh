@@ -43,7 +43,9 @@ if [ "${KEEP_WORK:-0}" = 1 ]; then echo "KEEP_WORK: $WORK" >&2; else trap 'rm -r
 
 # ---- 0. The guest: a no-WASI wasm32 module exporting compute() (off-the-shelf zig) ----
 if [ "$GUEST_KIND" = wasi ]; then
-    "$ZIG" cc -target wasm32-wasi -O2 -s -Wl,-z,stack-size=262144 "$GUEST" -o "$WORK/guest.wasm"
+    # Restrict the guest to a feature baseline the WAMR INTERP config accepts (no reference-types /
+    # multivalue table forms that trip the loader); bulk-memory + sign-ext are enabled in WAMR.
+    "$ZIG" cc -target wasm32-wasi -mno-reference-types -mno-multivalue -O2 -s -Wl,-z,stack-size=262144 "$GUEST" -o "$WORK/guest.wasm"
 else
     EXPFLAGS=(); for e in $GUEST_EXPORTS; do EXPFLAGS+=(-Wl,--export="$e"); done
     "$ZIG" cc -target wasm32-freestanding -nostdlib -Wl,--no-entry "${EXPFLAGS[@]}" -O2 "$GUEST" -o "$WORK/guest.wasm"
@@ -64,6 +66,7 @@ WINC=(-I"$WC/shared/platform/include" -I"$WC/shared/platform/mc" -I"$WC/shared/u
       -I"$WC/iwasm/include" -I"$WC/iwasm/common" -I"$WC/iwasm/interpreter" -I"$WC")
 WDEF=(-DBH_PLATFORM_MC -DBUILD_TARGET_RISCV64_LP64D -DWASM_ENABLE_INTERP=1
       -DWASM_ENABLE_INSTRUCTION_METERING=1 -DWASM_ENABLE_BULK_MEMORY=1
+      -DWASM_ENABLE_REF_TYPES=1
       -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free)
 
 # Compile the WAMR core source set (= the cmake's INTERP globs): platform/mc + shared utils +

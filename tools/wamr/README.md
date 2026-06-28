@@ -52,6 +52,21 @@ Proven along the way:
    #           core/iwasm/interpreter/wasm_{loader,runtime,interp_classic}.c, mc-platform/mc_platform.c
    ```
 
+## Status update — engine landed; WASI-agent path is the active blocker
+
+LANDED + gated in m0 (both backends): `wamr-run-test` (WAMR runs a real wasm32 module CONFINED)
+and `wamr-fuel-test` (DETERMINISTIC instruction-count fuel — the capability wasm3 lacks). The
+engine is vendored, builds freestanding, and executes wasm correctly.
+
+ACTIVE BLOCKER (WASI agents): running the EXISTING stock `wasm32-wasi` guests (the real agents,
+built by `zig cc -target wasm32-wasi`, linking zig's prebuilt wasi-libc) on WAMR fails in WAMR's
+loader with `unknown table 128` even with `WASM_ENABLE_REF_TYPES=1`. zig's wasi-libc objects carry
+post-MVP features (reference-types, multivalue, etc.) that WAMR's INTERP loader config must be
+matched to (guest-side `-mno-*` flags don't help — the features are in the prebuilt libc). The
+WAMR WASI host (`examples/apps/wamr_wasi_host.c`) + the `wasi` guest-kind in `wamr-run-test.sh`
+are staged; resolving the loader feature-match is the next step before the fs/net/tool imports and
+the gate migration. (wasm3 stays the default + every wasm gate; nothing is broken.)
+
 ## Remaining work (multi-session)
 
 - **A.** Close the libc gap (`strtok_r`); finish the `os_*` extension stubs needed at link time.
