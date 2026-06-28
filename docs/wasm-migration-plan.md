@@ -615,8 +615,8 @@ prove):
 | FS tool (allow + deny audit) | `qjs-realtool-test` | `wasm-realtool-test` | ☑ (Phase 2 landed; both backends in `m0`) |
 | Net fetch (mock) | `qjs-nettool-test` | `wasm-nettool-test` | ☑ (Phase 3a landed; both backends in `m0`) |
 | Net fetch (real TCP) | `qjs-net-realtool-test` | `wasm-net-realtool-test` | ☐ |
-| S-mode net IRQ | `qjs-smode-net-irq-tool-test` | `wasm-smode-net-irq-tool-test` | ☐ |
-| S-mode blk IRQ | `qjs-smode-blk-irq-tool-test` | `wasm-smode-blk-irq-tool-test` | ☐ |
+| S-mode net IRQ | `qjs-smode-net-irq-tool-test` | `wasm-smode-net-irq-tool-test` | ☑ (Phase 6 landed; both backends in `m0`) |
+| S-mode blk IRQ | `qjs-smode-blk-irq-tool-test` | `wasm-smode-blk-irq-tool-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | Quota / backpressure | `qjs-quota-agent-test` | `wasm-quota-agent-test` | ☑ (Phase 5 landed; both backends in `m0`) |
 | Cancel | `qjs-cancel-test` | `wasm-cancel-test` | ☑ (Phase 5 landed; both backends in `m0`) |
 | Cancel edges | `qjs-cancel-edges-test` | `wasm-cancel-edges-test` | ☑ (Phase 6 landed; both backends in `m0`) |

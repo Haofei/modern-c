@@ -889,6 +889,14 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wasm-smode-async-agent-test", "WASM-agent Phase 6: overlapping async tool ops + back-pressure (ok=8 rejected=4) CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-smode-async-agent" });
     _ = h.addScriptTest(ctx, "llvm-wasm-smode-async-agent-test", "WASM-agent Phase 6 (LLVM): overlapping async tool ops + back-pressure CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-smode-async-agent" });
 
+    // WASM-agent Phase 6 S-mode device-IRQ peers: a confined WASM guest's brokered tool completes
+    // through a REAL S-mode virtio PLIC interrupt + production SYS_POLL. Mirror qjs-smode-{net,blk}-irq.
+    _ = h.addScriptTest(ctx, "wasm-smode-net-irq-tool-test", "WASM-agent Phase 6: a confined WASM guest's net_fetch completes via a real S-mode virtio-net PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-smode-net-irq-tool-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest's net_fetch completes via a real S-mode virtio-net PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    _ = h.addScriptTest(ctx, "wasm-smode-blk-irq-tool-test", "WASM-agent Phase 6: a confined WASM guest's fs_read completes via a real S-mode virtio-blk PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-smode-blk-irq-tool-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest's fs_read completes via a real S-mode virtio-blk PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.

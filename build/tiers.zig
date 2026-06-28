@@ -149,6 +149,10 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-wasm-smode-agent-test"));
     m0_step.dependOn(ctx.cmd("wasm-smode-async-agent-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-smode-async-agent-test"));
+    m0_step.dependOn(ctx.cmd("wasm-smode-net-irq-tool-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-smode-net-irq-tool-test"));
+    m0_step.dependOn(ctx.cmd("wasm-smode-blk-irq-tool-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-smode-blk-irq-tool-test"));
     m0_step.dependOn(ctx.cmd("qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("llvm-qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("qjs-smode-confined-test"));
