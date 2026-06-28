@@ -918,6 +918,12 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wasm-net-realtool-test", "WASM-agent Phase 6: a confined WASM guest's net_fetch reaches a live HTTP server through the real TCP-backed broker over virtio-net under QEMU", &.{ "bash", "tools/lang/wasm-net-realtool-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-wasm-net-realtool-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest's net_fetch reaches a live HTTP server through the real TCP-backed broker over virtio-net under QEMU", &.{ "bash", "tools/lang/wasm-net-realtool-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    // WASM-agent Phase 7 (docs/wasm-migration-plan.md §5): JS perf benchmark — native QuickJS vs
+    // QuickJS-on-WASM on the SAME workload. Gate is functional-parity (same numeric result) + report
+    // emission (zig-out/wasm-js-bench-*.json); QEMU timings are indicative (recorded, not gated on).
+    _ = h.addScriptTest(ctx, "wasm-js-bench-test", "WASM-agent Phase 7: native QuickJS vs QuickJS-on-WASM evaluate the same JS workload to the same result; emit the comparison report under QEMU", &.{ "bash", "tools/lang/wasm-js-bench-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-js-bench-test", "WASM-agent Phase 7 (LLVM): native QuickJS vs QuickJS-on-WASM JS benchmark + comparison report under QEMU", &.{ "bash", "tools/lang/wasm-js-bench-test.sh", "zig-out/bin/mcc", "llvm" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.

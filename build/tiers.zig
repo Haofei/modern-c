@@ -161,6 +161,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-arm-wasm-async-test"));
     m0_step.dependOn(ctx.cmd("x86-wasm-async-test"));
     m0_step.dependOn(ctx.cmd("llvm-x86-wasm-async-test"));
+    m0_step.dependOn(ctx.cmd("wasm-js-bench-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-js-bench-test"));
     m0_step.dependOn(ctx.cmd("qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("llvm-qjs-confined-test"));
     m0_step.dependOn(ctx.cmd("qjs-smode-confined-test"));

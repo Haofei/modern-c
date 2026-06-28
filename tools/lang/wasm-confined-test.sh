@@ -119,8 +119,16 @@ kernel_boot_compile_rt "$WORK/freestanding.o"
 "$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/usermode.o" \
     "$WORK/runtime.o" "$WORK/thread.o" "$WORK/app_image.o" $K_SUPPORT -o "$WORK/kernel.elf"
 
+_bt0=$(date +%s%N 2>/dev/null || echo 0)
 OUT="$(timeout 120 "$QEMU" -machine virt -bios none -nographic -m 256 \
         -kernel "$WORK/kernel.elf" 2>/dev/null || true)"
+_bt1=$(date +%s%N 2>/dev/null || echo 0)
+# Phase-7 benchmark hooks (only when BENCH is set; otherwise no output change): the QEMU wall time
+# of the agent run + the confined U-mode image size, consumed by tools/lang/wasm-js-bench-test.sh.
+if [ -n "${BENCH:-}" ]; then
+    echo "BENCH-QEMU-MS: $(( (_bt1 - _bt0) / 1000000 ))"
+    [ -f "$WORK/agent.elf" ] && echo "BENCH-AGENT-ELF-BYTES: $(wc -c < "$WORK/agent.elf" | tr -d ' ')"
+fi
 
 echo "--- kernel UART output ---"
 printf '%s\n' "$OUT"

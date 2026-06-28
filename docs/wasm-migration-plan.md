@@ -12,9 +12,11 @@ phase section carries its own **Status:** line. Snapshot:
   broker-agent; real-TCP (`wasm-net-realtool-test`); all five S-mode peers
   (`wasm-smode-{confined,agent,async-agent,net-irq-tool,blk-irq-tool}-test`); and cross-arch
   (`arm-wasm-async-test`, `x86-wasm-async-test`). Every Group-A row is ☑; every Group-B row
-  has a confirmed disposition.
+  has a confirmed disposition. **Phase 7 JS benchmark (v0)** — `wasm-js-bench-test` gates
+  native-QuickJS vs QuickJS-on-WASM functional parity + emits the comparison report.
 - **Open:** Phase 5 remainder (fuel / quota-errno / linear-memory cap / P2 worlds);
-  Phase 7 (JS perf benchmark); Phase 8 (retire `qjs_host.c`).
+  Phase 8 (retire `qjs_host.c` — gated on a target-board perf measurement; Phase-7 QEMU data
+  says keep native QuickJS behind a flag, not delete).
 
 The remaining phases are still forward-looking; the prose in those sections describes intended
 work, not landed work, except where a **Status:** line says otherwise. The parity matrix in §5
@@ -653,7 +655,28 @@ The Phase-8 precondition (all Group-A ☑, all Group-B dispositioned) is satisfi
 
 ### Phase 7 — JS performance benchmark: QuickJS-on-WASM vs native QuickJS
 
-Status: **OPEN.**
+Status: **v0 LANDED** — gate `wasm-js-bench-test` / `llvm-wasm-js-bench-test` (both in `m0`).
+It runs the SAME deterministic JS workload (`examples/agents/agent_bench.js` ≡
+`examples/apps/wasm/wasi_js_bench.c`) on both confined paths and emits
+`zig-out/wasm-js-bench-<backend>.json`. The gate is **functional-parity-based** (both paths
+must reach the SAME numeric result — deterministic) plus report completeness; QEMU timings
+are recorded but **not** gated on a ratio (QEMU wall time is not deterministic), with only a
+generous absolute sanity cap.
+
+**Measured under QEMU (TCG; indicative only — the production decision must use the
+target-board profile):** on the compute-dominated workload, native QuickJS and
+QuickJS-on-WASM agree on the result; QuickJS-on-WASM runs ≈ **11–12× slower** wall-clock
+(wasm3 interprets the engine), its confined U-mode image is ≈ **66%** of native (wasm3 +
+the wasm module vs the full native QuickJS), and it has a markedly **tighter JS heap** — an
+800-object + JSON workload that native handled threw `InternalError: out of memory` on the
+WASM path (the QuickJS heap is bounded by the wasm linear memory carved from the libc arena).
+
+**Phase-8 implication:** correctness parity holds, but the WASM JS path is materially slower
+and more memory-constrained on this profile. Per §4/§8 this means **keep native QuickJS behind
+a build/runtime flag for `manifest.runtime = js`** rather than deleting `qjs_host.c` outright;
+the retire-vs-keep call is deferred to a target-board (not QEMU) measurement. Remaining v1
+work (heavier corpus: cold-start, warm-throughput, alloc/GC, host-API latency) is optional
+follow-up and does not block the Phase-8 disposition above.
 
 Goal: decide with data whether JS bundles can default to QuickJS-on-WASM, or
 whether the native QuickJS host must remain for performance-sensitive JS agents.
