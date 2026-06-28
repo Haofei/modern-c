@@ -606,7 +606,7 @@ prove):
 | Run + print | `qjs-run-test` | `wasm-run-test` | ☑ (Phase 0 landed; both backends in `m0`) |
 | Confined eval | `qjs-confined-test` | `wasm-wasi-hello-test` | ☑ (Phase 1 landed; both backends in `m0`) |
 | S-mode confined | `qjs-smode-confined-test` | `wasm-smode-confined-test` | ☑ (Phase 6 landed; both backends in `m0`) |
-| Agent (syscall-driven) | `qjs-agent-test` | `wasm-agent-test` | ☐ |
+| Agent (syscall-driven) | `qjs-agent-test` | `wasm-agent-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | Agent smoke | `qjs-agent-smoke-test` | `wasm-agent-smoke-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | S-mode agent | `qjs-smode-agent-test` | `wasm-smode-agent-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | Async agent | `qjs-async-agent-test` | `wasm-async-agent-test` | ☑ (Phase 5 landed; both backends in `m0`) |

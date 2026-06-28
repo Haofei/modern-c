@@ -887,6 +887,11 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wasm-broker-agent-test", "WASM-agent Phase 6: out-of-order broker completion (slow-then-fast submit -> fast resolves first, order=FS) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_broker.c", "broker-agent: order=FS", "wasm-broker-agent" });
     _ = h.addScriptTest(ctx, "llvm-wasm-broker-agent-test", "WASM-agent Phase 6 (LLVM): out-of-order broker completion (slow-then-fast submit -> fast resolves first, order=FS) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_broker.c", "broker-agent: order=FS", "wasm-broker-agent" });
 
+    // WASM-agent Phase 6 basic syscall-driven agent (mirrors qjs-agent-test): submit a brokered tool
+    // op and demultiplex its completion by id over SYS_SUBMIT/SYS_POLL, confined.
+    _ = h.addScriptTest(ctx, "wasm-agent-test", "WASM-agent Phase 6: a confined WASM agent submits a brokered tool op and resolves it by id over SYS_SUBMIT/SYS_POLL under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_agent.c", "agent: ok", "wasm-agent" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-agent-test", "WASM-agent Phase 6 (LLVM): a confined WASM agent resolves a brokered tool op by id over SYS_SUBMIT/SYS_POLL under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_agent.c", "agent: ok", "wasm-agent" });
+
     // WASM-agent Phase 6 S-mode peers (docs/wasm-migration-plan.md §5): the same confined WASM agent
     // ELF, but the kernel runs in S-mode under REAL OpenSBI (kernel mapped supervisor-only). Mirrors
     // the qjs-smode-* gates; one parameterized script covers confined / agent / async-agent by guest.

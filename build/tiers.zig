@@ -142,6 +142,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("wasm-cancel-edges-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-cancel-edges-test"));
     m0_step.dependOn(ctx.cmd("wasm-broker-agent-test"));
+    m0_step.dependOn(ctx.cmd("wasm-agent-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wasm-agent-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-broker-agent-test"));
     m0_step.dependOn(ctx.cmd("wasm-smode-confined-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-smode-confined-test"));
