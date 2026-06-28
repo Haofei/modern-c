@@ -533,33 +533,38 @@ the net path establishes the JS→broker mechanism.)
 
 ### Phase 5 — Async, fuel, budgets, P2 worlds
 
-Status: **Native async DONE; fuel / quota-errno / P2 worlds OPEN.** The shim exposes an async
+Status: **Native async + linear-memory cap + quota-errno DONE; fuel + P2 worlds OPEN.** The shim exposes an async
 tool surface — `mc.tool_submit(op, arg, flags)` and `mc.tool_poll(out)` (`wasi_shim.c`) — the
 WASM analogue of the JS host's async path / `agent_async.mc`'s `ToolPump`: a guest keeps
 multiple ops in flight and drains completions by id. Four guests mirror the QuickJS async
 agents and are gated (both backends, in `m0`): `wasm-async-agent-test` (12 overlapping SUM ops →
 ok=8 / rejected=4 back-pressure), `wasm-cancel-test` (`TOOL_OP_CANCEL` → `-E_CANCELED` while a
 peer resolves), `wasm-quota-agent-test` (9th submit on a full queue → exactly `-E_AGAIN`),
-`wasm-spurious-agent-test` (a bogus completion id is detected). **Still open:** fuel metering,
-the quota-errno decision (`E_QUOTA` vs overload), the linear-memory cap, and curated WASI
-Preview 2 worlds.
+`wasm-spurious-agent-test` (a bogus completion id is detected). **Still open:** fuel metering
+and curated WASI Preview 2 worlds.
 
 Goal: use WASM's strengths and align with the resource-budget model.
 
-- **Fuel metering** → CPU-ticks/event-loop budget (`future-kernel-plan.md` §7).
-  WAMR per-instance instruction budget or wasmi fuel; deny with the quota errno
-  (see note below).
-- **Quota errno.** `user/abi.mc` does **not** currently define `E_QUOTA` — the
-  errno set is `E_AGAIN` (-11), `E_DENIED` (-13), `E_FAULT` (-14), `E_NOCAP`
-  (-105), `E_TIMEDOUT` (-110), `E_CANCELED` (-125). Two choices: (a) **add
-  `E_QUOTA` as an append-only errno** (`future-kernel-plan.md` §7 already
-  anticipates it, and it keeps "budget exceeded" distinct from "denied by
-  policy") — recommended; or (b) **map to existing errno**: hard caps → `-E_NOCAP`,
-  transient backpressure → `-E_AGAIN`. Adding an errno value is append-only and
-  ABI-safe (§7); pick (a) unless you want zero ABI surface change, in which case
-  use (b) and document the overload. Until decided, this plan writes "quota errno"
-  rather than assuming `-E_QUOTA` exists.
-- **Linear-memory cap** → JS/WASM heap-bytes budget.
+- **Fuel metering** → CPU-ticks/event-loop budget (`future-kernel-plan.md` §7). **OPEN —
+  engine constraint.** wasm3 (the vendored engine) has **no built-in instruction fuel**, so
+  true per-instance CPU metering needs an engine-level mechanism — either instrumenting wasm3's
+  interpreter loop with a decrementing budget, or swapping to an engine with native fuel (wasmi)
+  / an instruction budget (WAMR). Not faked; recorded as the remaining Phase-5 gap. (Wall-clock
+  preemption via the timer IRQ is a separate, coarser backstop and is not a substitute for
+  deterministic fuel.)
+- **Quota errno. DECIDED: map to the existing errno set (option b); no `E_QUOTA` added.** The
+  frozen errno set — `E_AGAIN` (-11), `E_DENIED` (-13), `E_FAULT` (-14), `E_NOCAP` (-105),
+  `E_TIMEDOUT` (-110), `E_CANCELED` (-125) — already expresses the two real cases: **transient
+  backpressure → `-E_AGAIN`** (exactly what `wasm-quota-agent-test`'s 9th-submit assertion
+  checks) and **a hard cap → `-E_NOCAP`**. This keeps the errno set frozen (zero ABI surface
+  change); if a future policy genuinely needs "budget exceeded" distinct from both, `E_QUOTA`
+  remains available as an append-only addition (`future-kernel-plan.md` §7).
+- **Linear-memory cap** → JS/WASM heap-bytes budget. **DONE** — `wasm-memcap-test` /
+  `llvm-wasm-memcap-test` (both in `m0`): a confined guest (`wasi_memcap.c`) allocates until the
+  wasm linear memory (grown from the agent's libc arena) is exhausted; at the cap `memory.grow`
+  returns -1, wasi-libc's `malloc` returns NULL, and the guest stops cleanly — proving the heap
+  is **bounded** and OOM is a **graceful, confined** error (no trap, no host-memory exhaustion),
+  consistent with the Phase-7 finding (the WASM JS heap is materially tighter than native).
 - **Native async**: multiple in-flight WASI ops mapped onto the out-of-order
   `SYS_POLL` drain (reuse `ToolPump`'s by-id stash); cancellation via
   `TOOL_OP_CANCEL` (mirrors `qjs-cancel-test`).

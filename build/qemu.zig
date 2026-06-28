@@ -924,6 +924,12 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wasm-js-bench-test", "WASM-agent Phase 7: native QuickJS vs QuickJS-on-WASM evaluate the same JS workload to the same result; emit the comparison report under QEMU", &.{ "bash", "tools/lang/wasm-js-bench-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-wasm-js-bench-test", "WASM-agent Phase 7 (LLVM): native QuickJS vs QuickJS-on-WASM JS benchmark + comparison report under QEMU", &.{ "bash", "tools/lang/wasm-js-bench-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    // WASM-agent Phase 5 linear-memory cap: a confined guest's heap is BOUNDED and hitting the bound
+    // fails GRACEFULLY (malloc -> NULL at the cap, no trap, agent stays confined) — an untrusted agent
+    // cannot exhaust host memory and OOM is a normal confined error, not a crash.
+    _ = h.addScriptTest(ctx, "wasm-memcap-test", "WASM-agent Phase 5: a confined WASM guest's linear memory is bounded; OOM is graceful (malloc->NULL, no trap) under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_memcap.c", "memcap: ok", "wasm-memcap" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-memcap-test", "WASM-agent Phase 5 (LLVM): a confined WASM guest's linear memory is bounded; OOM is graceful under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_memcap.c", "memcap: ok", "wasm-memcap" });
+
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
     // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.
