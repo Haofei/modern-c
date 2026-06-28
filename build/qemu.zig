@@ -824,6 +824,12 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wamr-agent-test", "WASM engine swap: a confined WAMR agent drives the broker (async SUM over SYS_SUBMIT/SYS_POLL) under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wamr/agent.c", "examples/apps/wamr_agent_host.c", "agent: ok", "wamr-agent", "agent_main" });
     _ = h.addScriptTest(ctx, "llvm-wamr-agent-test", "WASM engine swap (LLVM): a confined WAMR agent drives the broker over SYS_SUBMIT/SYS_POLL under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wamr/agent.c", "examples/apps/wamr_agent_host.c", "agent: ok", "wamr-agent", "agent_main" });
 
+    // WASM engine swap: WAMR runs a STOCK wasm32-wasi guest (wasi-libc printf via the WASI P1 shim ->
+    // SYS_WRITE) CONFINED — the WAMR analogue of wasm-wasi-hello-test (wasm3). The guest's wasm
+    // features are pinned so wasi-libc avoids the multivalue/ref-types forms WAMR's INTERP mis-parses.
+    _ = h.addScriptTest(ctx, "wamr-wasi-hello-test", "WASM engine swap: WAMR runs a stock wasm32-wasi guest CONFINED via the WASI P1 shim under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_hello.c", "examples/apps/wamr_wasi_host.c", "WASI-HELLO=ok", "wamr-wasi-hello", "", "wasi" });
+    _ = h.addScriptTest(ctx, "llvm-wamr-wasi-hello-test", "WASM engine swap (LLVM): WAMR runs a stock wasm32-wasi guest CONFINED under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_hello.c", "examples/apps/wamr_wasi_host.c", "WASI-HELLO=ok", "wamr-wasi-hello", "", "wasi" });
+
     // WASM-agent Phase 1 (docs/wasm-migration-plan.md §5): run a STOCK wasm32-wasi guest CONFINED.
     // Build wasm3 + the WASI Preview 1 shim (examples/apps/wasm/wasi_shim) + the all-MC libc + the
     // generic wasm_host into a U-mode ELF, load it with the real elf_loader into an isolated Sv39
