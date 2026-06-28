@@ -3,6 +3,7 @@
 // libc must be ONE unit to avoid cross-object duplicate definitions of shared std/* helpers.
 import "user/libc/alloc.mc";
 import "user/libc/cstr.mc";
+import "user/libc/cstdlib.mc";
 import "user/libc/cnum.mc";
 import "user/libc/stdio.mc";
 import "user/libc/stubs.mc";

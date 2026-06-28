@@ -806,6 +806,12 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-wasm-run-test", "WASM-agent Phase 0 (LLVM): build wasm3 freestanding and run a real wasm32 module that prints via a WASI fd_write->SYS_WRITE import under QEMU", &.{ "bash", "tools/lang/wasm-run-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    // WASM engine swap (tools/wamr/README.md): the WAMR interpreter (vendored third_party/wamr, built
+    // freestanding via the `mc` platform port) runs a real wasm32 module CONFINED — the WAMR analogue
+    // of wasm-run-test (wasm3). WAMR adds deterministic instruction-metering fuel that wasm3 lacks.
+    _ = h.addScriptTest(ctx, "wamr-run-test", "WASM engine swap: build WAMR freestanding against the all-MC libc and run a real wasm32 module CONFINED under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-wamr-run-test", "WASM engine swap (LLVM): build WAMR freestanding and run a real wasm32 module CONFINED under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm" });
+
     // WASM-agent Phase 1 (docs/wasm-migration-plan.md §5): run a STOCK wasm32-wasi guest CONFINED.
     // Build wasm3 + the WASI Preview 1 shim (examples/apps/wasm/wasi_shim) + the all-MC libc + the
     // generic wasm_host into a U-mode ELF, load it with the real elf_loader into an isolated Sv39

@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# WASM engine swap (docs/wasm-migration-plan.md; tools/wamr/README.md): run the WAMR engine CONFINED,
+# the WAMR analogue of Phase-0 wasm-run-test (wasm3). Build WAMR's classic interpreter (freestanding
+# against the all-MC libc via the `mc` platform port) + the confined wamr_host into a U-mode ELF, load
+# it with the real elf_loader into an ISOLATED Sv39 space (kernel UNMAPPED), drop to U-mode, and let
+# the host run an embedded no-WASI wasm module — reaching the kernel ONLY through SYS_WRITE/SYS_EXIT.
+# PASS requires confinement + the engine's result marker + a clean U-mode exit. Keeps wasm3 untouched.
+#
+# Usage: tools/lang/wamr-run-test.sh <mcc> [c|llvm]
+set -euo pipefail
+
+MCC="${1:-zig-out/bin/mcc}"
+BACKEND="${2:-c}"
+EXPECT="${3:-WAMR=5050}"
+NAME_BASE="${4:-wamr-run}"
+CLANG="${CLANG:-clang}"
+LLD="${LLD:-ld.lld}"
+LLC="${LLC:-llc}"
+ZIG="${ZIG:-zig}"
+QEMU="${QEMU:-qemu-system-riscv64}"
+
+source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
+HERE="$(kernel_boot_repo_root)"
+WAMR="$HERE/third_party/wamr"
+WC="$WAMR/core"
+HOST="$HERE/examples/apps/wamr_host.c"
+GUEST="$HERE/examples/apps/wamr/compute.c"
+SRC="$HERE/tests/qemu/proc/app_run_demo.mc"
+RUNTIME="$HERE/tests/qemu/lang/qjs_confined_runtime.mc"
+SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
+USERMODE="$HERE/tests/qemu/proc/usermode_runtime.mc"
+LDSCRIPT="$HERE/tests/qemu/virt.ld"
+TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-$NAME_BASE-test" || echo "$NAME_BASE-test")
+
+kernel_boot_require_riscv "$TEST_NAME" "$BACKEND"
+
+WORK="$(mktemp -d)"
+if [ "${KEEP_WORK:-0}" = 1 ]; then echo "KEEP_WORK: $WORK" >&2; else trap 'rm -rf "$WORK"' EXIT; fi
+
+# ---- 0. The guest: a no-WASI wasm32 module exporting compute() (off-the-shelf zig) ----
+"$ZIG" cc -target wasm32-freestanding -nostdlib -Wl,--no-entry -Wl,--export=compute -O2 "$GUEST" -o "$WORK/guest.wasm"
+{
+    echo "const unsigned char wasm_blob[] = {"
+    od -An -v -tu1 "$WORK/guest.wasm" | awk '{ for (i = 1; i <= NF; i++) printf "%s,", $i }'
+    echo "};"
+    echo "const unsigned int wasm_blob_len = sizeof(wasm_blob);"
+} > "$WORK/wasm_blob.h"
+
+# ---- 1. The confined U-mode host ELF: WAMR interpreter + mc port + wamr_host + all-MC libc ----
+APP_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
+            -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O2
+            -fno-builtin -Wno-implicit-function-declaration -I"$HERE/user/libc/include")
+WINC=(-I"$WC/shared/platform/include" -I"$WC/shared/platform/mc" -I"$WC/shared/utils"
+      -I"$WC/shared/utils/uncommon" -I"$WC/shared/mem-alloc" -I"$WC/shared/mem-alloc/ems"
+      -I"$WC/iwasm/include" -I"$WC/iwasm/common" -I"$WC/iwasm/interpreter" -I"$WC")
+WDEF=(-DBH_PLATFORM_MC -DBUILD_TARGET_RISCV64_LP64D -DWASM_ENABLE_INTERP=1
+      -DWASM_ENABLE_INSTRUCTION_METERING=1 -DWASM_ENABLE_BULK_MEMORY=1
+      -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free)
+
+# Compile the WAMR core source set (= the cmake's INTERP globs): platform/mc + shared utils +
+# mem-alloc/ems + iwasm/common/*.c (minus wasm_application.c) + the three interpreter TUs + the
+# riscv native-call trampoline.
+WOBJS=()
+i=0
+compile_wamr() { "$CLANG" "${APP_CFLAGS[@]}" "${WINC[@]}" "${WDEF[@]}" -c "$1" -o "$2"; WOBJS+=("$2"); }
+compile_wamr "$WC/shared/platform/mc/mc_platform.c" "$WORK/w_mc.o"
+for f in "$WC"/shared/utils/*.c; do compile_wamr "$f" "$WORK/wu_$((i++)).o"; done  # uncommon/ (getopt, read_file) unused by the interp + needs posix
+compile_wamr "$WC/shared/mem-alloc/mem_alloc.c" "$WORK/w_ma.o"
+for f in "$WC"/shared/mem-alloc/ems/ems_alloc.c "$WC"/shared/mem-alloc/ems/ems_hmu.c "$WC"/shared/mem-alloc/ems/ems_kfc.c; do compile_wamr "$f" "$WORK/we_$((i++)).o"; done
+for f in "$WC"/iwasm/common/*.c; do case "$f" in *wasm_application.c) continue;; esac; compile_wamr "$f" "$WORK/wc_$((i++)).o"; done
+compile_wamr "$WC/iwasm/interpreter/wasm_runtime.c" "$WORK/w_rt.o"
+compile_wamr "$WC/iwasm/interpreter/wasm_interp_classic.c" "$WORK/w_interp.o"
+compile_wamr "$WC/iwasm/interpreter/wasm_loader.c" "$WORK/w_loader.o"
+"$CLANG" "${APP_CFLAGS[@]}" -c "$WC/iwasm/common/arch/invokeNative_riscv.S" -o "$WORK/w_tramp.o"; WOBJS+=("$WORK/w_tramp.o")
+
+# The confined host front-end (sees wasm_blob.h + WAMR's public header).
+"$CLANG" "${APP_CFLAGS[@]}" -I"$WC/iwasm/include" -I"$WORK" -c "$HOST" -o "$WORK/host.o"
+
+# crt0 + app_traps are PURE MC: emit-c then compile with the app CFLAGS.
+"$MCC" emit-c "$HERE/user/runtime/crt0.mc" > "$WORK/crt0_gen.c"
+"$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/crt0_gen.c" -o "$WORK/crt0.o"
+"$MCC" emit-c "$HERE/user/runtime/app_traps.mc" > "$WORK/traps_gen.c"
+"$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/traps_gen.c" -o "$WORK/traps.o"
+
+# The all-MC libc + the U-mode syscall shim, with hardware FP; + openlibm for sqrt/signbit/etc.
+CFLAGS=("${APP_CFLAGS[@]}")
+MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/user/libc/libc.mc" "$WORK/libc.o" "$WORK"
+MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/user/libc/syscall_user.mc" "$WORK/sys.o" "$WORK"
+APP_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/app-support.o")"
+bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
+
+"$LLD" -T "$HERE/user/runtime/user_qjs.ld" \
+    "$WORK/crt0.o" "$WORK/host.o" "${WOBJS[@]}" \
+    "$WORK/libc.o" "$WORK/sys.o" "$WORK/traps.o" $APP_SUPPORT "$WORK/libm.a" \
+    -o "$WORK/agent.elf"
+
+# ---- 2. Embed the host ELF for the kernel to load ----
+{
+    printf 'const unsigned char app_image[] = {'
+    od -An -v -tx1 "$WORK/agent.elf" | tr -s ' ' '\n' | grep -v '^$' | sed 's/^/0x/; s/$/,/' | tr '\n' ' '
+    printf '};\nconst unsigned int app_image_len = %s;\n' "$(wc -c < "$WORK/agent.elf")"
+} >"$WORK/app_image.c"
+
+# ---- 3. The kernel image (integer-only; the loader/ABI/confinement) ----
+KERNEL_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
+               -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1 -Wall -Wextra
+               -Wno-unused-parameter -Wno-unused-function -fno-builtin)
+CFLAGS=("${KERNEL_CFLAGS[@]}")
+kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/thread.o" "$WORK"
+kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
+kernel_boot_compile_c_object "$SHARED" "$WORK/shared.o"
+kernel_boot_compile_c_object "$USERMODE" "$WORK/usermode.o"
+"$CLANG" "${KERNEL_CFLAGS[@]}" -c "$WORK/app_image.c" -o "$WORK/app_image.o"
+K_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/k-support.o")"
+kernel_boot_compile_rt "$WORK/freestanding.o"
+"$LLD" -T "$LDSCRIPT" "$WORK/freestanding.o" "$WORK/shared.o" "$WORK/usermode.o" \
+    "$WORK/runtime.o" "$WORK/thread.o" "$WORK/app_image.o" $K_SUPPORT -o "$WORK/kernel.elf"
+
+OUT="$(timeout 120 "$QEMU" -machine virt -bios none -nographic -m 256 \
+        -kernel "$WORK/kernel.elf" 2>/dev/null || true)"
+
+echo "--- kernel UART output ---"
+printf '%s\n' "$OUT"
+echo "--------------------------"
+
+if printf '%s' "$OUT" | grep -q "CONFINED: kernel unmapped in agent space" \
+   && printf '%s' "$OUT" | grep -q "$EXPECT" \
+   && printf '%s' "$OUT" | grep -q "USER-EXIT from U"; then
+    echo "PASS: $TEST_NAME — $BACKEND backend: the WAMR interpreter, built freestanding against the all-MC libc (mc platform port), ran a real wasm32 module CONFINED in an isolated U-mode Sv39 space under QEMU; the kernel is unmapped in the host and it reached the kernel only via SYS_WRITE/SYS_EXIT"
+    exit 0
+fi
+echo "FAIL: $TEST_NAME — expected 'CONFINED...', '$EXPECT', and 'USER-EXIT from U'"
+exit 1
