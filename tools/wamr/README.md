@@ -24,8 +24,9 @@ Proven along the way:
 - **Key gotcha:** WAMR processes the module buffer **in place** — pass a **writable** copy to
   `wasm_runtime_load` (a `const`/`.rodata` blob segfaults). The confined harness must copy the
   embedded wasm into a writable buffer before load.
-- Remaining all-MC-libc gap for the FREESTANDING build: `strtok_r` (one function, used by an
-  uncalled util) + linking openlibm for `sqrt`/`signbit`/etc.
+- All-MC-libc: `strtok_r` is now declared in `user/libc/include/string.h` (decl-only — the caller
+  `bh_strtok_r` is uncalled, so the linker drops it), giving a clean **17/17 freestanding compile**.
+  The confined build additionally links openlibm for `sqrt`/`signbit`/etc.
 
 ## Reproduce / continue
 

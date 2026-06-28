@@ -18,6 +18,7 @@ char  *strcat(char *dst, const char *src);
 char  *strchr(const char *s, int c);
 char  *strrchr(const char *s, int c);
 char  *strstr(const char *haystack, const char *needle);
+char  *strtok_r(char *str, const char *delim, char **saveptr);
 char  *strdup(const char *s);
 size_t strspn(const char *s, const char *accept);
 size_t strcspn(const char *s, const char *reject);
