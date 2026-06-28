@@ -621,8 +621,8 @@ prove):
 | Cancel | `qjs-cancel-test` | `wasm-cancel-test` | ☑ (Phase 5 landed; both backends in `m0`) |
 | Cancel edges | `qjs-cancel-edges-test` | `wasm-cancel-edges-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 | Spurious completion id | `qjs-spurious-agent-test` | `wasm-spurious-agent-test` | ☑ (Phase 5 landed; both backends in `m0`) |
-| Cross-arch x86_64 | `x86-qjs-test` / `x86-qjs-async-test` | `wasm-*` x86_64 peers | ☐ |
-| Cross-arch aarch64 | `arm-qjs-test` / `arm-qjs-async-test` | `wasm-*` aarch64 peers | ☐ |
+| Cross-arch x86_64 | `x86-qjs-test` / `x86-qjs-async-test` | `x86-wasm-async-test` | ☑ (Phase 6 landed; both backends in `m0`) |
+| Cross-arch aarch64 | `arm-qjs-test` / `arm-qjs-async-test` | `arm-wasm-async-test` | ☑ (Phase 6 landed; both backends in `m0`) |
 
 **B. QuickJS-engine / JS-language gates — no direct WASM-engine peer**; JS
 behavior is instead proven collectively on the WASM path by the Phase-4a gate

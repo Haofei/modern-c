@@ -337,6 +337,11 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "arm-qjs-test", "M9: run a PURE-JS agent (fixed generic C host) confined in an aarch64 EL0 space under QEMU, with async host I/O over svc #0", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-arm-qjs-test", "M9 (LLVM): run a PURE-JS agent confined in an aarch64 EL0 space under QEMU, with async host I/O", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "arm-qjs-async-test", "M9: a pure-JS agent proves overlap + back-pressure/denial over async host I/O in aarch64 EL0", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "arm-qjs-async" });
+
+    // WASM-agent Phase 6 cross-arch (aarch64): a stock wasm32-wasi guest on wasm3 runs confined in
+    // EL0 with async host I/O over svc #0. The WASM peer of arm-qjs-async-test.
+    _ = h.addScriptTest(ctx, "arm-wasm-async-test", "WASM-agent Phase 6: a confined WASM guest proves overlap + back-pressure over async host I/O in aarch64 EL0 under QEMU", &.{ "bash", "tools/arch/arm-wasm-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-arm-wasm-async-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest proves async host I/O in aarch64 EL0 under QEMU", &.{ "bash", "tools/arch/arm-wasm-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "llvm-arm-qjs-async-test", "M9 (LLVM): a pure-JS agent proves overlap + back-pressure/denial over async host I/O in aarch64 EL0", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "arm-qjs-async" });
 
     _ = h.addScriptTest(ctx, "snapshot-test", "proc_snapshot (kernel/lib): stable process enumeration", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "snapshot-test" });
@@ -389,6 +394,11 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-x86-qjs-test", "M7 (LLVM): run a PURE-JS agent confined in an x86-64 ring-3 space under QEMU, with async host I/O", &.{ "bash", "tools/arch/x86-qjs-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "x86-qjs-async-test", "M7: a pure-JS agent proves overlap + back-pressure/denial over async host I/O in x86-64 ring 3", &.{ "bash", "tools/arch/x86-qjs-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "x86-qjs-async" });
+
+    // WASM-agent Phase 6 cross-arch (x86_64): a stock wasm32-wasi guest on wasm3 runs confined in
+    // ring 3 with async host I/O over int 0x80. The WASM peer of x86-qjs-async-test.
+    _ = h.addScriptTest(ctx, "x86-wasm-async-test", "WASM-agent Phase 6: a confined WASM guest proves overlap + back-pressure over async host I/O in x86-64 ring 3 under QEMU", &.{ "bash", "tools/arch/x86-wasm-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-x86-wasm-async-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest proves async host I/O in x86-64 ring 3 under QEMU", &.{ "bash", "tools/arch/x86-wasm-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "llvm-x86-qjs-async-test", "M7 (LLVM): a pure-JS agent proves overlap + back-pressure/denial over async host I/O in x86-64 ring 3", &.{ "bash", "tools/arch/x86-qjs-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "x86-qjs-async" });
 
     _ = h.addScriptTest(ctx, "cow-test", "Copy-on-write: shared RO page diverges on write", &.{ "bash", "tools/mem/cow-test.sh", "zig-out/bin/mcc", "c" });
