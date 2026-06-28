@@ -5,16 +5,27 @@ wasm3 lacks — **deterministic per-instruction fuel** (`wasm_runtime_set_instru
 WAMR's `WASM_ENABLE_INSTRUCTION_METERING`) and a path to **WASI Preview 2** — while keeping the
 confined U-mode model unchanged (engine is an untrusted payload; kernel TCB untouched).
 
-## Status: feasibility PROVEN (freestanding build works)
+## Status: engine RUNS wasm via the `mc` port (host-validated end-to-end)
 
-The decisive unknown was whether WAMR's interpreter builds **freestanding** (`-nostdlib
--ffreestanding`, riscv64 `lp64d`) against the **all-MC libc** (`user/libc`). It does:
+`tools/wamr/build-host-validate.sh` builds WAMR's classic interpreter + the freestanding `mc`
+platform port (`mc-platform/`) and runs an embedded no-WASI module exporting `compute()` →
+**`WAMR-RESULT=42`, exit 0**. The full chain works: `wasm_runtime_full_init` → `load` →
+`instantiate` → `create_exec_env` → `lookup_function` → `call_wasm`. This validates the port +
+engine + `wasm_export.h` usage independent of the confined build (host libc + the same `mc` port).
 
-- **16 / 17** WAMR core files compile freestanding with the `mc` platform port in `mc-platform/`.
-- The only gap is `bh_common.c:173` → **`strtok_r`**, which the all-MC libc doesn't provide yet
-  (used only by an uncalled util). Add `strtok_r` to `user/libc` (small) or stub it.
-- WAMR's defaults are already minimal (AOT/JIT/threads/GC/libc-wasi all default off), so the
-  config override is tiny.
+Proven along the way:
+- WAMR's interpreter **builds freestanding** against the all-MC libc (the decisive unknown). The
+  `mc` port (`mc-platform/`, ~70 lines: libc-heap malloc, linear memory from a static pool,
+  single-thread mutex/cond/thread stubs, printf→libc, a conservative stack boundary) satisfies the
+  ~22 vmcore `os_*` plus a few extension stubs (`os_mremap`, `os_dumps_proc_mem_info`).
+- WAMR defaults are minimal (AOT/JIT/threads/GC/libc-wasi off), so the config override is tiny
+  (`INTERP` + `INSTRUCTION_METERING` + `BULK_MEMORY` + `BH_MALLOC/FREE` + the build-target/platform
+  defines). Source set = `iwasm/common/*.c` (minus `wasm_application.c`) + `iwasm/interpreter/{wasm_runtime,wasm_interp_classic,wasm_loader}.c` + `shared/{utils,mem-alloc/ems}` + the `invokeNative_<arch>` trampoline.
+- **Key gotcha:** WAMR processes the module buffer **in place** — pass a **writable** copy to
+  `wasm_runtime_load` (a `const`/`.rodata` blob segfaults). The confined harness must copy the
+  embedded wasm into a writable buffer before load.
+- Remaining all-MC-libc gap for the FREESTANDING build: `strtok_r` (one function, used by an
+  uncalled util) + linking openlibm for `sqrt`/`signbit`/etc.
 
 ## Reproduce / continue
 
