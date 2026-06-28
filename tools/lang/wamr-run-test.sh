@@ -43,9 +43,7 @@ if [ "${KEEP_WORK:-0}" = 1 ]; then echo "KEEP_WORK: $WORK" >&2; else trap 'rm -r
 
 # ---- 0. The guest: a no-WASI wasm32 module exporting compute() (off-the-shelf zig) ----
 if [ "$GUEST_KIND" = wasi ]; then
-    # Restrict the guest to a feature baseline the WAMR INTERP config accepts (no reference-types /
-    # multivalue table forms that trip the loader); bulk-memory + sign-ext are enabled in WAMR.
-    "$ZIG" cc -target wasm32-wasi -mno-reference-types -mno-multivalue -O2 -s -Wl,-z,stack-size=262144 "$GUEST" -o "$WORK/guest.wasm"
+    "$ZIG" cc -target wasm32-wasi -O2 -s -Wl,-z,stack-size=262144 "$GUEST" -o "$WORK/guest.wasm"
 else
     EXPFLAGS=(); for e in $GUEST_EXPORTS; do EXPFLAGS+=(-Wl,--export="$e"); done
     "$ZIG" cc -target wasm32-freestanding -nostdlib -Wl,--no-entry "${EXPFLAGS[@]}" -O2 "$GUEST" -o "$WORK/guest.wasm"

@@ -67,6 +67,19 @@ WAMR WASI host (`examples/apps/wamr_wasi_host.c`) + the `wasi` guest-kind in `wa
 are staged; resolving the loader feature-match is the next step before the fs/net/tool imports and
 the gate migration. (wasm3 stays the default + every wasm gate; nothing is broken.)
 
+## WASI-libc loader blocker — precise localization (for the next session)
+
+The guest's table/elem sections are MVP-clean (1 funcref table min/max 5; elem flag `0x00`), so
+"unknown table 128" is NOT a table/elem problem — it's a **code-section desync**: an opcode in
+zig's wasi-libc `code` section is parsed wrong by WAMR's INTERP loader, mis-advancing the cursor so
+a later `call_indirect` (wasm_loader.c:11616 / :13138 → check_table_index) reads a garbage table
+index (128). Reproduces with **stock** `wasm32-wasi` (no `-mno-*`), with `WASM_ENABLE_REF_TYPES=1`.
+Suspects: a post-MVP code feature zig emits but the current WAMR config mis-parses (multi-value
+block types, sat-trunc `0xFC 0..7`, sign-ext) — next step is to bisect the failing opcode (dump the
+code section / try toggling WAMR feature flags) so WAMR loads the wasi-libc + QuickJS-on-wasm guests.
+This is the gate for migrating the WASI/JS gate family. NOTE: the MC *agent* path does NOT need this
+— `wamr-agent-test` already runs a confined broker agent via freestanding `mc.*` imports.
+
 ## Remaining work (multi-session)
 
 - **A.** Close the libc gap (`strtok_r`); finish the `os_*` extension stubs needed at link time.
