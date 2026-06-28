@@ -553,9 +553,17 @@ Goal: use WASM's strengths and align with the resource-budget model.
   loop that never syscalls), so an untrusted agent cannot wedge the system (it fails closed
   instead of hanging). It is **opt-in** (weak default 0 → disarmed → zero change for other
   confined gates). This is a coarse, wall-clock liveness bound, **not** deterministic fuel:
-  **deterministic per-instruction fuel remains OPEN** and needs an engine-level mechanism —
-  instrumenting wasm3's interpreter loop with a decrementing budget, or swapping to an engine
-  with native fuel (wasmi) / an instruction budget (WAMR). Not faked.
+  **deterministic per-instruction fuel remains OPEN** and needs an engine-level mechanism.
+  **Engine-swap spike DONE — WAMR chosen (see `tools/wamr/README.md`).** WAMR has native
+  instruction metering (`wasm_runtime_set_instruction_count_limit` — exactly the missing fuel) and,
+  unlike wasmi (Rust, impractical for the `-nostdlib` U-mode agent), is freestanding-C. The
+  decisive risk — *does WAMR build freestanding against the all-MC libc?* — is **answered: yes.** A
+  from-scratch `mc` platform port (`tools/wamr/mc-platform/`, ~80 lines) gets **16/17 WAMR core
+  files compiling** freestanding (riscv64 lp64d); the lone gap is `strtok_r` (a one-function libc
+  add). Remaining (multi-session, additive — wasm3 + all gates stay green until WAMR passes the
+  family): a `wamr_host.c` over WAMR's ~8-call `wasm_export.h` API, port the ~30 WASI/broker
+  imports to WAMR `NativeSymbol`s, a `wamr-run-test` gate, then the payoff `wamr-fuel-test`
+  (deterministic instruction-limit termination), then migrate the family / make WAMR default.
 - **Quota errno. DECIDED: map to the existing errno set (option b); no `E_QUOTA` added.** The
   frozen errno set — `E_AGAIN` (-11), `E_DENIED` (-13), `E_FAULT` (-14), `E_NOCAP` (-105),
   `E_TIMEDOUT` (-110), `E_CANCELED` (-125) — already expresses the two real cases: **transient

@@ -2,3 +2,4 @@
 zig-out/
 __pycache__/
 .refactor-baseline/
+.wamr-tmp/
