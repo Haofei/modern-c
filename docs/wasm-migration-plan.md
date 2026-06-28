@@ -7,10 +7,14 @@ phase section carries its own **Status:** line. Snapshot:
   (`wasm-wasi-hello-test`), Phase 2 (`wasm-realtool-test`), Phase 3a + net-deny audit
   (`wasm-nettool-test`), Phase 4a JS-executes-on-WASM (`wasm-js-agent-test`), Phase 4b
   JS-agent-drives-broker (`wasm-js-nettool-test`), Phase 5 native async
-  (`wasm-async-agent-test`/`wasm-cancel-test`/`wasm-quota-agent-test`/`wasm-spurious-agent-test`).
-- **Open:** Phase 3 real-TCP / S-mode-IRQ net variants; Phase 5 remainder (fuel / quota-errno / linear-memory cap / P2 worlds);
-  Phase 6 (full parity sweep + cross-arch); Phase 7 (JS perf benchmark); Phase 8 (retire
-  `qjs_host.c`).
+  (`wasm-async-agent-test`/`wasm-cancel-test`/`wasm-quota-agent-test`/`wasm-spurious-agent-test`),
+  **Phase 6 full parity sweep** — basic agent (`wasm-agent-test`), agent-smoke, cancel-edges,
+  broker-agent; real-TCP (`wasm-net-realtool-test`); all five S-mode peers
+  (`wasm-smode-{confined,agent,async-agent,net-irq-tool,blk-irq-tool}-test`); and cross-arch
+  (`arm-wasm-async-test`, `x86-wasm-async-test`). Every Group-A row is ☑; every Group-B row
+  has a confirmed disposition.
+- **Open:** Phase 5 remainder (fuel / quota-errno / linear-memory cap / P2 worlds);
+  Phase 7 (JS perf benchmark); Phase 8 (retire `qjs_host.c`).
 
 The remaining phases are still forward-looking; the prose in those sections describes intended
 work, not landed work, except where a **Status:** line says otherwise. The parity matrix in §5
@@ -636,10 +640,16 @@ by the WASM engine's own bring-up:
 | `qjs-async-test` | pure JS async/await semantics | JS-language behavior → covered by `wasm-js-agent-test` (landed: QuickJS-on-wasm runs real JS); runtime-level async is covered by `wasm-async-agent-test` above. |
 | `qjs-io-test` | QuickJS JS I/O feature | JS-language behavior → `wasm-js-agent-test`. |
 | `qjs-worker-test` | QuickJS worker feature | JS-language behavior → `wasm-js-agent-test` (verify Javy supports it; if not, document as a JS feature absent on the WASM path). |
-| `qjs-mc-host-test` | MC-hosted QuickJS variant | **TBD — classify in Phase 6** (confirm whether this exercises host glue that has a WASM analogue, or is QuickJS-host-specific and retired with the host). |
+| `qjs-mc-host-test` | MC-hosted QuickJS variant (host front-end `examples/apps/qjs_host.mc`, in MC instead of the C `qjs_host.c`) | **Classified: QuickJS-host-specific, no direct WASM peer.** It exercises the *host glue* — the exact layer the migration replaces with the wasm3 engine + WASI shim (a standard C boundary; the plan defines no MC-hosted WASM variant). The underlying property — *MC can host a confined, untrusted engine* — is already proven on the WASM path by `wasm-run-test` / `wasm-wasi-hello-test`, where wasm3 is built freestanding against the all-MC libc and run confined. Disposition: retired with `qjs_host.c`/`qjs_host.mc` in Phase 8; kept until then as a QuickJS-path regression test. |
 
 Keep both tables current as `qjs-*` gates are added. Phase 8 may not start until
 every Group A row is ☑ and every Group B row has a confirmed disposition.
+
+**Phase 6 status: COMPLETE.** Every Group-A runtime-substrate row has a green WASM
+peer on both backends (M-mode + S-mode + real-TCP + cross-arch aarch64/x86-64), and
+every Group-B row has a confirmed disposition (the rows above are covered collectively
+by `wasm-js-agent-test`/`wasm-js-nettool-test` or are engine-internal/host-specific).
+The Phase-8 precondition (all Group-A ☑, all Group-B dispositioned) is satisfied.
 
 ### Phase 7 — JS performance benchmark: QuickJS-on-WASM vs native QuickJS
 
