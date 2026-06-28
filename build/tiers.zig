@@ -121,6 +121,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-wasm-run-test"));
     m0_step.dependOn(ctx.cmd("wamr-run-test"));
     m0_step.dependOn(ctx.cmd("llvm-wamr-run-test"));
+    m0_step.dependOn(ctx.cmd("wamr-fuel-test"));
+    m0_step.dependOn(ctx.cmd("llvm-wamr-fuel-test"));
     m0_step.dependOn(ctx.cmd("wasm-wasi-hello-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-wasi-hello-test"));
     m0_step.dependOn(ctx.cmd("wasm-realtool-test"));

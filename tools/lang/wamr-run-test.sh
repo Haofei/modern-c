@@ -11,8 +11,12 @@ set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
 BACKEND="${2:-c}"
-EXPECT="${3:-WAMR=5050}"
-NAME_BASE="${4:-wamr-run}"
+GUEST_REL="${3:-examples/apps/wamr/compute.c}"   # a no-WASI wasm guest (built by zig)
+HOST_REL="${4:-examples/apps/wamr_host.c}"       # the confined WAMR host front-end
+EXPECT="${5:-WAMR=5050}"
+NAME_BASE="${6:-wamr-run}"
+GUEST_EXPORTS="${7:-compute}"                    # space-separated wasm exports the host looks up
+GUEST_KIND="${8:-freestanding}"                  # "freestanding" (named exports) | "wasi" (_start)
 CLANG="${CLANG:-clang}"
 LLD="${LLD:-ld.lld}"
 LLC="${LLC:-llc}"
@@ -23,8 +27,8 @@ source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kern
 HERE="$(kernel_boot_repo_root)"
 WAMR="$HERE/third_party/wamr"
 WC="$WAMR/core"
-HOST="$HERE/examples/apps/wamr_host.c"
-GUEST="$HERE/examples/apps/wamr/compute.c"
+HOST="$HERE/$HOST_REL"
+GUEST="$HERE/$GUEST_REL"
 SRC="$HERE/tests/qemu/proc/app_run_demo.mc"
 RUNTIME="$HERE/tests/qemu/lang/qjs_confined_runtime.mc"
 SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
@@ -38,7 +42,12 @@ WORK="$(mktemp -d)"
 if [ "${KEEP_WORK:-0}" = 1 ]; then echo "KEEP_WORK: $WORK" >&2; else trap 'rm -rf "$WORK"' EXIT; fi
 
 # ---- 0. The guest: a no-WASI wasm32 module exporting compute() (off-the-shelf zig) ----
-"$ZIG" cc -target wasm32-freestanding -nostdlib -Wl,--no-entry -Wl,--export=compute -O2 "$GUEST" -o "$WORK/guest.wasm"
+if [ "$GUEST_KIND" = wasi ]; then
+    "$ZIG" cc -target wasm32-wasi -O2 -s -Wl,-z,stack-size=262144 "$GUEST" -o "$WORK/guest.wasm"
+else
+    EXPFLAGS=(); for e in $GUEST_EXPORTS; do EXPFLAGS+=(-Wl,--export="$e"); done
+    "$ZIG" cc -target wasm32-freestanding -nostdlib -Wl,--no-entry "${EXPFLAGS[@]}" -O2 "$GUEST" -o "$WORK/guest.wasm"
+fi
 {
     echo "const unsigned char wasm_blob[] = {"
     od -An -v -tu1 "$WORK/guest.wasm" | awk '{ for (i = 1; i <= NF; i++) printf "%s,", $i }'
