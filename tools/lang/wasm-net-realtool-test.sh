@@ -67,8 +67,10 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 : >"$WORK/httpd.log"
 
-# ---- 0. The guest: a wasm32-wasi binary (off-the-shelf zig + wasi-libc), feature-pinned for WAMR ----
-WASI_MCPU="mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint"
+# ---- 0. The guest: a wasm32-wasi binary (off-the-shelf zig + wasi-libc), stock; no feature-pin (WAMR reads overlong call_indirect) ----
+WASI_MCPU="none"  # no feature-pin: WAMR is built WASM_ENABLE_CALL_INDIRECT_OVERLONG=1
+                  # (WDEF below), so its loader reads stock wasi-libc's overlong call_indirect
+                  # table-index LEB directly — no `-mcpu=` rebuild needed
 if [ "$GUEST_KIND" = qjs ]; then
     # Reuse the shared QuickJS-to-wasm object cache (see wasm-confined-test.sh): compile the 4 heavy
     # QuickJS TUs once, then per-gate only compile the small guest .c and link against the cached objects.
@@ -77,16 +79,16 @@ if [ "$GUEST_KIND" = qjs ]; then
     exec 8>"$QCACHE/.lock"; flock 8
     if [ "$(cat "$QCACHE/stamp" 2>/dev/null)" != "$QWANT" ]; then
         for f in dtoa libunicode libregexp quickjs; do
-            "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -I"$QJS" -D__wasi__ -c "$QJS/$f.c" -o "$QCACHE/$f.o"
+            "$ZIG" cc -target wasm32-wasi -O2 -I"$QJS" -D__wasi__ -c "$QJS/$f.c" -o "$QCACHE/$f.o"
         done
         printf '%s' "$QWANT" > "$QCACHE/stamp"
     fi
     flock -u 8
-    "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
+    "$ZIG" cc -target wasm32-wasi -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
         "$HERE/$GUEST_REL" "$QCACHE"/dtoa.o "$QCACHE"/libunicode.o "$QCACHE"/libregexp.o "$QCACHE"/quickjs.o \
         -o "$WORK/guest.wasm"
 else
-    "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -Wl,-z,stack-size=262144 "$HERE/$GUEST_REL" -o "$WORK/guest.wasm"
+    "$ZIG" cc -target wasm32-wasi -O2 -s -Wl,-z,stack-size=262144 "$HERE/$GUEST_REL" -o "$WORK/guest.wasm"
 fi
 {
     echo "const unsigned char wasm_blob[] = {"
@@ -105,6 +107,7 @@ WINC=(-I"$WC/shared/platform/include" -I"$WC/shared/platform/mc" -I"$WC/shared/u
 WDEF=(-DBH_PLATFORM_MC -DBUILD_TARGET_RISCV64_LP64D -DWASM_ENABLE_INTERP=1
       -DWASM_ENABLE_INSTRUCTION_METERING=1 -DWASM_ENABLE_BULK_MEMORY=1
       -DWASM_ENABLE_BULK_MEMORY_OPT=1 -DWASM_ENABLE_REF_TYPES=1
+      -DWASM_ENABLE_CALL_INDIRECT_OVERLONG=1
       -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free)
 WAMR_CFLAGS=("${APP_CFLAGS[@]}" -Wno-implicit-function-declaration)
 # Build/reuse the cached WAMR engine archive (flock-guarded, stamped) — shared with the other gates.

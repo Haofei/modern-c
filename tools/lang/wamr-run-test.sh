@@ -42,9 +42,12 @@ WORK="$(mktemp -d)"
 if [ "${KEEP_WORK:-0}" = 1 ]; then echo "KEEP_WORK: $WORK" >&2; else trap 'rm -rf "$WORK"' EXIT; fi
 
 # ---- 0. The guest: a no-WASI wasm32 module exporting compute() (off-the-shelf zig) ----
-# Pin the wasm feature set so zig rebuilds wasi-libc without multivalue/reference-types (which
-# WAMR's INTERP loader mis-parses in printf's call_indirect); keep what WAMR + wasi-libc need.
-WASI_MCPU="mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint"
+# No feature-pin: WAMR is built with WASM_ENABLE_CALL_INDIRECT_OVERLONG=1 (see WDEF below), so the
+# loader correctly reads the linker's overlong (5-byte relocatable LEB) call_indirect table-index
+# encoding that stock wasm32-wasi modules carry. We therefore run zig's PREBUILT wasi-libc as-is —
+# no `-mcpu=` rebuild. WASI_MCPU stays overridable purely for diagnostics (e.g. WASI_MCPU=mvp+...).
+WASI_MCPU="${WASI_MCPU:-none}"
+if [ "$WASI_MCPU" = none ]; then MCPU=(); else MCPU=(-mcpu="$WASI_MCPU"); fi
 if [ "$GUEST_KIND" = qjs ]; then
     # KEYSTONE: JavaScript on WAMR — the vendored QuickJS compiled to wasm32-wasi (guest + 4 TUs),
     # feature-pinned for WAMR. Larger stack for the JS engine. The 4 QuickJS TUs are identical across
@@ -56,15 +59,15 @@ if [ "$GUEST_KIND" = qjs ]; then
     exec 8>"$QCACHE/.lock"; flock 8
     if [ "$(cat "$QCACHE/stamp" 2>/dev/null)" != "$QWANT" ]; then
         for f in dtoa libunicode libregexp quickjs; do
-            "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -I"$QJS" -D__wasi__ -c "$QJS/$f.c" -o "$QCACHE/$f.o"
+            "$ZIG" cc -target wasm32-wasi "${MCPU[@]}" -O2 -I"$QJS" -D__wasi__ -c "$QJS/$f.c" -o "$QCACHE/$f.o"
         done
         printf '%s' "$QWANT" > "$QCACHE/stamp"
     fi
     flock -u 8
-    "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
+    "$ZIG" cc -target wasm32-wasi "${MCPU[@]}" -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
         "$GUEST" "$QCACHE"/dtoa.o "$QCACHE"/libunicode.o "$QCACHE"/libregexp.o "$QCACHE"/quickjs.o -o "$WORK/guest.wasm"
 elif [ "$GUEST_KIND" = wasi ]; then
-    "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -Wl,-z,stack-size=262144 "$GUEST" -o "$WORK/guest.wasm"
+    "$ZIG" cc -target wasm32-wasi "${MCPU[@]}" -O2 -s -Wl,-z,stack-size=262144 "$GUEST" -o "$WORK/guest.wasm"
 else
     EXPFLAGS=(); for e in $GUEST_EXPORTS; do EXPFLAGS+=(-Wl,--export="$e"); done
     "$ZIG" cc -target wasm32-freestanding -nostdlib -Wl,--no-entry "${EXPFLAGS[@]}" -O2 "$GUEST" -o "$WORK/guest.wasm"
@@ -86,6 +89,7 @@ WINC=(-I"$WC/shared/platform/include" -I"$WC/shared/platform/mc" -I"$WC/shared/u
 WDEF=(-DBH_PLATFORM_MC -DBUILD_TARGET_RISCV64_LP64D -DWASM_ENABLE_INTERP=1
       -DWASM_ENABLE_INSTRUCTION_METERING=1 -DWASM_ENABLE_BULK_MEMORY=1
       -DWASM_ENABLE_BULK_MEMORY_OPT=1 -DWASM_ENABLE_REF_TYPES=1
+      -DWASM_ENABLE_CALL_INDIRECT_OVERLONG=1
       -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free)
 
 # Build the WAMR core source set (the cmake INTERP globs: platform/mc + shared utils + mem-alloc/ems +
