@@ -79,7 +79,38 @@ With that, WAMR runs a stock wasm32-wasi guest CONFINED — `wamr-wasi-hello-tes
 WASI fd_write -> SYS_WRITE). WAMR config also needs `WASM_ENABLE_BULK_MEMORY_OPT=1` (memory.copy/
 fill) + `WASM_ENABLE_REF_TYPES=1`. This unblocks the WASI/QuickJS-on-wasm guests for the migration.
 
-## Remaining work (multi-session)
+## WAMR coverage status (engine swap progress)
+
+WAMR runs CONFINED, both backends, **gated in m0** (655 PASS): `wamr-run`, `wamr-fuel`
+(deterministic instruction fuel), `wamr-agent` (broker async via freestanding mc.*),
+`wamr-wasi-hello` (stock wasm32-wasi), `wamr-async` + `wamr-net` (real broker agents:
+wasi-libc printf + mc tool ABI, via `examples/apps/wamr_full_host.c`). Also VERIFIED on
+WAMR (not yet gated): the cancel / quota / spurious agents (same full host). So WAMR
+covers the entire mc.tool + WASI-stdout agent family.
+
+Two hosts: `wamr_host.c` (no-WASI named-export guests: compute/burn), `wamr_wasi_host.c`
+(WASI stdout slice), `wamr_full_host.c` (WASI stdout + mc net_fetch/tool_submit/tool_poll
+— the real agents). Guests built `zig cc -target wasm32-wasi -mcpu=mvp+bulk_memory+sign_ext
++mutable_globals+nontrapping_fptoint` (feature-pin so wasi-libc avoids the multivalue/
+ref-types forms WAMR's INTERP mis-parses).
+
+## Remaining to RETIRE wasm3 (the finish line)
+
+1. **FS shim** — port wasi_shim.c's WASI FS surface (fd table + `/ws` preopen, path_open,
+   fd_read whole-file cache via TOOL_OP_FS_READ, fd_write buffer + flush-on-close via
+   TOOL_OP_FS_WRITE, path_create_directory, fd_prestat_*) into `wamr_full_host.c`, using
+   `wasm_runtime_addr_app_to_native` + a host-staged `[path][data]` payload to sys_submit.
+   Unblocks `wasi_fs.c` + `wasi_smoke.c` on WAMR.
+2. **QuickJS-on-wasm keystone** — build wasi_js.c + QuickJS TUs with the feature-pin; run on
+   the full host (the big guest; verify heap/linear-memory sizing).
+3. **m0-cost fix** — build the WAMR engine ONCE (a cached object set / libwamr.a) instead of
+   recompiling ~25 files per gate, so the family doesn't bloat m0 runtime.
+4. **Flip + remove** — point the existing wasm gate harnesses (`wasm-confined-test.sh` etc.)
+   at WAMR + the full host, drop the parallel `wamr-*` gates, and delete `third_party/wasm3`,
+   `examples/apps/wasm_host.c`, `examples/apps/wasm/wasi_shim.c`.
+
+## Old remaining-work notes (superseded by the list above)
+
 
 - **A.** Close the libc gap (`strtok_r`); finish the `os_*` extension stubs needed at link time.
 - **B.** `wamr_host.c` — replace `examples/apps/wasm_host.c`'s wasm3 API (`m3_*`) with the
