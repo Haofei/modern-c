@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # WASM-agent Phase 6 (docs/wasm-migration-plan.md §5): run a WASM agent CONFINED under REAL OpenSBI
-# in S-mode. Same confined U-mode WASM agent ELF as wasm-confined-test.sh (wasm3 + WASI P1 shim +
-# all-MC libc + generic wasm_host running an embedded stock wasm32-wasi guest), but the KERNEL runs
+# in S-mode. Same confined U-mode WASM agent ELF as wasm-confined-test.sh (WAMR + the comprehensive
+# wamr_full_host + all-MC libc running an embedded stock wasm32-wasi guest), but the KERNEL runs
 # in S-mode under the real OpenSBI firmware (no `-bios none`) instead of M-mode. The agent runs in an
 # ISOLATED Sv39 space (kernel mapped SUPERVISOR-ONLY, unreachable from U), reaching the kernel ONLY
 # through the syscall ABI (ecall). PASS requires the OpenSBI banner + confinement + the guest marker
@@ -21,13 +21,14 @@ LLD="${LLD:-ld.lld}"
 LLC="${LLC:-llc}"
 ZIG="${ZIG:-zig}"
 QEMU="${QEMU:-qemu-system-riscv64}"
+AR="${AR:-llvm-ar}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-W3="$HERE/third_party/wasm3/source"
+WAMR="$HERE/third_party/wamr"
+WC="$WAMR/core"
 WASMDIR="$HERE/examples/apps/wasm"
-HOST="$HERE/examples/apps/wasm_host.c"
-SHIM="$WASMDIR/wasi_shim.c"
+HOST="$HERE/examples/apps/wamr_full_host.c"             # the comprehensive WAMR host (WASI + FS + mc)
 QJS="$HERE/third_party/quickjs"
 # Kernel side (S-mode): the same loader/ABI/confinement the qjs S-mode peer uses (agent-agnostic).
 SRC="$HERE/tests/qemu/arch/qjs_smode_demo.mc"                  # ELF load + ABI + supervisor gigapage
@@ -43,12 +44,25 @@ WORK="$(mktemp -d)"
 if [ "${KEEP_WORK:-0}" = 1 ]; then echo "KEEP_WORK: $WORK" >&2; else trap 'rm -rf "$WORK"' EXIT; fi
 
 # ---- 0. The guest: a wasm32-wasi binary, built by the off-the-shelf toolchain (zig + wasi-libc) ----
+# Feature-pin so zig rebuilds wasi-libc WITHOUT multivalue/reference-types (WAMR's INTERP loader
+# mis-parses them as "unknown table 128"); the QuickJS TUs come from the shared wasm-object cache.
+WASI_MCPU="mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint"
 if [ "$GUEST_KIND" = qjs ]; then
-    "$ZIG" cc -target wasm32-wasi -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
-        "$HERE/$GUEST_REL" "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c \
+    QCACHE="$HERE/.wamr-cache/qjs-wasm"; mkdir -p "$QCACHE"
+    QWANT="$(printf '%s ' "$WASI_MCPU"; ls -la "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c "$QJS"/*.h 2>/dev/null | md5sum)"
+    exec 8>"$QCACHE/.lock"; flock 8
+    if [ "$(cat "$QCACHE/stamp" 2>/dev/null)" != "$QWANT" ]; then
+        for f in dtoa libunicode libregexp quickjs; do
+            "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -I"$QJS" -D__wasi__ -c "$QJS/$f.c" -o "$QCACHE/$f.o"
+        done
+        printf '%s' "$QWANT" > "$QCACHE/stamp"
+    fi
+    flock -u 8
+    "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
+        "$HERE/$GUEST_REL" "$QCACHE"/dtoa.o "$QCACHE"/libunicode.o "$QCACHE"/libregexp.o "$QCACHE"/quickjs.o \
         -o "$WORK/guest.wasm"
 else
-    "$ZIG" cc -target wasm32-wasi -O2 -s -Wl,-z,stack-size=262144 "$HERE/$GUEST_REL" -o "$WORK/guest.wasm"
+    "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -Wl,-z,stack-size=262144 "$HERE/$GUEST_REL" -o "$WORK/guest.wasm"
 fi
 {
     echo "const unsigned char wasm_blob[] = {"
@@ -57,19 +71,43 @@ fi
     echo "const unsigned int wasm_blob_len = sizeof(wasm_blob);"
 } > "$WORK/wasm_blob.h"
 
-# ---- 1. The confined U-mode host ELF (hardware FP; wasm float ops compute on doubles) ----
+# ---- 1. The confined U-mode host ELF: WAMR (cached) + wamr_full_host + all-MC libc (hardware FP) ----
 APP_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
-            -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1
-            -fno-builtin -I"$HERE/user/libc/include")
-W3FLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
-         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O2
-         -fno-strict-aliasing -fno-builtin -I"$HERE/user/libc/include" -I"$W3")
+            -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O2
+            -fno-builtin -Wno-implicit-function-declaration -I"$HERE/user/libc/include")
+WINC=(-I"$WC/shared/platform/include" -I"$WC/shared/platform/mc" -I"$WC/shared/utils"
+      -I"$WC/shared/utils/uncommon" -I"$WC/shared/mem-alloc" -I"$WC/shared/mem-alloc/ems"
+      -I"$WC/iwasm/include" -I"$WC/iwasm/common" -I"$WC/iwasm/interpreter" -I"$WC")
+WDEF=(-DBH_PLATFORM_MC -DBUILD_TARGET_RISCV64_LP64D -DWASM_ENABLE_INTERP=1
+      -DWASM_ENABLE_INSTRUCTION_METERING=1 -DWASM_ENABLE_BULK_MEMORY=1
+      -DWASM_ENABLE_BULK_MEMORY_OPT=1 -DWASM_ENABLE_REF_TYPES=1
+      -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free)
 
-for f in m3_bind m3_code m3_compile m3_core m3_env m3_exec m3_function m3_module m3_parse; do
-    "$CLANG" "${W3FLAGS[@]}" -c "$W3/$f.c" -o "$WORK/$f.o"
-done
-"$CLANG" "${APP_CFLAGS[@]}" -I"$W3" -I"$WASMDIR" -c "$SHIM" -o "$WORK/wasi_shim.o"
-"$CLANG" "${APP_CFLAGS[@]}" -I"$W3" -I"$WASMDIR" -I"$WORK" -c "$HOST" -o "$WORK/host.o"
+# Build the WAMR engine ONCE into a cached archive (flock-guarded, stamped on WDEF + source mtimes) —
+# reused across every WASM gate so the ~25-TU engine doesn't recompile per gate. See tools/wamr/README.
+CACHE="$HERE/.wamr-cache"; mkdir -p "$CACHE"
+WAMR_LIB="$CACHE/libwamr.a"
+WANT="$(printf '%s ' "${WDEF[@]}"; find "$WC/shared/platform/mc" "$WC/shared/utils" "$WC/shared/mem-alloc" "$WC/iwasm/common" "$WC/iwasm/interpreter" \( -name '*.c' -o -name '*.h' -o -name '*.S' \) 2>/dev/null | sort | xargs ls -la 2>/dev/null | md5sum)"
+exec 9>"$CACHE/.lock"; flock 9
+if [ ! -f "$WAMR_LIB" ] || [ "$(cat "$CACHE/stamp" 2>/dev/null)" != "$WANT" ]; then
+    CB="$CACHE/obj"; rm -rf "$CB"; mkdir -p "$CB"; OBJS=(); j=0
+    cwamr() { "$CLANG" "${APP_CFLAGS[@]}" "${WINC[@]}" "${WDEF[@]}" -c "$1" -o "$2"; OBJS+=("$2"); }
+    cwamr "$WC/shared/platform/mc/mc_platform.c" "$CB/w_mc.o"
+    for f in "$WC"/shared/utils/*.c; do cwamr "$f" "$CB/wu_$((j++)).o"; done
+    cwamr "$WC/shared/mem-alloc/mem_alloc.c" "$CB/w_ma.o"
+    for f in "$WC"/shared/mem-alloc/ems/ems_alloc.c "$WC"/shared/mem-alloc/ems/ems_hmu.c "$WC"/shared/mem-alloc/ems/ems_kfc.c; do cwamr "$f" "$CB/we_$((j++)).o"; done
+    for f in "$WC"/iwasm/common/*.c; do case "$f" in *wasm_application.c) continue;; esac; cwamr "$f" "$CB/wc_$((j++)).o"; done
+    cwamr "$WC/iwasm/interpreter/wasm_runtime.c" "$CB/w_rt.o"
+    cwamr "$WC/iwasm/interpreter/wasm_interp_classic.c" "$CB/w_interp.o"
+    cwamr "$WC/iwasm/interpreter/wasm_loader.c" "$CB/w_loader.o"
+    "$CLANG" "${APP_CFLAGS[@]}" -c "$WC/iwasm/common/arch/invokeNative_riscv.S" -o "$CB/w_tramp.o"; OBJS+=("$CB/w_tramp.o")
+    "$AR" rcs "$WAMR_LIB" "${OBJS[@]}"
+    printf '%s' "$WANT" > "$CACHE/stamp"
+fi
+flock -u 9
+
+# The confined host front-end (sees wasm_blob.h + WAMR's public header + tool_abi.h/wasi.h).
+"$CLANG" "${APP_CFLAGS[@]}" -I"$WC/iwasm/include" -I"$WASMDIR" -I"$WORK" -c "$HOST" -o "$WORK/host.o"
 
 # crt0 + app_traps are PURE MC: emit-c then compile with the app CFLAGS.
 "$MCC" emit-c "$HERE/user/runtime/crt0.mc" > "$WORK/crt0_gen.c"
@@ -85,9 +123,7 @@ APP_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/app-support.o"
 bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
 
 "$LLD" -T "$HERE/user/runtime/user_qjs.ld" \
-    "$WORK/crt0.o" "$WORK/host.o" "$WORK/wasi_shim.o" \
-    "$WORK/m3_bind.o" "$WORK/m3_code.o" "$WORK/m3_compile.o" "$WORK/m3_core.o" \
-    "$WORK/m3_env.o" "$WORK/m3_exec.o" "$WORK/m3_function.o" "$WORK/m3_module.o" "$WORK/m3_parse.o" \
+    "$WORK/crt0.o" "$WORK/host.o" --whole-archive "$WAMR_LIB" --no-whole-archive \
     "$WORK/libc.o" "$WORK/sys.o" "$WORK/traps.o" $APP_SUPPORT "$WORK/libm.a" \
     -o "$WORK/agent.elf"
 
@@ -123,13 +159,13 @@ printf '%s\n' "$OUT"
 echo "------------------------------------"
 
 # PASS requires: OpenSBI ran (banner = S-mode under real firmware); the kernel is mapped
-# supervisor-only (CONFINED) in the agent's space; the stock wasm32-wasi guest ran on wasm3 and
+# supervisor-only (CONFINED) in the agent's space; the stock wasm32-wasi guest ran on WAMR and
 # printed its marker (copied out by SYS_WRITE); and the host left U-mode via SYS_EXIT.
 if printf '%s' "$OUT" | grep -qi "OpenSBI" \
    && printf '%s' "$OUT" | grep -q "CONFINED: kernel not user-accessible in agent space" \
    && printf '%s' "$OUT" | grep -q "$EXPECT" \
    && printf '%s' "$OUT" | grep -q "USER-EXIT from U"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend: wasm3 + WASI P1 shim, built freestanding against the all-MC libc, ran a STOCK wasm32-wasi guest CONFINED in an isolated U-mode Sv39 space under REAL OpenSBI in S-mode; the kernel is mapped supervisor-only (unreachable from U) and the agent reached the kernel only via the syscall ABI"
+    echo "PASS: $TEST_NAME — $BACKEND backend: WAMR + the comprehensive WASI/FS/mc host, built freestanding against the all-MC libc, ran a STOCK wasm32-wasi guest CONFINED in an isolated U-mode Sv39 space under REAL OpenSBI in S-mode; the kernel is mapped supervisor-only (unreachable from U) and the agent reached the kernel only via the syscall ABI"
     exit 0
 fi
 echo "FAIL: $TEST_NAME — expected OpenSBI banner + 'CONFINED...' + '$EXPECT' + 'USER-EXIT from U'"
