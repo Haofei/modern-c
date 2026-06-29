@@ -55,21 +55,30 @@ Proven along the way:
 ## Status update — engine swap COMPLETE, wasm3 retired
 
 All historical milestones below are DONE: the engine landed, the WASI-libc loader blocker was
-solved (feature-pin), the full agent family runs on WAMR, and wasm3 has been deleted. See the
+solved at the root (CALL_INDIRECT_OVERLONG — no feature-pin), the full agent family runs on WAMR,
+and wasm3 has been deleted. Stock toolchain-default wasm now loads directly. See the
 coverage-status section at the bottom for the current state. The notes below are kept as the
 record of how each blocker was resolved.
 
-## WASI-libc loader — SOLVED (feature-pin the guest build)
+## WASI-libc loader — SOLVED at the root (no feature-pin needed)
 
-WAMR's classic-interp loader desynced on a code-section opcode in zig's wasi-libc (printf's
-`call_indirect`), surfacing as "unknown table 128". Root cause: zig emits **multivalue /
-reference-types** forms WAMR's INTERP mis-parses. Fix is guest-side — build the wasm32-wasi guest
-with a pinned feature set so zig REBUILDS wasi-libc without them (a `-mno-*` flag does NOT, but
-`-mcpu=` changes the target hash and does):
-`zig cc -target wasm32-wasi -mcpu=mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint`.
-With that, WAMR runs a stock wasm32-wasi guest CONFINED — `wamr-wasi-hello-test` (printf ->
-WASI fd_write -> SYS_WRITE). WAMR config also needs `WASM_ENABLE_BULK_MEMORY_OPT=1` (memory.copy/
-fill) + `WASM_ENABLE_REF_TYPES=1`. This unblocks the WASI/QuickJS-on-wasm guests for the migration.
+WAMR's classic-interp loader desynced in `call_indirect`, surfacing as "unknown table 128".
+**True root cause** (found by disassembling the module): `wasm-ld` emits the `call_indirect`
+table index as an **overlong (5-byte relocatable) LEB** — `11 80 80 80 80 00 80 80 80 80 00`
+(opcode, typeidx LEB=0, tableidx LEB=0). With `WASM_ENABLE_CALL_INDIRECT_OVERLONG=0` (WAMR's
+default) the loader read the table index as a **single byte**, consuming 1 of the 5 bytes and
+drifting the instruction stream; a later `0x80 0x01` was then misread as table index 128.
+
+**Fix:** build WAMR with `-DWASM_ENABLE_CALL_INDIRECT_OVERLONG=1` (the feature WAMR ships for
+exactly this encoding) — both the pre-scan and the main validation loop then read the table
+index as a full LEB. This is a true engine-side fix, so **stock wasm built by a standard
+toolchain with default features loads directly** — no guest-side workaround.
+
+The earlier diagnosis ("multivalue/reference-types"; fix by feature-pinning the guest with
+`-mcpu=...` to force a wasi-libc rebuild) was a mis-attribution — feature-pinning *worked* only
+because the rebuild happened to re-emit a single-byte tableidx. The pin has been **removed** from
+every WASM harness; guests build with zig defaults against the PREBUILT wasi-libc. WAMR config
+still needs `WASM_ENABLE_BULK_MEMORY_OPT=1` + `WASM_ENABLE_REF_TYPES=1`.
 
 ## WAMR coverage status — wasm3 RETIRED (m0 green, 647 PASS, 0 FAIL)
 
@@ -89,9 +98,9 @@ per-arch invokeNative trampolines: `invokeNative_em64.s` (x86_64), `invokeNative
 
 Three WAMR hosts remain: `wamr_host.c` (no-WASI named-export guests: compute/burn),
 `wamr_wasi_host.c` (WASI stdout slice), `wamr_full_host.c` (the comprehensive host: WASI P1 +
-brokered FS + mc net_fetch/tool_submit/tool_poll — the real agents). Guests are built
-`zig cc -target wasm32-wasi -mcpu=mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint`
-(feature-pin so wasi-libc avoids the multivalue/ref-types forms WAMR's INTERP mis-parses).
+brokered FS + mc net_fetch/tool_submit/tool_poll — the real agents). Guests are built with a
+plain `zig cc -target wasm32-wasi` (no feature-pin — see the loader section above; WAMR's
+CALL_INDIRECT_OVERLONG=1 reads stock toolchain output directly).
 
 Verification note: a long Docker session degrades the host (m0 slows, background wrappers get
 killed). Use the detached-to-mounted-file + poll method: `docker compose run --rm -d dev bash
