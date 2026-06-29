@@ -79,14 +79,23 @@ With that, WAMR runs a stock wasm32-wasi guest CONFINED — `wamr-wasi-hello-tes
 WASI fd_write -> SYS_WRITE). WAMR config also needs `WASM_ENABLE_BULK_MEMORY_OPT=1` (memory.copy/
 fill) + `WASM_ENABLE_REF_TYPES=1`. This unblocks the WASI/QuickJS-on-wasm guests for the migration.
 
-## WAMR coverage status (engine swap progress)
+## WAMR coverage status — ENGINE SWAP COMPLETE (m0 green, 659 PASS, 0 FAIL)
 
-WAMR runs CONFINED, both backends, **gated in m0** (655 PASS): `wamr-run`, `wamr-fuel`
-(deterministic instruction fuel), `wamr-agent` (broker async via freestanding mc.*),
-`wamr-wasi-hello` (stock wasm32-wasi), `wamr-async` + `wamr-net` (real broker agents:
-wasi-libc printf + mc tool ABI, via `examples/apps/wamr_full_host.c`). Also VERIFIED on
-WAMR (not yet gated): the cancel / quota / spurious agents (same full host). So WAMR
-covers the entire mc.tool + WASI-stdout agent family.
+WAMR runs CONFINED, both backends, **gated in m0** (16 WAMR gates, full `zig build m0`
+green at 659 PASS / 0 FAIL): `wamr-run`, `wamr-fuel` (deterministic instruction fuel —
+wasm3's gap), `wamr-agent` (broker async via freestanding mc.*), `wamr-wasi-hello` (stock
+wasm32-wasi), `wamr-async` + `wamr-net` (real broker agents), `wamr-fs` (capability-checked
+WASI FS), and `wamr-js` (THE KEYSTONE: QuickJS-on-wasm runs JavaScript) — all via
+`examples/apps/wamr_full_host.c`. Also verified on WAMR: js-net / cancel / quota / spurious.
+WAMR covers the ENTIRE wasm3 agent family. Engine build is cached once into
+`.wamr-cache/libwamr.a` (flock-guarded, stamped) so the family doesn't bloat m0.
+
+The functional replacement is DONE. What remains is the wasm3 *code* retirement (below) —
+a flip of the 5 wasm3 harnesses + deletion of the vendored engine; it needs several clean
+full-m0 cycles to verify and is best done in a fresh environment (a long session degrades
+the Docker host: m0 slows and background wrappers get killed — use the detached-to-mounted
+-file + poll method: `docker compose run --rm dev bash -c 'zig build m0 > /work/.wamr-cache
+/m0.log 2>&1; echo EXIT=$? ...'` then poll `.wamr-cache/m0.log`).
 
 Two hosts: `wamr_host.c` (no-WASI named-export guests: compute/burn), `wamr_wasi_host.c`
 (WASI stdout slice), `wamr_full_host.c` (WASI stdout + mc net_fetch/tool_submit/tool_poll
