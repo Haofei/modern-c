@@ -125,16 +125,9 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-wamr-fuel-test"));
     m0_step.dependOn(ctx.cmd("wamr-agent-test"));
     m0_step.dependOn(ctx.cmd("llvm-wamr-agent-test"));
-    m0_step.dependOn(ctx.cmd("wamr-wasi-hello-test"));
-    m0_step.dependOn(ctx.cmd("llvm-wamr-wasi-hello-test"));
-    m0_step.dependOn(ctx.cmd("wamr-async-test"));
-    m0_step.dependOn(ctx.cmd("llvm-wamr-async-test"));
-    m0_step.dependOn(ctx.cmd("wamr-net-test"));
-    m0_step.dependOn(ctx.cmd("llvm-wamr-net-test"));
-    m0_step.dependOn(ctx.cmd("wamr-fs-test"));
-    m0_step.dependOn(ctx.cmd("llvm-wamr-fs-test"));
-    m0_step.dependOn(ctx.cmd("wamr-js-test"));
-    m0_step.dependOn(ctx.cmd("llvm-wamr-js-test"));
+    // The wamr-{wasi-hello,async,net,fs,js} gates were the pre-flip WAMR proofs; the wasm-* gates now
+    // run on WAMR (see wasm-confined-test.sh), so those duplicates are dropped. wamr-run/fuel/agent
+    // stay: the engine spike, the UNIQUE deterministic-fuel gate, and the freestanding-mc agent.
     m0_step.dependOn(ctx.cmd("wasm-wasi-hello-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-wasi-hello-test"));
     m0_step.dependOn(ctx.cmd("wasm-realtool-test"));
