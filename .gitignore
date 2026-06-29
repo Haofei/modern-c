@@ -3,3 +3,6 @@ zig-out/
 __pycache__/
 .refactor-baseline/
 .wamr-tmp/
+
+# WAMR engine object cache (build-once across gates)
+.wamr-cache/

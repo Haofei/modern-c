@@ -42,11 +42,17 @@ WORK="$(mktemp -d)"
 if [ "${KEEP_WORK:-0}" = 1 ]; then echo "KEEP_WORK: $WORK" >&2; else trap 'rm -rf "$WORK"' EXIT; fi
 
 # ---- 0. The guest: a no-WASI wasm32 module exporting compute() (off-the-shelf zig) ----
-if [ "$GUEST_KIND" = wasi ]; then
-    # Pin the wasm feature set so zig rebuilds wasi-libc without multivalue/reference-types (which
-    # WAMR's INTERP loader mis-parses in printf's call_indirect); keep what WAMR + wasi-libc need.
-    "$ZIG" cc -target wasm32-wasi -mcpu=mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint \
-        -O2 -s -Wl,-z,stack-size=262144 "$GUEST" -o "$WORK/guest.wasm"
+# Pin the wasm feature set so zig rebuilds wasi-libc without multivalue/reference-types (which
+# WAMR's INTERP loader mis-parses in printf's call_indirect); keep what WAMR + wasi-libc need.
+WASI_MCPU="mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint"
+if [ "$GUEST_KIND" = qjs ]; then
+    # KEYSTONE: JavaScript on WAMR — the vendored QuickJS compiled to wasm32-wasi (guest + 4 TUs),
+    # feature-pinned for WAMR. Larger stack for the JS engine.
+    QJS="$HERE/third_party/quickjs"
+    "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
+        "$GUEST" "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c -o "$WORK/guest.wasm"
+elif [ "$GUEST_KIND" = wasi ]; then
+    "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -Wl,-z,stack-size=262144 "$GUEST" -o "$WORK/guest.wasm"
 else
     EXPFLAGS=(); for e in $GUEST_EXPORTS; do EXPFLAGS+=(-Wl,--export="$e"); done
     "$ZIG" cc -target wasm32-freestanding -nostdlib -Wl,--no-entry "${EXPFLAGS[@]}" -O2 "$GUEST" -o "$WORK/guest.wasm"
@@ -70,21 +76,32 @@ WDEF=(-DBH_PLATFORM_MC -DBUILD_TARGET_RISCV64_LP64D -DWASM_ENABLE_INTERP=1
       -DWASM_ENABLE_BULK_MEMORY_OPT=1 -DWASM_ENABLE_REF_TYPES=1
       -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free)
 
-# Compile the WAMR core source set (= the cmake's INTERP globs): platform/mc + shared utils +
-# mem-alloc/ems + iwasm/common/*.c (minus wasm_application.c) + the three interpreter TUs + the
-# riscv native-call trampoline.
-WOBJS=()
-i=0
-compile_wamr() { "$CLANG" "${APP_CFLAGS[@]}" "${WINC[@]}" "${WDEF[@]}" -c "$1" -o "$2"; WOBJS+=("$2"); }
-compile_wamr "$WC/shared/platform/mc/mc_platform.c" "$WORK/w_mc.o"
-for f in "$WC"/shared/utils/*.c; do compile_wamr "$f" "$WORK/wu_$((i++)).o"; done  # uncommon/ (getopt, read_file) unused by the interp + needs posix
-compile_wamr "$WC/shared/mem-alloc/mem_alloc.c" "$WORK/w_ma.o"
-for f in "$WC"/shared/mem-alloc/ems/ems_alloc.c "$WC"/shared/mem-alloc/ems/ems_hmu.c "$WC"/shared/mem-alloc/ems/ems_kfc.c; do compile_wamr "$f" "$WORK/we_$((i++)).o"; done
-for f in "$WC"/iwasm/common/*.c; do case "$f" in *wasm_application.c) continue;; esac; compile_wamr "$f" "$WORK/wc_$((i++)).o"; done
-compile_wamr "$WC/iwasm/interpreter/wasm_runtime.c" "$WORK/w_rt.o"
-compile_wamr "$WC/iwasm/interpreter/wasm_interp_classic.c" "$WORK/w_interp.o"
-compile_wamr "$WC/iwasm/interpreter/wasm_loader.c" "$WORK/w_loader.o"
-"$CLANG" "${APP_CFLAGS[@]}" -c "$WC/iwasm/common/arch/invokeNative_riscv.S" -o "$WORK/w_tramp.o"; WOBJS+=("$WORK/w_tramp.o")
+# Build the WAMR core source set (the cmake INTERP globs: platform/mc + shared utils + mem-alloc/ems +
+# iwasm/common/*.c minus wasm_application.c + the three interpreter TUs + the riscv trampoline) ONCE
+# into a cached archive. The objects are backend-independent (clang C, fixed APP_CFLAGS), so ~25 TUs ×
+# every wamr gate would dominate m0; an flock-guarded build-once keyed on a (WDEF + source mtimes)
+# stamp cuts it to a single build reused across all wamr gates. Cache: .wamr-cache/ (gitignored).
+AR="${AR:-llvm-ar}"
+CACHE="$HERE/.wamr-cache"; mkdir -p "$CACHE"
+WAMR_LIB="$CACHE/libwamr.a"
+WANT="$(printf '%s ' "${WDEF[@]}"; find "$WC/shared/platform/mc" "$WC/shared/utils" "$WC/shared/mem-alloc" "$WC/iwasm/common" "$WC/iwasm/interpreter" \( -name '*.c' -o -name '*.h' -o -name '*.S' \) 2>/dev/null | sort | xargs ls -la 2>/dev/null | md5sum)"
+exec 9>"$CACHE/.lock"; flock 9
+if [ ! -f "$WAMR_LIB" ] || [ "$(cat "$CACHE/stamp" 2>/dev/null)" != "$WANT" ]; then
+    CB="$CACHE/obj"; rm -rf "$CB"; mkdir -p "$CB"; OBJS=(); j=0
+    cwamr() { "$CLANG" "${APP_CFLAGS[@]}" "${WINC[@]}" "${WDEF[@]}" -c "$1" -o "$2"; OBJS+=("$2"); }
+    cwamr "$WC/shared/platform/mc/mc_platform.c" "$CB/w_mc.o"
+    for f in "$WC"/shared/utils/*.c; do cwamr "$f" "$CB/wu_$((j++)).o"; done
+    cwamr "$WC/shared/mem-alloc/mem_alloc.c" "$CB/w_ma.o"
+    for f in "$WC"/shared/mem-alloc/ems/ems_alloc.c "$WC"/shared/mem-alloc/ems/ems_hmu.c "$WC"/shared/mem-alloc/ems/ems_kfc.c; do cwamr "$f" "$CB/we_$((j++)).o"; done
+    for f in "$WC"/iwasm/common/*.c; do case "$f" in *wasm_application.c) continue;; esac; cwamr "$f" "$CB/wc_$((j++)).o"; done
+    cwamr "$WC/iwasm/interpreter/wasm_runtime.c" "$CB/w_rt.o"
+    cwamr "$WC/iwasm/interpreter/wasm_interp_classic.c" "$CB/w_interp.o"
+    cwamr "$WC/iwasm/interpreter/wasm_loader.c" "$CB/w_loader.o"
+    "$CLANG" "${APP_CFLAGS[@]}" -c "$WC/iwasm/common/arch/invokeNative_riscv.S" -o "$CB/w_tramp.o"; OBJS+=("$CB/w_tramp.o")
+    "$AR" rcs "$WAMR_LIB" "${OBJS[@]}"
+    printf '%s' "$WANT" > "$CACHE/stamp"
+fi
+flock -u 9
 
 # The confined host front-end (sees wasm_blob.h + WAMR's public header).
 "$CLANG" "${APP_CFLAGS[@]}" -I"$WC/iwasm/include" -I"$HERE/examples/apps/wasm" -I"$WORK" -c "$HOST" -o "$WORK/host.o"
@@ -103,7 +120,7 @@ APP_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/app-support.o"
 bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
 
 "$LLD" -T "$HERE/user/runtime/user_qjs.ld" \
-    "$WORK/crt0.o" "$WORK/host.o" "${WOBJS[@]}" \
+    "$WORK/crt0.o" "$WORK/host.o" --whole-archive "$WAMR_LIB" --no-whole-archive \
     "$WORK/libc.o" "$WORK/sys.o" "$WORK/traps.o" $APP_SUPPORT "$WORK/libm.a" \
     -o "$WORK/agent.elf"
 

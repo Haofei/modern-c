@@ -7,6 +7,7 @@
 // preopen (fd 3). Guest offsets are converted via wasm_runtime_addr_app_to_native (bounds-validated).
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include "wasm_export.h"
 #include "wasm_blob.h"
@@ -257,8 +258,6 @@ static NativeSymbol g_mc[] = {
     { "tool_poll", mc_tool_poll, "(i)i", NULL },
 };
 
-static unsigned char g_wbuf[1u << 20];
-
 int main(void) {
     fds_init();
     RuntimeInitArgs ia; memset(&ia, 0, sizeof ia);
@@ -266,14 +265,18 @@ int main(void) {
     if (!wasm_runtime_full_init(&ia)) { printf("WAMR-FULL: init fail\n"); return 1; }
     wasm_runtime_register_natives("wasi_snapshot_preview1", g_wasi, sizeof(g_wasi)/sizeof(g_wasi[0]));
     wasm_runtime_register_natives("mc", g_mc, sizeof(g_mc)/sizeof(g_mc[0]));
-    if (wasm_blob_len > sizeof g_wbuf) { printf("WAMR-FULL: module too big\n"); return 1; }
-    memcpy(g_wbuf, wasm_blob, wasm_blob_len);
+    // WAMR edits the module buffer in place -> a WRITABLE copy. malloc from the libc arena (not a
+    // static BSS buffer) so the big QuickJS guest fits the confined region.
+    unsigned char *wbuf = malloc(wasm_blob_len);
+    if (!wbuf) { printf("WAMR-FULL: oom\n"); return 1; }
+    memcpy(wbuf, wasm_blob, wasm_blob_len);
     char err[192];
-    wasm_module_t module = wasm_runtime_load(g_wbuf, wasm_blob_len, err, sizeof err);
+    wasm_module_t module = wasm_runtime_load(wbuf, wasm_blob_len, err, sizeof err);
     if (!module) { printf("WAMR-FULL: load fail: %s\n", err); return 1; }
-    wasm_module_inst_t inst = wasm_runtime_instantiate(module, 65536, 262144, err, sizeof err);
+    // Large WAMR operand stack: QuickJS's wasm call chains are deep (the JS eval recursion).
+    wasm_module_inst_t inst = wasm_runtime_instantiate(module, 1048576, 262144, err, sizeof err);
     if (!inst) { printf("WAMR-FULL: instantiate fail: %s\n", err); return 1; }
-    wasm_exec_env_t env = wasm_runtime_create_exec_env(inst, 65536);
+    wasm_exec_env_t env = wasm_runtime_create_exec_env(inst, 1048576);
     wasm_function_inst_t start = wasm_runtime_lookup_function(inst, "_start");
     if (!start) { printf("WAMR-FULL: no _start\n"); return 1; }
     if (!wasm_runtime_call_wasm(env, start, 0, NULL)) {

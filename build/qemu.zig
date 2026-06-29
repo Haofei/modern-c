@@ -844,6 +844,12 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wamr-fs-test", "WASM engine swap: WAMR drives the capability-checked WASI FS path (allow + deny audit) confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_fs.c", "examples/apps/wamr_full_host.c", "fs: ok", "wamr-fs", "", "wasi" });
     _ = h.addScriptTest(ctx, "llvm-wamr-fs-test", "WASM engine swap (LLVM): WAMR drives the capability-checked WASI FS path confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_fs.c", "examples/apps/wamr_full_host.c", "fs: ok", "wamr-fs", "", "wasi" });
 
+    // WASM engine swap — THE KEYSTONE: JavaScript (QuickJS compiled to wasm32-wasi: guest + 4 TUs)
+    // runs on WAMR confined -> "js: ok". WAMR now covers the full wasm3 agent family. The qjs guest
+    // kind feature-pins the build; the full host's 1 MB operand stack carries QuickJS's eval recursion.
+    _ = h.addScriptTest(ctx, "wamr-js-test", "WASM engine swap keystone: JavaScript (QuickJS-on-wasm) runs on WAMR confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_js.c", "examples/apps/wamr_full_host.c", "js: ok", "wamr-js", "", "qjs" });
+    _ = h.addScriptTest(ctx, "llvm-wamr-js-test", "WASM engine swap keystone (LLVM): JavaScript (QuickJS-on-wasm) runs on WAMR confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js.c", "examples/apps/wamr_full_host.c", "js: ok", "wamr-js", "", "qjs" });
+
     // WASM-agent Phase 1 (docs/wasm-migration-plan.md §5): run a STOCK wasm32-wasi guest CONFINED.
     // Build wasm3 + the WASI Preview 1 shim (examples/apps/wasm/wasi_shim) + the all-MC libc + the
     // generic wasm_host into a U-mode ELF, load it with the real elf_loader into an isolated Sv39
