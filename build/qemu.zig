@@ -838,6 +838,12 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wamr-net-test", "WASM engine swap: WAMR runs the brokered net-fetch agent (allow/deny/budget) confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_net.c", "examples/apps/wamr_full_host.c", "net: ok", "wamr-net", "", "wasi" });
     _ = h.addScriptTest(ctx, "llvm-wamr-net-test", "WASM engine swap (LLVM): WAMR runs the brokered net-fetch agent confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_net.c", "examples/apps/wamr_full_host.c", "net: ok", "wamr-net", "", "wasi" });
 
+    // WASM engine swap: WAMR drives the real capability-checked WASI FS tool path (path_open/fd_read/
+    // fd_write whole-file + mkdir-deny + outside-preopen-deny) confined — the WAMR analogue of
+    // wasm-realtool-test, via the full host's brokered /ws preopen (TOOL_OP_FS_* over SYS_SUBMIT).
+    _ = h.addScriptTest(ctx, "wamr-fs-test", "WASM engine swap: WAMR drives the capability-checked WASI FS path (allow + deny audit) confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_fs.c", "examples/apps/wamr_full_host.c", "fs: ok", "wamr-fs", "", "wasi" });
+    _ = h.addScriptTest(ctx, "llvm-wamr-fs-test", "WASM engine swap (LLVM): WAMR drives the capability-checked WASI FS path confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_fs.c", "examples/apps/wamr_full_host.c", "fs: ok", "wamr-fs", "", "wasi" });
+
     // WASM-agent Phase 1 (docs/wasm-migration-plan.md §5): run a STOCK wasm32-wasi guest CONFINED.
     // Build wasm3 + the WASI Preview 1 shim (examples/apps/wasm/wasi_shim) + the all-MC libc + the
     // generic wasm_host into a U-mode ELF, load it with the real elf_loader into an isolated Sv39
