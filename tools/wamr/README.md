@@ -52,20 +52,12 @@ Proven along the way:
    #           core/iwasm/interpreter/wasm_{loader,runtime,interp_classic}.c, mc-platform/mc_platform.c
    ```
 
-## Status update — engine landed; WASI-agent path is the active blocker
+## Status update — engine swap COMPLETE, wasm3 retired
 
-LANDED + gated in m0 (both backends): `wamr-run-test` (WAMR runs a real wasm32 module CONFINED)
-and `wamr-fuel-test` (DETERMINISTIC instruction-count fuel — the capability wasm3 lacks). The
-engine is vendored, builds freestanding, and executes wasm correctly.
-
-ACTIVE BLOCKER (WASI agents): running the EXISTING stock `wasm32-wasi` guests (the real agents,
-built by `zig cc -target wasm32-wasi`, linking zig's prebuilt wasi-libc) on WAMR fails in WAMR's
-loader with `unknown table 128` even with `WASM_ENABLE_REF_TYPES=1`. zig's wasi-libc objects carry
-post-MVP features (reference-types, multivalue, etc.) that WAMR's INTERP loader config must be
-matched to (guest-side `-mno-*` flags don't help — the features are in the prebuilt libc). The
-WAMR WASI host (`examples/apps/wamr_wasi_host.c`) + the `wasi` guest-kind in `wamr-run-test.sh`
-are staged; resolving the loader feature-match is the next step before the fs/net/tool imports and
-the gate migration. (wasm3 stays the default + every wasm gate; nothing is broken.)
+All historical milestones below are DONE: the engine landed, the WASI-libc loader blocker was
+solved (feature-pin), the full agent family runs on WAMR, and wasm3 has been deleted. See the
+coverage-status section at the bottom for the current state. The notes below are kept as the
+record of how each blocker was resolved.
 
 ## WASI-libc loader — SOLVED (feature-pin the guest build)
 
@@ -79,44 +71,32 @@ With that, WAMR runs a stock wasm32-wasi guest CONFINED — `wamr-wasi-hello-tes
 WASI fd_write -> SYS_WRITE). WAMR config also needs `WASM_ENABLE_BULK_MEMORY_OPT=1` (memory.copy/
 fill) + `WASM_ENABLE_REF_TYPES=1`. This unblocks the WASI/QuickJS-on-wasm guests for the migration.
 
-## WAMR coverage status — ENGINE SWAP COMPLETE (m0 green, 659 PASS, 0 FAIL)
+## WAMR coverage status — wasm3 RETIRED (m0 green, 647 PASS, 0 FAIL)
 
-WAMR runs CONFINED, both backends, **gated in m0** (16 WAMR gates, full `zig build m0`
-green at 659 PASS / 0 FAIL): `wamr-run`, `wamr-fuel` (deterministic instruction fuel —
-wasm3's gap), `wamr-agent` (broker async via freestanding mc.*), `wamr-wasi-hello` (stock
-wasm32-wasi), `wamr-async` + `wamr-net` (real broker agents), `wamr-fs` (capability-checked
-WASI FS), and `wamr-js` (THE KEYSTONE: QuickJS-on-wasm runs JavaScript) — all via
-`examples/apps/wamr_full_host.c`. Also verified on WAMR: js-net / cancel / quota / spurious.
-WAMR covers the ENTIRE wasm3 agent family. Engine build is cached once into
-`.wamr-cache/libwamr.a` (flock-guarded, stamped) so the family doesn't bloat m0.
+WAMR has **fully replaced** wasm3. Every WASM gate — the confined agent family + net-realtool
++ watchdog + bench, the 3 S-mode (OpenSBI) peers, and the 2 cross-arch peers (x86_64 ring-3,
+aarch64 EL0) — runs on WAMR, both backends, **gated in `zig build m0`** (verified green at
+647 PASS / 0 FAIL). `third_party/wasm3`, `examples/apps/wasm_host.c`, and
+`examples/apps/wasm/wasi_shim.{c,h}` are **deleted**; the superseded `wasm-run` Phase-0 spike
+is retired in favour of `wamr-run`/`wamr-fuel`/`wamr-agent` (the latter adds the deterministic
+instruction-count fuel wasm3 lacked).
 
-The functional replacement is DONE. What remains is the wasm3 *code* retirement (below) —
-a flip of the 5 wasm3 harnesses + deletion of the vendored engine; it needs several clean
-full-m0 cycles to verify and is best done in a fresh environment (a long session degrades
-the Docker host: m0 slows and background wrappers get killed — use the detached-to-mounted
--file + poll method: `docker compose run --rm dev bash -c 'zig build m0 > /work/.wamr-cache
-/m0.log 2>&1; echo EXIT=$? ...'` then poll `.wamr-cache/m0.log`).
+Engine builds are cached once, per arch, into `.wamr-cache/<arch>/libwamr.a` (riscv64 lives at
+`.wamr-cache/libwamr.a`); the 4 QuickJS TUs are cached as wasm objects in `.wamr-cache/qjs-wasm`
+(both flock-guarded + mtime-stamped) so the family doesn't bloat m0. Cross-arch uses WAMR's
+per-arch invokeNative trampolines: `invokeNative_em64.s` (x86_64), `invokeNative_aarch64.s`
+(aarch64), `invokeNative_riscv.S` (riscv64).
 
-Two hosts: `wamr_host.c` (no-WASI named-export guests: compute/burn), `wamr_wasi_host.c`
-(WASI stdout slice), `wamr_full_host.c` (WASI stdout + mc net_fetch/tool_submit/tool_poll
-— the real agents). Guests built `zig cc -target wasm32-wasi -mcpu=mvp+bulk_memory+sign_ext
-+mutable_globals+nontrapping_fptoint` (feature-pin so wasi-libc avoids the multivalue/
-ref-types forms WAMR's INTERP mis-parses).
+Three WAMR hosts remain: `wamr_host.c` (no-WASI named-export guests: compute/burn),
+`wamr_wasi_host.c` (WASI stdout slice), `wamr_full_host.c` (the comprehensive host: WASI P1 +
+brokered FS + mc net_fetch/tool_submit/tool_poll — the real agents). Guests are built
+`zig cc -target wasm32-wasi -mcpu=mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint`
+(feature-pin so wasi-libc avoids the multivalue/ref-types forms WAMR's INTERP mis-parses).
 
-## Remaining to RETIRE wasm3 (the finish line)
-
-1. **FS shim** — port wasi_shim.c's WASI FS surface (fd table + `/ws` preopen, path_open,
-   fd_read whole-file cache via TOOL_OP_FS_READ, fd_write buffer + flush-on-close via
-   TOOL_OP_FS_WRITE, path_create_directory, fd_prestat_*) into `wamr_full_host.c`, using
-   `wasm_runtime_addr_app_to_native` + a host-staged `[path][data]` payload to sys_submit.
-   Unblocks `wasi_fs.c` + `wasi_smoke.c` on WAMR.
-2. **QuickJS-on-wasm keystone** — build wasi_js.c + QuickJS TUs with the feature-pin; run on
-   the full host (the big guest; verify heap/linear-memory sizing).
-3. **m0-cost fix** — build the WAMR engine ONCE (a cached object set / libwamr.a) instead of
-   recompiling ~25 files per gate, so the family doesn't bloat m0 runtime.
-4. **Flip + remove** — point the existing wasm gate harnesses (`wasm-confined-test.sh` etc.)
-   at WAMR + the full host, drop the parallel `wamr-*` gates, and delete `third_party/wasm3`,
-   `examples/apps/wasm_host.c`, `examples/apps/wasm/wasi_shim.c`.
+Verification note: a long Docker session degrades the host (m0 slows, background wrappers get
+killed). Use the detached-to-mounted-file + poll method: `docker compose run --rm -d dev bash
+-c 'zig build m0 > /work/.wamr-cache/m0.log 2>&1; echo EXIT=$? ...'` then poll
+`.wamr-cache/m0.log` for the `EXIT=` marker.
 
 ## Old remaining-work notes (superseded by the list above)
 
