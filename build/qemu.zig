@@ -338,7 +338,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-arm-qjs-test", "M9 (LLVM): run a PURE-JS agent confined in an aarch64 EL0 space under QEMU, with async host I/O", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "arm-qjs-async-test", "M9: a pure-JS agent proves overlap + back-pressure/denial over async host I/O in aarch64 EL0", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "arm-qjs-async" });
 
-    // WASM-agent Phase 6 cross-arch (aarch64): a stock wasm32-wasi guest on wasm3 runs confined in
+    // WASM-agent Phase 6 cross-arch (aarch64): a stock wasm32-wasi guest on WAMR runs confined in
     // EL0 with async host I/O over svc #0. The WASM peer of arm-qjs-async-test.
     _ = h.addScriptTest(ctx, "arm-wasm-async-test", "WASM-agent Phase 6: a confined WASM guest proves overlap + back-pressure over async host I/O in aarch64 EL0 under QEMU", &.{ "bash", "tools/arch/arm-wasm-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-arm-wasm-async-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest proves async host I/O in aarch64 EL0 under QEMU", &.{ "bash", "tools/arch/arm-wasm-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -395,7 +395,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "x86-qjs-async-test", "M7: a pure-JS agent proves overlap + back-pressure/denial over async host I/O in x86-64 ring 3", &.{ "bash", "tools/arch/x86-qjs-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "x86-qjs-async" });
 
-    // WASM-agent Phase 6 cross-arch (x86_64): a stock wasm32-wasi guest on wasm3 runs confined in
+    // WASM-agent Phase 6 cross-arch (x86_64): a stock wasm32-wasi guest on WAMR runs confined in
     // ring 3 with async host I/O over int 0x80. The WASM peer of x86-qjs-async-test.
     _ = h.addScriptTest(ctx, "x86-wasm-async-test", "WASM-agent Phase 6: a confined WASM guest proves overlap + back-pressure over async host I/O in x86-64 ring 3 under QEMU", &.{ "bash", "tools/arch/x86-wasm-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-x86-wasm-async-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest proves async host I/O in x86-64 ring 3 under QEMU", &.{ "bash", "tools/arch/x86-wasm-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -797,14 +797,9 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-qjs-run-test", "QuickJS-agent Phase 4 (LLVM): build QuickJS freestanding and evaluate JS under QEMU", &.{ "bash", "tools/lang/qjs-run-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // WASM-agent Phase 0 (docs/wasm-migration-plan.md §5): the spike that proves a general WASM
-    // engine confines, links, and reaches the kernel — the mirror of qjs-run-test. Build the
-    // vendored wasm3 interpreter (third_party/wasm3) freestanding against the all-MC libc, link
-    // the confined wasm3 front-end (examples/apps/wasm_agent.c), and run a real wasm32 module
-    // (built by clang --target=wasm32 + wasm-ld) that prints via a WASI fd_write import mapped to
-    // SYS_WRITE, then proc_exit. Both backends.
-    _ = h.addScriptTest(ctx, "wasm-run-test", "WASM-agent Phase 0: build wasm3 freestanding against the all-MC libc and run a real wasm32 module that prints via a WASI fd_write->SYS_WRITE import under QEMU", &.{ "bash", "tools/lang/wasm-run-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-wasm-run-test", "WASM-agent Phase 0 (LLVM): build wasm3 freestanding and run a real wasm32 module that prints via a WASI fd_write->SYS_WRITE import under QEMU", &.{ "bash", "tools/lang/wasm-run-test.sh", "zig-out/bin/mcc", "llvm" });
+    // engine confines, links, and reaches the kernel — the mirror of qjs-run-test. RETIRED with
+    // wasm3: superseded by wamr-run-test below (the WAMR engine spike, which also adds the
+    // deterministic instruction-metering fuel wasm3 lacked).
 
     // WASM engine swap (tools/wamr/README.md): the WAMR interpreter (vendored third_party/wamr, built
     // freestanding via the `mc` platform port) runs a real wasm32 module CONFINED — the WAMR analogue
@@ -851,8 +846,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-wamr-js-test", "WASM engine swap keystone (LLVM): JavaScript (QuickJS-on-wasm) runs on WAMR confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js.c", "examples/apps/wamr_full_host.c", "js: ok", "wamr-js", "", "qjs" });
 
     // WASM-agent Phase 1 (docs/wasm-migration-plan.md §5): run a STOCK wasm32-wasi guest CONFINED.
-    // Build wasm3 + the WASI Preview 1 shim (examples/apps/wasm/wasi_shim) + the all-MC libc + the
-    // generic wasm_host into a U-mode ELF, load it with the real elf_loader into an isolated Sv39
+    // Build WAMR + the comprehensive wamr_full_host (WASI P1 + the brokered FS + the mc tool ABI) +
+    // the all-MC libc into a U-mode ELF, load it with the real elf_loader into an isolated Sv39
     // space (kernel UNMAPPED), and run an embedded `zig cc -target wasm32-wasi` printf hello —
     // reaching the kernel only through SYS_WRITE/SYS_EXIT. The mirror of qjs-confined-test. Both
     // backends.
@@ -882,12 +877,12 @@ pub fn register(ctx: *h.Ctx) void {
     // WASM-agent Phase 4 KEYSTONE (docs/wasm-migration-plan.md §5): JavaScript on the WASM path.
     // The repo's vendored QuickJS compiled to wasm32-wasi (the Javy approach — Javy IS QuickJS-ng
     // on wasm32-wasi — built with zig cc + wasi-libc since the Javy binary is unavailable here) runs
-    // a representative JS program (recursion + objects + JSON + closures) on the wasm3 host + WASI
+    // a representative JS program (recursion + objects + JSON + closures) on the WAMR host + WASI
     // shim, confined. Proves JS agents survive the migration ("keep JS, retire the hack"). Both
     // backends. (The 6th arg selects the QuickJS-on-wasm guest build.)
-    _ = h.addScriptTest(ctx, "wasm-js-agent-test", "WASM-agent Phase 4 keystone: JavaScript (QuickJS compiled to wasm32-wasi) runs on the wasm3 runtime confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_js.c", "js: ok", "wasm-js-agent", "qjs" });
+    _ = h.addScriptTest(ctx, "wasm-js-agent-test", "WASM-agent Phase 4 keystone: JavaScript (QuickJS compiled to wasm32-wasi) runs on WAMR confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_js.c", "js: ok", "wasm-js-agent", "qjs" });
 
-    _ = h.addScriptTest(ctx, "llvm-wasm-js-agent-test", "WASM-agent Phase 4 keystone (LLVM): JavaScript (QuickJS compiled to wasm32-wasi) runs on the wasm3 runtime confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js.c", "js: ok", "wasm-js-agent", "qjs" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-js-agent-test", "WASM-agent Phase 4 keystone (LLVM): JavaScript (QuickJS compiled to wasm32-wasi) runs on WAMR confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js.c", "js: ok", "wasm-js-agent", "qjs" });
 
     // WASM-agent Phase 4b (docs/wasm-migration-plan.md §5): a JS AGENT drives the kernel broker on
     // the WASM path. QuickJS-on-wasm registers net_fetch() as a JS global backed by the mc.net_fetch

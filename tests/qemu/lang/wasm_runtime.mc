@@ -1,10 +1,10 @@
-// Bare-metal riscv64 platform runtime for the wasm3 agent bring-up — in PURE MC.
+// Bare-metal riscv64 platform runtime for the WASM agent bring-up — in PURE MC.
 // The WASM analogue of tests/qemu/lang/qjs_runtime.mc: the platform glue (the analogue of crt0 +
-// the syscall shim) the vendored wasm3 engine + the all-MC libc need — the console/write hooks
+// the syscall shim) the vendored WAMR engine + the all-MC libc need — the console/write hooks
 // (-> UART), the stdio stream DATA symbols, FPU enablement (wasm float ops compute on the hardware
 // F/D unit, lp64d), and the entry that calls the agent's main().
 //
-// wasm3 (third_party/wasm3) + openlibm stay vendored C, linked alongside. The mc_trap_* checked-
+// WAMR (third_party/wamr) + openlibm stay vendored C, linked alongside. The mc_trap_* checked-
 // arithmetic hooks are NOT defined here: MC's emit-c already emits a per-unit static inline
 // mc_trap_* (-> __builtin_trap()), so every MC unit is self-contained for traps and the C objects
 // never reference them.
