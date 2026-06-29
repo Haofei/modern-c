@@ -830,6 +830,14 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wamr-wasi-hello-test", "WASM engine swap: WAMR runs a stock wasm32-wasi guest CONFINED via the WASI P1 shim under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_hello.c", "examples/apps/wamr_wasi_host.c", "WASI-HELLO=ok", "wamr-wasi-hello", "", "wasi" });
     _ = h.addScriptTest(ctx, "llvm-wamr-wasi-hello-test", "WASM engine swap (LLVM): WAMR runs a stock wasm32-wasi guest CONFINED under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_hello.c", "examples/apps/wamr_wasi_host.c", "WASI-HELLO=ok", "wamr-wasi-hello", "", "wasi" });
 
+    // WASM engine swap: WAMR runs the REAL broker agents (stock wasm32-wasi: wasi-libc printf + the mc
+    // tool ABI) confined via the comprehensive host (WASI P1 + mc net_fetch/tool_submit/tool_poll).
+    _ = h.addScriptTest(ctx, "wamr-async-test", "WASM engine swap: WAMR runs the async broker agent (overlap + back-pressure) confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_async.c", "examples/apps/wamr_full_host.c", "async: ok", "wamr-async", "", "wasi" });
+    _ = h.addScriptTest(ctx, "llvm-wamr-async-test", "WASM engine swap (LLVM): WAMR runs the async broker agent confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_async.c", "examples/apps/wamr_full_host.c", "async: ok", "wamr-async", "", "wasi" });
+
+    _ = h.addScriptTest(ctx, "wamr-net-test", "WASM engine swap: WAMR runs the brokered net-fetch agent (allow/deny/budget) confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_net.c", "examples/apps/wamr_full_host.c", "net: ok", "wamr-net", "", "wasi" });
+    _ = h.addScriptTest(ctx, "llvm-wamr-net-test", "WASM engine swap (LLVM): WAMR runs the brokered net-fetch agent confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_net.c", "examples/apps/wamr_full_host.c", "net: ok", "wamr-net", "", "wasi" });
+
     // WASM-agent Phase 1 (docs/wasm-migration-plan.md §5): run a STOCK wasm32-wasi guest CONFINED.
     // Build wasm3 + the WASI Preview 1 shim (examples/apps/wasm/wasi_shim) + the all-MC libc + the
     // generic wasm_host into a U-mode ELF, load it with the real elf_loader into an isolated Sv39
