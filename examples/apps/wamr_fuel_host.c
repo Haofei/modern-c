@@ -31,7 +31,7 @@ int main(void) {
     wasm_exec_env_t e1 = wasm_runtime_create_exec_env(i1, 65536);
     wasm_function_inst_t f1 = wasm_runtime_lookup_function(i1, "burn");
     if (!f1) { printf("WAMR-FUEL: no burn\n"); return 1; }
-    wasm_runtime_set_instruction_count_limit(e1, 100000);     // ~0.1M instr — far below the loop
+    wasm_runtime_set_instruction_count_limit(e1, 20000);     // far below the loop -> caps
     uint32_t a1[1] = { 0 };
     int capped = 0;
     if (!wasm_runtime_call_wasm(e1, f1, 0, a1)) {
