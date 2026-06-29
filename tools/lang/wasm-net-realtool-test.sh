@@ -20,15 +20,16 @@ LLD="${LLD:-ld.lld}"
 LLC="${LLC:-llc}"
 ZIG="${ZIG:-zig}"
 QEMU="${QEMU:-qemu-system-riscv64}"
+AR="${AR:-llvm-ar}"
 PORT=8080
 TOKEN="MC-WASM-NET-REALTOOL-OK"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-W3="$HERE/third_party/wasm3/source"
+WAMR="$HERE/third_party/wamr"
+WC="$WAMR/core"
 WASMDIR="$HERE/examples/apps/wasm"
-HOST="$HERE/examples/apps/wasm_host.c"
-SHIM="$WASMDIR/wasi_shim.c"
+HOST="$HERE/examples/apps/wamr_full_host.c"
 QJS="$HERE/third_party/quickjs"
 SRC="$HERE/tests/qemu/proc/app_run_demo.mc"
 NETTCP="$HERE/tests/qemu/proc/app_run_net_tcp.mc"             # TCP-backed net provider (agent-agnostic)
@@ -66,13 +67,26 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 : >"$WORK/httpd.log"
 
-# ---- 0. The guest: a wasm32-wasi binary (off-the-shelf zig + wasi-libc) ----
+# ---- 0. The guest: a wasm32-wasi binary (off-the-shelf zig + wasi-libc), feature-pinned for WAMR ----
+WASI_MCPU="mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint"
 if [ "$GUEST_KIND" = qjs ]; then
-    "$ZIG" cc -target wasm32-wasi -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
-        "$HERE/$GUEST_REL" "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c \
+    # Reuse the shared QuickJS-to-wasm object cache (see wasm-confined-test.sh): compile the 4 heavy
+    # QuickJS TUs once, then per-gate only compile the small guest .c and link against the cached objects.
+    QCACHE="$HERE/.wamr-cache/qjs-wasm"; mkdir -p "$QCACHE"
+    QWANT="$(printf '%s ' "$WASI_MCPU"; ls -la "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c "$QJS"/*.h 2>/dev/null | md5sum)"
+    exec 8>"$QCACHE/.lock"; flock 8
+    if [ "$(cat "$QCACHE/stamp" 2>/dev/null)" != "$QWANT" ]; then
+        for f in dtoa libunicode libregexp quickjs; do
+            "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -I"$QJS" -D__wasi__ -c "$QJS/$f.c" -o "$QCACHE/$f.o"
+        done
+        printf '%s' "$QWANT" > "$QCACHE/stamp"
+    fi
+    flock -u 8
+    "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
+        "$HERE/$GUEST_REL" "$QCACHE"/dtoa.o "$QCACHE"/libunicode.o "$QCACHE"/libregexp.o "$QCACHE"/quickjs.o \
         -o "$WORK/guest.wasm"
 else
-    "$ZIG" cc -target wasm32-wasi -O2 -s -Wl,-z,stack-size=262144 "$HERE/$GUEST_REL" -o "$WORK/guest.wasm"
+    "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -Wl,-z,stack-size=262144 "$HERE/$GUEST_REL" -o "$WORK/guest.wasm"
 fi
 {
     echo "const unsigned char wasm_blob[] = {"
@@ -85,15 +99,35 @@ fi
 APP_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
             -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1
             -fno-builtin -I"$HERE/user/libc/include")
-W3FLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
-         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O2
-         -fno-strict-aliasing -fno-builtin -I"$HERE/user/libc/include" -I"$W3")
-
-for f in m3_bind m3_code m3_compile m3_core m3_env m3_exec m3_function m3_module m3_parse; do
-    "$CLANG" "${W3FLAGS[@]}" -c "$W3/$f.c" -o "$WORK/$f.o"
-done
-"$CLANG" "${APP_CFLAGS[@]}" -I"$W3" -I"$WASMDIR" -c "$SHIM" -o "$WORK/wasi_shim.o"
-"$CLANG" "${APP_CFLAGS[@]}" -I"$W3" -I"$WASMDIR" -I"$WORK" -c "$HOST" -o "$WORK/host.o"
+WINC=(-I"$WC/shared/platform/include" -I"$WC/shared/platform/mc" -I"$WC/shared/utils"
+      -I"$WC/shared/utils/uncommon" -I"$WC/shared/mem-alloc" -I"$WC/shared/mem-alloc/ems"
+      -I"$WC/iwasm/include" -I"$WC/iwasm/common" -I"$WC/iwasm/interpreter" -I"$WC")
+WDEF=(-DBH_PLATFORM_MC -DBUILD_TARGET_RISCV64_LP64D -DWASM_ENABLE_INTERP=1
+      -DWASM_ENABLE_INSTRUCTION_METERING=1 -DWASM_ENABLE_BULK_MEMORY=1
+      -DWASM_ENABLE_BULK_MEMORY_OPT=1 -DWASM_ENABLE_REF_TYPES=1
+      -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free)
+WAMR_CFLAGS=("${APP_CFLAGS[@]}" -Wno-implicit-function-declaration)
+# Build/reuse the cached WAMR engine archive (flock-guarded, stamped) — shared with the other gates.
+CACHE="$HERE/.wamr-cache"; mkdir -p "$CACHE"; WAMR_LIB="$CACHE/libwamr.a"
+WANT="$(printf '%s ' "${WDEF[@]}"; find "$WC/shared/platform/mc" "$WC/shared/utils" "$WC/shared/mem-alloc" "$WC/iwasm/common" "$WC/iwasm/interpreter" \( -name '*.c' -o -name '*.h' -o -name '*.S' \) 2>/dev/null | sort | xargs ls -la 2>/dev/null | md5sum)"
+exec 9>"$CACHE/.lock"; flock 9
+if [ ! -f "$WAMR_LIB" ] || [ "$(cat "$CACHE/stamp" 2>/dev/null)" != "$WANT" ]; then
+    CB="$CACHE/obj"; rm -rf "$CB"; mkdir -p "$CB"; OBJS=(); j=0
+    cwamr() { "$CLANG" "${WAMR_CFLAGS[@]}" "${WINC[@]}" "${WDEF[@]}" -c "$1" -o "$2"; OBJS+=("$2"); }
+    cwamr "$WC/shared/platform/mc/mc_platform.c" "$CB/w_mc.o"
+    for f in "$WC"/shared/utils/*.c; do cwamr "$f" "$CB/wu_$((j++)).o"; done
+    cwamr "$WC/shared/mem-alloc/mem_alloc.c" "$CB/w_ma.o"
+    for f in "$WC"/shared/mem-alloc/ems/ems_alloc.c "$WC"/shared/mem-alloc/ems/ems_hmu.c "$WC"/shared/mem-alloc/ems/ems_kfc.c; do cwamr "$f" "$CB/we_$((j++)).o"; done
+    for f in "$WC"/iwasm/common/*.c; do case "$f" in *wasm_application.c) continue;; esac; cwamr "$f" "$CB/wc_$((j++)).o"; done
+    cwamr "$WC/iwasm/interpreter/wasm_runtime.c" "$CB/w_rt.o"
+    cwamr "$WC/iwasm/interpreter/wasm_interp_classic.c" "$CB/w_interp.o"
+    cwamr "$WC/iwasm/interpreter/wasm_loader.c" "$CB/w_loader.o"
+    "$CLANG" "${WAMR_CFLAGS[@]}" -c "$WC/iwasm/common/arch/invokeNative_riscv.S" -o "$CB/w_tramp.o"; OBJS+=("$CB/w_tramp.o")
+    "$AR" rcs "$WAMR_LIB" "${OBJS[@]}"
+    printf '%s' "$WANT" > "$CACHE/stamp"
+fi
+flock -u 9
+"$CLANG" "${APP_CFLAGS[@]}" -I"$WC/iwasm/include" -I"$WASMDIR" -I"$WORK" -c "$HOST" -o "$WORK/host.o"
 
 "$MCC" emit-c "$HERE/user/runtime/crt0.mc" > "$WORK/crt0_gen.c"
 "$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/crt0_gen.c" -o "$WORK/crt0.o"
@@ -107,9 +141,7 @@ APP_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/app-support.o"
 bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
 
 "$LLD" -T "$HERE/user/runtime/user_qjs.ld" \
-    "$WORK/crt0.o" "$WORK/host.o" "$WORK/wasi_shim.o" \
-    "$WORK/m3_bind.o" "$WORK/m3_code.o" "$WORK/m3_compile.o" "$WORK/m3_core.o" \
-    "$WORK/m3_env.o" "$WORK/m3_exec.o" "$WORK/m3_function.o" "$WORK/m3_module.o" "$WORK/m3_parse.o" \
+    "$WORK/crt0.o" "$WORK/host.o" --whole-archive "$WAMR_LIB" --no-whole-archive \
     "$WORK/libc.o" "$WORK/sys.o" "$WORK/traps.o" $APP_SUPPORT "$WORK/libm.a" \
     -o "$WORK/agent.elf"
 

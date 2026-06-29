@@ -47,10 +47,22 @@ if [ "${KEEP_WORK:-0}" = 1 ]; then echo "KEEP_WORK: $WORK" >&2; else trap 'rm -r
 WASI_MCPU="mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint"
 if [ "$GUEST_KIND" = qjs ]; then
     # KEYSTONE: JavaScript on WAMR — the vendored QuickJS compiled to wasm32-wasi (guest + 4 TUs),
-    # feature-pinned for WAMR. Larger stack for the JS engine.
+    # feature-pinned for WAMR. Larger stack for the JS engine. The 4 QuickJS TUs are identical across
+    # every qjs gate, so compile them to wasm objects ONCE into a flock-guarded cache and reuse them —
+    # each gate then only compiles its small guest .c and links. See tools/wamr/README.
     QJS="$HERE/third_party/quickjs"
+    QCACHE="$HERE/.wamr-cache/qjs-wasm"; mkdir -p "$QCACHE"
+    QWANT="$(printf '%s ' "$WASI_MCPU"; ls -la "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c "$QJS"/*.h 2>/dev/null | md5sum)"
+    exec 8>"$QCACHE/.lock"; flock 8
+    if [ "$(cat "$QCACHE/stamp" 2>/dev/null)" != "$QWANT" ]; then
+        for f in dtoa libunicode libregexp quickjs; do
+            "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -I"$QJS" -D__wasi__ -c "$QJS/$f.c" -o "$QCACHE/$f.o"
+        done
+        printf '%s' "$QWANT" > "$QCACHE/stamp"
+    fi
+    flock -u 8
     "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
-        "$GUEST" "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c -o "$WORK/guest.wasm"
+        "$GUEST" "$QCACHE"/dtoa.o "$QCACHE"/libunicode.o "$QCACHE"/libregexp.o "$QCACHE"/quickjs.o -o "$WORK/guest.wasm"
 elif [ "$GUEST_KIND" = wasi ]; then
     "$ZIG" cc -target wasm32-wasi -mcpu="$WASI_MCPU" -O2 -s -Wl,-z,stack-size=262144 "$GUEST" -o "$WORK/guest.wasm"
 else
