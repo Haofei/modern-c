@@ -549,3 +549,54 @@ export fn proc_supervise_step(t: *mut ProcTable, slot: usize, now: u64, max_rest
     }
     return .GiveUp;
 }
+
+// ----- supervision: the running supervisor SCAN (production-readiness §3.1 #12 remainder) -----
+// proc_supervise_step is the per-slot VERDICT; this is the running supervisor LOOP a periodic
+// context (e.g. a timer-adjacent supervisor service) calls each scan to ACTUATE that verdict over
+// EVERY in-use, supervised slot. For each such slot it folds proc_supervise_step and acts:
+//   .Restart -> record the restart (crash-loop accounting, saturating) AND re-arm the heartbeat
+//               deadline (proc_heartbeat to `now`, giving the restarted slot a fresh interval) so a
+//               just-restarted slot is not re-flagged on the very next scan.
+//   .GiveUp  -> stop supervising the crash-looping slot (proc_unsupervise) so it is never restarted
+//               again — the restart_count is retained as evidence; reaping/kill of a held victim is
+//               the caller's policy (proc_oom_kill / proc_exit on a non-current slot).
+//   .None    -> the slot is alive (or unsupervised) — left untouched.
+// Returns an encoded summary: restart count in the low 16 bits, give-up count in the high 16 bits
+// (decode via proc_supervisor_scan_restarts / proc_supervisor_scan_giveups). Non-sleeping by
+// construction — a bounded scan over t.count slots plus only the bounded record/heartbeat/
+// unsupervise primitives — so it is safe to drive from a periodic context. Slot 0 (the bootstrap)
+// and any unsupervised slot have deadline 0, so proc_supervise_step yields .None for them; no
+// special-casing is needed.
+export fn proc_supervisor_scan(t: *mut ProcTable, now: u64, max_restarts: u32) -> u32 {
+    var restarts: u32 = 0;
+    var giveups: u32 = 0;
+    var slot: usize = 0;
+    while slot < t.count {
+        if t.procs[slot].state != .Unused { // a free slot carries no live supervision
+            switch proc_supervise_step(t, slot, now, max_restarts) {
+                .None => {}
+                .Restart => {
+                    proc_restart_record(t, slot); // crash-loop accounting (saturating)
+                    proc_heartbeat(t, slot, now); // re-arm: fresh interval from `now`
+                    restarts = restarts + 1;
+                }
+                .GiveUp => {
+                    proc_unsupervise(t, slot); // crash-looping: stop restarting it
+                    giveups = giveups + 1;
+                }
+            }
+        }
+        slot = slot + 1;
+    }
+    return (giveups << 16) | (restarts & 0xFFFF);
+}
+
+// Decode the restart count from a proc_supervisor_scan summary (low 16 bits).
+export fn proc_supervisor_scan_restarts(summary: u32) -> u32 {
+    return summary & 0xFFFF;
+}
+
+// Decode the give-up count from a proc_supervisor_scan summary (high 16 bits).
+export fn proc_supervisor_scan_giveups(summary: u32) -> u32 {
+    return (summary >> 16) & 0xFFFF;
+}
