@@ -131,11 +131,12 @@ export fn proc_tick_notify(t: *mut ProcTable) -> bool {
 // lives in a module-global array here, indexed by slot, and is folded into the comparison.
 const NO_SLOT: usize = MAX_PROCS; // sentinel: "no candidate found yet"
 
-// Per-slot throttle penalty, added to a slot's effective tick count in proc_pick_fair. A
-// throttled agent compares as if it had consumed (ticks + penalty) ticks, so it is pushed to
-// the back of the fair queue without being blocked or killed. Zero-initialized (bss); reset by
-// proc_throttle_clear. Indexed by slot in 0..MAX_PROCS.
-global g_throttle: [MAX_PROCS]u32;
+// Per-slot throttle penalty (added to a slot's effective tick count in proc_pick_fair): a
+// throttled agent compares as if it had consumed (ticks + penalty) ticks, pushing it to the back
+// of the fair queue without being blocked or killed. It lives ON THE Process (t.procs[slot].throttle)
+// — NOT a module global — so it is per-table and is cleared by proc_table_init + proc_spawn slot
+// reuse (a reaped slot must not inherit the old process's throttle). Same for the supervision/
+// restart state below.
 
 // A slot's effective fair-share cost: real ticks consumed plus any throttle penalty, weighted
 // down by priority so a higher-priority agent is allowed a larger share before deprioritizing.
@@ -143,7 +144,7 @@ global g_throttle: [MAX_PROCS]u32;
 // priority-2 agent may consume twice the ticks of a priority-1 agent before losing its turn.
 // u64 math avoids overflow when penalty is large.
 fn fair_cost(t: *mut ProcTable, slot: usize) -> u64 {
-    let base: u64 = (t.procs[slot].ticks as u64) + (g_throttle[slot] as u64);
+    let base: u64 = (t.procs[slot].ticks as u64) + (t.procs[slot].throttle as u64);
     var w: u32 = t.procs[slot].priority;
     if w == 0 {
         w = 1; // priority 0 (default/unset) weights as 1, never divides by zero
@@ -187,12 +188,12 @@ export fn proc_pick_fair(t: *mut ProcTable) -> Result<usize, SchedError> {
 // is a deprioritization knob, not a kill.
 export fn proc_throttle(t: *mut ProcTable, slot: usize, penalty: u32) -> void {
     if slot < MAX_PROCS {
-        let cur: u32 = g_throttle[slot];
+        let cur: u32 = t.procs[slot].throttle;
         let room: u32 = 0xFFFFFFFF - cur;
         if penalty > room {
-            g_throttle[slot] = 0xFFFFFFFF; // saturate
+            t.procs[slot].throttle = 0xFFFFFFFF; // saturate
         } else {
-            g_throttle[slot] = cur + penalty;
+            t.procs[slot].throttle = cur + penalty;
         }
     }
 }
@@ -200,7 +201,7 @@ export fn proc_throttle(t: *mut ProcTable, slot: usize, penalty: u32) -> void {
 // Clear a slot's throttle penalty: it returns to competing on its real tick count.
 export fn proc_throttle_clear(t: *mut ProcTable, slot: usize) -> void {
     if slot < MAX_PROCS {
-        g_throttle[slot] = 0;
+        t.procs[slot].throttle = 0;
     }
 }
 
@@ -442,32 +443,31 @@ export fn proc_preempt_point(t: *mut ProcTable) -> void {
 // agent (or the kernel on its behalf) calls proc_heartbeat each time it makes progress; a
 // supervisor periodically asks proc_liveness_expired which slots missed their deadline and applies
 // policy (proc_kill / respawn / crash-loop backoff — policy lives in the supervisor, not here).
-// Kept disjoint from process.mc (no new Process fields) via module-global arrays, exactly like the
-// throttle penalty above; indexed by slot in 0..MAX_PROCS. deadline 0 = unsupervised.
-global g_hb_deadline: [MAX_PROCS]u64; // max ticks allowed between heartbeats (0 = not supervised)
-global g_hb_last: [MAX_PROCS]u64;     // tick of the slot's most recent heartbeat
+// The state lives ON THE Process (t.procs[slot].hb_deadline/hb_last) — NOT module globals — so it
+// is per-table (two ProcTables don't share supervision) and is cleared by proc_table_init +
+// proc_spawn slot reuse (a reincarnated process is unsupervised until re-enrolled). deadline 0 = off.
 
 // Enroll `slot` under supervision: it must beat at least every `deadline` ticks, starting from
 // `now`. deadline 0 disables supervision for the slot.
 export fn proc_supervise(t: *mut ProcTable, slot: usize, now: u64, deadline: u64) -> void {
     if slot < MAX_PROCS {
-        g_hb_deadline[slot] = deadline;
-        g_hb_last[slot] = now;
+        t.procs[slot].hb_deadline = deadline;
+        t.procs[slot].hb_last = now;
     }
 }
 
 // Stop supervising `slot` (e.g. on a clean exit/reap): it can no longer be flagged expired.
 export fn proc_unsupervise(t: *mut ProcTable, slot: usize) -> void {
     if slot < MAX_PROCS {
-        g_hb_deadline[slot] = 0;
+        t.procs[slot].hb_deadline = 0;
     }
 }
 
 // Record a heartbeat for `slot` at tick `now` (the agent made progress). No-op if unsupervised.
 export fn proc_heartbeat(t: *mut ProcTable, slot: usize, now: u64) -> void {
     if slot < MAX_PROCS {
-        if g_hb_deadline[slot] != 0 {
-            g_hb_last[slot] = now;
+        if t.procs[slot].hb_deadline != 0 {
+            t.procs[slot].hb_last = now;
         }
     }
 }
@@ -479,11 +479,11 @@ export fn proc_liveness_expired(t: *mut ProcTable, slot: usize, now: u64) -> boo
     if slot >= MAX_PROCS {
         return false;
     }
-    let deadline: u64 = g_hb_deadline[slot];
+    let deadline: u64 = t.procs[slot].hb_deadline;
     if deadline == 0 {
         return false; // not supervised
     }
-    let last: u64 = g_hb_last[slot];
+    let last: u64 = t.procs[slot].hb_last;
     if now <= last {
         return false; // no time elapsed (or clock not advanced) — not expired
     }
@@ -493,17 +493,21 @@ export fn proc_liveness_expired(t: *mut ProcTable, slot: usize, now: u64) -> boo
 // ----- supervision: restart / crash-loop policy (production-readiness §3.1 #12) -----
 // Once liveness detection (above) flags a dead/stuck slot, the supervisor decides whether to RESTART
 // it — but blindly restarting a slot that keeps dying is a crash loop (CPU-burning thrash). This
-// adds the crash-loop guard: a per-slot restart counter the supervisor bumps on each restart and
-// checks against a budget; once the budget is exhausted the slot is declared crash-looping and the
-// supervisor gives up (escalates / leaves it dead) instead of restarting forever. A clean run
-// resets the counter. Mechanism only — the budget and the give-up action are the supervisor's policy.
-global g_restart_count: [MAX_PROCS]u32; // restarts attempted for this slot in the current window
+// adds the crash-loop guard: a per-process restart counter (t.procs[slot].restart_count, cleared on
+// table init + slot reuse) the supervisor bumps on each restart and checks against a budget; once
+// the budget is exhausted the slot is declared crash-looping and the supervisor gives up instead of
+// restarting forever. A clean run resets the counter. Mechanism only — the budget + give-up policy
+// are the supervisor's.
 
-// Record that the supervisor is (re)starting `slot`; returns the new restart count.
+// Record that the supervisor is (re)starting `slot`; returns the new restart count. SATURATES at
+// u32 max so a very long crash loop cannot wrap the counter back to 0 and re-permit restarts.
 export fn proc_restart_record(t: *mut ProcTable, slot: usize) -> u32 {
     if slot < MAX_PROCS {
-        g_restart_count[slot] = g_restart_count[slot] + 1;
-        return g_restart_count[slot];
+        let cur: u32 = t.procs[slot].restart_count;
+        if cur < 0xFFFFFFFF {
+            t.procs[slot].restart_count = cur + 1;
+        }
+        return t.procs[slot].restart_count;
     }
     return 0;
 }
@@ -514,12 +518,12 @@ export fn proc_restart_allowed(t: *mut ProcTable, slot: usize, max_restarts: u32
     if slot >= MAX_PROCS {
         return false;
     }
-    return g_restart_count[slot] < max_restarts;
+    return t.procs[slot].restart_count < max_restarts;
 }
 
 // Reset a slot's restart counter (a clean/healthy run — it is no longer crash-looping).
 export fn proc_restart_reset(t: *mut ProcTable, slot: usize) -> void {
     if slot < MAX_PROCS {
-        g_restart_count[slot] = 0;
+        t.procs[slot].restart_count = 0;
     }
 }

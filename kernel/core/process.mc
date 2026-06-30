@@ -96,6 +96,10 @@ struct Process {
     quantum: u32,                // remaining scheduling quantum in ticks (0 = expired)
     ticks: u32,                  // accounting: total ticks this incarnation has consumed
     sched_endpoint: u32,         // the scheduler service to notify on quantum expiry (0 = none)
+    throttle: u32,               // fair-share throttle penalty (added to effective ticks; see proc_throttle)
+    hb_deadline: u64,            // supervision: max ticks allowed between heartbeats (0 = unsupervised)
+    hb_last: u64,                // supervision: tick of the most recent heartbeat
+    restart_count: u32,          // supervision: restarts attempted this incarnation (crash-loop guard)
     fds: FdSpace,                // open file descriptors; copied to a child on spawn (fork), kept across exec
     macct: ResourceAccount,      // per-process memory account; reset on spawn (fresh, from zero) and on exit
 }
@@ -226,6 +230,10 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].quantum = QUANTUM_DEFAULT;
         t.procs[i].ticks = 0;
         t.procs[i].sched_endpoint = 0;
+        t.procs[i].throttle = 0;
+        t.procs[i].hb_deadline = 0;
+        t.procs[i].hb_last = 0;
+        t.procs[i].restart_count = 0;
         fd_init(&t.procs[i].fds);
         resacct_init(&t.procs[i].macct, MEM_QUOTA_DEFAULT);
         i = i + 1;
@@ -306,6 +314,10 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     t.procs[slot].quantum = QUANTUM_DEFAULT;
     t.procs[slot].ticks = 0;
     t.procs[slot].sched_endpoint = 0;
+    t.procs[slot].throttle = 0;       // a reused slot must not inherit the old process's scheduler state
+    t.procs[slot].hb_deadline = 0;    // ... supervision: not supervised until re-enrolled
+    t.procs[slot].hb_last = 0;
+    t.procs[slot].restart_count = 0;  // ... crash-loop count starts fresh for the new incarnation
     // fork fd semantics: the child inherits a COPY of the spawner's open descriptors at the
     // same fd numbers, sharing the underlying resources. Clear any stale fds from a reaped
     // slot first. (Empty child + equal capacity ⇒ inherit can never overflow.)
