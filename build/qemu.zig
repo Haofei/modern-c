@@ -101,6 +101,9 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "blk-audit-persist-test", "Durable policy/audit: a block_persistent_audit policy checkpoint written to virtio-blk is field-verified after a second QEMU boot", &.{ "bash", "tools/fs/blk-audit-persist-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-audit-persist-test", "Durable policy/audit (LLVM): block-backed policy checkpoint over virtio-blk survives a real reboot under QEMU", &.{ "bash", "tools/fs/blk-audit-persist-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    _ = h.addScriptTest(ctx, "blk-audit-frame-persist-test", "Durable audit frame: a block_persistent_audit frame (drained IpcTrace provenance records) written to virtio-blk is field-verified after a second QEMU boot", &.{ "bash", "tools/fs/blk-audit-frame-persist-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-blk-audit-frame-persist-test", "Durable audit frame (LLVM): block-backed audit frame over virtio-blk survives a real reboot under QEMU", &.{ "bash", "tools/fs/blk-audit-frame-persist-test.sh", "zig-out/bin/mcc", "llvm" });
+
     _ = h.addScriptTest(ctx, "blk-smode-test", "Build and run the virtio-blk driver reading a sector under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-smode-test", "Build and run the LLVM-lowered virtio-blk driver under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "llvm" });
 
