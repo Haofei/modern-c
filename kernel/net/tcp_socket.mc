@@ -1,16 +1,17 @@
 // kernel/net/tcp_socket — a real TCP SOCKET layer: a connection abstraction that owns
 // the control plane (kernel/net/tcp_conn state machine), the data-plane sequence/window
-// bookkeeping (kernel/net/tcp_window), and the receive reassembly (kernel/net/tcp_reasm),
-// and supplies the action→frame glue so callers never re-derive the active-open +
-// send/recv/ACK/reassembly loop.
+// bookkeeping (kernel/net/tcp_window), and an in-order sequence cursor (kernel/net/tcp_reasm
+// is used only for its rcv_nxt; see below), and supplies the action→frame glue so callers
+// never re-derive the active-open + send/recv loop.
 //
-// THE one place the reassembly/segment-hold lives: a single inbound TCP segment routinely
-// carries SEVERAL application records (the peer writes header+body in one segment and the
-// slirp gateway coalesces). tcp_socket_recv holds the most recent in-order segment's
-// payload and drains it across successive calls, advancing rcv_nxt by the WHOLE segment on
-// receipt (so the cumulative ACK is correct) and ACKing the whole segment exactly once —
-// never dropping the unconsumed tail. This is the segment-reassembly fix, centralized: it
-// was previously hand-rolled (and partly wrong) in the TLS bridge.
+// THE one place the inbound segment-hold lives: a single in-order TCP segment routinely carries
+// SEVERAL application records (the peer writes header+body in one segment and the slirp gateway
+// coalesces). tcp_socket_recv holds the most recent IN-ORDER segment's payload and drains it
+// across successive calls. It delivers/ACKs ONLY the bytes it actually holds from the CURRENT
+// frame (bounded by the hold buffer): rcv_nxt advances by exactly that many bytes, so an oversize
+// segment is drained in chunks (the tail is left unacked for retransmission) and never silently
+// dropped. Out-of-order segments are NOT buffered — only ordering metadata exists, not their
+// payload bytes — they are re-ACKed at the cumulative point so the peer retransmits in order.
 //
 // The frame builders/parsers and the virtio-net device are the production
 // kernel/net/tcp_tx + kernel/drivers/virtio/virtio_net used by the plaintext HTTP demos.
