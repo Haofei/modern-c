@@ -351,6 +351,9 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("blk-test"));
     m0_step.dependOn(ctx.cmd("blk-persist-test"));
     m0_step.dependOn(ctx.cmd("llvm-blk-persist-test"));
+    // blk-audit-persist-test proves a block-backed policy/audit checkpoint survives a real reboot.
+    m0_step.dependOn(ctx.cmd("blk-audit-persist-test"));
+    m0_step.dependOn(ctx.cmd("llvm-blk-audit-persist-test"));
     // blk-smode-test revalidates the same virtio-blk driver under REAL OpenSBI in S-mode.
     m0_step.dependOn(ctx.cmd("blk-smode-test"));
     // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
