@@ -30,7 +30,10 @@ export MCC HERE CLANG LLC LINK_FLAGS_STR
 
 fuzz_one() {
     local seed="$1"
-    local W; W="$(mktemp -d)"; trap 'rm -rf "$W"' RETURN
+    # Keep this seed's work dir (and report rc) on FAILURE so a failing/killed seed is diagnosable
+    # (rc 137 = SIGKILL: a trap/OOM in the generated program before it printed). Clean on success.
+    local W; W="$(mktemp -d)"
+    trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "move-fuzz: seed='"$seed"' FAILED rc=$rc — kept work dir: $W" >&2; else rm -rf "$W"; fi' RETURN
     local repro="reproduce: tools/toolchain/mcgen_move.py $seed"
 
     python3 "$HERE/tools/toolchain/mcgen_move.py" "$seed" > "$W/p.mc" 2>/dev/null || { echo "FAIL: move-fuzz seed=$seed (generator error)"; return 1; }

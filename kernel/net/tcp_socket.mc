@@ -211,29 +211,40 @@ fn sock_refill(s: *mut TcpSocket) -> u32 {
         }
         let rcv: u32 = tcp_win_rcv_nxt(&s.win);
         if seg.payload_len > 0 {
-            // Offer the segment to the reassembler: nonzero return == in-order bytes now
-            // deliverable (it advances rcv_nxt by the whole in-order run). For a single
-            // in-order segment that equals seg.payload_len.
-            let delivered: u32 = reasm_accept(&s.reasm, seg.seq, seg.payload_len as u32);
+            // Accept only as many bytes as the hold buffer can take, and NEVER ACK beyond what we
+            // actually held. A segment larger than the hold (anomalous — MSS < cap) is DRAINED IN
+            // CHUNKS: we accept/ACK exactly `n` bytes and leave the tail unacknowledged, so the peer
+            // retransmits it and the next refill delivers it. (Previously the whole payload was ACKed
+            // but copied truncated to `n`, silently dropping the tail [n, payload_len).)
+            var n: usize = seg.payload_len;
+            let truncated: bool = n > TCPSOCK_RXHOLD_CAP;
+            if truncated {
+                n = TCPSOCK_RXHOLD_CAP;
+            }
+            // Offer just `n` bytes to the reassembler: nonzero return == in-order bytes now
+            // deliverable (it advances rcv_nxt by exactly what we accepted).
+            let delivered: u32 = reasm_accept(&s.reasm, seg.seq, n as u32);
             if delivered > 0 {
-                // In-order: copy the WHOLE payload into the hold buffer (bounded by cap),
-                // advance the window's rcv_nxt to match, ACK the whole segment cumulatively.
-                var n: usize = seg.payload_len;
-                if n > TCPSOCK_RXHOLD_CAP {
-                    n = TCPSOCK_RXHOLD_CAP; // segment larger than our hold (MSS < cap)
+                // `delivered` equals `n` for a lone in-order segment; it can only exceed `n` if
+                // buffered out-of-order segments coalesced — cap the copy at the hold size either way.
+                var hold: usize = delivered as usize;
+                if hold > TCPSOCK_RXHOLD_CAP {
+                    hold = TCPSOCK_RXHOLD_CAP;
                 }
                 var rr: ByteReader = byte_reader(phys(seg.payload_off), seg.payload_len);
                 var i: usize = 0;
-                while i < n {
+                while i < hold {
                     s.rxhold[i] = br_u8(&rr, i);
                     i = i + 1;
                 }
-                s.rxhold_len = n;
+                s.rxhold_len = hold;
                 s.rxhold_pos = 0;
-                // Keep the window's rcv_nxt in step with the reassembler.
-                tcp_win_on_recv(&s.win, rcv, seg.payload_len as u32);
-                if tcp_flag_set(seg.flags, TCP_FIN) {
-                    // FIN consumes one seq after the data; account it in both trackers.
+                // Advance the window's rcv_nxt by exactly what the reassembler consumed, so the ACK
+                // never covers bytes we did not hold (the tail of an oversize segment stays unacked).
+                tcp_win_on_recv(&s.win, rcv, delivered);
+                if !truncated && tcp_flag_set(seg.flags, TCP_FIN) {
+                    // FIN consumes one seq AFTER all the data — only when the whole segment was
+                    // delivered (a truncated segment's tail, and its FIN, come on retransmission).
                     s.win.rcv_nxt = s.win.rcv_nxt + 1;
                     s.reasm.rcv_nxt = s.reasm.rcv_nxt + 1;
                     s.rx_fin = true;

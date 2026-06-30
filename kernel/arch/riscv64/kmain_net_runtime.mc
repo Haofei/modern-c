@@ -67,7 +67,11 @@ global g_dma_in_use: u32 = 0;
 
 export fn mc_dma_alloc_base(len: usize) -> usize {
     if len > DMA_POOL_LEN || g_dma_in_use != 0 {
-        while true {} // exhaustion: hang loudly rather than corrupt
+        // Fail closed and DIAGNOSABLY: trap (reports the fault site) rather than spin forever in a
+        // silent `while true {}` that is indistinguishable from a hang. Like the other DMA providers
+        // (sbi_dma_time / mmode_dma_time), this is a "must not happen with correct pool sizing" path;
+        // a typed NoMem/NoBuffer for production broker/device paths is tracked as a larger refactor.
+        unreachable; // DMA pool exhausted or single buffer already in use
     }
     g_dma_in_use = 1;
     let base: usize = (&g_dma_pool) as usize;

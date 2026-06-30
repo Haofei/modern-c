@@ -32,7 +32,11 @@ EXPECT=65
 
 LINK_FLAGS_STR="$(mc_link_flags)"
 
-W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+W="$(mktemp -d)"
+# Keep the work dir (and report the exit code) on FAILURE so a failing/aborted run is diagnosable —
+# a nonzero rc, especially 137 (=128+9, SIGKILL: OOM/resource kill), points straight at the cause.
+# Clean up only on success.
+trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "safe-release-parity: FAILED rc=$rc — kept work dir: $W" >&2; else rm -rf "$W"; fi' EXIT
 
 printf '#include <stdint.h>\n#include <stdio.h>\nextern uint32_t %s(void);\nint main(void){ printf("%%u\\n", %s()); return 0; }\n' "$ENTRY" "$ENTRY" > "$W/driver.c"
 
