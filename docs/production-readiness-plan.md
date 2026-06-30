@@ -100,6 +100,32 @@ The kernel is already beyond a toy prototype:
 The remaining work is not "invent an OS from nothing." It is turning a strong gated
 prototype into a reliable appliance runtime.
 
+### 3.1 External review reconciliation (2026-06-30)
+
+An independent review proposed a 12-area "production Agent OS" gap list. It maps almost 1:1
+onto §4 below (independent re-derivation — validating). Grounding each against the tree shows
+several areas it called "missing" already exist and are better characterized as "exists, needs
+hardening"; a few are genuinely thin. Current state, with evidence:
+
+| Area | Status | Evidence / gap |
+| --- | --- | --- |
+| 1. Preemptive scheduling | **Genuinely thin** | `kernel/core/sched.mc` is cooperative round-robin ("timer-tick preemption is the next step"); timer/IRQ/trap primitives + CPU-runaway watchdog exist (`clint.mc`, `plic.mc`, `trap.mc`). Preemption, priorities, per-agent CPU budget are the gap. |
+| 2. Stable agent ABI | Exists, unversioned | Frozen syscall surface + typed `Result` errors (`agent_abi.mc`) + `abi-consistency-test`. Gap: **version negotiation / compat tests**. |
+| 3. Durable storage | Exists, weak | KV/blob/fs + `persistent_audit.mc`, `block_persistent_audit.mc`, blockdev checkpoint seed. Gap: **persist-across-reboot for policy+audit** (checklist `[ ]`), journaling/CRC, compaction, migration. |
+| 4. Isolation boundary | **Most mature** | Confined U-mode Sv39 (kernel unmapped) + WAMR sandbox + deterministic fuel, S-mode + cross-arch. Gap: **per-agent crash cleanup/reap**. (Review overstates this as missing.) |
+| 5. Resource accounting | Partial | `NetCap.requests_left`, watchdog ticks, WAMR instruction fuel, `agent_quota`, memcap exist. Gap: **uniform coverage + a single accounting/quota model**. |
+| 6. Broker hardening | Exists, weak | `net_broker` policy+budget+audit; back-pressure (async `ok=8 rejected=4`); revoke/throttle/kill actuation gated. Gap: **persistent policy load, revocation propagation, retries, tracing**. |
+| 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), TLS (BearSSL), TCP RX hardened (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. (Review overstates DNS/TLS as needed.) |
+| 8. Observability | Partial | Audit/trace exist (`ipc_trace.mc`, `cap_audit`, provenance). Gap: **structured metrics, per-agent timelines, deterministic replay**. |
+| 9. Update/packaging | Partial | Agent signature verify (`kernel/crypto/rsa_verify.mc`), `liveupdate.mc`. Gap: **signed kernel images, reproducible builds, OTA, rollback**. |
+| 10. Platform contract | Partly documented | `platform-portability-plan.md`, `qemu-validation-checklist.md`; per-arch compiler-flag rules now explicit (aarch64 strict-align). Gap: **one frozen board profile**. |
+| 11. Security model doc | **Genuinely thin** | `unsafe-boundary.md` + capability design in code, but **no consolidated threat model** (trusted vs attacker-controlled, guarantees, acceptable failure modes). |
+| 12. Long-running lifecycle | **Genuinely thin** | Process table + `liveupdate`. Gap: **supervision trees, heartbeats, crash-loop policy, persistent identity, upgrade handoff**. |
+
+Net: the highest-leverage genuinely-missing work is **(1) timer-preemptive scheduler** (primitives
+ready), **(3) persist-across-reboot for policy+audit** (seed exists), **(11) a written threat model**
+(cheap; frames everything else), then **(2) ABI versioning** and **(12) supervision/lifecycle**.
+
 ## 4. Main production blockers
 
 ### 4.1 Interrupt-driven I/O
