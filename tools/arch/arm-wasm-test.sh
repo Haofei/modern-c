@@ -130,15 +130,8 @@ if [ "$BACKEND" = llvm ]; then
     $CLANG "${APP_CFLAGS[@]}" -x c -c /dev/null -o "$WORK/app-support.o"; APP_SUPPORT="$WORK/app-support.o"
 fi
 
-# openlibm (double-precision libm), built freestanding for aarch64 (the vendored script is riscv-only).
-OLM="$HERE/third_party/openlibm"
-OLM_CFLAGS=(--target=aarch64-unknown-elf -march=armv8-a -nostdlib -ffreestanding -fno-pic -fno-pie
-            -O2 -fno-builtin -DASSEMBLER=0 -I"$OLM/include" -I"$OLM/src" -I"$OLM")
-mkdir -p "$WORK/olm"
-for f in "$OLM"/src/*.c; do
-    b="$(basename "$f" .c)"; "$CLANG" "${OLM_CFLAGS[@]}" -c "$f" -o "$WORK/olm/$b.o" 2>/dev/null || true
-done
-"${LLVM_AR:-llvm-ar}" rcs "$WORK/libm.a" "$WORK"/olm/*.o
+# openlibm (double-precision libm) for aarch64, via the shared cached builder (build-once, then cp).
+LLVM_AR="${LLVM_AR:-llvm-ar}" bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" aarch64 >/dev/null
 
 # -z max-page-size=0x1000 -z norelro: 4 KiB-disjoint PT_LOAD segments for the 4 KiB-granule loader.
 "$LLD" -z max-page-size=0x1000 -z norelro -T "$HERE/user/runtime/user_qjs_aarch64.ld" \

@@ -14,32 +14,45 @@
 # Usage: tools/user/build-openlibm.sh <out-archive.a>
 set -euo pipefail
 
-OUT="${1:?usage: build-openlibm.sh <out.a>}"
+OUT="${1:?usage: build-openlibm.sh <out.a> [arch-label]}"
+ARCH="${2:-riscv64-lp64d}"   # cache label; the cross-arch harnesses pass x86_64 / aarch64
 export CLANG="${CLANG:-clang}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 OLM="$HERE/third_party/openlibm"
 
-CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
-        -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O2
+# Per-arch target flags. OLM_TARGET_FLAGS (env) overrides for the cross-arch callers; the default is
+# the riscv64 lp64d freestanding target the U-mode WASM/QuickJS agents use.
+case "$ARCH" in
+  x86_64)  DEFAULT_TGT=(--target=x86_64-unknown-elf -mno-red-zone) ;;
+  aarch64) DEFAULT_TGT=(--target=aarch64-unknown-elf -march=armv8-a) ;;
+  *)       DEFAULT_TGT=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d -mcmodel=medany) ;;
+esac
+if [ -n "${OLM_TARGET_FLAGS:-}" ]; then read -ra DEFAULT_TGT <<< "$OLM_TARGET_FLAGS"; fi
+CFLAGS=("${DEFAULT_TGT[@]}" -nostdlib -ffreestanding -fno-pic -fno-pie -O2
         -fno-builtin -DASSEMBLER=0 -I"$OLM/include" -I"$OLM/src" -I"$OLM")
 
-# Cache: skip the rebuild if the archive is newer than every source.
-if [ -f "$OUT" ] && [ -z "$(find "$OLM" -name '*.[ch]' -newer "$OUT" -print -quit)" ]; then
-    exit 0
+# Build ONCE into a shared, stable cache, then copy to the requested OUT. Callers pass a per-gate
+# temp path for OUT, so keying the cache on OUT (as before) never hit — every gate recompiled all
+# ~209 TUs (96× in a full m0). The shared cache (.wamr-cache/openlibm, gitignored) is flock-guarded
+# and rebuilt only when an openlibm source is newer than it; the per-gate cost drops to a file copy.
+CACHE="$HERE/.wamr-cache/openlibm"; mkdir -p "$CACHE"
+LIB="$CACHE/libopenlibm-$ARCH.a"
+kernel_boot_lock 9 "$CACHE/.lock"
+if [ ! -f "$LIB" ] || [ -n "$(find "$OLM" -name '*.[ch]' -newer "$LIB" -print -quit)" ]; then
+    WORK="$(mktemp -d)"
+    ok=0
+    for f in "$OLM"/src/*.c; do
+        b="$(basename "$f" .c)"
+        if "$CLANG" "${CFLAGS[@]}" -c "$f" -o "$WORK/$b.o" 2>/dev/null; then
+            ok=$((ok + 1))
+        fi
+    done
+    "${LLVM_AR:-llvm-ar}" rcs "$LIB" "$WORK"/*.o
+    rm -rf "$WORK"
+    echo "built $LIB: $ok objects" >&2
 fi
+kernel_boot_unlock 9 "$CACHE/.lock"
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
-
-ok=0
-for f in "$OLM"/src/*.c; do
-    b="$(basename "$f" .c)"
-    if "$CLANG" "${CFLAGS[@]}" -c "$f" -o "$WORK/$b.o" 2>/dev/null; then
-        ok=$((ok + 1))
-    fi
-done
-
-"${LLVM_AR:-llvm-ar}" rcs "$OUT" "$WORK"/*.o
-echo "built $OUT: $ok objects" >&2
+cp "$LIB" "$OUT"

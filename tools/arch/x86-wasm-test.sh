@@ -129,14 +129,8 @@ if [ "$BACKEND" = llvm ]; then
     $CLANG "${APP_CFLAGS[@]}" -x c -c /dev/null -o "$WORK/app-support.o"; APP_SUPPORT="$WORK/app-support.o"
 fi
 
-OLM="$HERE/third_party/openlibm"
-OLM_CFLAGS=(--target=x86_64-unknown-elf -nostdlib -ffreestanding -fno-pic -fno-pie -mno-red-zone
-            -O2 -fno-builtin -DASSEMBLER=0 -I"$OLM/include" -I"$OLM/src" -I"$OLM")
-mkdir -p "$WORK/olm"
-for f in "$OLM"/src/*.c; do
-    b="$(basename "$f" .c)"; "$CLANG" "${OLM_CFLAGS[@]}" -c "$f" -o "$WORK/olm/$b.o" 2>/dev/null || true
-done
-"${LLVM_AR:-llvm-ar}" rcs "$WORK/libm.a" "$WORK"/olm/*.o
+# openlibm (double-precision libm) for x86_64, via the shared cached builder (build-once, then cp).
+LLVM_AR="${LLVM_AR:-llvm-ar}" bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" x86_64 >/dev/null
 
 "$LLD" -T "$HERE/user/runtime/user_qjs_x86.ld" \
     "$WORK/crt0.o" "$WORK/host.o" --whole-archive "$WAMR_LIB" --no-whole-archive \
