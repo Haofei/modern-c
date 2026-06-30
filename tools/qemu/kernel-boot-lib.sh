@@ -36,6 +36,41 @@ kernel_boot_require_riscv() {
     fi
 }
 
+kernel_boot_lock() {
+    local fd="$1"
+    local lock="$2"
+    eval "exec ${fd}>\"\$lock\""
+    if command -v flock >/dev/null 2>&1; then
+        flock "$fd"
+        return
+    fi
+
+    local dir="${lock}.dir"
+    while ! mkdir "$dir" 2>/dev/null; do
+        if [ -f "$dir/pid" ]; then
+            local pid
+            pid="$(cat "$dir/pid" 2>/dev/null || true)"
+            if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+                rm -rf "$dir"
+                continue
+            fi
+        fi
+        sleep 0.1
+    done
+    printf '%s\n' "$$" > "$dir/pid"
+}
+
+kernel_boot_unlock() {
+    local fd="$1"
+    local lock="$2"
+    if command -v flock >/dev/null 2>&1; then
+        flock -u "$fd"
+    else
+        rm -rf "${lock}.dir"
+    fi
+    eval "exec ${fd}>&-"
+}
+
 kernel_boot_compile_mc_object() {
     local backend="$1"
     local src="$2"

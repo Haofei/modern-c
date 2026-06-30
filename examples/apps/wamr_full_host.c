@@ -2,7 +2,7 @@
 // of wasi_shim.c. Registers the full WASI Preview-1 surface (stdout + startup stubs + a "/ws" preopen
 // filesystem brokered through TOOL_OP_FS_*) AND the mc tool ABI (net_fetch + tool_submit/tool_poll)
 // as WAMR native symbols, then runs a stock wasm32-wasi guest's _start. Effects route through the SAME
-// six-syscall ABI + capability broker as the wasm3 shim; the engine is the only thing swapped. The FS
+// six-syscall ABI + capability broker as the old wasm3 shim; the engine is the only thing swapped. The FS
 // model mirrors the shim: whole-file (FS_WRITE buffers + flushes on close, FS_READ caches), one "/ws"
 // preopen (fd 3). Guest offsets are converted via wasm_runtime_addr_app_to_native (bounds-validated).
 #include <stdio.h>

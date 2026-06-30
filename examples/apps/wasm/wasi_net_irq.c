@@ -1,7 +1,7 @@
 // examples/apps/wasm/wasi_net_irq.c — Phase-6 S-mode virtio-net IRQ peer, the WASM mirror of
 // examples/agents/agent_net_irq_tool.js. The guest calls the brokered net_fetch tool; the kernel
 // services it through a REAL S-mode virtio-net PLIC interrupt and delivers the completion via
-// SYS_POLL (the wasi_shim net_fetch wrapper submits then polls until the IRQ-driven completion
+// SYS_POLL (the WAMR host's net_fetch wrapper submits then polls until the IRQ-driven completion
 // arrives). The IRQ broker grants ONE web fetch (returns 1), denies endpoint 9, and back-pressures
 // the second web fetch (budget). Prints "net-irq: ok" only on the fully-correct IRQ path.
 #include <stdio.h>

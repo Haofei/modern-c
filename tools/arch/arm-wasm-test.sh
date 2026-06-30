@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # WASM-agent Phase 6 (docs/wasm-migration-plan.md §5): a confined WASM agent on AArch64 EL0 — the
 # cross-arch WASM peer of tools/arch/arm-qjs-test.sh. Builds the SAME confined EL0 agent ELF the
-# RISC-V/x86 WASM harnesses build (WAMR + WASI P1 shim + wasm_host + all-MC libc + openlibm, running
+# RISC-V/x86 WASM harnesses build (WAMR + wamr_full_host + all-MC libc + openlibm, running
 # an embedded stock wasm32-wasi guest), but for aarch64: the arch-specific user pieces are
 # crt0_aarch64 + app_traps + fenv_aarch64_stub, linked with user_qjs_aarch64.ld. The KERNEL side is
 # the existing aarch64 EL0 agent machinery (tests/arm/qjs_arm_demo.mc + qjs_user_arm_runtime.mc) —
@@ -44,14 +44,14 @@ WASI_MCPU="none"  # no feature-pin: WAMR is built WASM_ENABLE_CALL_INDIRECT_OVER
 if [ "$GUEST_KIND" = qjs ]; then
     QCACHE="$HERE/.wamr-cache/qjs-wasm"; mkdir -p "$QCACHE"
     QWANT="$(printf '%s ' "$WASI_MCPU"; ls -la "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c "$QJS"/*.h 2>/dev/null | md5sum)"
-    exec 8>"$QCACHE/.lock"; flock 8
+    kernel_boot_lock 8 "$QCACHE/.lock"
     if [ "$(cat "$QCACHE/stamp" 2>/dev/null)" != "$QWANT" ]; then
         for f in dtoa libunicode libregexp quickjs; do
             "$ZIG" cc -target wasm32-wasi -O2 -I"$QJS" -D__wasi__ -c "$QJS/$f.c" -o "$QCACHE/$f.o"
         done
         printf '%s' "$QWANT" > "$QCACHE/stamp"
     fi
-    flock -u 8
+    kernel_boot_unlock 8 "$QCACHE/.lock"
     "$ZIG" cc -target wasm32-wasi -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
         "$HERE/$GUEST_REL" "$QCACHE"/dtoa.o "$QCACHE"/libunicode.o "$QCACHE"/libregexp.o "$QCACHE"/quickjs.o \
         -o "$WORK/guest.wasm"
@@ -68,7 +68,7 @@ fi
 # ---- 1. The confined EL0 host ELF (FP/NEON on; armv8-a default FPU) ----
 APP_CFLAGS=(--target=aarch64-unknown-elf -march=armv8-a
             -nostdlib -ffreestanding -fno-pic -fno-pie -O1
-            -fno-builtin -I"$HERE/user/libc/include")
+            -fno-builtin -mstrict-align -I"$HERE/user/libc/include")
 
 # WAMR engine, built ONCE into a per-arch cached archive (flock-guarded, stamped on WDEF + source
 # mtimes). The arch differs from the riscv host (BUILD_TARGET + invokeNative trampoline), so the cache
@@ -84,8 +84,8 @@ WDEF=(-DBH_PLATFORM_MC -DBUILD_TARGET_AARCH64 -DWASM_ENABLE_INTERP=1
       -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free)
 CACHE="$HERE/.wamr-cache/aarch64"; mkdir -p "$CACHE"
 WAMR_LIB="$CACHE/libwamr.a"
-WANT="$(printf '%s ' "${WDEF[@]}"; find "$WC/shared/platform/mc" "$WC/shared/utils" "$WC/shared/mem-alloc" "$WC/iwasm/common" "$WC/iwasm/interpreter" \( -name '*.c' -o -name '*.h' -o -name '*.S' \) 2>/dev/null | sort | xargs ls -la 2>/dev/null | md5sum)"
-exec 9>"$CACHE/.lock"; flock 9
+WANT="$(printf '%s ' "${WDEF[@]}"; find "$WC/shared/platform/mc" "$WC/shared/utils" "$WC/shared/mem-alloc" "$WC/iwasm/common" "$WC/iwasm/interpreter" \( -name '*.c' -o -name '*.h' -o -name '*.S' -o -name '*.s' \) 2>/dev/null | sort | xargs ls -la 2>/dev/null | md5sum)"
+kernel_boot_lock 9 "$CACHE/.lock"
 if [ ! -f "$WAMR_LIB" ] || [ "$(cat "$CACHE/stamp" 2>/dev/null)" != "$WANT" ]; then
     CB="$CACHE/obj"; rm -rf "$CB"; mkdir -p "$CB"; OBJS=(); j=0
     cwamr() { "$CLANG" "${WCF[@]}" "${WINC[@]}" "${WDEF[@]}" -c "$1" -o "$2"; OBJS+=("$2"); }
@@ -101,7 +101,7 @@ if [ ! -f "$WAMR_LIB" ] || [ "$(cat "$CACHE/stamp" 2>/dev/null)" != "$WANT" ]; t
     "$AR" rcs "$WAMR_LIB" "${OBJS[@]}"
     printf '%s' "$WANT" > "$CACHE/stamp"
 fi
-flock -u 9
+kernel_boot_unlock 9 "$CACHE/.lock"
 
 "$CLANG" "${WCF[@]}" -I"$WC/iwasm/include" -I"$WASMDIR" -I"$WORK" -c "$HOST" -o "$WORK/host.o"
 
@@ -154,7 +154,7 @@ done
 } >"$WORK/app_image.c"
 
 # ---- 3. The flat aarch64 kernel: qjs_user_arm_runtime.mc + the MC fixture (integer-only) ----
-KCF=(--target=aarch64-unknown-elf -march=armv8-a -ffreestanding -nostdlib -fno-pic -fno-pie -mgeneral-regs-only -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
+KCF=(--target=aarch64-unknown-elf -march=armv8-a -ffreestanding -nostdlib -fno-pic -fno-pie -mgeneral-regs-only -mstrict-align -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
 case "$BACKEND" in
   c)
     "$MCC" emit-c "$HERE/tests/arm/qjs_arm_demo.mc" --arch=aarch64 > "$WORK/fixture.c"

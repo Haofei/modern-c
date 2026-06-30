@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # WASM-agent Phase 6 (docs/wasm-migration-plan.md §5): a confined WASM guest's brokered net_fetch
 # reaches a LIVE HTTP server through the kernel's REAL TCP transport (net_fetch_tcp) over virtio-net
-# — the WASM peer of qjs-net-realtool-test.sh. Same confined WASM agent ELF (wasm3 + WASI P1 shim +
-# all-MC libc + wasm_host running a stock wasm32-wasi guest), with the M-mode TCP-backed net runtime.
+# — the WASM peer of qjs-net-realtool-test.sh. Same confined WASM agent ELF (WAMR +
+# wamr_full_host + all-MC libc running a stock wasm32-wasi guest), with the M-mode TCP-backed net runtime.
 # PASS requires the guest's success marker + an HTTP access-log GET 200 + a non-empty pcap, proving a
 # real datagram round-trip (not the mock broker).
 #
@@ -76,14 +76,14 @@ if [ "$GUEST_KIND" = qjs ]; then
     # QuickJS TUs once, then per-gate only compile the small guest .c and link against the cached objects.
     QCACHE="$HERE/.wamr-cache/qjs-wasm"; mkdir -p "$QCACHE"
     QWANT="$(printf '%s ' "$WASI_MCPU"; ls -la "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c "$QJS"/*.h 2>/dev/null | md5sum)"
-    exec 8>"$QCACHE/.lock"; flock 8
+    kernel_boot_lock 8 "$QCACHE/.lock"
     if [ "$(cat "$QCACHE/stamp" 2>/dev/null)" != "$QWANT" ]; then
         for f in dtoa libunicode libregexp quickjs; do
             "$ZIG" cc -target wasm32-wasi -O2 -I"$QJS" -D__wasi__ -c "$QJS/$f.c" -o "$QCACHE/$f.o"
         done
         printf '%s' "$QWANT" > "$QCACHE/stamp"
     fi
-    flock -u 8
+    kernel_boot_unlock 8 "$QCACHE/.lock"
     "$ZIG" cc -target wasm32-wasi -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
         "$HERE/$GUEST_REL" "$QCACHE"/dtoa.o "$QCACHE"/libunicode.o "$QCACHE"/libregexp.o "$QCACHE"/quickjs.o \
         -o "$WORK/guest.wasm"
@@ -113,7 +113,7 @@ WAMR_CFLAGS=("${APP_CFLAGS[@]}" -Wno-implicit-function-declaration)
 # Build/reuse the cached WAMR engine archive (flock-guarded, stamped) — shared with the other gates.
 CACHE="$HERE/.wamr-cache"; mkdir -p "$CACHE"; WAMR_LIB="$CACHE/libwamr.a"
 WANT="$(printf '%s ' "${WDEF[@]}"; find "$WC/shared/platform/mc" "$WC/shared/utils" "$WC/shared/mem-alloc" "$WC/iwasm/common" "$WC/iwasm/interpreter" \( -name '*.c' -o -name '*.h' -o -name '*.S' \) 2>/dev/null | sort | xargs ls -la 2>/dev/null | md5sum)"
-exec 9>"$CACHE/.lock"; flock 9
+kernel_boot_lock 9 "$CACHE/.lock"
 if [ ! -f "$WAMR_LIB" ] || [ "$(cat "$CACHE/stamp" 2>/dev/null)" != "$WANT" ]; then
     CB="$CACHE/obj"; rm -rf "$CB"; mkdir -p "$CB"; OBJS=(); j=0
     cwamr() { "$CLANG" "${WAMR_CFLAGS[@]}" "${WINC[@]}" "${WDEF[@]}" -c "$1" -o "$2"; OBJS+=("$2"); }
@@ -129,7 +129,7 @@ if [ ! -f "$WAMR_LIB" ] || [ "$(cat "$CACHE/stamp" 2>/dev/null)" != "$WANT" ]; t
     "$AR" rcs "$WAMR_LIB" "${OBJS[@]}"
     printf '%s' "$WANT" > "$CACHE/stamp"
 fi
-flock -u 9
+kernel_boot_unlock 9 "$CACHE/.lock"
 "$CLANG" "${APP_CFLAGS[@]}" -I"$WC/iwasm/include" -I"$WASMDIR" -I"$WORK" -c "$HOST" -o "$WORK/host.o"
 
 "$MCC" emit-c "$HERE/user/runtime/crt0.mc" > "$WORK/crt0_gen.c"

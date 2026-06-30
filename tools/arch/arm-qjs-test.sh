@@ -52,7 +52,7 @@ AGENT_JS="$HERE/$AGENT_JS_REL"
 #         FP/NEON on (armv8-a default); the arch-specific user pieces are crt0/app_traps/fenv.
 APP_CFLAGS=(--target=aarch64-unknown-elf -march=armv8-a
             -nostdlib -ffreestanding -fno-pic -fno-pie -O1
-            -fno-builtin -D__wasi__ -I"$HERE/user/libc/include" -I"$QJS")
+            -fno-builtin -mstrict-align -D__wasi__ -I"$HERE/user/libc/include" -I"$QJS")
 for f in dtoa libunicode libregexp quickjs; do
     "$CLANG" "${APP_CFLAGS[@]}" -c "$QJS/$f.c" -o "$WORK/$f.o"
 done
@@ -135,7 +135,7 @@ done
 } >"$WORK/agent_src.c"
 
 # ---- 3. The flat aarch64 kernel: qjs_user_runtime.c + the MC fixture (integer-only) ----
-KCF=(--target=aarch64-unknown-elf -march=armv8-a -ffreestanding -nostdlib -fno-pic -fno-pie -mgeneral-regs-only -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
+KCF=(--target=aarch64-unknown-elf -march=armv8-a -ffreestanding -nostdlib -fno-pic -fno-pie -mgeneral-regs-only -mstrict-align -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
 case "$BACKEND" in
   c)
     # --arch=aarch64 resolves the fixture's `kernel/arch/active/...` (uaccess_pt) to ARM paging.

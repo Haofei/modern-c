@@ -2,7 +2,7 @@
 // tool ABI (tool_submit/tool_poll over SYS_SUBMIT/SYS_POLL + a print->SYS_WRITE) as WAMR native
 // symbols, then runs the guest's exported agent_main(). The WAMR analogue of wasi_shim's host tool
 // path — proving WAMR drives the real kernel broker from a confined agent. Engine is WAMR; the
-// kernel/broker/ABI are unchanged (this is a U-mode payload swap, exactly like wasm3).
+// kernel/broker/ABI are unchanged; only the confined U-mode engine payload changes.
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>

@@ -2,8 +2,8 @@
 // boots WAMR (classic interpreter, freestanding against the all-MC libc via the `mc` platform port),
 // loads an embedded wasm module, calls its exported compute(), and prints the result over the kernel
 // syscall ABI (printf -> SYS_WRITE). A successful run from an ISOLATED U-mode space proves WAMR runs
-// a real WebAssembly module CONFINED, exactly as wasm3 does today — the foundation for replacing the
-// wasm3 engine. NOTE: WAMR processes the module buffer in place, so load() is given a WRITABLE copy.
+// a real WebAssembly module CONFINED. NOTE: WAMR processes the module buffer in place, so load() is
+// given a WRITABLE copy.
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>

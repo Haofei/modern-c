@@ -4,7 +4,7 @@
 // wasm32-wasi). The Javy binary is not available in this build environment, so we compile the
 // repo's already-vendored QuickJS (third_party/quickjs) to wasm32-wasi with the toolchain we have
 // (`zig cc -target wasm32-wasi`, which links zig's wasi-libc); the result is the same QuickJS
-// bytecode interpreter living inside a wasm module, run by the wasm3 host + WASI shim — no opaque
+// bytecode interpreter living inside a wasm module, run by the WAMR host + WASI shim — no opaque
 // prebuilt tool. See docs/wasm-migration-plan.md Phase 4.
 //
 // It evaluates a representative JavaScript program (recursion, objects, arrays, JSON, closures —

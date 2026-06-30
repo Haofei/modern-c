@@ -4,7 +4,7 @@
 # against the all-MC libc via the `mc` platform port) + the confined wamr_host into a U-mode ELF, load
 # it with the real elf_loader into an ISOLATED Sv39 space (kernel UNMAPPED), drop to U-mode, and let
 # the host run an embedded no-WASI wasm module — reaching the kernel ONLY through SYS_WRITE/SYS_EXIT.
-# PASS requires confinement + the engine's result marker + a clean U-mode exit. Keeps wasm3 untouched.
+# PASS requires confinement + the engine's result marker + a clean U-mode exit.
 #
 # Usage: tools/lang/wamr-run-test.sh <mcc> [c|llvm]
 set -euo pipefail
@@ -49,21 +49,21 @@ if [ "${KEEP_WORK:-0}" = 1 ]; then echo "KEEP_WORK: $WORK" >&2; else trap 'rm -r
 WASI_MCPU="${WASI_MCPU:-none}"
 if [ "$WASI_MCPU" = none ]; then MCPU=(); else MCPU=(-mcpu="$WASI_MCPU"); fi
 if [ "$GUEST_KIND" = qjs ]; then
-    # KEYSTONE: JavaScript on WAMR — the vendored QuickJS compiled to wasm32-wasi (guest + 4 TUs),
-    # feature-pinned for WAMR. Larger stack for the JS engine. The 4 QuickJS TUs are identical across
+    # KEYSTONE: JavaScript on WAMR — the vendored QuickJS compiled to wasm32-wasi (guest + 4 TUs).
+    # Larger stack for the JS engine. The 4 QuickJS TUs are identical across
     # every qjs gate, so compile them to wasm objects ONCE into a flock-guarded cache and reuse them —
     # each gate then only compiles its small guest .c and links. See tools/wamr/README.
     QJS="$HERE/third_party/quickjs"
     QCACHE="$HERE/.wamr-cache/qjs-wasm"; mkdir -p "$QCACHE"
     QWANT="$(printf '%s ' "$WASI_MCPU"; ls -la "$QJS"/dtoa.c "$QJS"/libunicode.c "$QJS"/libregexp.c "$QJS"/quickjs.c "$QJS"/*.h 2>/dev/null | md5sum)"
-    exec 8>"$QCACHE/.lock"; flock 8
+    kernel_boot_lock 8 "$QCACHE/.lock"
     if [ "$(cat "$QCACHE/stamp" 2>/dev/null)" != "$QWANT" ]; then
         for f in dtoa libunicode libregexp quickjs; do
             "$ZIG" cc -target wasm32-wasi "${MCPU[@]}" -O2 -I"$QJS" -D__wasi__ -c "$QJS/$f.c" -o "$QCACHE/$f.o"
         done
         printf '%s' "$QWANT" > "$QCACHE/stamp"
     fi
-    flock -u 8
+    kernel_boot_unlock 8 "$QCACHE/.lock"
     "$ZIG" cc -target wasm32-wasi "${MCPU[@]}" -O2 -s -I"$QJS" -D__wasi__ -Wl,-z,stack-size=524288 \
         "$GUEST" "$QCACHE"/dtoa.o "$QCACHE"/libunicode.o "$QCACHE"/libregexp.o "$QCACHE"/quickjs.o -o "$WORK/guest.wasm"
 elif [ "$GUEST_KIND" = wasi ]; then
@@ -101,7 +101,7 @@ AR="${AR:-llvm-ar}"
 CACHE="$HERE/.wamr-cache"; mkdir -p "$CACHE"
 WAMR_LIB="$CACHE/libwamr.a"
 WANT="$(printf '%s ' "${WDEF[@]}"; find "$WC/shared/platform/mc" "$WC/shared/utils" "$WC/shared/mem-alloc" "$WC/iwasm/common" "$WC/iwasm/interpreter" \( -name '*.c' -o -name '*.h' -o -name '*.S' \) 2>/dev/null | sort | xargs ls -la 2>/dev/null | md5sum)"
-exec 9>"$CACHE/.lock"; flock 9
+kernel_boot_lock 9 "$CACHE/.lock"
 if [ ! -f "$WAMR_LIB" ] || [ "$(cat "$CACHE/stamp" 2>/dev/null)" != "$WANT" ]; then
     CB="$CACHE/obj"; rm -rf "$CB"; mkdir -p "$CB"; OBJS=(); j=0
     cwamr() { "$CLANG" "${APP_CFLAGS[@]}" "${WINC[@]}" "${WDEF[@]}" -c "$1" -o "$2"; OBJS+=("$2"); }
@@ -117,7 +117,7 @@ if [ ! -f "$WAMR_LIB" ] || [ "$(cat "$CACHE/stamp" 2>/dev/null)" != "$WANT" ]; t
     "$AR" rcs "$WAMR_LIB" "${OBJS[@]}"
     printf '%s' "$WANT" > "$CACHE/stamp"
 fi
-flock -u 9
+kernel_boot_unlock 9 "$CACHE/.lock"
 
 # The confined host front-end (sees wasm_blob.h + WAMR's public header).
 "$CLANG" "${APP_CFLAGS[@]}" -I"$WC/iwasm/include" -I"$HERE/examples/apps/wasm" -I"$WORK" -c "$HOST" -o "$WORK/host.o"

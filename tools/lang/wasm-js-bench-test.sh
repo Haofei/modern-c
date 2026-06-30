@@ -2,7 +2,7 @@
 # WASM-agent Phase 7 (docs/wasm-migration-plan.md §5): JS performance benchmark — QuickJS-on-WASM vs
 # native QuickJS. Runs the SAME deterministic JS workload on both confined paths under QEMU:
 #   - native: the hand-written C host (qjs_host.c) evaluating examples/agents/agent_bench.js;
-#   - wasm:   QuickJS compiled to wasm32-wasi on wasm3, evaluating examples/apps/wasm/wasi_js_bench.c
+#   - wasm:   QuickJS compiled to wasm32-wasi on WAMR, evaluating examples/apps/wasm/wasi_js_bench.c
 #             (the byte-equivalent computation).
 # Emits a report artifact (zig-out/wasm-js-bench.json) with each path's QEMU wall time + U-mode image
 # size + their ratios, the backend, and the git commit. The GATE is functional-parity-based (the two
