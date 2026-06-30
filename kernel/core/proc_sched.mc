@@ -434,3 +434,58 @@ export fn proc_preempt_point(t: *mut ProcTable) -> void {
         proc_yield_priority(t);
     }
 }
+
+// ----- supervision: heartbeat liveness (production-readiness §3.1 #12) -----
+// The lifecycle primitives (spawn/exit/kill/reap) exist; supervision is the missing layer that
+// DETECTS a stuck/dead long-running agent so a supervisor can restart or kill it. This adds the
+// detection mechanism: a per-slot heartbeat deadline + last-beat timestamp (in timer ticks). An
+// agent (or the kernel on its behalf) calls proc_heartbeat each time it makes progress; a
+// supervisor periodically asks proc_liveness_expired which slots missed their deadline and applies
+// policy (proc_kill / respawn / crash-loop backoff — policy lives in the supervisor, not here).
+// Kept disjoint from process.mc (no new Process fields) via module-global arrays, exactly like the
+// throttle penalty above; indexed by slot in 0..MAX_PROCS. deadline 0 = unsupervised.
+global g_hb_deadline: [MAX_PROCS]u64; // max ticks allowed between heartbeats (0 = not supervised)
+global g_hb_last: [MAX_PROCS]u64;     // tick of the slot's most recent heartbeat
+
+// Enroll `slot` under supervision: it must beat at least every `deadline` ticks, starting from
+// `now`. deadline 0 disables supervision for the slot.
+export fn proc_supervise(t: *mut ProcTable, slot: usize, now: u64, deadline: u64) -> void {
+    if slot < MAX_PROCS {
+        g_hb_deadline[slot] = deadline;
+        g_hb_last[slot] = now;
+    }
+}
+
+// Stop supervising `slot` (e.g. on a clean exit/reap): it can no longer be flagged expired.
+export fn proc_unsupervise(t: *mut ProcTable, slot: usize) -> void {
+    if slot < MAX_PROCS {
+        g_hb_deadline[slot] = 0;
+    }
+}
+
+// Record a heartbeat for `slot` at tick `now` (the agent made progress). No-op if unsupervised.
+export fn proc_heartbeat(t: *mut ProcTable, slot: usize, now: u64) -> void {
+    if slot < MAX_PROCS {
+        if g_hb_deadline[slot] != 0 {
+            g_hb_last[slot] = now;
+        }
+    }
+}
+
+// True iff `slot` is supervised and has missed its heartbeat deadline as of `now` — i.e. more than
+// `deadline` ticks elapsed since its last beat. Overflow-safe (subtraction only when now >= last).
+// A supervisor calls this to decide whether to restart/kill the slot.
+export fn proc_liveness_expired(t: *mut ProcTable, slot: usize, now: u64) -> bool {
+    if slot >= MAX_PROCS {
+        return false;
+    }
+    let deadline: u64 = g_hb_deadline[slot];
+    if deadline == 0 {
+        return false; // not supervised
+    }
+    let last: u64 = g_hb_last[slot];
+    if now <= last {
+        return false; // no time elapsed (or clock not advanced) — not expired
+    }
+    return (now - last) > deadline;
+}

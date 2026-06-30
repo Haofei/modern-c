@@ -55,5 +55,17 @@ export fn scheduler_run() -> u32 {
     // the service applies policy: refresh the task's quantum
     proc_refresh_quantum(&g_t, 0, 10);
     if proc_quantum(&g_t, 0) != 10 { pass = 0; }
+
+    // ----- supervision: heartbeat liveness -----
+    // Enroll slot 0 (beat at least every 10 ticks, from t=100); detect a missed heartbeat, recover
+    // on a fresh beat, and stop flagging once unsupervised.
+    proc_supervise(&g_t, 0, 100, 10);
+    if proc_liveness_expired(&g_t, 0, 105) { pass = 0; }   // 5 ticks since beat: alive
+    if proc_liveness_expired(&g_t, 0, 110) { pass = 0; }   // exactly 10: still within deadline
+    if !proc_liveness_expired(&g_t, 0, 111) { pass = 0; }  // 11 > 10: missed -> expired
+    proc_heartbeat(&g_t, 0, 111);                          // agent beats again at 111
+    if proc_liveness_expired(&g_t, 0, 120) { pass = 0; }   // 9 since the new beat: alive
+    proc_unsupervise(&g_t, 0);
+    if proc_liveness_expired(&g_t, 0, 1000) { pass = 0; }  // unsupervised -> never expired
     return pass;
 }
