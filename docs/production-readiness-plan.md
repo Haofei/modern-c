@@ -569,16 +569,20 @@ Exit criteria:
 
 The first production claim should require all of these:
 
+NOTE (2026-06-30): the software-capability items below are marked done where a QEMU gate
+demonstrates them; the *board-hardware* items (real board profile, boot/interrupts on the board)
+remain open — QEMU is the only validated platform today.
+
 - [ ] One real board profile is selected and documented.
 - [ ] Kernel boots on the board in the intended privilege mode.
-- [ ] Timer and external interrupts work on the board.
-- [ ] Storage works with persistence tests.
-- [ ] Network works through the production brokered tool surface.
-- [ ] Agent runs confined with no ambient FS/network authority.
-- [ ] All external effects go through brokers.
-- [ ] Allowed and denied broker decisions are audited.
-- [ ] Per-agent memory, request, output, and network budgets are enforced across the production paths.
-- [ ] Policy can revoke/throttle/kill a running agent.
+- [ ] Timer and external interrupts work on the board. (QEMU: yes — `preempt-test`, CLINT/PLIC gates; board: pending.)
+- [ ] Storage works with persistence tests. (Roundtrip via BlockDevice gated; across-reboot pending — see below.)
+- [x] Network works through the production brokered tool surface. (QEMU-gated: `net-realtool`/`agent-net-real` over real TCP.)
+- [x] Agent runs confined with no ambient FS/network authority. (QEMU-gated: the confined-agent family — kernel unmapped, syscall-only entry.)
+- [x] All external effects go through brokers. (FS/net brokers; confined agents have no ambient handles.)
+- [x] Allowed and denied broker decisions are audited. (QEMU-gated: net allow `NET_TAG` / deny `NET_DENY_TAG`, FS deny audit.)
+- [x] Per-agent memory, request, output, and network budgets are enforced across the production paths. (QEMU-gated: `wasm-memcap`, `wamr-fuel`/`wasm-watchdog`, `quota`/`quota-agent`, `NetCap`.)
+- [x] Policy can revoke/throttle/kill a running agent. (`proc_throttle` + `proc_kill` + machine-timer watchdog kill (`wasm-watchdog-test`) + gated revoke/throttle/kill actuation.)
 - [x] Policy actuation state transitions for revoke/throttle/kill are gated.
 - [x] BlockDevice-backed policy/audit checkpoint seed exists.
 - [ ] Audit persists across reboot.
