@@ -268,6 +268,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-driver-test"));
     m0_step.dependOn(ctx.cmd("llvm-preempt-test"));
     m0_step.dependOn(ctx.cmd("llvm-agent-preempt-test"));
+    // llvm-proc-supervisor-test runs the LLVM-lowered running supervisor loop (proc_supervisor_scan) under QEMU.
+    m0_step.dependOn(ctx.cmd("llvm-proc-supervisor-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
     m0_step.dependOn(ctx.cmd("llvm-ledger-test"));
     m0_step.dependOn(ctx.cmd("llvm-signed-boot-test"));
@@ -648,6 +650,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("preempt-test"));
     // agent-preempt-test runs timer-driven preemption of agent PROCESSES (ProcTable) under QEMU.
     m0_step.dependOn(ctx.cmd("agent-preempt-test"));
+    // proc-supervisor-test runs the running supervisor loop (proc_supervisor_scan) over supervised PROCESSES under QEMU.
+    m0_step.dependOn(ctx.cmd("proc-supervisor-test"));
     // ledger-test runs the unified resource ledger (charge/release + overflow-edge) under QEMU.
     m0_step.dependOn(ctx.cmd("ledger-test"));
     // signed-boot-test runs signed-image admission + A/B rollback (production_ops) end to end under QEMU.
