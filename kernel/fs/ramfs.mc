@@ -8,6 +8,7 @@
 
 import "std/bytes.mc";
 import "std/addr.mc";
+import "std/mem.mc";
 
 const MAX_FILES: usize = 8;
 const NAME_POOL: usize = 128;
@@ -101,10 +102,10 @@ export fn ramfs_create(fs: *mut Ramfs, name: usize, name_len: usize, capacity: u
     if slot == MAX_FILES {
         return err(.NoSpace);
     }
-    if (fs.name_used + name_len) > NAME_POOL {
+    if !fits_within(fs.name_used, name_len, NAME_POOL) {
         return err(.NameTooLong);
     }
-    if (fs.data_used + capacity) > DATA_POOL {
+    if !fits_within(fs.data_used, capacity, DATA_POOL) {
         return err(.TooLarge);
     }
     var nr: ByteReader = byte_reader(pa(name), name_len);

@@ -29,7 +29,7 @@ export fn net_fetch_tcp(
     req_src: usize, req_len: usize,
     resp_dst: usize, resp_max: usize,
 ) -> Result<u32, BrokerError> {
-    switch net_policy_admit(t, reg, sb, nc, endpoint_id, req) {
+    switch net_policy_admit(t, reg, sb, nc, endpoint_id, req, EP_KIND_TCP) {
         ok(slot) => {
             // Dispatch: the REAL transport. Resolve the destination, then put packets on the wire.
             let dst_ip: u32 = endpoint_dst_ip_at(reg, slot);

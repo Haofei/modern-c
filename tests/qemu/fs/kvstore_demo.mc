@@ -191,5 +191,22 @@ export fn kvstore_run() -> u32 {
         }
     }
 
+    // REGRESSION (failed-overwrite preservation): the too-large overwrite above must NOT have
+    // destroyed key 0xB. kv_put used to evict the old value BEFORE the fit check, so a failed
+    // overwrite deleted the existing value. After the fix it is preserved byte-for-byte (length too).
+    if !kv_has(&g_store, 0xB) { pass = 0; }
+    if !len_is(0xB, 4) { pass = 0; }
+    i = 0;
+    while i < 16 { g_dst[i] = 0; i = i + 1; }
+    switch kv_get(&g_store, 0xB, pa((&g_dst[0]) as usize), 16) {
+        ok(n) => { if n != 4 { pass = 0; } }
+        err(e) => { pass = 0; }
+    }
+    i = 0;
+    while i < 4 {
+        if g_dst[i] != g_b[i] { pass = 0; }
+        i = i + 1;
+    }
+
     return pass;
 }

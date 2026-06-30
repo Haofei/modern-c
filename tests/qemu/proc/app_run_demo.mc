@@ -671,8 +671,14 @@ fn sys_poll(events_ptr: u64, max_arg: u64, timeout: u64) -> u64 {
     var count: usize = 0;
 
     // Outer loop: advance the clock at most (1 + timeout) times, draining each tick fully.
+    // `timeout` is an untrusted u64 syscall arg; saturate so a hostile u64::MAX does not overflow
+    // (which would TRAP the kernel path) — it just yields the maximum step budget.
     var steps: u64 = 0;
-    let max_steps: u64 = 1 + timeout;
+    let u64_max: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    var max_steps: u64 = u64_max;     // saturated default for the hostile timeout==u64::MAX case
+    if timeout != u64_max {
+        max_steps = 1 + timeout;      // safe: timeout < u64::MAX, so +1 cannot overflow
+    }
     while steps < max_steps {
         steps = steps + 1;
         g_clock = g_clock + 1; // virtual time progresses, so every armed slot eventually becomes ready
@@ -720,7 +726,18 @@ fn sys_poll(events_ptr: u64, max_arg: u64, timeout: u64) -> u64 {
             ev.out_len = g_slot_outlen[best];
             ev.reserved = 0;
             let esz: usize = sizeof(ToolEvent);
-            switch copy_to_user_pt(&g_uas, uptr((events_ptr as usize) + count * esz), pa((&ev) as usize), esz) {
+            // The destination is events_ptr + count*esz. count <= COMP_CAP so count*esz cannot
+            // overflow, but a hostile events_ptr near the top of the address space would overflow
+            // the base+offset addition and TRAP before copy_to_user_pt could reject it. Guard it and
+            // treat an out-of-range pointer as a fault (EFAULT, or the partial count if any).
+            let ev_off: usize = count * esz;
+            let ev_base: usize = events_ptr as usize;
+            let usize_max: usize = 0xFFFF_FFFF_FFFF_FFFF;
+            if ev_base > usize_max - ev_off {
+                if count > 0 { return count as u64; }
+                return bitcast<u64>(E_FAULT);
+            }
+            switch copy_to_user_pt(&g_uas, uptr(ev_base + ev_off), pa((&ev) as usize), esz) {
                 ok(v) => {}
                 err(e) => {
                     if count > 0 { return count as u64; } // slot stays active; keep delivered events

@@ -118,10 +118,16 @@ fn kv_evict(s: *mut KvStore, slot: usize) -> void {
 export fn kv_put(s: *mut KvStore, key: u64, src: PAddr, len: usize) -> Result<usize, KvError> {
     var slot: usize = kv_find(s, key);
     if slot != MAX_KEYS {
-        // Overwrite: free the old bytes first so the fit check sees true headroom.
+        // Overwrite: the replacement reuses the old value's space, so check fit against the arena
+        // AS IF the old value were already reclaimed (bump - old_len) — but check BEFORE evicting,
+        // so a too-large replacement returns TooLarge with the existing value still intact (an
+        // overwrite that fails must not destroy the old data). `s.bump >= old_len` always holds.
+        let base_after_evict: usize = s.bump - s.dir[slot].len;
+        if !fits_within(base_after_evict, len, KV_STORE_BYTES) {
+            return err(.TooLarge); // old value preserved — nothing moved yet
+        }
         kv_evict(s, slot);
-    }
-    if (s.bump + len) > KV_STORE_BYTES {
+    } else if !fits_within(s.bump, len, KV_STORE_BYTES) {
         return err(.TooLarge);
     }
     // Claim the first free directory slot (the evicted one is now free, if any).

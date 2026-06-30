@@ -94,7 +94,7 @@ export fn blob_reopen(s: *mut BlobStore) -> void {
 // Fails closed with `Full` if the directory is full or `TooLarge` if the bytes will not
 // fit in the remaining arena — never a partial/truncated write.
 export fn blob_put(s: *mut BlobStore, id: u32, src: PAddr, len: usize) -> Result<usize, BlobError> {
-    if (s.bump + len) > STORE_BYTES {
+    if !fits_within(s.bump, len, STORE_BYTES) {
         return err(.TooLarge);
     }
     var slot: usize = blob_find(s, id);

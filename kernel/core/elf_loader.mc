@@ -121,9 +121,17 @@ fn load_segment(elf: *ByteReader, pt: *mut PageTable, h: *mut Heap, p: *ProgramH
     }
     let vend: u64 = vaddr + memsz;
 
+    // align_up(vend, PAGE) adds (PAGE-1) and would TRAP on overflow for a hostile vend within
+    // PAGE-1 of the top of the address space (the vaddr+memsz wrap check above does not cover it).
+    // Reject such a segment with BadSegment instead of aborting the loader on untrusted input.
+    let page_u64: u64 = PAGE as u64;
+    if vend > (0xFFFF_FFFF_FFFF_FFFF as u64) - (page_u64 - 1) {
+        return err(.BadSegment); // page-aligned end would overflow the address space
+    }
+
     // Page range covering [vaddr, vaddr+memsz): [seg_start, seg_end) page-aligned.
     let seg_start: usize = align_down(vaddr as usize, PAGE);
-    let seg_end: usize = align_up(vend as usize, PAGE); // checked: traps on overflow
+    let seg_end: usize = align_up(vend as usize, PAGE);
     let span: usize = seg_end - seg_start;              // multiple of PAGE, > 0
     let page_count: usize = span / PAGE;
     if page_count > MAX_SEGMENT_PAGES {

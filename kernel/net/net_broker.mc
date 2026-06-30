@@ -68,12 +68,27 @@ const NET_DENY_TAG: u32 = 0x0E8;
 // A mock-only endpoint leaves dst_ip/dst_port zero; a real endpoint leaves handler unused. The
 // registry is the single source of truth for both (endpoint_lookup returns the slot; the dispatch
 // reads whichever descriptor it needs from it).
+// Transport kind of a registered endpoint. Dispatch is split into two entry points (net_fetch vs
+// net_fetch_tcp); `kind` records which transport an endpoint was registered for so a cross-transport
+// call (e.g. the mock net_fetch reaching a TCP endpoint whose `handler` is a stub) is rejected as
+// NoEndpoint instead of dispatching a wrong/uninitialized descriptor.
+export const EP_KIND_MOCK: u8 = 0;
+export const EP_KIND_TCP: u8 = 1;
+
 struct NetEndpoint {
     id: u32,
     handler: fn(u32) -> u32,
     dst_ip: u32,
     dst_port: u16,
+    kind: u8,
     present: bool,
+}
+
+// Safe default mock handler: returned by a TCP (or freshly-initialized) endpoint so its `handler`
+// slot is never an uninitialized fn pointer. It is never reached on a correct path (the transport
+// kind check rejects a mock dispatch to a non-mock endpoint first); returning 0 just fails closed.
+fn ep_no_handler(req: u32) -> u32 {
+    return 0;
 }
 
 // The broker's ENDPOINT REGISTRY: the set of destinations the broker can reach (what EXISTS).
@@ -99,8 +114,10 @@ export fn endpoint_registry_init(reg: *mut EndpointRegistry) -> void {
     var i: usize = 0;
     while i < MAX_ENDPOINTS {
         reg.eps[i].id = 0;
+        reg.eps[i].handler = ep_no_handler; // never an uninitialized fn pointer
         reg.eps[i].dst_ip = 0;
         reg.eps[i].dst_port = 0;
+        reg.eps[i].kind = EP_KIND_MOCK;
         reg.eps[i].present = false;
         i = i + 1;
     }
@@ -116,6 +133,7 @@ export fn endpoint_register(reg: *mut EndpointRegistry, id: u32, handler: fn(u32
             reg.eps[i].handler = handler;
             reg.eps[i].dst_ip = 0;   // mock endpoint — no real destination
             reg.eps[i].dst_port = 0;
+            reg.eps[i].kind = EP_KIND_MOCK;
             reg.eps[i].present = true;
             return ok(i);
         }
@@ -126,15 +144,18 @@ export fn endpoint_register(reg: *mut EndpointRegistry, id: u32, handler: fn(u32
 
 // Register a REAL endpoint `id` mapped to a destination (dst_ip, dst_port) the broker active-opens
 // a TCP connection to under net_fetch_tcp. Mirrors endpoint_register, but carries the transport
-// descriptor instead of a mock handler. `handler` is left a null fn pointer (never dispatched on the
-// TCP path). Returns the claimed slot index, or err(.NoEndpoint) if the registry is full.
+// descriptor instead of a mock handler, and tags the slot EP_KIND_TCP so a mock dispatch to it is
+// rejected (NoEndpoint). `handler` is set to the ep_no_handler stub (never dispatched on the TCP
+// path, never uninitialized). Returns the claimed slot index, or err(.NoEndpoint) if the registry is full.
 export fn endpoint_register_tcp(reg: *mut EndpointRegistry, id: u32, dst_ip: u32, dst_port: u16) -> Result<usize, BrokerError> {
     var i: usize = 0;
     while i < MAX_ENDPOINTS {
         if !reg.eps[i].present {
             reg.eps[i].id = id;
+            reg.eps[i].handler = ep_no_handler; // TCP transport: handler unused, but never uninitialized
             reg.eps[i].dst_ip = dst_ip;
             reg.eps[i].dst_port = dst_port;
+            reg.eps[i].kind = EP_KIND_TCP;
             reg.eps[i].present = true;
             return ok(i);
         }
@@ -206,7 +227,7 @@ export fn endpoint_handler_at(reg: *mut EndpointRegistry, slot: usize) -> fn(u32
 //   5. charge       — spend one request unit.
 // Returns ok(slot) once steps 1–5 have all succeeded (so the caller need only dispatch); err(...)
 // otherwise, with NO side effects (no audit, no charge) on any failure path.
-export fn net_policy_admit(t: *mut ProcTable, reg: *mut EndpointRegistry, sb: *mut Sandbox, nc: *mut NetCap, endpoint_id: u32, req: u32) -> Result<usize, BrokerError> {
+export fn net_policy_admit(t: *mut ProcTable, reg: *mut EndpointRegistry, sb: *mut Sandbox, nc: *mut NetCap, endpoint_id: u32, req: u32, want_kind: u8) -> Result<usize, BrokerError> {
     // 1. egress check: not in the agent's egress allowlist ⇒ Denied (the exfil block — no budget
     //    spent, NO packet on the wire). The blocked attempt IS recorded as a DENY event (distinct
     //    NET_DENY_TAG, separable from a real egress's NET_TAG) so exfil attempts are observable,
@@ -224,6 +245,12 @@ export fn net_policy_admit(t: *mut ProcTable, reg: *mut EndpointRegistry, sb: *m
     //    never reveals whether it is registered; after budget so a resolution failure spends none.)
     switch endpoint_lookup(reg, endpoint_id) {
         ok(slot) => {
+            // 3b. transport-kind match: reject a cross-transport dispatch (mock call to a TCP
+            //     endpoint or vice-versa) BEFORE any audit/charge, so a wrong/stub descriptor is
+            //     never dispatched. Reported as NoEndpoint — not reachable via THIS transport.
+            if reg.eps[slot].kind != want_kind {
+                return err(.NoEndpoint);
+            }
             // 4. audit: only ADMITTED egresses are recorded into the shared provenance trace.
             ipc_trace_record(cap_audit(), proc_pid_at(t, sb.slot), endpoint_id, NET_TAG, req);
             // 5. charge: spend one request unit. The transport-specific dispatch follows in the caller.
@@ -238,10 +265,11 @@ export fn net_policy_admit(t: *mut ProcTable, reg: *mut EndpointRegistry, sb: *m
 // in-process handler (the MOCKED packet send) and returns its simulated response. Used by
 // agent_net_demo, where the QEMU image has no live peer.
 export fn net_fetch(t: *mut ProcTable, reg: *mut EndpointRegistry, sb: *mut Sandbox, nc: *mut NetCap, endpoint_id: u32, req: u32) -> Result<u32, BrokerError> {
-    switch net_policy_admit(t, reg, sb, nc, endpoint_id, req) {
+    switch net_policy_admit(t, reg, sb, nc, endpoint_id, req, EP_KIND_MOCK) {
         ok(slot) => {
             // Dispatch: the MOCK transport — run the resolved handler, return its simulated response.
-            let handler: fn(u32) -> u32 = endpoint_handler_at(reg, slot); // initialized, never uninit
+            // admit() guaranteed kind==MOCK, so the handler is a real registered fn, never the stub.
+            let handler: fn(u32) -> u32 = endpoint_handler_at(reg, slot);
             let resp: u32 = handler(req);
             return ok(resp);
         }

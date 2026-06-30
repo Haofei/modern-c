@@ -14,6 +14,7 @@ import "std/bytes.mc";
 import "kernel/net/ethernet.mc";
 import "kernel/net/ipv4.mc";
 import "kernel/net/tcp.mc";
+import "kernel/net/inet_checksum.mc";
 
 const TCPTX_NET_HDR: usize = 12;        // virtio_net_hdr precedes the Ethernet frame
 const TCPTX_IP_PROTO_TCP: u8 = 6;
@@ -149,6 +150,21 @@ export fn tcp_parse_frame(base: usize, len: usize) -> TcpRx {
     let seg_total: usize = ip_total - ip_hdr_len; // TCP header + payload
     if seg_total < tcp_hdr_len {
         return out;
+    }
+    // Checksum validation: reject a corrupt frame before its fields reach socket/window state.
+    // All summed bytes are already proven in-bounds (br_validate_len above + seg_total<=ip_total),
+    // so inet_sum's reads cannot run off the frame. The IPv4 header checksum covers the IP header;
+    // a valid header (checksum field included) folds to all-ones. The TCP checksum covers the IPv4
+    // pseudo-header + the whole TCP segment.
+    if !checksum_valid(inet_sum(&r, ip_at, ip_hdr_len, 0)) {
+        return out; // bad IPv4 header checksum
+    }
+    var src_ip_be: u32 = 0;
+    var dst_ip_be: u32 = 0;
+    switch br_try_be32(&r, ip_at + 12) { ok(v) => { src_ip_be = v; } err(e) => { return out; } }
+    switch br_try_be32(&r, ip_at + 16) { ok(v) => { dst_ip_be = v; } err(e) => { return out; } }
+    if !tcp_checksum_valid(&r, tcp_at, src_ip_be, dst_ip_be, seg_total as u16) {
+        return out; // bad TCP checksum (pseudo-header + segment)
     }
     var src_port: u16 = 0;
     var dst_port: u16 = 0;

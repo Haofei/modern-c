@@ -207,6 +207,30 @@ fn build_toomany_image() -> void {
     img_phdr(64, T_PT_LOAD, T_PF_R | T_PF_X, TEXT_OFF as u64, TEXT_VADDR as u64, 16, 0x0100_1000);
 }
 
+// A HOSTILE image whose single PT_LOAD sits at the very TOP of the address space: vaddr+memsz does
+// not wrap u64 (so the wrap check passes), but page-aligning the end (align_up adds PAGE-1) WOULD
+// overflow. The loader must reject it with BadSegment via the pre-align bound check, NOT trap in
+// align_up. vaddr = 2^64 - PAGE, memsz = 0x500, filesz = 0, R|X.
+fn build_highaddr_image() -> void {
+    var i: usize = 0;
+    while i < IMAGE_CAP {
+        g_image[i] = 0;
+        i = i + 1;
+    }
+    img_u8(0, 0x7F);
+    img_u8(1, 0x45);
+    img_u8(2, 0x4C);
+    img_u8(3, 0x46);
+    img_u8(4, 2);
+    img_u8(5, 1);
+    img_u8(6, 1);
+    img_u64(24, ENTRY);
+    img_u64(32, 64);
+    img_u16(54, 56);
+    img_u16(56, 1); // one program header
+    img_phdr(64, T_PT_LOAD, T_PF_R | T_PF_X, 0, 0xFFFF_FFFF_FFFF_F000, 0, 0x0000_0000_0000_0500);
+}
+
 // Classify how `g_image` loads into a fresh heap over [pool_base, pool_base+pool_len): 0 = loaded
 // successfully, else the LoadError class as 1=BadElf, 2=TooManyPages, 3=NoFrame, 4=BadSegment.
 // Uses the fallible root allocation so even a pool too small for the root is a typed NoFrame.
@@ -332,6 +356,11 @@ export fn elf_loader_run() -> u32 {
     //   - segment over MAX_SEGMENT_PAGES -> TooManyPages (2)
     build_toomany_image();
     if load_err_code((&g_pool[0]) as usize, 262144) != 2 {
+        pass = 0;
+    }
+    //   - segment whose page-aligned end overflows -> BadSegment (4)  (pre-align bound, NOT a trap)
+    build_highaddr_image();
+    if load_err_code((&g_pool[0]) as usize, 262144) != 4 {
         pass = 0;
     }
     //   - heap too small for the frames  -> NoFrame (3)  (2-page pool; exhausts mid-walk)

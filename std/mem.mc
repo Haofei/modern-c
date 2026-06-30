@@ -40,6 +40,17 @@ export fn align_up(addr: usize, align: usize) -> usize {
     return align_down(bumped, align);
 }
 
+// Overflow-safe capacity check: does `len` more bytes fit when `used` of `limit` are taken?
+// Written as `len <= limit - used` (never `used + len <= limit`) so a hostile `len` cannot wrap
+// the addition and trap — an oversized request returns false, letting callers fail closed with a
+// typed error instead of aborting. `used > limit` (a corrupt counter) also returns false.
+export fn fits_within(used: usize, len: usize, limit: usize) -> bool {
+    if used > limit {
+        return false;
+    }
+    return len <= limit - used;
+}
+
 // Copy `len` bytes from physical region `src` to `dst`. The raw load/store is the
 // only unsafe operation; callers pass typed PAddrs. (Regions must not overlap with
 // dst after src — like C memcpy.)

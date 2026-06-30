@@ -19,6 +19,7 @@
 
 import "std/bytes.mc";
 import "std/addr.mc";
+import "std/mem.mc";
 
 const MAX_NODES: usize = 32;   // total directories + files
 const NAME_POOL: usize = 256;  // bytes for all component names
@@ -191,7 +192,7 @@ fn find_child(t: *mut Tree, dir: usize, r: *ByteReader, cstart: usize, clen: usi
 
 // Intern a component's bytes into the name pool, returning its offset.
 fn intern_name(t: *mut Tree, r: *ByteReader, cstart: usize, clen: usize) -> Result<usize, TreeError> {
-    if (t.name_used + clen) > NAME_POOL {
+    if !fits_within(t.name_used, clen, NAME_POOL) {
         return err(.NameTooLong);
     }
     let noff: usize = t.name_used;
@@ -296,7 +297,7 @@ fn make_path(t: *mut Tree, path: usize, path_len: usize, kind: u32, capacity: us
     }
     let slot: usize = alloc_node(t)?;
     if kind == KIND_FILE {
-        if (t.data_used + capacity) > DATA_POOL {
+        if !fits_within(t.data_used, capacity, DATA_POOL) {
             return err(.TooLarge);
         }
     }
