@@ -55,16 +55,16 @@ C
     if ! MCC="$MCC" LLC="$LLC" bash "$HERE/tools/toolchain/mcc-llvm-cc.sh" "$W/p.mc" -o "$W/l.o" >/dev/null 2>&1; then
         echo "FAIL: diff-fuzz seed=$seed — LLVM backend emit/compile failed ($repro)"; return 1
     fi
-    if ! "$CLANG" $LINK_FLAGS_STR -w "$W/d.c" "$W/c.o" -o "$W/c.app" >/dev/null 2>&1; then
+    if ! "$CLANG" $LINK_FLAGS_STR -w "$W/d.c" "$W/c.o" -o "$W/c.bin" >/dev/null 2>&1; then
         echo "FAIL: diff-fuzz seed=$seed — C link failed ($repro)"; return 1
     fi
-    if ! "$CLANG" $LINK_FLAGS_STR -w "$W/d.c" "$W/ts.c" "$W/l.o" -o "$W/l.app" >/dev/null 2>&1; then
+    if ! "$CLANG" $LINK_FLAGS_STR -w "$W/d.c" "$W/ts.c" "$W/l.o" -o "$W/l.bin" >/dev/null 2>&1; then
         echo "FAIL: diff-fuzz seed=$seed — LLVM link failed ($repro)"; return 1
     fi
 
     local co lo cr lr
-    co="$("$W/c.app" 2>&1)"; cr=$?
-    lo="$("$W/l.app" 2>&1)"; lr=$?
+    co="$("$W/c.bin" 2>&1)"; cr=$?
+    lo="$("$W/l.bin" 2>&1)"; lr=$?
     if [ "$co" != "$lo" ] || [ "$cr" != "$lr" ]; then
         echo "FAIL: diff-fuzz seed=$seed — BACKEND DIVERGENCE: C=(rc=$cr,'$co') LLVM=(rc=$lr,'$lo') ($repro)"; return 1
     fi

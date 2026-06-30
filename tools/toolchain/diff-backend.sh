@@ -65,16 +65,16 @@ void mc_trap_InvalidShift(void) { __builtin_trap(); }
 void mc_trap_NullUnwrap(void) { __builtin_trap(); }
 void mc_trap_Unreachable(void) { __builtin_trap(); }
 C
-    if ! "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/c.o" -o "$W/c.app" >/dev/null 2>&1; then
+    if ! "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/c.o" -o "$W/c.bin" >/dev/null 2>&1; then
         echo "SKIP: diff-backend $name (C link failed)"; return 0
     fi
-    if ! "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/trap_stubs.c" "$W/l.o" -o "$W/l.app" >/dev/null 2>&1; then
+    if ! "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/trap_stubs.c" "$W/l.o" -o "$W/l.bin" >/dev/null 2>&1; then
         echo "SKIP: diff-backend $name (LLVM link failed)"; return 0
     fi
 
     local c_out l_out c_rc l_rc
-    c_out="$("$W/c.app" 2>&1)"; c_rc=$?
-    l_out="$("$W/l.app" 2>&1)"; l_rc=$?
+    c_out="$("$W/c.bin" 2>&1)"; c_rc=$?
+    l_out="$("$W/l.bin" 2>&1)"; l_rc=$?
     if [ "$c_rc" != "$l_rc" ]; then
         echo "FAIL: diff-backend $name — exit codes differ: C=$c_rc LLVM=$l_rc"; return 1
     fi

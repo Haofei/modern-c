@@ -43,8 +43,8 @@ printf '#include <stdint.h>\n#include <stdio.h>\nextern uint32_t %s(void);\nint 
 build_run() {
     local checks="$1" tag="$2"
     "$MCC" emit-c "$SRC" --checks="$checks" > "$W/$tag.c"
-    "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/$tag.c" -o "$W/$tag.app"
-    "$W/$tag.app"
+    "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/$tag.c" -o "$W/$tag.bin"
+    "$W/$tag.bin"
 }
 
 safe="$(build_run all          safe)"

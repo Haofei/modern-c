@@ -199,10 +199,11 @@ export fn tcp_socket_send(s: *mut TcpSocket, src: usize, len: usize) -> u32 {
     return len as u32;
 }
 
-// ---- the centralized segment-hold reassembly ----
+// ---- the centralized in-order segment hold ----
 //
-// Pull the next in-order TCP data segment into the hold buffer (ACKing the WHOLE segment
-// once). Returns: 1 = data buffered, 0 = clean EOF (FIN, no more data), 2 = error/timeout.
+// Pull the next in-order TCP data segment into the hold buffer, ACKing ONLY the bytes actually
+// held from the current frame (an oversize segment is drained in chunks; out-of-order segments are
+// re-ACKed, not buffered). Returns: 1 = data buffered, 0 = clean EOF (FIN, no more data), 2 = error/timeout.
 fn sock_refill(s: *mut TcpSocket) -> u32 {
     var spins: u32 = 0;
     while spins < 256 {

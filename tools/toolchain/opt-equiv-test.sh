@@ -61,13 +61,13 @@ build_run() {
     local backend="$1" optflag="$2" tag="$3"
     if [ "$backend" = "c" ]; then
         "$MCC" emit-c "$SRC" $optflag > "$W/$tag.c"
-        "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/$tag.c" -o "$W/$tag.app"
+        "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/$tag.c" -o "$W/$tag.bin"
     else
         "$MCC" emit-llvm "$SRC" $optflag --arch="$HOST_MC_ARCH" > "$W/$tag.ll"
         "$LLC" -filetype=obj "$W/$tag.ll" -o "$W/$tag.o"
-        "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/trap_stubs.c" "$W/$tag.o" -o "$W/$tag.app"
+        "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/trap_stubs.c" "$W/$tag.o" -o "$W/$tag.bin"
     fi
-    "$W/$tag.app"
+    "$W/$tag.bin"
 }
 
 c0="$(build_run c    ''           c0)"
