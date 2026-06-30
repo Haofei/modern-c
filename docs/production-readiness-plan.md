@@ -113,18 +113,31 @@ hardening"; a few are genuinely thin. Current state, with evidence:
 | 2. Stable agent ABI | Mostly done | Correction: it IS versioned — `AGENT_ABI_VERSION`, `version` fields on req/event structs, `agent_abi_validate_req` rejects a mismatch with `badver` (gated: `agent_abi_demo.mc`), typed `AgentAbiError` status codes, a `CANCEL` op, `abi-consistency-test` guards syscall-number drift across kernel/userspace, and `liveupdate_demo` exercises a version transition. **Landed (2026-06-30):** the versioning/compat policy is now written in `agent_abi.mc` (single monotonic wire version; what forces a bump; status/op-set rules; the pair-kernel-with-agents deployment model). |
 | 3. Durable storage | Exists, weak | KV/blob/fs + `persistent_audit.mc`, `block_persistent_audit.mc`, blockdev checkpoint seed. Gap: **persist-across-reboot for policy+audit** (checklist `[ ]`), journaling/CRC, compaction, migration. |
 | 4. Isolation boundary | **Most mature** | Confined U-mode Sv39 (kernel unmapped) + WAMR sandbox + deterministic fuel, S-mode + cross-arch. Gap: **per-agent crash cleanup/reap**. (Review overstates this as missing.) |
-| 5. Resource accounting | Partial | `NetCap.requests_left`, watchdog ticks, WAMR instruction fuel, `agent_quota`, memcap exist. Gap: **uniform coverage + a single accounting/quota model**. |
+| 5. Resource accounting | Mostly done | Per-dimension budgets are enforced AND gated: CPU (`wamr-fuel-test`, `wasm-watchdog-test`), memory (`wasm-memcap-test`), network requests (`NetCap.requests_left`), tool/output quota (`quota-probe-test`, `qjs/wasm-quota-agent-test`) — multiple backends. Gap: a **single unified accounting/quota model** spanning all dimensions (incl. file handles + spawned tasks) and typed `NoMem` on the broker/device paths (§3.1 #5 detail). |
 | 6. Broker hardening | Exists, weak | `net_broker` policy+budget+audit; back-pressure (async `ok=8 rejected=4`); revoke/throttle/kill actuation gated. Gap: **persistent policy load, revocation propagation, retries, tracing**. |
 | 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), TLS (BearSSL), TCP RX hardened (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. (Review overstates DNS/TLS as needed.) |
-| 8. Observability | Partial | Audit/trace exist (`ipc_trace.mc`, `cap_audit`, provenance). Gap: **structured metrics, per-agent timelines, deterministic replay**. |
+| 8. Observability | Partial | Audit/trace + record/checkpoint exist (`ipc_trace.mc`, `cap_audit`, provenance, `kernel/lib/record.mc`, `kernel/lib/checkpoint.mc`). Gap: **structured metrics, per-agent event timelines, deterministic replay**. |
 | 9. Update/packaging | Partial | Agent signature verify (`kernel/crypto/rsa_verify.mc`), `liveupdate.mc`. Gap: **signed kernel images, reproducible builds, OTA, rollback**. |
 | 10. Platform contract | Partly documented | `platform-portability-plan.md`, `qemu-validation-checklist.md`; per-arch compiler-flag rules now explicit (aarch64 strict-align). Gap: **one frozen board profile**. |
 | 11. Security model doc | **Landed (2026-06-30)** | `docs/threat-model.md` written: assets, trust boundaries (TCB vs attacker-controlled), the isolation boundary with enforcing code, per-area threats→mitigations, guarantees G1–G5, accepted failure modes, and how each is gated. Keep it updated as §4.7 work lands. |
-| 12. Long-running lifecycle | **Genuinely thin** | Process table + `liveupdate`. Gap: **supervision trees, heartbeats, crash-loop policy, persistent identity, upgrade handoff**. |
+| 12. Long-running lifecycle | Partial | Core lifecycle exists: `proc_spawn` / `proc_exit` / `proc_kill` (+ `proc_signals`) / `proc_reap` (parent reaps a dead child — crash cleanup) / pause/resume, and `liveupdate.mc` (version handoff). Gap: the **supervision layer** — heartbeats, restart/crash-loop policy, supervision trees, leases, persistent identity. |
 
-Net: the highest-leverage genuinely-missing work is **(1) timer-preemptive scheduler** (primitives
-ready), **(3) persist-across-reboot for policy+audit** (seed exists), **(11) a written threat model**
-(cheap; frames everything else), then **(2) ABI versioning** and **(12) supervision/lifecycle**.
+Net (revised after grounding each row against the tree — the recurring finding is that items are
+substantially more implemented + gated than first credited):
+
+- **Landed this pass:** (11) threat model written; (2) ABI versioning policy written (the mechanism
+  already existed + was gated); (1) a process-level quantum→`need_resched` preemption-decision layer
+  added — and verified that real timer-driven preemption + per-agent CPU-budget kill **already
+  exist and are gated**.
+- **Genuinely remaining, narrow gaps:** (3) persist policy+audit **across a real reboot** (the
+  block-backed seed uses an in-RAM disk; needs a two-boot disk-image gate); (12) the **supervision
+  layer** (heartbeat/restart/crash-loop/leases) on top of the existing spawn/exit/kill/reap; (5) a
+  **unified** resource-accounting model + typed `NoMem` on broker/device paths; (8) structured
+  **metrics + deterministic replay**; (1-tail) drive `proc_preempt_tick` from a timer ISR in a
+  multi-AGENT runtime gate; (9) reproducible builds / signed kernel images / OTA / rollback.
+
+The point of this section: most "production blockers" are mechanism-complete and gated; the work is
+finishing narrow tails and writing the policies — not building these subsystems from scratch.
 
 ## 4. Main production blockers
 
