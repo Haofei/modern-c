@@ -267,6 +267,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-backtrace-test"));
     m0_step.dependOn(ctx.cmd("llvm-driver-test"));
     m0_step.dependOn(ctx.cmd("llvm-preempt-test"));
+    m0_step.dependOn(ctx.cmd("llvm-agent-preempt-test"));
     m0_step.dependOn(ctx.cmd("llvm-page-test"));
     m0_step.dependOn(ctx.cmd("llvm-heap-test"));
     m0_step.dependOn(ctx.cmd("llvm-paging-test"));
@@ -640,6 +641,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("sched-test"));
     // preempt-test runs the timer-driven preemptive scheduler under QEMU.
     m0_step.dependOn(ctx.cmd("preempt-test"));
+    // agent-preempt-test runs timer-driven preemption of agent PROCESSES (ProcTable) under QEMU.
+    m0_step.dependOn(ctx.cmd("agent-preempt-test"));
     // syscall-test runs the ecall syscall dispatch skeleton under QEMU.
     m0_step.dependOn(ctx.cmd("syscall-test"));
     // user-test runs the M->U privilege drop + user-mode syscalls under QEMU.

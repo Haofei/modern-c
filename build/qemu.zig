@@ -664,6 +664,10 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-preempt-test", "Run LLVM-lowered timer-driven preemption under QEMU", &.{ "bash", "tools/proc/preempt-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    _ = h.addScriptTest(ctx, "agent-preempt-test", "Run timer-driven preemption of agent PROCESSES (ProcTable) under QEMU", &.{ "bash", "tools/proc/agent-preempt-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-agent-preempt-test", "Run LLVM-lowered timer-driven preemption of agent PROCESSES under QEMU", &.{ "bash", "tools/proc/agent-preempt-test.sh", "zig-out/bin/mcc", "llvm" });
+
     _ = h.addScriptTest(ctx, "syscall-test", "Run the ecall syscall dispatch skeleton under QEMU", &.{ "bash", "tools/lang/syscall-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-syscall-test", "Run the LLVM-lowered ecall syscall dispatch skeleton under QEMU", &.{ "bash", "tools/lang/syscall-test.sh", "zig-out/bin/mcc", "llvm" });
