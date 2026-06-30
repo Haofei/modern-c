@@ -77,5 +77,21 @@ export fn scheduler_run() -> u32 {
     if proc_restart_allowed(&g_t, 0, 3) { pass = 0; }      // 3 >= 3: crash-looping -> give up
     proc_restart_reset(&g_t, 0);                           // a clean run clears the counter
     if !proc_restart_allowed(&g_t, 0, 3) { pass = 0; }     // allowed again after reset
+
+    // ----- supervisor loop verdict (proc_supervise_step: liveness + restart budget combined) -----
+    proc_restart_reset(&g_t, 0);
+    proc_supervise(&g_t, 0, 200, 10);                      // re-enroll: beat every <=10 ticks from t=200
+    switch proc_supervise_step(&g_t, 0, 205, 3) {          // alive (5 ticks) -> None
+        .None => {} _ => { pass = 0; }
+    }
+    switch proc_supervise_step(&g_t, 0, 220, 3) {          // missed (20>10), within budget -> Restart
+        .Restart => {} _ => { pass = 0; }
+    }
+    proc_restart_record(&g_t, 0);                          // the supervisor exhausts the budget...
+    proc_restart_record(&g_t, 0);
+    proc_restart_record(&g_t, 0);                          // count == 3
+    switch proc_supervise_step(&g_t, 0, 240, 3) {          // missed AND out of budget -> GiveUp (crash loop)
+        .GiveUp => {} _ => { pass = 0; }
+    }
     return pass;
 }

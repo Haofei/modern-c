@@ -527,3 +527,25 @@ export fn proc_restart_reset(t: *mut ProcTable, slot: usize) -> void {
         t.procs[slot].restart_count = 0;
     }
 }
+
+// The supervisor's per-slot verdict, combining liveness + restart budget.
+enum SupervisorAction {
+    None,    // the slot is alive (or unsupervised) — nothing to do
+    Restart, // the slot missed its heartbeat and is still within the restart budget — respawn it
+    GiveUp,  // the slot is dead AND out of restart budget (crash-looping) — stop restarting it
+}
+
+// One supervisor step over `slot`: fold the heartbeat-liveness check and the crash-loop budget into
+// a single verdict the caller actuates. This is the loop primitive a supervisor runs over its
+// children each tick — `for slot in children: switch proc_supervise_step(t, slot, now, max) { ... }`
+// — keeping the mechanism here and the actuation (respawn via proc_spawn / kill via proc_kill, and
+// proc_restart_record on an actual restart / proc_restart_reset on a clean recovery) in the caller.
+export fn proc_supervise_step(t: *mut ProcTable, slot: usize, now: u64, max_restarts: u32) -> SupervisorAction {
+    if !proc_liveness_expired(t, slot, now) {
+        return .None;
+    }
+    if proc_restart_allowed(t, slot, max_restarts) {
+        return .Restart;
+    }
+    return .GiveUp;
+}
