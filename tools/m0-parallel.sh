@@ -24,7 +24,18 @@ zig build install >"$OUT/_install.log" 2>&1 || { echo "[m0-parallel] install FAI
 mapfile -t GATES < <(awk '/const m0_step = b.step/{f=1} /const c0_step = b.step/{f=0} f' build/tiers.zig \
     | grep -oE 'ctx\.cmd\("[^"]+"\)' | sed -E 's/.*\("([^"]+)"\)/\1/' | sort -u)
 [ "${#GATES[@]}" -gt 0 ] || { echo "[m0-parallel] no gates extracted from build/tiers.zig"; exit 1; }
-echo "[m0-parallel] ${#GATES[@]} gates, -P $J"
+
+# Longest-processing-time-first: if a prior profiling run left step-times.tsv (MC_TIME_STEPS=1),
+# order gates by descending recorded wall time so the slow aarch64-QEMU long poles launch first and
+# overlap with everything else (shrinks the tail). Unknown/new gates sort first (assumed heavy).
+TIMES=".wamr-cache/step-times.tsv"
+if [ -s "$TIMES" ]; then
+    mapfile -t GATES < <(
+        for g in "${GATES[@]}"; do
+            ms=$(awk -F'\t' -v g="$g" '$1==g{print $2; exit}' "$TIMES"); printf '%s\t%s\n' "${ms:-999999}" "$g"
+        done | sort -t$'\t' -k1 -nr | cut -f2)
+fi
+echo "[m0-parallel] ${#GATES[@]} gates, -P $J $( [ -s "$TIMES" ] && echo '(LPT-ordered)' )"
 
 S=$(date +%s)
 printf '%s\n' "${GATES[@]}" | xargs -P "$J" -I{} bash -c '
