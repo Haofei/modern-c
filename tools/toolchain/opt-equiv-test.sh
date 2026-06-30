@@ -38,6 +38,12 @@ case "$(uname -m)" in
     *)             HOST_MC_ARCH=riscv64 ;;
 esac
 
+# emit-llvm embeds an *-elf target triple for the MC arch, but the object is LINKED + RUN on the dev
+# host, so llc must emit the HOST object format — otherwise on macOS the linker rejects the ELF
+# object ("ld: unknown file type ... l0.o"). Override llc's triple with the host default (the same
+# approach tools/toolchain/mcc-llvm-cc.sh uses): Mach-O on macOS, ELF on Linux.
+HOST_TRIPLE="${MC_HOST_TRIPLE:-$("$LLC" --version | awk -F: '/Default target:/ { gsub(/^[ \t]+/, "", $2); print $2; exit }')}"
+
 W="$(mktemp -d)"
 # Keep the work dir (and report the exit code) on FAILURE so a failing/aborted run is diagnosable —
 # a nonzero rc, especially 137 (=128+9, SIGKILL: OOM/resource kill), points straight at the cause.
@@ -64,7 +70,7 @@ build_run() {
         "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/$tag.c" -o "$W/$tag.bin"
     else
         "$MCC" emit-llvm "$SRC" $optflag --arch="$HOST_MC_ARCH" > "$W/$tag.ll"
-        "$LLC" -filetype=obj "$W/$tag.ll" -o "$W/$tag.o"
+        "$LLC" -filetype=obj ${HOST_TRIPLE:+-mtriple="$HOST_TRIPLE"} "$W/$tag.ll" -o "$W/$tag.o"
         "$CLANG" -std=c11 $LINK_FLAGS_STR "$W/driver.c" "$W/trap_stubs.c" "$W/$tag.o" -o "$W/$tag.bin"
     fi
     "$W/$tag.bin"

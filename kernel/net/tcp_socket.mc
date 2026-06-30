@@ -270,8 +270,8 @@ fn sock_refill(s: *mut TcpSocket) -> u32 {
     return 2;
 }
 
-// Return up to `max` application bytes, refilling from the wire (and ACKing whole segments)
-// as the hold buffer empties. Returns the byte count (>0), 0 on clean EOF, or 0xFFFF_FFFF
+// Return up to `max` application bytes, refilling from the wire (ACKing only the bytes held from
+// each in-order segment) as the hold buffer empties. Returns the byte count (>0), 0 on clean EOF, or 0xFFFF_FFFF
 // on error/timeout. Draining the hold buffer across calls is what makes a multi-record TCP
 // segment work: BearSSL asks for 5 bytes (record header) then the body length, repeatedly,
 // and several records can sit in one segment.
