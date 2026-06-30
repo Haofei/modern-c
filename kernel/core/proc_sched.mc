@@ -61,6 +61,11 @@ export fn proc_schedctl(t: *mut ProcTable, pid: u32, prio: u32, quantum: u32, sc
 // Account one timer tick to the current process; returns true if its quantum just expired
 // (the kernel marks it out-of-time and the timer path notifies its scheduler endpoint to
 // pick the next process / refresh the quantum — policy stays in the scheduler service).
+//
+// `#[irq_context]`: bounded counter/quantum updates on the current slot, no blocking or context
+// switch — so the timer ISR can account a tick directly (see proc_preempt_tick). Callable from
+// normal context too (irq_context is a restriction, not a requirement).
+#[irq_context]
 export fn proc_tick(t: *mut ProcTable) -> bool {
     let cur: usize = t.current;
     t.procs[cur].ticks = t.procs[cur].ticks + 1;
@@ -378,4 +383,54 @@ export fn proc_yield_vm(t: *mut ProcTable) -> void {
     // ABI), so we pass AddressSpace.raw — the same bits the field holds, no encoding in core.
     let to_aspace: AddressSpace = t.procs[to].aspace;
     mc_switch_context_vm(&t.procs[from].context, &t.procs[to].context, AddressSpace.raw(to_aspace));
+}
+
+// ----- timer-driven preemption (decision layer) -----
+// The scheduler is otherwise cooperative (the proc_yield* family switches only at explicit points).
+// Preemption adds a timer-driven RESCHEDULE REQUEST: the timer ISR accounts a tick and, when the
+// current process's quantum expires, raises `need_resched`. The actual context switch is NOT done
+// in the ISR — switching is a may-sleep op, and doing it from an `#[irq_context]` path is
+// "scheduling while atomic" (a compile error here). Instead the kernel consumes the flag at a safe
+// PREEMPTION POINT (proc_preempt_point) in normal context — e.g. on syscall/trap return — where
+// switching is legal. This is the voluntary-preemption-point model (set-flag-in-ISR,
+// switch-at-safe-point); a fully-asynchronous switch from the interrupted trap frame (saving the
+// full register frame in the asm vector and mret-ing into another process) is the follow-on step.
+//
+// `need_resched` is written by the timer ISR and read from normal kernel context, so it is an
+// explicit interrupt-shared atomic cell (release on set/clear, acquire on read) — exactly like
+// trap.mc's tick counter.
+global g_need_resched: atomic<u32> = atomic.init(0);
+
+// Timer ISR hook: account one tick to the current process and, on the quantum-expiry edge, raise
+// need_resched so the next preemption point reschedules. `#[irq_context]`: only bounded tick
+// accounting plus an atomic flag store — no context switch, no blocking. Returns the expiry edge.
+#[irq_context]
+export fn proc_preempt_tick(t: *mut ProcTable) -> bool {
+    let expired: bool = proc_tick(t);
+    if expired {
+        g_need_resched.store(1, .release);
+    }
+    return expired;
+}
+
+// True iff a reschedule has been requested (the current process's quantum expired since the last
+// preemption point). Polled at safe points to decide whether to switch.
+export fn proc_preempt_pending() -> bool {
+    return g_need_resched.load(.acquire) != 0;
+}
+
+// Clear the reschedule request WITHOUT switching — e.g. the scheduler refreshed the quantum and
+// chose to keep running the current process.
+export fn proc_preempt_clear() -> void {
+    g_need_resched.store(0, .release);
+}
+
+// Safe PREEMPTION POINT: if a reschedule was requested, clear it and switch to the highest-priority
+// runnable process. Call from NORMAL kernel context only (it may switch contexts) — never from an
+// `#[irq_context]` path. No-op when no reschedule is pending or nothing else is runnable.
+export fn proc_preempt_point(t: *mut ProcTable) -> void {
+    if proc_preempt_pending() {
+        proc_preempt_clear();
+        proc_yield_priority(t);
+    }
 }
