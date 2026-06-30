@@ -21,6 +21,7 @@ import "kernel/fs/treefs.mc";     // Tree
 import "kernel/core/ipc_trace.mc";// IpcTrace
 import "std/bytes.mc";
 import "std/addr.mc";
+import "std/mem.mc";
 
 const MCP_MAX: usize = 8;       // tools the catalog can advertise
 const MCP_NAME_POOL: usize = 256;
@@ -67,7 +68,7 @@ export fn mcp_register(c: *mut McpCatalog, name: usize, name_len: usize, tool_id
     if slot == MCP_MAX {
         return false;
     }
-    if (c.name_used + name_len) > MCP_NAME_POOL {
+    if !fits_within(c.name_used, name_len, MCP_NAME_POOL) {
         return false;
     }
     var r: ByteReader = byte_reader(pa(name), name_len);

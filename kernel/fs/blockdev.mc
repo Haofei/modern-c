@@ -84,7 +84,11 @@ export fn bfs_create(fs: *mut BlockFs, dev: *dyn BlockDevice, nblocks: u64) -> R
     if slot == MAX_FILES {
         return err(.NoSpace);
     }
-    if (fs.next_block + nblocks) > dev.blocks() {
+    let total_blocks: u64 = dev.blocks();
+    if fs.next_block > total_blocks {
+        return err(.NoSpace);
+    }
+    if nblocks > total_blocks - fs.next_block {
         return err(.NoSpace);
     }
     fs.files[slot].start_block = fs.next_block;

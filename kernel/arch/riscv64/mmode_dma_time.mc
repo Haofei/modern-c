@@ -57,7 +57,10 @@ global g_dma_off: usize = 0;
 
 export fn mc_dma_alloc_base(len: usize) -> usize {
     let aligned: usize = (g_dma_off + 15) & ~(15 as usize);
-    if aligned + len > DMA_POOL_LEN {
+    if aligned > DMA_POOL_LEN {
+        unreachable; // corrupt allocator cursor
+    }
+    if len > DMA_POOL_LEN - aligned {
         unreachable; // pool exhausted
     }
     g_dma_off = aligned + len;
