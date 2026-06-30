@@ -8,10 +8,12 @@
 import "std/virtio.mc";
 import "std/virtqueue.mc";
 import "std/alloc/dma.mc";
+import "std/mem.mc";
 import "std/time.mc";
 
 const VIRTIO_BLK_DEVICE_ID: u32 = 2;
-const VIRTIO_BLK_T_IN: u32 = 0; // read from disk into memory
+const VIRTIO_BLK_T_IN: u32 = 0;  // read from disk into memory
+const VIRTIO_BLK_T_OUT: u32 = 1; // write from memory to disk
 const SECTOR_SIZE: usize = 512;
 const BLK_HDR_SIZE: usize = 16;
 const BLK_STATUS_OK: u8 = 0;
@@ -128,4 +130,113 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
         return err(.IoError);
     }
     return ok(first);
+}
+
+// Read a full 512-byte sector into `dst` (a kernel PAddr with room for SECTOR_SIZE bytes). Like
+// blk_read_sector but copies the WHOLE sector out (not just the first word) — the read half of a
+// BlockDevice over virtio-blk (durable storage, production-readiness §3.1 #3).
+export fn blk_read_into(dev: *BlkDevice, sector: u64, dst: PAddr) -> Result<bool, BlkError> {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let vq: *mut Virtq = dev.vq;
+
+    var hdr: CpuBuffer = alloc(BLK_HDR_SIZE);
+    write_le32(&hdr, 0, VIRTIO_BLK_T_IN);
+    write_le32(&hdr, 4, 0);
+    write_le64(&hdr, 8, sector);
+    var data: CpuBuffer = alloc(SECTOR_SIZE); // the device writes the sector here
+    var status: CpuBuffer = alloc(1);
+
+    let hdr_d: DeviceBuffer = clean_for_device(hdr);
+    let data_d: DeviceBuffer = clean_for_device(data);
+    let status_d: DeviceBuffer = clean_for_device(status);
+
+    switch vq_submit_chain3(vq, hdr_d, data_d, status_d, true) { // data device-writable (read)
+        ok(id) => {}
+        err(e) => { return err(.QueueUnavailable); }
+    }
+    vq_kick(regs, 0);
+    if !vq_wait_used(vq, IO_TIMEOUT_TICKS) {
+        if virtio_reset(regs) { vq_reset_reclaim(vq); }
+        return err(.Timeout);
+    }
+    var io_ok: bool = false;
+    switch vq_complete_chain(vq) {
+        ok(done) => {
+            let hbuf: DeviceBuffer = done.header;
+            let dbuf: DeviceBuffer = done.data;
+            let sbuf: DeviceBuffer = done.status;
+            unsafe { forget_unchecked(done); }
+            let chdr: CpuBuffer = invalidate_for_cpu(hbuf);
+            let cdata: CpuBuffer = invalidate_for_cpu(dbuf);
+            let cstatus: CpuBuffer = invalidate_for_cpu(sbuf);
+            mem_copy(dst, cpu_addr(&cdata), SECTOR_SIZE); // hand the whole sector to the caller
+            io_ok = read_u8(&cstatus, 0) == BLK_STATUS_OK;
+            free(chdr);
+            free(cdata);
+            free(cstatus);
+        }
+        err(e) => {
+            if virtio_reset(regs) { vq_reset_reclaim(vq); }
+            return err(.DeviceFault);
+        }
+    }
+    if !io_ok {
+        return err(.IoError);
+    }
+    return ok(true);
+}
+
+// Write a full 512-byte sector from `src` (a kernel PAddr holding SECTOR_SIZE bytes) to disk. The
+// write half of a BlockDevice over virtio-blk: header(read) -> data(device-READABLE, the bytes to
+// write) -> status(device-writable). Mirrors blk_read_into but the data descriptor is device-
+// readable and we load it from `src` before flushing it to the device.
+export fn blk_write(dev: *BlkDevice, sector: u64, src: PAddr) -> Result<bool, BlkError> {
+    let regs: MmioPtr<VirtioMmio> = dev.regs;
+    let vq: *mut Virtq = dev.vq;
+
+    var hdr: CpuBuffer = alloc(BLK_HDR_SIZE);
+    write_le32(&hdr, 0, VIRTIO_BLK_T_OUT);
+    write_le32(&hdr, 4, 0);
+    write_le64(&hdr, 8, sector);
+    var data: CpuBuffer = alloc(SECTOR_SIZE);
+    mem_copy(cpu_addr(&data), src, SECTOR_SIZE); // the bytes to write, into the DMA buffer
+    var status: CpuBuffer = alloc(1);
+
+    let hdr_d: DeviceBuffer = clean_for_device(hdr);
+    let data_d: DeviceBuffer = clean_for_device(data); // flush the write data out to the device
+    let status_d: DeviceBuffer = clean_for_device(status);
+
+    switch vq_submit_chain3(vq, hdr_d, data_d, status_d, false) { // data device-READABLE (write)
+        ok(id) => {}
+        err(e) => { return err(.QueueUnavailable); }
+    }
+    vq_kick(regs, 0);
+    if !vq_wait_used(vq, IO_TIMEOUT_TICKS) {
+        if virtio_reset(regs) { vq_reset_reclaim(vq); }
+        return err(.Timeout);
+    }
+    var io_ok: bool = false;
+    switch vq_complete_chain(vq) {
+        ok(done) => {
+            let hbuf: DeviceBuffer = done.header;
+            let dbuf: DeviceBuffer = done.data;
+            let sbuf: DeviceBuffer = done.status;
+            unsafe { forget_unchecked(done); }
+            let chdr: CpuBuffer = invalidate_for_cpu(hbuf);
+            let cdata: CpuBuffer = invalidate_for_cpu(dbuf);
+            let cstatus: CpuBuffer = invalidate_for_cpu(sbuf);
+            io_ok = read_u8(&cstatus, 0) == BLK_STATUS_OK;
+            free(chdr);
+            free(cdata);
+            free(cstatus);
+        }
+        err(e) => {
+            if virtio_reset(regs) { vq_reset_reclaim(vq); }
+            return err(.DeviceFault);
+        }
+    }
+    if !io_ok {
+        return err(.IoError);
+    }
+    return ok(true);
 }

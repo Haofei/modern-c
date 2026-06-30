@@ -95,6 +95,9 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "blk-test", "Build and run the virtio-blk driver reading a sector under QEMU", &.{ "bash", "tools/fs/blk-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-test", "Build and run the LLVM-lowered virtio-blk driver under QEMU", &.{ "bash", "tools/fs/blk-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    _ = h.addScriptTest(ctx, "blk-persist-test", "Persist-across-reboot: a sentinel written to virtio-blk survives a second QEMU boot (durable storage)", &.{ "bash", "tools/fs/blk-persist-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-blk-persist-test", "Persist-across-reboot (LLVM): virtio-blk write/read survives a real reboot under QEMU", &.{ "bash", "tools/fs/blk-persist-test.sh", "zig-out/bin/mcc", "llvm" });
+
     _ = h.addScriptTest(ctx, "blk-smode-test", "Build and run the virtio-blk driver reading a sector under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-smode-test", "Build and run the LLVM-lowered virtio-blk driver under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "llvm" });
 

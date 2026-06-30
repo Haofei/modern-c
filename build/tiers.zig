@@ -349,6 +349,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("virtio-test"));
     // blk-test runs the virtio-blk driver reading a sector under QEMU.
     m0_step.dependOn(ctx.cmd("blk-test"));
+    m0_step.dependOn(ctx.cmd("blk-persist-test"));
+    m0_step.dependOn(ctx.cmd("llvm-blk-persist-test"));
     // blk-smode-test revalidates the same virtio-blk driver under REAL OpenSBI in S-mode.
     m0_step.dependOn(ctx.cmd("blk-smode-test"));
     // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
