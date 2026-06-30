@@ -36,9 +36,8 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
         -fno-builtin -D__wasi__ -I"$HERE/user/libc/include" -I"$QJS")
 
 # 1. QuickJS engine core (4 TUs) + the confined front-end.
-for f in dtoa libunicode libregexp quickjs; do
-    "$CLANG" "${CFLAGS[@]}" -c "$QJS/$f.c" -o "$WORK/$f.o"
-done
+# QuickJS engine objects: build once per (compiler+flags), cached + cp'd in (build-qjs.sh).
+bash "$HERE/tools/user/build-qjs.sh" "$WORK" "$CLANG" "${CFLAGS[@]}"
 "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$AGENT" -o "$WORK/agent.o"
 
 # 2. The all-MC libc, as one unit, through the selected backend (hardware FP: JS = doubles).

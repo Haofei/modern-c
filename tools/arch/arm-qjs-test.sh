@@ -53,9 +53,8 @@ AGENT_JS="$HERE/$AGENT_JS_REL"
 APP_CFLAGS=(--target=aarch64-unknown-elf -march=armv8-a
             -nostdlib -ffreestanding -fno-pic -fno-pie -O1
             -fno-builtin -mstrict-align -D__wasi__ -I"$HERE/user/libc/include" -I"$QJS")
-for f in dtoa libunicode libregexp quickjs; do
-    "$CLANG" "${APP_CFLAGS[@]}" -c "$QJS/$f.c" -o "$WORK/$f.o"
-done
+# QuickJS engine objects: build once per (compiler+flags), cached + cp'd in (build-qjs.sh).
+bash "$HERE/tools/user/build-qjs.sh" "$WORK" "$CLANG" "${APP_CFLAGS[@]}"
 "$CLANG" "${APP_CFLAGS[@]}" -I"$HERE" -c "$HOST" -o "$WORK/host.o"
 # crt0 + app_traps are PURE MC: emit-c then compile with the app CFLAGS (app_traps.mc is the
 # arch-neutral stdout/stderr/stdin shim, shared across all arches).

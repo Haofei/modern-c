@@ -34,9 +34,8 @@ trap 'rm -rf "$WORK"' EXIT
 APP_CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
             -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O1
             -fno-builtin -D__wasi__ -I"$HERE/user/libc/include" -I"$QJS")
-for f in dtoa libunicode libregexp quickjs; do
-    "$CLANG" "${APP_CFLAGS[@]}" -c "$QJS/$f.c" -o "$WORK/$f.o"
-done
+# QuickJS engine objects: build once per (compiler+flags), cached + cp'd in (build-qjs.sh).
+bash "$HERE/tools/user/build-qjs.sh" "$WORK" "$CLANG" "${APP_CFLAGS[@]}"
 "$CLANG" "${APP_CFLAGS[@]}" -I"$HERE" -c "$HOST" -o "$WORK/host.o"
 "$MCC" emit-c "$HERE/user/runtime/crt0.mc" > "$WORK/crt0_gen.c"
 "$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/crt0_gen.c" -o "$WORK/crt0.o"
