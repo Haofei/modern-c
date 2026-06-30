@@ -4,6 +4,7 @@
 // std/dma (pulled in via kernel/net/tcp_tx -> ethernet's MacAddr) declares these platform
 // DMA hooks; the parsers never call them, so stub them so the test links on the host.
 uintptr_t mc_dma_alloc_base(uintptr_t len){ (void)len; return 0; }
+uintptr_t mc_dma_alloc_base_try(uintptr_t len){ (void)len; return 0; }
 void mc_dma_free_base(uintptr_t a, uintptr_t b, uintptr_t c){ (void)a; (void)b; (void)c; }
 void mc_dma_clean_for_device_base(uintptr_t a, uintptr_t b, uintptr_t c){ (void)a; (void)b; (void)c; }
 uintptr_t mc_dma_invalidate_for_cpu_base(uintptr_t a, uintptr_t b){ (void)a; (void)b; return 0; }

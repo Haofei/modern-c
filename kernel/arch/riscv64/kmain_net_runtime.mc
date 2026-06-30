@@ -65,13 +65,14 @@ const DMA_POOL_LEN: usize = 2048;
 global g_dma_pool: [2048]u8;
 global g_dma_in_use: u32 = 0;
 
-export fn mc_dma_alloc_base(len: usize) -> usize {
-    if len > DMA_POOL_LEN || g_dma_in_use != 0 {
-        // Fail closed and DIAGNOSABLY: trap (reports the fault site) rather than spin forever in a
-        // silent `while true {}` that is indistinguishable from a hang. Like the other DMA providers
-        // (sbi_dma_time / mmode_dma_time), this is a "must not happen with correct pool sizing" path;
-        // a typed NoMem/NoBuffer for production broker/device paths is tracked as a larger refactor.
-        unreachable; // DMA pool exhausted or single buffer already in use
+// Fallible variant: returns 0 on exhaustion / in-use (no trap) so std/dma's `try_alloc` can
+// surface a typed DmaError. Single source of truth; infallible `mc_dma_alloc_base` wraps it.
+export fn mc_dma_alloc_base_try(len: usize) -> usize {
+    if len > DMA_POOL_LEN {
+        return 0; // request larger than the one-shot pool
+    }
+    if g_dma_in_use != 0 {
+        return 0; // the single buffer is already outstanding
     }
     g_dma_in_use = 1;
     let base: usize = (&g_dma_pool) as usize;
@@ -79,6 +80,17 @@ export fn mc_dma_alloc_base(len: usize) -> usize {
     while i < len {
         unsafe { raw.store<u8>(phys(base + i), 0); }
         i = i + 1;
+    }
+    return base;
+}
+
+export fn mc_dma_alloc_base(len: usize) -> usize {
+    let base: usize = mc_dma_alloc_base_try(len);
+    if base == 0 {
+        // Fail closed and DIAGNOSABLY: trap (reports the fault site) rather than spin forever in a
+        // silent `while true {}` that is indistinguishable from a hang. The fallible `try` variant
+        // above is the typed-NoMem path for production broker/device callers.
+        unreachable; // DMA pool exhausted or single buffer already in use
     }
     return base;
 }

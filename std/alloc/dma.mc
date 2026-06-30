@@ -24,9 +24,19 @@ move struct DeviceBuffer {
 }
 
 extern fn mc_dma_alloc_base(len: usize) -> usize;
+// Fallible provider primitive: returns 0 on exhaustion (never traps). It is the single
+// source of truth in every provider; the infallible `mc_dma_alloc_base` is just this plus a
+// trap on 0. `try_alloc` (below) turns the 0 into a typed `DmaError.OutOfMemory`.
+extern fn mc_dma_alloc_base_try(len: usize) -> usize;
 extern fn mc_dma_free_base(dev_addr: DmaAddr, cpu_addr: PAddr, len: usize) -> void;
 extern fn mc_dma_clean_for_device_base(dev_addr: DmaAddr, cpu_addr: PAddr, len: usize) -> void;
 extern fn mc_dma_invalidate_for_cpu_base(dev_addr: DmaAddr, len: usize) -> usize;
+
+// Why a non-trapping DMA allocation could not be satisfied. Production broker/device paths
+// use `try_alloc` to turn pool exhaustion into this typed error instead of trapping.
+enum DmaError {
+    OutOfMemory, // the DMA pool had no room for `len` bytes (or its single buffer is in use)
+}
 
 // Allocate a coherent/cpu-owned DMA buffer of `len` bytes (linear handle).
 export fn alloc(len: usize) -> CpuBuffer {
@@ -35,6 +45,20 @@ export fn alloc(len: usize) -> CpuBuffer {
     var dev: DmaAddr = uninit;
     unsafe { dev = (base as usize) as DmaAddr; }
     return .{ .dev_addr = dev, .cpu_addr = pa(base), .len = len };
+}
+
+// Fallible allocation: returns a typed `DmaError.OutOfMemory` on pool exhaustion instead of
+// trapping. Mints the `CpuBuffer` exactly like `alloc` when the provider returns a non-zero
+// base. For production broker/device paths that must degrade gracefully under load.
+export fn try_alloc(len: usize) -> Result<CpuBuffer, DmaError> {
+    let base: usize = mc_dma_alloc_base_try(len);
+    if base == 0 {
+        return err(.OutOfMemory);
+    }
+    // Mint the device-address class from the allocator's raw base (audited DMA boundary).
+    var dev: DmaAddr = uninit;
+    unsafe { dev = (base as usize) as DmaAddr; }
+    return ok(.{ .dev_addr = dev, .cpu_addr = pa(base), .len = len });
 }
 
 // Free a cpu-owned buffer, consuming it.

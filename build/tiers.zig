@@ -581,6 +581,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("genref-test"));
     m0_step.dependOn(ctx.cmd("owned-test"));
     m0_step.dependOn(ctx.cmd("net-arena-test"));
+    m0_step.dependOn(ctx.cmd("dma-try-test"));
     m0_step.dependOn(ctx.cmd("pool-test"));
     // closure-test links + runs a bind() capturing closure (needs clang).
     m0_step.dependOn(ctx.cmd("closure-test"));

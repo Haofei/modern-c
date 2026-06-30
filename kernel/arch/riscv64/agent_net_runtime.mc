@@ -24,6 +24,7 @@ extern fn agent_net_main(region_base: usize, region_len: usize) -> u32;
 export fn mc_read_ticks() -> u64 { return 0; }
 export fn mc_udelay(us: u32) -> void {}
 export fn mc_dma_alloc_base(_len: usize) -> usize { return 0; }
+export fn mc_dma_alloc_base_try(_len: usize) -> usize { return 0; } // dead stub: never called on the mock path
 export fn mc_dma_free_base(_dev_addr: usize, _cpu_addr: usize, _len: usize) -> void {}
 export fn mc_dma_clean_for_device_base(_dev_addr: usize, _cpu_addr: usize, _len: usize) -> void {}
 export fn mc_dma_invalidate_for_cpu_base(dev_addr: usize, _len: usize) -> usize { return dev_addr; }

@@ -63,13 +63,15 @@ const DMA_POOL_LEN: usize = 8 * 1024 * 1024;
 global g_dma_pool: [8388608]u8;
 global g_dma_off: usize = 0;
 
-export fn mc_dma_alloc_base(len: usize) -> usize {
+// Fallible bump allocation: returns 0 on exhaustion (no trap) so std/dma's `try_alloc` can
+// surface a typed DmaError. Single source of truth; infallible `mc_dma_alloc_base` wraps it.
+export fn mc_dma_alloc_base_try(len: usize) -> usize {
     let aligned: usize = (g_dma_off + 15) & ~(15 as usize);
     if aligned > DMA_POOL_LEN {
-        unreachable; // corrupt allocator cursor
+        return 0; // corrupt allocator cursor (overflow-safe; caller decides typed error or trap)
     }
     if len > DMA_POOL_LEN - aligned {
-        unreachable; // pool exhausted
+        return 0; // pool exhausted — caller decides (typed error or trap)
     }
     g_dma_off = aligned + len;
     var i: usize = 0;
@@ -78,6 +80,14 @@ export fn mc_dma_alloc_base(len: usize) -> usize {
         i = i + 1;
     }
     return (&g_dma_pool[aligned]) as usize;
+}
+
+export fn mc_dma_alloc_base(len: usize) -> usize {
+    let base: usize = mc_dma_alloc_base_try(len);
+    if base == 0 {
+        unreachable; // pool exhausted
+    }
+    return base;
 }
 
 // dev_addr/cpu_addr are the std's DmaAddr/PAddr (pointer-sized); taken as usize here

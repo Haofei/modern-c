@@ -58,6 +58,7 @@ pool-test	tests/qemu/mem/pool_demo.mc	entry	pool_demo_run		generational pool: us
 ring-test	tests/qemu/mem/ring_demo.mc	driver			generic in-place Ring<T> (instantiated at u32): FIFO push/pop, len, empty/full, wrap-around
 slotmap-test	tests/qemu/mem/slotmap_demo.mc	entry	slotmap_run	-Wno-switch-bool	SlotMap<T,N>: stable index handles, alloc lowest-free, get/set/free bounds+liveness checked (BadHandle on use-after-free/double-free/oob), Full at capacity
 net-arena-test	tests/qemu/net/net_arena_demo.mc	driver			RX scratch from a move Arena (GenRef), per-packet reset, use-after-reset caught
+dma-try-test	tests/qemu/mem/dma_try_demo.mc	driver		-Wno-switch-bool -Wno-incompatible-library-redeclaration	std/dma typed fallible alloc: try_alloc returns ok(CpuBuffer) when the pool fits and err(DmaError.OutOfMemory) on exhaustion instead of trapping
 net-fuzz-test	tests/qemu/net/net_fuzz_demo.mc	driver			40000 random/UDP-shaped frames parsed with no out-of-bounds read; ok + rejected paths both exercised
 net-rx-test	tests/qemu/net/net_rx_demo.mc	driver			driver RX path: parse eth/IPv4/UDP frame -> socket_deliver -> recv payload (and drop unbound-port frames)
 socket-test	tests/qemu/net/socket_demo.mc	driver			UDP sockets: bind (+conflict), deliver demuxed by port (+no-listener), recv payload+sender per socket

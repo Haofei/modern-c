@@ -24,14 +24,21 @@ void mc_spin_release_irqrestore(IrqGuard g) { g.lock->state = 0; }
 // than silently hand out an aliasing buffer.
 static uint8_t dma_pool[256];
 static int dma_in_use = 0;
-uintptr_t mc_dma_alloc_base(uintptr_t len) {
-    if (len > sizeof(dma_pool) || dma_in_use) {
-        for (;;) {
-        } // contract violation: too large, or a buffer is already outstanding
-    }
+// Fallible variant: 0 on exhaustion / in-use (no halt) so std/dma's try_alloc can return a
+// typed DmaError. Single source of truth; the infallible mc_dma_alloc_base wraps it.
+uintptr_t mc_dma_alloc_base_try(uintptr_t len) {
+    if (len > sizeof(dma_pool) || dma_in_use) return 0;
     dma_in_use = 1;
     for (uintptr_t i = 0; i < len; ++i) dma_pool[i] = 0;
     return (uintptr_t)dma_pool;
+}
+uintptr_t mc_dma_alloc_base(uintptr_t len) {
+    uintptr_t base = mc_dma_alloc_base_try(len);
+    if (!base) {
+        for (;;) {
+        } // contract violation: too large, or a buffer is already outstanding
+    }
+    return base;
 }
 void mc_dma_free_base(uintptr_t dev_addr, uintptr_t cpu_addr, uintptr_t len) { (void)dev_addr; (void)cpu_addr; (void)len; dma_in_use = 0; }
 void mc_dma_clean_for_device_base(uintptr_t dev_addr, uintptr_t cpu_addr, uintptr_t len) { (void)dev_addr; (void)cpu_addr; (void)len; }

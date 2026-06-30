@@ -56,9 +56,14 @@ const DMA_POOL_LEN: usize = 2048;
 const DMA_ALIGN: usize = 16;
 global g_dma_pool: [2064]u8; // 2048 usable + 16 bytes of slack for the runtime 16-byte alignment
 global g_dma_in_use: u32 = 0;
-export fn mc_dma_alloc_base(len: usize) -> usize {
-    if len > DMA_POOL_LEN || g_dma_in_use != 0 {
-        while true {} // contract violation: too large, or a buffer is already outstanding
+// Fallible variant: 0 on exhaustion / in-use (no hang) so std/dma's try_alloc can return a typed
+// DmaError. Single source of truth; the infallible mc_dma_alloc_base wraps it.
+export fn mc_dma_alloc_base_try(len: usize) -> usize {
+    if len > DMA_POOL_LEN {
+        return 0; // request larger than the single-slot pool
+    }
+    if g_dma_in_use != 0 {
+        return 0; // the single buffer is already outstanding
     }
     g_dma_in_use = 1;
     // 16-align the frame (virtio descriptors + the device DMA expect it; matches the old C
@@ -68,6 +73,13 @@ export fn mc_dma_alloc_base(len: usize) -> usize {
     while i < len {
         unsafe { raw.store<u8>(phys(base + i), 0); }
         i = i + 1;
+    }
+    return base;
+}
+export fn mc_dma_alloc_base(len: usize) -> usize {
+    let base: usize = mc_dma_alloc_base_try(len);
+    if base == 0 {
+        while true {} // contract violation: too large, or a buffer is already outstanding
     }
     return base;
 }

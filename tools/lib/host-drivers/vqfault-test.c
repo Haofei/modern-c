@@ -12,6 +12,7 @@ void mc_udelay(uint32_t us) { (void)us; }
 
 // no-IOMMU identity DMA stubs: device address == cpu address.
 uintptr_t mc_dma_alloc_base(uintptr_t len) { (void)len; return 0x1000; }
+uintptr_t mc_dma_alloc_base_try(uintptr_t len) { (void)len; return 0x1000; }
 void mc_dma_free_base(uintptr_t dev, uintptr_t cpu, uintptr_t len) { (void)dev; (void)cpu; (void)len; }
 void mc_dma_clean_for_device_base(uintptr_t dev, uintptr_t cpu, uintptr_t len) { (void)dev; (void)cpu; (void)len; }
 uintptr_t mc_dma_invalidate_for_cpu_base(uintptr_t dev, uintptr_t len) { (void)len; return dev; }

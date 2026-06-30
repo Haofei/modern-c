@@ -197,6 +197,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "owned-test", "create<T> typed linear allocation, leak-checked", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "owned-test" });
 
     _ = h.addScriptTest(ctx, "net-arena-test", "RX scratch from a move Arena + generational handle", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "net-arena-test" });
+    _ = h.addScriptTest(ctx, "dma-try-test", "std/dma typed fallible alloc: try_alloc -> err(OutOfMemory) on exhaustion", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "dma-try-test" });
 
     _ = h.addScriptTest(ctx, "pool-test", "generational pool: use-after-free/double-free caught", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pool-test" });
 
