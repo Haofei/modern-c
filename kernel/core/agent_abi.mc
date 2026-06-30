@@ -3,6 +3,25 @@
 // The syscall handlers and JS bindings can evolve internally, but the production surface needs
 // a single versioned contract for submit/poll requests and typed completion status. This module
 // keeps those wire-visible numbers in one place and validates requests before a broker sees them.
+//
+// VERSIONING POLICY (production-readiness-plan §4.2 / §3.1 item 2):
+//   * AGENT_ABI_VERSION is the wire-contract version carried in every request/event `version`
+//     field. The kernel rejects a request whose `version` != AGENT_ABI_VERSION with `badver`
+//     (gated by agent_abi_demo.mc) — fail-closed, never silently reinterpret a foreign envelope.
+//   * This is a SINGLE monotonic integer, not split major/minor: there is exactly one supported
+//     wire contract at a time. The kernel does not multiplex old contracts.
+//   * BUMP the version for ANY wire-incompatible change: adding/removing/reordering struct
+//     fields, changing a field's width/meaning, changing an op number, or changing a status
+//     code's meaning. Purely additive *behind a new op number* with unchanged structs does NOT
+//     require a bump (an unknown op already returns `badop`); changing existing layout does.
+//   * Status codes (agent_abi_status_*) are part of the contract — their numeric values are
+//     frozen for a given version; reusing a number for a new meaning is a version bump.
+//   * The op set (AGENT_OP_*) is append-only within a version; removing/renumbering an op is a
+//     version bump. abi-consistency-test pins the syscall numbers against user/abi.mc so the
+//     kernel and userspace cannot drift within a version.
+//   * Compatibility model: an agent built for version N runs only on a kernel advertising
+//     version N (query via agent_abi_version()). There is no forward/back-compat negotiation —
+//     deployment pairs a kernel image with agents built for its ABI version (see §4.4 bundles).
 
 const AGENT_ABI_VERSION: u32 = 1;
 
