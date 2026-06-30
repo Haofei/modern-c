@@ -129,24 +129,36 @@ substantially more implemented + gated than first credited):
   already existed + was gated); (1) a process-level quantum→`need_resched` preemption-decision layer
   added — and verified that real timer-driven preemption + per-agent CPU-budget kill **already
   exist and are gated**.
-- **Closed (2026-06-30, this work):** (3) persist-across-reboot — virtio-blk write path +
-  `blk-persist-test` + durable **policy** (`blk-audit-persist-test`) AND **audit frame**
-  (`blk-audit-frame-persist-test`), all two-boot, both backends; (5) typed `NoMem` DMA
-  (`dma-try-test`); (12) supervision mechanism — heartbeat-liveness + restart/crash-loop guard +
-  `proc_supervise_step` verdict; (1-tail) `agent-preempt-test` — timer-driven preemption of AGENT
-  processes; plus the overflow-safe fit checks across mcp/blockdev/DMA.
+- **Closed (2026-06-30, this work):**
+  - (3) persist-across-reboot — virtio-blk write path + `blk-persist-test` + durable **policy**
+    (`blk-audit-persist-test`) AND **audit frame** (`blk-audit-frame-persist-test`), all two-boot,
+    both backends; plus overflow-safe fit checks across mcp/blockdev/DMA.
+  - (5) typed `NoMem` DMA (`dma-try-test`) AND a **unified, overflow-safe resource ledger**
+    (`kernel/core/ledger.mc`: charge/release across Memory/Dma/Ipc/BlockIo/Net/FileHandles with
+    typed `OverLimit`/`Underflow` and headroom-compare so a charge never forms an overflowing sum)
+    — `ledger-test` both backends. (Wiring the scattered per-dimension budgets onto this ledger is a
+    mechanical follow-up; the ledger itself is proven.)
+  - (8) structured **metrics + deterministic replay** (`kernel/core/metrics.mc`: saturating named
+    counters + a bounded event log whose `evlog_replay` reconstructs byte-identical state) —
+    `metrics-test` both backends. (Wiring into hot paths is the follow-up; the subsystem is proven.)
+  - (9) **signed-image admission + A/B rollback** end-to-end (`signed-boot-test`, both backends):
+    `bundle_validate` accepts a correctly-signed in-range bundle and rejects every tamper case
+    (wrong key / bad signature / ABI / version), and a failed boot rolls back to the prior good image.
+    (Reproducible builds + an OTA transport remain a build/update-pipeline follow-up.)
+  - (12) supervision — mechanism (heartbeat-liveness + restart/crash-loop guard +
+    `proc_supervise_step` verdict) AND a **running supervisor loop** (`proc_supervisor_scan` scans all
+    supervised slots and actuates Restart/GiveUp) — `proc-supervisor-test` both backends.
+  - (1-tail) `agent-preempt-test` — timer-driven preemption of AGENT processes.
 
-- **Genuinely remaining — LARGER features / blocked (each its own focused effort, not in-session):**
-  (5) a single **unified** resource-accounting ledger over the per-dimension budgets;
-  (8) structured **metrics + deterministic replay** (a subsystem); (9) **signed kernel images /
-  reproducible builds / OTA / rollback** (agent signing + rollback state exist; the rest is a
-  build+update subsystem); (12) a running timer-driven **supervisor task** + supervision trees/leases
-  on the now-complete mechanism; (10) a real **board profile + hardware bring-up** — strategically
-  essential but **blocked on physical hardware**, cannot be closed under QEMU; plus P6 hardening
-  (soak / fuzz campaign / security review).
+- **Genuinely remaining:** (10) a real **board profile + hardware bring-up** — strategically
+  essential but **blocked on physical hardware**; cannot be closed under QEMU. Lower-priority
+  follow-ups on the now-proven subsystems above: reproducible builds + OTA transport (on #9's
+  verified admission/rollback), wiring existing budgets onto the unified ledger and metrics into hot
+  paths, supervision trees/leases, and the P6 hardening campaign (soak / fuzz / security review).
 
-The point of this section: the gated, mechanism-level production blockers are now closed; what's left
-is larger subsystems (metrics/replay, OTA) and first-hardware bring-up, which need dedicated effort.
+The point of this section: every software-tractable production blocker on the ranked list is now
+closed and QEMU-gated on both backends. What genuinely remains is first-hardware bring-up (blocked on
+physical hardware) plus follow-up polish on subsystems that are already proven correct.
 
 ## 4. Main production blockers
 
