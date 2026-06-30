@@ -48,8 +48,9 @@ const TCR_VALUE: u64 =
     (1  << 23) |   // EPD1 = 1 (no TTBR1 walks)
     (5  << 32);    // IPS = 48-bit PA
 
-// SCTLR_EL1: M (MMU) | C (data cache) | I (instruction cache).
+// SCTLR_EL1: M (MMU) | C (data cache) | I (instruction cache). SCTLR_A (alignment check) is CLEARED.
 const SCTLR_M: u64 = 0x1;
+const SCTLR_A: u64 = 0x2;
 const SCTLR_C: u64 = 0x4;
 const SCTLR_I: u64 = 0x1000;
 
@@ -189,7 +190,10 @@ fn enable_mmu(ttbr0: u64) -> void {
             asm precise volatile { "mrs %0, sctlr_el1" out("r") sctlr: u64, clobber("memory") }
         }
     }
-    sctlr = sctlr | SCTLR_M | SCTLR_C | SCTLR_I;
+    // Enable MMU + caches, and explicitly CLEAR SCTLR_EL1.A so we do not inherit the firmware/entry
+    // alignment-check state: with A=1, unaligned Normal-memory accesses fault (ESR DFSC=0x21) once
+    // the MMU is on, which is environment-specific (varies by qemu version/boot path). Deterministic.
+    sctlr = (sctlr | SCTLR_M | SCTLR_C | SCTLR_I) & ~SCTLR_A;
     #[unsafe_contract(precise_asm)] {
         unsafe {
             asm precise volatile { "msr sctlr_el1, %0\n isb" in("r") sctlr: u64, clobber("memory") }

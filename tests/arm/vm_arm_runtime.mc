@@ -38,6 +38,7 @@ const HEAP_BYTES: usize = 4 * 1024 * 1024;  // page-table backing store: 4 MiB, 
 // the mask gives it a u64 type so `reg = reg | MASK` lowers cleanly on both backends.
 const CPACR_FPEN: u64 = 0x30_0000;          // FPEN = 0b11 at bit 20
 const SCTLR_M: u64 = 0x1;                    // bit 0:  MMU enable
+const SCTLR_A: u64 = 0x2;                    // bit 1:  alignment check (we CLEAR this — see below)
 const SCTLR_C: u64 = 0x4;                    // bit 2:  data cache
 const SCTLR_I: u64 = 0x1000;                 // bit 12: instruction cache
 
@@ -171,7 +172,12 @@ fn enable_mmu() -> void {
             }
         }
     }
-    sctlr = sctlr | SCTLR_M | SCTLR_C | SCTLR_I;
+    // Enable MMU + caches, and explicitly CLEAR SCTLR_EL1.A: do not inherit the firmware/entry
+    // alignment-check state. With A=1 every unaligned Normal-memory access (which MC codegen may
+    // emit) faults with a data abort (ESR DFSC=0x21) once the MMU is on — and whether A is set at
+    // EL1 entry varies by qemu version/boot path, making the fault environment-specific. Clearing it
+    // makes the translated regime deterministic (unaligned Normal access allowed, as the code assumes).
+    sctlr = (sctlr | SCTLR_M | SCTLR_C | SCTLR_I) & ~SCTLR_A;
     #[unsafe_contract(precise_asm)] {
         unsafe {
             asm precise volatile {

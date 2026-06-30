@@ -211,24 +211,19 @@ fn sock_refill(s: *mut TcpSocket) -> u32 {
         }
         let rcv: u32 = tcp_win_rcv_nxt(&s.win);
         if seg.payload_len > 0 {
-            // Accept only as many bytes as the hold buffer can take, and NEVER ACK beyond what we
-            // actually held. A segment larger than the hold (anomalous — MSS < cap) is DRAINED IN
-            // CHUNKS: we accept/ACK exactly `n` bytes and leave the tail unacknowledged, so the peer
-            // retransmits it and the next refill delivers it. (Previously the whole payload was ACKed
-            // but copied truncated to `n`, silently dropping the tail [n, payload_len).)
-            var n: usize = seg.payload_len;
-            let truncated: bool = n > TCPSOCK_RXHOLD_CAP;
-            if truncated {
-                n = TCPSOCK_RXHOLD_CAP;
-            }
-            // Offer just `n` bytes to the reassembler: nonzero return == in-order bytes now
-            // deliverable (it advances rcv_nxt by exactly what we accepted).
-            let delivered: u32 = reasm_accept(&s.reasm, seg.seq, n as u32);
-            if delivered > 0 {
-                // `delivered` equals `n` for a lone in-order segment; it can only exceed `n` if
-                // buffered out-of-order segments coalesced — cap the copy at the hold size either way.
-                var hold: usize = delivered as usize;
-                if hold > TCPSOCK_RXHOLD_CAP {
+            // The reassembler (tcp_reasm) stores only ORDERING metadata, never payload bytes — the
+            // ONLY payload we have is the current frame's. So we deliver strictly the current
+            // in-order segment, bounded by both its own length and the hold buffer, and never trust a
+            // coalesced byte count: coalescing buffered out-of-order ranges would claim bytes whose
+            // payload was never stored (over-reading this frame and ACKing data we do not hold).
+            // `rcv` (= rcv_nxt) is the cumulative in-order cursor.
+            if seg.seq == rcv {
+                // In-order. Hold as much of THIS segment as fits; an oversize segment (anomalous —
+                // MSS < cap) is DRAINED IN CHUNKS: ACK only the bytes held, leave the tail for the
+                // peer to retransmit (it arrives next at the advanced rcv_nxt, in order).
+                var hold: usize = seg.payload_len;
+                let whole: bool = hold <= TCPSOCK_RXHOLD_CAP;
+                if !whole {
                     hold = TCPSOCK_RXHOLD_CAP;
                 }
                 var rr: ByteReader = byte_reader(phys(seg.payload_off), seg.payload_len);
@@ -239,12 +234,13 @@ fn sock_refill(s: *mut TcpSocket) -> u32 {
                 }
                 s.rxhold_len = hold;
                 s.rxhold_pos = 0;
-                // Advance the window's rcv_nxt by exactly what the reassembler consumed, so the ACK
-                // never covers bytes we did not hold (the tail of an oversize segment stays unacked).
-                tcp_win_on_recv(&s.win, rcv, delivered);
-                if !truncated && tcp_flag_set(seg.flags, TCP_FIN) {
-                    // FIN consumes one seq AFTER all the data — only when the whole segment was
-                    // delivered (a truncated segment's tail, and its FIN, come on retransmission).
+                // Advance BOTH cursors by EXACTLY the bytes held (never more), so the ACK never
+                // covers bytes we did not deliver and the trackers stay in lock-step.
+                tcp_win_on_recv(&s.win, rcv, hold as u32);
+                s.reasm.rcv_nxt = tcp_win_rcv_nxt(&s.win);
+                if whole && tcp_flag_set(seg.flags, TCP_FIN) {
+                    // FIN consumes one seq AFTER all the data — only when the whole segment landed
+                    // (a truncated segment's tail, and its FIN, come on retransmission).
                     s.win.rcv_nxt = s.win.rcv_nxt + 1;
                     s.reasm.rcv_nxt = s.reasm.rcv_nxt + 1;
                     s.rx_fin = true;
@@ -252,7 +248,9 @@ fn sock_refill(s: *mut TcpSocket) -> u32 {
                 sock_tx(s, tcp_win_snd_nxt(&s.win), tcp_win_rcv_nxt(&s.win), TCP_ACK, 0, 0);
                 return 1;
             }
-            // Out-of-order / duplicate: re-ACK our cumulative point and keep waiting.
+            // Out-of-order or duplicate (seq != rcv_nxt): we cannot hold its payload (only the
+            // current frame's bytes exist, and they are not the next in-order bytes), so do NOT
+            // buffer it — re-ACK our cumulative point so the peer retransmits from there, and wait.
             sock_tx(s, tcp_win_snd_nxt(&s.win), tcp_win_rcv_nxt(&s.win), TCP_ACK, 0, 0);
         } else {
             // Pure control segment (a bare ACK, or a data-less FIN).
