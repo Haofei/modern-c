@@ -668,6 +668,22 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-agent-preempt-test", "Run LLVM-lowered timer-driven preemption of agent PROCESSES under QEMU", &.{ "bash", "tools/proc/agent-preempt-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    _ = h.addScriptTest(ctx, "proc-supervisor-test", "Run the running supervisor loop (proc_supervisor_scan) over 3 supervised PROCESSES under QEMU: one healthy, one restarted once, one given up exactly once", &.{ "bash", "tools/proc/proc-supervisor-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-proc-supervisor-test", "Run the LLVM-lowered running supervisor loop (proc_supervisor_scan) over 3 supervised PROCESSES under QEMU", &.{ "bash", "tools/proc/proc-supervisor-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    _ = h.addScriptTest(ctx, "ledger-test", "Run the unified resource ledger (charge/release + overflow-edge) under QEMU", &.{ "bash", "tools/proc/ledger-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-ledger-test", "Run the LLVM-lowered unified resource ledger under QEMU", &.{ "bash", "tools/proc/ledger-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    _ = h.addScriptTest(ctx, "signed-boot-test", "Run signed-image admission + A/B rollback (kernel/core/production_ops) end to end under QEMU", &.{ "bash", "tools/fs/signed-boot-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-signed-boot-test", "Run the LLVM-lowered signed-image admission + A/B rollback end to end under QEMU", &.{ "bash", "tools/fs/signed-boot-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    _ = h.addScriptTest(ctx, "metrics-test", "Run structured metrics + deterministic event-log replay under QEMU", &.{ "bash", "tools/proc/metrics-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-metrics-test", "Run LLVM-lowered structured metrics + deterministic event-log replay under QEMU", &.{ "bash", "tools/proc/metrics-test.sh", "zig-out/bin/mcc", "llvm" });
+
     _ = h.addScriptTest(ctx, "syscall-test", "Run the ecall syscall dispatch skeleton under QEMU", &.{ "bash", "tools/lang/syscall-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-syscall-test", "Run the LLVM-lowered ecall syscall dispatch skeleton under QEMU", &.{ "bash", "tools/lang/syscall-test.sh", "zig-out/bin/mcc", "llvm" });
