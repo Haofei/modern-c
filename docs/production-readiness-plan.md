@@ -119,7 +119,7 @@ hardening"; a few are genuinely thin. Current state, with evidence:
 | 8. Observability | Partial | Audit/trace exist (`ipc_trace.mc`, `cap_audit`, provenance). Gap: **structured metrics, per-agent timelines, deterministic replay**. |
 | 9. Update/packaging | Partial | Agent signature verify (`kernel/crypto/rsa_verify.mc`), `liveupdate.mc`. Gap: **signed kernel images, reproducible builds, OTA, rollback**. |
 | 10. Platform contract | Partly documented | `platform-portability-plan.md`, `qemu-validation-checklist.md`; per-arch compiler-flag rules now explicit (aarch64 strict-align). Gap: **one frozen board profile**. |
-| 11. Security model doc | **Genuinely thin** | `unsafe-boundary.md` + capability design in code, but **no consolidated threat model** (trusted vs attacker-controlled, guarantees, acceptable failure modes). |
+| 11. Security model doc | **Landed (2026-06-30)** | `docs/threat-model.md` written: assets, trust boundaries (TCB vs attacker-controlled), the isolation boundary with enforcing code, per-area threats→mitigations, guarantees G1–G5, accepted failure modes, and how each is gated. Keep it updated as §4.7 work lands. |
 | 12. Long-running lifecycle | **Genuinely thin** | Process table + `liveupdate`. Gap: **supervision trees, heartbeats, crash-loop policy, persistent identity, upgrade handoff**. |
 
 Net: the highest-leverage genuinely-missing work is **(1) timer-preemptive scheduler** (primitives
