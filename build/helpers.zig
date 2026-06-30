@@ -55,8 +55,21 @@ pub fn addScriptTest(ctx: *Ctx, name: []const u8, desc: []const u8, argv: []cons
     return addScriptTestOpts(ctx, name, desc, argv, .{});
 }
 
+/// When MC_TIME_STEPS is set at configure time, prepend the timed-step.sh wrapper so each gate's wall
+/// time lands in .wamr-cache/step-times.tsv. A pure profiling aid: the wrapper execs argv unchanged.
+fn timed(b: *std.Build, name: []const u8, argv: []const []const u8) []const []const u8 {
+    if (b.graph.environ_map.get("MC_TIME_STEPS") == null) return argv;
+    const out = b.allocator.alloc([]const u8, argv.len + 4) catch @panic("OOM");
+    out[0] = "bash";
+    out[1] = "tools/qemu/timed-step.sh";
+    out[2] = name;
+    out[3] = "--";
+    for (argv, 0..) |a, i| out[4 + i] = a;
+    return out;
+}
+
 pub fn addScriptTestOpts(ctx: *Ctx, name: []const u8, desc: []const u8, argv: []const []const u8, opts: ScriptOpts) *Run {
-    const cmd = ctx.b.addSystemCommand(argv);
+    const cmd = ctx.b.addSystemCommand(timed(ctx.b, name, argv));
     if (opts.install) cmd.step.dependOn(ctx.install);
     if (opts.inherit_stdio) cmd.stdio = .inherit;
     const step = ctx.b.step(name, desc);
@@ -69,7 +82,7 @@ pub fn addScriptTestOpts(ctx: *Ctx, name: []const u8, desc: []const u8, argv: []
 /// public step of its own — e.g. the strict `demo-test`/`kernel-test` variants
 /// that only exist as tier dependencies. `key` is the lookup name used by tiers.
 pub fn addRawCmd(ctx: *Ctx, key: []const u8, argv: []const []const u8) *Run {
-    const cmd = ctx.b.addSystemCommand(argv);
+    const cmd = ctx.b.addSystemCommand(timed(ctx.b, key, argv));
     cmd.step.dependOn(ctx.install);
     ctx.register(key, &cmd.step);
     return cmd;

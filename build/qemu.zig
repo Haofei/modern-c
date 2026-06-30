@@ -149,6 +149,8 @@ pub fn register(ctx: *h.Ctx) void {
     // (host dev without a riscv64 clang skips). Used by the tiers below, not exposed as a step.
     const demo_test_strict_cmd = h.addRawCmd(ctx, "demo-test-strict", &.{ "bash", "tools/toolchain/demo-test.sh", "zig-out/bin/mcc" });
     demo_test_strict_cmd.setEnvironmentVariable("MC_REQUIRE_TARGET", "1");
+    // Expose as a public step too, so the parallel runner (tools/m0-parallel.sh) can invoke it alone.
+    ctx.b.step("demo-test-strict", "Strict demo-test (riscv64 required; m0/c0 variant)").dependOn(&demo_test_strict_cmd.step);
 
     _ = h.addScriptTest(ctx, "net-test", "Run the kernel virtio-net RX/TX ARP exchange under QEMU", &.{ "bash", "tools/net/net-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-net-test", "Run the LLVM-lowered kernel virtio-net RX/TX ARP exchange under QEMU", &.{ "bash", "tools/net/net-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -159,6 +161,8 @@ pub fn register(ctx: *h.Ctx) void {
     // hard failure under MC_REQUIRE_TARGET=1 so m0/c1 cannot pass without the riscv64 compile.
     const kernel_test_strict_cmd = h.addRawCmd(ctx, "kernel-test-strict", &.{ "bash", "tools/toolchain/kernel-test.sh", "zig-out/bin/mcc" });
     kernel_test_strict_cmd.setEnvironmentVariable("MC_REQUIRE_TARGET", "1");
+    // Expose as a public step too, so the parallel runner (tools/m0-parallel.sh) can invoke it alone.
+    ctx.b.step("kernel-test-strict", "Strict kernel-test (riscv64 required; m0/c1 variant)").dependOn(&kernel_test_strict_cmd.step);
 
     _ = h.addScriptTest(ctx, "page-test", "Link + run the physical frame allocator (bump + free-list reclaim)", &.{ "bash", "tools/mem/page-test.sh", "zig-out/bin/mcc", "c" });
 
