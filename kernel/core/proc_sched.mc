@@ -489,3 +489,37 @@ export fn proc_liveness_expired(t: *mut ProcTable, slot: usize, now: u64) -> boo
     }
     return (now - last) > deadline;
 }
+
+// ----- supervision: restart / crash-loop policy (production-readiness §3.1 #12) -----
+// Once liveness detection (above) flags a dead/stuck slot, the supervisor decides whether to RESTART
+// it — but blindly restarting a slot that keeps dying is a crash loop (CPU-burning thrash). This
+// adds the crash-loop guard: a per-slot restart counter the supervisor bumps on each restart and
+// checks against a budget; once the budget is exhausted the slot is declared crash-looping and the
+// supervisor gives up (escalates / leaves it dead) instead of restarting forever. A clean run
+// resets the counter. Mechanism only — the budget and the give-up action are the supervisor's policy.
+global g_restart_count: [MAX_PROCS]u32; // restarts attempted for this slot in the current window
+
+// Record that the supervisor is (re)starting `slot`; returns the new restart count.
+export fn proc_restart_record(t: *mut ProcTable, slot: usize) -> u32 {
+    if slot < MAX_PROCS {
+        g_restart_count[slot] = g_restart_count[slot] + 1;
+        return g_restart_count[slot];
+    }
+    return 0;
+}
+
+// True iff another restart is within budget (restart count < max_restarts). When false the slot is
+// crash-looping and the supervisor should stop restarting it.
+export fn proc_restart_allowed(t: *mut ProcTable, slot: usize, max_restarts: u32) -> bool {
+    if slot >= MAX_PROCS {
+        return false;
+    }
+    return g_restart_count[slot] < max_restarts;
+}
+
+// Reset a slot's restart counter (a clean/healthy run — it is no longer crash-looping).
+export fn proc_restart_reset(t: *mut ProcTable, slot: usize) -> void {
+    if slot < MAX_PROCS {
+        g_restart_count[slot] = 0;
+    }
+}

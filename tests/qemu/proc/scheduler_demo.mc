@@ -67,5 +67,15 @@ export fn scheduler_run() -> u32 {
     if proc_liveness_expired(&g_t, 0, 120) { pass = 0; }   // 9 since the new beat: alive
     proc_unsupervise(&g_t, 0);
     if proc_liveness_expired(&g_t, 0, 1000) { pass = 0; }  // unsupervised -> never expired
+
+    // ----- supervision: restart / crash-loop policy (budget = 3 restarts) -----
+    if !proc_restart_allowed(&g_t, 0, 3) { pass = 0; }     // 0 restarts so far: allowed
+    if proc_restart_record(&g_t, 0) != 1 { pass = 0; }     // restart #1
+    if proc_restart_record(&g_t, 0) != 2 { pass = 0; }     // restart #2
+    if !proc_restart_allowed(&g_t, 0, 3) { pass = 0; }     // 2 < 3: still allowed
+    if proc_restart_record(&g_t, 0) != 3 { pass = 0; }     // restart #3
+    if proc_restart_allowed(&g_t, 0, 3) { pass = 0; }      // 3 >= 3: crash-looping -> give up
+    proc_restart_reset(&g_t, 0);                           // a clean run clears the counter
+    if !proc_restart_allowed(&g_t, 0, 3) { pass = 0; }     // allowed again after reset
     return pass;
 }
