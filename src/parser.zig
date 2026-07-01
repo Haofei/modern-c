@@ -488,6 +488,10 @@ pub const Parser = struct {
             var struct_decl = try self.finishStructDecl(null);
             struct_decl.is_move = is_move;
             struct_decl.is_opaque = is_opaque;
+            // `#[c_union]` — compiler-internal addressable union laid out as a real C `union`
+            // (see ast.StructDecl.is_c_union). Recognized as a struct attribute so the async
+            // state-machine lowering (and its focused test) can request union layout.
+            struct_decl.is_c_union = attrsHaveNamed(attrs, "c_union");
             return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
         }
 
@@ -757,6 +761,16 @@ pub const Parser = struct {
             .span = joinSpan(start, end.span),
             .kind = if (std.mem.eql(u8, name.text, "no_lang_trap")) .no_lang_trap else if (std.mem.eql(u8, name.text, "naked")) .naked else if (std.mem.eql(u8, name.text, "noinline")) .@"noinline" else if (std.mem.eql(u8, name.text, "weak")) .weak else .{ .named = name },
         };
+    }
+
+    fn attrsHaveNamed(attrs: []ast.Attr, wanted: []const u8) bool {
+        for (attrs) |attr| {
+            switch (attr.kind) {
+                .named => |named| if (std.mem.eql(u8, named.text, wanted)) return true,
+                else => {},
+            }
+        }
+        return false;
     }
 
     fn stripStringQuotes(lexeme: []const u8) []const u8 {

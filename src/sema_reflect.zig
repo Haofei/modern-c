@@ -245,6 +245,27 @@ fn comptimeTaggedUnionPayloadLayout(env: *const ReflectEnv, info: UnionInfo, dep
 }
 
 fn comptimeStructLayout(env: *const ReflectEnv, info: StructInfo, want_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
+    // `#[c_union]`: real C union layout — every field at offset 0, size = largest field
+    // rounded up to the max alignment (mirrors layout.zig).
+    if (info.is_c_union) {
+        var max_size: i128 = 0;
+        var union_align: i128 = 1;
+        var union_found: ?i128 = null;
+        for (info.ordered) |field| {
+            const size = comptimeSizeOf(env, field.ty, depth + 1) orelse return null;
+            const alignment = comptimeAlignOf(env, field.ty, depth + 1) orelse return null;
+            if (alignment <= 0) return null;
+            if (alignment > union_align) union_align = alignment;
+            if (size > max_size) max_size = size;
+            if (want_field) |wanted| {
+                if (std.mem.eql(u8, field.name.text, wanted)) union_found = 0;
+            }
+        }
+        return .{
+            .size = alignForward(max_size, union_align) orelse return null,
+            .field_offset = union_found,
+        };
+    }
     var offset: i128 = 0;
     var max_align: i128 = 1;
     var found: ?i128 = null;

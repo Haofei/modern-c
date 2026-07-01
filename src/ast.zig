@@ -204,6 +204,16 @@ pub const StructDecl = struct {
     // may not name its fields in a struct literal or `.field` access, so the
     // value cannot be forged or inspected — constructor-only handle capabilities.
     is_opaque: bool = false,
+    // `#[c_union]` — a compiler-internal *addressable, runtime-selected union*. Laid out
+    // as a real C `union` (all fields at offset 0; size = largest field, align = max),
+    // so `&value.field` is a stable, in-place, alias-safe pointer to the shared storage
+    // reinterpreted as that field's type (member access is the canonical strict-aliasing
+    // exception in C). Distinct from `overlay union` (a `storage[]` byte-blob accessed by
+    // value memcpy, no member address) and from a tagged union (pattern-access only). The
+    // active arm is selected at runtime by the surrounding code (e.g. the async state
+    // machine's `state`); only one arm is live at a time. Field TYPING is identical to a
+    // struct — the sole difference is the union layout and the emitted aggregate keyword.
+    is_c_union: bool = false,
 };
 
 pub const PackedBitsDecl = struct {

@@ -134,12 +134,19 @@ pub fn emitAggregateForwardDeclarations(
 ) !void {
     var emitted = false;
     for (module.decls) |decl| {
+        var keyword: []const u8 = "struct";
         const name = switch (decl.kind) {
-            .struct_decl => |struct_decl| if (structs.contains(struct_decl.name.text)) struct_decl.name.text else continue,
+            .struct_decl => |struct_decl| blk: {
+                if (!structs.contains(struct_decl.name.text)) continue;
+                // A `#[c_union]` is a real C `union`; its forward tag must match its
+                // definition tag (`typedef union U U;`), not the default `struct`.
+                if (struct_decl.is_c_union) keyword = "union";
+                break :blk struct_decl.name.text;
+            },
             .union_decl => |union_decl| if (tagged_unions.contains(union_decl.name.text)) union_decl.name.text else continue,
             else => continue,
         };
-        try ctx.out.print(ctx.allocator, "typedef struct {s} {s};\n", .{ name, name });
+        try ctx.out.print(ctx.allocator, "typedef {s} {s} {s};\n", .{ keyword, name, name });
         emitted = true;
     }
     {
@@ -204,7 +211,10 @@ pub fn emitParamDecl(ctx: Context, ty: ast.TypeExpr, name: []const u8) !void {
 }
 
 pub fn emitStruct(ctx: Context, struct_decl: ast.StructDecl) !void {
-    try ctx.out.print(ctx.allocator, "typedef struct {s} {{\n", .{struct_decl.name.text});
+    // A `#[c_union]` lowers to a real C `union`: identical member declarations, but union
+    // layout (all fields at offset 0, size = largest arm) and alias-safe `&u.field` access.
+    const keyword: []const u8 = if (struct_decl.is_c_union) "union" else "struct";
+    try ctx.out.print(ctx.allocator, "typedef {s} {s} {{\n", .{ keyword, struct_decl.name.text });
     ctx.indent.* += 1;
     for (struct_decl.fields) |field| {
         try writeIndent(ctx);

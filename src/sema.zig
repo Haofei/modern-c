@@ -661,7 +661,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .is_opaque = struct_decl.is_opaque }) catch {
+        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .is_opaque = struct_decl.is_opaque, .is_c_union = struct_decl.is_c_union }) catch {
             fields.deinit();
         };
     }

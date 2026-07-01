@@ -2717,6 +2717,16 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = getelementptr i8, ptr {s}, i64 {d}\n", .{ result, base_ptr, offset });
             return result;
         }
+        // `#[c_union]`: every arm lives at offset 0, so the arm's address IS the union's own
+        // address (opaque pointers — no GEP, no bitcast). The load/store at the call site uses
+        // the arm's own type, reinterpreting the shared storage. Strict-aliasing safe: the C
+        // backend emits a real `union` member access, the canonical aliasing exception.
+        if (struct_decl.is_c_union) {
+            return if (self.resolveAliasType(base_ty).kind == .pointer)
+                try self.emitExpr(node.base.*, base_ty)
+            else
+                try self.aggregateBasePointer(node.base.*);
+        }
         const index = structFieldIndex(struct_decl, node.name.text) orelse return error.UnsupportedLlvmEmission;
         const base_ptr = if (self.resolveAliasType(base_ty).kind == .pointer)
             try self.emitExpr(node.base.*, base_ty)
@@ -5042,6 +5052,7 @@ const LlvmEmitter = struct {
     }
 
     fn structLlvmType(self: *LlvmEmitter, struct_decl: ast.StructDecl) anyerror![]const u8 {
+        if (struct_decl.is_c_union) return try self.cUnionLlvmType(struct_decl);
         var text: std.ArrayList(u8) = .empty;
         try text.appendSlice(self.scratch.allocator(), "{ ");
         for (struct_decl.fields, 0..) |field, i| {
@@ -5058,6 +5069,27 @@ const LlvmEmitter = struct {
 
     fn overlayLlvmType(self: *LlvmEmitter, info: OverlayUnionInfo) ![]const u8 {
         return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i8]", .{info.size});
+    }
+
+    // A `#[c_union]` has no native LLVM union. Represent it as a storage array whose element
+    // integer width encodes the max field alignment (`[count x i{align*8}]`) — the same
+    // alignment-carrying idiom used for tagged-union payloads — so an alloca/field of this
+    // type gets both the largest arm's size AND its alignment. All arms live at offset 0, so
+    // member access needs no GEP (see emitMemberAddress); the pointer IS reinterpreted per arm.
+    fn cUnionLlvmType(self: *LlvmEmitter, struct_decl: ast.StructDecl) ![]const u8 {
+        var max_size: i128 = 0;
+        var max_align: i128 = 1;
+        for (struct_decl.fields) |field| {
+            const size = self.comptimeSizeOf(field.ty, 0) orelse return error.UnsupportedLlvmEmission;
+            const alignment = self.comptimeAlignOf(field.ty, 0) orelse return error.UnsupportedLlvmEmission;
+            if (alignment <= 0) return error.UnsupportedLlvmEmission;
+            if (size > max_size) max_size = size;
+            if (alignment > max_align) max_align = alignment;
+        }
+        if (max_align != 1 and max_align != 2 and max_align != 4 and max_align != 8 and max_align != 16) return error.UnsupportedLlvmEmission;
+        const aligned_size = alignForward(max_size, max_align) orelse return error.UnsupportedLlvmEmission;
+        const count = @max(@as(i128, 1), @divExact(aligned_size, max_align));
+        return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i{d}]", .{ count, max_align * 8 });
     }
 
     fn overlayField(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) ?ast.Field {

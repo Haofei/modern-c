@@ -65,6 +65,8 @@ pub const StructInfo = struct {
     ordered: []const ast.Field,
     // `opaque struct` - fields are private to the struct's associated functions.
     is_opaque: bool = false,
+    // `#[c_union]` - compiler-internal addressable union (union layout; see ast.StructDecl).
+    is_c_union: bool = false,
 };
 
 // Liveness slot for a linear `move` binding (section 18.1 / annex D.7).

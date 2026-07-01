@@ -46,6 +46,29 @@ pub fn comptimeStructLayout(
     comptime alignOf: fn (Ctx, ast.TypeExpr, usize) ?i128,
 ) ?ComptimeStructLayout {
     if (depth > 32) return null;
+    // A `#[c_union]` lays out like a real C union: every field starts at offset 0, the
+    // total size is the largest field (rounded up to the max alignment), and the align is
+    // the max field alignment. The active arm is chosen at runtime; only one is live.
+    if (struct_decl.is_c_union) {
+        var max_size: i128 = 0;
+        var union_align: i128 = 1;
+        var union_found: ?i128 = null;
+        for (struct_decl.fields) |field| {
+            const size = sizeOf(ctx, field.ty, depth + 1) orelse return null;
+            const alignment = alignOf(ctx, field.ty, depth + 1) orelse return null;
+            if (alignment <= 0) return null;
+            if (alignment > union_align) union_align = alignment;
+            if (size > max_size) max_size = size;
+            if (wanted_field) |wanted| {
+                if (std.mem.eql(u8, field.name.text, wanted)) union_found = 0;
+            }
+        }
+        return .{
+            .size = alignForward(max_size, union_align) orelse return null,
+            .alignment = union_align,
+            .field_offset = union_found,
+        };
+    }
     var offset: i128 = 0;
     var max_align: i128 = 1;
     var found: ?i128 = null;
