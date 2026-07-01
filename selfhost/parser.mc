@@ -74,6 +74,9 @@ open enum NodeKind: u32 {
     struct_decl,      // 35 main_token = name; lhs = fields run [count, (name_tok, type_node)*]; rhs = exported
     var_decl,         // 36 mutable local: main_token = name; lhs = type node (0 = inferred); rhs = init expr
     struct_lit,       // 37 `.{ .f = e, ... }`: main_token = leading `.`; lhs = fields run [count, (name_tok, val_node)*]
+    // ----- P5.2 enum-support additions (appended to keep prior ordinals stable) -----
+    enum_decl,        // 38 main_token = name; lhs = fixed rec [exported, is_open, repr_type(0=none), variants_run]
+    enum_lit,         // 39 `.variant` primary: main_token = the variant ident (no operand)
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -344,11 +347,18 @@ fn parse_primary(p: *mut Parser) -> u32 {
         expect(p, .r_paren);
         return inner; // grouping is structural only; no wrapper node
     }
-    // Struct literal `.{ .f0 = e0, .f1 = e1, ... }` (leading `.` before a `{`). A lone leading `.`
-    // only ever introduces a struct literal in this subset (enum literals are out of scope).
+    // A leading `.` introduces either a struct literal `.{ ... }` (P5.1) or an enum literal
+    // `.variant` (P5.2). Distinguish by the token after the dot: a `{` is a struct literal, an
+    // identifier is an enum literal (main_token = the variant ident).
     if at(p, .dot) {
         if at_next(p, 1, .l_brace) {
             return parse_struct_lit(p);
+        }
+        if at_next(p, 1, .identifier) {
+            p_advance(p); // `.`
+            let vtok: u32 = p.tok as u32;
+            expect(p, .identifier);
+            return add_node(p, .enum_lit, vtok, 0, 0);
         }
     }
     // Not the start of any expression.
@@ -616,11 +626,58 @@ fn parse_struct(p: *mut Parser, exported: u32) -> u32 {
     return add_node(p, .struct_decl, sname, run, exported);
 }
 
-// decl := `export`? (`fn` ... | `struct` ...)
+// enum := `enum` IDENT (`:` Type)? `{` (IDENT (`,`)?)* `}`  (trailing comma allowed, per MC).
+// `exported`/`is_open` are captured by the caller (`parse_decl`) from the leading keywords; the
+// fixed record is [exported, is_open, repr_type(0=none), variants_run] where `variants_run` is a
+// length-prefixed run of variant name-tokens.
+fn parse_enum(p: *mut Parser, exported: u32, is_open: u32) -> u32 {
+    p_advance(p); // `enum`
+    let ename: u32 = p.tok as u32;
+    expect(p, .identifier);
+    var repr_node: u32 = 0;
+    if eat(p, .colon) {
+        repr_node = parse_type(p);
+    }
+    expect(p, .l_brace);
+    var vs: Vec<u32> = vec_new(u32, p.a);
+    if !at(p, .r_brace) {
+        while true {
+            let vtok: u32 = p.tok as u32;
+            expect(p, .identifier);
+            vec_push(u32, &vs, vtok);
+            if !eat(p, .comma) {
+                break;
+            }
+            if at(p, .r_brace) {
+                break; // trailing comma
+            }
+        }
+    }
+    expect(p, .r_brace);
+    let vrun: u32 = emit_list(p, &vs);
+    vec_free(u32, &vs);
+    // Fixed record: [exported, is_open, repr_type, variants_run].
+    let rec: u32 = vec_len(u32, &p.extra) as u32;
+    vec_push(u32, &p.extra, exported);
+    vec_push(u32, &p.extra, is_open);
+    vec_push(u32, &p.extra, repr_node);
+    vec_push(u32, &p.extra, vrun);
+    return add_node(p, .enum_decl, ename, rec, 0);
+}
+
+// decl := `export`? `open`? (`enum` ... | `fn` ... | `struct` ...)
 fn parse_decl(p: *mut Parser) -> u32 {
     var exported: u32 = 0;
     if eat(p, .kw_export) {
         exported = 1;
+    }
+    // `open` only ever precedes an `enum` in this subset (an open enum permits `.raw()`).
+    var is_open: u32 = 0;
+    if eat(p, .kw_open) {
+        is_open = 1;
+    }
+    if at(p, .kw_enum) {
+        return parse_enum(p, exported, is_open);
     }
     if at(p, .kw_struct) {
         return parse_struct(p, exported);

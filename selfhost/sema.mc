@@ -71,6 +71,8 @@ open enum SmErr: u32 {
     type_mismatch,    // 7  binary-operand / let-annotation mismatch
     unknown_field,    // 8  member access / struct-literal field not present on the struct
     struct_target,    // 9  struct literal `.{...}` used where no struct target type is known
+    unknown_variant,  // 10 `.variant` names a variant not present on the expected enum
+    enum_target,      // 11 `.variant` used where no enum target type is known
 }
 
 // A resolved type. Copyable (all scalar fields), so it stores freely in `Vec`/`StrHashMap`.
@@ -101,6 +103,20 @@ struct SmStruct {
     field_count: u32,
 }
 
+// One enum variant: its name (recovered by lexeme offsets, like a named `SmType`).
+struct SmEVar {
+    nstart: usize,
+    nlen: usize,
+}
+
+// A collected enum definition: a `(start, count)` window into `SmState.evariants` plus the repr
+// integer kind (the type `.raw()` yields; defaults to `u32_` when the enum omits `: TYPE`).
+struct SmEnum {
+    variant_start: u32,
+    variant_count: u32,
+    repr: SmKind,
+}
+
 // The analyzer state + owned inputs. `p` OWNS the parser arena (see selfhost/parser.mc); free the
 // whole thing exactly once with `sema_free`. `fns`/`sigs`/`ptypes` are the pass-1 symbol table;
 // `locals` is rebuilt per function in pass 2; `cur_ret` is the function currently being checked.
@@ -114,6 +130,9 @@ struct SmState {
     structs: StrHashMap<u32>,  // struct name -> struct_defs index + 1 (0 = absent)
     struct_defs: Vec<SmStruct>,
     fields: Vec<SmField>,      // flattened fields for all structs
+    enums: StrHashMap<u32>,    // enum name -> enum_defs index + 1 (0 = absent)
+    enum_defs: Vec<SmEnum>,
+    evariants: Vec<SmEVar>,    // flattened variants for all enums
     cur_ret: SmType,
     err_count: u32,
     first_err: SmErr,
@@ -183,6 +202,24 @@ fn sm_field_name(s: *mut SmState, f: SmField) -> []const u8 {
     let src: []const u8 = par.source;
     let end: usize = f.nstart + f.nlen;
     return src[f.nstart..end];
+}
+
+// The lexeme naming an enum variant (offsets captured at collection time, like `sm_field_name`).
+fn sm_evar_name(s: *mut SmState, v: SmEVar) -> []const u8 {
+    let par: *mut Parser = &s.p;
+    let src: []const u8 = par.source;
+    let end: usize = v.nstart + v.nlen;
+    return src[v.nstart..end];
+}
+
+// True when a named type identifies a KNOWN enum (used to route `.raw()` and `.variant` handling
+// away from the struct paths, since both structs and enums resolve to `named_`).
+fn sm_is_enum_type(s: *mut SmState, t: SmType) -> bool {
+    if t.kind.raw() != 15 {
+        return false;
+    }
+    let name: []const u8 = sm_name_text(s, t);
+    return strmap_contains(u32, &s.enums, name);
 }
 
 // ----- type construction from AST type nodes -----
@@ -319,8 +356,24 @@ fn sm_arith(s: *mut SmState, nd: Node) -> SmType {
     return sm_ty_unknown();
 }
 
-// Comparison (`== != < > <= >=`): operands comparable (same type) -> `bool`.
+// Comparison (`== != < > <= >=`): operands comparable (same type) -> `bool`. A bare `.variant`
+// literal has no standalone type, so when one side is an `enum_lit` it is resolved against the
+// OTHER operand's (enum) type — this is where `x == .green` gets its enum.
 fn sm_cmp(s: *mut SmState, nd: Node) -> SmType {
+    let lnode: Node = sm_node(s, nd.lhs);
+    let rnode: Node = sm_node(s, nd.rhs);
+    let l_lit: bool = lnode.kind == .enum_lit;
+    let r_lit: bool = rnode.kind == .enum_lit;
+    if r_lit && !l_lit {
+        let lt2: SmType = sm_type_of_expr(s, nd.lhs);
+        sm_check_enum_lit(s, nd.rhs, lt2);
+        return sm_ty(.bool_);
+    }
+    if l_lit && !r_lit {
+        let rt2: SmType = sm_type_of_expr(s, nd.rhs);
+        sm_check_enum_lit(s, nd.lhs, rt2);
+        return sm_ty(.bool_);
+    }
     let lt: SmType = sm_type_of_expr(s, nd.lhs);
     let rt: SmType = sm_type_of_expr(s, nd.rhs);
     let m: bool = sm_types_match(s, lt, rt);
@@ -366,6 +419,25 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
     let args_run: u32 = nd.rhs;
     let argc: u32 = sm_extra(s, args_run);
     let cnode: Node = sm_node(s, callee);
+    // `enumval.raw()` is a method-shaped call: callee is a `.field` named `raw` with zero args on an
+    // enum-typed receiver. It yields the enum's repr integer type. (Closed enums reject `.raw()` in
+    // the full language, but the subset does not model closedness — see the ledger.)
+    if cnode.kind == .field {
+        var b_raw: [3]u8 = .{ 114, 97, 119 }; // "raw"
+        let fname: []const u8 = sm_tok_text(s, cnode.main_token);
+        let is_raw: bool = mem_eql(fname, mem.as_bytes(&b_raw));
+        if is_raw && argc == 0 {
+            let recv: SmType = sm_type_of_expr(s, cnode.lhs);
+            if sm_is_enum_type(s, recv) {
+                let rname: []const u8 = sm_name_text(s, recv);
+                let eref: u32 = strmap_get_or(u32, &s.enums, rname, 0);
+                let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, (eref - 1) as usize);
+                return sm_ty(ed.repr);
+            }
+            // `.raw()` on a non-enum is outside the subset; yield unknown without a spurious error.
+            return sm_ty_unknown();
+        }
+    }
     if cnode.kind != .ident_expr {
         sm_type_of_expr(s, callee); // discard: walk an indirect callee for errors
         sm_walk_args(s, args_run, argc);
@@ -468,6 +540,36 @@ fn sm_check_struct_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
     }
 }
 
+// Check an enum literal `.variant` against a KNOWN expected type. The expected type must be a known
+// enum (else `enum_target`) and the variant must be one of its cases (else `unknown_variant`). No
+// value is returned: callers already know the resolved type is `expected` (this only diagnoses).
+fn sm_check_enum_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
+    let nd: Node = sm_node(s, node);
+    let vtext: []const u8 = sm_tok_text(s, nd.main_token);
+    let is_enum: bool = sm_is_enum_type(s, expected);
+    if !is_enum {
+        sm_err(s, .enum_target);
+        return;
+    }
+    let ename: []const u8 = sm_name_text(s, expected);
+    let eref: u32 = strmap_get_or(u32, &s.enums, ename, 0);
+    let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, (eref - 1) as usize);
+    var found: bool = false;
+    var vi: u32 = 0;
+    while vi < ed.variant_count {
+        let v: SmEVar = vec_get(SmEVar, &s.evariants, (ed.variant_start + vi) as usize);
+        let vn: []const u8 = sm_evar_name(s, v);
+        let m: bool = mem_eql(vtext, vn);
+        if m {
+            found = true;
+        }
+        vi = vi + 1;
+    }
+    if !found {
+        sm_err(s, .unknown_variant);
+    }
+}
+
 // True when an assignment target's root binding is a mutable local (`var`). Walks through member
 // (`.f`) and index (`[i]`) chains to the root identifier; anything else is not assignable.
 fn sm_target_mutable(s: *mut SmState, node: u32) -> bool {
@@ -520,6 +622,12 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
             sm_check_struct_lit(s, node, sm_ty_unknown());
             return sm_ty_unknown();
         }
+        .enum_lit => {
+            // Likewise an enum literal needs an expected enum type (typed init/return, or the
+            // other side of a comparison); reaching it here means none was threaded in.
+            sm_check_enum_lit(s, node, sm_ty_unknown());
+            return sm_ty_unknown();
+        }
         .bin_add => { return sm_arith(s, nd); }
         .bin_sub => { return sm_arith(s, nd); }
         .bin_mul => { return sm_arith(s, nd); }
@@ -554,6 +662,8 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
             let ann: SmType = sm_type_from_node(s, nd.lhs);
             if init_nd.kind == .struct_lit {
                 sm_check_struct_lit(s, nd.rhs, ann);
+            } else if init_nd.kind == .enum_lit {
+                sm_check_enum_lit(s, nd.rhs, ann);
             } else {
                 let it: SmType = sm_type_of_expr(s, nd.rhs);
                 let matched: bool = sm_types_match(s, ann, it);
@@ -584,6 +694,11 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
         if rv_nd.kind == .struct_lit {
             // `return .{...}` in an `-> S` fn: the return type is the struct target.
             sm_check_struct_lit(s, nd.lhs, s.cur_ret);
+            return;
+        }
+        if rv_nd.kind == .enum_lit {
+            // `return .variant` in an `-> EnumT` fn: the return type is the enum target.
+            sm_check_enum_lit(s, nd.lhs, s.cur_ret);
             return;
         }
         let vt: SmType = sm_type_of_expr(s, nd.lhs);
@@ -627,6 +742,12 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
                     return;
                 }
                 let lt: SmType = strmap_get_or(SmType, &s.locals, name, sm_ty_unknown());
+                let rhs_nd: Node = sm_node(s, nd.rhs);
+                if rhs_nd.kind == .enum_lit {
+                    // `c = .variant`: the literal resolves against the target's enum type.
+                    sm_check_enum_lit(s, nd.rhs, lt);
+                    return;
+                }
                 let rt: SmType = sm_type_of_expr(s, nd.rhs);
                 let m: bool = sm_types_match(s, lt, rt);
                 if !m {
@@ -707,6 +828,31 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let sname: []const u8 = sm_tok_text(s, dn.main_token);
             strmap_put(u32, &s.structs, sname, sidx + 1);
         }
+        if dn.kind == .enum_decl {
+            let erec: u32 = dn.lhs;
+            let repr_node: u32 = sm_extra(s, erec + 2);
+            let vrun: u32 = sm_extra(s, erec + 3);
+            let vcount: u32 = sm_extra(s, vrun);
+            let vstart: u32 = vec_len(SmEVar, &s.evariants) as u32;
+            let epar: *mut Parser = &s.p;
+            var evi: u32 = 0;
+            while evi < vcount {
+                let vtok: u32 = sm_extra(s, vrun + 1 + evi);
+                let vst: usize = token_start_at(&epar.tl, vtok as usize);
+                let vln: usize = token_len_at(&epar.tl, vtok as usize);
+                vec_push(SmEVar, &s.evariants, .{ .nstart = vst, .nlen = vln });
+                evi = evi + 1;
+            }
+            var repr_kind: SmKind = .u32_;
+            if repr_node != 0 {
+                let rt: SmType = sm_type_from_node(s, repr_node);
+                repr_kind = rt.kind;
+            }
+            let eidx: u32 = vec_len(SmEnum, &s.enum_defs) as u32;
+            vec_push(SmEnum, &s.enum_defs, .{ .variant_start = vstart, .variant_count = vcount, .repr = repr_kind });
+            let ename: []const u8 = sm_tok_text(s, dn.main_token);
+            strmap_put(u32, &s.enums, ename, eidx + 1);
+        }
         if dn.kind == .fn_decl {
             let frec: u32 = dn.lhs;
             let params_run: u32 = sm_extra(s, frec + 1);
@@ -781,6 +927,9 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
         .structs = strmap_new(u32, a),
         .struct_defs = vec_new(SmStruct, a),
         .fields = vec_new(SmField, a),
+        .enums = strmap_new(u32, a),
+        .enum_defs = vec_new(SmEnum, a),
+        .evariants = vec_new(SmEVar, a),
         .cur_ret = sm_ty_unknown(),
         .err_count = 0,
         .first_err = .none,
@@ -811,9 +960,12 @@ export fn sema_free(s: *mut SmState) -> void {
     strmap_free(SmType, &s.locals);
     strmap_free(u32, &s.muts);
     strmap_free(u32, &s.structs);
+    strmap_free(u32, &s.enums);
     strmap_free(u32, &s.fns);
     vec_free(SmStruct, &s.struct_defs);
     vec_free(SmField, &s.fields);
+    vec_free(SmEnum, &s.enum_defs);
+    vec_free(SmEVar, &s.evariants);
     vec_free(SmSig, &s.sigs);
     vec_free(SmType, &s.ptypes);
     parser_free(&s.p);

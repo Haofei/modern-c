@@ -184,6 +184,19 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         return;
     }
     if nd.kind == .call {
+        // `enumval.raw()` lowers to the receiver itself: the enum's C type is a transparent typedef
+        // of its repr integer, so the value already IS the raw integer (no cast needed).
+        let cnode: Node = e_node(p, nd.lhs);
+        if cnode.kind == .field {
+            var b_raw: [3]u8 = .{ 114, 97, 119 }; // "raw"
+            let fname: []const u8 = e_tok_text(p, cnode.main_token);
+            let argc0: u32 = e_extra(p, nd.rhs);
+            let is_raw: bool = mem_eql(fname, mem.as_bytes(&b_raw));
+            if is_raw && argc0 == 0 {
+                e_expr(p, sb, cnode.lhs); // emit just the receiver
+                return;
+            }
+        }
         e_expr(p, sb, nd.lhs); // callee
         sb_put_cstr(sb, "(");
         let arg_run: u32 = nd.rhs;
@@ -220,7 +233,51 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         e_struct_lit_body(p, sb, n);
         return;
     }
+    if nd.kind == .enum_lit {
+        e_enum_lit(p, sb, n);
+        return;
+    }
     // Any other node kind is outside the emitter subset; emit nothing.
+}
+
+// Emit an enum literal `.variant` as its C constant `<EnumName>_<variant>` (matching the anonymous
+// `enum {}` block emitted by `e_enum_decl`). The AST does not carry which enum a bare `.variant`
+// belongs to, so the module's enum decls are scanned for the one that declares this variant. (In
+// the subset variant names are assumed unique across enums — first match wins; see the ledger.)
+fn e_enum_lit(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
+    let nd: Node = e_node(p, node);
+    let vtext: []const u8 = e_tok_text(p, nd.main_token);
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let d: u32 = e_extra(p, run + 1 + i);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .enum_decl {
+            let rec: u32 = dn.lhs;
+            let vrun: u32 = e_extra(p, rec + 3);
+            let vc: u32 = e_extra(p, vrun);
+            var j: u32 = 0;
+            while j < vc {
+                let vtok: u32 = e_extra(p, vrun + 1 + j);
+                let vn: []const u8 = e_tok_text(p, vtok);
+                let m: bool = mem_eql(vtext, vn);
+                if m {
+                    let ename: []const u8 = e_tok_text(p, dn.main_token);
+                    sb_put_str(sb, ename);
+                    sb_put_cstr(sb, "_");
+                    sb_put_str(sb, vtext);
+                    return;
+                }
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    // Unresolved (sema would have rejected this): emit the bare variant lexeme as a fallback.
+    sb_put_str(sb, vtext);
 }
 
 // Emit the `{ .f0 = e0, ... }` body of a struct literal (no leading cast). The field run is
@@ -258,6 +315,20 @@ fn e_struct_lit(p: *mut Parser, sb: *mut StrBuf, node: u32, type_node: u32) -> v
 
 // ----- statement / block emission -----
 
+// Emit an `if`/`while` condition. A binary-op condition already emits its own outer parentheses
+// (see `e_expr`), so wrapping it again would produce `if ((a == b))` — which clang rejects under
+// `-Wparentheses-equality -Werror`. Only non-binop conditions (a bare ident/call) get parens.
+fn e_cond(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
+    let nd: Node = e_node(p, n);
+    if e_is_binop(nd.kind) {
+        e_expr(p, sb, n); // already `(lhs OP rhs)`
+        return;
+    }
+    sb_put_cstr(sb, "(");
+    e_expr(p, sb, n);
+    sb_put_cstr(sb, ")");
+}
+
 fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
     let nd: Node = e_node(p, n);
     if nd.kind == .let_decl || nd.kind == .var_decl {
@@ -292,9 +363,9 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
     }
     if nd.kind == .if_stmt {
         e_indent(sb, depth);
-        sb_put_cstr(sb, "if (");
-        e_expr(p, sb, nd.lhs);
-        sb_put_cstr(sb, ") ");
+        sb_put_cstr(sb, "if ");
+        e_cond(p, sb, nd.lhs);
+        sb_put_cstr(sb, " ");
         let rec: u32 = nd.rhs;
         let then_b: u32 = e_extra(p, rec);
         let else_b: u32 = e_extra(p, rec + 1);
@@ -314,9 +385,9 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
     }
     if nd.kind == .while_stmt {
         e_indent(sb, depth);
-        sb_put_cstr(sb, "while (");
-        e_expr(p, sb, nd.lhs);
-        sb_put_cstr(sb, ") ");
+        sb_put_cstr(sb, "while ");
+        e_cond(p, sb, nd.lhs);
+        sb_put_cstr(sb, " ");
         e_block(p, sb, nd.rhs, depth);
         sb_put_cstr(sb, "\n");
         return;
@@ -342,9 +413,9 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
 fn e_stmt_inline(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
     let nd: Node = e_node(p, n);
     if nd.kind == .if_stmt {
-        sb_put_cstr(sb, "if (");
-        e_expr(p, sb, nd.lhs);
-        sb_put_cstr(sb, ") ");
+        sb_put_cstr(sb, "if ");
+        e_cond(p, sb, nd.lhs);
+        sb_put_cstr(sb, " ");
         let rec: u32 = nd.rhs;
         let then_b: u32 = e_extra(p, rec);
         let else_b: u32 = e_extra(p, rec + 1);
@@ -445,14 +516,58 @@ fn e_struct_decl(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
     sb_put_cstr(sb, ";\n\n");
 }
 
-// Emit the whole module: the fixed prelude, every struct typedef (so they precede any use), then
-// one C function per `fn` decl.
+// Emit an enum declaration as a transparent typedef over its repr integer plus an anonymous C
+// `enum {}` giving each variant its ordinal constant `<NAME>_<variant>` (0,1,2,... in order). This
+// mirrors the real C backend (src/lower_c_defs.zig `emitEnumType`): the typedef makes the enum a
+// plain integer (so `.raw()` is the identity) and the constants match the source order exactly.
+// The fixed record is [exported, is_open, repr_type(0=none), variants_run] (see parser `enum_decl`).
+fn e_enum_decl(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
+    let nd: Node = e_node(p, node);
+    let rec: u32 = nd.lhs;
+    let repr_node: u32 = e_extra(p, rec + 2);
+    let vrun: u32 = e_extra(p, rec + 3);
+    let name: []const u8 = e_tok_text(p, nd.main_token);
+    sb_put_cstr(sb, "typedef ");
+    if repr_node == 0 {
+        sb_put_cstr(sb, "uint32_t"); // default repr when the enum omits `: TYPE`
+    } else {
+        e_type(p, sb, repr_node);
+    }
+    sb_put_cstr(sb, " ");
+    sb_put_str(sb, name);
+    sb_put_cstr(sb, ";\nenum {\n");
+    let vc: u32 = e_extra(p, vrun);
+    var vi: u32 = 0;
+    while vi < vc {
+        let vtok: u32 = e_extra(p, vrun + 1 + vi);
+        sb_put_cstr(sb, "    ");
+        sb_put_str(sb, name);
+        sb_put_cstr(sb, "_");
+        let vn: []const u8 = e_tok_text(p, vtok);
+        sb_put_str(sb, vn);
+        sb_put_cstr(sb, ",\n"); // no explicit value: C auto-numbers 0,1,2,... matching ordinals
+        vi = vi + 1;
+    }
+    sb_put_cstr(sb, "};\n\n");
+}
+
+// Emit the whole module: the fixed prelude, every enum then struct typedef (so they precede any
+// use), then one C function per `fn` decl.
 fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
     sb_put_cstr(sb, "#include <stdint.h>\n#include <stddef.h>\n#include <stdbool.h>\n\n");
     let root: u32 = p.root;
     let rnode: Node = e_node(p, root);
     let run: u32 = rnode.lhs;
     let count: u32 = e_extra(p, run);
+    var ei: u32 = 0;
+    while ei < count {
+        let ed: u32 = e_extra(p, run + 1 + ei);
+        let edn: Node = e_node(p, ed);
+        if edn.kind == .enum_decl {
+            e_enum_decl(p, sb, ed);
+        }
+        ei = ei + 1;
+    }
     var si: u32 = 0;
     while si < count {
         let sd: u32 = e_extra(p, run + 1 + si);
