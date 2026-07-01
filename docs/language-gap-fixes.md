@@ -50,4 +50,12 @@ cherry-pick → m0.
   domains, const globals) → literal `mcc2`-compiles-`mcc2`.
 
 ## Execution log
+- **2026-07-01 — Batch 1 landed** (G19 `6ef4534`, G23 `a3f5305`, G24 `5dbef9e`; fixture fix `<pending>`).
+  - **G19** — aggregate `raw.load/store<T>` now lower (whole-object typed load/store) on C + LLVM; scalar/MMIO path untouched. `diff-backend`/`c-test` green.
+  - **G23** — sequenced-comparison operand-type recovery in value contexts (`return`/`let bool=`) for call/`.raw()`/member operands (C backend; LLVM was already correct — types via sema, not AST heuristics). New `enum_raw_compare` fixture.
+  - **G24** — `ok`/`err`/`type`/`use`/`open`/`sat`/`wrap` now usable as locals/params/fields (contextual keywords in the parser; lexer table unchanged so keyword semantics preserved). Caveat: `ok(..)`/`err(..)` calls still resolve to the Result ctor by lexeme.
+  - Fixture bug caught by full `m0`: the G24 fixture returned 143 but host-suite entry contract needs `return 1` (both backends compute 143 identically — no compiler bug); fixed.
+- **2026-07-01 — Batch 2 landed + m0-green (both backends).**
+  - **G12 (slices)** (`910ec9f`) — soundness hole closed (`E_ILLEGAL_SLICE_CAST` rejects scalar→slice), string-literal→`[]const u8` lowering, `[]mut`→`[]const` coercion; C + LLVM, `diff-backend` 161. Slice-from-raw-parts deferred (unsafe length-fabricating primitive, own design). m0 real_failures=0.
+  - **G11 (value optionals `?T`)** (`3cc7416`, 21 files) — `?u32`/`?usize`/`?struct`/`?[]const u8` via a tagged `{present,value}` aggregate (C `mc_opt_<T>`, LLVM `{i1,T}`); pointer optionals keep the null sentinel unchanged. `if let`/`==null`/`.?`(traps on absent)/struct-field/by-value all work; `switch`-on-optional deferred. `diff-backend` 162, entry fixture returns 1 both backends, m0 real_failures=0.
 _(append per landed fix: gap, commit, what changed, backends, m0)_
