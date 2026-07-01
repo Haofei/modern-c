@@ -743,6 +743,12 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-mem-bench", "Mem microbenchmark under QEMU (LLVM backend): 64x 1 MiB mem_copy + mem_set cycle totals", &.{ "bash", "tools/mem/mem-bench.sh", "zig-out/bin/mcc", "llvm" });
 
+    // Phase 2.4 uaccess microbenchmark (NOT in m0): rdcycle totals for a 32x 1 MiB copy
+    // through the page-table-aware copy_to_user_pt / copy_from_user_pt (single-pass walk).
+    _ = h.addScriptTest(ctx, "uaccess-bench", "Page-table uaccess microbenchmark under QEMU: 32x 1 MiB copy_to_user_pt + copy_from_user_pt, prints UACCESS-CYCLES via rdcycle", &.{ "bash", "tools/mem/uaccess-bench.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-uaccess-bench", "Page-table uaccess microbenchmark under QEMU (LLVM backend): 32x 1 MiB copy_to_user_pt + copy_from_user_pt cycle totals", &.{ "bash", "tools/mem/uaccess-bench.sh", "zig-out/bin/mcc", "llvm" });
+
     // kernel/core/elf_loader: real multi-segment ELF loader (Phase 1 of the QuickJS-agent
     // plan / review F3) — maps every PT_LOAD at its vaddr with per-segment perms, zeroes bss.
     _ = h.addScriptTest(ctx, "elf-loader-test", "Multi-segment ELF64 loader under QEMU: maps every PT_LOAD at its vaddr with per-segment R/W/X perms, copies file bytes, zeroes bss; synthetic 2-segment image, asserts mappings/content/bss/perms", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });

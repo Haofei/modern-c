@@ -322,24 +322,56 @@ export fn copy_to_user_pt(uas: *UserAddrSpace, dst: UserPtr<u8>, src: PAddr, len
     return copy_pages(uas, src, dst_addr, len, true);
 }
 
+// SMP / preemption guard for the copy pass (see copy_pages). FALSE today: the kernel is
+// cooperative — no other hart and no preemption run between check_pages and the copy, so a
+// page validated up front cannot be unmapped mid-copy. When preemptive scheduling or SMP
+// lands, set this TRUE: it restores per-page RE-VALIDATION immediately before each slice is
+// copied (a concurrent unmap could invalidate a page after check_pages passed), which — with
+// an address-space lock / TLB-shootdown discipline — closes the validate→use window. Do NOT
+// silently drop this re-validation for a future SMP config; it is a safety property, not an
+// optimization knob.
+const UACCESS_REVALIDATE_PER_PAGE: bool = false;
+
 // Copy `len` bytes between kernel buffer `kbuf` and user range [uaddr, uaddr+len), one
 // page-slice at a time (each user page may map to a discontiguous frame). When `to_user` is
 // true the user range is the destination, else the source.
 //
-// Each page is re-validated immediately before its slice is copied — not only by the up-front
-// check_pages — so the validate→copy window shrinks to a single page. (Under cooperative
-// single-core scheduling nothing changes the address space mid-copy; this is defense for when
-// preemption/SMP land, where a fuller fix also locks the address space against concurrent
-// unmap/TLB shootdown.) On a page that became invalid, the copy stops and returns the error,
-// having copied the earlier pages.
+// SINGLE-PASS (Phase 2.4): the whole range was already validated all-or-nothing by the
+// up-front check_pages, so this pass performs exactly ONE page-table walk per page —
+// `page_table_lookup` yields BOTH the leaf flags and the offset-correct physical address, so
+// the previously separate `page_table_translate` walk AND the redundant per-page
+// re-validation walk are gone (the old path walked the table three times per page: check,
+// re-check, translate). Fail-closed is preserved: check_pages guarantees every page here is
+// mapped + user + correctly-permissioned before a single byte moves, so no unvalidated page
+// is ever touched. When `UACCESS_REVALIDATE_PER_PAGE` is set (SMP/preemptive kernel) the flags
+// from that same single lookup are re-checked before the slice is copied; on a page that
+// became invalid the copy stops and returns the error, having copied the earlier pages.
 fn copy_pages(uas: *UserAddrSpace, kbuf: PAddr, uaddr: usize, len: usize, to_user: bool) -> Result<bool, UaccessError> {
     var done: usize = 0;
     while done < len {
         let cur: usize = uaddr + done;
-        let page: usize = cur - (cur % UA_PAGE_SIZE);
-        switch validate_page(uas, page, to_user) { // re-check this page right before copying it
-            ok(v) => {}
-            err(e) => { return err(e); }
+        // One walk per page: resolve `cur` to its frame (offset included) and, only under the
+        // SMP guard, re-validate the leaf flags — no second lookup, no separate translate.
+        var user_pa: PAddr = uninit;
+        switch page_table_lookup(uas.pt, va(cur)) {
+            ok(m) => {
+                if UACCESS_REVALIDATE_PER_PAGE {
+                    if !mapping_is_user(&m) {
+                        return err(.NotUserPage);
+                    }
+                    if to_user {
+                        if !mapping_is_writable(&m) {
+                            return err(.NotWritable);
+                        }
+                    } else {
+                        if !mapping_is_readable(&m) {
+                            return err(.NotReadable);
+                        }
+                    }
+                }
+                user_pa = mapping_phys(&m);
+            }
+            err(e) => { return err(.NotMapped); } // only reachable under a concurrent unmap (SMP)
         }
         let page_off: usize = cur % UA_PAGE_SIZE;
         var chunk: usize = UA_PAGE_SIZE - page_off; // bytes left in this user page
@@ -347,7 +379,6 @@ fn copy_pages(uas: *UserAddrSpace, kbuf: PAddr, uaddr: usize, len: usize, to_use
         if chunk > remaining {
             chunk = remaining;
         }
-        let user_pa: PAddr = page_table_translate(uas.pt, va(cur));
         let k: PAddr = pa_offset(kbuf, done);
         if to_user {
             mem_copy(user_pa, k, chunk);
