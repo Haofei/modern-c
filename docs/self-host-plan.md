@@ -77,11 +77,18 @@ express them, that is the single most important finding of the whole exercise.
 | 0.4 | **DONE** — `std/hosted_args.mc` + `hosted_args_rt.c` shim; argv-test green. | MC has no compiler-level `main`; entry is a link concern |
 | 0.5 | **DONE** — `std/mem.mc` `mem_eql`/`starts_with`/`index_of[_byte]`/`split_*`; memstr-test green (C+LLVM). | `.len`/indexing/sub-slice work; `?usize` returns blocked by G11 |
 
-**All Phase 0 gates green (host + integrated); 5 new m0 gates registered.** Two dominant gaps
-surfaced — **G11 (value optionals `?V` not expressible)** and **G12 (`[]const u8` half-implemented)**
-— see the gap ledger. Both are used pervasively by a compiler, so a **candidate Phase 0.6**
-(fix them properly in the compiler) is likely higher-ROI than working around them per-site
-through P1–P5. Decision pending before starting the lexer (P1).
+**All Phase 0 gates green (host + integrated); 5 new m0 gates registered.** Dominant gaps
+surfaced — **G11 (value optionals `?V`)**, **G12 (`[]const u8` half-implemented)**, **G18
+(unions can't be generic)** — see the gap ledger.
+
+**Phase 0.6 DECISION: DEFER the deep compiler fixes; proceed to P1 with workarounds.**
+Rationale (first principle): fixing value-optionals + real slices + generic unions is weeks of
+deep sema/backend surgery, and we should not invest it *speculatively*. Idiomatic workarounds
+exist and are enough to write a lexer: `Result<T,E>` value returns (these DO work), per-type
+concrete unions, `mem.as_bytes`, `ByteReader`, and **index-based tokens** (store `{kind,start,len}`
+into the source buffer — exactly how Zig's own tokenizer works, no per-token slices). P1 (lexer)
+will then produce EMPIRICAL evidence of how painful G11/G12/G18 really are; that evidence — not
+speculation — justifies a Phase 0.6 if warranted.
 
 **Gates (MC rules):** each ships with a first-principle before/after **cycle-count bench** +
 **m0 green both backends**. Any container that cannot be expressed → immediate top-priority
