@@ -538,13 +538,16 @@ fn e_block(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
 
 // ----- declaration / module emission -----
 
-fn e_fn(p: *mut Parser, sb: *mut StrBuf, fn_node: u32) -> void {
+// Emit a function's C signature `RET NAME(PARAMS)` (no trailing space, no body). Shared by the
+// forward-prototype pass and the definition pass so a call can name a callee declared in ANY module
+// regardless of concatenation order (the loader flattens imports in dependency-agnostic order — see
+// e_module's prototype loop).
+fn e_fn_sig(p: *mut Parser, sb: *mut StrBuf, fn_node: u32) -> void {
     let nd: Node = e_node(p, fn_node);
     let frec: u32 = nd.lhs;
     // Fixed record [exported, params_run, ret_type, body]; `exported` has no C spelling.
     let params_run: u32 = e_extra(p, frec + 1);
     let ret_ty: u32 = e_extra(p, frec + 2);
-    let body: u32 = e_extra(p, frec + 3);
 
     e_type(p, sb, ret_ty);
     sb_put_cstr(sb, " ");
@@ -569,7 +572,15 @@ fn e_fn(p: *mut Parser, sb: *mut StrBuf, fn_node: u32) -> void {
             k = k + 1;
         }
     }
-    sb_put_cstr(sb, ") ");
+    sb_put_cstr(sb, ")");
+}
+
+fn e_fn(p: *mut Parser, sb: *mut StrBuf, fn_node: u32) -> void {
+    let nd: Node = e_node(p, fn_node);
+    let frec: u32 = nd.lhs;
+    let body: u32 = e_extra(p, frec + 3);
+    e_fn_sig(p, sb, fn_node);
+    sb_put_cstr(sb, " ");
     e_block(p, sb, body, 0);
     sb_put_cstr(sb, "\n\n");
 }
@@ -662,6 +673,19 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
         }
         si = si + 1;
     }
+    // Forward prototypes for every function, so a call resolves regardless of the order the loader
+    // concatenated the modules in (an importer may textually precede the module it depends on).
+    var fi: u32 = 0;
+    while fi < count {
+        let fd: u32 = e_extra(p, run + 1 + fi);
+        let fdn: Node = e_node(p, fd);
+        if fdn.kind == .fn_decl {
+            e_fn_sig(p, sb, fd);
+            sb_put_cstr(sb, ";\n");
+        }
+        fi = fi + 1;
+    }
+    sb_put_cstr(sb, "\n");
     var i: u32 = 0;
     while i < count {
         let d: u32 = e_extra(p, run + 1 + i);

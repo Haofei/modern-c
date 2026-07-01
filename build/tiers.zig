@@ -387,6 +387,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-enum-test"));
     // selfhost-switch-test exercises P5.3 SWITCH support + exhaustiveness (parser+sema+emit_c -> clang).
     m0_step.dependOn(ctx.cmd("selfhost-switch-test"));
+    // selfhost-import-test exercises P5.4 multi-module IMPORT resolution (loader flatten + dedup -> clang).
+    m0_step.dependOn(ctx.cmd("selfhost-import-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

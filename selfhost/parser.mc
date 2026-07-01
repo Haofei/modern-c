@@ -79,6 +79,11 @@ open enum NodeKind: u32 {
     enum_lit,         // 39 `.variant` primary: main_token = the variant ident (no operand)
     // ----- P5.3 switch-statement additions (appended to keep prior ordinals stable) -----
     switch_stmt,      // 40 main_token = `switch`; lhs = subject expr; rhs = arms run [count, (pat_tok, block)*]
+    // ----- P5.4 multi-module import additions (appended to keep prior ordinals stable) -----
+    import_decl,      // 41 `import "path";` directive; main_token = the path string-literal token.
+                      //    A NO-OP for sema/emit: the imported file's decls are supplied by the
+                      //    loader (selfhost/main.mc), which flattens all modules into one source by
+                      //    textual concatenation, so nothing needs type-checking or emitting here.
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -715,8 +720,42 @@ fn parse_enum(p: *mut Parser, exported: u32, is_open: u32) -> u32 {
     return add_node(p, .enum_decl, ename, rec, 0);
 }
 
-// decl := `export`? `open`? (`enum` ... | `fn` ... | `struct` ...)
+// The lexeme (`source[start..start+len]`) of token `tok`. Bound to a plain local first (the C
+// backend recovers a slice's element type from a local, not from a struct-field access — see the
+// lexer's SOURCE-AS-A-SLICE-FIELD note).
+fn tok_lexeme(p: *mut Parser, tok: u32) -> []const u8 {
+    let st: usize = token_start_at(&p.tl, tok as usize);
+    let ln: usize = token_len_at(&p.tl, tok as usize);
+    let s: []const u8 = p.source;
+    return s[st..st + ln];
+}
+
+// True when token `tok` is the identifier `import` (the module-directive keyword, which is NOT a
+// lexer keyword — it lexes as a plain identifier, exactly as MC's real loader recognizes it).
+fn tok_is_import(p: *mut Parser, tok: u32) -> bool {
+    let lex: []const u8 = tok_lexeme(p, tok);
+    var kw: [6]u8 = .{ 105, 109, 112, 111, 114, 116 }; // "import"
+    return mem_eql(lex, mem.as_bytes(&kw));
+}
+
+// import := `import` STRING `;`  (a top-level directive). The path string is kept as the node's
+// main_token; the directive is otherwise a no-op — the loader supplies the imported decls.
+fn parse_import(p: *mut Parser) -> u32 {
+    p_advance(p); // `import`
+    let path_tok: u32 = p.tok as u32;
+    expect(p, .string_literal);
+    expect(p, .semicolon);
+    return add_node(p, .import_decl, path_tok, 0, 0);
+}
+
+// decl := `import` STRING `;` | `export`? `open`? (`enum` ... | `fn` ... | `struct` ...)
 fn parse_decl(p: *mut Parser) -> u32 {
+    // A leading `import "..."` is the module directive (an identifier `import`, not a keyword).
+    if at(p, .identifier) {
+        if tok_is_import(p, p.tok as u32) {
+            return parse_import(p);
+        }
+    }
     var exported: u32 = 0;
     if eat(p, .kw_export) {
         exported = 1;

@@ -20,6 +20,7 @@
 
 import "selfhost/emit_c.mc";
 import "selfhost/sema.mc";
+import "selfhost/lexer.mc";
 import "std/strbuf.mc";
 import "std/mem.mc";
 import "std/addr.mc";
@@ -53,9 +54,53 @@ impl Allocator for MallocAlloc {
     }
 }
 
-// Fixed source ceiling (1 MiB). The file must fit here — see the FILE-INPUT FRICTION note.
+// Per-file scratch ceiling (1 MiB). Each module file is read INTO g_src, scanned for imports, then
+// copied into the combined buffer; a single file larger than this is rejected. See FILE-INPUT.
 const MC_SRC_CAP: usize = 1048576;
 global g_src: [1048576]u8;
+
+// ----- P5.4 multi-module loader state (docs/self-host-plan.md) --------------------------------
+//
+// MC has no separate module/object model: an `import "path";` is resolved by TEXTUAL INCLUSION.
+// The loader reads the root file, finds its (transitive) imports, and CONCATENATES every distinct
+// module's full source into one big buffer (`g_concat`), then runs the existing single-source
+// pipeline once over it. Import statements survive the concatenation verbatim; the parser treats
+// each as a no-op `import_decl` (its decls arrive via the concatenated text), and the emitter's
+// forward-prototype pass makes function order across modules irrelevant.
+//
+// PATH RESOLUTION (a deliberate subset): a relative import `rel` is tried FIRST against the ROOT
+// file's directory (`<rootdir>/rel`), then AS-GIVEN (cwd/repo-root-relative, so mcc2's own
+// `import "std/mem.mc"` / `import "selfhost/lexer.mc"` resolve when run from the repo root). This is
+// simpler than MC's real per-importer ancestor walk (src/loader.zig) and is noted as a limit: an
+// import is always resolved relative to the ROOT, not to the importing file's own directory.
+//
+// DEDUP: the queue of import paths doubles as the seen-set — a path string is added only if no
+// existing entry compares byte-equal (so a diamond A->{B,C}->D includes D exactly once). Dedup is
+// on the import STRING as written; two spellings of the same file would not dedup (a noted limit).
+
+// Combined-source ceiling (4 MiB): it holds every distinct module, so it is larger than the
+// per-file cap. A program whose flattened source exceeds this is rejected rather than truncated.
+const MC_CONCAT_CAP: usize = 4194304;
+global g_concat: [4194304]u8;
+global g_concat_len: usize = 0;
+
+// The import-path queue + seen-set. Path strings are packed end-to-end in g_path_buf; g_path_off /
+// g_path_len index them. g_path_count entries are processed in order (indices grow as new imports
+// are discovered), giving a breadth-first flatten.
+const MC_MAX_FILES: usize = 512;
+const MC_PATHBUF_CAP: usize = 131072; // 128 KiB total for all import-path strings
+global g_path_off: [512]usize;
+global g_path_len: [512]usize;
+global g_path_buf: [131072]u8;
+global g_path_count: usize = 0;
+global g_path_used: usize = 0;
+
+// The root file's directory prefix (bytes before the last '/', no trailing slash) and a scratch
+// buffer for the NUL-terminated candidate path handed to io_open.
+const MC_PATH_CAP: usize = 4096;
+global g_rootdir: [4096]u8;
+global g_rootdir_len: usize = 0;
+global g_openpath: [4096]u8;
 
 // ----- tiny cstr helpers (string literals are `*const u8`; G12) -----
 
@@ -106,6 +151,202 @@ fn mc_read_all(path: *const u8) -> Result<usize, IoError> {
     return ok(total);
 }
 
+// ----- P5.4 loader: flatten the import graph by textual concatenation -------------------------
+
+// Store one byte `v` at `base + i` (`base` is a global-array address taken via `... as usize`).
+fn mc_bset(base: usize, i: usize, v: u8) -> void {
+    unsafe {
+        raw.store<u8>(pa(base + i), v);
+    }
+}
+
+// Load the byte at `base + i` (used to walk the NUL-terminated argv path).
+fn mc_bget(base: usize, i: usize) -> u8 {
+    var v: u8 = 0;
+    unsafe {
+        v = raw.load<u8>(pa(base + i));
+    }
+    return v;
+}
+
+// A `*const u8` view of the bytes at global-array address `base` (for io_open's path argument).
+fn mc_cptr(base: usize) -> *const u8 {
+    var p: *const u8 = raw.ptr<u8>(pa(0));
+    unsafe {
+        p = raw.ptr<u8>(pa(base));
+    }
+    return p;
+}
+
+// True when `k` (a token-kind ordinal from `token_kind_at`) equals `TokKind` variant `want`. The
+// variant is passed as a param so its enum type is inferred (a bare `TokKind.x` value is not a
+// subset expression); `.raw()` yields the ordinal to compare against.
+fn mc_kind_is(k: u32, want: TokKind) -> bool {
+    let w: u32 = want.raw();
+    return k == w;
+}
+
+// Compute the root file's directory prefix from the NUL-terminated argv path at `argp`: the bytes
+// up to (excluding) the last '/'. No slash -> an empty prefix (the file sits in the cwd).
+fn mc_compute_rootdir(argp: usize) -> void {
+    var i: usize = 0;
+    var last: usize = 0;
+    var has: bool = false;
+    var b: u8 = mc_bget(argp, 0);
+    while b != 0 {
+        if b == 47 { // '/'
+            last = i;
+            has = true;
+        }
+        i = i + 1;
+        b = mc_bget(argp, i);
+    }
+    if has && last <= MC_PATH_CAP {
+        mem_copy(pa((&g_rootdir) as usize), pa(argp), last);
+        g_rootdir_len = last;
+    } else {
+        g_rootdir_len = 0;
+    }
+}
+
+// Enqueue import path `g_src[src_off .. src_off+len]` (the string-literal text minus its quotes)
+// unless an equal path is already queued (the queue is also the seen-set — dedup). Silently caps
+// at MC_MAX_FILES / MC_PATHBUF_CAP.
+fn mc_queue_path(src_off: usize, len: usize) -> void {
+    if len == 0 {
+        return;
+    }
+    let rel: []const u8 = mem.as_bytes(&g_src)[src_off..src_off + len];
+    var i: usize = 0;
+    while i < g_path_count {
+        let stored: []const u8 = mem.as_bytes(&g_path_buf)[g_path_off[i]..g_path_off[i] + g_path_len[i]];
+        if mem_eql(rel, stored) {
+            return; // already queued (dedup)
+        }
+        i = i + 1;
+    }
+    if g_path_count >= MC_MAX_FILES {
+        return;
+    }
+    if g_path_used + len > MC_PATHBUF_CAP {
+        return;
+    }
+    mem_copy(pa((&g_path_buf) as usize + g_path_used), pa((&g_src) as usize + src_off), len);
+    g_path_off[g_path_count] = g_path_used;
+    g_path_len[g_path_count] = len;
+    g_path_used = g_path_used + len;
+    g_path_count = g_path_count + 1;
+}
+
+// Lex the `nread` bytes currently in g_src and enqueue every top-level `import "path";` directive
+// (identifier `import` + string literal + `;` at brace-depth 0), mirroring src/loader.zig's scan.
+fn mc_scan_imports(nread: usize) -> void {
+    var ma: MallocAlloc = .{ .count = 0 };
+    var tl: TokenList = token_list_new(&ma);
+    let view: []const u8 = mem.as_bytes(&g_src)[0..nread];
+    lex(view, &tl);
+    let n: usize = token_count(&tl);
+    var depth: i32 = 0;
+    var i: usize = 0;
+    while i < n {
+        let k: u32 = token_kind_at(&tl, i);
+        if mc_kind_is(k, .l_brace) {
+            depth = depth + 1;
+        } else if mc_kind_is(k, .r_brace) {
+            depth = depth - 1;
+        } else if depth == 0 && mc_kind_is(k, .identifier) {
+            let st: usize = token_start_at(&tl, i);
+            let ln: usize = token_len_at(&tl, i);
+            var kw: [6]u8 = .{ 105, 109, 112, 111, 114, 116 }; // "import"
+            let lex_word: []const u8 = mem.as_bytes(&g_src)[st..st + ln];
+            if mem_eql(lex_word, mem.as_bytes(&kw)) && i + 2 < n {
+                let k1: u32 = token_kind_at(&tl, i + 1);
+                let k2: u32 = token_kind_at(&tl, i + 2);
+                if mc_kind_is(k1, .string_literal) && mc_kind_is(k2, .semicolon) {
+                    let sst: usize = token_start_at(&tl, i + 1);
+                    let sln: usize = token_len_at(&tl, i + 1);
+                    if sln >= 2 {
+                        mc_queue_path(sst + 1, sln - 2); // strip the surrounding quotes
+                    }
+                    i = i + 3;
+                    continue;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    token_list_free(&tl);
+}
+
+// Append the `nread` bytes now in g_src to the combined buffer, then a newline separator (so a file
+// with no trailing newline cannot merge tokens with the next). Returns false if it would overflow.
+fn mc_append_concat(nread: usize) -> bool {
+    if g_concat_len + nread + 1 > MC_CONCAT_CAP {
+        return false;
+    }
+    mem_copy(pa((&g_concat) as usize + g_concat_len), pa((&g_src) as usize), nread);
+    g_concat_len = g_concat_len + nread;
+    mc_bset((&g_concat) as usize, g_concat_len, 10); // '\n'
+    g_concat_len = g_concat_len + 1;
+    return true;
+}
+
+// Read queued import `idx` into g_src, trying `<rootdir>/rel` first, then `rel` as-given.
+fn mc_read_import(idx: usize) -> Result<usize, IoError> {
+    let off: usize = g_path_off[idx];
+    let len: usize = g_path_len[idx];
+    // Candidate 1: root-directory-relative.
+    if g_rootdir_len > 0 {
+        var pos: usize = 0;
+        mem_copy(pa((&g_openpath) as usize), pa((&g_rootdir) as usize), g_rootdir_len);
+        pos = g_rootdir_len;
+        mc_bset((&g_openpath) as usize, pos, 47); // '/'
+        pos = pos + 1;
+        mem_copy(pa((&g_openpath) as usize + pos), pa((&g_path_buf) as usize + off), len);
+        pos = pos + len;
+        mc_bset((&g_openpath) as usize, pos, 0); // NUL
+        if let ok(v) = mc_read_all(mc_cptr((&g_openpath) as usize)) {
+            return ok(v);
+        }
+    }
+    // Candidate 2: as-given (cwd / repo-root-relative).
+    mem_copy(pa((&g_openpath) as usize), pa((&g_path_buf) as usize + off), len);
+    mc_bset((&g_openpath) as usize, len, 0); // NUL
+    return mc_read_all(mc_cptr((&g_openpath) as usize));
+}
+
+// Load the whole import graph rooted at the NUL-terminated path `argp` into g_concat. The root is
+// read+scanned+appended first; then each newly-discovered import (breadth-first, deduped) in turn.
+// Returns true on success; false if a file is missing/unreadable or the combined source overflows.
+fn mc_load_all(argp: usize) -> bool {
+    mc_compute_rootdir(argp);
+    var nread: usize = 0;
+    if let ok(v) = mc_read_all(mc_cptr(argp)) {
+        nread = v;
+    } else {
+        return false;
+    }
+    mc_scan_imports(nread);
+    if !mc_append_concat(nread) {
+        return false;
+    }
+    var qi: usize = 0;
+    while qi < g_path_count {
+        var in_read: usize = 0;
+        if let ok(v) = mc_read_import(qi) {
+            in_read = v;
+        } else {
+            return false;
+        }
+        mc_scan_imports(in_read);
+        if !mc_append_concat(in_read) {
+            return false;
+        }
+        qi = qi + 1;
+    }
+    return true;
+}
+
 // mcc2 entry: `mcc2 input.mc` -> emitted subset C on stdout.
 export fn mc_main() -> i32 {
     if args_count() < 2 {
@@ -113,19 +354,17 @@ export fn mc_main() -> i32 {
         return 2;
     }
 
-    let path: *const u8 = mc_argv(1) as *const u8;
-    var nread: usize = 0;
-    if let ok(v) = mc_read_all(path) {
-        nread = v;
-    } else {
-        mc_emsg(stderr_fd(), "mcc2: cannot read input (missing, unreadable, or > 1 MiB)\n");
+    // Flatten the module's whole import graph into g_concat by textual concatenation.
+    let argp: usize = mc_argv(1) as usize;
+    if !mc_load_all(argp) {
+        mc_emsg(stderr_fd(), "mcc2: cannot load input (missing/unreadable import, or combined source too large)\n");
         return 3;
     }
 
-    // Build the `[]const u8` view the pipeline wants: a view of the typed global, sub-sliced to the
-    // bytes actually read (G12/G13 file-input path).
-    let full: []const u8 = mem.as_bytes(&g_src);
-    let src: []const u8 = full[0..nread];
+    // Build the `[]const u8` view the pipeline wants: a view of the combined-source global,
+    // sub-sliced to the bytes actually loaded (G12/G13 file-input path).
+    let full: []const u8 = mem.as_bytes(&g_concat);
+    let src: []const u8 = full[0..g_concat_len];
 
     // Sema pass first: report (but do not hard-fail on) type errors, then still emit — a subset
     // "best effort" so the perf harness always produces C to measure. Parse errors are surfaced too.
