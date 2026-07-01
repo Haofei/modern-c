@@ -13,6 +13,7 @@ import "kernel/core/ledger.mc";     // unified resource ledger: enforces the per
 import "kernel/core/syscall.mc";
 import "kernel/core/uaccess.mc";
 import "kernel/core/console.mc";
+import "std/fmt/fmt_sink.mc";        // fmt_put_str/fmt_put_dec — sbrk map-path microbench reporting
 import "std/addr.mc";
 import "user/abi.mc"; // SYS_* numbers + E_AGAIN/E_FAULT — the single ABI source of truth
 // M5b.2: the REAL capability-checked FS tool path. The same app_run_demo broker that drives the
@@ -62,6 +63,36 @@ global g_pool_end: usize;       // one past the last frame in the pool
 global g_frames_ready: bool;    // app_build stood up the pool (defensive: deny sbrk if not)
 global g_brk: usize;            // the agent's current break VA (0 = not yet started -> HEAP_BASE)
 global g_mem_ledger: Ledger;    // per-agent memory accounting; its Resource.Memory limit is the grow cap
+
+// ----- sbrk map-path microbenchmark (Phase 2.3) -----
+// Opt-in cycle timing of the sys_sbrk map loop. The kernel boots -bios none (M-mode), so we read the
+// machine cycle CSR `mcycle` (0xb00) directly. When SBRK_BENCH is true each grow prints
+// "SBRK-CYCLES <cycles> PAGES <pages>", making the per-page-vs-batched TLB-flush delta reproducible
+// via sbrk-grow-test (which grows 40 MiB). It is confinement-neutral kernel-side reporting.
+const SBRK_BENCH: bool = true;
+
+fn sbrk_read_cycle() -> u64 {
+    var v: u64 = 0;
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm precise volatile {
+                "csrr %0, 0xb00"
+                out("r") v: u64
+            }
+        }
+    }
+    return v;
+}
+
+fn sbrk_report_cycles(cycles: u64, pages: u64) -> void {
+    if SBRK_BENCH {
+        fmt_put_str(console_putc, "SBRK-CYCLES ");
+        fmt_put_dec(console_putc, cycles);
+        fmt_put_str(console_putc, " PAGES ");
+        fmt_put_dec(console_putc, pages);
+        console_putc(0x0a);
+    }
+}
 
 // app_build status codes: the loader's typed LoadError, preserved across the u64-satp C ABI
 // boundary so callers (and tests) can tell WHY a load failed rather than seeing a bare 0.
@@ -842,12 +873,15 @@ fn sys_sbrk(delta: u64, a1: u64, a2: u64) -> u64 {
     // charge — so the agent just sees a clean NULL from malloc (matching the "maps NOTHING on failure"
     // contract). pool_start snapshots the frontier for the restore.
     let pool_start: usize = g_pool_next;
+    let bench_c0: u64 = sbrk_read_cycle();
     var off: usize = 0;
     while off < need {
         let phys: PAddr = pa(g_pool_next);
         g_pool_next = g_pool_next + PAGE_BYTES; // consume one frame from the bump pool
+        // page_table_map (NOT _active): store the PTE only; the TLB flush is BATCHED below. On failure
+        // sbrk_rollback undoes the partial grow AND issues its own single global flush.
         switch page_table_try_map(&g_pt, &g_heap, va(old + off), phys, PTE_R | PTE_W | PTE_U) {
-            ok(v) => { sfence_vma_page(va(old + off)); } // active space: flush the stale TLB entry
+            ok(v) => {}
             err(e) => {
                 sbrk_rollback(old, off, pool_start, need); // undo the partial grow, fail closed
                 return bitcast<u64>(E_NOMEM);
@@ -855,6 +889,13 @@ fn sys_sbrk(delta: u64, a1: u64, a2: u64) -> u64 {
         }
         off = off + PAGE_BYTES;
     }
+    // BATCHED TLB flush (Phase 2.3): every page in this grow is mapped; ONE global `sfence.vma`
+    // invalidates any stale/negative TLB entries across the whole freshly-mapped range — vs the old
+    // one-address-scoped-fence-per-4-KiB-page loop (16384 fences for a 64 MiB grow). Sound because the
+    // range was just mapped, so any cached entry for it is negative and a global fence drops all of them.
+    sfence_vma_all();
+    let bench_c1: u64 = sbrk_read_cycle();
+    sbrk_report_cycles(bench_c1 - bench_c0, need_pages as u64);
     g_brk = old + need;
     return old as u64; // classic sbrk: the OLD break, now backed by `need` fresh bytes
 }
@@ -864,8 +905,13 @@ fn sys_sbrk(delta: u64, a1: u64, a2: u64) -> u64 {
 fn sbrk_rollback(old: usize, mapped: usize, pool_start: usize, charged: usize) -> void {
     var o: usize = 0;
     while o < mapped {
-        page_table_unmap_active(&g_pt, va(old + o));
+        // page_table_unmap (NOT _active): drop the PTE only; the TLB flush is BATCHED below so the
+        // rollback path mirrors the bulk-map path — one global fence instead of one per 4 KiB page.
+        page_table_unmap(&g_pt, va(old + o));
         o = o + PAGE_BYTES;
+    }
+    if mapped > 0 {
+        sfence_vma_all(); // batched flush: one global sfence.vma drops all the unmapped stale entries
     }
     g_pool_next = pool_start;
     switch ledger_release(&g_mem_ledger, .Memory, charged as u64) {

@@ -277,6 +277,22 @@ export fn sfence_vma_page(virt: VAddr) -> void {
     }
 }
 
+// Flush the ENTIRE TLB for all ASIDs (`sfence.vma` with no operands — rs1=x0, rs2=x0). Used to
+// batch a bulk address-space edit: instead of one address-scoped `sfence.vma va` per page (a fence
+// per 4 KiB — 16384 fences for a 64 MiB grow), map all pages then issue ONE global fence. A single
+// global fence correctly invalidates any stale/negative entries across the whole range (the pages
+// were freshly mapped), so it is sound for the bulk-map/bulk-unmap case in sys_sbrk. Single-hart: a
+// full implementation would also shoot down other harts sharing this address space.
+export fn sfence_vma_all() -> void {
+    #[unsafe_contract(precise_asm)] {
+        unsafe {
+            asm precise volatile {
+                "sfence.vma"
+            }
+        }
+    }
+}
+
 // Map a page in the active address space, then fence so the new translation is visible.
 export fn page_table_map_active(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_target: PAddr, flags: u64) -> void {
     page_table_map(pt, h, virt, phys_target, flags);
