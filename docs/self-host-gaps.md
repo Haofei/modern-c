@@ -45,6 +45,19 @@ proper compiler fix (candidate Phase 0.6) before the P1–P5 port, rather than p
 | G22 | P2 | language/modules | **Flat cross-import top-level namespace** — `import` pulls ALL top-level fn names (incl. non-`export`) into one shared flat namespace; no module qualification at use sites, no overloading. `parser.mc`'s private `fn advance(p:*mut Parser)` collided with `lexer.mc`'s private `fn advance(lx:*mut Lexer)` → `E_DUPLICATE_DECLARATION`. Real scaling hazard: lexer+parser+sema+lowering all want `advance`/`peek`/`expect`/`make`. | two imported files each `fn advance(...)` | **medium-high** | workaround (name-prefix `p_advance`; or wrap each module's helpers in a `module {}` block — MC has module namespaces). Revisit: adopt `module{}` per selfhost file before P3. |
 | G23 | P2 | codegen | **C backend can't emit `return <call> == <call>`** — `sequencedConditionOperandTypes` (`lower_c_flow.zig:391`) can't recover the operand type when BOTH comparison operands are call exprs → `UnsupportedCEmission`. | `fn at(p,k)->bool{ return cur(p)==k.raw(); }` | medium | workaround (bind each operand to a typed local first; +2 lines/site). Candidate compiler fix. |
 
+| G24 | P3 | language | **Reserved keywords steal common local names** — `ok`, `err`, `type`, `use`, `open`, `sat`, `wrap` are keywords (the lexer emits `kw_ok`/`kw_err` for Result sugar etc.), so `let ok: bool = ...` → `expected local name`. A compiler port's own vocabulary overlaps MC keywords. | `let ok: u32 = 1;` → parse error | low-medium | workaround (rename locals) |
+| G25 | P3 | language | **`.raw()` and switch-exhaustiveness are mutually exclusive for enums.** An `open enum` supports `.raw()` (needed for ordinal access / driver assertions, G21) but its `switch` REQUIRES a `_ =>` default → the compiler gives ZERO missing-case diagnostics. A closed enum gives exhaustiveness but rejects `.raw()`/`as`. A compiler AST enum wants BOTH. | `switch openEnumVal {...}` forces `_` | **medium** | open — candidate: exhaustiveness on `open enum` switches that omit `_`, or `.raw()` on closed enums. This is the sharpest ergonomic loss for a compiler in MC. |
+| G26 | P3 | toolchain | **Unused `let` is a hard error** (`-Werror=unused-variable` in emitted C) — every bound local must be consumed; side-effect-only walks must discard a struct-returning call directly rather than binding it. | bind-and-ignore a local | low | workaround (discard directly) |
+
+**G23 WIDENED (P3):** the `<call> == x` codegen gap (`UnsupportedCEmission`, `sequencedConditionOperandTypes`)
+also fires in a **typed `let`-initializer** (`let b: bool = k.raw() == 2;`), not just `return`. It does
+NOT fire inside an `if` condition — so it's specific to value-producing contexts (return / typed let-init).
+Workaround unchanged: bind the call operand to a typed local first.
+
+**P3 subset-grammar gaps to widen before P4/P5:** the P2 parser's `parse_type` accepts only `.identifier`
+(so keyword-types `bool`/`void`/`u32`… as annotations don't parse — they arise only internally), and there
+is no `var` (only immutable `let`). Both must be added for the parser to accept real mcc2 source at P5.
+
 **G20 refined (P2):** *nested* if/else branches CAN reuse a `let` name, but *sequential* sibling blocks
 at the same fn level cannot (`E_DUPLICATE_LOCAL`). Safe rule: **every `let`/`var` unique per function.**
 Also confirmed: **params are immutable** (`E_ASSIGN_TO_IMMUTABLE_LOCAL`) — mutate via a `*mut` field, not param rebind.

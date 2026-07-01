@@ -176,5 +176,12 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   structure, `a+b*c` precedence, if/else, while+call, and err-count on malformed input. Index-arena
   "felt natural" (validates G19 fix); mutual recursion works via forward decls. New findings G22
   (flat cross-import namespace collision), G23 (`return call==call` codegen gap); G20 refined.
-  Verbosity ~1.3–1.4× the Zig original. Next: P3 (sema subset) — but first adopt `module{}`
-  wrappers per selfhost file to head off G22 as more modules land.
+  Verbosity ~1.3–1.4× the Zig original.
+- **2026-07-01 — P3 (subset sema) DONE** (`8122cf9`). `selfhost/sema.mc` (~497 code LOC): two-pass
+  name-res + type-check over the P2 arena; `StrHashMap<u32>` fn table + per-fn `StrHashMap<SmType>`
+  locals (struct value — G19 dividend). Gate: 1 accept + 6 reject cases (unknown name, arg count/type,
+  non-bool cond, return mismatch, assign-to-param). `StrHashMap` scaled cleanly; Result/struct-return
+  propagation painless. New findings G24 (keywords steal locals), **G25 (`.raw()` vs switch-exhaustiveness
+  mutually exclusive — sharpest compiler-ergonomics loss)**, G26 (unused-let hard error); G23 widened to
+  typed let-init. Verbosity ~1.4–1.5×. G22 prefix discipline (sm_) held with a 3rd module. Next: P4
+  (lower-to-C subset) — and widen the P2 grammar (keyword-types, `var`) toward real mcc2 source.
