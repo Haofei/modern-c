@@ -385,6 +385,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-struct-test"));
     // selfhost-enum-test exercises P5.2 ENUM support end to end (parser+sema+emit_c -> clang).
     m0_step.dependOn(ctx.cmd("selfhost-enum-test"));
+    // selfhost-switch-test exercises P5.3 SWITCH support + exhaustiveness (parser+sema+emit_c -> clang).
+    m0_step.dependOn(ctx.cmd("selfhost-switch-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

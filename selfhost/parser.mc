@@ -77,6 +77,8 @@ open enum NodeKind: u32 {
     // ----- P5.2 enum-support additions (appended to keep prior ordinals stable) -----
     enum_decl,        // 38 main_token = name; lhs = fixed rec [exported, is_open, repr_type(0=none), variants_run]
     enum_lit,         // 39 `.variant` primary: main_token = the variant ident (no operand)
+    // ----- P5.3 switch-statement additions (appended to keep prior ordinals stable) -----
+    switch_stmt,      // 40 main_token = `switch`; lhs = subject expr; rhs = arms run [count, (pat_tok, block)*]
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -470,7 +472,52 @@ fn parse_if(p: *mut Parser) -> u32 {
     return add_node(p, .if_stmt, if_tok, cond, if_rec);
 }
 
-// stmt := let | return | if | while | (assign | expr) `;`
+// switch := `switch` Expr `{` (Pat `=>` Block (`,`)?)* `}`  where Pat is `.` IDENT | `_`.
+// (trailing comma allowed, per MC). Each arm is a (pattern-token, block-node) PAIR flushed via
+// `emit_pair_list`: the pattern token is the variant IDENT for a `.variant` arm and the `_`
+// underscore token for a wildcard arm; sema/emit tell them apart by the token's kind (so no
+// separate marker slot is needed). rhs = the arms run; lhs = the subject expr. (Statement form
+// only: switch-as-expression and payload-binding `variant(x) =>` are deferred — see the ledger.)
+fn parse_switch(p: *mut Parser) -> u32 {
+    let sw_tok: u32 = p.tok as u32;
+    p_advance(p); // `switch`
+    let subject: u32 = parse_expr(p, 0);
+    expect(p, .l_brace);
+    var arms: Vec<u32> = vec_new(u32, p.a); // (pattern_tok, block_node) pairs
+    if !at(p, .r_brace) {
+        while true {
+            var pat_tok: u32 = p.tok as u32;
+            if at(p, .dot) {
+                p_advance(p); // `.`
+                pat_tok = p.tok as u32; // the variant ident
+                expect(p, .identifier);
+            } else if at(p, .underscore) {
+                pat_tok = p.tok as u32; // the `_` token (recognized by kind at sema/emit)
+                p_advance(p);
+            } else {
+                // Not a valid pattern head: record and leave `pat_tok` at the offending token so the
+                // no-progress guard in the enclosing loop can still advance.
+                record_error(p);
+            }
+            expect(p, .fat_arrow);
+            let arm_block: u32 = parse_block(p);
+            vec_push(u32, &arms, pat_tok);
+            vec_push(u32, &arms, arm_block);
+            if !eat(p, .comma) {
+                break;
+            }
+            if at(p, .r_brace) {
+                break; // trailing comma
+            }
+        }
+    }
+    expect(p, .r_brace);
+    let arms_run: u32 = emit_pair_list(p, &arms);
+    vec_free(u32, &arms);
+    return add_node(p, .switch_stmt, sw_tok, subject, arms_run);
+}
+
+// stmt := let | return | if | while | switch | (assign | expr) `;`
 fn parse_stmt(p: *mut Parser) -> u32 {
     if at(p, .kw_let) {
         p_advance(p);
@@ -517,6 +564,9 @@ fn parse_stmt(p: *mut Parser) -> u32 {
         let while_cond: u32 = parse_expr(p, 0);
         let while_body: u32 = parse_block(p);
         return add_node(p, .while_stmt, while_tok, while_cond, while_body);
+    }
+    if at(p, .kw_switch) {
+        return parse_switch(p);
     }
     // Expression statement or assignment.
     let head: u32 = parse_expr(p, 0);

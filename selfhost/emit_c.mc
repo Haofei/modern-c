@@ -406,7 +406,92 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
         sb_put_cstr(sb, ";\n");
         return;
     }
+    if nd.kind == .switch_stmt {
+        e_switch(p, sb, n, depth);
+        return;
+    }
     // Unknown statement kind: emit nothing.
+}
+
+// True when arm-pattern token `tok` is the `_` wildcard (a `.variant` arm stores an `identifier`
+// token). Both operands are bound to locals before comparing, per gap G23.
+fn e_is_underscore(p: *mut Parser, tok: u32) -> bool {
+    let k: u32 = token_kind_at(&p.tl, tok as usize);
+    let uw: TokKind = .underscore;
+    let want: u32 = uw.raw();
+    return k == want;
+}
+
+// Emit the C `case` constant `<EnumName>_<variant>` for a `.variant` arm whose variant ident is
+// token `vtok`. Like `e_enum_lit`, the AST does not carry which enum the bare `.variant` belongs to,
+// so the module's enum decls are scanned for the one declaring this variant (gap G28: variant names
+// are assumed unique across enums — first match wins).
+fn e_case_label(p: *mut Parser, sb: *mut StrBuf, vtok: u32) -> void {
+    let vtext: []const u8 = e_tok_text(p, vtok);
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let d: u32 = e_extra(p, run + 1 + i);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .enum_decl {
+            let rec: u32 = dn.lhs;
+            let vrun: u32 = e_extra(p, rec + 3);
+            let vc: u32 = e_extra(p, vrun);
+            var j: u32 = 0;
+            while j < vc {
+                let etok: u32 = e_extra(p, vrun + 1 + j);
+                let vn: []const u8 = e_tok_text(p, etok);
+                let m: bool = mem_eql(vtext, vn);
+                if m {
+                    let ename: []const u8 = e_tok_text(p, dn.main_token);
+                    sb_put_str(sb, ename);
+                    sb_put_cstr(sb, "_");
+                    sb_put_str(sb, vtext);
+                    return;
+                }
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    // Unresolved (sema would have rejected this): emit the bare variant lexeme as a fallback.
+    sb_put_str(sb, vtext);
+}
+
+// Emit a `switch` statement. The subject is a transparent integer typedef (see `e_enum_decl`), so a
+// C `switch` on it is direct; each `.variant` arm becomes `case <EnumName>_<variant>: { .. } break;`
+// and a `_` arm becomes `default: { .. } break;`. The arms run is `[count, (pat_tok, block)*]` (see
+// parser `switch_stmt`); `e_is_underscore` distinguishes a wildcard pattern from a variant one.
+fn e_switch(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
+    let nd: Node = e_node(p, n);
+    e_indent(sb, depth);
+    sb_put_cstr(sb, "switch (");
+    e_expr(p, sb, nd.lhs);
+    sb_put_cstr(sb, ") {\n");
+    let run: u32 = nd.rhs;
+    let arm_count: u32 = e_extra(p, run);
+    var ai: u32 = 0;
+    while ai < arm_count {
+        let pat_tok: u32 = e_extra(p, run + 1 + ai * 2);
+        let blk: u32 = e_extra(p, run + 1 + ai * 2 + 1);
+        e_indent(sb, depth + 1);
+        let is_wild: bool = e_is_underscore(p, pat_tok);
+        if is_wild {
+            sb_put_cstr(sb, "default: ");
+        } else {
+            sb_put_cstr(sb, "case ");
+            e_case_label(p, sb, pat_tok);
+            sb_put_cstr(sb, ": ");
+        }
+        e_block(p, sb, blk, depth + 1);
+        sb_put_cstr(sb, " break;\n");
+        ai = ai + 1;
+    }
+    e_indent(sb, depth);
+    sb_put_cstr(sb, "}\n");
 }
 
 // Emit a statement WITHOUT a leading indent (used for the `else if` inline case).

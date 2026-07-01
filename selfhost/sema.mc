@@ -73,6 +73,10 @@ open enum SmErr: u32 {
     struct_target,    // 9  struct literal `.{...}` used where no struct target type is known
     unknown_variant,  // 10 `.variant` names a variant not present on the expected enum
     enum_target,      // 11 `.variant` used where no enum target type is known
+    // ----- P5.3 switch-statement additions (appended to keep prior ordinals stable) -----
+    nonexhaustive_switch, // 12 closed enum switch misses a variant with no `_`, or an open enum lacks `_`
+    duplicate_arm,        // 13 two arms name the same enum variant
+    switch_subject,       // 14 switch subject is not an enum-typed value
 }
 
 // A resolved type. Copyable (all scalar fields), so it stores freely in `Vec`/`StrHashMap`.
@@ -115,6 +119,7 @@ struct SmEnum {
     variant_start: u32,
     variant_count: u32,
     repr: SmKind,
+    is_open: u32, // 1 when declared `open` (a switch then REQUIRES a `_` arm — see sm_check_switch)
 }
 
 // The analyzer state + owned inputs. `p` OWNS the parser arena (see selfhost/parser.mc); free the
@@ -645,6 +650,140 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
     }
 }
 
+// ----- switch-statement checking -----
+
+// True when arm-pattern token `tok` is the `_` wildcard (a `.variant` arm stores an `identifier`
+// token instead). Both operands are bound to locals before comparing, per gap G23.
+fn sm_arm_is_wild(s: *mut SmState, tok: u32) -> bool {
+    let par: *mut Parser = &s.p;
+    let k: u32 = token_kind_at(&par.tl, tok as usize);
+    let uw: TokKind = .underscore;
+    let want: u32 = uw.raw();
+    return k == want;
+}
+
+// True when the named variant lexeme `vtext` is one of enum `ed`'s variants.
+fn sm_enum_has_variant(s: *mut SmState, ed: SmEnum, vtext: []const u8) -> bool {
+    var found: bool = false;
+    var vi: u32 = 0;
+    while vi < ed.variant_count {
+        let v: SmEVar = vec_get(SmEVar, &s.evariants, (ed.variant_start + vi) as usize);
+        let vn: []const u8 = sm_evar_name(s, v);
+        let m: bool = mem_eql(vtext, vn);
+        if m {
+            found = true;
+        }
+        vi = vi + 1;
+    }
+    return found;
+}
+
+// True when some `.variant` arm in the run covers the variant lexeme `vtext` (used for the
+// closed-enum exhaustiveness sweep). Wildcard arms are skipped (they are handled separately).
+fn sm_switch_covers(s: *mut SmState, run: u32, arm_count: u32, vtext: []const u8) -> bool {
+    var covered: bool = false;
+    var ai: u32 = 0;
+    while ai < arm_count {
+        let pat_tok: u32 = sm_extra(s, run + 1 + ai * 2);
+        let is_wild: bool = sm_arm_is_wild(s, pat_tok);
+        if !is_wild {
+            let ptext: []const u8 = sm_tok_text(s, pat_tok);
+            let m: bool = mem_eql(vtext, ptext);
+            if m {
+                covered = true;
+            }
+        }
+        ai = ai + 1;
+    }
+    return covered;
+}
+
+// Check a `switch EXPR { .variant => {..}, _ => {..} }`. The subject must be enum-typed; each
+// `.variant` pattern must be a case of that enum (else `unknown_variant`) and appear at most once
+// (else `duplicate_arm`); a `_` is the default. EXHAUSTIVENESS: a CLOSED enum with no `_` must
+// cover every variant (else `nonexhaustive_switch`); an OPEN enum REQUIRES a `_` (else
+// `nonexhaustive_switch`). Every arm block is checked regardless of pattern validity.
+fn sm_check_switch(s: *mut SmState, node: u32) -> void {
+    let nd: Node = sm_node(s, node);
+    let subj_ty: SmType = sm_type_of_expr(s, nd.lhs);
+    let run: u32 = nd.rhs;
+    let arm_count: u32 = sm_extra(s, run);
+    let is_enum: bool = sm_is_enum_type(s, subj_ty);
+    if !is_enum {
+        sm_err(s, .switch_subject);
+        // Still walk every arm block so nested errors are not lost.
+        var wi: u32 = 0;
+        while wi < arm_count {
+            let blk: u32 = sm_extra(s, run + 1 + wi * 2 + 1);
+            sm_check_stmt(s, blk);
+            wi = wi + 1;
+        }
+        return;
+    }
+    let ename: []const u8 = sm_name_text(s, subj_ty);
+    let eref: u32 = strmap_get_or(u32, &s.enums, ename, 0);
+    let ed: SmEnum = vec_get(SmEnum, &s.enum_defs, (eref - 1) as usize);
+    var has_default: bool = false;
+    var ai: u32 = 0;
+    while ai < arm_count {
+        let pat_tok: u32 = sm_extra(s, run + 1 + ai * 2);
+        let blk: u32 = sm_extra(s, run + 1 + ai * 2 + 1);
+        let is_wild: bool = sm_arm_is_wild(s, pat_tok);
+        if is_wild {
+            has_default = true;
+        } else {
+            let vtext: []const u8 = sm_tok_text(s, pat_tok);
+            let known: bool = sm_enum_has_variant(s, ed, vtext);
+            if !known {
+                sm_err(s, .unknown_variant);
+            }
+            // Duplicate: any earlier `.variant` arm naming the same case.
+            var dup: bool = false;
+            var aj: u32 = 0;
+            while aj < ai {
+                let pj: u32 = sm_extra(s, run + 1 + aj * 2);
+                let pj_wild: bool = sm_arm_is_wild(s, pj);
+                if !pj_wild {
+                    let pjtext: []const u8 = sm_tok_text(s, pj);
+                    let dm: bool = mem_eql(vtext, pjtext);
+                    if dm {
+                        dup = true;
+                    }
+                }
+                aj = aj + 1;
+            }
+            if dup {
+                sm_err(s, .duplicate_arm);
+            }
+        }
+        sm_check_stmt(s, blk);
+        ai = ai + 1;
+    }
+    // Exhaustiveness.
+    if ed.is_open == 1 {
+        if !has_default {
+            sm_err(s, .nonexhaustive_switch);
+        }
+    } else {
+        if !has_default {
+            var all_covered: bool = true;
+            var vi: u32 = 0;
+            while vi < ed.variant_count {
+                let v: SmEVar = vec_get(SmEVar, &s.evariants, (ed.variant_start + vi) as usize);
+                let vn: []const u8 = sm_evar_name(s, v);
+                let cov: bool = sm_switch_covers(s, run, arm_count, vn);
+                if !cov {
+                    all_covered = false;
+                }
+                vi = vi + 1;
+            }
+            if !all_covered {
+                sm_err(s, .nonexhaustive_switch);
+            }
+        }
+    }
+}
+
 // ----- statement + block checking -----
 
 // Type-check one statement (also dispatches nested blocks, e.g. an `if`/`while` body or an
@@ -727,6 +866,10 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
             sm_err(s, .not_bool_cond);
         }
         sm_check_stmt(s, nd.rhs);
+        return;
+    }
+    if nd.kind == .switch_stmt {
+        sm_check_switch(s, node);
         return;
     }
     if nd.kind == .assign {
@@ -830,6 +973,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
         }
         if dn.kind == .enum_decl {
             let erec: u32 = dn.lhs;
+            let is_open: u32 = sm_extra(s, erec + 1);
             let repr_node: u32 = sm_extra(s, erec + 2);
             let vrun: u32 = sm_extra(s, erec + 3);
             let vcount: u32 = sm_extra(s, vrun);
@@ -849,7 +993,7 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
                 repr_kind = rt.kind;
             }
             let eidx: u32 = vec_len(SmEnum, &s.enum_defs) as u32;
-            vec_push(SmEnum, &s.enum_defs, .{ .variant_start = vstart, .variant_count = vcount, .repr = repr_kind });
+            vec_push(SmEnum, &s.enum_defs, .{ .variant_start = vstart, .variant_count = vcount, .repr = repr_kind, .is_open = is_open });
             let ename: []const u8 = sm_tok_text(s, dn.main_token);
             strmap_put(u32, &s.enums, ename, eidx + 1);
         }
