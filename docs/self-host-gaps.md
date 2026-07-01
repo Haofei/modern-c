@@ -54,6 +54,23 @@ also fires in a **typed `let`-initializer** (`let b: bool = k.raw() == 2;`), not
 NOT fire inside an `if` condition — so it's specific to value-producing contexts (return / typed let-init).
 Workaround unchanged: bind the call operand to a typed local first.
 
+**P4 (emit-C) — G12 emission SOLVED via `sb_put_cstr`.** `export fn sb_put_cstr(sb, s: *const u8)`
+(appends a NUL-terminated literal) makes fixed C-fragment emission ergonomic — string literals ARE
+`*const u8`, so `sb_put_cstr(&sb, "uint32_t")` compiles directly. New confirmed fact: a raw `*const u8`
+casts to `usize` with `as usize`. Recommend `sb_put_cstr` as the canonical "emit fixed text" primitive.
+Big string-building is still ~2–3× the Zig emitter (no `writer.print`/format interpolation — one call per
+fragment). **G25 is AVOIDABLE**: the emitter used `if/else` chains on `nd.kind == .variant` (works on
+imported `open enum`) + a contiguous-ordinal range check for the 13 bin-ops, sidestepping the
+exhaustiveness/`.raw()` tension entirely.
+
+**P5 self-compile gap list (what the subset compiler CANNOT yet handle — the remaining front-end work):**
+`bool`/`void` as parseable type annotations (they're keywords; `parse_type` takes only identifiers);
+untyped `let x = e` (needs type inference; currently emits `void x`); slices (`[]const T` emitted as `T*`,
+length dropped); and NOT in the P2 grammar at all: `struct`/`enum`/`union`/global/const decls, `for`,
+`match`/`switch`, `defer`, `&`/`*` address-deref, bitwise `<< >> & | ^`, `as` casts, string/char/float
+literal expressions, method/UFCS calls, generics, multi-module imports/mangling. mcc2's OWN source uses
+nearly all of these — true self-compile requires widening the front end across all of them (large, multi-phase).
+
 **P3 subset-grammar gaps to widen before P4/P5:** the P2 parser's `parse_type` accepts only `.identifier`
 (so keyword-types `bool`/`void`/`u32`… as annotations don't parse — they arise only internally), and there
 is no `var` (only immutable `let`). Both must be added for the parser to accept real mcc2 source at P5.

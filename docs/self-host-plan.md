@@ -185,3 +185,13 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   mutually exclusive — sharpest compiler-ergonomics loss)**, G26 (unused-let hard error); G23 widened to
   typed let-init. Verbosity ~1.4–1.5×. G22 prefix discipline (sm_) held with a 3rd module. Next: P4
   (lower-to-C subset) — and widen the P2 grammar (keyword-types, `var`) toward real mcc2 source.
+- **2026-07-01 — P4 (subset emit-C) DONE — MILESTONE** (`073354b`). `selfhost/emit_c.mc` (~300 code
+  LOC) walks the arena → C via `StrBuf`; added `sb_put_cstr(*const u8)` to `std/strbuf.mc` (solves the
+  G12 emission problem — string literals are `*const u8`). **End-to-end round-trip green: `mcc2` source
+  → emitted C → clang → running binary** (`add(2,3)==5`, `fact(5)==120`). No new gaps; G25 avoided via
+  `if`-chains + ordinal-range. **The P1–P4 arc = a working subset MC-compiler-in-MC.**
+- **P5 (full self-compile) — REMAINING, large.** mcc2's own source uses structs/enums/generics/slices/
+  match/imports/etc. — none in the current subset. True `mcc2`-compiles-`mcc2` needs the front end
+  widened across the whole P5 gap list (see gap ledger). Next concrete step: package the pipeline as a
+  standalone `mcc2` CLI (`selfhost/main.mc` via hosted argv+IO) and MEASURE it (fills the perf ledger,
+  the "or slow" deliverable), then widen the grammar incrementally.
