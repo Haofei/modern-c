@@ -97,6 +97,16 @@ lacks: **generics** (`Vec<T>` ~30 uses), **fixed byte arrays + `mem.as_bytes`** 
 to true self-compile: **generics** (monomorphized `Vec<T>` + fixed arrays + array-slices) → `impl`/traits →
 `unsafe`/`raw` intrinsics → `match`/`?`. Each is a large vertical; true self-compile remains multi-phase.
 
+| G30 | P5.5 | language | **`*mut Vec<T>` param → `*const Vec<T>` param rejected** (`E_NO_IMPLICIT_POINTER_CONVERSION`) even though mut→const is a safe narrowing; but `&local`/`&field` address-of expressions DO coerce. Passing a `*mut` pointer *variable* to a `*const`-expecting fn (e.g. `vec_len(u32, v)` where `v: *mut Vec<u32>`) fails — must reborrow `&*v`. | `fn c(v:*mut Vec<u32>)->usize{return vec_len(u32,v);}` fails; `vec_len(u32,&*v)` works | medium | workaround (reborrow `&*v`) |
+
+**P5.5 monomorphizer lesson (for the ledger / any arena-scanning monomorphizer):** a monomorphizer that
+collects instantiations by scanning the flat arena for `S<...>` uses will also find the TEMPLATE's own
+signature use `S<T>` (arg = abstract `T`) → collecting it produces `S_T` whose `T→T` substitution recurses
+forever (stack overflow). Fix: collect ONLY when the type arg is a known concrete scalar lexeme. That filter
+IS the scope boundary (why nested/struct type-args are deferred). Substitution was done via threaded scratch
+fields on the Parser (set/clear around each monomorphic emit) rather than an arena clone — pragmatic given
+no `?T`/node-maps.
+
 **Structural observation (P5.1):** parser/sema/emit each re-implement length-prefixed "pair run" walking
 (`[count,(a,b)*]`, `fi*2(+1)` indexing) with no shared arena-access module → off-by-one-prone duplication
 across 3 files. A shared `selfhost/ast.mc` accessor layer would cut this; deferred (works, just repetitive).

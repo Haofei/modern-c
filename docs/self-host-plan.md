@@ -226,7 +226,14 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   mutual recursion). `selfhost-import-test` green (linear + diamond dedup); all 7 prior gates pass. Found
   G29 (hosted_io AT_FDCWD Linux-hardcoded). **HONEST: subset compiles ~0% of mcc2's own source — the hard
   blockers remain: generics, fixed arrays, traits, unsafe/raw, match, `?`.** Next: generics (decisive).
-- **STATUS: P1–P4 + CLI + perf + structs + enums + switch + imports COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
+- **2026-07-01 — P5.5 (generics vertical) DONE** (`de34d4d`) — the hardest so far. Monomorphized generic
+  structs (`S<T>`) + generic fns (`comptime T: type`): per-concrete-type emission (`Box_u32`/`Box_u64`),
+  dedup, multi-instantiation, call-site type-arg dropping (`f(u32,x)→f_u32(x)`), type-param return subst.
+  Substitution via threaded scratch fields (not arena clone); scalar-only instantiation filter avoids the
+  self-recursion trap. `selfhost-generic-test` green (accept + arity reject); all 8 prior gates pass. New
+  G30 (`*mut→*const` param). Deferred: multi-param, nested generics, trait bounds, const-generics, template-
+  body type-checking. Next blocker: **fixed `[N]T` arrays**, then `impl`/traits, then `*mut dyn`.
+- **STATUS: P1–P4 + CLI + perf + structs + enums + switch + imports + generics COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
   *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
   match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
   perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").
