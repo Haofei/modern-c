@@ -25,6 +25,27 @@ import "std/alloc/alloc.mc";
 // little; coalescing collapses adjacent frees, so this rarely fills.
 const HEAP_FREE_SLOTS: usize = 64;
 
+// Free-list coalesce strategy (Phase 2.1, perf refactor). The free list is kept in one
+// of two representations, selected at compile time:
+//
+//   true  (NEW, default): the free slots are COMPACTED into `free[0..free_count)`.
+//         `heap_release` coalesces in a SINGLE forward pass — it merges the (at most one)
+//         predecessor and successor with an O(1) swap-remove each, then O(1)-appends the
+//         merged block. This replaces the old multi-pass `while(changed)` re-scan and its
+//         separate O(n) find-an-empty-slot scan (O(n^2)-flavoured per free under
+//         fragmentation) with one bounded pass and O(1) insert/remove — no element shift.
+//         (An address-sorted variant was measured too; its O(n) insert *shift* made the
+//         well-optimized C backend slower, so the compacted swap-remove form was chosen.)
+//
+//   false (LEGACY): the original unsorted 64-slot array + `while(changed)` full re-scan.
+//         Kept selectable as a fail-safe; both paths produce a fully-coalesced free list
+//         with identical membership, differing only in first-fit slot *order*.
+//
+// Both representations share the same `free[]` / `heap_available` view, so availability
+// accounting is unchanged. `free_count` is maintained only by the compacted path; the
+// legacy path ignores it.
+const HEAP_COMPACT_FREELIST: bool = true;
+
 // ----- KASAN shadow hooks (D2.1) -----
 //
 // A KASAN-profile heap (built with `heap_new_ksan`) drives a shadow map: it POISONS a
@@ -96,6 +117,10 @@ struct Heap {
     range: PhysRange,
     next: PAddr, // bump frontier: [next, range.end) is untouched tail
     free: [HEAP_FREE_SLOTS]FreeBlock,
+    // Number of live (non-empty) blocks packed into `free[0..free_count)` when the
+    // COMPACTED representation is active (`HEAP_COMPACT_FREELIST`). Slots at and above
+    // `free_count` are empty. The legacy unsorted path does not maintain this.
+    free_count: usize,
     // Guard width (bytes) reserved on each side of every user allocation. 0 disables
     // the redzone profile entirely (default `heap_new`), so non-redzone builds keep
     // their original layout and incur no poison work.
@@ -118,6 +143,7 @@ export fn heap_new(range: PhysRange) -> Heap {
     h.next = pr_start(&range);
     h.redzone = 0; // redzone profile off: original layout, no guard bytes
     h.ksan = 0;    // KASAN shadow profile off: no poison/unpoison hooks
+    h.free_count = 0; // compacted free list: no live blocks yet
     var i: usize = 0;
     while i < HEAP_FREE_SLOTS {
         h.free[i] = fb_empty();
@@ -153,8 +179,123 @@ export fn heap_new_ksan(range: PhysRange) -> Heap {
 
 // Drop a block back into the free list, coalescing with any adjacent free blocks and
 // with the bump frontier. Fail-safe: if the list is full and the block can't coalesce,
-// it is dropped rather than corrupting the list.
+// it is dropped rather than corrupting the list. Dispatches to the compacted (default)
+// or legacy implementation per `HEAP_COMPACT_FREELIST`.
 fn heap_release(h: *mut Heap, start: PAddr, len: usize) -> void {
+    if HEAP_COMPACT_FREELIST {
+        heap_release_compact(h, start, len);
+        return;
+    }
+    heap_release_legacy(h, start, len);
+}
+
+// ----- compacted free-list helpers -----
+
+// Swap-remove the block at slot `i` (0 <= i < free_count): move the last live entry into
+// slot `i` and shrink the live count. O(1); the array is UNORDERED, so the reordering is
+// harmless. Empties the vacated tail slot so `heap_available`'s len-sum view is unchanged.
+fn fl_swap_remove(h: *mut Heap, i: usize) -> void {
+    let last: usize = h.free_count - 1;
+    h.free[i] = h.free[last];
+    h.free[last] = fb_empty();
+    h.free_count = last;
+}
+
+// Append [start, start+len) as a new live entry. O(1). If the list is already full the
+// block is dropped (fail-safe leak, never corrupts the list). Callers coalesce first, so
+// an appended block never abuts an existing one (preserving the no-adjacent invariant).
+fn fl_append(h: *mut Heap, start: PAddr, len: usize) -> void {
+    if h.free_count >= HEAP_FREE_SLOTS {
+        return; // full and no coalesce was possible: drop (fail-safe leak)
+    }
+    h.free[h.free_count] = .{ .start = start, .len = len };
+    h.free_count = h.free_count + 1;
+}
+
+// Consume the free block at slot `i` (the allocator picked it to carve from). Under the
+// compacted representation this swap-removes it (and decrements free_count); under the
+// legacy representation it simply empties the slot. The caller has already read the
+// block's start/len before calling.
+fn fl_take_at(h: *mut Heap, i: usize) -> void {
+    if HEAP_COMPACT_FREELIST {
+        fl_swap_remove(h, i);
+        return;
+    }
+    h.free[i] = fb_empty();
+}
+
+// Compacted release. The free list has no two adjacent blocks (fully coalesced on every
+// release), so the block being freed has at most one immediate predecessor (its end ==
+// block start) and one immediate successor (its start == block end). A SINGLE forward pass
+// over `free[0..free_count)` finds and coalesces both — after a swap-remove the moved-in
+// entry is re-checked at the same index, and because extending the block can only ever make
+// it adjacent to the original two neighbours (no-adjacent invariant), no restart is needed.
+// A frontier-adjacent result is handed back to the bump tail; otherwise it is O(1)-appended.
+fn heap_release_compact(h: *mut Heap, start: PAddr, len: usize) -> void {
+    if len == 0 {
+        return;
+    }
+    var bstart: PAddr = start;
+    var blen: usize = len;
+    var bend: PAddr = pa_offset(bstart, blen);
+
+    // Single pass: coalesce the (<= 2) adjacent free blocks via O(1) swap-removes.
+    var i: usize = 0;
+    while i < h.free_count {
+        let fstart: PAddr = h.free[i].start;
+        let fend: PAddr = pa_offset(fstart, h.free[i].len);
+        var merged: bool = false;
+        if pa_eq(fend, bstart) {
+            // existing block sits just before the released one
+            bstart = fstart;
+            blen = blen + h.free[i].len;
+            bend = pa_offset(bstart, blen);
+            fl_swap_remove(h, i);
+            merged = true;
+        } else {
+            if pa_eq(bend, fstart) {
+                // existing block sits just after the released one
+                blen = blen + h.free[i].len;
+                bend = pa_offset(bstart, blen);
+                fl_swap_remove(h, i);
+                merged = true;
+            }
+        }
+        // On a merge the swapped-in entry now occupies slot `i`; re-check it (do not
+        // advance). Otherwise move on.
+        if !merged {
+            i = i + 1;
+        }
+    }
+
+    // If the (possibly coalesced) block now ends at the bump frontier, return it to the
+    // tail and absorb any free block left tail-adjacent (invariant bounds this to <= 1).
+    if pa_eq(bend, h.next) {
+        h.next = bstart;
+        var j: usize = 0;
+        while j < h.free_count {
+            let jend: PAddr = pa_offset(h.free[j].start, h.free[j].len);
+            if pa_eq(jend, h.next) {
+                h.next = h.free[j].start;
+                fl_swap_remove(h, j);
+                j = 0;
+                continue;
+            }
+            j = j + 1;
+        }
+        return;
+    }
+
+    // Store the merged block. Full + no coalesce => drop (fail-safe leak).
+    fl_append(h, bstart, blen);
+}
+
+// ----- legacy (unsorted) free-list implementation -----
+
+// The original multi-pass coalesce over the unsorted `free[]` array. Kept selectable via
+// `HEAP_COMPACT_FREELIST == false` as a fail-safe fallback. Semantics identical to the
+// compacted path (fully-coalesced free list); only the first-fit slot order differs.
+fn heap_release_legacy(h: *mut Heap, start: PAddr, len: usize) -> void {
     if len == 0 {
         return;
     }
@@ -303,10 +444,10 @@ fn heap_try_alloc_raw(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, 
             if pa_le(astart, fend) {
                 let aend: PAddr = pa_offset(astart, size); // checked
                 if pa_le(aend, fend) {
-                    // Carve [astart, aend) out of this block. Clear the slot, then
-                    // release the head gap [fstart, astart) and tail remainder
-                    // [aend, fend) back (each coalesces/restores as appropriate).
-                    h.free[i] = fb_empty();
+                    // Carve [astart, aend) out of this block. Remove the slot (compacting
+                    // the sorted array), then release the head gap [fstart, astart) and
+                    // tail remainder [aend, fend) back (each coalesces/restores as needed).
+                    fl_take_at(h, i);
                     if pa_lt(fstart, astart) {
                         heap_release(h, fstart, pa_diff(fstart, astart));
                     }

@@ -755,6 +755,13 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-sched-bench", "Scheduler microbenchmark under QEMU (LLVM backend): average cycles per next_runnable() round-robin pick", &.{ "bash", "tools/proc/sched-bench.sh", "zig-out/bin/mcc", "llvm" });
 
+    // Phase 2.1 heap microbenchmark (NOT in m0): rdcycle total for an adversarial
+    // fragment-and-coalesce free sequence that drives the free list to capacity — the
+    // before/after number for killing the O(n^2) coalesce in kernel/core/heap.mc.
+    _ = h.addScriptTest(ctx, "heap-bench", "Heap free-path microbenchmark under QEMU: adversarial fragment+coalesce free sequence, prints HEAPFREE-CYCLES via rdcycle", &.{ "bash", "tools/mem/heap-bench.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-heap-bench", "Heap free-path microbenchmark under QEMU (LLVM backend): adversarial fragment+coalesce free sequence, HEAPFREE-CYCLES total", &.{ "bash", "tools/mem/heap-bench.sh", "zig-out/bin/mcc", "llvm" });
+
     // kernel/core/elf_loader: real multi-segment ELF loader (Phase 1 of the QuickJS-agent
     // plan / review F3) — maps every PT_LOAD at its vaddr with per-segment perms, zeroes bss.
     _ = h.addScriptTest(ctx, "elf-loader-test", "Multi-segment ELF64 loader under QEMU: maps every PT_LOAD at its vaddr with per-segment R/W/X perms, copies file bytes, zeroes bss; synthetic 2-segment image, asserts mappings/content/bss/perms", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });
