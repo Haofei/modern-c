@@ -93,6 +93,14 @@ open enum NodeKind: u32 {
                       //    (A generic FUNCTION reuses `fn_decl`: its type param is a leading
                       //    `comptime T: type` param — a `param_decl` whose lhs is a `type_kw` node
                       //    and whose rhs = 1 marks it comptime.)
+    // ----- P5.6 fixed-size array additions (appended to keep prior ordinals stable) -----
+    type_array,       // 45 `[N]T` fixed array TYPE: main_token = the integer-literal token N (a const
+                      //    length in the subset — a `comptime N` size param is deferred); lhs = the
+                      //    element type node. (Multi-dim `[N][M]T` nests via the element being another
+                      //    `type_array`, but sema only fully types one level — see the ledger.)
+    array_lit,        // 46 `.{ e0, e1, ... }` positional array literal: main_token = leading `.`; lhs =
+                      //    extra run of element expr node indices. Distinct from `struct_lit` (whose
+                      //    elements are `.field = e`); disambiguated by a `.ident =` lookahead.
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -273,6 +281,16 @@ fn parse_type(p: *mut Parser) -> u32 {
     if at(p, .l_bracket) {
         let br_tok: u32 = p.tok as u32;
         p_advance(p); // `[`
+        // A fixed-size array `[N]T` (P5.6): a `[` immediately followed by an integer-literal length
+        // (N a const literal in the subset — a `comptime N` size param is deferred). An empty `[]`
+        // is the slice form handled below. main_token = the length token; lhs = the element type.
+        if at(p, .integer_literal) {
+            let n_tok: u32 = p.tok as u32;
+            p_advance(p); // N
+            expect(p, .r_bracket);
+            let elem_a: u32 = parse_type(p);
+            return add_node(p, .type_array, n_tok, elem_a, 0);
+        }
         expect(p, .r_bracket);
         if eat(p, .kw_const) {
             let elem_c: u32 = parse_type(p);
@@ -367,6 +385,43 @@ fn parse_struct_lit(p: *mut Parser) -> u32 {
     return add_node(p, .struct_lit, dot_tok, run, 0);
 }
 
+// array_lit := `.` `{` (Expr (`,`)?)* `}`  (trailing comma allowed, per MC). Positional elements
+// (no `.field =`), so it is distinguished from `struct_lit` by the `.ident =` lookahead in
+// `dot_is_struct_lit`. main_token = the leading `.`; lhs = a length-prefixed run of element exprs.
+fn parse_array_lit(p: *mut Parser) -> u32 {
+    let dot_tok: u32 = p.tok as u32;
+    p_advance(p); // `.`
+    expect(p, .l_brace);
+    var elems: Vec<u32> = vec_new(u32, p.a);
+    if !at(p, .r_brace) {
+        while true {
+            let e: u32 = parse_expr(p, 0);
+            vec_push(u32, &elems, e);
+            if !eat(p, .comma) {
+                break;
+            }
+            if at(p, .r_brace) {
+                break; // trailing comma
+            }
+        }
+    }
+    expect(p, .r_brace);
+    let run: u32 = emit_list(p, &elems);
+    vec_free(u32, &elems);
+    return add_node(p, .array_lit, dot_tok, run, 0);
+}
+
+// True when a leading `.{` opens a STRUCT literal (its first entry is `.field = ...`) rather than a
+// positional ARRAY literal. The cursor is at the `.`; offsets: 0 = `.`, 1 = `{`, 2.. = first entry.
+// A struct entry begins `.` IDENT `=` (offsets 2,3,4); anything else (an int, an ident, a nested
+// `.{`, or `}` for an empty literal) is an array literal.
+fn dot_is_struct_lit(p: *mut Parser) -> bool {
+    let a: bool = at_next(p, 2, .dot);
+    let b: bool = at_next(p, 3, .identifier);
+    let c: bool = at_next(p, 4, .equal);
+    return a && b && c;
+}
+
 // primary := INT | IDENT | `(` Expr `)`
 fn parse_primary(p: *mut Parser) -> u32 {
     if at(p, .integer_literal) {
@@ -389,7 +444,11 @@ fn parse_primary(p: *mut Parser) -> u32 {
     // identifier is an enum literal (main_token = the variant ident).
     if at(p, .dot) {
         if at_next(p, 1, .l_brace) {
-            return parse_struct_lit(p);
+            // `.{` opens a struct literal (`.field = ...`) or a positional array literal (P5.6).
+            if dot_is_struct_lit(p) {
+                return parse_struct_lit(p);
+            }
+            return parse_array_lit(p);
         }
         if at_next(p, 1, .identifier) {
             p_advance(p); // `.`

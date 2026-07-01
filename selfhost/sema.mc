@@ -56,6 +56,7 @@ open enum SmKind: u32 {
     i64_,      // 13
     isize_,    // 14
     named_,    // 15 a named (struct) type; identify by lexeme at [nstart .. nstart+nlen]
+    array_,    // 16 `[N]T` fixed array (P5.6): `arr_len` = N; `elem`/`nstart`/`nlen` describe T
 }
 
 // The first-error code surfaced to the gate (an `open enum` so `.raw()` gives the ordinal the C
@@ -77,14 +78,19 @@ open enum SmErr: u32 {
     nonexhaustive_switch, // 12 closed enum switch misses a variant with no `_`, or an open enum lacks `_`
     duplicate_arm,        // 13 two arms name the same enum variant
     switch_subject,       // 14 switch subject is not an enum-typed value
+    // ----- P5.6 fixed-size array additions (appended to keep prior ordinals stable) -----
+    array_length,         // 15 array-literal element count != the target `[N]T`'s N
+    array_target,         // 16 array literal `.{...}` used where no `[N]T` target type is known
 }
 
 // A resolved type. Copyable (all scalar fields), so it stores freely in `Vec`/`StrHashMap`.
 struct SmType {
     kind: SmKind,
     ptr_depth: u32,
-    nstart: usize, // named type: source byte offset of the identifier
-    nlen: usize,   // named type: identifier byte length
+    nstart: usize, // named type (or array element type): source byte offset of the identifier
+    nlen: usize,   // named type (or array element type): identifier byte length
+    arr_len: usize, // `array_`: the fixed length N (0 otherwise)
+    elem: SmKind,   // `array_`: the element type's kind (`nstart`/`nlen` give its name if `named_`)
 }
 
 // A collected function signature: return type + a `(start, count)` window into `SmState.ptypes`.
@@ -159,7 +165,34 @@ struct SmState {
 
 // A depth-0 type of kind `k`.
 fn sm_ty(k: SmKind) -> SmType {
-    return .{ .kind = k, .ptr_depth = 0, .nstart = 0, .nlen = 0 };
+    return .{ .kind = k, .ptr_depth = 0, .nstart = 0, .nlen = 0, .arr_len = 0, .elem = .unknown };
+}
+
+// An `[N]T` array type: `len` = N; `elem_ty` describes the element T (its kind + named offsets).
+fn sm_arr(elem_ty: SmType, len: usize) -> SmType {
+    return .{ .kind = .array_, .ptr_depth = 0, .nstart = elem_ty.nstart, .nlen = elem_ty.nlen, .arr_len = len, .elem = elem_ty.kind };
+}
+
+// Reconstruct the element `SmType` of an `[N]T` array (its kind + named offsets were flattened into
+// the array type by `sm_arr`). Only meaningful when `t.kind == array_`.
+fn sm_arr_elem(t: SmType) -> SmType {
+    return .{ .kind = t.elem, .ptr_depth = 0, .nstart = t.nstart, .nlen = t.nlen, .arr_len = 0, .elem = .unknown };
+}
+
+// Parse a decimal integer-literal lexeme to a `usize` (array lengths are plain decimals in the
+// subset — no `0x`/`_` separators, which the fixed-array grammar never produces here).
+fn sm_parse_uint(txt: []const u8) -> usize {
+    var acc: usize = 0;
+    var i: usize = 0;
+    let n: usize = txt.len;
+    while i < n {
+        let c: u8 = txt[i];
+        if c >= 48 && c <= 57 {
+            acc = acc * 10 + ((c - 48) as usize);
+        }
+        i = i + 1;
+    }
+    return acc;
 }
 
 // The error/unresolved type.
@@ -295,7 +328,16 @@ fn sm_type_from_node(s: *mut SmState, tn: u32) -> SmType {
         let par: *mut Parser = &s.p;
         let gst: usize = token_start_at(&par.tl, nd.main_token as usize);
         let gln: usize = token_len_at(&par.tl, nd.main_token as usize);
-        return .{ .kind = .named_, .ptr_depth = 0, .nstart = gst, .nlen = gln };
+        return .{ .kind = .named_, .ptr_depth = 0, .nstart = gst, .nlen = gln, .arr_len = 0, .elem = .unknown };
+    }
+    // A fixed-size array `[N]T` (P5.6): N is the integer-literal `main_token`'s value; the element
+    // type T resolves recursively. A nested `[N][M]T` yields an `array_` whose `elem` is `array_`,
+    // but only ONE level is fully modeled here (multi-dim element typing is deferred — see the ledger).
+    if nd.kind == .type_array {
+        let elem_ty: SmType = sm_type_from_node(s, nd.lhs);
+        let ltxt: []const u8 = sm_tok_text(s, nd.main_token);
+        let len: usize = sm_parse_uint(ltxt);
+        return sm_arr(elem_ty, len);
     }
     // The `type` keyword annotation of a `comptime T: type` param has no value type in the subset.
     if nd.kind == .type_kw {
@@ -308,7 +350,7 @@ fn sm_type_from_node(s: *mut SmState, tn: u32) -> SmType {
         let txt: []const u8 = sm_tok_text(s, nd.main_token);
         let k: SmKind = sm_scalar_kind(txt);
         if k.raw() == 0 {
-            return .{ .kind = .named_, .ptr_depth = 0, .nstart = st, .nlen = ln };
+            return .{ .kind = .named_, .ptr_depth = 0, .nstart = st, .nlen = ln, .arr_len = 0, .elem = .unknown };
         }
         return sm_ty(k);
     }
@@ -342,6 +384,15 @@ fn sm_types_match(s: *mut SmState, a: SmType, b: SmType) -> bool {
         let ta: []const u8 = sm_name_text(s, a);
         let tb: []const u8 = sm_name_text(s, b);
         return mem_eql(ta, tb);
+    }
+    if ak == 16 {
+        // Arrays: same length and matching element type (P5.6).
+        if a.arr_len != b.arr_len {
+            return false;
+        }
+        let ea: SmType = sm_arr_elem(a);
+        let eb: SmType = sm_arr_elem(b);
+        return sm_types_match(s, ea, eb);
     }
     return true;
 }
@@ -599,6 +650,42 @@ fn sm_check_struct_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
     }
 }
 
+// Check an array literal `.{ e0, e1, ... }` against a KNOWN expected `[N]T` type (P5.6). The element
+// COUNT must equal N (else `array_length`) and each element's type must match T (else `type_mismatch`,
+// with untyped-int-literal unification via `sm_types_match`). A literal whose expected type is not an
+// array reports `array_target` (elements are still walked for nested errors). A generic-struct field
+// is never routed here (its field types are name-checked only), so T is always concrete.
+fn sm_check_array_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
+    let nd: Node = sm_node(s, node);
+    let run: u32 = nd.lhs;
+    let ecount: u32 = sm_extra(s, run);
+    // Bind `.raw()` to a local before comparing (a `<call> == <lit>` in a let-init cannot recover
+    // its operand type in the C backend — gap G23).
+    let ek: u32 = expected.kind.raw();
+    let is_arr: bool = ek == 16;
+    if !is_arr {
+        sm_err(s, .array_target);
+    } else {
+        let want: u32 = expected.arr_len as u32;
+        if ecount != want {
+            sm_err(s, .array_length);
+        }
+    }
+    var ei: u32 = 0;
+    while ei < ecount {
+        let en: u32 = sm_extra(s, run + 1 + ei);
+        let et: SmType = sm_type_of_expr(s, en);
+        if is_arr {
+            let elem: SmType = sm_arr_elem(expected);
+            let m: bool = sm_types_match(s, elem, et);
+            if !m {
+                sm_err(s, .type_mismatch);
+            }
+        }
+        ei = ei + 1;
+    }
+}
+
 // Check an enum literal `.variant` against a KNOWN expected type. The expected type must be a known
 // enum (else `enum_target`) and the variant must be one of its cases (else `unknown_variant`). No
 // value is returned: callers already know the resolved type is `expected` (this only diagnoses).
@@ -667,8 +754,15 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
             return sm_ty(.bool_);
         }
         .index => {
-            sm_type_of_expr(s, nd.lhs); // discard: walk base + subscript for errors
-            sm_type_of_expr(s, nd.rhs);
+            let base: SmType = sm_type_of_expr(s, nd.lhs);
+            sm_type_of_expr(s, nd.rhs); // walk the subscript for errors (any numeric index accepted)
+            // Indexing an `[N]T` array yields its element type T (P5.6); a slice/other base is not
+            // element-typed in the subset (yields `unknown`, matching the prior behavior). The
+            // `.raw()` is bound to a local before comparing (gap G23).
+            let bk: u32 = base.kind.raw();
+            if bk == 16 {
+                return sm_arr_elem(base);
+            }
             return sm_ty_unknown();
         }
         .field => {
@@ -685,6 +779,12 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
             // Likewise an enum literal needs an expected enum type (typed init/return, or the
             // other side of a comparison); reaching it here means none was threaded in.
             sm_check_enum_lit(s, node, sm_ty_unknown());
+            return sm_ty_unknown();
+        }
+        .array_lit => {
+            // An array literal is only valid where an `[N]T` target type is known (a typed init or
+            // an `-> [N]T` return); reaching it here means no target was threaded in.
+            sm_check_array_lit(s, node, sm_ty_unknown());
             return sm_ty_unknown();
         }
         .bin_add => { return sm_arith(s, nd); }
@@ -855,6 +955,8 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
             let ann: SmType = sm_type_from_node(s, nd.lhs);
             if init_nd.kind == .struct_lit {
                 sm_check_struct_lit(s, nd.rhs, ann);
+            } else if init_nd.kind == .array_lit {
+                sm_check_array_lit(s, nd.rhs, ann);
             } else if init_nd.kind == .enum_lit {
                 sm_check_enum_lit(s, nd.rhs, ann);
             } else {
@@ -892,6 +994,11 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
         if rv_nd.kind == .enum_lit {
             // `return .variant` in an `-> EnumT` fn: the return type is the enum target.
             sm_check_enum_lit(s, nd.lhs, s.cur_ret);
+            return;
+        }
+        if rv_nd.kind == .array_lit {
+            // `return .{...}` in an `-> [N]T` fn: the return type is the array target.
+            sm_check_array_lit(s, nd.lhs, s.cur_ret);
             return;
         }
         let vt: SmType = sm_type_of_expr(s, nd.lhs);
@@ -967,6 +1074,22 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
             let rt: SmType = sm_type_of_expr(s, nd.rhs);
             let m: bool = sm_types_match(s, lt, rt);
             if !m {
+                sm_err(s, .type_mismatch);
+            }
+            return;
+        }
+        if lnode.kind == .index {
+            // Element assignment `a[i] = e` (P5.6): the root binding must be a mutable `var`, and the
+            // value must match the element type (`sm_type_of_expr` on the index yields T for an array).
+            let root_mut2: bool = sm_target_mutable(s, nd.lhs);
+            if !root_mut2 {
+                sm_err(s, .assign_immutable);
+                return;
+            }
+            let lt2: SmType = sm_type_of_expr(s, nd.lhs);
+            let rt2: SmType = sm_type_of_expr(s, nd.rhs);
+            let m2: bool = sm_types_match(s, lt2, rt2);
+            if !m2 {
                 sm_err(s, .type_mismatch);
             }
             return;

@@ -148,6 +148,31 @@ fn e_type(p: *mut Parser, sb: *mut StrBuf, tn: u32) -> void {
     e_scalar_name(sb, txt);
 }
 
+// Emit a C DECLARATOR `<type> <name>`, honoring fixed-size arrays (P5.6): a `[N]T` type must lower
+// to `T name[N]` (the `[N]` binds to the NAME in C, not the type), so it cannot go through the plain
+// `e_type` + name path. Used everywhere a named binding is emitted: locals, struct fields, params,
+// and their monomorphic copies. `type_node` 0 (no annotation) falls through to `void name`.
+fn e_emit_decl(p: *mut Parser, sb: *mut StrBuf, type_node: u32, name: []const u8) -> void {
+    if type_node != 0 {
+        let nd: Node = e_node(p, type_node);
+        if nd.kind == .type_array {
+            // `T name[N]` — the element type may itself be the active generic type param (substituted
+            // by `e_type`); N is the integer-literal `main_token`'s lexeme, emitted verbatim.
+            e_type(p, sb, nd.lhs);
+            sb_put_cstr(sb, " ");
+            sb_put_str(sb, name);
+            sb_put_cstr(sb, "[");
+            let ltxt: []const u8 = e_tok_text(p, nd.main_token);
+            sb_put_str(sb, ltxt);
+            sb_put_cstr(sb, "]");
+            return;
+        }
+    }
+    e_type(p, sb, type_node);
+    sb_put_cstr(sb, " ");
+    sb_put_str(sb, name);
+}
+
 // The source lexeme of the ACTIVE type param (`source[sub_name_start .. +sub_name_len]`), recovered
 // through a plain local per gap G13. Only meaningful while `sub_concrete != 0`.
 fn e_sub_name(p: *mut Parser) -> []const u8 {
@@ -336,6 +361,11 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         e_enum_lit(p, sb, n);
         return;
     }
+    if nd.kind == .array_lit {
+        // Bare aggregate `{ e0, ... }` (valid as an initializer or nested inside another literal).
+        e_array_lit_body(p, sb, n);
+        return;
+    }
     // Any other node kind is outside the emitter subset; emit nothing.
 }
 
@@ -412,6 +442,26 @@ fn e_struct_lit(p: *mut Parser, sb: *mut StrBuf, node: u32, type_node: u32) -> v
     e_struct_lit_body(p, sb, node);
 }
 
+// Emit the `{ e0, e1, ... }` body of an array literal (P5.6). Directly usable as a C aggregate
+// INITIALIZER (`T a[N] = { .. }`); the element run is `[count, node*]` (see parser `array_lit`).
+// Elements are ordinary expressions (which may themselves be nested `.{...}` — emitted recursively).
+fn e_array_lit_body(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
+    let nd: Node = e_node(p, node);
+    let run: u32 = nd.lhs;
+    let ecount: u32 = e_extra(p, run);
+    sb_put_cstr(sb, "{ ");
+    var ei: u32 = 0;
+    while ei < ecount {
+        if ei > 0 {
+            sb_put_cstr(sb, ", ");
+        }
+        let en: u32 = e_extra(p, run + 1 + ei);
+        e_expr(p, sb, en);
+        ei = ei + 1;
+    }
+    sb_put_cstr(sb, " }");
+}
+
 // ----- statement / block emission -----
 
 // Emit an `if`/`while` condition. A binary-op condition already emits its own outer parentheses
@@ -432,17 +482,18 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
     let nd: Node = e_node(p, n);
     if nd.kind == .let_decl || nd.kind == .var_decl {
         e_indent(sb, depth);
-        e_type(p, sb, nd.lhs); // 0 (no annotation) emits "void" via e_type
-        // The subset always annotates in practice; a bare `let`/`var` with no type would emit
-        // `void`, which is not a valid C variable type. `var` lowers identically to `let` in C.
-        sb_put_cstr(sb, " ");
+        // `e_emit_decl` emits `TYPE name`, or `T name[N]` for a fixed-size array (P5.6). The subset
+        // always annotates in practice; a bare `let`/`var` would emit `void name`. `var` == `let` in C.
         let name: []const u8 = e_tok_text(p, nd.main_token);
-        sb_put_str(sb, name);
+        e_emit_decl(p, sb, nd.lhs, name);
         sb_put_cstr(sb, " = ");
         let init_nd: Node = e_node(p, nd.rhs);
         if init_nd.kind == .struct_lit {
             // Emit a target-typed compound literal using the annotation's type.
             e_struct_lit(p, sb, nd.rhs, nd.lhs);
+        } else if init_nd.kind == .array_lit {
+            // Aggregate initializer `{ .. }` (a C array cannot use a compound-literal cast here).
+            e_array_lit_body(p, sb, nd.rhs);
         } else {
             e_expr(p, sb, nd.rhs);
         }
@@ -664,10 +715,8 @@ fn e_fn_sig(p: *mut Parser, sb: *mut StrBuf, fn_node: u32) -> void {
             }
             let pn: u32 = e_extra(p, params_run + 1 + k);
             let pnode: Node = e_node(p, pn);
-            e_type(p, sb, pnode.lhs);
-            sb_put_cstr(sb, " ");
             let pname: []const u8 = e_tok_text(p, pnode.main_token);
-            sb_put_str(sb, pname);
+            e_emit_decl(p, sb, pnode.lhs, pname); // `T p[N]` for a fixed-array param (P5.6)
             k = k + 1;
         }
     }
@@ -699,10 +748,8 @@ fn e_struct_decl(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
         let name_tok: u32 = e_extra(p, run + 1 + fi * 2);
         let type_node: u32 = e_extra(p, run + 1 + fi * 2 + 1);
         sb_put_cstr(sb, "    ");
-        e_type(p, sb, type_node);
-        sb_put_cstr(sb, " ");
         let fname: []const u8 = e_tok_text(p, name_tok);
-        sb_put_str(sb, fname);
+        e_emit_decl(p, sb, type_node, fname); // `T f[N]` for a fixed-array field (P5.6)
         sb_put_cstr(sb, ";\n");
         fi = fi + 1;
     }
@@ -937,10 +984,10 @@ fn e_gstruct_mono(p: *mut Parser, sb: *mut StrBuf, template_node: u32, concrete_
         let name_tok: u32 = e_extra(p, fields_run + 1 + fi * 2);
         let type_node: u32 = e_extra(p, fields_run + 1 + fi * 2 + 1);
         sb_put_cstr(sb, "    ");
-        e_type(p, sb, type_node);
-        sb_put_cstr(sb, " ");
         let fname: []const u8 = e_tok_text(p, name_tok);
-        sb_put_str(sb, fname);
+        // `T f[N]` for a fixed-array field; the element type param is substituted by the active sub
+        // context (e.g. `[4]T` -> `uint32_t f[4]` when monomorphizing at u32). (P5.6)
+        e_emit_decl(p, sb, type_node, fname);
         sb_put_cstr(sb, ";\n");
         fi = fi + 1;
     }
@@ -978,10 +1025,8 @@ fn e_gfn_sig_mono(p: *mut Parser, sb: *mut StrBuf, fn_node: u32, concrete_node: 
             if emitted > 0 {
                 sb_put_cstr(sb, ", ");
             }
-            e_type(p, sb, pnode.lhs);
-            sb_put_cstr(sb, " ");
             let pname: []const u8 = e_tok_text(p, pnode.main_token);
-            sb_put_str(sb, pname);
+            e_emit_decl(p, sb, pnode.lhs, pname); // `T p[N]` for a fixed-array param (P5.6)
             emitted = emitted + 1;
         }
         k = k + 1;

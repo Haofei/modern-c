@@ -391,6 +391,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-import-test"));
     // selfhost-generic-test exercises P5.5 GENERICS (monomorphization: parser+sema+emit_c -> clang).
     m0_step.dependOn(ctx.cmd("selfhost-generic-test"));
+    // selfhost-array-test exercises P5.6 fixed [N]T ARRAYS (parser+sema+emit_c, incl. array-in-generic -> clang).
+    m0_step.dependOn(ctx.cmd("selfhost-array-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).
