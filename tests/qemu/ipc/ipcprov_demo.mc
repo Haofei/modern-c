@@ -21,6 +21,7 @@ export fn ipcprov_run() -> u32 {
     var pass: u32 = 1;
     proc_table_init(&g_t);
     ipc_provenance_init();
+    ipc_provenance_set_enabled(true); // provenance is OFF by default in production; this fixture exercises it
 
     // Spawn two worker processes: A (slot/pid 1) and B (slot/pid 2).
     let a: u32 = proc_spawn(&g_t, 0x1000, worker);

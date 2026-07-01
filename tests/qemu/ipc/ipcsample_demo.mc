@@ -61,6 +61,7 @@ export fn ipcsample_run() -> u32 {
     var pass: u32 = 1;
     proc_table_init(&g_t);
     ipc_provenance_init();
+    ipc_provenance_set_enabled(true); // provenance is OFF by default in production; this fixture exercises it
 
     let a: u32 = proc_spawn(&g_t, 0x1000, worker);
     let b: u32 = proc_spawn(&g_t, 0x2000, worker);

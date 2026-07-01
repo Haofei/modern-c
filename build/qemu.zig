@@ -473,6 +473,10 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-ipc-test", "Run LLVM-lowered kernel-mediated IPC under QEMU", &.{ "bash", "tools/ipc/ipc-test.sh", "zig-out/bin/mcc", "llvm" });
 
+    _ = h.addScriptTest(ctx, "ipc-bench", "IPC round-trip latency microbench (cycles/round-trip) under QEMU", &.{ "bash", "tools/ipc/ipc-bench.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-ipc-bench", "IPC round-trip latency microbench (LLVM backend) under QEMU", &.{ "bash", "tools/ipc/ipc-bench.sh", "zig-out/bin/mcc", "llvm" });
+
     // async-test (async/await roadmap Phase B): request-id-keyed PARK/WAKE completion broker
     // (kernel/lib/async.mc). A waiter PARKS on submitted requests; a completer wakes it
     // (out-of-order completions) under the real cooperative scheduler. WCR + ASYNC-OK.

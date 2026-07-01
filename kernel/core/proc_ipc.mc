@@ -24,7 +24,11 @@ import "kernel/core/ipc_trace.mc";
 // (the hot-channel opt-out lever for the future fast path). Kept self-contained in this
 // module so it stays disjoint from process.mc.
 global g_ipc_trace: IpcTrace;
-global g_ipc_provenance_enabled: bool = true;
+// Default DISABLED in production: the hot IPC send path must not pay for provenance unless a
+// drainer/observer explicitly turns it on (ipc_provenance_set_enabled(true)). When off, the send
+// funnel does a single global-flag load and skips the emit entirely — no function call, no
+// sample-counter work (see ipc_send_try_id_prov's call site).
+global g_ipc_provenance_enabled: bool = false;
 
 // Sampling lever: record only 1 of every `g_ipc_sample` messages. n=1 records every message;
 // n=0 records none (equivalent to disabled). `g_ipc_sample_counter` counts candidate messages
@@ -188,7 +192,13 @@ fn ipc_send_try_id_prov(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: 
             // Observe-only: record provenance for this successful delivery. Does not affect the
             // result — the same sends succeed/fail exactly as before. The fast path skips this
             // (and, with it, the sampling-counter advance inside ipc_provenance_emit).
-            ipc_provenance_emit(msg.from, dst_pid, &msg);
+            //
+            // HOT-PATH OPT-OUT: gate the emit on the enable flag HERE so the disabled default
+            // (production) costs a single branchless global-flag load and NO function call / no
+            // sample-counter work. ipc_provenance_emit re-checks the flag as belt-and-suspenders.
+            if g_ipc_provenance_enabled {
+                ipc_provenance_emit(msg.from, dst_pid, &msg);
+            }
         }
         return true;
     }
