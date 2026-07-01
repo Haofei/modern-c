@@ -88,10 +88,19 @@ struct SmType {
 }
 
 // A collected function signature: return type + a `(start, count)` window into `SmState.ptypes`.
+// P5.5: a GENERIC fn (one with a leading `comptime T: type` param) sets `is_generic = 1` and
+// records its type-param lexeme offsets; `ret_is_tparam = 1` when the declared return type is
+// exactly that type param (so a call substitutes the concrete type-arg's kind for the result).
+// `param_count` is the DECLARED arity (comptime param included), which the call's arg count must
+// match. Generic-fn bodies are not type-checked in the subset (the type param is abstract).
 struct SmSig {
     ret: SmType,
     param_start: u32,
     param_count: u32,
+    is_generic: u32,
+    tparam_start: usize,
+    tparam_len: usize,
+    ret_is_tparam: u32,
 }
 
 // One struct field: its name (recovered by lexeme offsets, like a named `SmType`) + resolved type.
@@ -101,10 +110,13 @@ struct SmField {
     ty: SmType,
 }
 
-// A collected struct definition: a `(start, count)` window into `SmState.fields`.
+// A collected struct definition: a `(start, count)` window into `SmState.fields`. P5.5: a GENERIC
+// struct (`struct S<T> {..}`) sets `is_generic = 1`; a struct literal targeting it only has its
+// field NAMES checked (field-type matching is skipped, since the field type may be the abstract T).
 struct SmStruct {
     field_start: u32,
     field_count: u32,
+    is_generic: u32,
 }
 
 // One enum variant: its name (recovered by lexeme offsets, like a named `SmType`).
@@ -275,6 +287,19 @@ fn sm_type_from_node(s: *mut SmState, tn: u32) -> SmType {
     }
     if nd.kind == .type_slice_mut {
         return sm_ty(.slice_);
+    }
+    // A generic instance `S<T>` (P5.5) resolves to a `named_` type carrying the BASE name's lexeme
+    // offsets — enough for struct-literal field-NAME checking (which is all generic instances get in
+    // the subset). The concrete type argument is not tracked in the resolved type.
+    if nd.kind == .type_generic {
+        let par: *mut Parser = &s.p;
+        let gst: usize = token_start_at(&par.tl, nd.main_token as usize);
+        let gln: usize = token_len_at(&par.tl, nd.main_token as usize);
+        return .{ .kind = .named_, .ptr_depth = 0, .nstart = gst, .nlen = gln };
+    }
+    // The `type` keyword annotation of a `comptime T: type` param has no value type in the subset.
+    if nd.kind == .type_kw {
+        return sm_ty_unknown();
     }
     if nd.kind == .type_name {
         let par: *mut Parser = &s.p;
@@ -458,6 +483,25 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
     let sig_ref: u32 = strmap_get_or(u32, &s.fns, name, 0);
     let sig_idx: u32 = sig_ref - 1;
     let sig: SmSig = vec_get(SmSig, &s.sigs, sig_idx as usize);
+    // P5.5: a GENERIC call `f(u32, ...)` — the first arg is the type argument. Only ARITY is
+    // checked (against the declared param count, comptime param included); the abstract-typed value
+    // args are not individually type-checked in the subset (see the ledger). The result type is the
+    // concrete type-arg's kind when the return type is the type param, else the declared return.
+    if sig.is_generic == 1 {
+        if argc != sig.param_count {
+            sm_err(s, .arg_count);
+        }
+        if sig.ret_is_tparam == 1 && argc >= 1 {
+            let a0: u32 = sm_extra(s, args_run + 1);
+            let a0n: Node = sm_node(s, a0);
+            if a0n.kind == .ident_expr {
+                let a0text: []const u8 = sm_tok_text(s, a0n.main_token);
+                let ak: SmKind = sm_scalar_kind(a0text);
+                return sm_ty(ak);
+            }
+        }
+        return sig.ret;
+    }
     if argc != sig.param_count {
         sm_err(s, .arg_count);
     }
@@ -519,9 +563,19 @@ fn sm_check_struct_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
     let fcount: u32 = sm_extra(s, run);
     let ek: u32 = expected.kind.raw();
     var known: bool = false;
+    var gen: bool = false;
     if ek == 15 {
         let sname: []const u8 = sm_name_text(s, expected);
         known = strmap_contains(u32, &s.structs, sname);
+        if known {
+            // A GENERIC target struct (P5.5): only field NAMES are checked below — field-TYPE
+            // matching is skipped because the field type may be the abstract type param T.
+            let sref: u32 = strmap_get_or(u32, &s.structs, sname, 0);
+            let sd: SmStruct = vec_get(SmStruct, &s.struct_defs, (sref - 1) as usize);
+            if sd.is_generic == 1 {
+                gen = true;
+            }
+        }
     }
     if !known {
         sm_err(s, .struct_target);
@@ -534,7 +588,7 @@ fn sm_check_struct_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
         if known {
             let ft: SmType = sm_field_type(s, expected, fname_tok);
             let fk: u32 = ft.kind.raw();
-            if fk != 0 {
+            if fk != 0 && !gen {
                 let m: bool = sm_types_match(s, ft, vt);
                 if !m {
                     sm_err(s, .type_mismatch);
@@ -942,6 +996,46 @@ fn sm_check_block(s: *mut SmState, block: u32) -> void {
 
 // ----- module driver (two passes) -----
 
+// Collect one struct definition (name -> fields window) from a field run `[count, (name,type)*]`.
+// Shared by the concrete `struct_decl` and generic `struct_gdecl` paths (P5.5); `is_generic` marks
+// the latter so a targeting struct literal only has its field NAMES checked (see sm_check_struct_lit).
+fn sm_collect_struct(s: *mut SmState, name_tok: u32, srun: u32, is_generic: u32) -> void {
+    let fcount: u32 = sm_extra(s, srun);
+    let fstart: u32 = vec_len(SmField, &s.fields) as u32;
+    let par: *mut Parser = &s.p;
+    var fi: u32 = 0;
+    while fi < fcount {
+        let fn_tok: u32 = sm_extra(s, srun + 1 + fi * 2);
+        let type_node: u32 = sm_extra(s, srun + 1 + fi * 2 + 1);
+        let fty: SmType = sm_type_from_node(s, type_node);
+        let fst: usize = token_start_at(&par.tl, fn_tok as usize);
+        let fln: usize = token_len_at(&par.tl, fn_tok as usize);
+        vec_push(SmField, &s.fields, .{ .nstart = fst, .nlen = fln, .ty = fty });
+        fi = fi + 1;
+    }
+    let sidx: u32 = vec_len(SmStruct, &s.struct_defs) as u32;
+    vec_push(SmStruct, &s.struct_defs, .{ .field_start = fstart, .field_count = fcount, .is_generic = is_generic });
+    let sname: []const u8 = sm_tok_text(s, name_tok);
+    strmap_put(u32, &s.structs, sname, sidx + 1);
+}
+
+// True when a fn's param run contains a `comptime` param (`param_decl.rhs == 1`) — i.e. the fn is
+// generic (P5.5). Used by pass 2 to SKIP type-checking a generic template body (the type param is
+// abstract), and mirrors the pass-1 detection that fills `SmSig.is_generic`.
+fn sm_fn_is_generic(s: *mut SmState, params_run: u32) -> bool {
+    let pcount: u32 = sm_extra(s, params_run);
+    var pi: u32 = 0;
+    while pi < pcount {
+        let pnode: u32 = sm_extra(s, params_run + 1 + pi);
+        let pn: Node = sm_node(s, pnode);
+        if pn.rhs == 1 {
+            return true;
+        }
+        pi = pi + 1;
+    }
+    return false;
+}
+
 // PASS 1: collect one `SmSig` per `fn` decl and register its name -> (index + 1).
 fn sm_collect(s: *mut SmState, root: u32) -> void {
     let rnode: Node = sm_node(s, root);
@@ -952,24 +1046,14 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
         let d: u32 = sm_extra(s, drun + 1 + di);
         let dn: Node = sm_node(s, d);
         if dn.kind == .struct_decl {
-            let srun: u32 = dn.lhs;
-            let fcount: u32 = sm_extra(s, srun);
-            let fstart: u32 = vec_len(SmField, &s.fields) as u32;
-            let par: *mut Parser = &s.p;
-            var fi: u32 = 0;
-            while fi < fcount {
-                let name_tok: u32 = sm_extra(s, srun + 1 + fi * 2);
-                let type_node: u32 = sm_extra(s, srun + 1 + fi * 2 + 1);
-                let fty: SmType = sm_type_from_node(s, type_node);
-                let fst: usize = token_start_at(&par.tl, name_tok as usize);
-                let fln: usize = token_len_at(&par.tl, name_tok as usize);
-                vec_push(SmField, &s.fields, .{ .nstart = fst, .nlen = fln, .ty = fty });
-                fi = fi + 1;
-            }
-            let sidx: u32 = vec_len(SmStruct, &s.struct_defs) as u32;
-            vec_push(SmStruct, &s.struct_defs, .{ .field_start = fstart, .field_count = fcount });
-            let sname: []const u8 = sm_tok_text(s, dn.main_token);
-            strmap_put(u32, &s.structs, sname, sidx + 1);
+            sm_collect_struct(s, dn.main_token, dn.lhs, 0);
+        }
+        if dn.kind == .struct_gdecl {
+            // Generic struct rec [tparam_tok, fields_run, exported]; register the template by name
+            // with its fields (field types may reference the abstract type param T).
+            let grec: u32 = dn.lhs;
+            let gfields: u32 = sm_extra(s, grec + 1);
+            sm_collect_struct(s, dn.main_token, gfields, 1);
         }
         if dn.kind == .enum_decl {
             let erec: u32 = dn.lhs;
@@ -1004,16 +1088,42 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             let ret_ty: SmType = sm_type_from_node(s, ret_node);
             let pcount: u32 = sm_extra(s, params_run);
             let pstart: u32 = vec_len(SmType, &s.ptypes) as u32;
+            // P5.5: scan params for a leading `comptime T: type` param (a `param_decl` with rhs == 1
+            // whose type node is `type_kw`) — that names the generic type param T.
+            var is_generic: u32 = 0;
+            var tp_start: usize = 0;
+            var tp_len: usize = 0;
+            let gpar: *mut Parser = &s.p;
             var pi: u32 = 0;
             while pi < pcount {
                 let pnode: u32 = sm_extra(s, params_run + 1 + pi);
                 let pn: Node = sm_node(s, pnode);
                 let pty: SmType = sm_type_from_node(s, pn.lhs);
                 vec_push(SmType, &s.ptypes, pty);
+                if pn.rhs == 1 {
+                    is_generic = 1;
+                    tp_start = token_start_at(&gpar.tl, pn.main_token as usize);
+                    tp_len = token_len_at(&gpar.tl, pn.main_token as usize);
+                }
                 pi = pi + 1;
             }
+            // `ret_is_tparam`: the declared return type is exactly the type param (compared by
+            // lexeme). A call then yields the concrete type-arg's kind rather than a `named_` T.
+            var ret_is_tp: u32 = 0;
+            if is_generic == 1 {
+                let rn: Node = sm_node(s, ret_node);
+                if rn.kind == .type_name {
+                    let rtext: []const u8 = sm_tok_text(s, rn.main_token);
+                    let src: []const u8 = gpar.source;
+                    let tpend: usize = tp_start + tp_len;
+                    let tptext: []const u8 = src[tp_start..tpend];
+                    if mem_eql(rtext, tptext) {
+                        ret_is_tp = 1;
+                    }
+                }
+            }
             let sig_idx: u32 = vec_len(SmSig, &s.sigs) as u32;
-            vec_push(SmSig, &s.sigs, .{ .ret = ret_ty, .param_start = pstart, .param_count = pcount });
+            vec_push(SmSig, &s.sigs, .{ .ret = ret_ty, .param_start = pstart, .param_count = pcount, .is_generic = is_generic, .tparam_start = tp_start, .tparam_len = tp_len, .ret_is_tparam = ret_is_tp });
             let name: []const u8 = sm_tok_text(s, dn.main_token);
             strmap_put(u32, &s.fns, name, sig_idx + 1);
         }
@@ -1035,6 +1145,14 @@ fn sm_check_fns(s: *mut SmState, root: u32) -> void {
             let params_run: u32 = sm_extra(s, frec + 1);
             let ret_node: u32 = sm_extra(s, frec + 2);
             let body: u32 = sm_extra(s, frec + 3);
+            // P5.5: SKIP generic templates — their bodies reference the abstract type param T (which
+            // has no concrete type here), so checking is deferred to each monomorphic instantiation
+            // (not modeled in the subset). A generic call site is still arity-checked (sm_check_call).
+            let generic: bool = sm_fn_is_generic(s, params_run);
+            if generic {
+                di = di + 1;
+                continue;
+            }
             // Reset the locals + mutability tables (reusable after free) and seed the params.
             strmap_free(SmType, &s.locals);
             strmap_free(u32, &s.muts);

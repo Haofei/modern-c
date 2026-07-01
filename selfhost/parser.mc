@@ -84,6 +84,15 @@ open enum NodeKind: u32 {
                       //    A NO-OP for sema/emit: the imported file's decls are supplied by the
                       //    loader (selfhost/main.mc), which flattens all modules into one source by
                       //    textual concatenation, so nothing needs type-checking or emitting here.
+    // ----- P5.5 generics (monomorphized) additions (appended to keep prior ordinals stable) -----
+    type_generic,     // 42 `S<T>` in type position: main_token = base-name ident; lhs = single
+                      //    type-arg node (ONE type param in the subset — nested/multi is deferred).
+    type_kw,          // 43 the `type` keyword as a type (a `comptime T: type` param's annotation).
+    struct_gdecl,     // 44 generic struct decl `struct S<T> { ... }`: main_token = name; lhs = fixed
+                      //    rec [tparam_tok, fields_run, exported]. Fields run is as `struct_decl`.
+                      //    (A generic FUNCTION reuses `fn_decl`: its type param is a leading
+                      //    `comptime T: type` param — a `param_decl` whose lhs is a `type_kw` node
+                      //    and whose rhs = 1 marks it comptime.)
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -108,6 +117,13 @@ struct Parser {
     root: u32,
     err_count: u32,
     first_err_tok: u32,
+    // P5.5 emit-time monomorphization scratch (set/cleared by selfhost/emit_c.mc while emitting a
+    // generic template's monomorphic copy): when `sub_concrete` != 0, a `type_name` whose lexeme is
+    // `source[sub_name_start .. sub_name_start+sub_name_len]` (the type param, e.g. `T`) is emitted
+    // as the concrete type node `sub_concrete` instead. Not used by parse/sema; 0 means inactive.
+    sub_name_start: usize,
+    sub_name_len: usize,
+    sub_concrete: u32,
 }
 
 // Prefix-operator operand binding power: above every binary `left_bp` (max 19, `* / %`) so a
@@ -283,9 +299,23 @@ fn parse_type(p: *mut Parser) -> u32 {
         p_advance(p);
         return add_node(p, .type_name, vt, 0, 0);
     }
+    // The `type` keyword as a type — only appears as a `comptime T: type` param annotation (P5.5).
+    if at(p, .kw_type) {
+        let tt: u32 = p.tok as u32;
+        p_advance(p);
+        return add_node(p, .type_kw, tt, 0, 0);
+    }
     let name_tok: u32 = p.tok as u32;
     if !expect(p, .identifier) {
         return 0;
+    }
+    // A generic instance `S<T>` (P5.5): the `<` is unambiguous in type position (no comparison
+    // operators occur here). ONE type argument is supported; nested/multi type args are deferred.
+    if at(p, .less) {
+        p_advance(p); // `<`
+        let arg: u32 = parse_type(p);
+        expect(p, .greater);
+        return add_node(p, .type_generic, name_tok, arg, 0);
     }
     return add_node(p, .type_name, name_tok, 0, 0);
 }
@@ -626,11 +656,17 @@ fn parse_fn(p: *mut Parser, exported: u32) -> u32 {
     var params: Vec<u32> = vec_new(u32, p.a);
     if !at(p, .r_paren) {
         while true {
+            // A leading `comptime` marks a compile-time param; with a `type` annotation it is the
+            // generic type param (`comptime T: type`, P5.5). `rhs = is_comptime` records the marker.
+            var is_comptime: u32 = 0;
+            if eat(p, .kw_comptime) {
+                is_comptime = 1;
+            }
             let param_name: u32 = p.tok as u32;
             expect(p, .identifier);
             expect(p, .colon);
             let param_ty: u32 = parse_type(p);
-            let param: u32 = add_node(p, .param_decl, param_name, param_ty, 0);
+            let param: u32 = add_node(p, .param_decl, param_name, param_ty, is_comptime);
             vec_push(u32, &params, param);
             if !eat(p, .comma) {
                 break;
@@ -657,6 +693,16 @@ fn parse_struct(p: *mut Parser, exported: u32) -> u32 {
     p_advance(p); // `struct`
     let sname: u32 = p.tok as u32;
     expect(p, .identifier);
+    // An optional `<T>` type-param list marks a GENERIC struct (P5.5). ONE param is supported.
+    var tparam_tok: u32 = 0;
+    var is_generic: u32 = 0;
+    if at(p, .less) {
+        p_advance(p); // `<`
+        tparam_tok = p.tok as u32;
+        expect(p, .identifier);
+        expect(p, .greater);
+        is_generic = 1;
+    }
     expect(p, .l_brace);
     var pairs: Vec<u32> = vec_new(u32, p.a); // (name_tok, type_node) pairs
     if !at(p, .r_brace) {
@@ -678,6 +724,14 @@ fn parse_struct(p: *mut Parser, exported: u32) -> u32 {
     expect(p, .r_brace);
     let run: u32 = emit_pair_list(p, &pairs);
     vec_free(u32, &pairs);
+    if is_generic == 1 {
+        // Generic struct: fixed rec [tparam_tok, fields_run, exported].
+        let grec: u32 = vec_len(u32, &p.extra) as u32;
+        vec_push(u32, &p.extra, tparam_tok);
+        vec_push(u32, &p.extra, run);
+        vec_push(u32, &p.extra, exported);
+        return add_node(p, .struct_gdecl, sname, grec, 0);
+    }
     return add_node(p, .struct_decl, sname, run, exported);
 }
 
@@ -820,6 +874,9 @@ export fn parser_run(source: []const u8, a: *mut dyn Allocator) -> Parser {
         .root = 0,
         .err_count = 0,
         .first_err_tok = 0,
+        .sub_name_start = 0,
+        .sub_name_len = 0,
+        .sub_concrete = 0,
     };
     lex(source, &p.tl);
     // Node index 0 is the reserved `.invalid` sentinel ("none").

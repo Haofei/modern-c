@@ -81,6 +81,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "selfhost-enum-test", "Build, link, and run the P5.2 self-hosted ENUM gate (selfhost parser+sema+emit_c): open enum decl with repr + .variant literals (typed init + assignment) + .raw() -> clang -> run", &.{ "bash", "tools/toolchain/selfhost-enum-test.sh", "zig-out/bin/mcc" });
     _ = h.addScriptTest(ctx, "selfhost-switch-test", "Build, link, and run the P5.3 self-hosted SWITCH gate (selfhost parser+sema+emit_c): switch over an enum subject with .variant arms + _ default + real exhaustiveness (unknown-variant + nonexhaustive rejects) -> clang -> run", &.{ "bash", "tools/toolchain/selfhost-switch-test.sh", "zig-out/bin/mcc" });
     _ = h.addScriptTest(ctx, "selfhost-import-test", "Build the mcc2 CLI and run the P5.4 self-hosted multi-module IMPORT gate (selfhost/main.mc loader + parser import_decl + emit_c prototypes): linear import round-trip + diamond dedup -> clang -> run", &.{ "bash", "tools/toolchain/selfhost-import-test.sh", "zig-out/bin/mcc" });
+    _ = h.addScriptTest(ctx, "selfhost-generic-test", "Build, link, and run the P5.5 self-hosted GENERICS gate (selfhost parser+sema+emit_c): generic struct + generic fn (comptime T) monomorphized at two scalar types with dedup + wrong-arity reject -> clang -> run", &.{ "bash", "tools/toolchain/selfhost-generic-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "pkg-test", "Build a package from its manifest with mcc-pkg, link, and run it", &.{ "bash", "tools/toolchain/pkg-test.sh", "zig-out/bin/mcc" });
 

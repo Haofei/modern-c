@@ -116,9 +116,81 @@ fn e_type(p: *mut Parser, sb: *mut StrBuf, tn: u32) -> void {
         sb_put_cstr(sb, "*");
         return;
     }
+    // A generic instance `S<T>` (P5.5) emits the MANGLED monomorphic name `S_<concrete>` (the type
+    // arg's lexeme, with the active type param substituted). This matches the typedef emitted by
+    // `e_gstruct_mono` and the mangled names elsewhere.
+    if nd.kind == .type_generic {
+        let base: []const u8 = e_tok_text(p, nd.main_token);
+        sb_put_str(sb, base);
+        sb_put_cstr(sb, "_");
+        let arg_lex: []const u8 = e_type_arg_lexeme(p, nd.lhs);
+        sb_put_str(sb, arg_lex);
+        return;
+    }
+    // The `type` keyword annotation (a `comptime T: type` param) has no C spelling; it is dropped
+    // from emitted signatures (see `e_gfn_sig_mono`), so nothing is emitted here.
+    if nd.kind == .type_kw {
+        return;
+    }
     // type_name
     let txt: []const u8 = e_tok_text(p, nd.main_token);
+    // Monomorphization substitution (P5.5): when this names the active type param, emit the concrete
+    // type node instead (e.g. `T` -> `uint32_t`). The concrete node is not the type param, so the
+    // recursion terminates.
+    if p.sub_concrete != 0 {
+        let subname: []const u8 = e_sub_name(p);
+        let hit: bool = mem_eql(txt, subname);
+        if hit {
+            e_type(p, sb, p.sub_concrete);
+            return;
+        }
+    }
     e_scalar_name(sb, txt);
+}
+
+// The source lexeme of the ACTIVE type param (`source[sub_name_start .. +sub_name_len]`), recovered
+// through a plain local per gap G13. Only meaningful while `sub_concrete != 0`.
+fn e_sub_name(p: *mut Parser) -> []const u8 {
+    let src: []const u8 = p.source;
+    let st: usize = p.sub_name_start;
+    let en: usize = st + p.sub_name_len;
+    return src[st..en];
+}
+
+// The lexeme of a node's `main_token` (works for both a `type_name` type arg and an `ident_expr`
+// type argument at a call site — both carry the concrete type spelling, e.g. `u32`, in `main_token`).
+fn e_node_lexeme(p: *mut Parser, node: u32) -> []const u8 {
+    let nd: Node = e_node(p, node);
+    return e_tok_text(p, nd.main_token);
+}
+
+// The effective concrete lexeme of a generic type argument node: the type param's substitution when
+// active and matching, else the node's own lexeme. Used to build mangled names (`S_<concrete>`).
+fn e_type_arg_lexeme(p: *mut Parser, arg_node: u32) -> []const u8 {
+    let nd: Node = e_node(p, arg_node);
+    let txt: []const u8 = e_tok_text(p, nd.main_token);
+    if p.sub_concrete != 0 {
+        if nd.kind == .type_name {
+            let subname: []const u8 = e_sub_name(p);
+            let hit: bool = mem_eql(txt, subname);
+            if hit {
+                return e_node_lexeme(p, p.sub_concrete);
+            }
+        }
+    }
+    return txt;
+}
+
+// Set / clear the monomorphization substitution context on the shared arena (see the Parser fields):
+// `tparam_tok` names the type param; `concrete_node` is the concrete type/ident node to substitute.
+fn e_set_sub(p: *mut Parser, tparam_tok: u32, concrete_node: u32) -> void {
+    p.sub_name_start = token_start_at(&p.tl, tparam_tok as usize);
+    p.sub_name_len = token_len_at(&p.tl, tparam_tok as usize);
+    p.sub_concrete = concrete_node;
+}
+
+fn e_clear_sub(p: *mut Parser) -> void {
+    p.sub_concrete = 0;
 }
 
 // ----- expression emission -----
@@ -194,6 +266,33 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
             let is_raw: bool = mem_eql(fname, mem.as_bytes(&b_raw));
             if is_raw && argc0 == 0 {
                 e_expr(p, sb, cnode.lhs); // emit just the receiver
+                return;
+            }
+        }
+        // P5.5: a GENERIC call `f(u32, ...)` lowers to `f_u32(...)` — the mangled monomorphic callee
+        // with the leading type argument DROPPED (it selected the instantiation, it is not a value).
+        if cnode.kind == .ident_expr {
+            let cname: []const u8 = e_tok_text(p, cnode.main_token);
+            let is_gen: bool = e_is_generic_fn(p, cname);
+            if is_gen {
+                let grun: u32 = nd.rhs;
+                let gargc: u32 = e_extra(p, grun);
+                let a0: u32 = e_extra(p, grun + 1);
+                let a0lex: []const u8 = e_node_lexeme(p, a0);
+                sb_put_str(sb, cname);
+                sb_put_cstr(sb, "_");
+                sb_put_str(sb, a0lex);
+                sb_put_cstr(sb, "(");
+                var gk: u32 = 1; // skip the type arg at index 0
+                while gk < gargc {
+                    if gk > 1 {
+                        sb_put_cstr(sb, ", ");
+                    }
+                    let garg: u32 = e_extra(p, grun + 1 + gk);
+                    e_expr(p, sb, garg);
+                    gk = gk + 1;
+                }
+                sb_put_cstr(sb, ")");
                 return;
             }
         }
@@ -647,6 +746,275 @@ fn e_enum_decl(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
     sb_put_cstr(sb, "};\n\n");
 }
 
+// ----- P5.5 monomorphization -----
+
+// True when a fn's param run contains a `comptime` param (`param_decl.rhs == 1`) — i.e. the fn is a
+// generic template. Such templates are NOT emitted directly; one monomorphic copy is emitted per
+// distinct concrete type argument used at a call site (see `e_module`).
+fn e_fn_has_comptime(p: *mut Parser, params_run: u32) -> bool {
+    let pc: u32 = e_extra(p, params_run);
+    var i: u32 = 0;
+    while i < pc {
+        let pn: u32 = e_extra(p, params_run + 1 + i);
+        let pnode: Node = e_node(p, pn);
+        if pnode.rhs == 1 {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// True when `name_text` names a generic fn template in this module (a `fn_decl` with a comptime
+// param). Used to route a call `f(u32, ...)` to the mangled monomorphic callee.
+fn e_is_generic_fn(p: *mut Parser, name_text: []const u8) -> bool {
+    let root: u32 = p.root;
+    let rnode: Node = e_node(p, root);
+    let run: u32 = rnode.lhs;
+    let count: u32 = e_extra(p, run);
+    var i: u32 = 0;
+    while i < count {
+        let d: u32 = e_extra(p, run + 1 + i);
+        let dn: Node = e_node(p, d);
+        if dn.kind == .fn_decl {
+            let nm: []const u8 = e_tok_text(p, dn.main_token);
+            let m: bool = mem_eql(name_text, nm);
+            if m {
+                let frec: u32 = dn.lhs;
+                let params_run: u32 = e_extra(p, frec + 1);
+                let has: bool = e_fn_has_comptime(p, params_run);
+                if has {
+                    return true;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// The type param's name token of a generic fn (its `comptime` param's `main_token`), or 0 if none.
+fn e_gfn_tparam(p: *mut Parser, fn_node: u32) -> u32 {
+    let nd: Node = e_node(p, fn_node);
+    let frec: u32 = nd.lhs;
+    let params_run: u32 = e_extra(p, frec + 1);
+    let pc: u32 = e_extra(p, params_run);
+    var i: u32 = 0;
+    while i < pc {
+        let pn: u32 = e_extra(p, params_run + 1 + i);
+        let pnode: Node = e_node(p, pn);
+        if pnode.rhs == 1 {
+            return pnode.main_token;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// True when `txt` is a supported CONCRETE scalar type spelling. Instantiations are collected ONLY at
+// concrete scalar type args (the subset's scope); this critically EXCLUDES the abstract type param
+// itself (e.g. `Box<T>` in a template's own signature), which would otherwise self-substitute
+// `T -> T` forever. Nested/struct type args are deferred (see the ledger).
+fn e_is_scalar_lexeme(txt: []const u8) -> bool {
+    var b_u8: [2]u8 = .{ 117, 56 }; // "u8"
+    if mem_eql(txt, mem.as_bytes(&b_u8)) { return true; }
+    var b_u16: [3]u8 = .{ 117, 49, 54 }; // "u16"
+    if mem_eql(txt, mem.as_bytes(&b_u16)) { return true; }
+    var b_u32: [3]u8 = .{ 117, 51, 50 }; // "u32"
+    if mem_eql(txt, mem.as_bytes(&b_u32)) { return true; }
+    var b_u64: [3]u8 = .{ 117, 54, 52 }; // "u64"
+    if mem_eql(txt, mem.as_bytes(&b_u64)) { return true; }
+    var b_usize: [5]u8 = .{ 117, 115, 105, 122, 101 }; // "usize"
+    if mem_eql(txt, mem.as_bytes(&b_usize)) { return true; }
+    var b_i8: [2]u8 = .{ 105, 56 }; // "i8"
+    if mem_eql(txt, mem.as_bytes(&b_i8)) { return true; }
+    var b_i16: [3]u8 = .{ 105, 49, 54 }; // "i16"
+    if mem_eql(txt, mem.as_bytes(&b_i16)) { return true; }
+    var b_i32: [3]u8 = .{ 105, 51, 50 }; // "i32"
+    if mem_eql(txt, mem.as_bytes(&b_i32)) { return true; }
+    var b_i64: [3]u8 = .{ 105, 54, 52 }; // "i64"
+    if mem_eql(txt, mem.as_bytes(&b_i64)) { return true; }
+    var b_isize: [5]u8 = .{ 105, 115, 105, 122, 101 }; // "isize"
+    if mem_eql(txt, mem.as_bytes(&b_isize)) { return true; }
+    return false;
+}
+
+// True when a concrete type/ident node whose lexeme equals `arg`'s is already in `out` (dedup by
+// lexeme — the subset has no set type, so instantiations are deduped with a linear scan; gap-noted).
+fn e_arg_present(p: *mut Parser, out: *Vec<u32>, arg: u32) -> bool {
+    let at: []const u8 = e_node_lexeme(p, arg);
+    let n: usize = vec_len(u32, out);
+    var i: usize = 0;
+    while i < n {
+        let ex: u32 = vec_get(u32, out, i);
+        let et: []const u8 = e_node_lexeme(p, ex);
+        let m: bool = mem_eql(at, et);
+        if m {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Collect the DISTINCT concrete type-arg nodes used with generic struct base `base_text` — every
+// `type_generic` node in the flat arena whose base name matches (deduped by lexeme). Scanning the
+// whole node array is simpler than a tree walk and finds every use regardless of context.
+fn e_collect_type_insts(p: *mut Parser, base_text: []const u8, out: *mut Vec<u32>) -> void {
+    let total: u32 = vec_len(Node, &p.nodes) as u32;
+    var i: u32 = 1;
+    while i < total {
+        let nd: Node = e_node(p, i);
+        if nd.kind == .type_generic {
+            let b: []const u8 = e_tok_text(p, nd.main_token);
+            let m: bool = mem_eql(base_text, b);
+            if m {
+                let arg_lex: []const u8 = e_node_lexeme(p, nd.lhs);
+                let concrete: bool = e_is_scalar_lexeme(arg_lex);
+                if concrete {
+                    let present: bool = e_arg_present(p, &*out, nd.lhs);
+                    if !present {
+                        vec_push(u32, out, nd.lhs);
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
+// Collect the DISTINCT concrete type-arg nodes used at calls to generic fn `fn_text` — the first arg
+// (the type argument) of every `call` whose callee ident matches (deduped by lexeme).
+fn e_collect_call_insts(p: *mut Parser, fn_text: []const u8, out: *mut Vec<u32>) -> void {
+    let total: u32 = vec_len(Node, &p.nodes) as u32;
+    var i: u32 = 1;
+    while i < total {
+        let nd: Node = e_node(p, i);
+        if nd.kind == .call {
+            let cnode: Node = e_node(p, nd.lhs);
+            if cnode.kind == .ident_expr {
+                let cname: []const u8 = e_tok_text(p, cnode.main_token);
+                let m: bool = mem_eql(fn_text, cname);
+                if m {
+                    let arg_run: u32 = nd.rhs;
+                    let argc: u32 = e_extra(p, arg_run);
+                    if argc >= 1 {
+                        let a0: u32 = e_extra(p, arg_run + 1);
+                        let a0lex: []const u8 = e_node_lexeme(p, a0);
+                        let concrete: bool = e_is_scalar_lexeme(a0lex);
+                        if concrete {
+                            let present: bool = e_arg_present(p, &*out, a0);
+                            if !present {
+                                vec_push(u32, out, a0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
+// Emit ONE monomorphic struct `typedef struct S_<concrete> { ... } S_<concrete>;` for generic
+// template `template_node` at concrete type `concrete_node`, substituting the type param throughout.
+fn e_gstruct_mono(p: *mut Parser, sb: *mut StrBuf, template_node: u32, concrete_node: u32) -> void {
+    let nd: Node = e_node(p, template_node);
+    let grec: u32 = nd.lhs;
+    let tparam_tok: u32 = e_extra(p, grec);
+    let fields_run: u32 = e_extra(p, grec + 1);
+    e_set_sub(p, tparam_tok, concrete_node);
+    let base: []const u8 = e_tok_text(p, nd.main_token);
+    let clex: []const u8 = e_node_lexeme(p, concrete_node);
+    sb_put_cstr(sb, "typedef struct ");
+    sb_put_str(sb, base);
+    sb_put_cstr(sb, "_");
+    sb_put_str(sb, clex);
+    sb_put_cstr(sb, " {\n");
+    let fcount: u32 = e_extra(p, fields_run);
+    var fi: u32 = 0;
+    while fi < fcount {
+        let name_tok: u32 = e_extra(p, fields_run + 1 + fi * 2);
+        let type_node: u32 = e_extra(p, fields_run + 1 + fi * 2 + 1);
+        sb_put_cstr(sb, "    ");
+        e_type(p, sb, type_node);
+        sb_put_cstr(sb, " ");
+        let fname: []const u8 = e_tok_text(p, name_tok);
+        sb_put_str(sb, fname);
+        sb_put_cstr(sb, ";\n");
+        fi = fi + 1;
+    }
+    sb_put_cstr(sb, "} ");
+    sb_put_str(sb, base);
+    sb_put_cstr(sb, "_");
+    sb_put_str(sb, clex);
+    sb_put_cstr(sb, ";\n\n");
+    e_clear_sub(p);
+}
+
+// Emit a monomorphic fn signature `RET NAME_<concrete>(PARAMS)` for generic template `fn_node` at
+// `concrete_node` — the comptime type param is DROPPED and the type param is substituted in the
+// return type and remaining param types. The substitution context must be set by the caller.
+fn e_gfn_sig_mono(p: *mut Parser, sb: *mut StrBuf, fn_node: u32, concrete_node: u32) -> void {
+    let nd: Node = e_node(p, fn_node);
+    let frec: u32 = nd.lhs;
+    let params_run: u32 = e_extra(p, frec + 1);
+    let ret_ty: u32 = e_extra(p, frec + 2);
+    e_type(p, sb, ret_ty);
+    sb_put_cstr(sb, " ");
+    let base: []const u8 = e_tok_text(p, nd.main_token);
+    let clex: []const u8 = e_node_lexeme(p, concrete_node);
+    sb_put_str(sb, base);
+    sb_put_cstr(sb, "_");
+    sb_put_str(sb, clex);
+    sb_put_cstr(sb, "(");
+    let pcount: u32 = e_extra(p, params_run);
+    var emitted: u32 = 0;
+    var k: u32 = 0;
+    while k < pcount {
+        let pn: u32 = e_extra(p, params_run + 1 + k);
+        let pnode: Node = e_node(p, pn);
+        if pnode.rhs != 1 {
+            if emitted > 0 {
+                sb_put_cstr(sb, ", ");
+            }
+            e_type(p, sb, pnode.lhs);
+            sb_put_cstr(sb, " ");
+            let pname: []const u8 = e_tok_text(p, pnode.main_token);
+            sb_put_str(sb, pname);
+            emitted = emitted + 1;
+        }
+        k = k + 1;
+    }
+    if emitted == 0 {
+        sb_put_cstr(sb, "void");
+    }
+    sb_put_cstr(sb, ")");
+}
+
+// Emit one monomorphic fn PROTOTYPE for generic template `fn_node` at `concrete_node`.
+fn e_gfn_proto_mono(p: *mut Parser, sb: *mut StrBuf, fn_node: u32, concrete_node: u32) -> void {
+    let tparam_tok: u32 = e_gfn_tparam(p, fn_node);
+    e_set_sub(p, tparam_tok, concrete_node);
+    e_gfn_sig_mono(p, sb, fn_node, concrete_node);
+    sb_put_cstr(sb, ";\n");
+    e_clear_sub(p);
+}
+
+// Emit one monomorphic fn DEFINITION for generic template `fn_node` at `concrete_node`.
+fn e_gfn_mono(p: *mut Parser, sb: *mut StrBuf, fn_node: u32, concrete_node: u32) -> void {
+    let nd: Node = e_node(p, fn_node);
+    let frec: u32 = nd.lhs;
+    let body: u32 = e_extra(p, frec + 3);
+    let tparam_tok: u32 = e_gfn_tparam(p, fn_node);
+    e_set_sub(p, tparam_tok, concrete_node);
+    e_gfn_sig_mono(p, sb, fn_node, concrete_node);
+    sb_put_cstr(sb, " ");
+    e_block(p, sb, body, 0);
+    sb_put_cstr(sb, "\n\n");
+    e_clear_sub(p);
+}
+
 // Emit the whole module: the fixed prelude, every enum then struct typedef (so they precede any
 // use), then one C function per `fn` decl.
 fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
@@ -673,17 +1041,69 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
         }
         si = si + 1;
     }
+    // P5.5 monomorphic structs: for each generic struct template, emit one typedef per distinct
+    // concrete type argument used anywhere in the module (deduped). These precede all functions.
+    var gsi: u32 = 0;
+    while gsi < count {
+        let gd: u32 = e_extra(p, run + 1 + gsi);
+        let gdn: Node = e_node(p, gd);
+        if gdn.kind == .struct_gdecl {
+            let base: []const u8 = e_tok_text(p, gdn.main_token);
+            var insts: Vec<u32> = vec_new(u32, p.a);
+            e_collect_type_insts(p, base, &insts);
+            let ni: usize = vec_len(u32, &insts);
+            var ii: usize = 0;
+            while ii < ni {
+                let concrete: u32 = vec_get(u32, &insts, ii);
+                e_gstruct_mono(p, sb, gd, concrete);
+                ii = ii + 1;
+            }
+            vec_free(u32, &insts);
+        }
+        gsi = gsi + 1;
+    }
     // Forward prototypes for every function, so a call resolves regardless of the order the loader
-    // concatenated the modules in (an importer may textually precede the module it depends on).
+    // concatenated the modules in (an importer may textually precede the module it depends on). A
+    // generic template is skipped here and emitted as monomorphic prototypes below.
     var fi: u32 = 0;
     while fi < count {
         let fd: u32 = e_extra(p, run + 1 + fi);
         let fdn: Node = e_node(p, fd);
         if fdn.kind == .fn_decl {
-            e_fn_sig(p, sb, fd);
-            sb_put_cstr(sb, ";\n");
+            let frec: u32 = fdn.lhs;
+            let params_run: u32 = e_extra(p, frec + 1);
+            let generic: bool = e_fn_has_comptime(p, params_run);
+            if !generic {
+                e_fn_sig(p, sb, fd);
+                sb_put_cstr(sb, ";\n");
+            }
         }
         fi = fi + 1;
+    }
+    // P5.5 monomorphic fn prototypes: one per distinct concrete type argument at a call site.
+    var gpi: u32 = 0;
+    while gpi < count {
+        let gpd: u32 = e_extra(p, run + 1 + gpi);
+        let gpdn: Node = e_node(p, gpd);
+        if gpdn.kind == .fn_decl {
+            let frec2: u32 = gpdn.lhs;
+            let params_run2: u32 = e_extra(p, frec2 + 1);
+            let generic2: bool = e_fn_has_comptime(p, params_run2);
+            if generic2 {
+                let fname: []const u8 = e_tok_text(p, gpdn.main_token);
+                var pinsts: Vec<u32> = vec_new(u32, p.a);
+                e_collect_call_insts(p, fname, &pinsts);
+                let pn2: usize = vec_len(u32, &pinsts);
+                var pj: usize = 0;
+                while pj < pn2 {
+                    let pconcrete: u32 = vec_get(u32, &pinsts, pj);
+                    e_gfn_proto_mono(p, sb, gpd, pconcrete);
+                    pj = pj + 1;
+                }
+                vec_free(u32, &pinsts);
+            }
+        }
+        gpi = gpi + 1;
     }
     sb_put_cstr(sb, "\n");
     var i: u32 = 0;
@@ -691,9 +1111,39 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
         let d: u32 = e_extra(p, run + 1 + i);
         let dn: Node = e_node(p, d);
         if dn.kind == .fn_decl {
-            e_fn(p, sb, d);
+            let frec3: u32 = dn.lhs;
+            let params_run3: u32 = e_extra(p, frec3 + 1);
+            let generic3: bool = e_fn_has_comptime(p, params_run3);
+            if !generic3 {
+                e_fn(p, sb, d);
+            }
         }
         i = i + 1;
+    }
+    // P5.5 monomorphic fn definitions: one per distinct concrete type argument at a call site.
+    var gfi: u32 = 0;
+    while gfi < count {
+        let gfd: u32 = e_extra(p, run + 1 + gfi);
+        let gfdn: Node = e_node(p, gfd);
+        if gfdn.kind == .fn_decl {
+            let frec4: u32 = gfdn.lhs;
+            let params_run4: u32 = e_extra(p, frec4 + 1);
+            let generic4: bool = e_fn_has_comptime(p, params_run4);
+            if generic4 {
+                let fname2: []const u8 = e_tok_text(p, gfdn.main_token);
+                var dinsts: Vec<u32> = vec_new(u32, p.a);
+                e_collect_call_insts(p, fname2, &dinsts);
+                let dn2: usize = vec_len(u32, &dinsts);
+                var dj: usize = 0;
+                while dj < dn2 {
+                    let dconcrete: u32 = vec_get(u32, &dinsts, dj);
+                    e_gfn_mono(p, sb, gfd, dconcrete);
+                    dj = dj + 1;
+                }
+                vec_free(u32, &dinsts);
+            }
+        }
+        gfi = gfi + 1;
     }
 }
 
