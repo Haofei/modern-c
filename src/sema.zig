@@ -4028,7 +4028,9 @@ pub const Checker = struct {
 
     fn checkNullPointerInitializer(self: *Checker, target: TypeClass, expr: ast.Expr) bool {
         if (!isNullLiteral(expr)) return false;
-        if (isNullablePointerLike(target) or target == .nullable_dyn_trait) return true;
+        // `null` initializes any nullable: the pointer nullables (sentinel repr) and
+        // a value optional `?T` (tagged repr, `present = false`).
+        if (isNullablePointerLike(target) or target == .nullable_dyn_trait or target == .nullable_value) return true;
         if (isNonNullPointerLike(target)) {
             self.errorCode(expr.span, "E_NULL_NON_NULL_POINTER", "null cannot initialize a non-null pointer");
             return true;
@@ -4412,7 +4414,8 @@ pub const Checker = struct {
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type") else false;
         const secret_checked = target == .secret and self.checkSecretWrapInitializer(target_ty, expr, ctx);
-        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, returned)) {
+        const value_optional_checked = checkValueOptionalInitializer(target_ty, target, expr, returned, ctx);
+        if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !dyn_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !value_optional_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         }
     }
@@ -4868,6 +4871,20 @@ pub const Checker = struct {
 
         const left_is_null = left == .null_literal;
         const right_is_null = right == .null_literal;
+
+        // A value optional (`?T`, tagged repr) supports `opt == null` / `opt != null`,
+        // testing the `present` tag. Only equality is defined (like the pointers).
+        if (left == .nullable_value or right == .nullable_value) {
+            if ((left == .nullable_value and right_is_null) or (right == .nullable_value and left_is_null)) {
+                if (op != .eq and op != .ne) {
+                    self.errorCode(span, "E_POINTER_ORDERING", "optional values support only equality comparisons against null");
+                }
+                return;
+            }
+            // Comparing a value optional against a non-null operand has no meaning
+            // without narrowing it first; fall through to the mismatch diagnostic.
+        }
+
         const left_ty = exprResultType(left_expr, ctx) orelse exprStorageType(left_expr, ctx);
         const right_ty = exprResultType(right_expr, ctx) orelse exprStorageType(right_expr, ctx);
         const left_is_view = if (left_ty) |ty| viewType(ty) != null else false;
@@ -5247,8 +5264,15 @@ pub const Checker = struct {
             .bind => |ident| {
                 if (!isNullableValue(value_class)) return;
                 const narrowed_ty = if (exprResultType(value, binding_ctx)) |ty| nullableInnerType(ty) else null;
+                // A value optional narrows to its payload type: recover the payload's
+                // specific class from the binding's TypeExpr (tryResultType left it
+                // unknown). The pointer nullables already carry a precise class.
+                const narrowed_class = if (value_class == .nullable_value)
+                    (if (narrowed_ty) |ty| classifyTypeCtx(ty, ctx) else .unknown)
+                else
+                    tryResultType(value_class);
                 self.addLocalBinding(scope, ident, .{
-                    .class = tryResultType(value_class),
+                    .class = narrowed_class,
                     .mutable = false,
                     .ty = narrowed_ty,
                     .origin = .local,
@@ -5880,6 +5904,19 @@ fn isKnownTaggedUnionConstructorName(name: []const u8, ctx: Context) bool {
 fn taggedUnionConstructorIsFunction(name: []const u8, ctx: Context) bool {
     const functions = ctx.functions orelse return false;
     return functions.contains(name);
+}
+
+// A value optional `?T` accepts a `T` (present) or `null` (absent). `null` is handled by
+// checkNullPointerInitializer; this covers the present coercion of a plain payload value.
+// Returns true when accepted (so the generic mismatch diagnostic is suppressed).
+fn checkValueOptionalInitializer(target_ty: ast.TypeExpr, target: TypeClass, expr: ast.Expr, source: TypeClass, ctx: Context) bool {
+    if (target != .nullable_value) return false;
+    if (isNullLiteral(expr)) return true; // absent (also caught by checkNullPointerInitializer)
+    if (source == .nullable_value) return true; // ?T -> ?T pass-through
+    const inner = nullableInnerType(resolveAliasType(target_ty, ctx)) orelse return false;
+    const inner_class = classifyTypeCtx(inner, ctx);
+    // present: the payload value must be assignable to the payload type T.
+    return canInitialize(inner_class, source);
 }
 
 fn canInitialize(target: TypeClass, initializer: TypeClass) bool {

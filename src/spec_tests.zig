@@ -814,6 +814,7 @@ fn isAcceptanceCheck(check: []const u8) bool {
         "traits-tier2-nullable-dyn",
         "section-attr-accept",
         "sanitizer-hook-override-accept",
+        "value-optional-tagged-repr",
     };
     return matchesAny(check, &names);
 }

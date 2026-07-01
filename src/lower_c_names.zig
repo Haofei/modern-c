@@ -36,6 +36,11 @@ pub fn resultTypeName(ctx: Context, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) !
     return std.fmt.allocPrint(ctx.allocator, "mc_result_{s}_{s}", .{ try typeSuffix(ctx, ok_ty), try typeSuffix(ctx, err_ty) });
 }
 
+// Value optional `?T` (tagged repr `{ present, value }`) — one typedef per payload type.
+pub fn optTypeName(ctx: Context, payload: ast.TypeExpr) ![]const u8 {
+    return std.fmt.allocPrint(ctx.allocator, "mc_opt_{s}", .{try typeSuffix(ctx, payload)});
+}
+
 pub fn fnPtrTypeName(ctx: Context, node: anytype) ![]const u8 {
     return signatureTypeName(ctx, "mc_fnptr_", node.ret.*, node.params);
 }

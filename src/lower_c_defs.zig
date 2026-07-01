@@ -15,6 +15,7 @@ const ArrayInfo = lower_c_model.ArrayInfo;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const ResultInfo = lower_c_model.ResultInfo;
+const OptInfo = lower_c_model.OptInfo;
 const SliceInfo = lower_c_model.SliceInfo;
 
 const cTraitIsObjectSafe = lower_c_shape.cTraitIsObjectSafe;
@@ -256,6 +257,19 @@ pub fn emitResultType(ctx: Context, result: ResultInfo) !void {
     try ctx.out.appendSlice(ctx.allocator, "} payload;\n");
     ctx.indent.* -= 1;
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{result.name});
+}
+
+// A value optional `?T` — a tagged aggregate `{ bool present; T value; }`. `present`
+// is the niche (false = absent / `null`); `value` holds the payload when present.
+pub fn emitOptType(ctx: Context, opt: OptInfo) !void {
+    try ctx.out.print(ctx.allocator, "typedef struct {s} {{\n", .{opt.name});
+    ctx.indent.* += 1;
+    try writeIndent(ctx);
+    try ctx.out.appendSlice(ctx.allocator, "bool present;\n");
+    try writeIndent(ctx);
+    try ctx.out.print(ctx.allocator, "{s} value;\n", .{try ctx.c_type(ctx.emit_ctx, opt.payload_ty)});
+    ctx.indent.* -= 1;
+    try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{opt.name});
 }
 
 pub fn emitArrayType(ctx: Context, array: ArrayInfo) !void {

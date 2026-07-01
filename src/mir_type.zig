@@ -90,7 +90,7 @@ pub fn checkedIntBoundsByName(name: []const u8) ?IntBounds {
 }
 
 pub fn isTryCapableType(ty: ValueType) bool {
-    return isResultType(ty) or ty == .nullable_pointer;
+    return isResultType(ty) or ty == .nullable_pointer or ty == .nullable_value;
 }
 
 pub fn isResultType(ty: ValueType) bool {
@@ -99,7 +99,7 @@ pub fn isResultType(ty: ValueType) bool {
 
 pub fn isMirNullableValue(ty: ValueType) bool {
     return switch (ty) {
-        .nullable_pointer, .nullable_dyn_trait, .unknown, .never => true,
+        .nullable_pointer, .nullable_dyn_trait, .nullable_value, .unknown, .never => true,
         else => false,
     };
 }
@@ -150,6 +150,22 @@ pub fn typesAreCompatible(target: ValueType, source: ValueType) bool {
     if (target == .nullable_dyn_trait) {
         return switch (source) {
             .nullable_dyn_trait, .pointer, .nullable_pointer => true,
+            else => false,
+        };
+    }
+    // A value optional `?T` accepts: a `null` literal (typed `.nullable_pointer` with the
+    // "null" shape), a present payload value assignable to T, and another `?T`. Sema already
+    // enforced the payload match; the MIR check is structural (name-based).
+    if (target == .nullable_value) {
+        return switch (source) {
+            .nullable_value => |src_child| std.mem.eql(u8, src_child, switch (target) {
+                .nullable_value => |tgt_child| tgt_child,
+                else => unreachable,
+            }),
+            .nullable_pointer => |shape| isNullPointerShape(shape),
+            // A present payload value (integer/float/bool/struct/enum/address, or a
+            // comptime literal). Sema validated the specific payload type.
+            .integer, .float, .bool, .struct_, .closed_enum, .open_enum, .address => true,
             else => false,
         };
     }
@@ -206,7 +222,9 @@ pub fn typesAreCompatible(target: ValueType, source: ValueType) bool {
             };
             break :blk std.mem.eql(u8, target_shape.ok, source_shape.ok) and std.mem.eql(u8, target_shape.err, source_shape.err);
         },
-        .void, .never, .bool, .contract, .branch, .trap, .unknown, .value, .nullable_dyn_trait => true,
+        // `.nullable_value` is fully handled by the early branch above (structural,
+        // name-based); it never reaches this activeTag-equal switch.
+        .void, .never, .bool, .contract, .branch, .trap, .unknown, .value, .nullable_dyn_trait, .nullable_value => true,
     };
 }
 
@@ -331,6 +349,9 @@ pub fn valueTypeFromType(ty: ast.TypeExpr, enums: *const std.StringHashMap(EnumS
             const child_ty = valueTypeFromType(child.*, enums, structs);
             break :blk switch (child_ty) {
                 .pointer => |shape| .{ .nullable_pointer = shape },
+                // A known, sized value payload → tagged value optional. `.value`
+                // (a bare generic param / opaque) stays `.value` (may be a pointer).
+                .integer, .float, .bool, .struct_, .closed_enum, .open_enum, .address => .{ .nullable_value = typeText(child.*) },
                 else => if (isDynTraitMirType(child.*)) ValueType.nullable_dyn_trait else .value,
             };
         },
@@ -363,6 +384,7 @@ fn valueTypeFromTypeAliasDepth(ty: ast.TypeExpr, enums: *const std.StringHashMap
             const child_ty = valueTypeFromTypeAliasDepth(child.*, enums, structs, packed_bits, aliases, depth + 1);
             break :blk switch (child_ty) {
                 .pointer => |shape| .{ .nullable_pointer = shape },
+                .integer, .float, .bool, .struct_, .closed_enum, .open_enum, .address => .{ .nullable_value = typeText(aggregateTargetTypeAlias(child.*, aliases)) },
                 else => if (isDynTraitMirType(child.*)) ValueType.nullable_dyn_trait else .value,
             };
         },

@@ -232,6 +232,8 @@ const CEmitter = struct {
     array_types: std.StringHashMap(ArrayInfo),
     slice_types: std.StringHashMap(SliceInfo),
     result_types: std.StringHashMap(ResultInfo),
+    // Value optionals `?T` (tagged repr), one typedef per payload type.
+    opt_types: std.StringHashMap(lower_c_model.OptInfo),
     // Function-pointer signatures encountered, each emitted as a `typedef RET
     // (*name)(params);` so the name-in-the-middle C declarator works anywhere a
     // plain type name does.
@@ -309,6 +311,7 @@ const CEmitter = struct {
             .array_types = std.StringHashMap(ArrayInfo).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
+            .opt_types = std.StringHashMap(lower_c_model.OptInfo).init(allocator),
             .fn_ptr_types = std.StringHashMap(ast.TypeExpr).init(allocator),
             .closure_types = std.StringHashMap(ast.TypeExpr).init(allocator),
             .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
@@ -344,6 +347,7 @@ const CEmitter = struct {
     }
 
     fn deinitTypeCollections(self: *CEmitter) void {
+        self.opt_types.deinit();
         self.result_types.deinit();
         self.slice_types.deinit();
         self.array_types.deinit();
@@ -532,6 +536,8 @@ const CEmitter = struct {
         // Arrays, structs, Result types, and tagged unions can embed one another
         // by value (`[N]S`, `struct { [N]S }`, `Result<S, E>`), so emit them in
         // dependency order rather than a fixed category order.
+        // Value optionals `?T` join the dependency-ordered aggregate emission (a `?T`
+        // typedef embeds its payload by value, and a struct/Result may embed a `?T`).
         try self.emitOrderedAggregates(module);
     }
 
@@ -904,6 +910,10 @@ const CEmitter = struct {
             var it = self.result_types.valueIterator();
             while (it.next()) |r| try units.append(arena, .{ .result = r.* });
         }
+        {
+            var it = self.opt_types.valueIterator();
+            while (it.next()) |o| try units.append(arena, .{ .opt = o.* });
+        }
 
         try self.emitAggregateUnitsInDependencyOrder(units.items);
     }
@@ -924,6 +934,7 @@ const CEmitter = struct {
             .array => |a| try self.emitArrayType(a),
             .result => |r| try self.emitResultType(r),
             .tagged_union => |u| try self.emitTaggedUnionType(u),
+            .opt => |o| try lower_c_defs.emitOptType(self.defsContext(), o),
         }
     }
 
@@ -1179,6 +1190,7 @@ const CEmitter = struct {
             .fn_ptr_type_name = fnPtrTypeNameForType,
             .closure_type_name = closureTypeNameForType,
             .dyn_type_name = dynTypeNameForType,
+            .opt_type_name = optTypeNameForType,
         };
     }
 
@@ -1711,7 +1723,16 @@ const CEmitter = struct {
             .numeric_expr_type = numericExprTypeForConvert,
             .operand_emit_type = operandEmitTypeForAtomic,
             .expr_resolves_to_float = exprResolvesToFloatForExpr,
+            .is_value_optional = isValueOptionalForExpr,
         };
+    }
+
+    fn isValueOptionalForExpr(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        const ty = self.nullableTypeForExpr(expr, locals) orelse return false;
+        const resolved = self.resolveAliasType(ty);
+        if (resolved.kind != .nullable) return false;
+        return lower_c_type.nullablePayloadIsValueType(&self.type_aliases, resolved.kind.nullable.*);
     }
 
     fn tryReplacementEmitContext(self: *CEmitter) lower_c_try.TryReplacementEmitContext {
@@ -1792,6 +1813,11 @@ const CEmitter = struct {
     fn resultTypeNameForConvert(ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.resultTypeName(ok_ty, err_ty);
+    }
+
+    fn optTypeNameForType(ctx: *anyopaque, payload_ty: ast.TypeExpr) anyerror![]const u8 {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        return lower_c_names.optTypeName(self.typeNameContext(), self.resolveAliasType(payload_ty));
     }
 
     fn enumNameForValueExprForBuiltin(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
@@ -2344,6 +2370,47 @@ const CEmitter = struct {
         try lower_c_collect.collectSliceType(self.sliceArtifactContext(), resolved_ty);
         try lower_c_collect.collectResultType(self.resultArtifactContext(), resolved_ty);
         try lower_c_collect.collectFnPtrType(self.fnPtrArtifactContext(), resolved_ty);
+        try self.collectOptTypes(ty);
+    }
+
+    // Register any value optional `?T` (tagged repr) reachable through `ty` so its
+    // `mc_opt_<T>` typedef is emitted. Mirrors collectSliceType's per-type dedup.
+    fn collectOptTypes(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
+        const resolved = self.resolveAliasType(ty);
+        switch (resolved.kind) {
+            .pointer => |node| try self.collectOptTypes(node.child.*),
+            .raw_many_pointer => |node| try self.collectOptTypes(node.child.*),
+            .slice => |node| try self.collectOptTypes(node.child.*),
+            .array => |node| try self.collectOptTypes(node.child.*),
+            .qualified => |node| try self.collectOptTypes(node.child.*),
+            .generic => |node| for (node.args) |arg| try self.collectOptTypes(arg),
+            .member => |node| try self.collectOptTypes(node.base.*),
+            .nullable => |child| {
+                try self.collectOptTypes(child.*);
+                if (self.nullablePayloadIsValueOptional(child.*)) {
+                    const payload = self.resolveAliasType(child.*);
+                    const name = try lower_c_names.optTypeName(self.typeNameContext(), payload);
+                    if (!self.opt_types.contains(name)) {
+                        try self.opt_types.put(name, .{ .name = name, .payload_ty = payload });
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    // A `?T` payload uses the tagged repr iff T is a sized VALUE type (not a pointer,
+    // slice, fn-pointer, or `*dyn` — those keep the null-sentinel repr).
+    fn nullablePayloadIsValueOptional(self: *CEmitter, child: ast.TypeExpr) bool {
+        const resolved = self.resolveAliasType(child);
+        return switch (resolved.kind) {
+            // A named payload — a scalar (u32/…), address class (PAddr), struct, enum,
+            // or packed-bits — uses the tagged repr. Pointers/slices/dyn keep the
+            // sentinel repr; arrays/generics are deferred.
+            .name => |n| !std.mem.eql(u8, n.text, "c_void"),
+            .qualified => |node| self.nullablePayloadIsValueOptional(node.child.*),
+            else => false,
+        };
     }
 
     fn typeArtifactContext(self: *CEmitter) lower_c_collect.TypeArtifactContext {
@@ -3568,6 +3635,7 @@ const CEmitter = struct {
     }
 
     fn emitExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+        if (try self.emitValueOptionalCoercion(expr, locals, target_ty)) return;
         if (try self.emitTargetPreludeExpr(expr, locals, target_ty)) return;
         switch (expr.kind) {
             .array_literal, .struct_literal => try self.emitAggregateLiteralWithTarget(expr, locals, target_ty),
@@ -3579,6 +3647,30 @@ const CEmitter = struct {
             .address_of => try self.emitAddressOfExprWithTarget(expr, locals, target_ty),
             else => try self.emitExpr(expr, locals),
         }
+    }
+
+    // Coerce a `null` (absent) or a payload value (present) into a value optional `?T`'s
+    // tagged aggregate. A source that already yields `?T` (another optional local / a call
+    // returning `?T`) is left to the normal path (pass-through, no double-wrap).
+    fn emitValueOptionalCoercion(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!bool {
+        const ty = target_ty orelse return false;
+        const resolved = self.resolveAliasType(ty);
+        if (resolved.kind != .nullable) return false;
+        const child = resolved.kind.nullable.*;
+        if (!lower_c_type.nullablePayloadIsValueType(&self.type_aliases, child)) return false;
+        const opt_name = try self.cTypeFor(resolved, .typedef_name);
+        if (expr.kind == .null_literal) {
+            try self.out.print(self.allocator, "({s}){{ .present = false }}", .{opt_name});
+            return true;
+        }
+        // Pass-through: the source already produces the optional aggregate.
+        if (self.nullableTypeForExpr(expr, locals)) |src_ty| {
+            if (self.resolveAliasType(src_ty).kind == .nullable) return false;
+        }
+        try self.out.print(self.allocator, "({s}){{ .present = true, .value = ", .{opt_name});
+        try self.emitExprWithTarget(expr, locals, child);
+        try self.out.appendSlice(self.allocator, " }");
+        return true;
     }
 
     fn emitAggregateLiteralWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {

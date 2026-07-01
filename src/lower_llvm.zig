@@ -1113,6 +1113,11 @@ const LlvmEmitter = struct {
         if (self.targetIsDynOrNullableDyn(expected_ty)) {
             if (try self.emitDynCoercion(expr, expected_ty)) |value| return value;
         }
+        // Value optional `?T`: wrap a `null` (absent) or payload value (present) into the
+        // tagged `{ i1, T }` aggregate. A source already yielding `?T` passes through.
+        if (self.targetIsValueOptional(expected_ty)) {
+            if (try self.emitValueOptionalCoercion(expr, expected_ty)) |value| return value;
+        }
         const value = try switch (expr.kind) {
             .ident => |ident| try self.emitIdent(ident),
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
@@ -1667,6 +1672,21 @@ const LlvmEmitter = struct {
             return payload;
         }
         const inner_ty = self.nullableInnerType(operand_ty) orelse return error.UnsupportedLlvmEmission;
+        // Value optional `?T`: trap on absent (present tag false), then yield the payload.
+        if (self.targetIsValueOptional(operand_ty)) {
+            const value = try self.emitExpr(operand, operand_ty);
+            const opt_ty = try self.llvmType(operand_ty);
+            const present = try self.nextTemp();
+            const is_absent = try self.nextTemp();
+            const trap = try self.nextLabel("trap_null");
+            const cont = try self.nextLabel("nonnull");
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ present, opt_ty, value });
+            try self.out.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ is_absent, present });
+            try self.emitTrapBranch(is_absent, trap, cont, trap, cont, "NullUnwrap");
+            const payload = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, opt_ty, value });
+            return payload;
+        }
         const value = try self.emitExpr(operand, operand_ty);
         try self.emitNullUnwrapCheck(value, inner_ty);
         return value;
@@ -1735,11 +1755,16 @@ const LlvmEmitter = struct {
         const subject_ty = self.exprType(node.value) orelse return false;
         const inner_ty = self.nullableInnerType(subject_ty) orelse return false;
         const subject = try self.emitExpr(node.value, subject_ty);
+        const is_value_opt = self.targetIsValueOptional(subject_ty);
         const then_label = try self.nextLabel("nullable_some");
         const else_label = try self.nextLabel("nullable_none");
         const end_label = try self.nextLabel("nullable_end");
         const is_some = try self.nextTemp();
-        try self.emitNullableSomeTest(is_some, subject, inner_ty);
+        if (is_value_opt) {
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ is_some, try self.llvmType(subject_ty), subject });
+        } else {
+            try self.emitNullableSomeTest(is_some, subject, inner_ty);
+        }
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ is_some, then_label, else_label, try self.debugCallSuffix(), then_label });
 
         const old_type = self.local_types.fetchRemove(binding.text);
@@ -1748,7 +1773,12 @@ const LlvmEmitter = struct {
         defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
 
         const binding_ptr = try self.nextBindingPtr(binding.text);
-        try self.emitAllocaStore(binding_ptr, try self.llvmType(inner_ty), subject);
+        const binding_value = if (is_value_opt) blk: {
+            const payload = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, try self.llvmType(subject_ty), subject });
+            break :blk payload;
+        } else subject;
+        try self.emitAllocaStore(binding_ptr, try self.llvmType(inner_ty), binding_value);
         try self.local_types.put(binding.text, inner_ty);
         try self.local_slots.put(binding.text, .{ .ty = inner_ty, .ptr = binding_ptr });
 
@@ -2603,6 +2633,44 @@ const LlvmEmitter = struct {
             .nullable => |child| self.resolveAliasType(child.*).kind == .dyn_trait,
             else => false,
         };
+    }
+
+    // A `?T` payload T uses the tagged `{ i1, T }` repr iff T is a sized VALUE type (named
+    // scalar/struct/enum/address, not a pointer, slice, fn-pointer, or `*dyn`).
+    fn nullablePayloadIsValueType(self: *LlvmEmitter, child: ast.TypeExpr) bool {
+        const resolved = self.resolveAliasType(child);
+        return switch (resolved.kind) {
+            .name => |n| !std.mem.eql(u8, n.text, "c_void"),
+            .qualified => |node| self.nullablePayloadIsValueType(node.child.*),
+            else => false,
+        };
+    }
+
+    fn targetIsValueOptional(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+        const resolved = self.resolveAliasType(ty);
+        return resolved.kind == .nullable and self.nullablePayloadIsValueType(resolved.kind.nullable.*);
+    }
+
+    // Coerce a `null` (absent) or a payload value (present) into a value optional `?T`'s
+    // tagged `{ i1, T }` aggregate. A source already yielding `?T` returns null (pass-through).
+    fn emitValueOptionalCoercion(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) !?[]const u8 {
+        const resolved = self.resolveAliasType(expected_ty);
+        const child = resolved.kind.nullable.*;
+        if (expr.kind == .grouped) return self.emitValueOptionalCoercion(expr.kind.grouped.*, expected_ty);
+        // `null` -> absent: `{ i1 false, T zero }` == zeroinitializer.
+        if (expr.kind == .null_literal) return "zeroinitializer";
+        // Pass-through: the source already produces the optional aggregate.
+        if (self.exprType(expr)) |src_ty| {
+            if (self.resolveAliasType(src_ty).kind == .nullable) return null;
+        }
+        const opt_ty = try self.llvmType(resolved);
+        const payload_ty = try self.llvmType(child);
+        const payload = try self.emitExpr(expr, child);
+        const with_tag = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 true, 0\n", .{ with_tag, opt_ty });
+        const with_value = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ with_value, opt_ty, with_tag, payload_ty, payload });
+        return with_value;
     }
 
     fn emitDynCoercion(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) !?[]const u8 {
@@ -4000,6 +4068,10 @@ const LlvmEmitter = struct {
     }
 
     fn emitComparison(self: *LlvmEmitter, node: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+        // `opt == null` / `opt != null` for a value optional `?T` tests its present tag.
+        if ((node.op == .eq or node.op == .ne)) {
+            if (try self.valueOptionalNullCompare(node)) |result| return result;
+        }
         // A comparison yields i1. The expected type is `bool` — or `Secret<bool>`
         // when the verdict stays secret-tainted (constant-time `secret == k`);
         // Secret is transparent, so the inner bool is what we lower against.
@@ -4017,6 +4089,32 @@ const LlvmEmitter = struct {
         const cmp_op: []const u8 = if (self.isFloatTypeOf(operand_ty)) "fcmp" else "icmp";
         try self.out.print(self.allocator, "  {s} = {s} {s} {s} {s}, {s}\n", .{ result, cmp_op, pred, llvm_ty, left, right });
         return result;
+    }
+
+    fn nullLiteralExpr(expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .null_literal => true,
+            .grouped => |inner| nullLiteralExpr(inner.*),
+            else => false,
+        };
+    }
+
+    // If `node` compares a value optional `?T` against `null`, emit the present-tag test:
+    // `!= null` -> present; `== null` -> `xor present, true`. Returns null when N/A.
+    fn valueOptionalNullCompare(self: *LlvmEmitter, node: anytype) !?[]const u8 {
+        const left_null = nullLiteralExpr(node.left.*);
+        const right_null = nullLiteralExpr(node.right.*);
+        if (left_null == right_null) return null; // exactly one null side
+        const subject = if (left_null) node.right.* else node.left.*;
+        const subject_ty = self.exprType(subject) orelse return null;
+        if (!self.targetIsValueOptional(subject_ty)) return null;
+        const value = try self.emitExpr(subject, subject_ty);
+        const present = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ present, try self.llvmType(subject_ty), value });
+        if (node.op == .ne) return present;
+        const absent = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = xor i1 {s}, true\n", .{ absent, present });
+        return absent;
     }
 
     fn emitCheckedArithmetic(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
@@ -4671,9 +4769,14 @@ const LlvmEmitter = struct {
             else
                 error.UnsupportedLlvmEmission,
             .pointer, .raw_many_pointer => "ptr",
-            // A nullable lowers to its inner type's representation — the niche is in-band:
-            // `?*T` -> `ptr` (null address), `?*dyn Trait` -> `{ ptr, ptr }` (null data word).
-            .nullable => |child| try self.llvmType(child.*),
+            // A pointer nullable lowers to its inner type's representation — the niche is
+            // in-band: `?*T` -> `ptr` (null address), `?*dyn Trait` -> `{ ptr, ptr }` (null
+            // data word). A VALUE optional `?T` has no spare sentinel, so it lowers to a
+            // tagged aggregate `{ i1, <T> }` (present tag + payload).
+            .nullable => |child| if (self.nullablePayloadIsValueType(child.*))
+                try std.fmt.allocPrint(self.scratch.allocator(), "{{ i1, {s} }}", .{try self.llvmType(child.*)})
+            else
+                try self.llvmType(child.*),
             .array => |node| try std.fmt.allocPrint(self.scratch.allocator(), "[{d} x {s}]", .{ self.arrayLenValue(node.len) orelse return error.UnsupportedLlvmEmission, try self.llvmType(node.child.*) }),
             .slice => "{ ptr, i64 }",
             .fn_pointer => "ptr",

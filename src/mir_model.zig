@@ -66,6 +66,10 @@ pub const ValueType = union(enum) {
     // `?*dyn Trait` - nullable trait object; niche is `data == null`. Narrows to a
     // bare `*dyn Trait` (`.value`) under `if let` / switch / unwrap.
     nullable_dyn_trait,
+    // `?T` for a sized VALUE payload T (tagged repr `{ present, value }`). The string
+    // is the payload type's text (e.g. "u32", "Point"), used to name the backend's
+    // `mc_opt_<T>` aggregate. Narrows to the bare payload under `if let` / `?`.
+    nullable_value: []const u8,
     slice: []const u8,
     array: []const u8,
     address: AddressClass,
@@ -89,6 +93,7 @@ pub const ValueType = union(enum) {
             .pointer => |shape| pointerShapeName(shape),
             .nullable_pointer => |shape| pointerShapeName(shape),
             .nullable_dyn_trait => "?dyn",
+            .nullable_value => |n| n,
             .slice => |n| n,
             .array => |n| n,
             .address => |kind| addressClassName(kind),

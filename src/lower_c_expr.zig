@@ -6,6 +6,7 @@ const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
+const lower_c_type = @import("lower_c_type.zig");
 
 const calleeIdentName = ast_query.calleeIdentName;
 const isIdentNamed = ast_query.isIdentNamed;
@@ -37,6 +38,9 @@ pub const EmitContext = struct {
     numeric_expr_type: ExprTypeFn,
     operand_emit_type: ExprTypeFn,
     expr_resolves_to_float: ExprPredicateFn,
+    // True when `expr` statically has a value-optional `?T` type (tagged repr). Backed by
+    // the emitter's full type inference so it also recognizes calls returning `?T`.
+    is_value_optional: ExprPredicateFn,
 };
 
 pub fn emitUnaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
@@ -77,6 +81,16 @@ pub fn emitBinaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHash
             }
         }
     }
+    // `opt == null` / `opt != null` for a value optional `?T` tests its `.present` tag.
+    if (node.op == .eq or node.op == .ne) {
+        if (valueOptionalNullCompareSubject(ctx, node, locals)) |subject| {
+            try ctx.out.appendSlice(ctx.allocator, "(");
+            if (node.op == .eq) try ctx.out.appendSlice(ctx.allocator, "!");
+            try ctx.emit_expr(ctx.emit_ctx, subject, locals);
+            try ctx.out.appendSlice(ctx.allocator, ".present)");
+            return;
+        }
+    }
     if (isCheckedBinaryOp(node.op) and !binaryResolvesToFloat(ctx, node, locals)) {
         if (ctx.numeric_expr_type(ctx.emit_ctx, expr, locals)) |inferred| {
             const inferred_dom = lower_c_alias.resolveAliasType(ctx.type_aliases, inferred);
@@ -111,6 +125,29 @@ pub fn emitBinaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHash
     try ctx.out.print(ctx.allocator, " {s} ", .{binaryCOp(node.op)});
     try ctx.emit_expr(ctx.emit_ctx, node.right.*, locals);
     try ctx.out.appendSlice(ctx.allocator, ")");
+}
+
+// If `node` compares a value optional `?T` against `null`, returns the optional operand
+// (whose `.present` tag drives the comparison). Null literal on either side.
+fn valueOptionalNullCompareSubject(ctx: EmitContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.Expr {
+    const left_null = isNullLiteralExpr(node.left.*);
+    const right_null = isNullLiteralExpr(node.right.*);
+    if (left_null == right_null) return null; // need exactly one null side
+    const subject = if (left_null) node.right.* else node.left.*;
+    if (!operandIsValueOptional(ctx, subject, locals)) return null;
+    return subject;
+}
+
+fn isNullLiteralExpr(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .null_literal => true,
+        .grouped => |inner| isNullLiteralExpr(inner.*),
+        else => false,
+    };
+}
+
+fn operandIsValueOptional(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    return ctx.is_value_optional(ctx.emit_ctx, expr, locals);
 }
 
 fn binaryResolvesToFloat(ctx: EmitContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) bool {

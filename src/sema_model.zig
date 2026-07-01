@@ -222,6 +222,11 @@ pub const TypeClass = enum {
     // `if let` / switch narrowing and `?` unwrap like the thin nullables, but its
     // niche test and codegen are on the data word, not the whole value.
     nullable_dyn_trait,
+    // `?T` for a sized VALUE payload T (e.g. `?u32`, `?usize`, `?SomeStruct`). Unlike
+    // the pointer nullables there is no spare sentinel, so it lowers to a TAGGED
+    // aggregate `{ present, value }` (see lower_c mc_opt_<T> / lower_llvm `{ i1, T }`).
+    // Eligible for `if let` / `== null` / `.?` narrowing like the pointer nullables.
+    nullable_value,
     paddr,
     vaddr,
     dma_addr,

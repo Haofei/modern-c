@@ -316,7 +316,8 @@ fn emitNullableIfLetThen(ctx: EmitContext, node: ast.IfLet, locals: *std.StringH
     try then_locals.put(binding.text, binding_info);
     ctx.indent.* += 1;
     try writeIndent(ctx);
-    try ctx.out.print(ctx.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ subject.inner_c_type, try ctx.c_ident(ctx.emit_ctx, binding.text), subject.name });
+    var val_buf: [256]u8 = undefined;
+    try ctx.out.print(ctx.allocator, "MC_UNUSED {s} {s} = {s};\n", .{ subject.inner_c_type, try ctx.c_ident(ctx.emit_ctx, binding.text), subject.valueExpr(&val_buf) });
     try ctx.emit_switch_body(ctx.emit_ctx, .{ .block = node.then_block }, &then_locals, return_ty);
     ctx.indent.* -= 1;
     try writeIndent(ctx);
@@ -580,7 +581,30 @@ fn nullableSubjectForLocalName(name: []const u8, locals: *std.StringHashMap(Loca
     const info = locals.get(name) orelse return null;
     const inner_c_type = info.nullable_inner_c_type orelse return null;
     const inner_ty = if (info.source_ty) |st| nullableInnerTypeExpr(st) else null;
-    return .{ .name = name, .inner_c_type = inner_c_type, .is_dyn = isDynCTypeName(inner_c_type), .inner_ty = inner_ty };
+    return .{
+        .name = name,
+        .inner_c_type = inner_c_type,
+        .is_dyn = isDynCTypeName(inner_c_type),
+        .inner_ty = inner_ty,
+        .is_value_opt = nullablePayloadIsValueOptional(info.source_ty),
+    };
+}
+
+// True when a `?T` (given as the whole optional TypeExpr) uses the tagged value repr —
+// i.e. its payload T is a named value type (scalar/struct/enum/address), not a pointer,
+// slice, fn-pointer, or `*dyn`. Mirrors lower_c_type.nullablePayloadIsValueType.
+fn nullablePayloadIsValueOptional(opt_ty: ?ast.TypeExpr) bool {
+    const ty = opt_ty orelse return false;
+    const child = nullableInnerTypeExpr(ty) orelse return false;
+    return payloadKindIsValue(child);
+}
+
+fn payloadKindIsValue(child: ast.TypeExpr) bool {
+    return switch (child.kind) {
+        .name => |n| !std.mem.eql(u8, n.text, "c_void"),
+        .qualified => |node| payloadKindIsValue(node.child.*),
+        else => false,
+    };
 }
 
 fn materializeNullableSubject(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?NullableSwitchSubject {
@@ -588,7 +612,13 @@ fn materializeNullableSubject(ctx: EmitContext, expr: ast.Expr, locals: *std.Str
     const inner_c_type = try ctx.nullable_inner_c_type_for_type(ctx.emit_ctx, nullable_ty) orelse return null;
     const temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, nullable_ty);
     try locals.put(temp.name, try ctx.local_info_from_type(ctx.emit_ctx, nullable_ty));
-    return .{ .name = temp.name, .inner_c_type = inner_c_type, .is_dyn = isDynCTypeName(inner_c_type), .inner_ty = nullableInnerTypeExpr(nullable_ty) };
+    return .{
+        .name = temp.name,
+        .inner_c_type = inner_c_type,
+        .is_dyn = isDynCTypeName(inner_c_type),
+        .inner_ty = nullableInnerTypeExpr(nullable_ty),
+        .is_value_opt = nullablePayloadIsValueOptional(nullable_ty),
+    };
 }
 
 pub fn taggedUnionSwitchBranch(allocator: std.mem.Allocator, patterns: []const ast.Pattern, subject: TaggedUnionSwitchSubject) !?TaggedUnionSwitchBranch {

@@ -44,6 +44,7 @@ pub const AggregateEmitUnit = union(enum) {
     array: ArrayInfo,
     result: ResultInfo,
     tagged_union: ast.UnionDecl,
+    opt: OptInfo,
 };
 
 pub const RawManyOffsetInfo = struct {
@@ -155,6 +156,12 @@ pub const ResultInfo = struct {
     err_ty: ast.TypeExpr,
 };
 
+// A value optional `?T`: the tagged aggregate `{ bool present; T value; }`.
+pub const OptInfo = struct {
+    name: []const u8,
+    payload_ty: ast.TypeExpr,
+};
+
 pub const ResultSwitchSubject = struct {
     name: []const u8,
     ok_c_type: []const u8,
@@ -182,13 +189,25 @@ pub const NullableSwitchSubject = struct {
     // The narrowed inner type (`*dyn Trait`), so the some-binding carries enough type
     // information for trait dispatch (`d.m()` -> `d.vtable->m(d.data, …)`).
     inner_ty: ?ast.TypeExpr = null,
+    // A value optional `?T` (tagged repr `{ present, value }`): the some-test reads the
+    // `.present` tag and the some-binding reads the `.value` payload (not the whole word).
+    is_value_opt: bool = false,
 
     // The C boolean expression that is true when the subject is `some` (present).
     pub fn someCond(self: NullableSwitchSubject, buf: []u8) []const u8 {
+        if (self.is_value_opt)
+            return std.fmt.bufPrint(buf, "{s}.present", .{self.name}) catch "0";
         return if (self.is_dyn)
             std.fmt.bufPrint(buf, "{s}.data != NULL", .{self.name}) catch "0"
         else
             std.fmt.bufPrint(buf, "{s} != NULL", .{self.name}) catch "0";
+    }
+
+    // The C expression that yields the some-payload value.
+    pub fn valueExpr(self: NullableSwitchSubject, buf: []u8) []const u8 {
+        if (self.is_value_opt)
+            return std.fmt.bufPrint(buf, "{s}.value", .{self.name}) catch self.name;
+        return self.name;
     }
 };
 

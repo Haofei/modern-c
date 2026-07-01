@@ -1406,6 +1406,7 @@ const FunctionBuilder = struct {
             .bind => |ident| switch (self.exprType(node.value)) {
                 .nullable_pointer => |shape| .{ .name = ident.text, .ty = .{ .pointer = shape }, .ty_expr = self.narrowedBindingTypeExpr(node.value, "ok") },
                 .nullable_dyn_trait => .{ .name = ident.text, .ty = .value, .ty_expr = self.narrowedBindingTypeExpr(node.value, "ok") },
+                .nullable_value => |child| .{ .name = ident.text, .ty = valueTypeFromTypeNameAlias(child, self.enums, self.structs, self.packed_bits), .ty_expr = self.narrowedBindingTypeExpr(node.value, "ok") },
                 else => null,
             },
             .tag_bind => |tag_bind| blk: {
@@ -1461,6 +1462,7 @@ const FunctionBuilder = struct {
             .bind => |ident| switch (self.exprType(subject)) {
                 .nullable_pointer => |shape| .{ .name = ident.text, .ty = .{ .pointer = shape }, .ty_expr = self.narrowedBindingTypeExpr(subject, "ok") },
                 .nullable_dyn_trait => .{ .name = ident.text, .ty = .value, .ty_expr = self.narrowedBindingTypeExpr(subject, "ok") },
+                .nullable_value => |child| .{ .name = ident.text, .ty = valueTypeFromTypeNameAlias(child, self.enums, self.structs, self.packed_bits), .ty_expr = self.narrowedBindingTypeExpr(subject, "ok") },
                 else => null,
             },
             .tag_bind => |tag_bind| blk: {

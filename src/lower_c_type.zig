@@ -44,7 +44,20 @@ pub const TypeEmitContext = struct {
     fn_ptr_type_name: TypeNameFn,
     closure_type_name: TypeNameFn,
     dyn_type_name: DynTypeNameFn,
+    opt_type_name: TypeNameFn,
 };
+
+// A `?T` payload T uses the tagged `mc_opt_<T>` repr iff T is a sized VALUE type
+// (named scalar/struct/enum/address, not `c_void`). Pointers/slices/fn-pointers/`*dyn`
+// keep the null-sentinel repr and lower transparently to the inner type.
+pub fn nullablePayloadIsValueType(type_aliases: *const std.StringHashMap(ast.TypeExpr), child: ast.TypeExpr) bool {
+    const resolved = if (lower_c_alias.aliasTargetType(type_aliases, child)) |t| t else child;
+    return switch (resolved.kind) {
+        .name => |n| !std.mem.eql(u8, n.text, "c_void"),
+        .qualified => |node| nullablePayloadIsValueType(type_aliases, node.child.*),
+        else => false,
+    };
+}
 
 pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExpr, style: StructTypeStyle) anyerror!void {
     if (lower_c_alias.aliasTargetType(ctx.type_aliases, ty)) |target| return appendType(ctx, out, target, style);
@@ -53,7 +66,14 @@ pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExp
         .raw_many_pointer => |node| return appendPointerType(ctx, out, node.child.*, node.mutability, style),
         .slice => |node| return out.appendSlice(ctx.scratch, try ctx.slice_type_name(ctx.emit_ctx, node.child.*, node.mutability)),
         .array => |node| return out.appendSlice(ctx.scratch, try ctx.array_type_name(ctx.emit_ctx, node.child.*, node.len)),
-        .nullable => |child| return appendType(ctx, out, child.*, style),
+        .nullable => |child| {
+            // Value optional `?T`: emit the tagged `mc_opt_<T>` aggregate. Pointer
+            // nullables keep their sentinel repr and lower to the inner type.
+            if (nullablePayloadIsValueType(ctx.type_aliases, child.*)) {
+                return out.appendSlice(ctx.scratch, try ctx.opt_type_name(ctx.emit_ctx, child.*));
+            }
+            return appendType(ctx, out, child.*, style);
+        },
         .qualified => |node| return appendType(ctx, out, node.child.*, style),
         .generic => |node| {
             if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {

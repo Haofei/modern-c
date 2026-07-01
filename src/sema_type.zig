@@ -94,7 +94,7 @@ pub fn isPointerLike(kind: TypeClass) bool {
 
 pub fn isNullableValue(kind: TypeClass) bool {
     return switch (kind) {
-        .nullable_pointer, .nullable_c_void_pointer, .nullable_dyn_trait => true,
+        .nullable_pointer, .nullable_c_void_pointer, .nullable_dyn_trait, .nullable_value => true,
         else => false,
     };
 }
@@ -129,7 +129,7 @@ pub fn isConditionType(kind: TypeClass) bool {
 
 pub fn isTryOperand(kind: TypeClass) bool {
     return switch (kind) {
-        .result, .nullable_pointer, .nullable_c_void_pointer, .nullable_dyn_trait, .never, .unknown => true,
+        .result, .nullable_pointer, .nullable_c_void_pointer, .nullable_dyn_trait, .nullable_value, .never, .unknown => true,
         else => false,
     };
 }
@@ -141,6 +141,10 @@ pub fn tryResultType(kind: TypeClass) TypeClass {
         // The narrowed `*dyn Trait` carries no specific class - dispatch keys off
         // the narrowed binding's TypeExpr, like a bare dyn.
         .nullable_dyn_trait => .unknown,
+        // The narrowed payload's specific class is recovered from the binding's
+        // TypeExpr (nullableInnerType) at the `if let` / switch site; the class
+        // itself is left unknown here (parallel to `.result`).
+        .nullable_value => .unknown,
         .result => .unknown,
         else => kind,
     };
@@ -263,6 +267,7 @@ pub fn isEqualityOperand(kind: TypeClass) bool {
         kind == .bool or
         kind == .secret or
         isPointerLike(kind) or
+        kind == .nullable_value or
         kind == .null_literal;
 }
 
@@ -271,6 +276,10 @@ pub fn equalityOperandsCompatible(left: TypeClass, right: TypeClass) bool {
     if (isDiagnosticNeutralOperand(left) or isDiagnosticNeutralOperand(right)) return true;
     if (left == .secret or right == .secret) {
         return (left == .secret or isIntegerLike(left)) and (right == .secret or isIntegerLike(right));
+    }
+    // A value optional `?T` (tagged repr) compares only against `null` (present tag test).
+    if (left == .nullable_value or right == .nullable_value) {
+        return (left == .nullable_value and right == .null_literal) or (right == .nullable_value and left == .null_literal);
     }
     if (left == .null_literal or right == .null_literal) return isPointerLike(left) or isPointerLike(right);
     if (left == .bool or right == .bool) return left == .bool and right == .bool;
@@ -426,7 +435,33 @@ pub fn classifyType(ty: ast.TypeExpr) TypeClass {
 }
 
 pub fn classifyTypeCtx(ty: ast.TypeExpr, ctx: Context) TypeClass {
-    return classifyType(resolveAliasType(ty, ctx));
+    const resolved = resolveAliasType(ty, ctx);
+    // A value optional `?Struct`/`?EnumAlias`/… whose payload is a NAMED aggregate
+    // classifies as `.unknown` under the ctx-free `classifyType` (it has no type
+    // tables). With ctx we can tell a concrete named value type (→ value optional)
+    // from a bare generic type parameter (→ stays unknown, may be a pointer).
+    if (classifyType(resolved) == .unknown) {
+        if (nullableInnerType(resolved)) |inner| {
+            const resolved_inner = resolveAliasType(inner, ctx);
+            if (isDynTraitTypeExpr(resolved_inner)) return .nullable_dyn_trait;
+            if (namedTypeIsKnownValue(resolved_inner, ctx)) return .nullable_value;
+        }
+    }
+    return classifyType(resolved);
+}
+
+// True when `ty` names a concrete, sized value type known to the module (a struct,
+// packed-bits, enum, or tagged union) — as opposed to a bare generic type parameter.
+fn namedTypeIsKnownValue(ty: ast.TypeExpr, ctx: Context) bool {
+    const name = typeName(ty) orelse return false;
+    if (ctx.type_params) |tps| {
+        if (tps.contains(name)) return false;
+    }
+    if (ctx.structs) |m| if (m.contains(name)) return true;
+    if (ctx.packed_bits) |m| if (m.contains(name)) return true;
+    if (ctx.enums) |m| if (m.contains(name)) return true;
+    if (ctx.tagged_unions) |m| if (m.contains(name)) return true;
+    return false;
 }
 
 pub fn resolveAliasType(ty: ast.TypeExpr, ctx: Context) ast.TypeExpr {
@@ -493,13 +528,27 @@ fn resolveAliasTypeDepth(ty: ast.TypeExpr, ctx: Context, depth: usize) ast.TypeE
 }
 
 fn classifyNullableType(child: ast.TypeExpr) TypeClass {
-    return switch (classifyType(child)) {
+    const child_class = classifyType(child);
+    return switch (child_class) {
         .c_void_pointer => .nullable_c_void_pointer,
         .pointer, .raw_many_pointer => .nullable_pointer,
         // A `*dyn Trait` classifies as `.unknown` (dispatch keys off the TypeExpr
         // kind, not the class), so recognize the trait-object niche explicitly.
-        else => if (isDynTraitTypeExpr(child)) .nullable_dyn_trait else .unknown,
+        // `.unknown` (a bare generic type param, `*dyn`, or a named struct/enum
+        // without ctx) stays unknown here; classifyTypeCtx recovers a concrete
+        // named value payload (→ nullable_value) with the module's type tables.
+        .unknown => if (isDynTraitTypeExpr(child)) .nullable_dyn_trait else .unknown,
+        // A sized, KNOWN scalar/domain/address payload is a value optional (tagged
+        // repr). Arrays, slices, fn-pointers, secret/atomic/dma views etc. are NOT
+        // covered (deferred); they fall through to unknown.
+        else => if (isValueOptionalPayloadClass(child_class)) .nullable_value else .unknown,
     };
+}
+
+// The payload classes that a `?T` value optional supports (tagged `{present,value}`
+// repr). Kept in sync with mir_type.valueTypeFrom* and the backends' opt registries.
+pub fn isValueOptionalPayloadClass(kind: TypeClass) bool {
+    return isCheckedInt(kind) or isFloat(kind) or isOpaqueAddressClass(kind) or kind == .bool;
 }
 
 // True when `ty` is a `*dyn Trait` fat pointer (possibly behind `const`/`mut`

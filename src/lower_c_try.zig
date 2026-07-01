@@ -458,6 +458,19 @@ pub fn emitNullableTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: 
         .grouped => |inner| return try emitNullableTryReturn(ctx, inner.*, locals),
         else => return false,
     };
+    // Value optional `?T` (tagged repr): unwrap traps on absent, then yields `.value`.
+    if (try valueOptionalCType(ctx, operand, locals)) |opt_c_type| {
+        const temp_name = try nextTempName(ctx.replacement);
+        try writeIndent(ctx.replacement);
+        try ctx.replacement.out.print(ctx.replacement.allocator, "{s} {s} = ", .{ opt_c_type, temp_name });
+        try ctx.replacement.emit_expr(ctx.replacement.emit_ctx, operand, locals);
+        try ctx.replacement.out.appendSlice(ctx.replacement.allocator, ";\n");
+        try writeIndent(ctx.replacement);
+        try ctx.replacement.out.print(ctx.replacement.allocator, "if (!{s}.present) mc_trap_NullUnwrap();\n", .{temp_name});
+        try writeIndent(ctx.replacement);
+        try ctx.replacement.out.print(ctx.replacement.allocator, "return {s}.value;\n", .{temp_name});
+        return true;
+    }
     const inner_c_type = try ctx.nullable_inner_c_type_for_expr(ctx.replacement.emit_ctx, operand, locals) orelse return false;
     const temp_name = try nextTempName(ctx.replacement);
 
@@ -470,6 +483,15 @@ pub fn emitNullableTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: 
     try writeIndent(ctx.replacement);
     try ctx.replacement.out.print(ctx.replacement.allocator, "return {s};\n", .{temp_name});
     return true;
+}
+
+// If `operand` has a value-optional `?T` type, returns its `mc_opt_<T>` C type name.
+fn valueOptionalCType(ctx: TryDirectEmitContext, operand: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
+    const ty = ctx.replacement.operand_emit_type(ctx.replacement.emit_ctx, operand, locals) orelse return null;
+    const resolved = lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, ty);
+    if (resolved.kind != .nullable) return null;
+    if (!lower_c_type.nullablePayloadIsValueType(ctx.replacement.type_aliases, resolved.kind.nullable.*)) return null;
+    return try ctx.replacement.c_type(ctx.replacement.emit_ctx, resolved);
 }
 
 pub fn collectResultTryHoistsForReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(lower_c_model.TryReplacement)) !bool {

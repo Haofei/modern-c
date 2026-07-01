@@ -493,7 +493,19 @@ pub fn collectTypeClosure(
                 if (!(try seen.getOrPut(ident.text)).found_existing) try scalar_deps.append(allocator, ident.text);
             }
         },
-        .nullable => |child| try collectTypeClosure(ctx, allocator, child.*, units, seen, scalar_deps),
+        .nullable => |child| {
+            // A value optional `?T` field embeds `mc_opt_<T>` by value: pull in the payload
+            // closure, then the opt typedef unit. Pointer nullables impose no by-value dep.
+            if (lower_c_type.nullablePayloadIsValueType(ctx.type_aliases, child.*)) {
+                const opt_name = try ctx.name_for_type(ctx.name_ctx, resolved);
+                if (!(try seen.getOrPut(opt_name)).found_existing) {
+                    try collectTypeClosure(ctx, allocator, child.*, units, seen, scalar_deps);
+                    try units.append(allocator, .{ .opt = .{ .name = opt_name, .payload_ty = child.* } });
+                }
+            } else {
+                try collectTypeClosure(ctx, allocator, child.*, units, seen, scalar_deps);
+            }
+        },
         .qualified => |node| try collectTypeClosure(ctx, allocator, node.child.*, units, seen, scalar_deps),
         else => {},
     }
@@ -514,6 +526,9 @@ pub fn aggregateDepsSatisfied(ctx: DepContext, unit: AggregateEmitUnit, emitted:
         .tagged_union => |u| for (u.cases) |case| {
             if (case.ty) |ty| if (try aggregateDepName(ctx, ty)) |dep| if (!emitted.contains(dep)) return false;
         },
+        .opt => |o| {
+            if (try aggregateDepName(ctx, o.payload_ty)) |dep| if (!emitted.contains(dep)) return false;
+        },
     }
     return true;
 }
@@ -531,6 +546,13 @@ pub fn aggregateDepName(ctx: DepContext, ty: ast.TypeExpr) !?[]const u8 {
             try ctx.name_for_type(ctx.name_ctx, resolved)
         else
             null,
+        // A value optional `?T` embeds its payload by value in a `mc_opt_<T>` typedef, so a
+        // struct/Result/array embedding `?T` must wait for that typedef. Pointer nullables
+        // reference through a pointer and impose no ordering.
+        .nullable => |child| if (lower_c_type.nullablePayloadIsValueType(ctx.type_aliases, child.*))
+            try ctx.name_for_type(ctx.name_ctx, resolved)
+        else
+            null,
         .name => |ident| if (ctx.structs.contains(ident.text) or ctx.tagged_unions.contains(ident.text)) ident.text else null,
         else => null,
     };
@@ -542,5 +564,6 @@ fn aggregateUnitName(unit: AggregateEmitUnit) []const u8 {
         .array => |a| a.name,
         .result => |r| r.name,
         .tagged_union => |u| u.name.text,
+        .opt => |o| o.name,
     };
 }
