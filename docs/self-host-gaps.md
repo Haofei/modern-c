@@ -42,6 +42,18 @@ proper compiler fix (candidate Phase 0.6) before the P1–P5 port, rather than p
 | G21 | P1 | language | **enum→int needs `open enum` + `.raw()`** — a plain (closed) enum rejects both `x as u32` (`E_ENUM_RAW_REQUIRES_OPEN_ENUM`) and `.raw()`. To read ordinals (e.g. token kinds for a driver), the enum must be `open enum TokKind: u32` and use `.raw()`. (Corrects a stale note that `kind as usize` works.) | closed `enum` `.raw()`/`as` → error | low | workaround (`open enum`) |
 | — | P1 | correction | NOT gaps: `std/ascii.mc` DOES export `is_digit`/`is_alpha`/`is_whitespace`/… (usable directly); char literals `'f'`/`'\n'`/`'\''` work as `u8` incl. in `[N]u8` initializers. | — | — | n/a |
 
+| G22 | P2 | language/modules | **Flat cross-import top-level namespace** — `import` pulls ALL top-level fn names (incl. non-`export`) into one shared flat namespace; no module qualification at use sites, no overloading. `parser.mc`'s private `fn advance(p:*mut Parser)` collided with `lexer.mc`'s private `fn advance(lx:*mut Lexer)` → `E_DUPLICATE_DECLARATION`. Real scaling hazard: lexer+parser+sema+lowering all want `advance`/`peek`/`expect`/`make`. | two imported files each `fn advance(...)` | **medium-high** | workaround (name-prefix `p_advance`; or wrap each module's helpers in a `module {}` block — MC has module namespaces). Revisit: adopt `module{}` per selfhost file before P3. |
+| G23 | P2 | codegen | **C backend can't emit `return <call> == <call>`** — `sequencedConditionOperandTypes` (`lower_c_flow.zig:391`) can't recover the operand type when BOTH comparison operands are call exprs → `UnsupportedCEmission`. | `fn at(p,k)->bool{ return cur(p)==k.raw(); }` | medium | workaround (bind each operand to a typed local first; +2 lines/site). Candidate compiler fix. |
+
+**G20 refined (P2):** *nested* if/else branches CAN reuse a `let` name, but *sequential* sibling blocks
+at the same fn level cannot (`E_DUPLICATE_LOCAL`). Safe rule: **every `let`/`var` unique per function.**
+Also confirmed: **params are immutable** (`E_ASSIGN_TO_IMMUTABLE_LOCAL`) — mutate via a `*mut` field, not param rebind.
+
+**P2 verbosity vs Zig original: ~1.3–1.4×** real code lines — driven by G20 unique-naming, explicit type
+annotations, and the G23 two-line workaround; the parse *structure* is a faithful 1:1 port. Token-kind
+comparisons (via the lexer's `open enum TokKind`+`.raw()`) were friction-free — the parser needs almost
+no string compares, unlike the lexer.
+
 **P1 keyword-matching friction quantified (G12 consequence):** the 47-keyword table took **~94 lines**
 of `[N]u8` + `mem_eql(lex, mem.as_bytes(&kN))` boilerplate (2 lines/keyword) vs ~47 one-line rows in
 Zig — ~2× — because string literals are `*const u8`, not `[]const u8`, so `str_eq(lex, "fn")` is

@@ -170,3 +170,11 @@ The gap and perf ledgers are the primary output. Scaffolds live in
 - **2026-07-01 — G19 FIXED** (`1855eab`). `Vec<T>` element access switched to `raw.ptr<T>`+deref →
   works for struct T (scalar `raw.load/store` was aggregate-incompatible). Unblocks the P2
   index-arena AST (`Vec<AstNode>`). vec-test now covers a struct element.
+- **2026-07-01 — P2 (subset parser + index-arena AST) DONE** (`5cb1a2a`). `selfhost/parser.mc`
+  (~340 code LOC): flat `Vec<Node>{kind,main_token,lhs,rhs}` + length-prefixed `Vec<u32>` extra
+  runs; precedence-climbing ported verbatim from `src/parser.zig`. Gate asserts fn/param/block
+  structure, `a+b*c` precedence, if/else, while+call, and err-count on malformed input. Index-arena
+  "felt natural" (validates G19 fix); mutual recursion works via forward decls. New findings G22
+  (flat cross-import namespace collision), G23 (`return call==call` codegen gap); G20 refined.
+  Verbosity ~1.3–1.4× the Zig original. Next: P3 (sema subset) — but first adopt `module{}`
+  wrappers per selfhost file to head off G22 as more modules land.
