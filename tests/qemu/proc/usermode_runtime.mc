@@ -7,6 +7,8 @@ const ECALL_FROM_U: u64 = 8;
 const ECALL_FROM_M: u64 = 11;
 const SYS_EXIT: u64 = 3;
 const MCAUSE_INT_BIT: u64 = 0x8000_0000_0000_0000;
+const CAUSE_LOAD_PAGE_FAULT: u64 = 13;   // mcause for a U-mode load page fault
+const CAUSE_STORE_PAGE_FAULT: u64 = 15;  // ... store/AMO page fault
 
 const UART_RBR: usize = 0x10000000;
 const UART_LSR: usize = 0x10000005;
@@ -57,6 +59,17 @@ fn read_mepc() -> u64 {
     #[unsafe_contract(precise_asm)] { unsafe { asm precise volatile { "csrr %0, mepc" out("r") v: u64, clobber("memory") } } }
     return v;
 }
+fn read_mtval() -> u64 {
+    var v: u64 = 0;
+    #[unsafe_contract(precise_asm)] { unsafe { asm precise volatile { "csrr %0, mtval" out("r") v: u64, clobber("memory") } } }
+    return v;
+}
+// Weak default for the WASM linear-memory demand-pager: "not my fault" (return 0). A confined WASM host
+// (tests/qemu/proc/app_run_demo.mc) provides the STRONG override that maps a frame in the reserved
+// linear-memory window. Every gate that does NOT link that override keeps the prior behaviour: an
+// unexpected page fault fails closed (mc_halt). Mirrors mc_watchdog_ticks's weak-default pattern.
+#[weak]
+export fn mc_lm_fault(stval: u64) -> u64 { return 0; }
 fn write_mepc(v: u64) -> void {
     #[unsafe_contract(precise_asm)] { unsafe { asm precise volatile { "csrw mepc, %0" in("r") v: u64, clobber("memory") } } }
 }
@@ -143,6 +156,14 @@ export fn trap_entry(f: usize) -> void {
         let res: u64 = mc_syscall(a7, a0, a1, a2);
         unsafe { raw.store<u64>(phys(f + F_A0), res); }
         write_mepc(read_mepc() + 4);
+    } else if mcause == CAUSE_LOAD_PAGE_FAULT || mcause == CAUSE_STORE_PAGE_FAULT {
+        // A U-mode load/store page fault. If it lands in a confined WASM host's reserved linear-memory
+        // window, mc_lm_fault maps a fresh frame and we RETRY the instruction (no mepc bump). Any other
+        // page fault (outside the window, or no override linked) fails closed — confinement unchanged.
+        if mc_lm_fault(read_mtval()) != 0 {
+            return;
+        }
+        mc_halt();
     } else {
         mc_halt();
     }

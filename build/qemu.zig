@@ -1064,6 +1064,12 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wasm-memcap-test", "WASM-agent Phase 5: a confined WASM guest's linear memory is bounded; OOM is graceful (malloc->NULL, no trap) under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_memcap.c", "memcap: ok", "wasm-memcap" });
     _ = h.addScriptTest(ctx, "llvm-wasm-memcap-test", "WASM-agent Phase 5 (LLVM): a confined WASM guest's linear memory is bounded; OOM is graceful under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_memcap.c", "memcap: ok", "wasm-memcap" });
 
+    // Phase 4.1: a confined WASM guest grows its linear memory FAR past the old ~14 MiB arena ceiling
+    // (18 MiB) with the data intact — proving demand-paged growth (no O(n^2) realloc-copy, no trap, and
+    // the guest's own stdout survives the large grow).
+    _ = h.addScriptTest(ctx, "wasm-biggrow-test", "WASM-agent Phase 4.1: a confined WASM guest grows its linear memory to 18 MiB (>14 MiB arena) with correct data via demand paging under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_biggrow.c", "biggrow: ok", "wasm-biggrow" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-biggrow-test", "WASM-agent Phase 4.1 (LLVM): a confined WASM guest grows its linear memory to 18 MiB with correct data via demand paging under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_biggrow.c", "biggrow: ok", "wasm-biggrow" });
+
     // Demand-grown guest heap (Increment 1): a confined agent's libc heap grows ON DEMAND past the
     // fixed static arena via SYS_SBRK — the kernel maps fresh frames at the running break, so the heap
     // scales with real RAM instead of a compile-time .bss array. The agent malloc()s far past the arena

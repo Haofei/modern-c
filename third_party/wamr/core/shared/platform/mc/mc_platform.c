@@ -47,16 +47,56 @@ int os_cond_broadcast(korp_cond *c) { (void)c; return 0; }
 // The confined agent has a single flat address space and uses the system allocator, so "mmap"
 // regions (chiefly the wasm linear memory) come straight from the all-MC libc heap — NO large static
 // pool (which would blow the confined load region alongside the libc arena). free reclaims them.
+//
+// Phase 4.1 (WASM linear-memory growth without the O(n) realloc-copy): when built with
+// -DMC_WASM_LINEAR_RESERVE, the (single) wasm linear-memory reservation is instead handed a fixed VA
+// WINDOW that the kernel DEMAND-PAGES (first access to a fresh page faults into M-mode, which maps one
+// zeroed frame and retries). Growth (os_mremap) then costs NOTHING: we return the SAME window base and
+// the new pages simply fault in on access — no realloc, no copy, no eager commit. The window/cap MUST
+// match tests/qemu/proc/app_run_demo.mc's LM_WINDOW_BASE / LM_WINDOW_MAX (the kernel side that owns the
+// backing pool and enforces confinement — only in-window faults are ever mapped). Without the macro the
+// port keeps the malloc/realloc behaviour (linear memory capped at the libc arena, growth copies).
+#ifdef MC_WASM_LINEAR_RESERVE
+#define MC_LM_WINDOW_BASE ((uintptr_t)0x100000000ULL) /* == app_run_demo LM_WINDOW_BASE (4 GiB) */
+#define MC_LM_WINDOW_MAX  ((size_t)0x03000000u)       /* == app_run_demo LM_WINDOW_MAX  (48 MiB) */
+static int g_lm_reserved = 0; /* one active linear-memory reservation (single-module confined guest) */
+#endif
+
 void *os_mmap(void *hint, size_t size, int prot, int flags, os_file_handle file) {
     (void)hint; (void)prot; (void)flags; (void)file;
+#ifdef MC_WASM_LINEAR_RESERVE
+    // Route the (single) linear-memory reservation to the demand-paged kernel window. In this
+    // freestanding interp build os_mmap is only ever called for linear memory (the HW-bound-check guard
+    // page is compiled out), so a single reservation is sufficient; any further/oversized mmap falls
+    // back to the heap so we never alias the window.
+    if (!g_lm_reserved && size <= MC_LM_WINDOW_MAX) {
+        g_lm_reserved = 1;
+        return (void *)MC_LM_WINDOW_BASE;
+    }
+#endif
     return malloc(size);
 }
-void os_munmap(void *addr, size_t size) { (void)size; free(addr); }
+void os_munmap(void *addr, size_t size) {
+    (void)size;
+#ifdef MC_WASM_LINEAR_RESERVE
+    if ((uintptr_t)addr == MC_LM_WINDOW_BASE) { g_lm_reserved = 0; return; } /* window: nothing to free */
+#endif
+    free(addr);
+}
 int os_mprotect(void *addr, size_t size, int prot) { (void)addr; (void)size; (void)prot; return 0; }
 void os_dcache_flush(void) {}
 void os_icache_flush(void *start, size_t len) { (void)start; (void)len; }
 void *os_mremap(void *old_addr, size_t old_size, size_t new_size) {
     (void)old_size;
+#ifdef MC_WASM_LINEAR_RESERVE
+    // Grow the demand-paged window IN PLACE: the VA is already reserved to the max, so enlarging is just
+    // returning the same base — the extra pages fault in on first access. No copy (the O(n^2) killer is
+    // gone). Past the window ceiling, fail with NULL so wasm memory.grow returns -1 GRACEFULLY.
+    if ((uintptr_t)old_addr == MC_LM_WINDOW_BASE) {
+        if (new_size > MC_LM_WINDOW_MAX) return NULL;
+        return old_addr;
+    }
+#endif
     return realloc(old_addr, new_size);
 }
 int os_dumps_proc_mem_info(char *out, unsigned int size) { if (out && size) out[0] = 0; return 0; }

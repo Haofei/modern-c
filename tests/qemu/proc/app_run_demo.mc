@@ -52,17 +52,80 @@ const HEAP_BASE: usize = 0x6000_0000;      // agent-side VA where the demand-gro
                                            // the ELF image below 16 MiB and the stack)
 const SBRK_POOL_BASE: usize = 0x8400_0000; // physical RAM for grown frames: 64 MiB into RAM, above the
                                            // kernel image + the 16 MiB confinement region
-const SBRK_POOL_LEN: usize = 0x0800_0000;  // 128 MiB pool (fits -m 256 with room for the DTB up top)
-// Per-agent grow ceiling: the break may not advance more than this past HEAP_BASE. INCREMENT 1 uses a
-// fixed ceiling (also bounds the O(n^2) realloc copying a WASM engine does while growing linear memory,
-// keeping the memcap gate's runtime sane); INCREMENT 2 replaces it with min(ledger limit, bootinfo
-// memory.size / 4).
+const SBRK_POOL_LEN: usize = 0x0500_0000;  // 80 MiB sbrk pool. The old single 128 MiB frame window is
+                                           // now SPLIT 80/48 between the libc-heap sbrk pool and the WASM
+                                           // linear-memory demand-paging pool below — SAME total physical
+                                           // footprint (ends at 0x8C00_0000), so the DTB room up top is
+                                           // unchanged.
+// Per-agent grow ceiling: the break may not advance more than this past HEAP_BASE. INCREMENT 2 replaces
+// it with min(ledger limit, bootinfo memory.size / 4).
 const SBRK_CAP_BYTES: usize = 0x0400_0000;  // 64 MiB grown per agent
 global g_pool_next: usize;      // bump frontier into the physical frame pool (next free frame addr)
 global g_pool_end: usize;       // one past the last frame in the pool
 global g_frames_ready: bool;    // app_build stood up the pool (defensive: deny sbrk if not)
 global g_brk: usize;            // the agent's current break VA (0 = not yet started -> HEAP_BASE)
 global g_mem_ledger: Ledger;    // per-agent memory accounting; its Resource.Memory limit is the grow cap
+
+// ----- WASM linear-memory demand paging (Phase 4.1: growth without the O(n) realloc-copy) -----
+// A confined WASM engine's linear memory grows via `memory.grow`. The old path realloc'd the WHOLE
+// linear buffer each grow (O(n) copy, O(n^2) total) and was capped at the ~14 MiB libc arena. Instead
+// we RESERVE a fixed VA WINDOW for the linear memory up front (unmapped) and DEMAND-PAGE it: the first
+// load/store to a fresh window page faults into M-mode, the trap handler maps ONE zeroed frame there
+// and retries the instruction (no copy, no eager commit). The agent-side WAMR `mc` platform port
+// (os_mmap/os_mremap, gated by -DMC_WASM_LINEAR_RESERVE) hands WAMR the window base and grows it
+// in place by simply returning the same base — the frames appear on access.
+//
+// Soundness / confinement: ONLY faults strictly inside [LM_WINDOW_BASE, LM_WINDOW_BASE+LM_WINDOW_MAX)
+// are mapped; every other fault still `mc_halt`s (unchanged). Frames come from a DEDICATED bump pool
+// sized == the window, so any page the guest can reach (WAMR software-bounds-checks growth against its
+// max) is guaranteed backable — no mid-instruction OOM. Frames are pristine-zero on first use (QEMU
+// zeroes RAM; the bump frontier never reuses within an agent's life), matching the sbrk heap. The
+// window sits far above the agent's ELF/heap/stack and never appears in a syscall buffer (WAMR marshals
+// linear memory host-side before any ecall), so it needs no place in the uaccess window.
+const LM_WINDOW_BASE: usize = 0x1_0000_0000;   // agent-side VA (4 GiB, canonical Sv39) for linear memory
+const LM_POOL_BASE: usize = 0x8900_0000;       // physical frames for the window: the upper 48 MiB of the
+                                               // split 128 MiB pool (starts where the 80 MiB sbrk pool ends)
+const LM_POOL_LEN: usize = 0x0300_0000;        // 48 MiB dedicated linear-memory pool
+const LM_WINDOW_MAX: usize = 0x0300_0000;      // reserve/commit ceiling == the pool (every reachable page backable)
+global g_lm_pool_next: usize;   // bump frontier into the linear-memory frame pool
+global g_lm_pool_end: usize;    // one past the last frame in the linear-memory pool
+global g_lm_ready: bool;        // app_build stood up the linear-memory pool
+
+// M-mode page-fault handler for the WASM linear-memory window. Called from the shared trap dispatcher on
+// a U-mode load/store page fault with the faulting VA `stval`. Returns 1 if the fault was inside the
+// reserved window and a fresh frame was mapped (the caller must RETRY the instruction — no mepc bump); 0
+// if the VA is outside the window or a frame could not be mapped (the caller fails closed / mc_halt).
+export fn mc_lm_fault(stval: u64) -> u64 {
+    if !g_lm_ready {
+        return 0;
+    }
+    let v: usize = stval as usize;
+    if v < LM_WINDOW_BASE {
+        return 0;
+    }
+    if v >= LM_WINDOW_BASE + LM_WINDOW_MAX {
+        return 0; // outside the reserved window -> not ours; fail closed (confinement)
+    }
+    let page_va: usize = v & ~(PAGE_BYTES - 1);
+    // A spurious re-fault on an already-mapped page (e.g. a stale negative TLB entry): treat as handled.
+    if page_table_is_mapped(&g_pt, va(page_va)) {
+        return 1;
+    }
+    if g_lm_pool_next >= g_lm_pool_end {
+        return 0; // pool exhausted — cannot happen for a reachable page (pool == window), fail closed
+    }
+    let phys: PAddr = pa(g_lm_pool_next);
+    g_lm_pool_next = g_lm_pool_next + PAGE_BYTES;
+    switch page_table_try_map(&g_pt, &g_heap, va(page_va), phys, PTE_R | PTE_W | PTE_U) {
+        ok(m) => {}
+        err(e) => {
+            g_lm_pool_next = g_lm_pool_next - PAGE_BYTES; // interior-table OOM: rewind, fail closed
+            return 0;
+        }
+    }
+    sfence_vma_all(); // drop any stale negative TLB entry for the freshly-mapped page
+    return 1;
+}
 
 // ----- sbrk map-path microbenchmark (Phase 2.3) -----
 // Opt-in cycle timing of the sys_sbrk map loop. The kernel boots -bios none (M-mode), so we read the
@@ -967,13 +1030,17 @@ export fn app_build(image_base: usize, image_len: usize, region_base: usize, reg
         }
     }
 
-    // The user-accessible window must span BOTH the ELF image/stack (below USER_LIMIT) AND the
-    // demand-grown heap region [HEAP_BASE, HEAP_BASE+SBRK_CAP_BYTES). Otherwise a syscall buffer that
-    // libc allocated from the grown heap (SYS_WRITE/READ/SUBMIT/POLL) would be rejected by
-    // copy_{from,to}_user_pt with E_FAULT. The window is a single [base, limit) span; the gap between
-    // USER_LIMIT and HEAP_BASE is in-range but unmapped, so a stray access there still fails the
-    // per-page page-table walk (E_FAULT) — the range widening only admits pages that are actually mapped.
-    g_uas = user_addr_space(&g_pt, USER_BASE, HEAP_BASE + SBRK_CAP_BYTES);
+    // The user-accessible window must span the ELF image/stack (below USER_LIMIT), the demand-grown heap
+    // region [HEAP_BASE, HEAP_BASE+SBRK_CAP_BYTES), AND the WASM linear-memory demand-paging window
+    // [LM_WINDOW_BASE, LM_WINDOW_BASE+LM_WINDOW_MAX). Otherwise a syscall buffer that lives in one of
+    // those regions is rejected by copy_{from,to}_user_pt with E_FAULT. In particular WASI fd_write
+    // hands SYS_WRITE the guest buffer's NATIVE address, which for the reserved linear memory is a window
+    // VA — so the window MUST be in range or the guest's stdout is silently dropped. The window is a
+    // single [base, limit) span; the gaps (USER_LIMIT..HEAP_BASE and heap-end..LM_WINDOW_BASE) are
+    // in-range but unmapped, so a stray access there still fails the per-page page-table walk (E_FAULT) —
+    // the widening only admits pages that are actually mapped (the ELF, the sbrk heap, or a faulted-in
+    // window page).
+    g_uas = user_addr_space(&g_pt, USER_BASE, LM_WINDOW_BASE + LM_WINDOW_MAX);
 
     // Stand up the demand-grown-heap frame pool (SYS_SBRK): a trivial monotonic bump frontier over a
     // fixed physical window. No RAM is touched until the agent actually sbrk's, so this is safe even in
@@ -984,6 +1051,13 @@ export fn app_build(image_base: usize, image_len: usize, region_base: usize, reg
     g_pool_end = SBRK_POOL_BASE + SBRK_POOL_LEN; // checked add: traps if the window overflows the space
     g_frames_ready = true;
     g_brk = HEAP_BASE;
+
+    // Stand up the WASM linear-memory demand-paging pool (Phase 4.1): a dedicated bump frontier over the
+    // upper 48 MiB of the split physical window. Untouched until the confined WASM engine faults a window
+    // page in, so it is inert for every non-WASM agent.
+    g_lm_pool_next = LM_POOL_BASE;
+    g_lm_pool_end = LM_POOL_BASE + LM_POOL_LEN;
+    g_lm_ready = true;
     // The per-agent grow ceiling lives in the unified ledger: set Resource.Memory's limit to the cap
     // (bounded by the physical pool). sys_sbrk charges this ledger per grow and fails closed on
     // over-limit. On real hardware SBRK_CAP_BYTES/the pool would be sized from the FDT free-RAM window.

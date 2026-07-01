@@ -95,10 +95,22 @@ biggest long-term lever for generated-code speed.
 
 ## Phase 4 — WASM deep + stretch (scoped separately)
 
-- **4.1 WASM linear-memory growth without O(n) copy.** `tools/wamr/mc-platform/mc_platform.c:61` (`os_mremap`
-  memcpy) + WAMR's realloc-the-whole-buffer growth. This is the same wall hit in the demand-grown-heap
-  Increment 3: the real fix is kernel page-fault demand-paging + a reserve-max/commit-on-grow linear
-  memory (WAMR mmap mode). Large, dependent on Phase 2.3. Tracked in `demand-grown-heap` notes.
+- **4.1 WASM linear-memory growth without O(n) copy. DONE (2026-07-01).** Route A (kernel page-fault
+  demand-paging of a reserved VA window), which needed NO WAMR source patch. The confined WASM host's
+  `mc` platform port (`os_mmap`/`os_mremap`, gated by `-DMC_WASM_LINEAR_RESERVE`) hands WAMR a fixed VA
+  WINDOW (4 GiB, 48 MiB reserve) and grows it IN PLACE by returning the same base — no realloc, no copy.
+  The M-mode trap dispatcher (`tests/qemu/proc/usermode_runtime.mc`) demand-pages that window: a
+  load/store fault inside it maps ONE zeroed frame from a dedicated pool and retries; every other fault
+  still `mc_halt`s (confinement unchanged). Backing pool split out of the existing 128 MiB frame window
+  (80 MiB sbrk / 48 MiB linear-memory), so any reachable page is guaranteed backable (no mid-instruction
+  OOM). BEFORE: growth OFF, linear memory capped at the ~14 MiB libc arena (enabling the old path made
+  WAMR realloc-copy the whole buffer each grow, O(n^2), and a large grow corrupted guest stdout). AFTER:
+  demand-paged, near-linear in pages touched, correct data — `wasm-memcap` cap moved 14 MiB → 23 MiB
+  (graceful), new `wasm-biggrow-test` grows 18 MiB (4608 pages faulted + verified) with intact stdout.
+  Full WASM/JS family green both backends. Kernel-side pager is general (would also serve a demand-paged
+  libc heap). Remaining stretch: unify the two pools behind the ledger + a reservation syscall so the
+  split is dynamic rather than a fixed 80/48; raise the effective cap past the WAMR/wasi-libc ~23 MiB
+  ceiling (module max / dlmalloc growth granularity, not the window).
 - **4.2 Instruction-metering as a build variant** — keep on by default (confinement), offer a
   metering-off variant for trusted/non-fuel workloads (~5–8%). `tools/lang/wamr-run-test.sh:90`.
 

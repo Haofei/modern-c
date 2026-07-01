@@ -90,6 +90,7 @@ WDEF=(-DBH_PLATFORM_MC -DBUILD_TARGET_RISCV64_LP64D -DWASM_ENABLE_INTERP=1
       -DWASM_ENABLE_INSTRUCTION_METERING=1 -DWASM_ENABLE_BULK_MEMORY=1
       -DWASM_ENABLE_BULK_MEMORY_OPT=1 -DWASM_ENABLE_REF_TYPES=1
       -DWASM_ENABLE_CALL_INDIRECT_OVERLONG=1
+      -DMC_WASM_LINEAR_RESERVE
       -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free)
 # Phase 1.2 (perf plan): default to WAMR's FAST interpreter (direct-threaded / label-as-values
 # dispatch); set WAMR_FAST_INTERP=0 to fall back to the classic interpreter. The flag is part of the
@@ -101,8 +102,11 @@ if [ "${WAMR_FAST_INTERP:-1}" = 1 ]; then WDEF+=(-DWASM_ENABLE_FAST_INTERP=1); W
 # into a cached archive. The objects are backend-independent (clang C, fixed APP_CFLAGS), so ~25 TUs ×
 # every wamr gate would dominate m0; an flock-guarded build-once keyed on a (WDEF + source mtimes)
 # stamp cuts it to a single build reused across all wamr gates. Cache: .wamr-cache/ (gitignored).
+# The -DMC_WASM_LINEAR_RESERVE (Phase 4.1 demand-paged linear memory) build lives in its OWN cache
+# subdir so it never thrashes the plain riscv archive that the S-mode/net gates (which have no M-mode
+# demand-pager) still share.
 AR="${AR:-llvm-ar}"
-CACHE="$HERE/.wamr-cache"; mkdir -p "$CACHE"
+CACHE="$HERE/.wamr-cache/lmreserve"; mkdir -p "$CACHE"
 WAMR_LIB="$CACHE/libwamr.a"
 WANT="$(printf '%s ' "${WDEF[@]}"; find "$WC/shared/platform/mc" "$WC/shared/utils" "$WC/shared/mem-alloc" "$WC/iwasm/common" "$WC/iwasm/interpreter" \( -name '*.c' -o -name '*.h' -o -name '*.S' \) 2>/dev/null | sort | xargs ls -la 2>/dev/null | md5sum)"
 kernel_boot_lock 9 "$CACHE/.lock"
