@@ -58,5 +58,8 @@ export fn g24_run() -> u32 {
     let ok: u32 = drain(true) + drain(false);
     let err: u32 = domains(20, 30);
     let wrap: u32 = bag.use + bag.open + bag.sat + bag.wrap;
-    return blended + ok + err + wrap;
+    // blended=7, ok=14, err=100, wrap=22 -> 143. Entry-mode contract: return 1 on success.
+    let total: u32 = blended + ok + err + wrap;
+    if (total == 143) { return 1; }
+    return 0;
 }
