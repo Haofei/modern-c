@@ -154,4 +154,12 @@ The gap and perf ledgers are the primary output. Scaffolds live in
 
 ## Execution log
 
-_(append per landed increment: commit, what shipped, measurement, m0 status)_
+- **2026-07-01 — Phase 0 COMPLETE (master @ c3106bb + follow-ups).** Vec<T> (`8b5c22b`),
+  StrHashMap<V> (`fd603ed`), StrBuf (`6eab817`), hosted argv (`5b04389`), mem string ops
+  (`6782fb5`), all cherry-picked from parallel worktree agents. 5 new m0 gates registered.
+  **Full Docker `m0` green: real_failures=0 (259s)** — both backends, nothing regressed. The
+  make-or-break spike (heap-backed generic `Vec<T>`) proved MC generics fully express growable
+  containers. Findings G9–G18 recorded in the gap ledger; two dominant gaps (G11 value
+  optionals, G12 slices) → Phase 0.6 deferred (workarounds suffice; let P1 prove the need).
+- **2026-07-01 — P1 (lexer) IN FLIGHT** — worktree agent porting `src/lexer.zig`+`src/token.zig`
+  → `selfhost/lexer.mc`+`selfhost/token.mc`, index-based tokens into `Vec<Token>`.
