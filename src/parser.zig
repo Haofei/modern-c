@@ -1685,8 +1685,29 @@ pub const Parser = struct {
         };
     }
 
+    // Contextual keywords (language gap G24): words that carry keyword meaning only in a
+    // specific syntactic position but are otherwise ordinary identifiers. Freeing them here
+    // lets self-hosted code use common names (`ok`, `err`, `type`, `use`, `open`, `sat`,
+    // `wrap`) as locals/params/fields/fn names without ambiguity:
+    //   - `ok`/`err`   : only meaningful as text (Result constructor `ok(v)`/pattern `ok(v)=>`),
+    //                    resolved downstream by lexeme, never by token kind.
+    //   - `sat`/`wrap` : arithmetic-domain type constructors, also resolved by lexeme in a type
+    //                    position; the token kind is irrelevant to a name position.
+    //   - `open`       : keyword only as the top-level `open enum` lead-in (a decl-leading
+    //                    position expectName never reaches).
+    //   - `type`       : keyword only as the top-level `type X = …` alias lead-in and as the
+    //                    `comptime T: type` metatype (both matched via `self.match(.kw_type)`
+    //                    before any name position is consulted).
+    //   - `use`        : reserved but otherwise unused, so free in every non-leading position.
+    fn isContextualNameKeyword(_: *Parser, kind: token.Kind) bool {
+        return switch (kind) {
+            .kw_ok, .kw_err, .kw_type, .kw_use, .kw_open, .kw_sat, .kw_wrap => true,
+            else => false,
+        };
+    }
+
     fn expectName(self: *Parser, message: []const u8) anyerror!ast.Ident {
-        if (self.current.kind != .identifier) return self.fail(message);
+        if (self.current.kind != .identifier and !self.isContextualNameKeyword(self.current.kind)) return self.fail(message);
         const out = ident(self.current);
         self.advance();
         return out;
@@ -1759,7 +1780,7 @@ pub const Parser = struct {
 
     fn isSymbol(_: *Parser, kind: token.Kind) bool {
         return switch (kind) {
-            .identifier, .kw_ok, .kw_err, .kw_open, .kw_never, .kw_void, .kw_bool, .kw_wrap, .kw_sat, .kw_serial, .kw_atomic, .kw_sizeof, .kw_alignof => true,
+            .identifier, .kw_ok, .kw_err, .kw_open, .kw_type, .kw_use, .kw_never, .kw_void, .kw_bool, .kw_wrap, .kw_sat, .kw_serial, .kw_atomic, .kw_sizeof, .kw_alignof => true,
             else => false,
         };
     }
