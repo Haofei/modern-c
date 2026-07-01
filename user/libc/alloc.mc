@@ -47,6 +47,100 @@ fn ensure_init() -> void {
     }
 }
 
+// ---- demand growth past the fixed arena (SYS_SBRK) ----
+//
+// When the arena is exhausted, allocations spill into a SECOND heap backed by frames the kernel maps
+// ON DEMAND at HEAP_BASE (through the __sbrk seam). Keeping the two heaps separate leaves the arena
+// path byte-for-byte unchanged for the common case (an agent that stays within the arena never sbrk's
+// and never touches this code), while letting a hungry agent — e.g. a WASM engine growing its linear
+// memory — grow into real RAM instead of a compile-time .bss array. free()/realloc route by address:
+// anything at or above HEAP_BASE lives in the grown heap. __sbrk is a WEAK default here that reports
+// "growth unavailable" (returns the -1 sentinel); user/libc/syscall_user.mc overrides it with the real
+// ecall, so ONLY a confined agent that can ecall actually grows — plain host-side libc users keep the
+// fixed arena and identical behaviour.
+const HEAP_BASE: usize = 0x6000_0000;         // must match app_run_demo.mc's HEAP_BASE
+const SBRK_FAIL: usize = 0xFFFF_FFFF_FFFF_FFFF;
+const GROW_CHUNK: usize = 4194304;            // 4 MiB per SYS_SBRK, amortizing the syscall over small mallocs
+const GROW_PAGE: usize = 4096;
+
+global g_grown: Heap;
+global g_grown_inited: u8;
+
+// Weak default: no syscall shim linked -> the heap is the fixed arena only (growth unavailable).
+#[weak]
+export fn __sbrk(delta: usize) -> usize {
+    return SBRK_FAIL;
+}
+
+// Is `sbrk`'s return an error (a negative errno, or the -1 unavailable sentinel)? Valid break VAs are
+// small positive addresses (the HEAP_BASE region), so the sign bit distinguishes cleanly.
+fn sbrk_failed(r: usize) -> bool {
+    return r >= 0x8000_0000_0000_0000;
+}
+
+// Lazily build the grown heap rooted at the current break. Returns false if growth is unavailable
+// (weak __sbrk) — callers then simply fail the allocation (NULL), exactly as the fixed arena did.
+fn grown_ensure_init() -> bool {
+    if g_grown_inited == 0 {
+        let base: usize = __sbrk(0); // query the current break without growing
+        if sbrk_failed(base) {
+            return false;
+        }
+        g_grown = heap_new(phys_range(pa(base), 0)); // empty; extended as we sbrk
+        g_grown_inited = 1;
+    }
+    return true;
+}
+
+// Grow the grown heap by at least `min_bytes` (rounded up to GROW_CHUNK + a page of slack, page-aligned)
+// via SYS_SBRK, then extend the heap over the freshly-mapped, contiguous tail. Returns false on failure.
+fn grown_grow(min_bytes: usize) -> bool {
+    let usize_max: usize = 0xFFFF_FFFF_FFFF_FFFF;
+    // headroom for the block header + heap alignment slack so a request of exactly `min_bytes` fits.
+    if min_bytes > usize_max - GROW_PAGE {
+        return false;
+    }
+    var want: usize = min_bytes + GROW_PAGE;
+    if want < GROW_CHUNK {
+        want = GROW_CHUNK;
+    }
+    if want > usize_max - (GROW_PAGE - 1) {
+        return false;
+    }
+    want = ((want + (GROW_PAGE - 1)) / GROW_PAGE) * GROW_PAGE; // whole pages
+    let old: usize = __sbrk(want);
+    if sbrk_failed(old) {
+        return false;
+    }
+    // The kernel mapped [old, old+want) R|W|U and contiguously with the grown heap's current end.
+    heap_extend(&g_grown, want);
+    return true;
+}
+
+// Try to satisfy `total` bytes from the grown heap, growing it once if needed. 0 == failure.
+fn grown_alloc(total: usize) -> usize {
+    if !grown_ensure_init() {
+        return 0;
+    }
+    switch heap_try_alloc(&g_grown, total, HEADER) {
+        ok(b) => {
+            unsafe { raw.store<usize>(b, total); }
+            return pa_value(pa_offset(b, HEADER));
+        }
+        err(e) => {}
+    }
+    if !grown_grow(total) {
+        return 0;
+    }
+    switch heap_try_alloc(&g_grown, total, HEADER) {
+        ok(b) => {
+            unsafe { raw.store<usize>(b, total); }
+            return pa_value(pa_offset(b, HEADER));
+        }
+        err(e) => { return 0; }
+    }
+}
+
 // ---- internal allocator, entirely in usize addresses (0 == failure / NULL) ----
 
 fn malloc_addr(size: usize) -> usize {
@@ -64,7 +158,11 @@ fn malloc_addr(size: usize) -> usize {
     var block: PAddr = uninit;
     switch heap_try_alloc(&g_heap, total, HEADER) {
         ok(b) => { block = b; }
-        err(e) => { return 0; }
+        err(e) => {
+            // Arena exhausted: spill into the demand-grown heap (sbrk-backed). Returns 0 (NULL) if
+            // growth is unavailable or the per-agent grow cap is reached — never a trap.
+            return grown_alloc(total);
+        }
     }
     unsafe {
         raw.store<usize>(block, total); // header: total block size
@@ -81,7 +179,13 @@ fn free_addr(user: usize) -> void {
     unsafe {
         total = raw.load<usize>(block);
     }
-    heap_free(&g_heap, block, total);
+    // Route by address: blocks at/above HEAP_BASE were carved from the demand-grown heap; everything
+    // below came from the fixed arena. Each heap validates the free against its own backing range.
+    if user >= HEAP_BASE {
+        heap_free(&g_grown, block, total);
+    } else {
+        heap_free(&g_heap, block, total);
+    }
 }
 
 fn realloc_addr(old: usize, size: usize) -> usize {

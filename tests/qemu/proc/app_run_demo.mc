@@ -34,6 +34,33 @@ const USER_LIMIT: usize = 0x0100_0000;
 const KBUF: usize = 256;
 const AGENT_PID: u64 = 7;
 
+// ----- demand-grown guest heap (SYS_SBRK) -----
+// The confined agent's libc heap no longer relies solely on a fixed static arena baked into the ELF's
+// .bss: when it runs dry, libc calls SYS_SBRK, and the kernel maps fresh R|W|U frames CONTIGUOUSLY at
+// the agent's break VA. Structural page-table frames still come from `g_heap` (the region pool); the
+// bulk DATA frames come from a dedicated window of physical RAM well above the kernel image + region
+// (QEMU virt is -m 256, RAM 0x8000_0000..0x9000_0000), handed out by a trivial monotonic bump frontier
+// (grown frames are never returned during an agent's life, so no free list is needed — and this avoids
+// pulling in kernel/core/page_alloc.mc, whose PAGE_SIZE would clash with paging.mc's under emit-c's
+// flattened namespace). This makes the grown heap scale with real RAM instead of a compile-time .bss
+// array. INCREMENT 1: additive (the static arena stays; sbrk only kicks in past it); INCREMENT 2
+// derives the pool/cap from bootinfo + the ledger.
+const PAGE_BYTES: usize = 4096;
+const HEAP_BASE: usize = 0x6000_0000;      // agent-side VA where the demand-grown heap begins (clear of
+                                           // the ELF image below 16 MiB and the stack)
+const SBRK_POOL_BASE: usize = 0x8400_0000; // physical RAM for grown frames: 64 MiB into RAM, above the
+                                           // kernel image + the 16 MiB confinement region
+const SBRK_POOL_LEN: usize = 0x0800_0000;  // 128 MiB pool (fits -m 256 with room for the DTB up top)
+// Per-agent grow ceiling: the break may not advance more than this past HEAP_BASE. INCREMENT 1 uses a
+// fixed ceiling (also bounds the O(n^2) realloc copying a WASM engine does while growing linear memory,
+// keeping the memcap gate's runtime sane); INCREMENT 2 replaces it with min(ledger limit, bootinfo
+// memory.size / 4).
+const SBRK_CAP_BYTES: usize = 0x0400_0000;  // 64 MiB grown per agent
+global g_pool_next: usize;      // bump frontier into the physical frame pool (next free frame addr)
+global g_pool_end: usize;       // one past the last frame in the pool
+global g_frames_ready: bool;    // app_build stood up the pool (defensive: deny sbrk if not)
+global g_brk: usize;            // the agent's current break VA (0 = not yet started -> HEAP_BASE)
+
 // app_build status codes: the loader's typed LoadError, preserved across the u64-satp C ABI
 // boundary so callers (and tests) can tell WHY a load failed rather than seeing a bare 0.
 const LS_OK: u32 = 0;
@@ -759,6 +786,72 @@ fn sys_poll(events_ptr: u64, max_arg: u64, timeout: u64) -> u64 {
     return count as u64;
 }
 
+// SYS_SBRK(delta): demand-grow the agent's heap. Classic sbrk semantics — grow the break by `delta`
+// bytes (rounded up to whole pages), mapping fresh R|W|U frames CONTIGUOUSLY at the current break VA
+// into the ACTIVE agent page table (g_pt), and return the OLD break VA. `delta == 0` queries the
+// current break. Fails closed with -E_NOMEM (mapping NOTHING) when the frame pool is short or an
+// interior page-table frame can't be allocated — an OOM is a normal, confined NULL from malloc, not a
+// kernel trap. Every page_alloc is guarded by pages_available first (page_alloc itself traps on
+// exhaustion). Frames handed to the page table are forgotten (their ownership moves into the mapping).
+fn sys_sbrk(delta: u64, a1: u64, a2: u64) -> u64 {
+    if !g_frames_ready {
+        return bitcast<u64>(E_NOMEM);
+    }
+    if g_brk == 0 {
+        g_brk = HEAP_BASE;
+    }
+    if delta == 0 {
+        return g_brk as u64; // query the current break
+    }
+
+    // Round `delta` up to whole pages, guarding the +(PAGE-1) against usize overflow.
+    let d: usize = delta as usize;
+    let usize_max: usize = 0xFFFF_FFFF_FFFF_FFFF;
+    if d > usize_max - (PAGE_BYTES - 1) {
+        return bitcast<u64>(E_NOMEM); // absurd request
+    }
+    let need_pages: usize = (d + (PAGE_BYTES - 1)) / PAGE_BYTES;
+    // need_pages * PAGE_BYTES cannot overflow here: need_pages <= usize_max/PAGE_BYTES by construction.
+    let need: usize = need_pages * PAGE_BYTES;
+
+    // Capacity guard: the pool must hold every data frame BEFORE we map anything (all-or-nothing at the
+    // data-frame level; interior-table OOM is still handled per-page below, failing closed).
+    let pool_left_pages: usize = (g_pool_end - g_pool_next) / PAGE_BYTES; // g_pool_end >= g_pool_next invariant
+    if pool_left_pages < need_pages {
+        return bitcast<u64>(E_NOMEM);
+    }
+    // The break VA must not overflow while growing.
+    let old: usize = g_brk;
+    if old > usize_max - need {
+        return bitcast<u64>(E_NOMEM);
+    }
+    // Per-agent grow ceiling: refuse to advance the break past HEAP_BASE + SBRK_CAP_BYTES. Enforced
+    // BEFORE mapping so an over-cap request maps nothing (the agent just gets NULL from malloc).
+    if need > SBRK_CAP_BYTES {
+        return bitcast<u64>(E_NOMEM);
+    }
+    let grown: usize = old - HEAP_BASE; // old >= HEAP_BASE (set on first call), so this cannot underflow
+    if grown > SBRK_CAP_BYTES - need {
+        return bitcast<u64>(E_NOMEM);
+    }
+
+    var off: usize = 0;
+    while off < need {
+        if g_pool_next >= g_pool_end {
+            return bitcast<u64>(E_NOMEM); // pool exhausted (guarded above; defensive)
+        }
+        let phys: PAddr = pa(g_pool_next);
+        g_pool_next = g_pool_next + PAGE_BYTES; // consume one frame from the bump pool
+        switch page_table_try_map(&g_pt, &g_heap, va(old + off), phys, PTE_R | PTE_W | PTE_U) {
+            ok(v) => { sfence_vma_page(va(old + off)); } // active space: flush the stale TLB entry
+            err(e) => { return bitcast<u64>(E_NOMEM); }  // interior-table OOM etc — fail closed
+        }
+        off = off + PAGE_BYTES;
+    }
+    g_brk = old + need;
+    return old as u64; // classic sbrk: the OLD break, now backed by `need` fresh bytes
+}
+
 // Register the userspace ABI handlers. Called by usermode_setup() (the shared C trap
 // bring-up) before the app runs; the handlers reference g_uas, which app_build sets before
 // any ecall can occur.
@@ -769,6 +862,7 @@ export fn syscall_setup() -> void {
     syscall_register(&g_syscalls, SYS_GETPID as usize, sys_getpid);
     syscall_register(&g_syscalls, SYS_SUBMIT as usize, sys_submit);
     syscall_register(&g_syscalls, SYS_POLL as usize, sys_poll);
+    syscall_register(&g_syscalls, SYS_SBRK as usize, sys_sbrk);
 }
 
 // Called by the C trap for each ecall (number a7, args a0..a2). SYS_EXIT is handled by the
@@ -806,6 +900,16 @@ export fn app_build(image_base: usize, image_len: usize, region_base: usize, reg
     }
 
     g_uas = user_addr_space(&g_pt, USER_BASE, USER_LIMIT);
+
+    // Stand up the demand-grown-heap frame pool (SYS_SBRK): a trivial monotonic bump frontier over a
+    // fixed physical window. No RAM is touched until the agent actually sbrk's, so this is safe even in
+    // gates whose agents never grow. Self-contained (no page_alloc.mc import — whose PAGE_SIZE would
+    // clash with paging.mc's under emit-c's flattened namespace). The break starts at HEAP_BASE (lazily
+    // on first sbrk).
+    g_pool_next = SBRK_POOL_BASE;
+    g_pool_end = SBRK_POOL_BASE + SBRK_POOL_LEN; // checked add: traps if the window overflows the space
+    g_frames_ready = true;
+    g_brk = HEAP_BASE;
 
     // M5b.2: stand up the REAL capability-checked FS tool world before the agent can issue any
     // SYS_SUBMIT. The agent gets a path cap rooted at "/ws" with read+write rights, and an

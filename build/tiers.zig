@@ -172,6 +172,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-wasm-js-bench-test"));
     m0_step.dependOn(ctx.cmd("wasm-memcap-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-memcap-test"));
+    m0_step.dependOn(ctx.cmd("sbrk-grow-test"));
+    m0_step.dependOn(ctx.cmd("llvm-sbrk-grow-test"));
     m0_step.dependOn(ctx.cmd("wasm-watchdog-test"));
     m0_step.dependOn(ctx.cmd("llvm-wasm-watchdog-test"));
     m0_step.dependOn(ctx.cmd("qjs-confined-test"));

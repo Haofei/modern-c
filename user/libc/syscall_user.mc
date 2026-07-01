@@ -41,6 +41,15 @@ export fn sys_read(buf: usize, max: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_READ, buf as u64, max as u64, 0));
 }
 
+// Demand-grown heap: the libc allocator's break primitive. Grow the heap by `delta` bytes and return
+// the OLD break VA, or a negative errno (as usize) on failure. This is the STRONG definition that
+// overrides the weak "growth unavailable" default in user/libc/alloc.mc, so only a confined agent that
+// links this shim (i.e. can ecall) actually gets a growable heap; plain host-side libc users keep the
+// fixed arena. `delta == 0` queries the current break.
+export fn __sbrk(delta: usize) -> usize {
+    return mc_ecall(SYS_SBRK, delta as u64, 0, 0) as usize;
+}
+
 // Bind the agent-facing async pump (user/agent_async.mc) to the REAL syscall Tool ABI: its drain
 // goes through sys_submit / sys_poll. A confined agent calls this once, then uses tool_call_async /
 // read_async / write_async / sleep_async / net_fetch_async + pump_run_to_completion over `p`.

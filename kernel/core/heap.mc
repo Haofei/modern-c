@@ -431,6 +431,21 @@ export fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
     heap_release(h, faddr, fsize);
 }
 
+// Extend this heap's backing range by `added_len` bytes at its current end (demand-grown heap). The
+// caller must have just made [range.end, range.end + added_len) real, writable, and CONTIGUOUS with the
+// existing range — e.g. the libc allocator after SYS_SBRK mapped fresh frames at the running break. The
+// new tail becomes available to the bump frontier (no free-list slot is consumed), and because the
+// backing range now covers the grown span, `heap_free` of a block later carved from it validates and
+// coalesces exactly like any other block. Precondition: the added region is contiguous; a non-adjacent
+// region must go through the free list instead.
+export fn heap_extend(h: *mut Heap, added_len: usize) -> void {
+    if added_len == 0 {
+        return;
+    }
+    let new_len: usize = pr_len(&h.range) + added_len; // checked: traps on overflow
+    h.range = phys_range(pr_start(&h.range), new_len);
+}
+
 // Bytes still available: the untouched tail plus everything on the free list.
 export fn heap_available(h: *mut Heap) -> usize {
     var total: usize = pa_diff(h.next, pr_end(&h.range));

@@ -25,9 +25,16 @@ export const SYS_EXIT: u64 = 3; // (code) -> noreturn
 // FS ops (below); future compound Tool/Net calls slot straight in.
 export const SYS_SUBMIT: u64 = 4; // (req_ptr) -> request id (>=0) | -errno
 export const SYS_POLL: u64 = 5; // (events_ptr, max, timeout) -> count delivered (0..max) | -E_FAULT
+// Demand-grown guest heap (docs: the fixed 14 MiB static libc arena is replaced by frames the
+// kernel maps on demand). Classic sbrk: grow the agent's break by `delta` bytes (rounded up to whole
+// pages), mapping fresh R|W|U frames CONTIGUOUSLY at the running break VA, and return the OLD break VA
+// (>=0). `delta == 0` queries the current break. On exhaustion / over-cap it returns a negative errno
+// (-E_NOMEM) WITHOUT mapping anything, so a hostile or greedy agent gets NULL from malloc, never a trap.
+export const SYS_SBRK: u64 = 6; // (delta) -> old break VA (>=0) | -E_NOMEM
 
 // Negative-errno results returned through the syscall ABI (Linux-compatible values).
 export const E_AGAIN: i64 = -11;     // EAGAIN: no capacity right now (back-pressure, retryable)
+export const E_NOMEM: i64 = -12;     // ENOMEM: out of memory / over the per-agent grow cap (not retryable)
 export const E_DENIED: i64 = -13;    // EACCES: policy denied this op (not retryable)
 export const E_FAULT: i64 = -14;     // EFAULT: a user pointer could not be accessed
 export const E_NOCAP: i64 = -105;    // ENOBUFS: request exceeds a hard capacity bound (payload too big)
