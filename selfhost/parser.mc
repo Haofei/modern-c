@@ -118,6 +118,17 @@ open enum NodeKind: u32 {
                       //    lhs = the pointer operand. Emits `(*(p))`.
     extern_fn,        // 52 `extern "C" fn NAME(params) -> RET;`: main_token = name; lhs = a fixed
                       //    record [params_run, ret_type]. No body — a callable prototype only.
+    // ----- P5.9 casts + sizeof/alignof additions (appended to keep prior ordinals stable) -----
+    cast,             // 53 `expr as TYPE`: main_token = the `as` ident token; lhs = operand expr;
+                      //    rhs = target type node. Binds TIGHTER than any binary op but looser than
+                      //    postfix/unary — recognized in the infix position by the `as` identifier
+                      //    lexeme (`as` is NOT a keyword), mirroring src/parser.zig. Emits
+                      //    `((<ctype>)(operand))`; types as its target type.
+    sizeof_op,        // 54 `sizeof(TYPE)`: main_token = the `sizeof` keyword; lhs = the TYPE node
+                      //    (the subset's `sizeof` takes a type, not an expr). Emits `sizeof(<ctype>)`;
+                      //    types as `usize`. A generic type param T is substituted at emit (P5.5).
+    alignof_op,       // 55 `alignof(TYPE)`: main_token = the `alignof` keyword; lhs = the TYPE node.
+                      //    Emits `_Alignof(<ctype>)`; types as `usize`.
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -451,6 +462,15 @@ fn tok_is_raw(p: *mut Parser, tok: u32) -> bool {
     return mem_eql(lex, mem.as_bytes(&kw));
 }
 
+// True when token `tok` is the identifier `as` (the cast operator, which is NOT a lexer keyword —
+// it lexes as a plain identifier, exactly as MC's real parser recognizes it in src/parser.zig:
+// `self.current.kind == .identifier and eql(self.current.lexeme, "as")`). Bound to a local per G13.
+fn tok_is_as(p: *mut Parser, tok: u32) -> bool {
+    let lex: []const u8 = tok_lexeme(p, tok);
+    var kw: [2]u8 = .{ 97, 115 }; // "as"
+    return mem_eql(lex, mem.as_bytes(&kw));
+}
+
 // raw_op := `raw` `.` (`ptr`|`load`|`store`) `<` Type `>` `(` Expr (`,` Expr)? `)`  (P5.8). The
 // member ident (`ptr`/`load`/`store`) becomes main_token so emit/sema recover the op by lexeme; the
 // `<T>` reuses `parse_type`; the value args are a fixed 2-slot record [arg0, arg1] (arg1 = 0 for the
@@ -482,6 +502,24 @@ fn parse_primary(p: *mut Parser) -> u32 {
         let it: u32 = p.tok as u32;
         p_advance(p);
         return add_node(p, .int_literal, it, 0, 0);
+    }
+    // `sizeof(TYPE)` / `alignof(TYPE)` (P5.9): both are lexer KEYWORDS (kw_sizeof/kw_alignof) and take
+    // a TYPE (not an expr) in the subset — matching MC's builtins. The type node is kept in `lhs`.
+    if at(p, .kw_sizeof) {
+        let sz_tok: u32 = p.tok as u32;
+        p_advance(p); // `sizeof`
+        expect(p, .l_paren);
+        let sz_ty: u32 = parse_type(p);
+        expect(p, .r_paren);
+        return add_node(p, .sizeof_op, sz_tok, sz_ty, 0);
+    }
+    if at(p, .kw_alignof) {
+        let al_tok: u32 = p.tok as u32;
+        p_advance(p); // `alignof`
+        expect(p, .l_paren);
+        let al_ty: u32 = parse_type(p);
+        expect(p, .r_paren);
+        return add_node(p, .alignof_op, al_tok, al_ty, 0);
     }
     if at(p, .identifier) {
         // A `raw.ptr<T>(...)` / `raw.load<T>(...)` / `raw.store<T>(...)` intrinsic (P5.8): the base
@@ -624,6 +662,21 @@ fn parse_expr(p: *mut Parser, min_bp: u32) -> u32 {
     var lhs: u32 = parse_prefix(p);
     while true {
         lhs = parse_postfix(p, lhs);
+        // `expr as TYPE` (P5.9): recognized in the infix position by the `as` identifier lexeme (it is
+        // NOT a keyword). Checked BEFORE the binary table and `continue`d regardless of `min_bp`, so a
+        // cast binds tighter than every binary operator but looser than postfix/unary — exactly as
+        // src/parser.zig does it (so `a as u32 + b` is `(a as u32) + b`, `a * b as u32` is
+        // `a * (b as u32)`). lhs = the operand; rhs = the target type node.
+        if at(p, .identifier) {
+            let is_as: bool = tok_is_as(p, p.tok as u32);
+            if is_as {
+                let as_tok: u32 = p.tok as u32;
+                p_advance(p); // `as`
+                let cast_ty: u32 = parse_type(p);
+                lhs = add_node(p, .cast, as_tok, lhs, cast_ty);
+                continue;
+            }
+        }
         let op: OpInfo = infix_op(p);
         if !op.present {
             break;

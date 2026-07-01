@@ -799,6 +799,33 @@ fn sm_raw_op(s: *mut SmState, node: u32) -> SmType {
     return sm_ty(.void_);
 }
 
+// Type an `expr as TYPE` cast (P5.9): the result type is the target. The operand is walked for its
+// own errors. CAST VALIDITY is LENIENT in the subset — allowed when BOTH sides are numeric,
+// pointer-ish (ptr_depth > 0), or `unknown` (already errored / an unmodeled kind, accepted to avoid
+// cascading). That admits numeric<->numeric widening/narrowing and integer<->pointer / pointer<->pointer
+// casts (the uses the memory/container deps need: `x as u32`, `i * sizeof(T)`, address<->pointer). A
+// clearly-bogus cast (e.g. a bool or struct/array operand) is a `type_mismatch`. Crucially, a cast is
+// what RESOLVES the cross-width arithmetic pain from earlier phases (`s.len as u32 + b`).
+fn sm_cast(s: *mut SmState, nd: Node) -> SmType {
+    let src: SmType = sm_type_of_expr(s, nd.lhs);
+    let dst: SmType = sm_type_from_node(s, nd.rhs);
+    // Bind each classification to a local before deciding (a bare `call() == lit` operand cannot
+    // recover its type on the C backend — gap G23).
+    let sk: u32 = src.kind.raw();
+    let dk: u32 = dst.kind.raw();
+    let s_num: bool = sm_is_num_raw(sk);
+    let d_num: bool = sm_is_num_raw(dk);
+    let s_ptr: bool = src.ptr_depth > 0;
+    let d_ptr: bool = dst.ptr_depth > 0;
+    let s_ok: bool = s_num || s_ptr || sk == 0;
+    let d_ok: bool = d_num || d_ptr || dk == 0;
+    if s_ok && d_ok {
+        return dst;
+    }
+    sm_err(s, .type_mismatch);
+    return dst;
+}
+
 // The type of an expression node (recursively). Dispatches over `NodeKind` with a `switch`; the
 // open enum forces a `_` default (there is no exhaustiveness help — see the ledger note).
 fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
@@ -911,6 +938,11 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
         .bin_ge => { return sm_cmp(s, nd); }
         .bin_lor => { return sm_logic(s, nd); }
         .bin_land => { return sm_logic(s, nd); }
+        .cast => { return sm_cast(s, nd); }
+        // `sizeof(T)` / `alignof(T)` (P5.9) are `usize`. The type node is not resolved here (it needs
+        // no checking in the subset); a generic type param T is substituted only at emit (P5.5).
+        .sizeof_op => { return sm_ty(.usize_); }
+        .alignof_op => { return sm_ty(.usize_); }
         _ => { return sm_ty_unknown(); }
     }
 }

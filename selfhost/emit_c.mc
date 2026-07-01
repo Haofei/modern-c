@@ -758,6 +758,32 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         e_array_lit_body(p, sb, n);
         return;
     }
+    if nd.kind == .cast {
+        // `expr as TYPE` (P5.9) -> `((<ctype>)(operand))` — matching the real C backend. The target
+        // goes through `e_type` so a monomorphized generic type param is substituted (P5.5); the
+        // operand is parenthesized so a compound operand casts cleanly.
+        sb_put_cstr(sb, "((");
+        e_type(p, sb, nd.rhs);
+        sb_put_cstr(sb, ")(");
+        e_expr(p, sb, nd.lhs);
+        sb_put_cstr(sb, "))");
+        return;
+    }
+    if nd.kind == .sizeof_op {
+        // `sizeof(TYPE)` (P5.9) -> `sizeof(<ctype>)`. `e_type` substitutes an active generic type
+        // param, so `sizeof(T)` in a `Vec<u32>` instance emits `sizeof(uint32_t)`.
+        sb_put_cstr(sb, "sizeof(");
+        e_type(p, sb, nd.lhs);
+        sb_put_cstr(sb, ")");
+        return;
+    }
+    if nd.kind == .alignof_op {
+        // `alignof(TYPE)` (P5.9) -> `_Alignof(<ctype>)` (C11 keyword; same substitution as sizeof).
+        sb_put_cstr(sb, "_Alignof(");
+        e_type(p, sb, nd.lhs);
+        sb_put_cstr(sb, ")");
+        return;
+    }
     // Any other node kind is outside the emitter subset; emit nothing.
 }
 
