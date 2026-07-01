@@ -35,6 +35,10 @@ const U64_MAX: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 const EVLOG_CAP: usize = 64;          // event-log capacity (bounded; recording past this fails)
 
 // Stable ordinal for a MetricId (also its array index and wire `kind`).
+// `#[irq_context]`: a pure switch returning a small ordinal, no blocking/indirect calls — so a
+// counter update built on it (metrics_add/metrics_inc) can meter an event from an ISR path
+// (e.g. proc_preempt_tick's quantum-expiry edge).
+#[irq_context]
 fn metric_ord(id: MetricId) -> usize {
     switch id {
         .ProcSpawn => { return 0; }
@@ -62,6 +66,9 @@ export fn metrics_init(m: *mut Metrics) -> void {
 }
 
 // Add `n` to a counter, SATURATING at u64 max (checked add would trap on overflow).
+// `#[irq_context]`: only a bounded array read/write plus saturating arithmetic — no blocking or
+// indirect calls — so a hot-path counter can be bumped directly from an ISR (see proc_preempt_tick).
+#[irq_context]
 export fn metrics_add(m: *mut Metrics, id: MetricId, n: u64) -> void {
     let i: usize = metric_ord(id);
     let cur: u64 = m.counters[i];
@@ -74,13 +81,17 @@ export fn metrics_add(m: *mut Metrics, id: MetricId, n: u64) -> void {
 }
 
 // Increment a counter by one (saturating).
+// `#[irq_context]`: delegates to the irq-safe metrics_add, so an ISR edge (e.g. a scheduler
+// preemption) can meter itself with a single call.
+#[irq_context]
 export fn metrics_inc(m: *mut Metrics, id: MetricId) -> void {
     metrics_add(m, id, 1);
 }
 
 // Read a counter's current value.
 export fn metrics_get(m: *Metrics, id: MetricId) -> u64 {
-    return m.counters[metric_ord(id)];
+    let i: usize = metric_ord(id); // bind the ordinal first (a bare call inside the index emits an unused C pre-temp)
+    return m.counters[i];
 }
 
 // One recorded event: `kind` is a MetricId ordinal; `a`/`b` are free payload slots

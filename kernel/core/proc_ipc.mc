@@ -108,6 +108,19 @@ fn wake_if_blocked(t: *mut ProcTable, dst: usize) -> void {
     proc_unblock(t, dst, BLOCK_RECV); // wake a receiver blocked on its inbox
 }
 
+// Release one in-flight IPC message on receive/drain — the dual of the charge in the send funnel
+// (ipc_send_try_id_prov) — and meter IpcRecv. Called only when a message is actually TAKEN from a
+// mailbox (never on a synthesized out-of-band DEAD result). ledger_release refuses (no-op) if the
+// counter is already zero, so a message delivered by a path that did not charge (e.g. ipc_notify)
+// can never underflow the ledger.
+fn ipc_recv_release(t: *mut ProcTable) -> void {
+    switch ledger_release(&t.ledger, .IpcMessages, 1) {
+        ok(v) => {}
+        err(e) => {}
+    }
+    metrics_inc(&t.metrics, .IpcRecv); // hot-path counter: an IPC message was received
+}
+
 // Non-blocking send: deliver if the mailbox has room, else false (the caller decides
 // whether to retry, drop, or block). This is the primitive both send policies build on,
 // so a caller never has to spin against a full mailbox unless it explicitly chooses to.
@@ -138,9 +151,18 @@ fn ipc_send_try_id_prov(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: 
     if !proc_is_live(t, dst) {
         return false; // no such process, or it has exited/died — never post into a dead slot
     }
+    // UNIFIED LEDGER: charge one in-flight IPC message BEFORE posting. If the ledger refuses
+    // (IpcMessages over limit) the send fails cleanly — indistinguishable from a full mailbox to
+    // the caller (returns false), never a trap. Released on receive (ipc_recv_release). A dimension
+    // with limit 0 is unlimited, so an un-configured ledger never blocks a send.
+    switch ledger_charge(&t.ledger, .IpcMessages, 1) {
+        ok(v) => {}
+        err(e) => { return false; } // over the IPC-message ceiling — drop cleanly, reserve nothing
+    }
     let msg: Message = proc_make_msg(t, tag, a0, a1, a2, call_id);
     if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
         wake_if_blocked(t, dst);
+        metrics_inc(&t.metrics, .IpcSend); // hot-path counter: an IPC message was sent
         if record_prov {
             // Observe-only: record provenance for this successful delivery. Does not affect the
             // result — the same sends succeed/fail exactly as before. The fast path skips this
@@ -148,6 +170,12 @@ fn ipc_send_try_id_prov(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: 
             ipc_provenance_emit(msg.from, dst_pid, &msg);
         }
         return true;
+    }
+    // Post failed (mailbox full): refund the charge so a later retry does not double-count the
+    // same message against the ledger.
+    switch ledger_release(&t.ledger, .IpcMessages, 1) {
+        ok(v) => {}
+        err(e) => {}
     }
     return false; // mailbox full
 }
@@ -398,6 +426,7 @@ fn ipc_receive_reply(t: *mut ProcTable, ep: Endpoint, expected_call_id: u64, out
     while !got {
         if mailbox_take_if(Message, IPC_SLOTS, &t.procs[t.current].inbox, pred, out) {
             got = true; // only the matching reply is ever taken; everything else stays queued
+            ipc_recv_release(t); // release the in-flight charge + meter IpcRecv for the taken reply
         } else {
             if !endpoint_live(t, ep) {
                 let dead_msg: Message = .{ .from = src_pid, .from_gen = ep.gen, .call_id = expected_call_id, .tag = TAG_DEAD, .a0 = 0, .a1 = 0, .a2 = 0 };
@@ -472,7 +501,9 @@ export fn ipc_receive(t: *mut ProcTable, out: *mut Message) -> void {
     var got: bool = false;
     while !got {
         got = mailbox_take(Message, IPC_SLOTS, &t.procs[t.current].inbox, out);
-        if !got {
+        if got {
+            ipc_recv_release(t); // release the in-flight charge + meter IpcRecv for the taken message
+        } else {
             proc_block(t, t.current, BLOCK_RECV);
             proc_yield_or_idle(t);
         }
@@ -487,6 +518,7 @@ export fn ipc_receive_timeout(t: *mut ProcTable, out: *mut Message, max_yields: 
     var tries: u32 = 0;
     while tries <= max_yields {
         if mailbox_take(Message, IPC_SLOTS, &t.procs[t.current].inbox, out) {
+            ipc_recv_release(t); // release the in-flight charge + meter IpcRecv for the taken message
             return true;
         }
         if tries == max_yields {
@@ -535,7 +567,9 @@ export fn ipc_receive_from(t: *mut ProcTable, src_pid: u32, out: *mut Message) -
         // Match both source slot and the captured generation, so a stale message from an older
         // incarnation is not mistaken for the awaited source (and is left queued, not dropped).
         got = mailbox_take_if(Message, IPC_SLOTS, &t.procs[t.current].inbox, pred, out);
-        if !got {
+        if got {
+            ipc_recv_release(t); // release the in-flight charge + meter IpcRecv for the taken message
+        } else {
             // The awaited source died: stop waiting and report DEAD out-of-band (not via the
             // mailbox, which could be full) — guaranteed delivery of the dead-endpoint result.
             if !endpoint_live(t, src_ep) {

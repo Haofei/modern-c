@@ -410,6 +410,9 @@ export fn proc_preempt_tick(t: *mut ProcTable) -> bool {
     let expired: bool = proc_tick(t);
     if expired {
         g_need_resched.store(1, .release);
+        // Hot-path counter: the scheduler preempted the running task (quantum-expiry edge). A plain
+        // saturating counter update — no blocking / context switch — so it stays irq-safe.
+        metrics_inc(&t.metrics, .SchedPreempt);
     }
     return expired;
 }
@@ -490,6 +493,115 @@ export fn proc_liveness_expired(t: *mut ProcTable, slot: usize, now: u64) -> boo
     return (now - last) > deadline;
 }
 
+// ----- supervision: LEASES (time-bounded grants) -----
+// A lease is a time-bounded grant of continued supervision: a slot must have its lease RENEWED
+// before it expires, or the supervisor treats the lapse exactly like a missed heartbeat (see
+// sup_expired / proc_supervise_step). Where a heartbeat proves "still making progress", a lease
+// proves "still authorized to run"; both feed the same restart/give-up verdict. The state lives ON
+// the Process (lease_expiry / lease_ttl) — per-table, cleared by proc_table_init + proc_spawn reuse.
+const SCHED_U64_MAX: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+
+// Grant `slot` a lease valid for `ttl` ticks starting at `now`: it must be renewed before now+ttl
+// or it is treated as expired. The absolute expiry is computed overflow-safe (never forms an
+// overflowing now+ttl sum), saturating at u64 max. ttl 0 is degenerate (immediately expired).
+export fn proc_lease_grant(t: *mut ProcTable, slot: usize, now: u64, ttl: u64) -> void {
+    if slot < MAX_PROCS {
+        t.procs[slot].lease_ttl = ttl;
+        if ttl > SCHED_U64_MAX - now {
+            t.procs[slot].lease_expiry = SCHED_U64_MAX; // saturate rather than wrap the expiry
+        } else {
+            t.procs[slot].lease_expiry = now + ttl;
+        }
+    }
+}
+
+// Renew `slot`'s lease for another `ttl` ticks from `now` (same as a fresh grant).
+export fn proc_lease_renew(t: *mut ProcTable, slot: usize, now: u64, ttl: u64) -> void {
+    proc_lease_grant(t, slot, now, ttl);
+}
+
+// True iff `slot` currently holds a valid (un-expired) lease as of `now`.
+export fn proc_lease_valid(t: *mut ProcTable, slot: usize, now: u64) -> bool {
+    if slot >= MAX_PROCS {
+        return false;
+    }
+    let exp: u64 = t.procs[slot].lease_expiry;
+    if exp == 0 {
+        return false; // no lease granted
+    }
+    return now < exp;
+}
+
+// True iff `slot` holds a lease that has EXPIRED as of `now` — the lease analogue of a missed
+// heartbeat. A slot with no lease (expiry 0) is never lease-expired.
+fn proc_lease_expired(t: *mut ProcTable, slot: usize, now: u64) -> bool {
+    if slot >= MAX_PROCS {
+        return false;
+    }
+    let exp: u64 = t.procs[slot].lease_expiry;
+    if exp == 0 {
+        return false; // no lease granted
+    }
+    return now >= exp;
+}
+
+// Clear a slot's lease (no lease held).
+fn proc_lease_clear(t: *mut ProcTable, slot: usize) -> void {
+    if slot < MAX_PROCS {
+        t.procs[slot].lease_expiry = 0;
+        t.procs[slot].lease_ttl = 0;
+    }
+}
+
+// The unified "this slot needs supervisor attention" predicate: a missed heartbeat OR an expired
+// lease. proc_supervise_step folds this into its verdict, so heartbeat and lease lapses drive the
+// same restart/give-up decision.
+fn sup_expired(t: *mut ProcTable, slot: usize, now: u64) -> bool {
+    if proc_liveness_expired(t, slot, now) {
+        return true;
+    }
+    return proc_lease_expired(t, slot, now);
+}
+
+// ----- supervision: TREE (parent/child links) -----
+// Register `child_slot` as a supervised child of `parent_slot`, so that when the supervisor gives
+// up on the parent (crash-loop exhausted) the scan CASCADES the give-up to the child (see
+// proc_supervisor_scan). The link is one parent slot per child (MAX_PROCS = no parent). Cleared by
+// proc_table_init + proc_spawn slot reuse.
+export fn proc_supervise_child(t: *mut ProcTable, child_slot: usize, parent_slot: usize) -> void {
+    if child_slot < MAX_PROCS {
+        if parent_slot < MAX_PROCS {
+            t.procs[child_slot].sup_parent = parent_slot;
+        }
+    }
+}
+
+// The supervision parent slot of `slot`, or MAX_PROCS if it has none.
+export fn proc_supervise_parent(t: *mut ProcTable, slot: usize) -> usize {
+    if slot < MAX_PROCS {
+        return t.procs[slot].sup_parent;
+    }
+    return MAX_PROCS;
+}
+
+// Give up on a slot: stop supervising it (heartbeat + lease both cleared) so it is never restarted
+// again. The restart_count is retained as evidence; reaping/kill of a held victim is caller policy.
+fn proc_giveup(t: *mut ProcTable, slot: usize) -> void {
+    proc_unsupervise(t, slot); // hb_deadline = 0
+    proc_lease_clear(t, slot); // drop any lease too
+}
+
+// Re-arm a just-restarted slot so it is not immediately re-flagged on the next scan: a fresh
+// heartbeat interval from `now`, and — if it held a lease — a fresh lease of the same ttl.
+fn proc_sup_rearm(t: *mut ProcTable, slot: usize, now: u64) -> void {
+    proc_heartbeat(t, slot, now); // re-arm the heartbeat deadline
+    if slot < MAX_PROCS {
+        if t.procs[slot].lease_expiry != 0 {
+            proc_lease_grant(t, slot, now, t.procs[slot].lease_ttl); // re-arm the lease too
+        }
+    }
+}
+
 // ----- supervision: restart / crash-loop policy (production-readiness §3.1 #12) -----
 // Once liveness detection (above) flags a dead/stuck slot, the supervisor decides whether to RESTART
 // it — but blindly restarting a slot that keeps dying is a crash loop (CPU-burning thrash). This
@@ -541,7 +653,8 @@ enum SupervisorAction {
 // — keeping the mechanism here and the actuation (respawn via proc_spawn / kill via proc_kill, and
 // proc_restart_record on an actual restart / proc_restart_reset on a clean recovery) in the caller.
 export fn proc_supervise_step(t: *mut ProcTable, slot: usize, now: u64, max_restarts: u32) -> SupervisorAction {
-    if !proc_liveness_expired(t, slot, now) {
+    // A missed heartbeat OR an expired lease demands attention; both feed the same verdict.
+    if !sup_expired(t, slot, now) {
         return .None;
     }
     if proc_restart_allowed(t, slot, max_restarts) {
@@ -570,6 +683,10 @@ export fn proc_supervise_step(t: *mut ProcTable, slot: usize, now: u64, max_rest
 export fn proc_supervisor_scan(t: *mut ProcTable, now: u64, max_restarts: u32) -> u32 {
     var restarts: u32 = 0;
     var giveups: u32 = 0;
+    // Bitset of slots given up THIS scan (MAX_PROCS <= 32, so a u32 suffices). Seeds the tree
+    // cascade below: a child whose supervision parent is in this set is also given up.
+    var given: u32 = 0;
+    // ----- phase 1: per-slot verdict (heartbeat + lease), actuate restart / give-up -----
     var slot: usize = 0;
     while slot < t.count {
         if t.procs[slot].state != .Unused { // a free slot carries no live supervision
@@ -577,16 +694,47 @@ export fn proc_supervisor_scan(t: *mut ProcTable, now: u64, max_restarts: u32) -
                 .None => {}
                 .Restart => {
                     proc_restart_record(t, slot); // crash-loop accounting (saturating)
-                    proc_heartbeat(t, slot, now); // re-arm: fresh interval from `now`
+                    proc_sup_rearm(t, slot, now); // re-arm heartbeat (and lease) — fresh interval
                     restarts = restarts + 1;
                 }
                 .GiveUp => {
-                    proc_unsupervise(t, slot); // crash-looping: stop restarting it
+                    proc_giveup(t, slot); // crash-looping: stop supervising (heartbeat + lease)
+                    given = given | ((1 as u32) << (slot as u32));
                     giveups = giveups + 1;
                 }
             }
         }
         slot = slot + 1;
+    }
+    // ----- phase 2: TREE cascade — give up the children of any given-up parent -----
+    // Bounded, non-recursive fixpoint: each round marks children whose parent is already given up;
+    // at most MAX_PROCS rounds are needed to reach the deepest leaf, so recursion is not required.
+    var changed: bool = true;
+    var rounds: usize = 0;
+    while changed {
+        changed = false;
+        if rounds < MAX_PROCS {
+            var c: usize = 0;
+            while c < t.count {
+                let cbit: u32 = (1 as u32) << (c as u32);
+                if (given & cbit) == 0 { // child not already given up
+                    if t.procs[c].state != .Unused {
+                        let par: usize = t.procs[c].sup_parent;
+                        if par < MAX_PROCS {
+                            let pbit: u32 = (1 as u32) << (par as u32);
+                            if (given & pbit) != 0 { // its supervision parent was given up
+                                proc_giveup(t, c);
+                                given = given | cbit;
+                                giveups = giveups + 1;
+                                changed = true; // a newly given-up child may itself have children
+                            }
+                        }
+                    }
+                }
+                c = c + 1;
+            }
+            rounds = rounds + 1;
+        }
     }
     return (giveups << 16) | (restarts & 0xFFFF);
 }

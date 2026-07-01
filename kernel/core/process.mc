@@ -14,6 +14,8 @@ import "std/mask.mc";
 import "kernel/lib/mailbox.mc";
 import "kernel/lib/fdspace.mc";
 import "kernel/lib/resacct.mc";
+import "kernel/core/ledger.mc";  // unified per-dimension resource ledger (charged from hot paths)
+import "kernel/core/metrics.mc"; // structured counters incremented at hot-path sites
 // Re-export the concerns split out of this file. MC imports are textual inclusion deduped
 // by path, so every existing `import "kernel/core/process.mc"` consumer transitively gets
 // the full process API (scheduling, signals, IPC) without changing any consumer import site.
@@ -100,6 +102,9 @@ struct Process {
     hb_deadline: u64,            // supervision: max ticks allowed between heartbeats (0 = unsupervised)
     hb_last: u64,                // supervision: tick of the most recent heartbeat
     restart_count: u32,          // supervision: restarts attempted this incarnation (crash-loop guard)
+    sup_parent: usize,           // supervision tree: parent slot (MAX_PROCS = no supervision parent)
+    lease_expiry: u64,           // supervision lease: absolute tick the grant expires (0 = no lease)
+    lease_ttl: u64,              // supervision lease: the ttl last granted, so a re-arm recomputes expiry
     fds: FdSpace,                // open file descriptors; copied to a child on spawn (fork), kept across exec
     macct: ResourceAccount,      // per-process memory account; reset on spawn (fresh, from zero) and on exit
 }
@@ -125,6 +130,14 @@ struct ProcTable {
     // Monotonic source of correlation ids for synchronous calls (ipc_call / ipc_call_ep), so
     // each outstanding call is distinguishable and its reply can be matched. Never reused.
     next_call_id: u64,
+    // The UNIFIED resource ledger for this table (kernel/core/ledger.mc). Representative hot paths
+    // charge/release against it (IPC messages on send/receive, block I/O per op, DMA at the alloc
+    // seam); a dimension with limit 0 is unlimited, so an un-configured ledger never gates work.
+    // An over-limit charge fails the operation cleanly (its existing error/drop path), never traps.
+    ledger: Ledger,
+    // Structured hot-path counters (kernel/core/metrics.mc): a single metrics_inc at each of the
+    // spawn/exit/ipc-send/ipc-recv/preempt/blk-read/blk-write sites gives a live view of activity.
+    metrics: Metrics,
 }
 
 // The no-op default idle action (a closure needs a captured env; this one is empty).
@@ -234,6 +247,9 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].hb_deadline = 0;
         t.procs[i].hb_last = 0;
         t.procs[i].restart_count = 0;
+        t.procs[i].sup_parent = MAX_PROCS; // no supervision parent until linked
+        t.procs[i].lease_expiry = 0;       // no lease until granted
+        t.procs[i].lease_ttl = 0;
         fd_init(&t.procs[i].fds);
         resacct_init(&t.procs[i].macct, MEM_QUOTA_DEFAULT);
         i = i + 1;
@@ -247,6 +263,20 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
     t.next_call_id = 1; // 0 means "not a call"; real call ids start at 1
     t.idle_hook = bind(&g_idle_env, idle_noop); // platform overrides with wfi via proc_set_idle
     t.death_hook = bind(&g_death_env, death_noop); // subsystems override via proc_set_death_hook
+    ledger_init(&t.ledger);   // every dimension starts unlimited (limit 0); callers opt in per dimension
+    metrics_init(&t.metrics); // all hot-path counters start at zero
+}
+
+// The table's unified resource ledger — for the hot paths that charge/release against it and for
+// policy/introspection to set limits (ledger_set_limit) and read usage (ledger_used).
+export fn proc_ledger(t: *mut ProcTable) -> *mut Ledger {
+    return &t.ledger;
+}
+
+// The table's hot-path metrics counters — for the sites that increment them and for a monitor to
+// read totals back (metrics_get).
+export fn proc_metrics(t: *mut ProcTable) -> *mut Metrics {
+    return &t.metrics;
 }
 
 // Set the platform's CPU-idle action (e.g. a `wfi` wrapper). Called when the scheduler has
@@ -318,6 +348,9 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     t.procs[slot].hb_deadline = 0;    // ... supervision: not supervised until re-enrolled
     t.procs[slot].hb_last = 0;
     t.procs[slot].restart_count = 0;  // ... crash-loop count starts fresh for the new incarnation
+    t.procs[slot].sup_parent = MAX_PROCS; // ... no supervision parent until re-linked
+    t.procs[slot].lease_expiry = 0;   // ... no lease until re-granted
+    t.procs[slot].lease_ttl = 0;
     // fork fd semantics: the child inherits a COPY of the spawner's open descriptors at the
     // same fd numbers, sharing the underlying resources. Clear any stale fds from a reaped
     // slot first. (Empty child + equal capacity ⇒ inherit can never overflow.)
@@ -329,6 +362,7 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     // A fresh process starts at zero memory usage — it does NOT inherit the parent's usage.
     // Re-init in case this slot was reaped from an earlier (possibly heavily-charged) process.
     resacct_init(&t.procs[slot].macct, MEM_QUOTA_DEFAULT);
+    metrics_inc(&t.metrics, .ProcSpawn); // hot-path counter: a process was spawned
     return slot as u32;
 }
 
@@ -716,6 +750,7 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
 // one. Never returns to the caller (its slot is now a Zombie awaiting reap).
 export fn proc_exit(t: *mut ProcTable, code: u32) -> void {
     let from: usize = t.current;
+    metrics_inc(&t.metrics, .ProcExit); // hot-path counter: a process exited
     t.procs[from].exit_code = code;
     proc_death_cleanup(t, from); // release waiters + clear IPC before the slot becomes a zombie
     t.procs[from].state = .Zombie;

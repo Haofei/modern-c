@@ -270,6 +270,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-agent-preempt-test"));
     // llvm-proc-supervisor-test runs the LLVM-lowered running supervisor loop (proc_supervisor_scan) under QEMU.
     m0_step.dependOn(ctx.cmd("llvm-proc-supervisor-test"));
+    // llvm-instrument-test runs the LLVM-lowered instrumented ProcTable (ledger + metrics + supervision-tree/leases) under QEMU.
+    m0_step.dependOn(ctx.cmd("llvm-instrument-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
     m0_step.dependOn(ctx.cmd("llvm-ledger-test"));
     m0_step.dependOn(ctx.cmd("llvm-signed-boot-test"));
@@ -652,6 +654,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("agent-preempt-test"));
     // proc-supervisor-test runs the running supervisor loop (proc_supervisor_scan) over supervised PROCESSES under QEMU.
     m0_step.dependOn(ctx.cmd("proc-supervisor-test"));
+    // instrument-test proves the instrumented ProcTable end to end (unified ledger gating real IPC/blk/DMA ops + exact hot-path metrics + supervision-tree cascade with leases) under QEMU.
+    m0_step.dependOn(ctx.cmd("instrument-test"));
     // ledger-test runs the unified resource ledger (charge/release + overflow-edge) under QEMU.
     m0_step.dependOn(ctx.cmd("ledger-test"));
     // signed-boot-test runs signed-image admission + A/B rollback (production_ops) end to end under QEMU.
