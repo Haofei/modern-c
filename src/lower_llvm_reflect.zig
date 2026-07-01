@@ -68,9 +68,14 @@ pub fn reflectionTypeArg(node: anytype) ?ast.TypeExpr {
 
 pub fn arrayLenValue(env: *const ReflectEnv, expr: ast.Expr) ?u64 {
     if (literalArrayLenValue(expr)) |len| return len;
-    var buf: [64 * 1024]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buf);
-    var scope = eval.ComptimeScope.init(fba.allocator());
+    var fb_arena: ?std.heap.ArenaAllocator = null;
+    defer if (fb_arena) |*a| a.deinit();
+    const fold_alloc = eval.tryFoldScratch() orelse blk: {
+        fb_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        break :blk fb_arena.?.allocator();
+    };
+    defer if (fb_arena == null) eval.releaseFoldScratch();
+    var scope = eval.ComptimeScope.init(fold_alloc);
     defer scope.deinit();
     seedConstFoldScope(env, &scope);
     return switch (eval.foldComptimeExpr(&scope, expr)) {

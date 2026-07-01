@@ -61,9 +61,14 @@ pub fn comptimeUsizeValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.F
 
 pub fn comptimeUsizeValueWithReflect(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
     if (funcs == null and globals == null) return null;
-    var buf: [64 * 1024]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buf);
-    var scope = eval.ComptimeScope.init(fba.allocator());
+    var fb_arena: ?std.heap.ArenaAllocator = null;
+    defer if (fb_arena) |*a| a.deinit();
+    const fold_alloc = eval.tryFoldScratch() orelse blk: {
+        fb_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        break :blk fb_arena.?.allocator();
+    };
+    defer if (fb_arena == null) eval.releaseFoldScratch();
+    var scope = eval.ComptimeScope.init(fold_alloc);
     scope.funcs = funcs;
     scope.globals = globals;
     scope.reflect = reflect;

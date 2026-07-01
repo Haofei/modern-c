@@ -639,9 +639,14 @@ fn foldIntConst(
     int_consts: *const std.StringHashMap(i128),
     expr: ast.Expr,
 ) ?i128 {
-    var buf: [64 * 1024]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buf);
-    var scope = eval.ComptimeScope.init(fba.allocator());
+    var fb_arena: ?std.heap.ArenaAllocator = null;
+    defer if (fb_arena) |*a| a.deinit();
+    const fold_alloc = eval.tryFoldScratch() orelse blk: {
+        fb_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        break :blk fb_arena.?.allocator();
+    };
+    defer if (fb_arena == null) eval.releaseFoldScratch();
+    var scope = eval.ComptimeScope.init(fold_alloc);
     scope.funcs = const_fns;
     var it = int_consts.iterator();
     while (it.next()) |entry| {

@@ -1144,9 +1144,14 @@ pub const Checker = struct {
     }
 
     fn comptimeConstantFolds(self: *Checker, expr: ast.Expr) bool {
-        var buf: [64 * 1024]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&buf);
-        var scope = eval.ComptimeScope.init(fba.allocator());
+        var fb_arena: ?std.heap.ArenaAllocator = null;
+        defer if (fb_arena) |*a| a.deinit();
+        const fold_alloc = eval.tryFoldScratch() orelse blk: {
+            fb_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            break :blk fb_arena.?.allocator();
+        };
+        defer if (fb_arena == null) eval.releaseFoldScratch();
+        var scope = eval.ComptimeScope.init(fold_alloc);
         self.seedComptimeScope(&scope);
         return switch (eval.foldComptimeExpr(&scope, expr)) {
             .value => true,
@@ -1722,6 +1727,13 @@ pub const Checker = struct {
     // Returns the folded comptime value of `expr`, or null if it is not a
     // compile-time constant (section 22).
     fn comptimeFoldValue(self: *Checker, expr: ast.Expr) ?eval.ComptimeValue {
+        // NOTE: deliberately NOT switched to the shared fold-scratch buffer.
+        // Unlike the other fold sites this returns the ComptimeValue itself, and
+        // an aggregate value (.bytes/.array/.@"struct") aliases slices allocated
+        // from this scope's allocator — the result can escape into the caller's
+        // separate scope (checkComptimeCallAsserts binds it). Reusing a shared,
+        // reset-on-next-use buffer would risk clobbering that escaped aggregate,
+        // so this keeps its own per-call buffer. Not a hot path.
         var buf: [64 * 1024]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&buf);
         var scope = eval.ComptimeScope.init(fba.allocator());

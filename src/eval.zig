@@ -346,6 +346,37 @@ const comptime_call_fuel: u32 = 256;
 // null if it is not a reflection call this resolver can fold.
 pub const ReflectFn = *const fn (ctx: ?*anyopaque, call: ast.Expr) ?i128;
 
+// Shared scratch buffer for the const-fold evaluator's scopes. A comptime fold
+// produces only short-lived scalar values (or the caller deep-copies aggregates
+// out via cloneComptimeValue), so a single reusable buffer replaces the fresh
+// 64 KiB stack buffer that hot fold sites used to `= undefined`-poison on every
+// call (a 64 KiB memset per call in Debug/ReleaseSafe builds).
+//
+// Reentrancy: reflection folds can recurse back into the evaluator (e.g.
+// sizeof of an array type re-folds the array length). A busy flag makes reuse
+// safe — a nested fold sees the buffer in use and the caller falls back to its
+// own allocator instead of resetting/clobbering the outer scope's allocations.
+// `threadlocal` keeps it correct if the compiler ever folds on multiple threads.
+threadlocal var fold_scratch_buf: [64 * 1024]u8 = undefined;
+threadlocal var fold_scratch_fba: std.heap.FixedBufferAllocator = undefined;
+threadlocal var fold_scratch_busy: bool = false;
+
+/// Acquire the shared fold-scratch allocator, resetting it for a fresh fold.
+/// Returns null when it is already in use on this thread (a reentrant fold); the
+/// caller must then supply its own allocator. On success the caller MUST pair
+/// this with `releaseFoldScratch()` (typically via `defer`) once the fold — and
+/// any use of its results that alias the buffer — is complete.
+pub fn tryFoldScratch() ?std.mem.Allocator {
+    if (fold_scratch_busy) return null;
+    fold_scratch_busy = true;
+    fold_scratch_fba = std.heap.FixedBufferAllocator.init(&fold_scratch_buf);
+    return fold_scratch_fba.allocator();
+}
+
+pub fn releaseFoldScratch() void {
+    fold_scratch_busy = false;
+}
+
 pub const ComptimeScope = struct {
     bindings: std.StringHashMap(ComptimeValue),
     // Concrete type arguments for `comptime T: type` parameters. These are
