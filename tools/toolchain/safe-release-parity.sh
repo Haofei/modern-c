@@ -28,7 +28,10 @@ mc_require_cmd "safe-release-parity" "$CLANG"
 
 SRC="$HERE/tests/toolchain/opt_index_demo.mc"
 ENTRY="opt_index_demo"
-EXPECT=65
+# opt_index_demo.mc was extended (Phase 3.4) with range-fact-guarded index/slice/div cases; its
+# deterministic result is now 385 (SAFE == RELEASE, confirmed C==LLVM by opt-equiv-test). The elision
+# structure below (SAFE keeps / RELEASE drops the proven-dead checks) is unchanged.
+EXPECT=385
 
 LINK_FLAGS_STR="$(mc_link_flags)"
 
