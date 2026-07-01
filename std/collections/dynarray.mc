@@ -17,6 +17,13 @@
 // `realloc` — so growth is allocate-new + copy + free-old. Amortized O(1) push via
 // capacity doubling (start 4, then ×2). See docs/self-host-plan.md §3 step 0.0.
 //
+// ELEMENT ACCESS: every get/set/grow-copy mints a typed `*mut T` with `raw.ptr<T>` and
+// dereferences it (`p.* = x` / `out = p.*`). This is deliberate: `raw.load<T>`/`raw.store<T>`
+// only lower for SCALAR T on the C backend (an aggregate T yields UnsupportedCEmission), but
+// `raw.ptr<T>` + whole-struct deref lowers for both scalar AND struct T on both backends —
+// so `Vec<T>` works for struct element types (e.g. `Vec<Token>`, `Vec<AstNode>`), which the
+// self-hosting compiler needs pervasively. (Self-host gap ledger G19.)
+//
 // The allocator is stored in the Vec (its provenance, like `Arc`), so element ops don't
 // re-thread it; it is borrowed and must outlive the Vec.
 
@@ -56,8 +63,9 @@ fn vec_reserve(comptime T: type, v: *mut Vec<T>, need: usize) -> void {
     var i: usize = 0;
     while i < v.len {
         unsafe {
-            let x: T = raw.load<T>(pa_offset(v.data, i * sizeof(T)));
-            raw.store<T>(pa_offset(newdata, i * sizeof(T)), x);
+            let src: *T = raw.ptr<T>(pa_offset(v.data, i * sizeof(T)));
+            let dst: *mut T = raw.ptr<T>(pa_offset(newdata, i * sizeof(T)));
+            dst.* = src.*;
         }
         i = i + 1;
     }
@@ -72,7 +80,8 @@ fn vec_reserve(comptime T: type, v: *mut Vec<T>, need: usize) -> void {
 export fn vec_push(comptime T: type, v: *mut Vec<T>, x: T) -> void {
     vec_reserve(T, v, v.len + 1);
     unsafe {
-        raw.store<T>(pa_offset(v.data, v.len * sizeof(T)), x);
+        let p: *mut T = raw.ptr<T>(pa_offset(v.data, v.len * sizeof(T)));
+        p.* = x;
     }
     v.len = v.len + 1;
 }
@@ -84,7 +93,8 @@ export fn vec_get(comptime T: type, v: *Vec<T>, i: usize) -> T {
     }
     var out: T = uninit;
     unsafe {
-        out = raw.load<T>(pa_offset(v.data, i * sizeof(T)));
+        let p: *T = raw.ptr<T>(pa_offset(v.data, i * sizeof(T)));
+        out = p.*;
     }
     return out;
 }
@@ -95,7 +105,8 @@ export fn vec_set(comptime T: type, v: *mut Vec<T>, i: usize, x: T) -> void {
         unreachable; // index out of bounds
     }
     unsafe {
-        raw.store<T>(pa_offset(v.data, i * sizeof(T)), x);
+        let p: *mut T = raw.ptr<T>(pa_offset(v.data, i * sizeof(T)));
+        p.* = x;
     }
 }
 
@@ -107,7 +118,8 @@ export fn vec_pop(comptime T: type, v: *mut Vec<T>) -> T {
     v.len = v.len - 1;
     var out: T = uninit;
     unsafe {
-        out = raw.load<T>(pa_offset(v.data, v.len * sizeof(T)));
+        let p: *T = raw.ptr<T>(pa_offset(v.data, v.len * sizeof(T)));
+        out = p.*;
     }
     return out;
 }

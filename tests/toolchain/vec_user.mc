@@ -44,6 +44,32 @@ export fn vec_sum_to(n: u32) -> u32 {
     return sum;
 }
 
+// A struct element type: proves Vec<T> works for aggregate T (gap ledger G19), not just scalars.
+struct Pair {
+    a: u32,
+    b: u32,
+}
+
+// Push n pairs {i, i*2}, then sum (a+b) over all via get() — exercises struct store/grow-copy/load.
+export fn vec_pair_sum(n: u32) -> u32 {
+    var m: MallocAlloc = .{ .count = 0 };
+    var v: Vec<Pair> = vec_new(Pair, &m);
+    var i: u32 = 0;
+    while i < n {
+        vec_push(Pair, &v, .{ .a = i, .b = i * 2 });
+        i = i + 1;
+    }
+    var sum: u32 = 0;
+    var j: usize = 0;
+    while j < vec_len(Pair, &v) {
+        let p: Pair = vec_get(Pair, &v, j);
+        sum = sum + p.a + p.b;
+        j = j + 1;
+    }
+    vec_free(Pair, &v);
+    return sum;
+}
+
 // Push 0..n, then pop everything: returns the sum of popped values (LIFO), which must equal
 // the sum of 0..n-1 — proving pop order and length tracking. Also set() element 0 to 100 first.
 export fn vec_pop_sum(n: u32) -> u32 {

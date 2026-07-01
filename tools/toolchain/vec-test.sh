@@ -22,18 +22,21 @@ size_t mc_malloc(size_t n){ return (size_t)malloc(n); }
 void   mc_free(size_t a, size_t n){ (void)n; free((void*)a); }
 extern uint32_t vec_sum_to(uint32_t n);
 extern uint32_t vec_pop_sum(uint32_t n);
+extern uint32_t vec_pair_sum(uint32_t n);
 int main(void) {
     if (vec_sum_to(1000) != 499500u) return 1;   // sum 0..999
     if (vec_sum_to(0)    != 0u)      return 2;    // empty
     if (vec_sum_to(1)    != 0u)      return 3;    // just element 0
     if (vec_pop_sum(100) != 4950u + 7u) return 4; // sum 0..99 popped LIFO, + reused push(7)
+    // struct elements (G19): sum over {i,2i} of (a+b) = sum 3i for i in 0..99 = 3*4950 = 14850
+    if (vec_pair_sum(100) != 14850u) return 5;
     return 0;
 }
 EOF
 
 "$CLANG" -std=c11 -Wall -Wextra -Werror "$WORK/driver.c" "$WORK/vec.o" -o "$WORK/prog"
 if "$WORK/prog"; then
-    echo "PASS: vec-test — generic heap-backed std/collections/dynarray (Vec<T>) monomorphized, grew, popped, freed, and ran"
+    echo "PASS: vec-test — generic heap-backed std/collections/dynarray (Vec<T>) monomorphized, grew, popped, freed, ran (scalar AND struct elements)"
     exit 0
 fi
 echo "FAIL: vec-test — program returned non-zero"
