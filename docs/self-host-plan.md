@@ -265,7 +265,20 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   (mutation-through-`*mut` flagged immutable → impl bodies not sema-checked). **Self-compile ~70–75%.**
   Remaining to literal self-compile: `?T`, `match`, general `mod.fn` calls, opaque `PAddr`, full std API +
   the end-to-end integration.
-- **STATUS: P1–P4 + CLI + perf + 10 grammar verticals (structs→traits) COMPLETE — a working, fast, subset MC-compiler-in-MC handling ~70–75% of its own source's features.** Remaining for
+- **2026-07-01 — P5.11 (`match`) DONE** (`4106979`) — but a NON-feature: the "match 8×" estimate was a
+  `grep` false positive (counted prose "ordinals match"/"first match wins"). Selfhost uses ZERO real `match`
+  (and zero `?T`). `match` desugars to the existing `switch` (2 parser edits, no new gaps). **Lesson: profile
+  by AST/keyword-token, not word-grep.** Language-feature coverage for the selfhost subset is now effectively
+  complete.
+- **2026-07-01 — END-TO-END SELF-COMPILE PROBE (ground truth).** Built standalone `mcc2` (251 KB) and fed it
+  real files. Result: with an ABSOLUTE path, `mcc2` loads `std/addr.mc` (0 imports), parses+sema's most of it,
+  and EMITS 197 lines of C — then reports parse/sema errors on advanced constructs. Relative-path imports fail
+  on the macOS host (G29 `AT_FDCWD`; Linux/Docker fine). **So self-compile is PARTIAL-and-real: `mcc2` loads +
+  partially compiles actual std source.** The remaining ~25% is INTEGRATION LONG-TAIL, not core features: per
+  real file, a few advanced constructs (opaque structs, `wrap`/`sat` arithmetic domains, `bitcast`, `#[attr]`s,
+  const globals) + `Result`/`if let` payload binding (for `main.mc`) + closing G32; plus G29 for macOS imports.
+  Each is a small vertical; literal `mcc2`-compiles-`mcc2` is a bounded-but-multi-step integration from here.
+- **STATUS: P1–P4 + CLI + perf + 11 grammar verticals (structs→traits→match) COMPLETE — a working, fast, subset MC-compiler-in-MC (~70–75% of its own source's features); end-to-end probe shows it loads + partially compiles real std files.** Remaining for
   *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
   match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
   perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").
