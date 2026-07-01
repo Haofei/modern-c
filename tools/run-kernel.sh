@@ -35,10 +35,17 @@ MCC="${MCC:-zig-out/bin/mcc}"
 CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
 QEMU="${QEMU:-qemu-system-riscv64}"
-# Prefer an explicit LLD; else the Homebrew lld formula; else bare `ld.lld` on PATH.
+# Prefer an explicit LLD; else `ld.lld` on PATH; else a Homebrew lld formula. Homebrew ships lld
+# keg-only under a versioned name (lld, lld@21, ...) that is NOT symlinked onto PATH, so probe both
+# the unversioned prefix and any versioned opt dir.
 if [ -z "${LLD:-}" ]; then
-    if command -v brew >/dev/null 2>&1 && [ -x "$(brew --prefix lld 2>/dev/null)/bin/ld.lld" ]; then
-        LLD="$(brew --prefix lld)/bin/ld.lld"
+    if command -v ld.lld >/dev/null 2>&1; then
+        LLD="ld.lld"
+    elif command -v brew >/dev/null 2>&1; then
+        for p in "$(brew --prefix lld 2>/dev/null)/bin/ld.lld" /opt/homebrew/opt/lld@*/bin/ld.lld /usr/local/opt/lld@*/bin/ld.lld; do
+            [ -x "$p" ] && { LLD="$p"; break; }
+        done
+        LLD="${LLD:-ld.lld}"
     else
         LLD="ld.lld"
     fi
