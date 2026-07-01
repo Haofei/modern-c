@@ -233,7 +233,14 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   self-recursion trap. `selfhost-generic-test` green (accept + arity reject); all 8 prior gates pass. New
   G30 (`*mut→*const` param). Deferred: multi-param, nested generics, trait bounds, const-generics, template-
   body type-checking. Next blocker: **fixed `[N]T` arrays**, then `impl`/traits, then `*mut dyn`.
-- **STATUS: P1–P4 + CLI + perf + structs + enums + switch + imports + generics COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
+- **2026-07-01 — P5.6 (fixed `[N]T` arrays) DONE** (`92df433`). `[N]T` types (const-int N), positional
+  array literals `.{ e0, e1 }` (disambiguated from struct-literal `.{ .f = e }` via 3-token lookahead),
+  `a[i]` read/write, and array-in-generic monomorphization (`[4]T`→`uint32_t data[4]`). `selfhost-array-test`
+  green (`asum`, generic `Buf<T>`, length-mismatch reject); all 9 prior gates pass. Findings: MC array-lit is
+  leading-dot-brace positional; NO `as` cast in subset yet; SmType is flat (nested arrays need a type arena);
+  field access through an abstract type param isn't type-checkable (sidestep via generic accessor fn).
+  **Self-compile estimate now ~35–40%** (data-shapes largely covered). Next lever: **`impl`/methods** (→~60%).
+- **STATUS: P1–P4 + CLI + perf + structs + enums + switch + imports + generics + arrays COMPLETE — a working, fast, subset MC-compiler-in-MC (~35–40% of its own source).** Remaining for
   *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
   match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
   perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").

@@ -107,6 +107,13 @@ IS the scope boundary (why nested/struct type-args are deferred). Substitution w
 fields on the Parser (set/clear around each monomorphic emit) rather than an arena clone — pragmatic given
 no `?T`/node-maps.
 
+**P5.6 array findings:** MC array-literal is `.{ e0, e1, ... }` — the SAME leading-dot-brace as a struct
+literal `.{ .f = e }` but positional; disambiguated by 3-token lookahead (`.` IDENT `=` ⇒ struct). The
+subset has **no `as` cast expression** yet (deferred). Widening a flat `SmType` with fields forces updating
+every full struct-literal site (MC requires all fields present) — O(literal-sites) churn. Field access through
+an ABSTRACT type param isn't type-checkable (element type is `named_ T`); works only inside generic-fn bodies
+(sema-skipped) whose return substitutes to concrete — same pattern as P5.5.
+
 **Structural observation (P5.1):** parser/sema/emit each re-implement length-prefixed "pair run" walking
 (`[count,(a,b)*]`, `fi*2(+1)` indexing) with no shared arena-access module → off-by-one-prone duplication
 across 3 files. A shared `selfhost/ast.mc` accessor layer would cut this; deferred (works, just repetitive).
