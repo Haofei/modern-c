@@ -519,6 +519,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("service-test"));
     m0_step.dependOn(ctx.cmd("plugin-test"));
     m0_step.dependOn(ctx.cmd("endpoint-test"));
+    m0_step.dependOn(ctx.cmd("sched-difftest"));
     m0_step.dependOn(ctx.cmd("supervisor-test"));
     m0_step.dependOn(ctx.cmd("registry2-test"));
     m0_step.dependOn(ctx.cmd("manifest-test"));

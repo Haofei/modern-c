@@ -33,6 +33,19 @@ fn next_runnable(t: *mut ProcTable, from: usize) -> Result<usize, SchedError> {
     return err(.NoRunnable);
 }
 
+// Test/probe seam for the differential scheduler gate (sched-difftest). Returns the round-robin
+// pick that next_runnable would make, with MAX_PROCS as the "NoRunnable" sentinel so a host
+// driver can compare it against an INDEPENDENT is_runnable scan without importing SchedError.
+// next_runnable itself stays private (the authoritative O(MAX_PROCS) scan over is_runnable) —
+// this only exposes its result. Deliberately NOT a cache: it re-derives via next_runnable on
+// every call, so it can never disagree with the authoritative runnability the test recomputes.
+export fn proc_next_runnable_probe(t: *mut ProcTable, from: usize) -> usize {
+    switch next_runnable(t, from) {
+        ok(n) => { return n; }
+        err(e) => { return MAX_PROCS; }
+    }
+}
+
 // ----- userspace-set scheduling policy. The kernel keeps the *mechanism* (context
 // switch); the *policy* (per-process priority) is set from outside — a scheduler server
 // — and the kernel just runs the highest-priority runnable process. -----
@@ -707,33 +720,61 @@ export fn proc_supervisor_scan(t: *mut ProcTable, now: u64, max_restarts: u32) -
         slot = slot + 1;
     }
     // ----- phase 2: TREE cascade — give up the children of any given-up parent -----
-    // Bounded, non-recursive fixpoint: each round marks children whose parent is already given up;
-    // at most MAX_PROCS rounds are needed to reach the deepest leaf, so recursion is not required.
-    var changed: bool = true;
-    var rounds: usize = 0;
-    while changed {
-        changed = false;
-        if rounds < MAX_PROCS {
-            var c: usize = 0;
-            while c < t.count {
-                let cbit: u32 = (1 as u32) << (c as u32);
-                if (given & cbit) == 0 { // child not already given up
-                    if t.procs[c].state != .Unused {
-                        let par: usize = t.procs[c].sup_parent;
-                        if par < MAX_PROCS {
-                            let pbit: u32 = (1 as u32) << (par as u32);
-                            if (given & pbit) != 0 { // its supervision parent was given up
-                                proc_giveup(t, c);
-                                given = given | cbit;
-                                giveups = giveups + 1;
-                                changed = true; // a newly given-up child may itself have children
-                            }
-                        }
-                    }
-                }
-                c = c + 1;
+    // The old cascade was an O(MAX_PROCS²) fixpoint: it re-scanned every slot each round, up to
+    // MAX_PROCS rounds, to propagate give-ups down the tree. Instead, build a per-parent child
+    // list ONCE from the authoritative sup_parent links (O(t.count)), then walk it with an
+    // explicit worklist seeded from the phase-1 give-ups (each node/edge visited once). Total
+    // cost is O(t.count + children) rather than O(MAX_PROCS²), with no new persistent state — the
+    // adjacency is a transient derived from sup_parent, so there is nothing to keep in sync across
+    // spawn/reap/re-parent (the very hazard a persistent child list on Process would add). This is
+    // a pure algorithmic rewrite of the SAME give-up set: it visits exactly the descendants of the
+    // phase-1 given-up roots, in the same "a child of a given-up parent is given up" relation.
+    //
+    // head[p] = first child slot of parent p (MAX_PROCS = none); sib[c] = next sibling of child c.
+    var head: [MAX_PROCS]usize = uninit;
+    var sib: [MAX_PROCS]usize = uninit;
+    var k: usize = 0;
+    while k < MAX_PROCS {
+        head[k] = MAX_PROCS; // empty child list
+        k = k + 1;
+    }
+    var c0: usize = 0;
+    while c0 < t.count {
+        if t.procs[c0].state != .Unused {
+            let par: usize = t.procs[c0].sup_parent;
+            if par < MAX_PROCS {
+                sib[c0] = head[par]; // push c0 onto parent's child list
+                head[par] = c0;
             }
-            rounds = rounds + 1;
+        }
+        c0 = c0 + 1;
+    }
+    // Worklist DFS. Seed with the slots given up in phase 1; a node is pushed exactly once (the
+    // `given` bit guards re-entry), so the stack never exceeds MAX_PROCS entries.
+    var stack: [MAX_PROCS]usize = uninit;
+    var top: usize = 0;
+    var s0: usize = 0;
+    while s0 < t.count {
+        if (given & wrapping_shl_u32(1, s0 as u32)) != 0 {
+            stack[top] = s0;
+            top = top + 1;
+        }
+        s0 = s0 + 1;
+    }
+    while top > 0 {
+        top = top - 1;
+        let p: usize = stack[top];
+        var c: usize = head[p];
+        while c < MAX_PROCS {
+            let cbit: u32 = wrapping_shl_u32(1, c as u32);
+            if (given & cbit) == 0 { // child not already given up
+                proc_giveup(t, c);
+                given = given | cbit;
+                giveups = giveups + 1;
+                stack[top] = c; // its own children cascade next
+                top = top + 1;
+            }
+            c = sib[c];
         }
     }
     return (giveups << 16) | (restarts & 0xFFFF);

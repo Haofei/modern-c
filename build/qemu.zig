@@ -370,6 +370,11 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "endpoint-test", "MINIX hardening: endpoints/generations, derived runnable, death cleanup", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "endpoint-test" });
 
+    // Phase 2.2 re-land condition: differential scheduler gate — after each randomized runnability
+    // transition, next_runnable's pick must equal an independent authoritative is_runnable scan.
+    // Reproduces the stale-cache regression that reverted the first O(1)/O(children) attempt.
+    _ = h.addScriptTest(ctx, "sched-difftest", "differential scheduler gate: next_runnable pick == independent authoritative scan across randomized transitions (stale-cache regression guard)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "sched-difftest" });
+
     _ = h.addScriptTest(ctx, "supervisor-test", "service supervisor: declarative manifests + restart policy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "supervisor-test" });
 
     _ = h.addScriptTest(ctx, "registry2-test", "Registry v2: multiple-per-class, generations, unregister-on-death", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "registry2-test" });
@@ -748,6 +753,14 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "uaccess-bench", "Page-table uaccess microbenchmark under QEMU: 32x 1 MiB copy_to_user_pt + copy_from_user_pt, prints UACCESS-CYCLES via rdcycle", &.{ "bash", "tools/mem/uaccess-bench.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-uaccess-bench", "Page-table uaccess microbenchmark under QEMU (LLVM backend): 32x 1 MiB copy_to_user_pt + copy_from_user_pt cycle totals", &.{ "bash", "tools/mem/uaccess-bench.sh", "zig-out/bin/mcc", "llvm" });
+
+    // Phase 2.2 scheduler pick-path microbenchmark (NOT in m0): average cycles per
+    // next_runnable() round-robin pick. In the re-land the pick path is unchanged (design B),
+    // so this stays the standing baseline tool; the algorithmic win was the O(children)
+    // supervisor cascade, not the pick.
+    _ = h.addScriptTest(ctx, "sched-bench", "Scheduler microbenchmark under QEMU: average cycles per next_runnable() round-robin pick (SCHED-CYCLES) via rdcycle", &.{ "bash", "tools/proc/sched-bench.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-sched-bench", "Scheduler microbenchmark under QEMU (LLVM backend): average cycles per next_runnable() round-robin pick", &.{ "bash", "tools/proc/sched-bench.sh", "zig-out/bin/mcc", "llvm" });
 
     // Phase 2.1 heap microbenchmark (NOT in m0): rdcycle total for an adversarial
     // fragment-and-coalesce free sequence that drives the free list to capacity — the
