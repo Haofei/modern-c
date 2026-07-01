@@ -68,6 +68,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "hashmap-test", "Build, link, and run the generic heap-backed std/collections/hashmap (StrHashMap<V>)", &.{ "bash", "tools/toolchain/hashmap-test.sh", "zig-out/bin/mcc" });
     _ = h.addScriptTest(ctx, "strbuf-test", "Build, link, and run the growable std/strbuf (StrBuf over Vec<u8>)", &.{ "bash", "tools/toolchain/strbuf-test.sh", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "argv-test", "Build, link with the hosted_args_rt shim, and run a program that reads its real argv", &.{ "bash", "tools/toolchain/argv-test.sh", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "pkg-test", "Build a package from its manifest with mcc-pkg, link, and run it", &.{ "bash", "tools/toolchain/pkg-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "llvm-pkg-test", "Build a package from its manifest through LLVM, link, and run it", &.{ "bash", "tools/toolchain/llvm-pkg-test.sh", "zig-out/bin/mcc" });

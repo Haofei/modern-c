@@ -367,6 +367,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("hashmap-test"));
     // strbuf-test exercises the growable std/strbuf StrBuf over Vec<u8> (needs clang).
     m0_step.dependOn(ctx.cmd("strbuf-test"));
+    // argv-test exercises hosted command-line argument access (std/hosted_args + shim; needs clang).
+    m0_step.dependOn(ctx.cmd("argv-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).
