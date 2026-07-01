@@ -13,81 +13,24 @@ enum SchedError {
     NoRunnable, // no process other than `from` is runnable
 }
 
-// Index of the lowest set bit of `x` (a de-facto count-trailing-zeros over a u32). Returns 0
-// for x == 0 — callers guarantee x != 0, so the degenerate case never selects a wrong slot.
-// A private helper rather than std/bits.trailing_zeros: std/bits also exports `is_aligned`,
-// which std/mem (pulled in transitively across the kernel) already defines, so importing
-// std/bits here would be a duplicate-declaration. Bounded (<= 32 iterations), no calls.
-fn sched_lowest_bit(x: u32) -> u32 {
-    var n: u32 = x;
-    var i: u32 = 0;
-    while i < 32 {
-        if (n & 1) != 0 {
-            return i;
-        }
-        n = n >> 1;
-        i = i + 1;
-    }
-    return 0;
-}
-
-// ----- run-queue cache maintenance (Phase 2.2) -----
-// Reconcile the ProcTable's run_mask bit for `slot` with the authoritative runnability
-// (is_runnable = state Ready/Running AND no block reasons). This is the SINGLE point that
-// updates the cache; it is called after every transition that can change a slot's
-// runnability (block/unblock, spawn, exit/kill, reap). It RECOMPUTES the truth and sets or
-// clears the bit, so it is idempotent — a redundant call is harmless and a double-call can
-// never corrupt the queue (unlike a FIFO where a double-enqueue would).
-//
-// `#[irq_context]`: proc_unblock (itself irq-safe — the ISR wake path reaches it) calls this,
-// so it must be irq-safe too. It uses only direct field reads, comparisons, and bit ops
-// (wrapping_shl_u32 is the same irq-safe shift mask32_clear uses) — no blocking, no indirect
-// call — so the MIR irq verifier accepts it. It deliberately does NOT call is_runnable
-// (which is not irq-marked); the runnability predicate is inlined here as `.bits == 0`.
-#[irq_context]
-fn sched_refresh(t: *mut ProcTable, slot: usize) -> void {
-    if slot < MAX_PROCS {
-        let s: ProcState = t.procs[slot].state;
-        var runnable: bool = false;
-        if s == .Ready {
-            runnable = t.procs[slot].block_reasons.bits == 0;
-        }
-        if s == .Running {
-            runnable = t.procs[slot].block_reasons.bits == 0;
-        }
-        let bit: u32 = wrapping_shl_u32(1, slot as u32);
-        if runnable {
-            t.run_mask = t.run_mask | bit;
-        } else {
-            t.run_mask = t.run_mask & (~bit);
-        }
-    }
-}
-
 // The next runnable slot after `from` (round-robin), or NoRunnable if none other is
 // runnable — an explicit result so callers handle "nothing to run" rather than receiving
 // `from` back and having to special-case it.
-//
-// O(1) via the run_mask cache: mask `from` out, then take the lowest set bit STRICTLY above
-// `from` (the next slot in index order); if none, wrap to the lowest set bit overall. This
-// returns EXACTLY the slot the old linear round-robin scan did — the first runnable slot in
-// circular (from+1, from+2, …, wrap) order — but in a single find-next-set-bit instead of an
-// O(MAX_PROCS) walk. run_mask never has a bit set for a slot >= t.count (those are Unused),
-// so the old `idx < t.count` guard is subsumed by the cache.
 fn next_runnable(t: *mut ProcTable, from: usize) -> Result<usize, SchedError> {
-    let from_u: u32 = from as u32;
-    let m: u32 = t.run_mask & (~wrapping_shl_u32(1, from_u)); // every runnable slot except `from`
-    if m == 0 {
-        return err(.NoRunnable);
+    // Scan the other slots round-robin (i in 1..MAX_PROCS-1, so idx never wraps back to
+    // `from`); `from` itself is never returned, so a lone runnable current process yields
+    // NoRunnable rather than "switch to yourself".
+    var i: usize = 1;
+    while i < MAX_PROCS {
+        let idx: usize = (from + i) % MAX_PROCS;
+        if idx < t.count {
+            if is_runnable(t, idx) {
+                return ok(idx);
+            }
+        }
+        i = i + 1;
     }
-    // Bits strictly above `from` (slots from+1 .. MAX_PROCS-1). from < MAX_PROCS <= 32 so the
-    // shift amount from_u+1 is <= 32; wrapping_shl_u32 yields 0 at 32, i.e. "no higher bits".
-    let higher: u32 = m & wrapping_shl_u32(0xFFFFFFFF, from_u + 1);
-    if higher != 0 {
-        return ok(sched_lowest_bit(higher) as usize);
-    }
-    // No runnable slot above `from`: wrap around to the lowest-index runnable slot.
-    return ok(sched_lowest_bit(m) as usize);
+    return err(.NoRunnable);
 }
 
 // ----- userspace-set scheduling policy. The kernel keeps the *mechanism* (context
@@ -264,32 +207,28 @@ export fn proc_throttle_clear(t: *mut ProcTable, slot: usize) -> void {
 
 // Policy: the highest-priority runnable process other than `from` (ties: lowest pid),
 // or `from` if no other is runnable.
-//
-// Consults the run_mask cache to enumerate ONLY the runnable candidates (via a shrinking
-// take-lowest-set-bit loop) instead of re-deriving is_runnable over every slot — so the work
-// is O(runnable) rather than O(MAX_PROCS), and blocked/zombie/unused slots are skipped for
-// free. Arbitrary u32 priorities preclude a true O(1) bucketed pick without changing the
-// priority contract, so the max-priority comparison itself is retained verbatim; iterating the
-// bits in increasing index order with a strict `>` update keeps the exact lowest-slot tie-break.
 fn sched_next_priority(t: *mut ProcTable, from: usize) -> usize {
     var best: usize = from;
     var best_prio: u32 = 0;
     var found: bool = false;
-    var pool: u32 = t.run_mask & (~wrapping_shl_u32(1, from as usize as u32)); // runnable, excluding `from`
-    while pool != 0 {
-        let i: usize = sched_lowest_bit(pool) as usize; // lowest-index remaining runnable slot
-        pool = pool & (~wrapping_shl_u32(1, i as u32)); // consume it
-        let p: u32 = t.procs[i].priority;
-        if !found {
-            best = i;
-            best_prio = p;
-            found = true;
-        } else {
-            if p > best_prio {
-                best = i;
-                best_prio = p;
+    var i: usize = 0;
+    while i < t.count {
+        if i != from {
+            if is_runnable(t, i) {
+                let p: u32 = t.procs[i].priority;
+                if !found {
+                    best = i;
+                    best_prio = p;
+                    found = true;
+                } else {
+                    if p > best_prio {
+                        best = i;
+                        best_prio = p;
+                    }
+                }
             }
         }
+        i = i + 1;
     }
     return best;
 }
@@ -300,7 +239,6 @@ fn sched_next_priority(t: *mut ProcTable, from: usize) -> usize {
 export fn proc_block(t: *mut ProcTable, slot: usize, reason: u32) -> void {
     if slot < t.count {
         mask32_set(&t.procs[slot].block_reasons, reason);
-        sched_refresh(t, slot); // block set may now be non-empty: reconcile the run queue
     }
 }
 
@@ -311,7 +249,6 @@ export fn proc_block(t: *mut ProcTable, slot: usize, reason: u32) -> void {
 export fn proc_unblock(t: *mut ProcTable, slot: usize, reason: u32) -> void {
     if slot < t.count {
         mask32_clear(&t.procs[slot].block_reasons, reason);
-        sched_refresh(t, slot); // block set may now be empty: reconcile the run queue (irq-safe)
     }
 }
 
@@ -770,59 +707,33 @@ export fn proc_supervisor_scan(t: *mut ProcTable, now: u64, max_restarts: u32) -
         slot = slot + 1;
     }
     // ----- phase 2: TREE cascade — give up the children of any given-up parent -----
-    // The old cascade was an O(MAX_PROCS²) fixpoint: it re-scanned every slot each round, up to
-    // MAX_PROCS rounds, to propagate give-ups down the tree. Instead, build a per-parent child
-    // list ONCE from the authoritative sup_parent links (O(t.count)), then walk it with an
-    // explicit worklist seeded from the phase-1 give-ups (each node/edge visited once). Total
-    // cost is O(t.count + children) rather than O(MAX_PROCS²), with no new persistent state — the
-    // adjacency is a transient derived from sup_parent, so there is nothing to keep in sync across
-    // spawn/reap/re-parent (the very hazard a persistent child list on Process would add).
-    //
-    // head[p] = first child slot of parent p (MAX_PROCS = none); sib[c] = next sibling of child c.
-    var head: [MAX_PROCS]usize = uninit;
-    var sib: [MAX_PROCS]usize = uninit;
-    var k: usize = 0;
-    while k < MAX_PROCS {
-        head[k] = MAX_PROCS; // empty child list
-        k = k + 1;
-    }
-    var c0: usize = 0;
-    while c0 < t.count {
-        if t.procs[c0].state != .Unused {
-            let par: usize = t.procs[c0].sup_parent;
-            if par < MAX_PROCS {
-                sib[c0] = head[par]; // push c0 onto parent's child list
-                head[par] = c0;
+    // Bounded, non-recursive fixpoint: each round marks children whose parent is already given up;
+    // at most MAX_PROCS rounds are needed to reach the deepest leaf, so recursion is not required.
+    var changed: bool = true;
+    var rounds: usize = 0;
+    while changed {
+        changed = false;
+        if rounds < MAX_PROCS {
+            var c: usize = 0;
+            while c < t.count {
+                let cbit: u32 = (1 as u32) << (c as u32);
+                if (given & cbit) == 0 { // child not already given up
+                    if t.procs[c].state != .Unused {
+                        let par: usize = t.procs[c].sup_parent;
+                        if par < MAX_PROCS {
+                            let pbit: u32 = (1 as u32) << (par as u32);
+                            if (given & pbit) != 0 { // its supervision parent was given up
+                                proc_giveup(t, c);
+                                given = given | cbit;
+                                giveups = giveups + 1;
+                                changed = true; // a newly given-up child may itself have children
+                            }
+                        }
+                    }
+                }
+                c = c + 1;
             }
-        }
-        c0 = c0 + 1;
-    }
-    // Worklist DFS. Seed with the slots given up in phase 1; a node is pushed exactly once (the
-    // `given` bit guards re-entry), so the stack never exceeds MAX_PROCS entries.
-    var stack: [MAX_PROCS]usize = uninit;
-    var top: usize = 0;
-    var s0: usize = 0;
-    while s0 < t.count {
-        if (given & wrapping_shl_u32(1, s0 as u32)) != 0 {
-            stack[top] = s0;
-            top = top + 1;
-        }
-        s0 = s0 + 1;
-    }
-    while top > 0 {
-        top = top - 1;
-        let p: usize = stack[top];
-        var c: usize = head[p];
-        while c < MAX_PROCS {
-            let cbit: u32 = wrapping_shl_u32(1, c as u32);
-            if (given & cbit) == 0 { // child not already given up
-                proc_giveup(t, c);
-                given = given | cbit;
-                giveups = giveups + 1;
-                stack[top] = c; // its own children cascade next
-                top = top + 1;
-            }
-            c = sib[c];
+            rounds = rounds + 1;
         }
     }
     return (giveups << 16) | (restarts & 0xFFFF);

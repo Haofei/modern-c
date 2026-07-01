@@ -118,14 +118,6 @@ struct ProcTable {
     procs: [MAX_PROCS]Process,
     count: usize,   // slots in use (slot 0 = bootstrap)
     current: usize, // running slot
-    // RUN-QUEUE cache (Phase 2.2): bit `slot` set iff `is_runnable(t, slot)`. This is a pure
-    // DERIVED cache of runnability — the authoritative source is still is_runnable (state +
-    // block_reasons) — maintained idempotently by sched_refresh at every runnability transition
-    // (block/unblock, spawn, exit/kill, reap). It lets next_runnable / sched_next_priority pick
-    // in O(1) (a single find-next-set-bit) instead of an O(MAX_PROCS) scan. A missed refresh is
-    // the only failure mode; because sched_refresh RECOMPUTES the truth and sets/clears the bit,
-    // a redundant refresh is always safe. MAX_PROCS <= 32, so one u32 holds every slot.
-    run_mask: u32,
     // The platform's CPU-idle action (e.g. `wfi`), invoked when a process blocks and nothing
     // else is runnable — so the kernel sleeps until an interrupt instead of busy-spinning as a
     // blocked "current" process. Defaults to a no-op (set by the platform via proc_set_idle).
@@ -268,8 +260,6 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
     t.procs[0].kcall_mask = mask32_from(0xFFFF_FFFF);
     t.count = 1;
     t.current = 0;
-    // Slot 0 (bootstrap) is the only runnable slot at init: seed the run-queue cache with it.
-    t.run_mask = wrapping_shl_u32(1, 0);
     t.next_call_id = 1; // 0 means "not a call"; real call ids start at 1
     t.idle_hook = bind(&g_idle_env, idle_noop); // platform overrides with wfi via proc_set_idle
     t.death_hook = bind(&g_death_env, death_noop); // subsystems override via proc_set_death_hook
@@ -372,7 +362,6 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     // A fresh process starts at zero memory usage — it does NOT inherit the parent's usage.
     // Re-init in case this slot was reaped from an earlier (possibly heavily-charged) process.
     resacct_init(&t.procs[slot].macct, MEM_QUOTA_DEFAULT);
-    sched_refresh(t, slot); // the new process is Ready with no block reasons: mark it runnable
     metrics_inc(&t.metrics, .ProcSpawn); // hot-path counter: a process was spawned
     return slot as u32;
 }
@@ -504,7 +493,6 @@ export fn proc_oom_kill(t: *mut ProcTable, slot: usize) -> void {
     t.procs[slot].exit_code = OOM_KILLED_CODE; // recognizable: OOM-killed, not a clean exit
     proc_death_cleanup(t, slot); // SAME path as proc_exit: fds + macct + IPC + waiters released
     t.procs[slot].state = .Zombie; // a parent can still reap its death
-    sched_refresh(t, slot); // a zombie is never runnable: clear it from the run queue
     // Wake the parent if it is blocked in proc_wait — this forced exit is the event it awaits.
     let parent_slot: usize = t.procs[slot].parent_slot;
     if parent_slot < t.count {
@@ -600,7 +588,6 @@ export fn proc_fault_kill(t: *mut ProcTable, slot: usize) -> void {
     t.procs[slot].exit_code = FAULT_KILLED_CODE; // recognizable: contained-fault kill
     proc_death_cleanup(t, slot); // SAME path as proc_exit/proc_oom_kill: fds + macct + IPC + waiters
     t.procs[slot].state = .Zombie; // a parent can still reap its death
-    sched_refresh(t, slot); // a zombie is never runnable: clear it from the run queue
     let parent_slot: usize = t.procs[slot].parent_slot;
     if parent_slot < t.count {
         if t.procs[parent_slot].gen == t.procs[slot].parent_gen {
@@ -780,7 +767,6 @@ export fn proc_exit(t: *mut ProcTable, code: u32) -> void {
     t.procs[from].exit_code = code;
     proc_death_cleanup(t, from); // release waiters + clear IPC before the slot becomes a zombie
     t.procs[from].state = .Zombie;
-    sched_refresh(t, from); // the exiting process is a zombie now: drop it from the run queue
     // Wake the parent if it is blocked in proc_wait — this exit is the event it was waiting for.
     let parent_slot: usize = t.procs[from].parent_slot;
     if parent_slot < t.count {
@@ -838,7 +824,6 @@ export fn proc_reap(t: *mut ProcTable, parent_pid: u32) -> Result<ReapInfo, Reap
                 if st == .Zombie {
                     let code: u32 = t.procs[i].exit_code;
                     t.procs[i].state = .Unused;
-                    sched_refresh(t, i); // reaped slot is free (Unused): ensure it is out of the run queue
                     t.procs[i].parent_slot = MAX_PROCS;
                     t.procs[i].parent_gen = 0;
                     return ok(.{ .pid = pid, .code = code });

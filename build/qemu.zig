@@ -749,12 +749,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-uaccess-bench", "Page-table uaccess microbenchmark under QEMU (LLVM backend): 32x 1 MiB copy_to_user_pt + copy_from_user_pt cycle totals", &.{ "bash", "tools/mem/uaccess-bench.sh", "zig-out/bin/mcc", "llvm" });
 
-    // Phase 2.2 scheduler pick-path microbenchmark (NOT in m0): average cycles per
-    // next_runnable() round-robin pick, before/after the O(1) run-queue change.
-    _ = h.addScriptTest(ctx, "sched-bench", "Scheduler microbenchmark under QEMU: average cycles per next_runnable() round-robin pick (SCHED-CYCLES) via rdcycle", &.{ "bash", "tools/proc/sched-bench.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-sched-bench", "Scheduler microbenchmark under QEMU (LLVM backend): average cycles per next_runnable() round-robin pick", &.{ "bash", "tools/proc/sched-bench.sh", "zig-out/bin/mcc", "llvm" });
-
     // Phase 2.1 heap microbenchmark (NOT in m0): rdcycle total for an adversarial
     // fragment-and-coalesce free sequence that drives the free list to capacity — the
     // before/after number for killing the O(n^2) coalesce in kernel/core/heap.mc.
