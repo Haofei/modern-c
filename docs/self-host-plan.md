@@ -246,7 +246,14 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   Key structural finding: emit has no shared typed IR → built a mini local-type resolver (~150 LOC); this
   re-derivation is the compounding tax of the 3-pass split. **Self-compile ~50–55%.** Next: `impl`/methods,
   traits/`*mut dyn`, then `unsafe`/`raw` intrinsics, `match`, `?`, `as` casts.
-- **STATUS: P1–P4 + CLI + perf + structs + enums + switch + imports + generics + arrays + slices COMPLETE — a working, fast, subset MC-compiler-in-MC (~50–55% of its own source).** Remaining for
+- **2026-07-01 — P5.8 (low-level: `unsafe`/`raw.*`/`extern "C"`) DONE** (`6acaaad`). `unsafe{}` blocks,
+  `raw.ptr/load/store<T>` (cast-through-pointer, matching the real backend), `p.*` deref (read+write),
+  `extern "C" fn` protos. Parsing `raw.op<T>(...)` needed a 4-token lookahead pinned to the `raw` namespace
+  (C++ `<>` ambiguity). Addresses modeled as plain integers (no opaque PAddr yet). `selfhost-lowlevel-test`
+  green; all 11 prior gates pass. **Self-compile ~60–65%** — the container/mem deps now PARSE. Next lever:
+  **`as` casts + `sizeof`/`alignof`** (mechanical, used everywhere in dynarray), then **traits/`*mut dyn`**
+  (structural — the Allocator seam). `match`/`?` are lowest (selfhost avoids them by design).
+- **STATUS: P1–P4 + CLI + perf + structs + enums + switch + imports + generics + arrays + slices + low-level COMPLETE — a working, fast, subset MC-compiler-in-MC (~60–65% of its own source).** Remaining for
   *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
   match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
   perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").
