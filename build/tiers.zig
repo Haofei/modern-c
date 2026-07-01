@@ -371,6 +371,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("argv-test"));
     // memstr-test exercises the allocation-free std/mem byte-slice string ops (needs clang).
     m0_step.dependOn(ctx.cmd("memstr-test"));
+    // selfhost-lex-test exercises the Phase-1 self-hosted lexer's token stream (needs clang).
+    m0_step.dependOn(ctx.cmd("selfhost-lex-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).
