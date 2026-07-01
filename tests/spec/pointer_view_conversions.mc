@@ -72,8 +72,11 @@ fn reject_mut_to_const_raw_many(p: [*]mut u32) -> [*]const u32 {
     return q;
 }
 
-fn reject_mut_to_const_slice(xs: []mut u32) -> []const u32 {
-    // EXPECT_ERROR: E_NO_IMPLICIT_POINTER_CONVERSION
+// A `[]mut T` -> `[]const T` slice const-narrowing IS allowed implicitly (language gap G12
+// #3): the fat pointer is layout-identical, only the pointee's constness differs, so it is a
+// safe no-op coercion. This is scoped to slices — the `*mut`/`[*]mut` reject cases above still
+// hold (a single-object / raw-many const-narrow stays explicit).
+fn accept_mut_to_const_slice(xs: []mut u32) -> []const u32 {
     let ys: []const u32 = xs;
     return ys;
 }

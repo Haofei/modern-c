@@ -521,6 +521,43 @@ pub fn isStringLiteralTarget(ty: ast.TypeExpr) bool {
     return std.mem.eql(u8, name, "u8");
 }
 
+/// If `ty` is a `[]const u8` / `[]u8` slice (a byte-slice), return its element mutability;
+/// null otherwise. This is the slice-shaped string-literal target: a string literal can lower
+/// to a fat-pointer slice value `{ptr, len}` over a static C string literal.
+pub fn u8SliceMutability(ty: ast.TypeExpr) ?ast.Mutability {
+    const node = switch (ty.kind) {
+        .slice => |node| node,
+        else => return null,
+    };
+    const name = typeName(node.child.*) orelse return null;
+    if (!std.mem.eql(u8, name, "u8")) return null;
+    return node.mutability;
+}
+
+/// The decoded byte length of a `"…"` string literal lexeme (escapes counted as one byte
+/// each), or null if the lexeme is malformed / has an unsupported escape. Matches the escape
+/// set of both backends' string-literal emitters (no trailing NUL is counted).
+pub fn stringLiteralByteLen(literal: []const u8) ?usize {
+    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
+    const body = literal[1 .. literal.len - 1];
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < body.len) : (i += 1) {
+        if (body[i] != '\\') {
+            n += 1;
+            continue;
+        }
+        i += 1;
+        if (i >= body.len) return null;
+        switch (body[i]) {
+            '\\', '\'', '"', '0', 'n', 'r', 't' => {},
+            else => return null,
+        }
+        n += 1;
+    }
+    return n;
+}
+
 /// True for a struct declared with `abi("mmio")`.
 pub fn isMmioStructAbi(struct_decl: ast.StructDecl) bool {
     return if (struct_decl.abi) |abi| std.mem.eql(u8, abi, "mmio") else false;

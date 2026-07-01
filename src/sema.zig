@@ -2350,6 +2350,15 @@ pub const Checker = struct {
                 if ((source == .c_void_pointer) != (target == .c_void_pointer)) {
                     self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
                 }
+                // SOUNDNESS: a slice (`[]T`) is a fat pointer (ptr+len). A scalar / non-slice
+                // value has no length component, so `scalar as []T` cannot be lowered — the
+                // backend would cast only the scalar and DROP the length (fabricating garbage).
+                // Only a slice-to-slice `as` (e.g. `[]mut T as []const T`) is representable.
+                // `.unknown` (generic type param / `*dyn`) and `.never` are left alone to avoid
+                // false positives; the MIR/backends reject any residual bad shape.
+                if (target == .slice and source != .slice and source != .unknown and source != .never) {
+                    self.errorCode(expr.span, "E_ILLEGAL_SLICE_CAST", "cannot cast a non-slice value to a slice: a slice is a fat pointer (ptr+len) and the length has no source. Build one with a slicing expression `a[i..j]`, a byte view (`mem.as_bytes`), or a string literal");
+                }
                 self.checkEnumCast(expr.span, node.value.*, source, node.ty.*, target, ctx);
                 self.checkCastSafetyStrip(expr.span, node.value.*, source, node.ty.*, target, ctx);
                 return target;
@@ -6817,10 +6826,29 @@ fn implicitPointerViewConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, 
     _ = viewType(resolved_target) orelse return false;
     _ = viewType(resolved_source) orelse return false;
     if (nullablePointerWideningCtx(resolved_target, resolved_source, ctx)) return false;
+    // A `[]mut T` -> `[]const T` slice const-narrowing is safe (the fat pointer is
+    // layout-identical; only the pointee's constness differs) and is allowed implicitly.
+    if (constNarrowingSliceConversionCtx(resolved_target, resolved_source, ctx)) return false;
     const target_is_c_void = isCVoidPointerClass(classifyTypeCtx(resolved_target, ctx));
     const source_is_c_void = isCVoidPointerClass(classifyTypeCtx(resolved_source, ctx));
     if (target_is_c_void != source_is_c_void) return false;
     return !sameTypeSyntaxCtx(resolved_target, resolved_source, ctx);
+}
+
+// True for a safe `[]mut T` -> `[]const T` slice conversion: both are slices of the same
+// element type and nullability, and the ONLY difference is the pointer's constness
+// (mut source -> const target). The fat pointer layout is identical, so this is a no-op
+// coercion the backends emit as a struct copy. Scoped to slices (not general pointers) to
+// match the language-gap fix; other view-const changes stay explicit.
+fn constNarrowingSliceConversionCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {
+    const target_view = viewType(target) orelse return false;
+    const source_view = viewType(source) orelse return false;
+    if (target_view.kind != .slice or source_view.kind != .slice) return false;
+    if (target_view.nullable != source_view.nullable) return false;
+    if (!(source_view.mutability == .mut and target_view.mutability == .@"const")) return false;
+    const target_elem = viewElementType(target) orelse return false;
+    const source_elem = viewElementType(source) orelse return false;
+    return sameTypeSyntaxCtx(target_elem, source_elem, ctx);
 }
 
 fn nullablePointerWideningCtx(target: ast.TypeExpr, source: ast.TypeExpr, ctx: Context) bool {

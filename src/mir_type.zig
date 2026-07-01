@@ -169,10 +169,14 @@ pub fn typesAreCompatible(target: ValueType, source: ValueType) bool {
             .float => |source_name| source_name,
             else => unreachable,
         }, "comptime_float"),
-        .pointer => |target_shape| samePointerShape(target_shape, switch (source) {
-            .pointer => |source_shape| source_shape,
-            else => unreachable,
-        }),
+        .pointer => |target_shape| blk: {
+            const source_shape = switch (source) {
+                .pointer => |shape| shape,
+                else => unreachable,
+            };
+            if (samePointerShape(target_shape, source_shape)) break :blk true;
+            break :blk sliceConstNarrowing(target_shape, source_shape);
+        },
         .nullable_pointer => |target_shape| samePointerShape(target_shape, switch (source) {
             .nullable_pointer => |source_shape| source_shape,
             else => unreachable,
@@ -249,6 +253,30 @@ pub fn isCVoidPointerType(ty: ValueType) bool {
 
 pub fn isPointerLikeType(ty: ValueType) bool {
     return ty == .pointer or ty == .nullable_pointer;
+}
+
+// A `[]mut T` source is compatible with a `[]const T` target (safe const-narrowing): both
+// are slices of the same element type and only the pointee's constness differs. The fat
+// pointer layout is identical, so this is a no-op coercion (see sema
+// constNarrowingSliceConversionCtx). Scoped to slices to match the language-gap fix.
+pub fn sliceConstNarrowing(target: PointerShape, source: PointerShape) bool {
+    return target.kind == .slice and source.kind == .slice and
+        target.mutability == .@"const" and source.mutability == .mut and
+        std.mem.eql(u8, target.child, source.child);
+}
+
+// True when `target`/`source` are the `[]const T`/`[]mut T` value types of a safe slice
+// const-narrowing (used by the MIR builder to treat an explicit `as` cast as transparent).
+pub fn isSliceConstNarrowCast(target: ValueType, source: ValueType) bool {
+    const target_shape = switch (target) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    const source_shape = switch (source) {
+        .pointer => |shape| shape,
+        else => return false,
+    };
+    return sliceConstNarrowing(target_shape, source_shape);
 }
 
 pub fn samePointerShape(left: PointerShape, right: PointerShape) bool {

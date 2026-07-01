@@ -3741,6 +3741,14 @@ const LlvmEmitter = struct {
         {
             return value;
         }
+        // A `[]mut T as []const T` const-narrowing cast is a no-op: both slices lower to the
+        // identical `{ ptr, i64 }` LLVM type (LLVM pointers carry no constness).
+        if (std.mem.eql(u8, source_llvm, target_llvm) and
+            self.resolveAliasType(source_ty).kind == .slice and
+            self.resolveAliasType(target_ty).kind == .slice)
+        {
+            return value;
+        }
         if (self.pointerAddressCoercion(source_ty, target_ty)) {
             return try self.emitBitcastValue(value, source_ty, target_ty);
         }
@@ -4529,7 +4537,25 @@ const LlvmEmitter = struct {
     }
 
     fn emitStringLiteral(self: *LlvmEmitter, literal: []const u8, expected_ty: ast.TypeExpr) ![]const u8 {
-        if (!isStringLiteralTarget(self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
+        const resolved = self.resolveAliasType(expected_ty);
+        // A `[]const u8` / `[]u8` slice target: build the fat-pointer slice value
+        // `{ ptr = &.str, len = <byte count> }`. The pointer is the static string-literal
+        // global (program-lifetime, always valid); the length excludes the trailing NUL that
+        // `internStringLiteral` appends.
+        if (ast_query.u8SliceMutability(resolved)) |mutability| {
+            const global = try self.internStringLiteral(literal);
+            const child = resolved.kind.slice.child.*;
+            const slice_ty = try self.sliceTypeFor(child, mutability, expected_ty.span);
+            const slice_llvm = try self.llvmType(slice_ty);
+            const ptr = try self.nextTemp();
+            const with_ptr = try self.nextTemp();
+            const result = try self.nextTemp();
+            try self.out.print(self.allocator, "  {s} = getelementptr [{d} x i8], ptr @{s}, i64 0, i64 0\n", .{ ptr, global.len, global.name });
+            try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr {s}, 0\n", .{ with_ptr, slice_llvm, ptr });
+            try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i64 {d}, 1\n", .{ result, slice_llvm, with_ptr, global.len - 1 });
+            return result;
+        }
+        if (!isStringLiteralTarget(resolved)) return error.UnsupportedLlvmEmission;
 
         const global = try self.internStringLiteral(literal);
         const result = try self.nextTemp();

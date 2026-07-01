@@ -117,6 +117,7 @@ const integerLiteralRangeFinding = mir_type.integerLiteralRangeFinding;
 const integerLiteralFitsTarget = mir_type.integerLiteralFitsTarget;
 const checkedIntBoundsByName = mir_type.checkedIntBoundsByName;
 const isDynTraitMirType = mir_type.isDynTraitMirType;
+const isSliceConstNarrowCast = mir_type.isSliceConstNarrowCast;
 const valueTypeFromExpr = mir_type.valueTypeFromExpr;
 const valueTypeFromType = mir_type.valueTypeFromType;
 const valueTypeFromTypeAlias = mir_type.valueTypeFromTypeAlias;
@@ -2120,6 +2121,15 @@ const FunctionBuilder = struct {
                 const cast_target = valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases);
                 if (cast_target == .closed_enum and isMirIntegerType(self.exprType(node.value.*))) {
                     try self.addInstr(.usage_check, "closed_enum_conversion", .unknown, expr.span);
+                }
+                // A `[]mut T as []const T` const-narrowing cast is a statically-safe reinterpret
+                // (the source slice is already a valid fat pointer). Emit its own dominating
+                // representation check keyed on the cast's own text so the enclosing
+                // representation_use (initializer/call_arg, keyed on the cast text) is discharged
+                // — the same way `.ident`/`address_of` self-discharge their nonnull obligation.
+                if (isSliceConstNarrowCast(cast_target, self.exprType(node.value.*)) and representationCheckKind(cast_target) != null) {
+                    try self.addInstr(.typed_load, exprText(expr), cast_target, expr.span);
+                    try self.addRuntimeRepresentationCheck(cast_target, expr.span, exprText(expr));
                 }
                 try self.addInstr(.expr, "cast", valueTypeFromTypeAlias(node.ty.*, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 if (self.semantic_expr_depth == 1) {

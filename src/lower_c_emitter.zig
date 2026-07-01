@@ -3649,7 +3649,46 @@ const CEmitter = struct {
         if (self.targetIsDynOrNullableDyn(ty)) {
             if (try self.emitDynCoercion(expr, locals, ty)) return true;
         }
+        // A `[]mut T` value coerced to a `[]const T` target (safe const-narrowing). The two
+        // slice structs are layout-identical but distinct C types (const vs mut pointee), so a
+        // plain assignment won't compile — reinterpret via a fresh slice literal that const-casts
+        // the pointer.
+        if (locals) |local_set| {
+            if (try self.emitSliceConstNarrowCoercion(expr, local_set, ty)) return true;
+        }
         return false;
+    }
+
+    fn emitSliceConstNarrowCoercion(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!bool {
+        const resolved_target = self.resolveAliasType(target_ty);
+        const target_node = switch (resolved_target.kind) {
+            .slice => |node| node,
+            else => return false,
+        };
+        if (target_node.mutability != .@"const") return false;
+        // An explicit `m as []const u8` narrow: the cast target is also a slice, so lower the
+        // INNER value with the same const reinterpret (the `as` is a no-op reinterpret).
+        const value_expr = switch (expr.kind) {
+            .cast => |node| if (self.resolveAliasType(node.ty.*).kind == .slice) node.value.* else expr,
+            .grouped => |inner| inner.*,
+            else => expr,
+        };
+        const source_ty = self.operandEmitType(value_expr, locals) orelse return false;
+        const resolved_source = self.resolveAliasType(source_ty);
+        const source_node = switch (resolved_source.kind) {
+            .slice => |node| node,
+            else => return false,
+        };
+        if (source_node.mutability != .mut) return false;
+        const src_c_type = try self.cTypeFor(source_ty, .typedef_name);
+        const slice_name = try self.sliceTypeName(target_node.child.*, .@"const");
+        const ptr_type = try self.pointerTypeForSliceElement(target_node.child.*, .@"const");
+        const n = self.temp_index;
+        self.temp_index += 1;
+        try self.out.print(self.allocator, "({{ {s} mc_scv{d} = ", .{ src_c_type, n });
+        try self.emitExpr(value_expr, locals);
+        try self.out.print(self.allocator, "; ({s}){{ .ptr = ({s})mc_scv{d}.ptr, .len = mc_scv{d}.len }}; }})", .{ slice_name, ptr_type, n, n });
+        return true;
     }
 
     fn emitEnumLiteralWithTarget(self: *CEmitter, literal: ast.Ident, target_ty: ?ast.TypeExpr) anyerror!void {
@@ -3667,7 +3706,22 @@ const CEmitter = struct {
         // ones). They lower to a C string literal cast to the target
         // pointer type, e.g. `*const u8` -> `(uint8_t const *)"…"`.
         const target = target_ty orelse return error.UnsupportedCEmission;
-        if (!isStringLiteralTarget(self.resolveAliasType(target))) return error.UnsupportedCEmission;
+        const resolved = self.resolveAliasType(target);
+        // A `[]const u8` / `[]u8` slice target: build the fat-pointer slice value
+        // `(mc_slice_..._u8){ .ptr = (uint8_t const *)"hi", .len = 2 }`. The pointer is
+        // the static C string literal (always valid — it is a program-lifetime literal),
+        // the length is the decoded byte count (no trailing NUL).
+        if (ast_query.u8SliceMutability(resolved)) |mutability| {
+            const child = resolved.kind.slice.child.*;
+            const slice_name = try self.sliceTypeName(child, mutability);
+            const ptr_type = try self.pointerTypeForSliceElement(child, mutability);
+            const len = ast_query.stringLiteralByteLen(literal) orelse return error.UnsupportedCEmission;
+            try self.out.print(self.allocator, "(({s}){{ .ptr = ({s})", .{ slice_name, ptr_type });
+            try self.out.appendSlice(self.allocator, literal);
+            try self.out.print(self.allocator, ", .len = {d} }})", .{len});
+            return;
+        }
+        if (!isStringLiteralTarget(resolved)) return error.UnsupportedCEmission;
         try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(target, .typedef_name)});
         try self.out.appendSlice(self.allocator, literal);
         try self.out.appendSlice(self.allocator, ")");
