@@ -74,6 +74,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "selfhost-lex-test", "Build, link, and run the Phase-1 self-hosted lexer (selfhost/lexer.mc) token-stream gate", &.{ "bash", "tools/toolchain/selfhost-lex-test.sh", "zig-out/bin/mcc" });
     _ = h.addScriptTest(ctx, "selfhost-parse-test", "Build, link, and run the Phase-2 self-hosted parser (selfhost/parser.mc) AST-shape gate", &.{ "bash", "tools/toolchain/selfhost-parse-test.sh", "zig-out/bin/mcc" });
+    _ = h.addScriptTest(ctx, "selfhost-sema-test", "Build, link, and run the Phase-3 self-hosted semantic analyzer (selfhost/sema.mc) type-check gate", &.{ "bash", "tools/toolchain/selfhost-sema-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "pkg-test", "Build a package from its manifest with mcc-pkg, link, and run it", &.{ "bash", "tools/toolchain/pkg-test.sh", "zig-out/bin/mcc" });
 

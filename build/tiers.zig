@@ -375,6 +375,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-lex-test"));
     // selfhost-parse-test exercises the Phase-2 self-hosted parser + flat AST (needs clang).
     m0_step.dependOn(ctx.cmd("selfhost-parse-test"));
+    // selfhost-sema-test exercises the Phase-3 self-hosted semantic analyzer (needs clang).
+    m0_step.dependOn(ctx.cmd("selfhost-sema-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).
