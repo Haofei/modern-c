@@ -274,6 +274,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("llvm-instrument-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
     m0_step.dependOn(ctx.cmd("llvm-ledger-test"));
+    // llvm-soak-test runs the LLVM-lowered single-boot soak workload under QEMU.
+    m0_step.dependOn(ctx.cmd("llvm-soak-test"));
     m0_step.dependOn(ctx.cmd("llvm-signed-boot-test"));
     // llvm-ota-test runs the LLVM-lowered chunked OTA transport + admission + rollback under QEMU.
     m0_step.dependOn(ctx.cmd("llvm-ota-test"));
@@ -629,6 +631,9 @@ pub fn register(ctx: *h.Ctx) void {
     // parser-fuzz-test (P1) fuzzes the DNS+TCP parsers with malformed/truncated bytes:
     // every parse is total over its finite buffer — no over-read, garbage rejected (clang).
     m0_step.dependOn(ctx.cmd("parser-fuzz-test"));
+    // bundle-fuzz-test (P6) fuzzes the bundle/OTA admission surface (bundle_validate + rollback)
+    // over adversarial headers + random op-sequences: every call total, fail-closed, no trap (clang).
+    m0_step.dependOn(ctx.cmd("bundle-fuzz-test"));
     // net-rx-live-test routes a real virtio-net RX frame through net_rx_deliver under QEMU.
     m0_step.dependOn(ctx.cmd("net-rx-live-test"));
     // http-get-test active-opens a real TCP connection and HTTP GETs a live server under QEMU.
@@ -662,6 +667,9 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("instrument-test"));
     // ledger-test runs the unified resource ledger (charge/release + overflow-edge) under QEMU.
     m0_step.dependOn(ctx.cmd("ledger-test"));
+    // soak-test runs the single-boot soak workload (thousands of spawn/charge/supervise/reclaim/
+    // reap cycles return to baseline; no leak, no counter-overflow trap) under QEMU.
+    m0_step.dependOn(ctx.cmd("soak-test"));
     // signed-boot-test runs signed-image admission + A/B rollback (production_ops) end to end under QEMU.
     m0_step.dependOn(ctx.cmd("signed-boot-test"));
     // ota-test runs chunked OTA transport (kernel/core/ota) + admission + rollback end to end under QEMU.
