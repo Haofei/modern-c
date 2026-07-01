@@ -253,7 +253,12 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   green; all 11 prior gates pass. **Self-compile ~60–65%** — the container/mem deps now PARSE. Next lever:
   **`as` casts + `sizeof`/`alignof`** (mechanical, used everywhere in dynarray), then **traits/`*mut dyn`**
   (structural — the Allocator seam). `match`/`?` are lowest (selfhost avoids them by design).
-- **STATUS: P1–P4 + CLI + perf + structs + enums + switch + imports + generics + arrays + slices + low-level COMPLETE — a working, fast, subset MC-compiler-in-MC (~60–65% of its own source).** Remaining for
+- **2026-07-01 — P5.9 (`as` casts + `sizeof`/`alignof`) DONE** (`e14aa90`). `x as T` (bind tighter than binary,
+  looser than postfix — `as` is an identifier, not a keyword), `sizeof(T)`/`alignof(T)`→usize; `sizeof(T)`
+  composes with generic substitution for free. Mechanical, NO new gaps. `selfhost-cast-test` green; all 12
+  prior gates pass. **Self-compile ~65–70%** (container/mem bodies now type-check+emit). Last structural
+  lever: **traits/`*mut dyn`** (vtables + method desugar + fat pointers — the Allocator seam; genuinely hard).
+- **STATUS: P1–P4 + CLI + perf + 9 grammar verticals (structs→low-level→casts) COMPLETE — a working, fast, subset MC-compiler-in-MC (~65–70% of its own source).** Remaining for
   *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
   match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
   perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").
