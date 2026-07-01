@@ -158,8 +158,8 @@ delivers + hash-verifies images (`ota-test`).
    can break any guarantee. Defense is vendoring discipline + the differential/fuzz gates.
 2. **FNV image hash is a placeholder** — not collision-resistant; boot-image integrity awaits
    BearSSL SHA-256 (§2.8). Highest-severity honest gap in the OTA/boot story.
-3. **Availability is best-effort** until full preemption + uniform per-agent CPU/memory budgets
-   land (§2.5).
+3. **Availability is best-effort** — agent preemption has landed (§2.5), so the remaining risk is
+   finer-grained / uniform per-agent CPU/memory budget enforcement, not preemption itself.
 4. **Policy/audit persistence + revocation** across reboot are not yet wired (§2.3, §2.7).
 5. **Residual `unreachable`-on-exhaustion paths** exist off the main attacker-reachable routes;
    they are tracked and must all become typed `NoMem`/errors to fully satisfy G3.

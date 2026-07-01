@@ -132,6 +132,7 @@ fn charged_post(t: *mut ProcTable, dst: usize, msg: Message) -> bool {
     }
     if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
         wake_if_blocked(t, dst);
+        metrics_inc(&t.metrics, .IpcSend); // count endpoint/notify sends too, so IpcSend matches IpcRecv
         return true;
     }
     switch ledger_release(&t.ledger, .IpcMessages, 1) { // mailbox full: undo the charge
