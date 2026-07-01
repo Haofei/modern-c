@@ -1,10 +1,34 @@
 # Performance refactor plan
 
-Status: **proposal / awaiting approval**. Owner: perf refactor. Baseline: master @ `01424e1` (m0 green, both backends).
+Status: **Phases 0–3 EXECUTED & pushed** (2026-07-01). Baseline: master @ `01424e1`. Phase 4 scoped separately.
 
 This plan turns a four-surface performance review (compiler, kernel runtime, generated code,
 WASM+std+build) into a phased, measurable, parity-gated refactor. Every finding below carries a
 `file:line` anchor from the review and an impact/effort/risk estimate.
+
+## Execution scorecard (all landed changes measured before/after, parity-gated both backends, m0 green)
+
+| # | Item | Result | Commit |
+|---|------|--------|--------|
+| 1.1 | word-aligned mem_copy/set/memmove | ✅ **memcpy 7.2×, memset 8.3×** | `a893c78` |
+| 1.2 | WASM fast-interp | ✅ **1.77× compute** (vendored fast-interp TU) | `ee8cde3` |
+| 1.3 | compiler FixedBufferAllocator reuse | ✅ **~1.24× `mcc check`** | `ff2a782` |
+| 1.4/1.5 | O(1) mailbox + provenance off hot path | ✅ **IPC 1.55× (C)** | `46167bf` |
+| 2.1 | heap O(n²) coalesce → compacted free-list | ✅ **45.7% (C)** free path (behind flag; sorted-list measured slower→pivoted) | `e482c46` |
+| 2.2 | scheduler run queues | ❌ **REVERTED** — run_mask went stale (endpoint-test death path); marginal at MAX_PROCS=8. Re-land only with a next_runnable differential test | `0c5df7f`→`d9d00da` |
+| 2.3 | sys_sbrk batched TLB flush | ✅ **~32×** map path | `4cd6504` |
+| 2.4 | uaccess single-pass copy | ✅ **20.4%** small copies (large now copy-bound after 1.1) | `73ae00f` |
+| 2.5 | compiler type-query memoization | ⚠️ measure-first: memoization ~0% (bodies already O(1)) → SKIPPED; landed only conformance-flatten | `da5880d` |
+| 3.1 | sret for large aggregate returns | ⚠️ SKIP — clang/llc already apply sret ABI (0 memcpy at HEAD) | — |
+| 3.2 | overlay memcpy narrowing | ⚠️ SKIP — emit already field-width; clang -O2 already 1 load/store | `b51285d` (doc) |
+| 3.3 | MIR const-fold/DCE/CSE | ⏸ not attempted (prioritized 3.4 correctness) | — |
+| 3.4 | bounds/divide check elision (range facts) | ✅ **bounds 3→0, div 1→0** in check-heavy code; sound + gated | `c10acb9` |
+| 3.5 | async future = union-of-children | ⏸ DEFER — 87% win real BUT needs a new *addressable runtime-selected union member* primitive (no member-address in overlay/tagged union today) | — |
+| 3.6 | Tier-2 dispatch inline hints | ⚠️ SKIP — clang/llc already devirtualize+inline when type is visible | — |
+
+**Net: 9 measured wins shipped** (mem 7–8×, WASM 1.77×, IPC 1.55×, sbrk ~32×, heap 1.46×, uaccess 1.2×, compile 1.24×, check-elision, conformance-flatten). **Key finding:** MC's "offload optimization to clang/llc" design already captures most *codegen-quality* wins (sret, overlay, dispatch) — measure-first correctly killed 5 proposed changes rather than ship redundant, ABI-risky churn. The one genuine MC-level codegen win (check elision) acts *before* the backend.
+
+**Deferred with clear prerequisites:** 2.2 scheduler run-queues (needs a next_runnable differential test); 3.3 MIR optimizer; 3.5 async union (needs an addressable-union primitive); Phase 4 WASM linear-memory growth (= demand-grown-heap Increment 3: kernel demand-paging + WAMR mmap-reserve). 3.6/3.1/3.2 are closed (already optimal).
 
 ## Guiding rules
 
