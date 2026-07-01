@@ -655,6 +655,9 @@ pub const Parser = struct {
 
     fn finishUnionDecl(self: *Parser) anyerror!ast.UnionDecl {
         const name = try self.expectName("expected union name");
+        // Optional `<T, …>` type-parameter list for a generic tagged union
+        // (mirrors `struct Name<T>`); case payload types may reference these.
+        const type_params = try self.parseTypeParamList();
         try self.expect(.l_brace, "expected '{' after union name");
         var cases: std.ArrayList(ast.UnionCase) = .empty;
         errdefer cases.deinit(self.allocator);
@@ -665,7 +668,7 @@ pub const Parser = struct {
             try cases.append(self.allocator, .{ .name = case_name, .ty = ty });
         }
         try self.expect(.r_brace, "expected '}' after union cases");
-        return .{ .name = name, .cases = try cases.toOwnedSlice(self.allocator) };
+        return .{ .name = name, .cases = try cases.toOwnedSlice(self.allocator), .type_params = type_params };
     }
 
     fn finishFieldList(self: *Parser, open_message: []const u8, close_message: []const u8) anyerror![]ast.Field {

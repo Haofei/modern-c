@@ -70,6 +70,13 @@ const StructInstance = struct {
     generated: bool = false,
 };
 
+const UnionInstance = struct {
+    decl: ast.UnionDecl,
+    subst: Subst,
+    mangled: []const u8,
+    generated: bool = false,
+};
+
 pub const CloneCtx = struct {
     arena: std.mem.Allocator,
     subst: ?*const Subst = null,
@@ -90,6 +97,11 @@ const Rewriter = struct {
     generic_structs: *const std.StringHashMap(ast.StructDecl),
     struct_instances: *std.StringHashMap(*StructInstance),
     struct_list: *std.ArrayList(*StructInstance),
+    // Generic tagged unions, parallel to the struct machinery: each concrete use
+    // `Opt<u32>` monomorphizes to a distinct non-generic tagged union `Opt__u32`.
+    generic_unions: *const std.StringHashMap(ast.UnionDecl),
+    union_instances: *std.StringHashMap(*UnionInstance),
+    union_list: *std.ArrayList(*UnionInstance),
     // Module-level integer `const`s, so a const can be used as a const-generic argument
     // (`Ring<u32, RQ_CAP>`), not just an integer literal.
     int_consts: *const std.StringHashMap(i128),
@@ -120,6 +132,7 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
     var type_generic = std.StringHashMap(TypeGenericInfo).init(arena);
     var const_fns = std.StringHashMap(ast.FnDecl).init(arena);
     var generic_structs = std.StringHashMap(ast.StructDecl).init(arena);
+    var generic_unions = std.StringHashMap(ast.UnionDecl).init(arena);
     var int_consts = std.StringHashMap(i128).init(arena);
     var field_types = std.StringHashMap(std.StringHashMap(ast.TypeExpr)).init(arena);
     var fn_names = std.StringHashMap(void).init(arena);
@@ -155,6 +168,7 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
                 try collectFieldTypes(arena, &field_types, ou.name.text, ou.fields);
             },
             .union_decl => |u| {
+                if (u.type_params.len > 0) try generic_unions.put(u.name.text, u);
                 try collectUnionCaseTypes(arena, &field_types, u);
             },
             // Record integer module consts (folded against earlier ones), so they can be
@@ -174,12 +188,14 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
 
     // No-op for the common case: a module with no type-generic functions or
     // generic structs is returned unchanged, so existing code is untouched.
-    if (type_generic.count() == 0 and generic_structs.count() == 0) return module;
+    if (type_generic.count() == 0 and generic_structs.count() == 0 and generic_unions.count() == 0) return module;
 
     var instances = std.StringHashMap(*Instance).init(arena);
     var struct_instances = std.StringHashMap(*StructInstance).init(arena);
+    var union_instances = std.StringHashMap(*UnionInstance).init(arena);
     var inst_list: std.ArrayList(*Instance) = .empty;
     var struct_list: std.ArrayList(*StructInstance) = .empty;
+    var union_list: std.ArrayList(*UnionInstance) = .empty;
     var rewriter = Rewriter{
         .arena = arena,
         .type_generic = &type_generic,
@@ -189,6 +205,9 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
         .generic_structs = &generic_structs,
         .struct_instances = &struct_instances,
         .struct_list = &struct_list,
+        .generic_unions = &generic_unions,
+        .union_instances = &union_instances,
+        .union_list = &union_list,
         .int_consts = &int_consts,
         .field_types = &field_types,
         .fn_names = &fn_names,
@@ -210,6 +229,10 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
             .struct_decl => |sd| {
                 if (sd.type_params.len > 0) continue; // generic; replaced by instances
                 try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .kind = .{ .struct_decl = try cloneStructDeclCtx(&ctx, sd) } });
+            },
+            .union_decl => |u| {
+                if (u.type_params.len > 0) continue; // generic; replaced by instances
+                try out.append(arena, .{ .span = decl.span, .attrs = decl.attrs, .kind = .{ .union_decl = try cloneUnionDeclCtx(&ctx, u) } });
             },
             .global_decl => |g| {
                 const ty = if (g.ty) |t| try cloneType(&ctx, t) else null;
@@ -243,19 +266,34 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
     }
     if (rewriter.oom) return error.OutOfMemory;
 
-    // Pass 2b: generate one concrete struct per instantiation. Field types may reference
-    // further instantiations, appending to struct_list; the index loop processes those.
+    // Pass 2b: generate one concrete struct/tagged-union per instantiation. A field or
+    // case-payload type may reference a further instantiation of either kind, appending
+    // to struct_list/union_list; a single fixpoint loop drains both worklists (they can
+    // cross-feed: a generic struct field of a generic-union type, and vice versa).
     {
-        var i: usize = 0;
-        while (i < struct_list.items.len) : (i += 1) {
-            const si = struct_list.items[i];
-            if (si.generated) continue;
-            si.generated = true;
-            var sctx = CloneCtx{ .arena = arena, .subst = &si.subst, .rewrite = &rewriter };
-            var spec = try cloneStructDeclCtx(&sctx, si.decl);
-            spec.name = .{ .text = si.mangled, .span = si.decl.name.span };
-            spec.type_params = &.{};
-            try out.append(arena, .{ .span = si.decl.name.span, .attrs = &.{}, .kind = .{ .struct_decl = spec } });
+        var si: usize = 0;
+        var ui: usize = 0;
+        while (si < struct_list.items.len or ui < union_list.items.len) {
+            while (si < struct_list.items.len) : (si += 1) {
+                const inst = struct_list.items[si];
+                if (inst.generated) continue;
+                inst.generated = true;
+                var sctx = CloneCtx{ .arena = arena, .subst = &inst.subst, .rewrite = &rewriter };
+                var spec = try cloneStructDeclCtx(&sctx, inst.decl);
+                spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
+                spec.type_params = &.{};
+                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .kind = .{ .struct_decl = spec } });
+            }
+            while (ui < union_list.items.len) : (ui += 1) {
+                const inst = union_list.items[ui];
+                if (inst.generated) continue;
+                inst.generated = true;
+                var uctx = CloneCtx{ .arena = arena, .subst = &inst.subst, .rewrite = &rewriter };
+                var spec = try cloneUnionDeclCtx(&uctx, inst.decl);
+                spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
+                spec.type_params = &.{};
+                try out.append(arena, .{ .span = inst.decl.name.span, .attrs = &.{}, .kind = .{ .union_decl = spec } });
+            }
         }
     }
     if (rewriter.oom) return error.OutOfMemory;
@@ -747,6 +785,9 @@ pub fn cloneType(ctx: *const CloneCtx, ty: ast.TypeExpr) anyerror!ast.TypeExpr {
                 if (rw.generic_structs.get(node.base.text)) |sd| {
                     if (try rewriteGenericStruct(ctx, rw, sd, node)) |name| break :blk ast.TypeExpr.Kind{ .name = .{ .text = name, .span = node.base.span } };
                 }
+                if (rw.generic_unions.get(node.base.text)) |ud| {
+                    if (try rewriteGenericUnion(ctx, rw, ud, node)) |name| break :blk ast.TypeExpr.Kind{ .name = .{ .text = name, .span = node.base.span } };
+                }
             }
             break :blk .{ .generic = .{ .base = node.base, .args = try cloneTypeSlice(ctx, node.args) } };
         },
@@ -769,12 +810,20 @@ fn constGenericValue(text: []const u8) ?i128 {
     return std.fmt.parseInt(i128, text, 0) catch null;
 }
 
-fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, sd: ast.StructDecl, node: anytype) anyerror!?[]const u8 {
-    if (node.args.len != sd.type_params.len) return null;
+// Compute the mangled concrete name and type-parameter substitution for a use of a
+// generic declaration `Base<Arg, …>` (shared by generic structs and generic tagged
+// unions). Returns null if the argument count is wrong or an argument is not a concrete
+// type name / const-generic value (the use is left generic for sema to diagnose).
+const InstantiationKey = struct {
+    name: []const u8,
+    subst: Subst,
+};
+fn instantiateGeneric(ctx: *const CloneCtx, rw: *Rewriter, base: []const u8, type_params: []const ast.Ident, node: anytype) anyerror!?InstantiationKey {
+    if (node.args.len != type_params.len) return null;
     var subst = Subst.init(rw.arena);
     var mangled: std.ArrayList(u8) = .empty;
-    try mangled.appendSlice(rw.arena, sd.name.text);
-    for (sd.type_params, node.args) |param, arg| {
+    try mangled.appendSlice(rw.arena, base);
+    for (type_params, node.args) |param, arg| {
         // The argument resolves to a concrete type name (after any outer substitution),
         // or a const-generic *value* (an integer) bound into `[N]T` array lengths.
         const arg_clone = try cloneType(ctx, arg);
@@ -799,21 +848,45 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, sd: ast.StructDecl,
             try mangled.appendSlice(rw.arena, tn);
         }
     }
-    const name = try mangled.toOwnedSlice(rw.arena);
-    if (!rw.struct_instances.contains(name)) {
+    return .{ .name = try mangled.toOwnedSlice(rw.arena), .subst = subst };
+}
+
+fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, sd: ast.StructDecl, node: anytype) anyerror!?[]const u8 {
+    const key = (try instantiateGeneric(ctx, rw, sd.name.text, sd.type_params, node)) orelse return null;
+    if (!rw.struct_instances.contains(key.name)) {
         const si = rw.arena.create(StructInstance) catch {
             rw.oom = true;
-            return name;
+            return key.name;
         };
-        si.* = .{ .decl = sd, .subst = subst, .mangled = name };
-        rw.struct_instances.put(name, si) catch {
+        si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name };
+        rw.struct_instances.put(key.name, si) catch {
             rw.oom = true;
         };
         rw.struct_list.append(rw.arena, si) catch {
             rw.oom = true;
         };
     }
-    return name;
+    return key.name;
+}
+
+// Collect (if new) and name the monomorphization of a generic tagged-union use
+// `Opt<u32>` → `Opt__u32`, mirroring rewriteGenericStruct.
+fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, ud: ast.UnionDecl, node: anytype) anyerror!?[]const u8 {
+    const key = (try instantiateGeneric(ctx, rw, ud.name.text, ud.type_params, node)) orelse return null;
+    if (!rw.union_instances.contains(key.name)) {
+        const ui = rw.arena.create(UnionInstance) catch {
+            rw.oom = true;
+            return key.name;
+        };
+        ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name };
+        rw.union_instances.put(key.name, ui) catch {
+            rw.oom = true;
+        };
+        rw.union_list.append(rw.arena, ui) catch {
+            rw.oom = true;
+        };
+    }
+    return key.name;
 }
 
 fn cloneStructDeclCtx(ctx: *const CloneCtx, sd: ast.StructDecl) anyerror!ast.StructDecl {
@@ -822,6 +895,16 @@ fn cloneStructDeclCtx(ctx: *const CloneCtx, sd: ast.StructDecl) anyerror!ast.Str
         fields[i] = .{ .name = field.name, .ty = try cloneType(ctx, field.ty), .offset = field.offset };
     }
     return .{ .name = sd.name, .abi = sd.abi, .fields = fields, .type_params = sd.type_params, .is_move = sd.is_move, .is_opaque = sd.is_opaque, .is_c_union = sd.is_c_union };
+}
+
+fn cloneUnionDeclCtx(ctx: *const CloneCtx, ud: ast.UnionDecl) anyerror!ast.UnionDecl {
+    var cases = try ctx.arena.alloc(ast.UnionCase, ud.cases.len);
+    for (ud.cases, 0..) |case, i| {
+        // Substitute a case payload type (`some: T` → `some: u32`); payload-less
+        // cases (`none`) carry a null type and pass through unchanged.
+        cases[i] = .{ .name = case.name, .ty = if (case.ty) |ty| try cloneType(ctx, ty) else null };
+    }
+    return .{ .name = ud.name, .cases = cases, .type_params = ud.type_params };
 }
 
 fn cloneBlock(ctx: *const CloneCtx, block: ast.Block) anyerror!ast.Block {

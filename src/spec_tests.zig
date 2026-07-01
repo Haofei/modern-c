@@ -815,6 +815,7 @@ fn isAcceptanceCheck(check: []const u8) bool {
         "section-attr-accept",
         "sanitizer-hook-override-accept",
         "value-optional-tagged-repr",
+        "generic-union-monomorphize-accept",
     };
     return matchesAny(check, &names);
 }

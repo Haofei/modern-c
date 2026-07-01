@@ -259,6 +259,11 @@ pub const EnumCase = struct {
 pub const UnionDecl = struct {
     name: Ident,
     cases: []UnionCase,
+    // Type parameters for a generic tagged union `union Name<T, …>` (section 22),
+    // parallel to `StructDecl.type_params`; empty for an ordinary tagged union. A
+    // generic union is a template: each concrete use `Name<u32>` monomorphizes to a
+    // distinct non-generic tagged union (`Name__u32`) before sema/lowering.
+    type_params: []Ident = &.{},
 };
 
 pub const UnionCase = struct {
