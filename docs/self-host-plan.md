@@ -258,7 +258,14 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   composes with generic substitution for free. Mechanical, NO new gaps. `selfhost-cast-test` green; all 12
   prior gates pass. **Self-compile ~65–70%** (container/mem bodies now type-check+emit). Last structural
   lever: **traits/`*mut dyn`** (vtables + method desugar + fat pointers — the Allocator seam; genuinely hard).
-- **STATUS: P1–P4 + CLI + perf + 9 grammar verticals (structs→low-level→casts) COMPLETE — a working, fast, subset MC-compiler-in-MC (~65–70% of its own source).** Remaining for
+- **2026-07-01 — P5.10 (traits + `*mut dyn`) DONE** (`9603f78`) — the last major structural lever. `trait`
+  decls, `impl Trait for Type` (methods desugared to `Type__m` + a rodata vtable), `*mut dyn` fat pointers,
+  `*mut T`→`*mut dyn` coercion at call args, dynamic dispatch `d.vtbl->m(d.data,..)` — matching the real
+  backend (thunks, no heap). All 14 selfhost gates + CLI green. Found+fixed G31 (`p.field`→`->`); G32
+  (mutation-through-`*mut` flagged immutable → impl bodies not sema-checked). **Self-compile ~70–75%.**
+  Remaining to literal self-compile: `?T`, `match`, general `mod.fn` calls, opaque `PAddr`, full std API +
+  the end-to-end integration.
+- **STATUS: P1–P4 + CLI + perf + 10 grammar verticals (structs→traits) COMPLETE — a working, fast, subset MC-compiler-in-MC handling ~70–75% of its own source's features.** Remaining for
   *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
   match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
   perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").

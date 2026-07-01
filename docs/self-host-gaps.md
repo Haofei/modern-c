@@ -122,6 +122,21 @@ type-directed lowering and is the compounding tax of not having sema annotate th
 the real backend (`mc_slice_const_<T>{ const T* ptr; size_t len; }`). Also: added a `&` address-of node
 (`un_addr`) for `mem.as_bytes(&arr)`; still no `as` casts (cross-width arithmetic must be avoided).
 
+| G31 | P5.10 | codegen | **Pointer field access `p.field` (p: `*mut T`) must emit C `->`, not `.`** — the subset emitter emitted `.` because prior fixtures never did pointer-field access in the accept set. Latent wrong-C bug; fixed with `e_base_is_ptr` (dyn fat pointers stay `.`). | `fn f(p:*mut S)->u32{return p.x;}` → `p.x` (wrong) | medium | fixed (selfhost) |
+| G32 | P5.10 | selfhost-sema | **Mutation through a `*mut` pointer receiver is flagged immutable** — `self.total = x` where `self: *mut Acc` → the subset's `sm_target_mutable` only allows `var` locals, so it errors `assign_immutable`. Worked around by NOT sema-checking impl/method bodies → blocks real conformance checking. | `fn m(self:*mut S)->void{self.x=1;}` | medium | workaround (skip body check); real fix = treat deref-of-`*mut` as a mutable lvalue |
+
+**P5.10 traits:** representation matches the real backend — rodata `static const NAME__vtable`, fat pointer
+`{void* data; const NAME__vtable* vtbl}`, `void*`-self thunks (`(TYPE*)self`, avoids `-Wincompatible-pointer-types`),
+dispatch `d.vtbl->m(d.data, ...)`. Coercion `*mut T`→`*mut dyn Trait` at CALL ARGS only (returns/assigns deferred).
+`Self` is a non-problem (erased to `void*` in the vtable; concrete in impl methods).
+
+**REMAINING blockers to LITERAL `mcc2`-compiles-`mcc2`** (after 11 verticals, ~70–75% coverage): `?T`
+optionals (G11 — selfhost mostly avoids), `match` + payload binding, GENERAL module-qualified calls (`mod.fn`
+— only `mem.as_bytes`/`raw.*` special-cased today; `pa()`/`pa_value`/etc. not), the OPAQUE `PAddr` address
+class from `std/addr.mc`, and the full std API surface (StrHashMap over struct values, exact signatures). Plus
+closing G32 for real impl-body checking. These are a mix of a few more features + a substantial end-to-end
+INTEGRATION effort (feeding all of selfhost/*.mc + std deps through mcc2 and fixing the long tail).
+
 **Structural observation (P5.1):** parser/sema/emit each re-implement length-prefixed "pair run" walking
 (`[count,(a,b)*]`, `fi*2(+1)` indexing) with no shared arena-access module → off-by-one-prone duplication
 across 3 files. A shared `selfhost/ast.mc` accessor layer would cut this; deferred (works, just repetitive).
