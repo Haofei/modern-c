@@ -82,6 +82,10 @@ WDEF=(-DBH_PLATFORM_MC -DBUILD_TARGET_AARCH64 -DWASM_ENABLE_INTERP=1
       -DWASM_ENABLE_BULK_MEMORY_OPT=1 -DWASM_ENABLE_REF_TYPES=1
       -DWASM_ENABLE_CALL_INDIRECT_OVERLONG=1
       -DBH_MALLOC=wasm_runtime_malloc -DBH_FREE=wasm_runtime_free)
+# Phase 1.2 (perf plan): default to WAMR's FAST interpreter (direct-threaded / label-as-values
+# dispatch); set WAMR_FAST_INTERP=0 to fall back to the classic interpreter. The flag is part of the
+# cache key (WANT below) so toggling it rebuilds libwamr.a.
+if [ "${WAMR_FAST_INTERP:-1}" = 1 ]; then WDEF+=(-DWASM_ENABLE_FAST_INTERP=1); WAMR_INTERP_TU=wasm_interp_fast.c; else WDEF+=(-DWASM_ENABLE_FAST_INTERP=0); WAMR_INTERP_TU=wasm_interp_classic.c; fi
 CACHE="$HERE/.wamr-cache/aarch64"; mkdir -p "$CACHE"
 WAMR_LIB="$CACHE/libwamr.a"
 WANT="$(printf '%s ' "${WDEF[@]}"; find "$WC/shared/platform/mc" "$WC/shared/utils" "$WC/shared/mem-alloc" "$WC/iwasm/common" "$WC/iwasm/interpreter" \( -name '*.c' -o -name '*.h' -o -name '*.S' -o -name '*.s' \) 2>/dev/null | sort | xargs ls -la 2>/dev/null | md5sum)"
@@ -95,7 +99,7 @@ if [ ! -f "$WAMR_LIB" ] || [ "$(cat "$CACHE/stamp" 2>/dev/null)" != "$WANT" ]; t
     for f in "$WC"/shared/mem-alloc/ems/ems_alloc.c "$WC"/shared/mem-alloc/ems/ems_hmu.c "$WC"/shared/mem-alloc/ems/ems_kfc.c; do cwamr "$f" "$CB/we_$((j++)).o"; done
     for f in "$WC"/iwasm/common/*.c; do case "$f" in *wasm_application.c) continue;; esac; cwamr "$f" "$CB/wc_$((j++)).o"; done
     cwamr "$WC/iwasm/interpreter/wasm_runtime.c" "$CB/w_rt.o"
-    cwamr "$WC/iwasm/interpreter/wasm_interp_classic.c" "$CB/w_interp.o"
+    cwamr "$WC/iwasm/interpreter/$WAMR_INTERP_TU" "$CB/w_interp.o"
     cwamr "$WC/iwasm/interpreter/wasm_loader.c" "$CB/w_loader.o"
     "$CLANG" "${WCF[@]}" -c "$WC/iwasm/common/arch/invokeNative_aarch64.s" -o "$CB/w_tramp.o"; OBJS+=("$CB/w_tramp.o")
     "$AR" rcs "$WAMR_LIB" "${OBJS[@]}"
