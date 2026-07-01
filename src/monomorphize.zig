@@ -4,8 +4,19 @@ const ast = @import("ast.zig");
 const eval = @import("eval.zig");
 const diagnostics = @import("diagnostics.zig");
 
-// A set of concrete type names that conform to a trait (`impl Trait for Type`).
-const ConformanceSet = std.StringHashMap(std.StringHashMap(void));
+// The set of `(trait, concrete)` pairs with an `impl Trait for Concrete`, flattened
+// to a single map keyed on `"{trait}\x00{concrete}"` so a bound check is one hash
+// lookup instead of a nested trait->set->contains double lookup (Phase 2.5). The keys
+// are identifier strings (stable within a compilation), so membership is identical to
+// the old nested form — no observable change.
+const ConformanceSet = std.StringHashMap(void);
+
+// Build the combined conformance key into `buf` (or arena-allocate if it doesn't fit).
+// Names are identifiers, so the stack buffer covers every realistic case.
+fn conformanceKey(arena: std.mem.Allocator, buf: []u8, trait: []const u8, concrete: []const u8) []const u8 {
+    return std.fmt.bufPrint(buf, "{s}\x00{s}", .{ trait, concrete }) catch
+        std.fmt.allocPrint(arena, "{s}\x00{s}", .{ trait, concrete }) catch "\x00";
+}
 
 // Comptime-parameter monomorphization (section 22). A *type-generic* function —
 // one whose `comptime` parameter appears in a type position, e.g.
@@ -91,9 +102,9 @@ const Rewriter = struct {
     // the receiver type concrete (`Square.area(recv)`), this becomes a DIRECT call to
     // the desugared impl method `Square__area(recv)` (Tier 1: zero runtime dispatch).
     fn_names: *const std.StringHashMap(void),
-    // Trait-bound checking at the instantiation site (Tier 1). `conformance` maps each
-    // trait to the set of concrete types with an `impl Trait for Type`; when a generic
-    // fn with `where T: Trait` is instantiated with a concrete `T`, an unmet bound is
+    // Trait-bound checking at the instantiation site (Tier 1). `conformance` holds the
+    // `(trait, concrete)` pairs with an `impl Trait for Concrete` (see ConformanceSet);
+    // when a generic fn with `where T: Trait` is instantiated with a concrete `T`, an unmet bound is
     // E_TRAIT_NOT_SATISFIED reported at the call. Null reporter => no diagnostics (the
     // surviving trait_decl/impl_trait still let sema run its other trait checks).
     conformance: *const ConformanceSet,
@@ -119,9 +130,8 @@ pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?
                 try fn_names.put(fn_decl.name.text, {});
             },
             .impl_trait => |it| {
-                const gop = try conformance.getOrPut(it.trait_name.text);
-                if (!gop.found_existing) gop.value_ptr.* = std.StringHashMap(void).init(arena);
-                try gop.value_ptr.put(it.type_name.text, {});
+                const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ it.trait_name.text, it.type_name.text });
+                try conformance.put(key, {});
             },
             else => {},
         }
@@ -595,7 +605,8 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
                 .type_name => |tn| tn,
                 .int => continue,
             };
-            const conforms = if (rw.conformance.get(bound.trait_name.text)) |set| set.contains(concrete) else false;
+            var key_buf: [512]u8 = undefined;
+            const conforms = rw.conformance.contains(conformanceKey(rw.arena, &key_buf, bound.trait_name.text, concrete));
             if (!conforms) {
                 bound_failed = true;
                 reporter.err(node.callee.*.span, "{s}: {s}", .{
