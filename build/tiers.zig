@@ -275,6 +275,8 @@ pub fn register(ctx: *h.Ctx) void {
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
     m0_step.dependOn(ctx.cmd("llvm-ledger-test"));
     m0_step.dependOn(ctx.cmd("llvm-signed-boot-test"));
+    // llvm-ota-test runs the LLVM-lowered chunked OTA transport + admission + rollback under QEMU.
+    m0_step.dependOn(ctx.cmd("llvm-ota-test"));
     // llvm-metrics-test runs the LLVM-lowered structured metrics + deterministic replay under QEMU.
     m0_step.dependOn(ctx.cmd("llvm-metrics-test"));
     m0_step.dependOn(ctx.cmd("llvm-page-test"));
@@ -326,6 +328,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("opt-test"));
     // opt-equiv-test validates the elided bounds check is behavior-preserving (C vs LLVM).
     m0_step.dependOn(ctx.cmd("opt-equiv-test"));
+    // reproducible-build-test validates emitted C + LLVM text is byte-identical across two compiles.
+    m0_step.dependOn(ctx.cmd("reproducible-build-test"));
     // safe-release-parity (D2.5): SAFE/RELEASE profiles agree functionally; RELEASE elides
     // only the optimizer-proven-dead checks SAFE keeps.
     m0_step.dependOn(ctx.cmd("safe-release-parity"));
@@ -660,6 +664,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("ledger-test"));
     // signed-boot-test runs signed-image admission + A/B rollback (production_ops) end to end under QEMU.
     m0_step.dependOn(ctx.cmd("signed-boot-test"));
+    // ota-test runs chunked OTA transport (kernel/core/ota) + admission + rollback end to end under QEMU.
+    m0_step.dependOn(ctx.cmd("ota-test"));
     // metrics-test runs structured metrics + deterministic event-log replay under QEMU.
     m0_step.dependOn(ctx.cmd("metrics-test"));
     // syscall-test runs the ecall syscall dispatch skeleton under QEMU.

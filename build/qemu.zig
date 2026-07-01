@@ -46,6 +46,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "opt-equiv-test", "Validate the optimizer's elided bounds check is behavior-preserving: C vs LLVM, default vs --optimize", &.{ "bash", "tools/toolchain/opt-equiv-test.sh", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "reproducible-build-test", "Validate emitted C + LLVM text is byte-identical across two compiles of a fixed input (build determinism)", &.{ "bash", "tools/toolchain/reproducible-build-test.sh", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "comptime-fold-test", "Validate comptime-only folds (byte strings, wrap/sat arithmetic domains) evaluate correctly", &.{ "bash", "tools/toolchain/comptime-fold-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "asm-targets-test", "Validate per-architecture precise-asm register vocabularies (x86-64/RISC-V/AArch64)", &.{ "bash", "tools/toolchain/asm-targets-test.sh", "zig-out/bin/mcc" });
@@ -683,6 +685,10 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "signed-boot-test", "Run signed-image admission + A/B rollback (kernel/core/production_ops) end to end under QEMU", &.{ "bash", "tools/fs/signed-boot-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-signed-boot-test", "Run the LLVM-lowered signed-image admission + A/B rollback end to end under QEMU", &.{ "bash", "tools/fs/signed-boot-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    _ = h.addScriptTest(ctx, "ota-test", "Run chunked OTA transport (kernel/core/ota) + admission + rollback end to end under QEMU", &.{ "bash", "tools/fs/ota-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-ota-test", "Run the LLVM-lowered chunked OTA transport + admission + rollback end to end under QEMU", &.{ "bash", "tools/fs/ota-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "metrics-test", "Run structured metrics + deterministic event-log replay under QEMU", &.{ "bash", "tools/proc/metrics-test.sh", "zig-out/bin/mcc", "c" });
 
