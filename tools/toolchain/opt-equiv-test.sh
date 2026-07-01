@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # C-vs-LLVM equivalence test for the fact-gated MIR optimizer (annex E): const-index
-# bounds-check elision and divide-by-constant check elision (unsigned DivideByZero, and the
-# signed INT_MIN/-1 overflow on a runtime-negative dividend). Compiles
+# bounds-check elision, divide-by-constant check elision (unsigned DivideByZero, and the
+# signed INT_MIN/-1 overflow on a runtime-negative dividend), AND range-fact elision of a
+# runtime index/divisor proven safe by an `if`/`while` guard. Compiles
 # tests/toolchain/opt_index_demo.mc through BOTH backends in four configurations — C/LLVM ×
 # default/--optimize — links each into the same entry driver, runs them, and asserts all four
 # print the same value. Eliding a provably-dead check must be behavior-preserving, so the
@@ -24,7 +25,7 @@ mc_require_cmd "opt-equiv-test" "$LLC"
 
 SRC="$HERE/tests/toolchain/opt_index_demo.mc"
 ENTRY="opt_index_demo"
-EXPECT=65
+EXPECT=385
 
 LINK_FLAGS_STR="$(mc_link_flags)"
 
@@ -107,4 +108,4 @@ grep -q 'call void @mc_trap_DivideByZero' "$W/l1.ll" && { echo "FAIL: opt-equiv-
 grep -q '> mc_len' "$W/c0.c" || { echo "FAIL: opt-equiv-test — default C dropped the slice bounds check"; exit 1; }
 grep -q '> mc_len' "$W/c1.c" && { echo "FAIL: opt-equiv-test — --optimize C kept the slice bounds check"; exit 1; }
 
-echo "PASS: opt-equiv-test — C and LLVM agree ($EXPECT) across default/--optimize; the elided bounds (index + slice) and divide-by-zero checks are behavior-preserving on both backends"
+echo "PASS: opt-equiv-test — C and LLVM agree ($EXPECT) across default/--optimize; the elided bounds (const index + slice + guard/while range-fact index) and divide-by-zero checks (const + guard-proven divisor) are behavior-preserving on both backends"

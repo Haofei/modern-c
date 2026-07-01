@@ -12,6 +12,33 @@ fn signed_div_demo(x: i32) -> i32 {
     return x / 2;   // signed div by the literal 2: both checks provably dead under --optimize
 }
 
+// A runtime (non-constant) index proven in range by a guard: the range-fact analysis proves
+// `i < len` on the true path, so the bounds check is elided under --optimize and must stay
+// behavior-preserving (the false path returns 0 without indexing).
+fn guarded_index_demo(a: [4]u32, i: usize) -> u32 {
+    if (i < 4) { return a[i]; }
+    return 0;
+}
+
+// A runtime divisor proven non-zero by a guard: the DivideByZero check is elided under
+// --optimize on the true path only.
+fn guarded_div_demo(x: u32, d: u32) -> u32 {
+    if (d != 0) { return x / d; }
+    return 0;
+}
+
+// A runtime index summed under a `while (i < len)` guard: the loop-condition fact elides the
+// per-iteration bounds check while staying behavior-identical to the checked build.
+fn while_sum_demo(a: [4]u32) -> u32 {
+    var acc: u32 = 0;
+    var i: usize = 0;
+    while (i < 4) {
+        acc = acc + a[i];
+        i = i + 1;
+    }
+    return acc;
+}
+
 // A struct-field array, indexed at a constant — exercises the member-base bounds elision.
 struct Pair {
     vals: [2]u32,
@@ -42,5 +69,10 @@ export fn opt_index_demo() -> u32 {
     let p: Pair = .{ .vals = .{40, 50} };
     let m: u32 = pair_second(p);                             // 50 (member-base const index)
     let sl: u32 = slice_len_demo();                          // 3 (const-slice construction)
-    return base + ((signed_val + 10) as u32) + m + sl;      // 5 + 7 + 50 + 3 = 65
+    let gi_src: [4]u32 = .{100, 200, 300, 400};
+    let gi: u32 = guarded_index_demo(gi_src, 2);            // 300 (guard-proven runtime index)
+    let gd: u32 = guarded_div_demo(90, 9);                 // 10 (guard-proven non-zero divisor)
+    let ws: u32 = while_sum_demo(.{1, 2, 3, 4});           // 10 (while-guarded running index)
+    // 5 + 7 + 50 + 3 + 300 + 10 + 10 = 385
+    return base + ((signed_val + 10) as u32) + m + sl + gi + gd + ws;
 }

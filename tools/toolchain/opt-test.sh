@@ -68,4 +68,31 @@ if ! "$MCC" lower-mir "$NEG" --optimize 2>/dev/null | grep -q 'kind=Bounds'; the
     echo "FAIL: opt-test — an out-of-range const slice lost its Bounds trap edge under --optimize"; exit 1
 fi
 
-echo "PASS: opt-test — const-index/const-slice bounds and divide-by-constant check elision proven, gated by --optimize, sound on variable/out-of-range/-1 operands"
+# 4. Range-fact elision (annex E 3.4): a runtime index/divisor proven safe by an `if`/`while`
+#    guard has its trap edge dropped under --optimize, while operations the analysis cannot prove
+#    keep theirs. Uses lower-mir per function (the guard forms are broader than the #[no_lang_trap]
+#    contract surface, so this asserts the MIR trap edges directly rather than via `verify`).
+GUARD="$HERE/tests/toolchain/opt_guard.mc"
+
+# edge_present <fn> <kind> <optflag> -> 0 if a matching trap edge exists, 1 otherwise
+edge_present() {
+    "$MCC" lower-mir "$GUARD" $3 2>/dev/null | grep -qE "trap_edge fn=$1 .*kind=$2"
+}
+
+# Positives: the guard proves the op safe, so under --optimize the edge is GONE (present without).
+for pair in "guarded_index:Bounds" "while_index:Bounds" "guarded_div:DivideByZero" \
+            "guarded_signed_div:DivideByZero" "guarded_signed_div:IntegerOverflow"; do
+    fn="${pair%%:*}"; kind="${pair#*:}"
+    edge_present "$fn" "$kind" ""          || { echo "FAIL: opt-test — $fn lost its $kind edge WITHOUT --optimize"; exit 1; }
+    edge_present "$fn" "$kind" "--optimize" && { echo "FAIL: opt-test — $fn kept its $kind edge under --optimize (guard fact not applied)"; exit 1; }
+done
+
+# Negatives: unprovable, so the edge must REMAIN even under --optimize (soundness floor: a
+# too-weak bound, a signed divisor that could be -1, an address-taken index, a re-assigned index).
+for pair in "wrong_bound:Bounds" "signed_div_ne:DivideByZero" "signed_div_ne:IntegerOverflow" \
+            "aliased_index:Bounds" "mutated_index:Bounds"; do
+    fn="${pair%%:*}"; kind="${pair#*:}"
+    edge_present "$fn" "$kind" "--optimize" || { echo "FAIL: opt-test — $fn wrongly dropped its $kind edge under --optimize (unsound elision)"; exit 1; }
+done
+
+echo "PASS: opt-test — const-index/const-slice bounds and divide-by-constant check elision proven, gated by --optimize, sound on variable/out-of-range/-1 operands; range-fact (guard/while) index+divisor elision proven, sound on weak-bound/signed-/-1/address-taken/re-assigned operands"

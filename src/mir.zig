@@ -743,6 +743,20 @@ const MutableBlock = struct {
     terminator: Terminator = .fallthrough,
 };
 
+// OPT (annex E) — a range fact proven true on every path reaching the current program point,
+// gathered from `if`/`while` guards and `assert`s so a later `arr[i]`/`x / d` can drop a
+// provably-dead bounds/divide check. Facts are conservative and SOUND-ONLY: the operands are
+// restricted to simple identifiers (whose only mutation vectors — assignment or `&`/`&mut` —
+// clear all facts) so no aliased write can invalidate a fact behind our back. A fact is never
+// removed once invalidated (`valid=false`); it is only dropped when its scope pops.
+const ProvenFact = struct {
+    kind: enum { lt, positive, nonzero },
+    // `lt`: `a < b`. `positive`: `a > 0`. `nonzero`: `a != 0`.
+    a: ast.Expr,
+    b: ast.Expr = undefined,
+    valid: bool = true,
+};
+
 const FunctionBuilder = struct {
     allocator: std.mem.Allocator,
     name: []const u8,
@@ -765,6 +779,13 @@ const FunctionBuilder = struct {
     contract_regions: std.ArrayList(ContractRegion),
     range_facts: std.ArrayList(RangeFact),
     elided_bounds: std.ArrayList(SourcePoint),
+    // OPT (annex E) — guard/assert-proven facts live for check elision (see ProvenFact).
+    proven_facts: std.ArrayList(ProvenFact) = .empty,
+    // OPT (annex E) — identifiers whose address is taken ANYWHERE in the function body (a
+    // pre-pass, so ordering is irrelevant). A pointer to such a local can outlive an `&`/`&mut`
+    // site and mutate it through an opaque call we cannot see, so these names never become fact
+    // operands. Populated only under `--optimize`.
+    address_taken: std.StringHashMap(void),
     local_types: std.StringHashMap(ValueType),
     local_type_exprs: std.StringHashMap(ast.TypeExpr),
     local_mutability: std.StringHashMap(bool),
@@ -819,6 +840,7 @@ const FunctionBuilder = struct {
             .contract_regions = .empty,
             .range_facts = .empty,
             .elided_bounds = .empty,
+            .address_taken = std.StringHashMap(void).init(allocator),
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
@@ -869,6 +891,7 @@ const FunctionBuilder = struct {
             .contract_regions = .empty,
             .range_facts = .empty,
             .elided_bounds = .empty,
+            .address_taken = std.StringHashMap(void).init(allocator),
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
@@ -900,6 +923,8 @@ const FunctionBuilder = struct {
         self.contract_regions.deinit(self.allocator);
         self.range_facts.deinit(self.allocator);
         self.elided_bounds.deinit(self.allocator);
+        self.proven_facts.deinit(self.allocator);
+        self.address_taken.deinit();
         self.local_types.deinit();
         self.local_type_exprs.deinit();
         self.local_mutability.deinit();
@@ -942,6 +967,10 @@ const FunctionBuilder = struct {
 
         self.blocks.deinit(self.allocator);
         self.blocks = .empty;
+        self.proven_facts.deinit(self.allocator);
+        self.proven_facts = .empty;
+        self.address_taken.deinit();
+        self.address_taken = std.StringHashMap(void).init(self.allocator);
         self.local_types.deinit();
         self.local_types = std.StringHashMap(ValueType).init(self.allocator);
         self.local_type_exprs.deinit();
@@ -975,7 +1004,97 @@ const FunctionBuilder = struct {
     }
 
     fn buildBody(self: *FunctionBuilder, body: ast.Block) anyerror!void {
+        // OPT (annex E) — collect address-taken locals up front so no fact is ever formed about a
+        // name a hidden alias could mutate (see `address_taken`). Only needed under `--optimize`.
+        if (self.optimize) try self.collectAddressTakenBlock(body);
         _ = try self.buildBlock(body);
+    }
+
+    fn collectAddressTakenBlock(self: *FunctionBuilder, block: ast.Block) anyerror!void {
+        for (block.items) |stmt| try self.collectAddressTakenStmt(stmt);
+    }
+
+    fn collectAddressTakenStmt(self: *FunctionBuilder, stmt: ast.Stmt) anyerror!void {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| {
+                if (local.init) |init_expr| try self.collectAddressTakenExpr(init_expr);
+            },
+            .assignment => |node| {
+                try self.collectAddressTakenExpr(node.target);
+                try self.collectAddressTakenExpr(node.value);
+            },
+            .expr, .@"defer", .assert => |expr| try self.collectAddressTakenExpr(expr),
+            .@"return" => |maybe| if (maybe) |expr| try self.collectAddressTakenExpr(expr),
+            .block, .comptime_block, .unsafe_block => |b| try self.collectAddressTakenBlock(b),
+            .contract_block => |c| try self.collectAddressTakenBlock(c.block),
+            .if_let => |node| {
+                try self.collectAddressTakenExpr(node.value);
+                try self.collectAddressTakenBlock(node.then_block);
+                if (node.else_block) |eb| try self.collectAddressTakenBlock(eb);
+            },
+            .@"switch" => |node| {
+                try self.collectAddressTakenExpr(node.subject);
+                for (node.arms) |arm| switch (arm.body) {
+                    .block => |b| try self.collectAddressTakenBlock(b),
+                    .expr => |e| try self.collectAddressTakenExpr(e),
+                };
+            },
+            .loop => |node| {
+                if (node.iterable) |it| try self.collectAddressTakenExpr(it);
+                try self.collectAddressTakenBlock(node.body);
+            },
+            .@"break", .@"continue", .asm_stmt => {},
+        }
+    }
+
+    fn collectAddressTakenExpr(self: *FunctionBuilder, expr: ast.Expr) anyerror!void {
+        switch (expr.kind) {
+            .address_of => |inner| {
+                if (identBaseName(inner.*)) |name| try self.address_taken.put(name, {});
+                try self.collectAddressTakenExpr(inner.*);
+            },
+            .grouped, .deref, .await_expr => |inner| try self.collectAddressTakenExpr(inner.*),
+            .unary => |node| try self.collectAddressTakenExpr(node.expr.*),
+            .cast => |node| try self.collectAddressTakenExpr(node.value.*),
+            .binary => |node| {
+                try self.collectAddressTakenExpr(node.left.*);
+                try self.collectAddressTakenExpr(node.right.*);
+            },
+            .index => |node| {
+                try self.collectAddressTakenExpr(node.base.*);
+                try self.collectAddressTakenExpr(node.index.*);
+            },
+            .slice => |node| {
+                try self.collectAddressTakenExpr(node.base.*);
+                try self.collectAddressTakenExpr(node.start.*);
+                try self.collectAddressTakenExpr(node.end.*);
+            },
+            .member => |node| try self.collectAddressTakenExpr(node.base.*),
+            .call => |node| {
+                try self.collectAddressTakenExpr(node.callee.*);
+                for (node.args) |arg| try self.collectAddressTakenExpr(arg);
+            },
+            .try_expr => |node| {
+                try self.collectAddressTakenExpr(node.operand.*);
+                if (node.mapped) |m| try self.collectAddressTakenExpr(m.*);
+            },
+            .array_literal => |items| for (items) |item| try self.collectAddressTakenExpr(item),
+            .struct_literal => |fields| for (fields) |field| try self.collectAddressTakenExpr(field.value),
+            .block => |b| try self.collectAddressTakenBlock(b),
+            else => {},
+        }
+    }
+
+    // The base identifier of an address-of target: `&x`, `&x.f`, `&x[i]`, `&(x)` all pin `x`.
+    fn identBaseName(expr: ast.Expr) ?[]const u8 {
+        return switch (expr.kind) {
+            .ident => |id| id.text,
+            .grouped => |inner| identBaseName(inner.*),
+            .member => |m| identBaseName(m.base.*),
+            .index => |n| identBaseName(n.base.*),
+            .deref => |inner| identBaseName(inner.*),
+            else => null,
+        };
     }
 
     fn buildGlobalInitializer(self: *FunctionBuilder, ty: ast.TypeExpr, initializer: ast.Expr) anyerror!void {
@@ -996,6 +1115,11 @@ const FunctionBuilder = struct {
     }
 
     fn buildBlock(self: *FunctionBuilder, block: ast.Block) anyerror!bool {
+        // OPT (annex E) — facts proven inside this block (by `assert`s or nested guards) do not
+        // outlive it: drop everything appended while building it. Invalidations of outer facts
+        // (valid=false) intentionally persist — keeping a check that is still live is always sound.
+        const facts_save = self.proven_facts.items.len;
+        defer self.proven_facts.items.len = facts_save;
         for (block.items) |stmt| {
             if (try self.buildStmt(stmt)) {
                 try self.addUnhandledResultChecksForBlock(block);
@@ -1048,6 +1172,9 @@ const FunctionBuilder = struct {
                     self.assignment_target = previous_target;
                     self.assignment_target_ty = previous_target_ty;
                 }
+                // OPT (annex E) — a new binding may shadow a fact operand; drop all facts (after
+                // the initializer was built, so a use in it still saw the pre-decl facts).
+                self.invalidateFacts();
                 return false;
             },
             .assignment => |node| {
@@ -1081,6 +1208,9 @@ const FunctionBuilder = struct {
                 try self.addRepresentationUseForValue(self.assignment_target_ty, "assignment", node.value.span, exprText(node.value));
                 self.assignment_target = previous_target;
                 self.assignment_target_ty = previous_target_ty;
+                // OPT (annex E) — a store may change any fact operand; drop all facts (after the
+                // RHS/target were built, so a use on this line still saw the pre-write facts).
+                self.invalidateFacts();
                 return false;
             },
             .expr => |expr| {
@@ -1097,6 +1227,9 @@ const FunctionBuilder = struct {
                 try self.addConversionCheck(.bool, expr, .condition, expr.span);
                 try self.buildExpr(expr);
                 try self.addTrapEdge(.Assert, .assert_stmt, stmt.span);
+                // OPT (annex E) — control only continues past the assert when its condition held,
+                // so its range facts are proven for the rest of this block (dropped when it pops).
+                try self.recordTrueCondFacts(expr);
                 return false;
             },
             .@"return" => |maybe| {
@@ -1358,6 +1491,13 @@ const FunctionBuilder = struct {
             const arm_id = try self.addBlock("switch_arm");
             try self.addSuccessor(dispatch_id, arm_id);
             self.current = arm_id;
+            // OPT (annex E) — a plain `if (cond) {…}` is desugared to `switch cond { true => …,
+            // false => … }`, so the `true` arm runs only when `cond` held: record its facts for
+            // that arm and drop them afterwards. Any single-pattern `.literal true` arm qualifies.
+            const facts_save = self.proven_facts.items.len;
+            if (arm.patterns.len == 1 and patternIsBoolTrue(arm.patterns[0])) {
+                try self.recordTrueCondFacts(node.subject);
+            }
             try self.addInstr(.expr, if (arm.patterns.len == 0) "_" else patternText(arm.patterns[0]), .branch, span);
             const narrowed_binding = if (arm.patterns.len > 0) self.switchNarrowedBinding(node.subject, arm.patterns[0]) else null;
             var had_previous_type = false;
@@ -1413,6 +1553,10 @@ const FunctionBuilder = struct {
                 try self.addSuccessor(self.current, after_id);
                 self.setTerminator(.{ .jump = after_id });
             }
+            // Drop this arm's guard facts before the next arm (invalidations of outer facts made
+            // inside the arm intentionally persist — the arm may have run, so a later use of an
+            // outer fact must stay conservative).
+            self.proven_facts.items.len = facts_save;
         }
         self.blocks.items[dispatch_id].terminator = .switch_;
         self.current = after_id;
@@ -1822,7 +1966,17 @@ const FunctionBuilder = struct {
             }
             try self.local_mutability.put(binding.text, false);
         }
+        // OPT (annex E) — facts proven before the loop do NOT survive the back-edge (a later
+        // iteration may have mutated their operands), so invalidate them all. A `while (cond)`
+        // re-tests `cond` on entry to every iteration, so its facts DO hold at the top of the
+        // body — record them there (valid until the first in-body write clears them).
+        const facts_save = self.proven_facts.items.len;
+        self.invalidateFacts();
+        if (node.kind == .@"while") {
+            if (node.iterable) |cond| try self.recordTrueCondFacts(cond);
+        }
         const terminated = try self.buildBlock(node.body);
+        self.proven_facts.items.len = facts_save;
         if (node.kind == .@"for" and node.label != null) {
             const binding = node.label.?;
             if (had_previous_type) {
@@ -1885,7 +2039,13 @@ const FunctionBuilder = struct {
             .unreachable_expr => {
                 try self.addTrapEdge(.Unreachable, .unreachable_expr, expr.span);
             },
-            .grouped, .address_of => |inner| try self.buildExpr(inner.*),
+            .grouped => |inner| try self.buildExpr(inner.*),
+            .address_of => |inner| {
+                // OPT (annex E) — taking an address exposes the target to a later aliased write we
+                // cannot see; conservatively drop all facts so none is used past this point.
+                self.invalidateFacts();
+                try self.buildExpr(inner.*);
+            },
             .deref => |inner| {
                 const inner_ty = self.exprType(inner.*);
                 if (!self.active_unsafe and isRawManyPointerValue(inner_ty)) {
@@ -2514,16 +2674,169 @@ const FunctionBuilder = struct {
         }
     }
 
+    // OPT (annex E) — invalidate every currently-live fact. Called on any write vector that
+    // could change a fact operand: an assignment, a new local declaration (possible shadow),
+    // or an address-of (aliased future write). Marking (not removing) keeps the scope stack's
+    // length invariant intact; a stale-but-invalid fact is simply never used again.
+    fn invalidateFacts(self: *FunctionBuilder) void {
+        if (!self.optimize) return;
+        for (self.proven_facts.items) |*fact| fact.valid = false;
+    }
+
+    // OPT (annex E) — record the range facts implied by `cond` being TRUE on this path. Only a
+    // strict `<`/`>` comparison, a `!= 0`, or a conjunction of those yields a usable fact, and
+    // only when the constrained operand is a bare identifier (so the invalidation vectors above
+    // are exhaustive). `<=`/`>=`/`==` and non-ident operands are ignored — a missed fact only
+    // costs a kept check, never soundness.
+    fn recordTrueCondFacts(self: *FunctionBuilder, cond: ast.Expr) !void {
+        if (!self.optimize) return;
+        switch (cond.kind) {
+            .grouped => |inner| try self.recordTrueCondFacts(inner.*),
+            .binary => |b| switch (b.op) {
+                .logical_and => {
+                    try self.recordTrueCondFacts(b.left.*);
+                    try self.recordTrueCondFacts(b.right.*);
+                },
+                // `a < b`.
+                .lt => try self.recordLessThan(b.left.*, b.right.*),
+                // `a > b` ≡ `b < a`.
+                .gt => try self.recordLessThan(b.right.*, b.left.*),
+                // `a != b`: if either side is the literal 0, the other is proven non-zero.
+                .ne => {
+                    if (isZeroLiteral(b.right.*) and self.factIdentAllowed(b.left.*)) {
+                        try self.proven_facts.append(self.allocator, .{ .kind = .nonzero, .a = b.left.* });
+                    }
+                    if (isZeroLiteral(b.left.*) and self.factIdentAllowed(b.right.*)) {
+                        try self.proven_facts.append(self.allocator, .{ .kind = .nonzero, .a = b.right.* });
+                    }
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+
+    // `lo < hi`: records `lo < hi` (when `lo` is an ident, for bounds elision) and, when `lo`
+    // is the literal 0, `hi > 0` (positive, for divisor elision).
+    fn recordLessThan(self: *FunctionBuilder, lo: ast.Expr, hi: ast.Expr) !void {
+        if (self.factIdentAllowed(lo)) {
+            try self.proven_facts.append(self.allocator, .{ .kind = .lt, .a = lo, .b = hi });
+        }
+        if (isZeroLiteral(lo) and self.factIdentAllowed(hi)) {
+            try self.proven_facts.append(self.allocator, .{ .kind = .positive, .a = hi });
+        }
+    }
+
+    // A fact operand must be a bare identifier whose address is never taken in this function, so
+    // the only writes to it are visible assignments/`&`-sites that clear all facts.
+    fn factIdentAllowed(self: *FunctionBuilder, expr: ast.Expr) bool {
+        return switch (unwrapGrouped(expr).kind) {
+            .ident => |id| !self.address_taken.contains(id.text),
+            else => false,
+        };
+    }
+
+    fn isSimpleIdent(expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .ident => true,
+            .grouped => |inner| isSimpleIdent(inner.*),
+            else => false,
+        };
+    }
+
+    fn isZeroLiteral(expr: ast.Expr) bool {
+        const v = integerLiteralValue(expr) orelse return false;
+        return !v.negative and v.magnitude == 0;
+    }
+
+    fn patternIsBoolTrue(pattern: ast.Pattern) bool {
+        return switch (pattern.kind) {
+            .literal => |expr| switch (unwrapGrouped(expr).kind) {
+                .bool_literal => |value| value,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    // Structural equality of two simple place expressions (identifiers and `base.field` chains),
+    // by text. Sound because facts only ever hold ident operands, and any binding change to an
+    // ident clears all facts, so equal text at a use site denotes the same live value.
+    fn sameSimplePlace(a: ast.Expr, b: ast.Expr) bool {
+        return switch (a.kind) {
+            .grouped => |inner| sameSimplePlace(inner.*, b),
+            .ident => |ai| switch (unwrapGrouped(b).kind) {
+                .ident => |bi| std.mem.eql(u8, ai.text, bi.text),
+                else => false,
+            },
+            .member => |am| switch (unwrapGrouped(b).kind) {
+                .member => |bm| std.mem.eql(u8, am.name.text, bm.name.text) and sameSimplePlace(am.base.*, bm.base.*),
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    fn unwrapGrouped(expr: ast.Expr) ast.Expr {
+        return switch (expr.kind) {
+            .grouped => |inner| unwrapGrouped(inner.*),
+            else => expr,
+        };
+    }
+
+    // The compile-time usize value of a length-bound expression (integer literal or named
+    // const), or null when not statically known.
+    fn constUsizeValue(self: *FunctionBuilder, expr: ast.Expr) ?usize {
+        if (integerLiteralValue(expr)) |v| {
+            if (v.negative) return null;
+            return std.math.cast(usize, v.magnitude);
+        }
+        return parseArrayLen(expr, self.const_fns, self.const_globals);
+    }
+
+    // `expr` is `base.len` for the same fixed-array place as `base` — so `i < expr` is exactly
+    // `i < N` for that array's static length.
+    fn isLenMemberOf(expr: ast.Expr, base: ast.Expr) bool {
+        return switch (unwrapGrouped(expr).kind) {
+            .member => |m| std.mem.eql(u8, m.name.text, "len") and sameSimplePlace(m.base.*, base),
+            else => false,
+        };
+    }
+
     // OPT (annex E) proof obligation for const-index bounds-check elision: the index is a
     // non-negative integer literal `k`, the base names a fixed array of statically-known
     // length `N`, and `k < N`. All three are compile-time constants, so the bounds check
     // provably never traps. Conservative: returns false for any non-literal index or any
     // base whose length is not statically known (the check is then kept).
     fn indexProvablyInBounds(self: *FunctionBuilder, base: ast.Expr, index: ast.Expr) bool {
-        const k = integerLiteralValue(index) orelse return false;
-        if (k.negative) return false;
+        if (integerLiteralValue(index)) |k| {
+            if (!k.negative) {
+                if (self.baseArrayLen(base)) |n| {
+                    if (k.magnitude < n) return true;
+                }
+            }
+        }
+        return self.indexInBoundsByFact(base, index);
+    }
+
+    // OPT (annex E) — a guard/assert proved `index < B` where `B` is provably `<= N` (the base
+    // array's static length): `index < B <= N` ⇒ `index < N`, so the bounds check is dead. `B`
+    // is accepted either as a compile-time constant (`i < 16`, `i < CAP`) or as the base's own
+    // `.len` member (`i < arr.len`, which for a fixed array is exactly `N`). The index must be a
+    // bare identifier; any write to it clears the fact. Fixed arrays only — a slice's length is
+    // dynamic and is not consumed by the array-index elision path.
+    fn indexInBoundsByFact(self: *FunctionBuilder, base: ast.Expr, index: ast.Expr) bool {
+        if (!isSimpleIdent(index)) return false;
         const n = self.baseArrayLen(base) orelse return false;
-        return k.magnitude < n;
+        for (self.proven_facts.items) |fact| {
+            if (!fact.valid or fact.kind != .lt) continue;
+            if (!sameSimplePlace(fact.a, index)) continue;
+            if (self.constUsizeValue(fact.b)) |bound| {
+                if (bound <= n) return true;
+            }
+            if (isLenMemberOf(fact.b, base)) return true;
+        }
+        return false;
     }
 
     // OPT (annex E) proof obligation for const-slice bounds elision: the range `[start, end)` is
@@ -2551,14 +2864,39 @@ const FunctionBuilder = struct {
     // other non-zero literal divisor is safe. Conservative: false for any non-literal
     // or zero divisor (keeping both checks).
     fn divModProvablySafe(self: *FunctionBuilder, node: anytype) bool {
-        const d = integerLiteralValue(node.right.*) orelse return false;
-        if (d.magnitude == 0) return false;
-        if (isCheckedSignedType(self.exprType(node.left.*))) {
-            // Signed: safe for any non-zero divisor except `-1` (the INT_MIN overflow).
-            return !(d.negative and d.magnitude == 1);
+        const signed = isCheckedSignedType(self.exprType(node.left.*));
+        if (integerLiteralValue(node.right.*)) |d| {
+            if (d.magnitude != 0) {
+                if (signed) {
+                    // Signed: safe for any non-zero divisor except `-1` (the INT_MIN overflow).
+                    if (!(d.negative and d.magnitude == 1)) return true;
+                } else {
+                    // Unsigned: any non-zero, non-negative literal divisor is safe.
+                    if (!d.negative) return true;
+                }
+            }
         }
-        // Unsigned: any non-zero, non-negative literal divisor is safe.
-        return !d.negative;
+        return self.divisorProvablySafeByFact(node.right.*, signed);
+    }
+
+    // OPT (annex E) — a guard/assert proved the divisor safe. The backend elides BOTH the
+    // divide-by-zero and (for a signed dividend) the INT_MIN/-1 overflow check from one source
+    // point, so the proof must cover both: a `positive` fact (`d > 0`) proves `d != 0 && d != -1`
+    // and is sufficient for either signedness; a bare `nonzero` fact (`d != 0`) is sufficient
+    // only for an unsigned dividend (a signed one could still be `-1`). The divisor must be a
+    // bare identifier; any write to it clears the fact.
+    fn divisorProvablySafeByFact(self: *FunctionBuilder, divisor: ast.Expr, signed: bool) bool {
+        if (!isSimpleIdent(divisor)) return false;
+        for (self.proven_facts.items) |fact| {
+            if (!fact.valid) continue;
+            if (!sameSimplePlace(fact.a, divisor)) continue;
+            switch (fact.kind) {
+                .positive => return true,
+                .nonzero => if (!signed) return true,
+                .lt => {},
+            }
+        }
+        return false;
     }
 
     fn baseArrayLen(self: *FunctionBuilder, base: ast.Expr) ?usize {
