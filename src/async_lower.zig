@@ -82,6 +82,7 @@ const ifElseBlock = async_ast.ifElseBlock;
 const ifNotReturnFalse = async_ast.ifNotReturnFalse;
 const ifStateEq = async_ast.ifStateEq;
 const intExpr = async_ast.intExpr;
+const memberExpr = async_ast.memberExpr;
 const isScalarIntName = async_ast.isScalarIntName;
 const mutPtrType = async_ast.mutPtrType;
 const nameType = async_ast.nameType;
@@ -600,15 +601,17 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     // ---- Build the future struct: state + child fields + captured-binding fields + result. ----
     var fields: std.ArrayList(ast.Field) = .empty;
     try fields.append(arena, .{ .name = id("state"), .ty = try nameType(arena, "u8") });
-    // One child-future field per await, across pre-run + both arms (only the taken arm's children are
-    // ever built — lazy — but all fields exist).
+    // One child-future ARM per await, across pre-run + both arms (only the taken arm's children are
+    // ever built — lazy — and only one is live at a time), overlaid in a single addressable union.
+    var child_arms: std.ArrayList(ast.Field) = .empty;
     for (steps.items) |s| {
-        try fields.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
+        try child_arms.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
     }
     if (branch) |b| {
-        for (b.then_steps.items) |s| try fields.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
-        for (b.else_steps.items) |s| try fields.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
+        for (b.then_steps.items) |s| try child_arms.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
+        for (b.else_steps.items) |s| try child_arms.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
     }
+    try appendChildUnionField(arena, out, &fields, fut_type, child_arms.items);
     // Conservative capture: every awaited binding becomes a field (it may be live across a later
     // await or used in the tail). Params are also captured so the tail/await args can read them. Arm
     // bindings (pre + then + else) AND any local declared in an arm/tail straight-line block become
@@ -689,7 +692,7 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     if (steps.items.len > 0) {
         const s0 = steps.items[0];
         const rewritten = try rewriteParamRefs(low, s0.call, &field_names);
-        try cbody.append(arena, assignStmt(try selfMember(arena, s0.child_field), rewritten));
+        try cbody.append(arena, assignStmt(try selfChild(arena, s0.child_field), rewritten));
     }
     // Zero the captured binding fields + result (definite-init for the move/borrow checker). This
     // covers pre-await bindings, pre-branch locals, and BOTH arms' awaited bindings — every scalar
@@ -979,7 +982,9 @@ fn lowerAsyncLoopFn(
     // body-awaited bindings + result. ----
     var fields: std.ArrayList(ast.Field) = .empty;
     try fields.append(arena, .{ .name = id("state"), .ty = try nameType(arena, "u8") });
-    for (loopw.steps.items) |s| try fields.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
+    var child_arms: std.ArrayList(ast.Field) = .empty;
+    for (loopw.steps.items) |s| try child_arms.append(arena, .{ .name = id(s.child_field), .ty = try nameType(arena, s.fut_type) });
+    try appendChildUnionField(arena, out, &fields, fut_type, child_arms.items);
     for (fd.params) |p| try fields.append(arena, .{ .name = p.name, .ty = p.ty });
     // Pre-loop locals are live across the loop (the index/accumulator) -> captured fields; require an
     // explicit type annotation like the pre-branch locals.
@@ -1803,9 +1808,11 @@ fn lowerAsyncGeneralFn(
     // locals + awaited bindings + result. ----
     var fields: std.ArrayList(ast.Field) = .empty;
     try fields.append(arena, .{ .name = id("state"), .ty = try nameType(arena, "u8") });
+    var child_arms: std.ArrayList(ast.Field) = .empty;
     for (ctx.awaits.items) |ga| {
-        try fields.append(arena, .{ .name = id(ga.step.child_field), .ty = try nameType(arena, ga.step.fut_type) });
+        try child_arms.append(arena, .{ .name = id(ga.step.child_field), .ty = try nameType(arena, ga.step.fut_type) });
     }
+    try appendChildUnionField(arena, out, &fields, fut_type, child_arms.items);
     for (fd.params) |p| try fields.append(arena, .{ .name = p.name, .ty = p.ty });
     // EVERY local (top-level OR nested, now uniquely renamed) -> a captured field; each lives across
     // the regions as a `self.*` field (its source-level scope is enforced by where its init store and
@@ -2318,6 +2325,37 @@ fn collectArm(low: *Lowerer, blk: ast.Block, field_base: usize, steps: *std.Arra
     }
 }
 
+// `self.__u.__cN` — access the active child future through the addressable child-union.
+// The N child futures share ONE union slot (only the current `state`'s child is live), so the
+// Future struct is sized to the LARGEST child instead of their sum (§3.5). Union member access is
+// alias-safe on both backends (real C `union` / offset-0 storage; see ast.StructDecl.is_c_union),
+// and `&self.__u.__cN` is a stable, in-place pointer — exactly what poll/take/cancel need across
+// suspensions.
+fn selfChild(arena: std.mem.Allocator, child_field: []const u8) Error!ast.Expr {
+    return memberExpr(arena, try selfMember(arena, "__u"), child_field);
+}
+
+// Build the `#[c_union]` child-storage struct `<FutName>__U` (one arm per await child) and append
+// ONE `__u` field of it to the Future's `fields`, in place of N separate `__cN` fields. The union
+// decl is emitted into `out`. No-op when there are no children (a pure async fn with no awaits).
+fn appendChildUnionField(
+    arena: std.mem.Allocator,
+    out: *std.ArrayList(ast.Decl),
+    fields: *std.ArrayList(ast.Field),
+    fut_type: []const u8,
+    arms: []const ast.Field,
+) Error!void {
+    if (arms.len == 0) return;
+    const union_name = try std.fmt.allocPrint(arena, "{s}__U", .{fut_type});
+    try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .struct_decl = .{
+        .name = id(union_name),
+        .abi = null,
+        .fields = try arena.dupe(ast.Field, arms),
+        .is_c_union = true,
+    } } });
+    try fields.append(arena, .{ .name = id("__u"), .ty = try nameType(arena, union_name) });
+}
+
 // Emit the suspend-or-take prologue of an await step into `blk`:
 //   let r: bool = FutT__poll(&self.__cN);  if !r { return false; }
 //   self.<binding> = FutT_take_result(&self.__cN);   (or drop the result if no binding)
@@ -2329,7 +2367,7 @@ fn emitPollAndTake(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), s: AwaitStep, d
     const arena = low.arena;
     const poll_fn = try std.fmt.allocPrint(arena, "{s}__poll", .{s.fut_type});
     var poll_args = try arena.alloc(ast.Expr, 1);
-    poll_args[0] = try addrOf(arena, try selfMember(arena, s.child_field));
+    poll_args[0] = try addrOf(arena, try selfChild(arena, s.child_field));
     try blk.append(arena, .{ .span = zspan, .kind = .{ .let_decl = .{
         .names = try dupIdents(arena, &.{"r"}),
         .ty = try nameType(arena, "bool"),
@@ -2337,7 +2375,7 @@ fn emitPollAndTake(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), s: AwaitStep, d
     } } });
     try blk.append(arena, try ifNotReturnFalse(arena));
     var take_args = try arena.alloc(ast.Expr, 1);
-    take_args[0] = try addrOf(arena, try selfMember(arena, s.child_field));
+    take_args[0] = try addrOf(arena, try selfChild(arena, s.child_field));
     const take_call = try callExpr(arena, s.take_result, take_args);
 
     if (s.is_try) {
@@ -2380,7 +2418,7 @@ fn emitPollAndTake(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), s: AwaitStep, d
 // fields (params + prior await results). Used to LAZILY construct an arm/pre child at a transition.
 fn emitBuildChild(low: *Lowerer, blk: *std.ArrayList(ast.Stmt), s: AwaitStep, names: *std.StringHashMap(void)) Error!void {
     const rewritten = try rewriteParamRefs(low, s.call, names);
-    try blk.append(low.arena, assignStmt(try selfMember(low.arena, s.child_field), rewritten));
+    try blk.append(low.arena, assignStmt(try selfChild(low.arena, s.child_field), rewritten));
 }
 
 // `self.state = N;`
@@ -2432,7 +2470,7 @@ fn rewriteDeclToStore(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void
 fn emitCancelGuard(low: *Lowerer, cn_body: *std.ArrayList(ast.Stmt), s: AwaitStep, state: usize) Error!void {
     const arena = low.arena;
     var cargs = try arena.alloc(ast.Expr, 1);
-    cargs[0] = try addrOf(arena, try selfMember(arena, s.child_field));
+    cargs[0] = try addrOf(arena, try selfChild(arena, s.child_field));
     var cblk = try arena.alloc(ast.Stmt, 1);
     cblk[0] = .{ .span = zspan, .kind = .{ .expr = try callExpr(arena, s.cancel, cargs) } };
     try cn_body.append(arena, try ifStateEq(arena, state, cblk));

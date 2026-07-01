@@ -101,10 +101,41 @@ fn size_check() -> u32 {
     return 1;
 }
 
+// A struct that EMBEDS the union by value — this is how the async future struct holds its
+// child-union field. Pins that a c-union-typed field is spelled `union Slot` (not `struct Slot`)
+// and that access through the enclosing struct (`w.slot.a`, `&w.slot.a`) works on both backends.
+struct Wrap {
+    lead: u32,
+    slot: Slot,
+    trail: u32,
+}
+
+fn nested_check() -> u32 {
+    var w: Wrap = uninit;
+    w.lead = 0xAAAAAAAA;
+    w.trail = 0xBBBBBBBB;
+    let pa: *mut ArmA = &w.slot.a;
+    pa.tag = 0x7E;
+    pa.a = 0x0011223344556677;
+    pa.b = 0xCAFEF00D;
+    suspend_barrier(&w.slot);
+    if w.slot.a.tag != 0x7E { return 0; }
+    if w.slot.a.a != 0x0011223344556677 { return 0; }
+    if w.slot.a.b != 0xCAFEF00D { return 0; }
+    // The union must not overrun into the neighbouring fields.
+    if w.lead != 0xAAAAAAAA { return 0; }
+    if w.trail != 0xBBBBBBBB { return 0; }
+    // sizeof(Wrap) = lead(4)+pad(4)+slot(24)+trail(4)+pad(4) = 40 — union at its largest arm,
+    // not the sum of arms; alignment-correct within the enclosing struct.
+    if sizeof(Wrap) != 40 { return 0; }
+    return 1;
+}
+
 export fn c_union_run() -> u32 {
     if build_and_check(0) != 1 { return 0; }
     if build_and_check(1) != 1 { return 0; }
     if build_and_check(2) != 1 { return 0; }
     if size_check() != 1 { return 0; }
+    if nested_check() != 1 { return 0; }
     return 1;
 }

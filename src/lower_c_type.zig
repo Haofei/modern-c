@@ -113,8 +113,9 @@ pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExp
         if (ctx.packed_bits.contains(name)) return out.appendSlice(ctx.scratch, name);
         if (ctx.overlay_unions.contains(name)) return out.appendSlice(ctx.scratch, name);
         if (ctx.tagged_unions.contains(name)) return out.appendSlice(ctx.scratch, name);
-        if (ctx.structs.contains(name)) {
-            if (style == .struct_tag) try out.appendSlice(ctx.scratch, "struct ");
+        if (ctx.structs.get(name)) |struct_decl| {
+            // A `#[c_union]` is emitted as a C `union`; its tag keyword must match.
+            if (style == .struct_tag) try out.appendSlice(ctx.scratch, if (struct_decl.is_c_union) "union " else "struct ");
             return out.appendSlice(ctx.scratch, name);
         }
     }
