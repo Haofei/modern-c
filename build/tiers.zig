@@ -369,6 +369,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("strbuf-test"));
     // argv-test exercises hosted command-line argument access (std/hosted_args + shim; needs clang).
     m0_step.dependOn(ctx.cmd("argv-test"));
+    // memstr-test exercises the allocation-free std/mem byte-slice string ops (needs clang).
+    m0_step.dependOn(ctx.cmd("memstr-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

@@ -143,3 +143,146 @@ export fn mem_set(dst: PAddr, value: u8, len: usize) -> void {
         i = i + 1;
     }
 }
+
+// ----- byte-slice string operations (allocation-free; the lexer/parser layer) -----
+//
+// The byte-slice vocabulary a compiler front end lives on: equality, prefix match,
+// byte/substring search, and a cursor splitter. Every one is a total function over
+// the FINITE `[]const u8` — bounds-checked indexing (`s[i]`) and sub-slicing
+// (`s[a..b]`) are the only accesses, so none can ever run off the buffer. No Vec, no
+// allocator, no hidden heap: results are plain values, and sub-slices *borrow* the input.
+//
+// GAP (recorded for the self-host ledger): MC optionals are a pointer-only niche —
+// `?usize` / `?[]const u8` can be declared and `return null`ed, but NO consumer form
+// accepts them (`if let`, `== null`, and `switch` all reject a non-pointer optional:
+// E_IF_LET_OPTIONAL_REQUIRED / "null comparisons require a pointer or view operand" /
+// E_SWITCH_RESULT_TAG). A value optional is therefore write-only and unusable as an
+// API. So "not found" / "no more fields" is carried by a small explicit result struct
+// (`MemFound.present`, `SplitField.valid`) — the sanctioned workaround, and clearer at
+// the call site than a bare sentinel index.
+
+// The result of a search: `present` false means "not found" and `index` is unspecified
+// (0). When `present` is true, `index` is the first matching offset into the haystack.
+struct MemFound {
+    present: bool,
+    index: usize,
+}
+
+// True when two byte slices have the same length and the same bytes.
+export fn mem_eql(a: []const u8, b: []const u8) -> bool {
+    if a.len != b.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < a.len {
+        if a[i] != b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// True when `hay` begins with `prefix` (a prefix longer than `hay` is never a match).
+export fn mem_starts_with(hay: []const u8, prefix: []const u8) -> bool {
+    if prefix.len > hay.len {
+        return false;
+    }
+    var i: usize = 0;
+    while i < prefix.len {
+        if hay[i] != prefix[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// First index of byte `b` in `hay`, or `.present = false` when absent.
+export fn mem_index_of_byte(hay: []const u8, b: u8) -> MemFound {
+    var i: usize = 0;
+    while i < hay.len {
+        if hay[i] == b {
+            return .{ .present = true, .index = i };
+        }
+        i = i + 1;
+    }
+    return .{ .present = false, .index = 0 };
+}
+
+// First index of substring `needle` in `hay` (naive O(n*m) scan), or `.present = false`
+// when absent. An empty needle matches at 0; a needle longer than `hay` never matches.
+export fn mem_index_of(hay: []const u8, needle: []const u8) -> MemFound {
+    if needle.len == 0 {
+        return .{ .present = true, .index = 0 };
+    }
+    if needle.len > hay.len {
+        return .{ .present = false, .index = 0 };
+    }
+    // Highest start offset a full needle can still fit at. `start + needle.len` below
+    // is then <= hay.len, so the sub-slice bound never overflows or over-reads.
+    let last: usize = hay.len - needle.len;
+    var start: usize = 0;
+    while start <= last {
+        // The slice-range end must be a simple operand for C emission, so precompute it.
+        let end: usize = start + needle.len;
+        let window: []const u8 = hay[start..end];
+        if mem_eql(window, needle) {
+            return .{ .present = true, .index = start };
+        }
+        start = start + 1;
+    }
+    return .{ .present = false, .index = 0 };
+}
+
+// ----- cursor-based splitter (allocation-free iterator) -----
+//
+// `split_by` seeds a cursor; `split_next` yields each separator-delimited field as a
+// borrowed sub-slice of the original input, then reports `.valid = false` once every
+// field is consumed. No buffer is copied — a field is `s[start..end]` into `s`.
+//
+// Field count == (number of separators) + 1: "a,b,c" -> "a","b","c"; "a,,c" ->
+// "a","","c"; "" -> one empty field. The cursor advances one PAST each separator, and
+// `pos > s.len` is the terminal state (the step past the final field's end).
+
+struct Split {
+    s: []const u8,
+    sep: u8,
+    pos: usize,
+}
+
+// The result of `split_next`: `valid` false means iteration is done and `s` is empty.
+struct SplitField {
+    valid: bool,
+    s: []const u8,
+}
+
+// Seed a splitter over `s` on separator byte `sep`, positioned at the first field.
+export fn split_by(s: []const u8, sep: u8) -> Split {
+    return .{ .s = s, .sep = sep, .pos = 0 };
+}
+
+// Yield the next field, or `.valid = false` when the input is exhausted. Each field is
+// a borrowed sub-slice `sp.s[start..end]`; the cursor moves one past the separator so
+// the following call starts at the next field.
+export fn split_next(sp: *mut Split) -> SplitField {
+    // Copy the field slice into a locally-typed binding before sub-slicing: the C
+    // emitter can recover a slice's source type from a plain local (or param) but NOT
+    // from a struct-field access directly (exprSourceTypeForEmission -> null).
+    let base: []const u8 = sp.s;
+    // pos == len is still a valid (final, possibly empty) field; pos > len is terminal.
+    if sp.pos > base.len {
+        return .{ .valid = false, .s = base[0..0] };
+    }
+    let start: usize = sp.pos;
+    var i: usize = start;
+    while i < base.len {
+        if base[i] == sp.sep {
+            break;
+        }
+        i = i + 1;
+    }
+    let field: []const u8 = base[start..i];
+    sp.pos = i + 1; // step past the separator (or past the end after the last field)
+    return .{ .valid = true, .s = field };
+}

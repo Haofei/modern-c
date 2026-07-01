@@ -70,6 +70,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "argv-test", "Build, link with the hosted_args_rt shim, and run a program that reads its real argv", &.{ "bash", "tools/toolchain/argv-test.sh", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "memstr-test", "Build, link, and run the allocation-free std/mem byte-slice string ops", &.{ "bash", "tools/toolchain/memstr-test.sh", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "pkg-test", "Build a package from its manifest with mcc-pkg, link, and run it", &.{ "bash", "tools/toolchain/pkg-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "llvm-pkg-test", "Build a package from its manifest through LLVM, link, and run it", &.{ "bash", "tools/toolchain/llvm-pkg-test.sh", "zig-out/bin/mcc" });
