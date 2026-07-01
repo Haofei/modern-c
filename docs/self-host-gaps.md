@@ -84,6 +84,19 @@ nearly all of these — true self-compile requires widening the front end across
 in a control-flow condition. Fixed via `e_cond` (skip redundant parens when the condition is already a binop).
 This is exactly the class of latent codegen bug the stress test exists to surface.
 
+| G29 | P5.4 | stdlib/portability | **`std/hosted_io.mc` hardcodes Linux `AT_FDCWD = -100`** — on macOS it's `-2`, so `openat` with relative paths fails on a macOS host (absolute paths ignore dirfd and work). Linux/Docker CI unaffected. | relative `io_open` on macOS | low | note (make AT_FDCWD target-conditional) |
+
+**P5.4 forward-prototype pass:** the subset emitter now emits C fn prototypes before definitions
+(`e_fn_sig`), so flattened/concatenated modules are order-independent and support cross-module mutual
+recursion — needed once imports put a caller textually before its callee.
+
+**HONEST self-compile status (after P5.4):** the subset can compile **~0%** of `mcc2`'s OWN source. Import
+plumbing was necessary but not the bottleneck — mcc2's modules pervasively use features the subset still
+lacks: **generics** (`Vec<T>` ~30 uses), **fixed byte arrays + `mem.as_bytes`** (~77 uses), **`impl`/traits**
+(Allocator), **`unsafe`/`raw.*`**, **`match`**, **`?` propagation**, string-literal exprs. Recommended order
+to true self-compile: **generics** (monomorphized `Vec<T>` + fixed arrays + array-slices) → `impl`/traits →
+`unsafe`/`raw` intrinsics → `match`/`?`. Each is a large vertical; true self-compile remains multi-phase.
+
 **Structural observation (P5.1):** parser/sema/emit each re-implement length-prefixed "pair run" walking
 (`[count,(a,b)*]`, `fi*2(+1)` indexing) with no shared arena-access module → off-by-one-prone duplication
 across 3 files. A shared `selfhost/ast.mc` accessor layer would cut this; deferred (works, just repetitive).

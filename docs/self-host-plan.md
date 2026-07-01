@@ -219,7 +219,14 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   gaps (smoothest vertical). Note: `sema.mc` itself now uses `switch`, so mcc2's own source already needs
   this. Next vertical: **multi-module imports** (mcc2 is split across selfhost/*.mc + std/* — can't resolve
   yet), then generics.
-- **STATUS: P1–P4 + CLI + perf + structs + enums + switch COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
+- **2026-07-01 — P5.4 (multi-module imports) DONE** (`ee8adf4`). Loader in `main.mc`: BFS-reads +
+  dedups + concatenates imported modules (root-dir- then as-given-relative path resolution) into a 4 MiB
+  buffer, runs the pipeline once (flat namespace). `import` is an identifier+string (not a keyword),
+  parsed as a no-op `import_decl`. Added an emit forward-prototype pass (order-independent, cross-module
+  mutual recursion). `selfhost-import-test` green (linear + diamond dedup); all 7 prior gates pass. Found
+  G29 (hosted_io AT_FDCWD Linux-hardcoded). **HONEST: subset compiles ~0% of mcc2's own source — the hard
+  blockers remain: generics, fixed arrays, traits, unsafe/raw, match, `?`.** Next: generics (decisive).
+- **STATUS: P1–P4 + CLI + perf + structs + enums + switch + imports COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
   *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
   match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
   perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").
