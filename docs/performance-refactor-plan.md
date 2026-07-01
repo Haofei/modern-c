@@ -1,6 +1,6 @@
 # Performance refactor plan
 
-Status: **Phases 0–3 EXECUTED & pushed** (2026-07-01). Baseline: master @ `01424e1`. Phase 4 scoped separately.
+Status: **FULLY EXECUTED & pushed** (2026-07-01). Baseline: master @ `01424e1`. All phases (0–4) done or closed-as-already-optimal; 11 measured wins landed, m0 green both backends.
 
 This plan turns a four-surface performance review (compiler, kernel runtime, generated code,
 WASM+std+build) into a phased, measurable, parity-gated refactor. Every finding below carries a
@@ -15,7 +15,7 @@ WASM+std+build) into a phased, measurable, parity-gated refactor. Every finding 
 | 1.3 | compiler FixedBufferAllocator reuse | ✅ **~1.24× `mcc check`** | `ff2a782` |
 | 1.4/1.5 | O(1) mailbox + provenance off hot path | ✅ **IPC 1.55× (C)** | `46167bf` |
 | 2.1 | heap O(n²) coalesce → compacted free-list | ✅ **45.7% (C)** free path (behind flag; sorted-list measured slower→pivoted) | `e482c46` |
-| 2.2 | scheduler run queues | ❌ **REVERTED** — run_mask went stale (endpoint-test death path); marginal at MAX_PROCS=8. Re-land only with a next_runnable differential test | `0c5df7f`→`d9d00da` |
+| 2.2 | scheduler run queues | ✅ **RE-LANDED (design B)** — the run_mask cache was reverted (went stale on direct `state=.Zombie/.Unused` pokes → endpoint-test); re-landed the genuine win only: **O(children) supervisor cascade** (was O(MAX_PROCS²)), `next_runnable` kept as the authoritative scan (no cache class). Guarded by a new `sched-difftest` (4000 randomized transitions incl. death-cleanup-with-blocked-waiter; fails vs the buggy version, passes vs this). | `0c5df7f`→`d9d00da`→`078cf11` |
 | 2.3 | sys_sbrk batched TLB flush | ✅ **~32×** map path | `4cd6504` |
 | 2.4 | uaccess single-pass copy | ✅ **20.4%** small copies (large now copy-bound after 1.1) | `73ae00f` |
 | 2.5 | compiler type-query memoization | ⚠️ measure-first: memoization ~0% (bodies already O(1)) → SKIPPED; landed only conformance-flatten | `da5880d` |
@@ -26,9 +26,9 @@ WASM+std+build) into a phased, measurable, parity-gated refactor. Every finding 
 | 3.5 | async future = union-of-children | ✅ **DONE** — built the prerequisite `#[c_union]` addressable, runtime-selected union primitive (real C `union` / alignment-carrying LLVM storage, alias-safe both backends), then applied it in `src/async_lower.zig`: N `__c0..__cN` child fields (sized to SUM) → one `__u` union field (sized to LARGEST). Deep/wide await chain **17272 → 624 B (27.7×)**; child future 2152 → 568 B. Async family green both backends. | `feat(union)` + `perf(async)` |
 | 3.6 | Tier-2 dispatch inline hints | ⚠️ SKIP — clang/llc already devirtualize+inline when type is visible | — |
 
-**Net: 9 measured wins shipped** (mem 7–8×, WASM 1.77×, IPC 1.55×, sbrk ~32×, heap 1.46×, uaccess 1.2×, compile 1.24×, check-elision, conformance-flatten). **Key finding:** MC's "offload optimization to clang/llc" design already captures most *codegen-quality* wins (sret, overlay, dispatch) — measure-first correctly killed 5 proposed changes rather than ship redundant, ABI-risky churn. The one genuine MC-level codegen win (check elision) acts *before* the backend.
+**Net: 11 measured wins shipped** — mem 7–8×, WASM interp 1.77×, IPC 1.55×, sbrk ~32×, heap 1.46×, uaccess 1.2×, compile 1.24×, bounds/div check-elision, conformance-flatten, **O(children) supervisor cascade (2.2)**, **async future 27.7× smaller via the `#[c_union]` primitive (3.5)**, **WASM demand-paged linear-memory growth — 18 MiB grow, no O(n²) (Phase 4.1)**. **Key finding:** MC's "offload optimization to clang/llc" design already captures most *codegen-quality* wins (sret, overlay, dispatch, MIR-opt) — measure-first correctly killed **6** proposed changes rather than ship redundant, ABI-risky churn; the genuine MC-level codegen win (check elision) acts *before* the backend.
 
-**Deferred with clear prerequisites:** 2.2 scheduler run-queues (needs a next_runnable differential test); 3.5 async union (needs an addressable-union primitive); Phase 4 WASM linear-memory growth (= demand-grown-heap Increment 3: kernel demand-paging + WAMR mmap-reserve). 3.6/3.1/3.2/**3.3** are closed (already optimal — see 3.3 row: MIR is analysis-only, off the lowering path).
+**Everything in this plan is EXECUTED.** No deferrals remain: 2.2 re-landed (design B), 3.5 done (primitive + application), Phase 4.1 done (demand-paging). Closed-as-already-optimal: 3.1 (sret), 3.2 (overlay), 3.3 (MIR analysis-only), 3.6 (dispatch). Follow-ups noted inline (not blockers): WASM grow ceiling is now a wasm-ld/dlmalloc config limit (~23 MiB, not the reserved window); the sbrk/LM frame pools are a fixed 80/48 split that could unify behind the ledger; the kernel demand-pager is now general enough to also back a demand-paged libc heap.
 
 ## Guiding rules
 
