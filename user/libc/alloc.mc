@@ -143,6 +143,28 @@ fn grown_grow(min_bytes: usize) -> bool {
     return true;
 }
 
+// Extend the grown heap's backing range (via SYS_SBRK) until its end reaches at least `target_end`.
+// Returns true once the range covers target_end. Used by realloc's in-place grow path so a topmost
+// linear-memory buffer can be enlarged without copying.
+fn grow_grown_to(target_end: usize) -> bool {
+    if !grown_ensure_init() {
+        return false;
+    }
+    var guard: u32 = 0;
+    while pa_value(heap_range_end(&g_grown)) < target_end {
+        let cur_end: usize = pa_value(heap_range_end(&g_grown));
+        let deficit: usize = target_end - cur_end; // target_end > cur_end by the loop condition
+        if !grown_grow(deficit) {
+            return false; // sbrk/cap reached
+        }
+        guard = guard + 1;
+        if guard > 4096 {
+            return false; // defensive: never spin
+        }
+    }
+    return true;
+}
+
 // Try to satisfy `total` bytes from the grown heap, growing it once if needed. 0 == failure.
 fn grown_alloc(total: usize) -> usize {
     if !grown_ensure_init() {
@@ -229,20 +251,52 @@ fn realloc_addr(old: usize, size: usize) -> usize {
         free_addr(old);
         return 0;
     }
+    let block: PAddr = pa(old - HEADER);
     var old_total: usize = 0;
     unsafe {
-        old_total = raw.load<usize>(pa(old - HEADER));
+        old_total = raw.load<usize>(block);
     }
     let old_payload: usize = old_total - HEADER;
+    // Shrink or same size: keep the existing block (no split — simple and never copies).
+    if size <= old_payload {
+        return old;
+    }
+    let new_total: usize = size + HEADER;
+
+    // GROW-IN-PLACE fast path: if this block is the topmost frontier block of its heap, extend it
+    // without moving a byte. This is what makes a repeatedly-grown buffer (a WASM engine enlarging its
+    // linear memory through realloc) O(n) instead of O(n^2). Falls through to allocate-copy-free when
+    // the block isn't at the frontier.
+    if in_arena(old) {
+        if heap_try_grow_in_place(&g_heap, block, old_total, new_total) {
+            unsafe { raw.store<usize>(block, new_total); }
+            return old;
+        }
+    } else {
+        if g_grown_inited != 0 {
+            // Try directly; if the block is topmost but the grown range is too short, SYS_SBRK more
+            // contiguous frames (grown_grow extends the range) and retry, then extend in place.
+            if heap_try_grow_in_place(&g_grown, block, old_total, new_total) {
+                unsafe { raw.store<usize>(block, new_total); }
+                return old;
+            }
+            if heap_is_frontier_block(&g_grown, block, old_total) {
+                if grow_grown_to(pa_value(pa_offset(block, new_total))) {
+                    if heap_try_grow_in_place(&g_grown, block, old_total, new_total) {
+                        unsafe { raw.store<usize>(block, new_total); }
+                        return old;
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: allocate a fresh block, copy the payload, free the old one.
     let new_addr: usize = malloc_addr(size);
     if new_addr == 0 {
         return 0; // old block left intact on failure
     }
-    var copy: usize = old_payload;
-    if size < old_payload {
-        copy = size;
-    }
-    mem_copy(pa(new_addr), pa(old), copy);
+    mem_copy(pa(new_addr), pa(old), old_payload); // size > old_payload here, so copy the whole payload
     free_addr(old);
     return new_addr;
 }

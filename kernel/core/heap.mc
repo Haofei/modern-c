@@ -446,6 +446,43 @@ export fn heap_extend(h: *mut Heap, added_len: usize) -> void {
     h.range = phys_range(pr_start(&h.range), new_len);
 }
 
+// The end of this heap's backing range (one past the last usable byte). A demand-grown caller compares
+// it against a desired block end to decide how much more to SYS_SBRK before an in-place grow.
+export fn heap_range_end(h: *mut Heap) -> PAddr {
+    return pr_end(&h.range);
+}
+
+// Is [addr, addr+len) the topmost bump-frontier block (its end == h.next)? A caller that owns a
+// growable backing store (e.g. the demand-grown libc heap) uses this to decide whether it is worth
+// SYS_SBRK-extending the range so a subsequent heap_try_grow_in_place can succeed.
+export fn heap_is_frontier_block(h: *mut Heap, addr: PAddr, len: usize) -> bool {
+    return pa_eq(pa_offset(addr, len), h.next);
+}
+
+// Grow the block [addr, addr+old_len) to new_len IN PLACE — no copy — but ONLY when it is the topmost
+// bump-frontier block (its end == h.next, i.e. nothing was allocated after it) and the backing range
+// still has room. Returns true on success (h.next advanced to addr+new_len), false otherwise (the
+// caller must fall back to allocate-copy-free, or heap_extend the range and retry). This is what turns
+// a repeatedly-realloc'd growing buffer (e.g. a WASM engine enlarging its linear memory) from an
+// O(n^2) copy chain into O(n): after the first move the buffer sits at the frontier and every later
+// grow just bumps h.next. Shrink/equal (new_len <= old_len) is reported as success with no change —
+// the block is already big enough; realloc's shrink path keeps the original block.
+export fn heap_try_grow_in_place(h: *mut Heap, addr: PAddr, old_len: usize, new_len: usize) -> bool {
+    if new_len <= old_len {
+        return true;
+    }
+    let end: PAddr = pa_offset(addr, old_len);
+    if !pa_eq(end, h.next) {
+        return false; // not the topmost frontier block — cannot extend without moving
+    }
+    let new_end: PAddr = pa_offset(addr, new_len); // checked: traps on overflow
+    if pa_lt(pr_end(&h.range), new_end) {
+        return false; // backing range too short — caller may heap_extend then retry
+    }
+    h.next = new_end;
+    return true;
+}
+
 // Bytes still available: the untouched tail plus everything on the free list.
 export fn heap_available(h: *mut Heap) -> usize {
     var total: usize = pa_diff(h.next, pr_end(&h.range));
