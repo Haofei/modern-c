@@ -71,6 +71,16 @@ length dropped); and NOT in the P2 grammar at all: `struct`/`enum`/`union`/globa
 literal expressions, method/UFCS calls, generics, multi-module imports/mangling. mcc2's OWN source uses
 nearly all of these — true self-compile requires widening the front end across all of them (large, multi-phase).
 
+| G27 | P5.1 | language | **`.raw()` works on an enum-typed PARAMETER but not on a variant-path literal** — `TokKind.l_brace.raw()` → `E_UNKNOWN_IDENTIFIER`. To get the ordinal of a known variant you must pass it as a param and call `.raw()` there (a typed-param indirection). | `SomeEnum.variant.raw()` | low-medium | workaround (helper taking the variant as a param) |
+
+**G23 broadened again (P5.1):** also fires for `let b: bool = x.kind == .variant` and `let b: bool = call.raw() == N`
+(any typed-`let bool` whose rhs is a comparison with a call/field-`.raw()` operand). Fine as an `if` condition;
+`UnsupportedCEmission` as a `let bool =`. Recurring, easy-to-hit trap — bind the operand to a `u32` local first.
+
+**Structural observation (P5.1):** parser/sema/emit each re-implement length-prefixed "pair run" walking
+(`[count,(a,b)*]`, `fi*2(+1)` indexing) with no shared arena-access module → off-by-one-prone duplication
+across 3 files. A shared `selfhost/ast.mc` accessor layer would cut this; deferred (works, just repetitive).
+
 **mcc2 CLI findings (2ac36e7):** G12 file-input ceiling is REAL — to feed the `[]const u8` pipeline you
 must read into a compile-time-sized `global g_src:[1048576]u8` and `mem.as_bytes(&g_src)[0..nread]`; a
 writable `PAddr` for `io_read` comes from `(&g_src) as usize` → `pa(...)` (the sanctioned addr↔usize

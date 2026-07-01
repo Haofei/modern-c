@@ -200,7 +200,13 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   emitted C to stdout. **PERF (perf ledger): ~20,800 fns/s ≈ 2.0 MB/s; mcc2 wall 48 ms < clang -O0 73 ms
   on its own output — mcc2 is FAST, no scaling pathology at 1000 fns.** ~2× headroom (dedup sema/emit
   re-parse). `mcc2-cli-test` gate registered. This closes the "or slow" half of the goal for the subset.
-- **STATUS: P1–P4 + CLI + perf COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
+- **2026-07-01 — P5.1 (structs vertical) DONE** (`4138ed1`). Parser+sema+emit extended for `struct` decls,
+  member access (chains free), struct literals in typed positions, `var`/mutation, `bool`/`void` types.
+  `selfhost-struct-test` green (`mk(2,3)==6`, rejects unknown field); 4 prior gates still pass. New: G27
+  (`.raw()` on variant-path literal rejected), G23 broadened, duplicated pair-run walking across 3 stages.
+  **NEXT self-compile blocker = enums** (`open enum`, `.variant`, `switch`, `.raw()` — mcc2's own source is
+  built on them), then generics, imports, traits.
+- **STATUS: P1–P4 + CLI + perf + structs COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
   *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
   match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
   perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").
