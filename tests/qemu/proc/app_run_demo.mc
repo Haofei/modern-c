@@ -837,21 +837,41 @@ fn sys_sbrk(delta: u64, a1: u64, a2: u64) -> u64 {
         err(e) => { return bitcast<u64>(E_NOMEM); }
     }
 
+    // ALL-OR-NOTHING: an interior page-table frame may run out mid-loop. If any map fails we must leave
+    // NO trace — unmap the pages already mapped, restore the frame-pool frontier, and release the ledger
+    // charge — so the agent just sees a clean NULL from malloc (matching the "maps NOTHING on failure"
+    // contract). pool_start snapshots the frontier for the restore.
+    let pool_start: usize = g_pool_next;
     var off: usize = 0;
     while off < need {
-        if g_pool_next >= g_pool_end {
-            return bitcast<u64>(E_NOMEM); // pool exhausted (guarded above; defensive)
-        }
         let phys: PAddr = pa(g_pool_next);
         g_pool_next = g_pool_next + PAGE_BYTES; // consume one frame from the bump pool
         switch page_table_try_map(&g_pt, &g_heap, va(old + off), phys, PTE_R | PTE_W | PTE_U) {
             ok(v) => { sfence_vma_page(va(old + off)); } // active space: flush the stale TLB entry
-            err(e) => { return bitcast<u64>(E_NOMEM); }  // interior-table OOM etc — fail closed
+            err(e) => {
+                sbrk_rollback(old, off, pool_start, need); // undo the partial grow, fail closed
+                return bitcast<u64>(E_NOMEM);
+            }
         }
         off = off + PAGE_BYTES;
     }
     g_brk = old + need;
     return old as u64; // classic sbrk: the OLD break, now backed by `need` fresh bytes
+}
+
+// Undo a partially-applied grow: unmap the [old, old+mapped) pages just mapped, rewind the frame-pool
+// frontier, and refund the ledger. Leaves state exactly as before the failed sys_sbrk.
+fn sbrk_rollback(old: usize, mapped: usize, pool_start: usize, charged: usize) -> void {
+    var o: usize = 0;
+    while o < mapped {
+        page_table_unmap_active(&g_pt, va(old + o));
+        o = o + PAGE_BYTES;
+    }
+    g_pool_next = pool_start;
+    switch ledger_release(&g_mem_ledger, .Memory, charged as u64) {
+        ok(v) => {}
+        err(e) => {}
+    }
 }
 
 // Register the userspace ABI handlers. Called by usermode_setup() (the shared C trap
@@ -901,7 +921,13 @@ export fn app_build(image_base: usize, image_len: usize, region_base: usize, reg
         }
     }
 
-    g_uas = user_addr_space(&g_pt, USER_BASE, USER_LIMIT);
+    // The user-accessible window must span BOTH the ELF image/stack (below USER_LIMIT) AND the
+    // demand-grown heap region [HEAP_BASE, HEAP_BASE+SBRK_CAP_BYTES). Otherwise a syscall buffer that
+    // libc allocated from the grown heap (SYS_WRITE/READ/SUBMIT/POLL) would be rejected by
+    // copy_{from,to}_user_pt with E_FAULT. The window is a single [base, limit) span; the gap between
+    // USER_LIMIT and HEAP_BASE is in-range but unmapped, so a stray access there still fails the
+    // per-page page-table walk (E_FAULT) — the range widening only admits pages that are actually mapped.
+    g_uas = user_addr_space(&g_pt, USER_BASE, HEAP_BASE + SBRK_CAP_BYTES);
 
     // Stand up the demand-grown-heap frame pool (SYS_SBRK): a trivial monotonic bump frontier over a
     // fixed physical window. No RAM is touched until the agent actually sbrk's, so this is safe even in

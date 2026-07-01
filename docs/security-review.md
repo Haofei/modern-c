@@ -103,9 +103,10 @@ and the preemption-decision layer (`proc_preempt_*` in `proc_sched.mc`), bound a
 `proc_oom_kill` / `proc_oom_reclaim` in `process.mc` select the worst live offender and
 forcibly reclaim it through the shared death-cleanup path, kernel and peers untouched.
 
-Residual: **full timer-driven preemption** is still in progress (threat-model §6 / plan §3.1
-#1). Until it lands, availability under a determined local DoS is *best-effort*: a misbehaving
-agent may degrade throughput (it cannot escape isolation or forge authority). This is an
+Residual: timer-driven preemption of agent processes has **landed** (plan §3.1 #1,
+`agent-preempt-test`), so a compute-bound agent is rotated off the hart. Availability under a
+determined local DoS remains *best-effort* at finer grain: a misbehaving agent may still degrade
+throughput (it cannot escape isolation or forge authority). This is an
 explicitly **accepted** failure mode, not a claimed guarantee.
 
 ### 2.6 Untrusted-input parsers (network + ELF)
@@ -145,7 +146,9 @@ FNV is trivially collidable and MUST NOT be relied on for image integrity. The r
 compute the image digest with **BearSSL SHA-256** (already vendored, already used for the RSA
 signature path in `kernel/crypto/rsa_verify.mc`) and have the signature cover that digest.
 Until then, boot-image *integrity* is not cryptographically assured even though the *signature
-verify* primitive itself is sound. Reproducible builds are also pending (plan §4.4).
+verify* primitive itself is sound. A reproducible-build determinism gate has **landed**
+(`reproducible-build-test`: byte-identical emitted C/LLVM across rebuilds); an OTA transport
+delivers + hash-verifies images (`ota-test`).
 
 ---
 

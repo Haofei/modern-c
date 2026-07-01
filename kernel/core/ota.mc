@@ -114,6 +114,12 @@ export fn ota_chunk(s: *mut OtaSession, offset: usize, bytes_ptr: *const u8, len
 // equals the expected image hash. On success the caller may proceed to bundle_validate +
 // rollback_install_candidate. Deactivates the session on success so it cannot be reused.
 export fn ota_finish(s: *mut OtaSession) -> Result<bool, OtaError> {
+    // Reject a session that was never begun or was already finalized. Without this a zeroed session
+    // (received == expected_len == 0, hash_accum == expected_hash == 0) would spuriously finalize, and
+    // a finished one could be re-finalized — violating the one-shot contract.
+    if !s.active {
+        return err(.Incomplete);
+    }
     if s.received != s.expected_len {
         return err(.Incomplete);
     }

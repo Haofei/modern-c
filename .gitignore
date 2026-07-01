@@ -6,3 +6,9 @@ __pycache__/
 
 # WAMR engine object cache (build-once across gates)
 .wamr-cache/
+
+# Claude Code session/worktree scratch (large, machine-local)
+.claude/
+
+# Generated bootable VM artifacts (tools/run-kernel.sh)
+out/

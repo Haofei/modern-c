@@ -724,6 +724,19 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     // Drop the dead process's own pending IPC + signals + wait state, and close its open file
     // descriptors — a zombie holds only its exit status, never live resources, so a later
     // spawn that reuses this slot can never inherit a ghost descriptor.
+    // Refund the unified ledger for every charged in-flight IPC message still queued in the dead
+    // process's inbox. Each was charged at post; only a receive releases, and a zombie never receives,
+    // so without this refund a process killed with mail pending would permanently leak IpcMessages
+    // budget. Must run BEFORE mailbox_init drops the messages.
+    let queued_ipc: usize = mailbox_count(Message, IPC_SLOTS, &t.procs[dead].inbox);
+    var qr: usize = 0;
+    while qr < queued_ipc {
+        switch ledger_release(&t.ledger, .IpcMessages, 1) {
+            ok(v) => {}
+            err(e) => {}
+        }
+        qr = qr + 1;
+    }
     mailbox_init(Message, IPC_SLOTS, &t.procs[dead].inbox);
     fd_init(&t.procs[dead].fds);
     resacct_reset(&t.procs[dead].macct); // a zombie holds no charged memory — release the account

@@ -49,6 +49,14 @@ int main(void) {
         }
     }
 
-    emit("SBRK-GROW-OK\n");
+    // Emit the success marker FROM a grown-heap buffer (chunks[CHUNKS-1] is well past the 14 MiB
+    // static arena, so its VA is in the demand-grown region). This exercises the kernel's SYS_WRITE
+    // copy_from_user_pt on a grown address — proving the user-accessible window covers the grown heap.
+    // A static-string emit would only ever touch .rodata below the arena and miss that path.
+    const char *msg = "SBRK-GROW-OK\n";
+    char *out = (char *)chunks[CHUNKS - 1];
+    unsigned long n = 0;
+    while (msg[n]) { out[n] = msg[n]; n++; }
+    sys_write(1, out, n);
     return 0;
 }
