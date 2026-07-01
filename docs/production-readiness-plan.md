@@ -150,15 +150,26 @@ substantially more implemented + gated than first credited):
     supervised slots and actuates Restart/GiveUp) — `proc-supervisor-test` both backends.
   - (1-tail) `agent-preempt-test` — timer-driven preemption of AGENT processes.
 
-- **Genuinely remaining:** (10) a real **board profile + hardware bring-up** — strategically
-  essential but **blocked on physical hardware**; cannot be closed under QEMU. Lower-priority
-  follow-ups on the now-proven subsystems above: reproducible builds + OTA transport (on #9's
-  verified admission/rollback), wiring existing budgets onto the unified ledger and metrics into hot
-  paths, supervision trees/leases, and the P6 hardening campaign (soak / fuzz / security review).
+- **Polish delivered (2026-06-30):** the follow-ups on the proven subsystems are now landed and gated:
+  - unified ledger + metrics **wired into hot paths** (IPC/blk/DMA charges gate real ops without
+    trapping; spawn/exit/ipc/preempt/blk counters) + **supervision trees + leases** (`instrument-test`,
+    both backends).
+  - **OTA transport** — chunked, hash-verified image delivery on top of #9's admission/rollback
+    (`ota-test`, both backends) — and a **reproducible-build determinism** gate
+    (`reproducible-build-test`; byte-identical emitted C/LLVM across rebuilds).
+  - **P6 hardening**: a **soak** gate (~12k spawn/charge/supervise/reclaim/reap cycles, leak/overflow
+    clean; `soak-test`, both backends), a **fuzz** gate (>200k adversarial bundle headers + 50k
+    rollback op-sequences, deterministic seed; `bundle-fuzz-test`), and `docs/security-review.md`.
 
-The point of this section: every software-tractable production blocker on the ranked list is now
-closed and QEMU-gated on both backends. What genuinely remains is first-hardware bring-up (blocked on
-physical hardware) plus follow-up polish on subsystems that are already proven correct.
+- **Genuinely remaining:** (10) a real **board profile + hardware bring-up** — strategically
+  essential but **blocked on physical hardware**; cannot be closed under QEMU. Also honestly noted in
+  `docs/security-review.md`: the signed-boot / OTA image hash is currently FNV-1a (a non-cryptographic
+  stand-in); the real fix is a BearSSL SHA-256 digest — a bounded follow-up, not a blocker for the
+  gated flows. Local dev VM: `tools/run-kernel.sh` boots any demo as a QEMU VM on the host.
+
+The point of this section: every software-tractable production blocker AND its follow-up polish is now
+closed and QEMU-gated on both backends. The only genuine remainder is first-hardware bring-up, which
+is blocked on physical hardware.
 
 ## 4. Main production blockers
 
