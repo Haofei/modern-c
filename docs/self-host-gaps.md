@@ -71,6 +71,14 @@ length dropped); and NOT in the P2 grammar at all: `struct`/`enum`/`union`/globa
 literal expressions, method/UFCS calls, generics, multi-module imports/mangling. mcc2's OWN source uses
 nearly all of these — true self-compile requires widening the front end across all of them (large, multi-phase).
 
+**mcc2 CLI findings (2ac36e7):** G12 file-input ceiling is REAL — to feed the `[]const u8` pipeline you
+must read into a compile-time-sized `global g_src:[1048576]u8` and `mem.as_bytes(&g_src)[0..nread]`; a
+writable `PAddr` for `io_read` comes from `(&g_src) as usize` → `pa(...)` (the sanctioned addr↔usize
+boundary). Files > the fixed buffer are rejected, not truncated. G22 also bit as re-declaring an imported
+`extern "C"` (`mc_argv`) → `E_DUPLICATE_DECLARATION` (call the imported one). Canonical idioms confirmed:
+**discard a must-handle `Result` via `if let err(e) = expr {}`** (no `let _ = expr;` statement discard,
+G26-exempt); Result has no `is_ok`/`unwrap` — use `if let ok(v) = ...` or `?` propagation.
+
 **P3 subset-grammar gaps to widen before P4/P5:** the P2 parser's `parse_type` accepts only `.identifier`
 (so keyword-types `bool`/`void`/`u32`… as annotations don't parse — they arise only internally), and there
 is no `var` (only immutable `let`). Both must be added for the parser to accept real mcc2 source at P5.

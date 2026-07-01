@@ -195,3 +195,12 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   widened across the whole P5 gap list (see gap ledger). Next concrete step: package the pipeline as a
   standalone `mcc2` CLI (`selfhost/main.mc` via hosted argv+IO) and MEASURE it (fills the perf ledger,
   the "or slow" deliverable), then widen the grammar incrementally.
+- **2026-07-01 — `mcc2` CLI + perf DONE** (`2ac36e7`). `selfhost/main.mc` (~140 LOC): `mcc2 in.mc` reads
+  the file (hosted argv+IO into a 1 MiB `global` buffer → `mem.as_bytes` slice), runs the pipeline, writes
+  emitted C to stdout. **PERF (perf ledger): ~20,800 fns/s ≈ 2.0 MB/s; mcc2 wall 48 ms < clang -O0 73 ms
+  on its own output — mcc2 is FAST, no scaling pathology at 1000 fns.** ~2× headroom (dedup sema/emit
+  re-parse). `mcc2-cli-test` gate registered. This closes the "or slow" half of the goal for the subset.
+- **STATUS: P1–P4 + CLI + perf COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
+  *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
+  match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
+  perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").
