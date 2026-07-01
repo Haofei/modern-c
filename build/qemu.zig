@@ -727,6 +727,18 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-uaccess-pt-test", "Page-table-aware user copies under QEMU (LLVM backend): Sv39 walk + per-page PTE_U/R/W checks; kernel-only page, unmapped hole, off-page straddle all rejected", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/uaccess_pt_demo.mc", "uaccess_pt_run", "uaccess-pt-test" });
 
+    // Word-aligned mem ops (perf refactor Phase 1.1): mem_copy/mem_set/memmove copy 8-byte
+    // words for the aligned bulk. Correctness gate boots a self-contained runtime that asserts
+    // byte-exact results across boundary lengths + alignments + memmove overlap both directions.
+    _ = h.addScriptTest(ctx, "mem-test", "Word-aligned mem ops under QEMU: mem_copy/mem_set/memmove byte-exact across lengths 0..4096, misaligned src/dst, memmove overlap both directions", &.{ "bash", "tools/mem/mem-test.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-mem-test", "Word-aligned mem ops under QEMU (LLVM backend): mem_copy/mem_set/memmove byte-exact across lengths+alignments, memmove overlap both directions", &.{ "bash", "tools/mem/mem-test.sh", "zig-out/bin/mcc", "llvm" });
+
+    // Phase 0 mem microbenchmark (NOT in m0): rdcycle totals for a 64x 1 MiB copy/fill.
+    _ = h.addScriptTest(ctx, "mem-bench", "Mem microbenchmark under QEMU: 64x 1 MiB mem_copy + mem_set, prints MEMCPY-CYCLES / MEMSET-CYCLES via rdcycle", &.{ "bash", "tools/mem/mem-bench.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-mem-bench", "Mem microbenchmark under QEMU (LLVM backend): 64x 1 MiB mem_copy + mem_set cycle totals", &.{ "bash", "tools/mem/mem-bench.sh", "zig-out/bin/mcc", "llvm" });
+
     // kernel/core/elf_loader: real multi-segment ELF loader (Phase 1 of the QuickJS-agent
     // plan / review F3) — maps every PT_LOAD at its vaddr with per-segment perms, zeroes bss.
     _ = h.addScriptTest(ctx, "elf-loader-test", "Multi-segment ELF64 loader under QEMU: maps every PT_LOAD at its vaddr with per-segment R/W/X perms, copies file bytes, zeroes bss; synthetic 2-segment image, asserts mappings/content/bss/perms", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });
