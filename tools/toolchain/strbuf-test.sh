@@ -32,6 +32,8 @@ mc_slice_const_u8 sb_label(void){
 extern uint32_t strbuf_len(void);
 extern uint8_t  strbuf_byte(uint32_t i);
 extern uint32_t strbuf_checksum(void);
+extern uint32_t strbuf_cstr_len(void);
+extern uint8_t  strbuf_cstr_byte(uint32_t i);
 int main(void) {
     // Canonical string: "N=" + u32(UINT32_MAX) + ' ' + hex(0xDEADBEEF) + u32(0).
     const char *want = "N=4294967295 0xdeadbeef0";
@@ -44,6 +46,13 @@ int main(void) {
     uint32_t expect = 0;
     for (uint32_t i = 0; i < n; i++) expect += (uint32_t)(uint8_t)want[i] * (i + 1);
     if (strbuf_checksum() != expect) return 3;
+    // sb_put_cstr: a NUL-terminated string literal appended directly (the emitter's workhorse).
+    const char *wc = "uint32_t";
+    uint32_t nc = (uint32_t)strlen(wc);             // 8
+    if (strbuf_cstr_len() != nc) return 4;
+    for (uint32_t i = 0; i < nc; i++) {
+        if (strbuf_cstr_byte(i) != (uint8_t)wc[i]) return 5;
+    }
     return 0;
 }
 EOF

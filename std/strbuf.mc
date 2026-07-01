@@ -25,6 +25,7 @@
 // gate (tests/toolchain/strbuf_user.mc) for the checksum-based consumption pattern.
 
 import "std/collections/dynarray.mc";
+import "std/addr.mc";
 
 struct StrBuf {
     v: Vec<u8>,                // backing byte storage (owns the allocation)
@@ -55,6 +56,27 @@ export fn sb_put_str(sb: *mut StrBuf, s: []const u8) -> void {
     var i: usize = 0;
     while i < s.len {
         vec_push(u8, &sb.v, s[i]);
+        i = i + 1;
+    }
+}
+
+// Append the bytes of a NUL-terminated C string `s` (a `*const u8`), stopping at (and not
+// copying) the terminating 0. This is the emitter's workhorse: MC string literals lower to
+// `*const u8`, NOT `[]const u8` (self-host gap G12), so `sb_put_str("...")` will not compile;
+// `sb_put_cstr(sb, "...")` does. Reads a byte at a time via `raw.load<u8>` off the pointer's
+// address (the same raw-boundary pattern as std/libc `mc_strlen`).
+export fn sb_put_cstr(sb: *mut StrBuf, s: *const u8) -> void {
+    let base: PAddr = pa(s as usize);
+    var i: usize = 0;
+    while true {
+        var b: u8 = 0;
+        unsafe {
+            b = raw.load<u8>(pa_offset(base, i));
+        }
+        if b == 0 {
+            break;
+        }
+        vec_push(u8, &sb.v, b);
         i = i + 1;
     }
 }

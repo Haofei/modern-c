@@ -94,3 +94,25 @@ export fn strbuf_checksum() -> u32 {
     }
     return sum;
 }
+
+// Exercise sb_put_cstr: append a NUL-terminated string literal (a `*const u8`) directly.
+// "uint32_t" is 8 bytes; the driver checks the length and exact bytes. This is the exact
+// pattern the C emitter relies on (fixed C fragments come in as string literals).
+export fn strbuf_cstr_len() -> u32 {
+    var m: MallocAlloc = .{ .count = 0 };
+    var sb: StrBuf = sb_new(&m);
+    sb_put_cstr(&sb, "uint32_t");
+    let n: usize = sb_len(&sb);
+    sb_free(&sb);
+    return n as u32;
+}
+
+// Byte `i` of the sb_put_cstr("uint32_t") result.
+export fn strbuf_cstr_byte(i: u32) -> u8 {
+    var m: MallocAlloc = .{ .count = 0 };
+    var sb: StrBuf = sb_new(&m);
+    sb_put_cstr(&sb, "uint32_t");
+    let b: u8 = sb_byte(&sb, i as usize);
+    sb_free(&sb);
+    return b;
+}
