@@ -811,7 +811,18 @@ fn parse_switch(p: *mut Parser) -> u32 {
     return add_node(p, .switch_stmt, sw_tok, subject, arms_run);
 }
 
-// stmt := let | return | if | while | switch | (assign | expr) `;`
+// match := `match` Expr `{` (Pat `=>` Block (`,`)?)* `}`  where Pat is `.` IDENT | `_` (P5.11).
+// In the checked subset a `match` is GRAMMATICALLY identical to a `switch`: the subset has no
+// tagged-union / `Result` / payload-carrying enum types, so a pattern can never bind a payload
+// (`variant(x) =>` is unrepresentable here — see the ledger). `match` therefore reuses parse_switch
+// verbatim and desugars to the same `switch_stmt` node; sema (exhaustiveness) and emit (C `switch`)
+// need no `match`-specific handling. parse_switch keys off the CURRENT token, so the `match` keyword
+// is consumed correctly. (Payload binding is deferred until the subset grows tagged unions.)
+fn parse_match(p: *mut Parser) -> u32 {
+    return parse_switch(p);
+}
+
+// stmt := let | return | if | while | switch | match | (assign | expr) `;`
 fn parse_stmt(p: *mut Parser) -> u32 {
     if at(p, .kw_let) {
         p_advance(p);
@@ -861,6 +872,9 @@ fn parse_stmt(p: *mut Parser) -> u32 {
     }
     if at(p, .kw_switch) {
         return parse_switch(p);
+    }
+    if at(p, .kw_match) {
+        return parse_match(p);
     }
     // `unsafe { <stmts> }` (P5.8): a block-statement wrapper. C has no `unsafe`, so this lowers to a
     // plain brace block; sema simply checks the inner statements (no effect tracking in the subset).

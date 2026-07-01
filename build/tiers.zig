@@ -401,6 +401,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-cast-test"));
     // selfhost-trait-test exercises P5.10 TRAITS + `*mut dyn` dynamic dispatch (vtable + thunk + fat-pointer coercion + dispatch).
     m0_step.dependOn(ctx.cmd("selfhost-trait-test"));
+    // selfhost-match-test exercises P5.11 MATCH support (desugars to switch; no payload in the subset) + exhaustiveness.
+    m0_step.dependOn(ctx.cmd("selfhost-match-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).
