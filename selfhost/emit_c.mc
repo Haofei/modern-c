@@ -522,6 +522,52 @@ fn e_as_bytes(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
     sb_put_cstr(sb, ") }");
 }
 
+// ----- P5.8 low-level intrinsics -----
+
+// Emit a `raw.ptr<T>(e)` / `raw.load<T>(e)` / `raw.store<T>(e, v)` intrinsic (P5.8), matching the
+// real backend's cast-through-pointer lowering:
+//   ptr   -> `(T*)(e)`            — mint a typed pointer from an address
+//   load  -> `(*(T*)(e))`         — read a T through the address
+//   store -> `(*(T*)(e) = (v))`   — write v (a T) through the address
+// The element type `T` goes through `e_type` so a monomorphized type param is substituted (a `Vec<T>`
+// template body uses `raw.ptr<T>`). The op is recovered from the member lexeme in `main_token`.
+fn e_raw_op(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
+    let nd: Node = e_node(p, n);
+    let ty: u32 = nd.lhs;
+    let rec: u32 = nd.rhs;
+    let arg0: u32 = e_extra(p, rec);
+    let arg1: u32 = e_extra(p, rec + 1);
+    let member: []const u8 = e_tok_text(p, nd.main_token);
+    var b_ptr: [3]u8 = .{ 112, 116, 114 }; // "ptr"
+    let is_ptr: bool = mem_eql(member, mem.as_bytes(&b_ptr));
+    if is_ptr {
+        sb_put_cstr(sb, "(");
+        e_type(p, sb, ty);
+        sb_put_cstr(sb, "*)(");
+        e_expr(p, sb, arg0);
+        sb_put_cstr(sb, ")");
+        return;
+    }
+    var b_load: [4]u8 = .{ 108, 111, 97, 100 }; // "load"
+    let is_load: bool = mem_eql(member, mem.as_bytes(&b_load));
+    if is_load {
+        sb_put_cstr(sb, "(*(");
+        e_type(p, sb, ty);
+        sb_put_cstr(sb, "*)(");
+        e_expr(p, sb, arg0);
+        sb_put_cstr(sb, "))");
+        return;
+    }
+    // `store`: `(*(T*)(addr) = (value))`.
+    sb_put_cstr(sb, "(*(");
+    e_type(p, sb, ty);
+    sb_put_cstr(sb, "*)(");
+    e_expr(p, sb, arg0);
+    sb_put_cstr(sb, ") = (");
+    e_expr(p, sb, arg1);
+    sb_put_cstr(sb, "))");
+}
+
 // ----- expression emission -----
 
 // Emit the C spelling (with surrounding spaces) of a binary NodeKind operator.
@@ -677,6 +723,17 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         sb_put_cstr(sb, "&(");
         e_expr(p, sb, nd.lhs);
         sb_put_cstr(sb, ")");
+        return;
+    }
+    if nd.kind == .raw_op {
+        e_raw_op(p, sb, n);
+        return;
+    }
+    if nd.kind == .deref {
+        // `p.*` -> `(*(p))` (P5.8). Matches the real backend's pointer-deref lowering.
+        sb_put_cstr(sb, "(*(");
+        e_expr(p, sb, nd.lhs);
+        sb_put_cstr(sb, "))");
         return;
     }
     if nd.kind == .field {
@@ -895,6 +952,13 @@ fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
         e_switch(p, sb, n, depth);
         return;
     }
+    if nd.kind == .unsafe_block {
+        // `unsafe { ... }` (P5.8): C has no `unsafe`, so emit the inner block as a plain brace block.
+        e_indent(sb, depth);
+        e_block(p, sb, nd.lhs, depth);
+        sb_put_cstr(sb, "\n");
+        return;
+    }
     // Unknown statement kind: emit nothing.
 }
 
@@ -1068,6 +1132,38 @@ fn e_fn(p: *mut Parser, sb: *mut StrBuf, fn_node: u32) -> void {
     e_block(p, sb, body, 0);
     p.cur_fn = 0;
     sb_put_cstr(sb, "\n\n");
+}
+
+// Emit an `extern "C" fn` as a C prototype `RET NAME(PARAMS);` (P5.8). The symbol is provided by
+// the C side (libc / a driver shim), so only a declaration is emitted; call sites reference NAME
+// like any function. The record is [params_run, ret_type] (see parser `extern_fn`).
+fn e_extern_fn(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
+    let nd: Node = e_node(p, node);
+    let exrec: u32 = nd.lhs;
+    let params_run: u32 = e_extra(p, exrec);
+    let ret_ty: u32 = e_extra(p, exrec + 1);
+    e_type(p, sb, ret_ty);
+    sb_put_cstr(sb, " ");
+    let name: []const u8 = e_tok_text(p, nd.main_token);
+    sb_put_str(sb, name);
+    sb_put_cstr(sb, "(");
+    let pcount: u32 = e_extra(p, params_run);
+    if pcount == 0 {
+        sb_put_cstr(sb, "void");
+    } else {
+        var k: u32 = 0;
+        while k < pcount {
+            if k > 0 {
+                sb_put_cstr(sb, ", ");
+            }
+            let pn: u32 = e_extra(p, params_run + 1 + k);
+            let pnode: Node = e_node(p, pn);
+            let pname: []const u8 = e_tok_text(p, pnode.main_token);
+            e_emit_decl(p, sb, pnode.lhs, pname);
+            k = k + 1;
+        }
+    }
+    sb_put_cstr(sb, ");\n");
 }
 
 // Emit a struct declaration as a C typedef: `typedef struct NAME { T0 f0; ... } NAME;`. The field
@@ -1455,6 +1551,10 @@ fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
     while fi < count {
         let fd: u32 = e_extra(p, run + 1 + fi);
         let fdn: Node = e_node(p, fd);
+        if fdn.kind == .extern_fn {
+            // P5.8: emit the C prototype for each `extern "C" fn` (its symbol is provided externally).
+            e_extern_fn(p, sb, fd);
+        }
         if fdn.kind == .fn_decl {
             let frec: u32 = fdn.lhs;
             let params_run: u32 = e_extra(p, frec + 1);

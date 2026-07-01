@@ -767,6 +767,38 @@ fn sm_target_mutable(s: *mut SmState, node: u32) -> bool {
     return false;
 }
 
+// Type a `raw.ptr<T>(e)` / `raw.load<T>(e)` / `raw.store<T>(e, v)` intrinsic (P5.8). `ptr` yields a
+// `*mut T` (a `T` with `ptr_depth + 1`); `load` yields `T`; `store` yields `void`. The address
+// operand `e` is accepted leniently (any usize/PAddr/pointer-ish value — the subset does not tighten
+// this); it is walked for errors, as is the value operand of `store`. The op is recovered from the
+// member lexeme in `main_token` (like `.as_bytes`/`.raw` elsewhere).
+fn sm_raw_op(s: *mut SmState, node: u32) -> SmType {
+    let nd: Node = sm_node(s, node);
+    let elem: SmType = sm_type_from_node(s, nd.lhs);
+    let rec: u32 = nd.rhs;
+    let arg0: u32 = sm_extra(s, rec);
+    let arg1: u32 = sm_extra(s, rec + 1);
+    sm_type_of_expr(s, arg0); // walk the address operand for errors (lenient on its type)
+    let member: []const u8 = sm_tok_text(s, nd.main_token);
+    var b_ptr: [3]u8 = .{ 112, 116, 114 }; // "ptr"
+    let is_ptr: bool = mem_eql(member, mem.as_bytes(&b_ptr));
+    if is_ptr {
+        var pt: SmType = elem;
+        pt.ptr_depth = pt.ptr_depth + 1;
+        return pt;
+    }
+    var b_load: [4]u8 = .{ 108, 111, 97, 100 }; // "load"
+    let is_load: bool = mem_eql(member, mem.as_bytes(&b_load));
+    if is_load {
+        return elem;
+    }
+    // `store`: the value operand is walked for errors; the result is `void`.
+    if arg1 != 0 {
+        sm_type_of_expr(s, arg1);
+    }
+    return sm_ty(.void_);
+}
+
 // The type of an expression node (recursively). Dispatches over `NodeKind` with a `switch`; the
 // open enum forces a `_` default (there is no exhaustiveness help — see the ledger note).
 fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
@@ -823,6 +855,15 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
             var pt: SmType = sm_type_of_expr(s, nd.lhs);
             pt.ptr_depth = pt.ptr_depth + 1;
             return pt;
+        }
+        .raw_op => { return sm_raw_op(s, node); }
+        .deref => {
+            // `p.*` yields the pointee type of `p` (one fewer level of indirection, P5.8).
+            var dt: SmType = sm_type_of_expr(s, nd.lhs);
+            if dt.ptr_depth > 0 {
+                dt.ptr_depth = dt.ptr_depth - 1;
+            }
+            return dt;
         }
         .field => {
             let obj: SmType = sm_type_of_expr(s, nd.lhs);
@@ -1016,6 +1057,11 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
     let nd: Node = sm_node(s, node);
     if nd.kind == .block {
         sm_check_block(s, node);
+        return;
+    }
+    if nd.kind == .unsafe_block {
+        // `unsafe { ... }` (P5.8): no effect tracking in the subset — just check the inner block.
+        sm_check_block(s, nd.lhs);
         return;
     }
     if nd.kind == .let_decl || nd.kind == .var_decl {
@@ -1273,6 +1319,29 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
             vec_push(SmEnum, &s.enum_defs, .{ .variant_start = vstart, .variant_count = vcount, .repr = repr_kind, .is_open = is_open });
             let ename: []const u8 = sm_tok_text(s, dn.main_token);
             strmap_put(u32, &s.enums, ename, eidx + 1);
+        }
+        if dn.kind == .extern_fn {
+            // `extern "C" fn NAME(params) -> RET;` (P5.8): collect a plain (non-generic) signature so
+            // calls resolve like any fn. The record is [params_run, ret_type] (no exported flag, no
+            // body). Pass 2 skips it (it only walks `fn_decl` bodies).
+            let exrec: u32 = dn.lhs;
+            let ex_params_run: u32 = sm_extra(s, exrec);
+            let ex_ret_node: u32 = sm_extra(s, exrec + 1);
+            let ex_ret_ty: SmType = sm_type_from_node(s, ex_ret_node);
+            let ex_pcount: u32 = sm_extra(s, ex_params_run);
+            let ex_pstart: u32 = vec_len(SmType, &s.ptypes) as u32;
+            var ex_pi: u32 = 0;
+            while ex_pi < ex_pcount {
+                let ex_pnode: u32 = sm_extra(s, ex_params_run + 1 + ex_pi);
+                let ex_pn: Node = sm_node(s, ex_pnode);
+                let ex_pty: SmType = sm_type_from_node(s, ex_pn.lhs);
+                vec_push(SmType, &s.ptypes, ex_pty);
+                ex_pi = ex_pi + 1;
+            }
+            let ex_sig_idx: u32 = vec_len(SmSig, &s.sigs) as u32;
+            vec_push(SmSig, &s.sigs, .{ .ret = ex_ret_ty, .param_start = ex_pstart, .param_count = ex_pcount, .is_generic = 0, .tparam_start = 0, .tparam_len = 0, .ret_is_tparam = 0 });
+            let ex_name: []const u8 = sm_tok_text(s, dn.main_token);
+            strmap_put(u32, &s.fns, ex_name, ex_sig_idx + 1);
         }
         if dn.kind == .fn_decl {
             let frec: u32 = dn.lhs;

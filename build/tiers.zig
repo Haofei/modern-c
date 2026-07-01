@@ -395,6 +395,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-array-test"));
     // selfhost-slice-test exercises P5.7 PROPER SLICES (fat pointers: .len, index, sub-slice, by-value, as_bytes).
     m0_step.dependOn(ctx.cmd("selfhost-slice-test"));
+    // selfhost-lowlevel-test exercises P5.8 the LOW-LEVEL LAYER (unsafe blocks, raw.ptr/load/store, extern "C" fn, p.* deref).
+    m0_step.dependOn(ctx.cmd("selfhost-lowlevel-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

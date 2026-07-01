@@ -107,6 +107,17 @@ open enum NodeKind: u32 {
                       //    directly at rhs+0 / rhs+1, like the `if_stmt` then/else record).
     un_addr,          // 48 address-of `&expr`: main_token = `&`; lhs = operand. Used by the
                       //    `mem.as_bytes(&arr)` slice builtin (and general pointer taking).
+    // ----- P5.8 low-level layer additions (appended to keep prior ordinals stable) -----
+    unsafe_block,     // 49 `unsafe { <stmts> }`: main_token = `unsafe`; lhs = the inner block node.
+                      //    A pure wrapper — C has no `unsafe`, so emit lowers it to a plain `{ ... }`.
+    raw_op,           // 50 a `raw.ptr<T>(e)` / `raw.load<T>(e)` / `raw.store<T>(e, v)` intrinsic call:
+                      //    main_token = the member ident (`ptr`/`load`/`store`, distinguishing the op);
+                      //    lhs = the `<T>` type-arg node; rhs = a fixed 2-slot extra record [arg0, arg1]
+                      //    (arg1 = 0 for the single-arg `ptr`/`load`; the value operand for `store`).
+    deref,            // 51 pointer deref `p.*` (read or assign target): main_token = the `*` token;
+                      //    lhs = the pointer operand. Emits `(*(p))`.
+    extern_fn,        // 52 `extern "C" fn NAME(params) -> RET;`: main_token = name; lhs = a fixed
+                      //    record [params_run, ret_type]. No body — a callable prototype only.
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -432,6 +443,39 @@ fn dot_is_struct_lit(p: *mut Parser) -> bool {
     return a && b && c;
 }
 
+// True when token `tok` is the identifier `raw` (the low-level intrinsic namespace, which is NOT a
+// lexer keyword — it lexes as a plain identifier, like `import`). Bound to a local per G13.
+fn tok_is_raw(p: *mut Parser, tok: u32) -> bool {
+    let lex: []const u8 = tok_lexeme(p, tok);
+    var kw: [3]u8 = .{ 114, 97, 119 }; // "raw"
+    return mem_eql(lex, mem.as_bytes(&kw));
+}
+
+// raw_op := `raw` `.` (`ptr`|`load`|`store`) `<` Type `>` `(` Expr (`,` Expr)? `)`  (P5.8). The
+// member ident (`ptr`/`load`/`store`) becomes main_token so emit/sema recover the op by lexeme; the
+// `<T>` reuses `parse_type`; the value args are a fixed 2-slot record [arg0, arg1] (arg1 = 0 for the
+// single-arg `ptr`/`load`). The cursor is at the `raw` identifier.
+fn parse_raw_op(p: *mut Parser) -> u32 {
+    p_advance(p); // `raw`
+    p_advance(p); // `.`
+    let op_tok: u32 = p.tok as u32; // `ptr` / `load` / `store`
+    expect(p, .identifier);
+    expect(p, .less);
+    let ty: u32 = parse_type(p);
+    expect(p, .greater);
+    expect(p, .l_paren);
+    let arg0: u32 = parse_expr(p, 0);
+    var arg1: u32 = 0;
+    if eat(p, .comma) {
+        arg1 = parse_expr(p, 0);
+    }
+    expect(p, .r_paren);
+    let rec: u32 = vec_len(u32, &p.extra) as u32;
+    vec_push(u32, &p.extra, arg0);
+    vec_push(u32, &p.extra, arg1);
+    return add_node(p, .raw_op, op_tok, ty, rec);
+}
+
 // primary := INT | IDENT | `(` Expr `)`
 fn parse_primary(p: *mut Parser) -> u32 {
     if at(p, .integer_literal) {
@@ -440,6 +484,19 @@ fn parse_primary(p: *mut Parser) -> u32 {
         return add_node(p, .int_literal, it, 0, 0);
     }
     if at(p, .identifier) {
+        // A `raw.ptr<T>(...)` / `raw.load<T>(...)` / `raw.store<T>(...)` intrinsic (P5.8): the base
+        // ident is literally `raw`, followed by `.` MEMBER `<` — unambiguous, since a normal member
+        // access is never followed by `<` in expression position here. Parse it as a `raw_op` node so
+        // the `<T>` type arg is not misread as a `less-than` comparison.
+        let is_raw_head: bool = tok_is_raw(p, p.tok as u32);
+        if is_raw_head {
+            let d1: bool = at_next(p, 1, .dot);
+            let m2: bool = at_next(p, 2, .identifier);
+            let l3: bool = at_next(p, 3, .less);
+            if d1 && m2 && l3 {
+                return parse_raw_op(p);
+            }
+        }
         let idt: u32 = p.tok as u32;
         p_advance(p);
         return add_node(p, .ident_expr, idt, 0, 0);
@@ -519,6 +576,13 @@ fn parse_postfix(p: *mut Parser, input: u32) -> u32 {
         }
         if at(p, .dot) {
             p_advance(p); // `.`
+            // Pointer deref `p.*` (P5.8): a `.` followed by `*` (read or assignment target).
+            if at(p, .star) {
+                let star_tok: u32 = p.tok as u32;
+                p_advance(p); // `*`
+                expr = add_node(p, .deref, star_tok, expr, 0);
+                continue;
+            }
             let field_tok: u32 = p.tok as u32;
             expect(p, .identifier);
             expr = add_node(p, .field, field_tok, expr, 0);
@@ -692,6 +756,14 @@ fn parse_stmt(p: *mut Parser) -> u32 {
     }
     if at(p, .kw_switch) {
         return parse_switch(p);
+    }
+    // `unsafe { <stmts> }` (P5.8): a block-statement wrapper. C has no `unsafe`, so this lowers to a
+    // plain brace block; sema simply checks the inner statements (no effect tracking in the subset).
+    if at(p, .kw_unsafe) {
+        let u_tok: u32 = p.tok as u32;
+        p_advance(p); // `unsafe`
+        let ubody: u32 = parse_block(p);
+        return add_node(p, .unsafe_block, u_tok, ubody, 0);
     }
     // Expression statement or assignment.
     let head: u32 = parse_expr(p, 0);
@@ -892,13 +964,54 @@ fn parse_import(p: *mut Parser) -> u32 {
     return add_node(p, .import_decl, path_tok, 0, 0);
 }
 
-// decl := `import` STRING `;` | `export`? `open`? (`enum` ... | `fn` ... | `struct` ...)
+// extern := `extern` STRING `fn` IDENT `(` Params `)` `->` Type `;`  (P5.8). A bodyless prototype
+// binding a C symbol (typically libc). The ABI string (`"C"`) is consumed and ignored (the subset
+// only targets the C ABI). The fixed record is [params_run, ret_type]; there is no body.
+fn parse_extern_fn(p: *mut Parser) -> u32 {
+    p_advance(p); // `extern`
+    expect(p, .string_literal); // the ABI string, e.g. "C"
+    expect(p, .kw_fn);
+    let fn_name: u32 = p.tok as u32;
+    expect(p, .identifier);
+    expect(p, .l_paren);
+    var params: Vec<u32> = vec_new(u32, p.a);
+    if !at(p, .r_paren) {
+        while true {
+            let param_name: u32 = p.tok as u32;
+            expect(p, .identifier);
+            expect(p, .colon);
+            let param_ty: u32 = parse_type(p);
+            let param: u32 = add_node(p, .param_decl, param_name, param_ty, 0);
+            vec_push(u32, &params, param);
+            if !eat(p, .comma) {
+                break;
+            }
+        }
+    }
+    expect(p, .r_paren);
+    expect(p, .arrow);
+    let ret_ty: u32 = parse_type(p);
+    expect(p, .semicolon);
+    let params_run: u32 = emit_list(p, &params);
+    vec_free(u32, &params);
+    // Fixed record: [params_run, ret_type].
+    let ext_rec: u32 = vec_len(u32, &p.extra) as u32;
+    vec_push(u32, &p.extra, params_run);
+    vec_push(u32, &p.extra, ret_ty);
+    return add_node(p, .extern_fn, fn_name, ext_rec, 0);
+}
+
+// decl := `import` STRING `;` | `extern` ... | `export`? `open`? (`enum` ... | `fn` ... | `struct` ...)
 fn parse_decl(p: *mut Parser) -> u32 {
     // A leading `import "..."` is the module directive (an identifier `import`, not a keyword).
     if at(p, .identifier) {
         if tok_is_import(p, p.tok as u32) {
             return parse_import(p);
         }
+    }
+    // `extern "C" fn NAME(...) -> RET;` — a bodyless C-symbol prototype (P5.8).
+    if at(p, .kw_extern) {
+        return parse_extern_fn(p);
     }
     var exported: u32 = 0;
     if eat(p, .kw_export) {
