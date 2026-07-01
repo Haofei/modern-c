@@ -77,6 +77,13 @@ nearly all of these — true self-compile requires widening the front end across
 (any typed-`let bool` whose rhs is a comparison with a call/field-`.raw()` operand). Fine as an `if` condition;
 `UnsupportedCEmission` as a `let bool =`. Recurring, easy-to-hit trap — bind the operand to a `u32` local first.
 
+| G28 | P5.2 | selfhost-design | **`enum_lit` AST node carries only the variant token, not its enum** — sema resolves via threaded expected-type, but the emitter (no type table) resolves an enum literal by scanning all module enum decls for a matching variant (first match wins). Silently mis-emits if two enums share a variant name. | `.variant` emit | medium (selfhost) | workaround (unique variant names; robust fix = variant→enum map or carry enum index on the node) |
+
+**Pre-existing emitter bug found+fixed by P5.2:** `if (<fully-parenthesized binop>)` emitted `if ((n == 1))`
+→ clang `-Wparentheses-equality -Werror` rejects. The enum gate was the first selfhost test with a comparison
+in a control-flow condition. Fixed via `e_cond` (skip redundant parens when the condition is already a binop).
+This is exactly the class of latent codegen bug the stress test exists to surface.
+
 **Structural observation (P5.1):** parser/sema/emit each re-implement length-prefixed "pair run" walking
 (`[count,(a,b)*]`, `fi*2(+1)` indexing) with no shared arena-access module → off-by-one-prone duplication
 across 3 files. A shared `selfhost/ast.mc` accessor layer would cut this; deferred (works, just repetitive).

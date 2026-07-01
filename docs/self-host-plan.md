@@ -206,7 +206,13 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   (`.raw()` on variant-path literal rejected), G23 broadened, duplicated pair-run walking across 3 stages.
   **NEXT self-compile blocker = enums** (`open enum`, `.variant`, `switch`, `.raw()` — mcc2's own source is
   built on them), then generics, imports, traits.
-- **STATUS: P1–P4 + CLI + perf + structs COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
+- **2026-07-01 — P5.2 (enums vertical, no switch) DONE** (`f77c011`). Parser+sema+emit for `open? enum`
+  decls, `.variant` literals, `== .variant`, `.raw()`, enum-typed values; C repr matches
+  `src/lower_c_defs.zig` (transparent `typedef <repr> NAME;` + auto-numbered `enum{}`). `selfhost-enum-test`
+  green (`pick`); all 5 prior gates pass. Found G28 (enum-lit node lacks its enum) + fixed a real
+  double-paren `if` codegen bug. Next vertical: **`switch`** (lets mcc2 stop paying the G25 if/else tax and
+  match its own dispatch idiom), then generics.
+- **STATUS: P1–P4 + CLI + perf + structs + enums COMPLETE — a working, fast, subset MC-compiler-in-MC.** Remaining for
   *true* self-compile (P5): widen the front end across the P5 gap list (structs/enums/generics/slices/
   match/imports/…). That is a large, multi-phase effort; the subset milestone + the G9–G26 gap ledger +
   perf data already deliver the stress-test's north star ("what MC doesn't support, or is slow").
