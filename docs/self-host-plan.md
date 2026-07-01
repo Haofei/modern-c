@@ -161,5 +161,12 @@ The gap and perf ledgers are the primary output. Scaffolds live in
   make-or-break spike (heap-backed generic `Vec<T>`) proved MC generics fully express growable
   containers. Findings G9–G18 recorded in the gap ledger; two dominant gaps (G11 value
   optionals, G12 slices) → Phase 0.6 deferred (workarounds suffice; let P1 prove the need).
-- **2026-07-01 — P1 (lexer) IN FLIGHT** — worktree agent porting `src/lexer.zig`+`src/token.zig`
-  → `selfhost/lexer.mc`+`selfhost/token.mc`, index-based tokens into `Vec<Token>`.
+- **2026-07-01 — P1 (lexer) DONE** (`dc41aa4`). `selfhost/lexer.mc` (~500 LOC) reproduces all 95
+  `TokKind` variants (7 base + 47 kw + 41 ops/punct), 9 gate inputs assert kinds/counts/spans vs
+  `src/lexer.zig`; `selfhost-lex-test` gate registered. Index-based tokens were pleasant; the pain
+  was **G19** (below). Findings: G19 (Vec of struct), G20 (`let` function-scoped), G21 (enum→int
+  needs `open enum`); corrections (ascii predicates exist, char literals fine). Keyword table = ~2×
+  the Zig line count (G12 consequence).
+- **2026-07-01 — G19 FIXED** (`1855eab`). `Vec<T>` element access switched to `raw.ptr<T>`+deref →
+  works for struct T (scalar `raw.load/store` was aggregate-incompatible). Unblocks the P2
+  index-arena AST (`Vec<AstNode>`). vec-test now covers a struct element.
