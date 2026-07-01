@@ -70,6 +70,10 @@ open enum NodeKind: u32 {
     bin_mul,          // 32 `*`
     bin_div,          // 33 `/`
     bin_mod,          // 34 `%`
+    // ----- P5.1 struct-support additions (appended to keep ordinals 0..34 stable for the gate) -----
+    struct_decl,      // 35 main_token = name; lhs = fields run [count, (name_tok, type_node)*]; rhs = exported
+    var_decl,         // 36 mutable local: main_token = name; lhs = type node (0 = inferred); rhs = init expr
+    struct_lit,       // 37 `.{ .f = e, ... }`: main_token = leading `.`; lhs = fields run [count, (name_tok, val_node)*]
 }
 
 // A flat AST node: `main_token` indexes the token stream; `lhs`/`rhs` are child node indices
@@ -119,6 +123,25 @@ fn cur(p: *mut Parser) -> u32 {
         return 0; // eof
     }
     return token_kind_at(&p.tl, p.tok);
+}
+
+// The kind ordinal of the token `off` positions ahead of the cursor, or eof (0) past the end.
+fn peek_kind(p: *mut Parser, off: usize) -> u32 {
+    let n: usize = token_count(&p.tl);
+    let i: usize = p.tok + off;
+    if i >= n {
+        return 0; // eof
+    }
+    return token_kind_at(&p.tl, i);
+}
+
+// True when the token `off` positions ahead of the cursor has kind `k` (a bounded lookahead used
+// to disambiguate a struct literal `.{` from postfix member access). `k.raw()` is bound to a local
+// first, mirroring `at` (a bare `call() == call()` return can't recover its operand type — G23).
+fn at_next(p: *mut Parser, off: usize, k: TokKind) -> bool {
+    let c: u32 = peek_kind(p, off);
+    let want: u32 = k.raw();
+    return c == want;
 }
 
 // True when the current token has kind `k`.
@@ -238,6 +261,18 @@ fn parse_type(p: *mut Parser) -> u32 {
         let elem_bad: u32 = parse_type(p);
         return add_node(p, .type_slice_const, br_tok, elem_bad, 0);
     }
+    // Keyword scalar types `bool`/`void` lex as `kw_bool`/`kw_void` (not identifiers); build a
+    // `type_name` on the keyword token — its recovered lexeme ("bool"/"void") is what sema/emit map.
+    if at(p, .kw_bool) {
+        let bt: u32 = p.tok as u32;
+        p_advance(p);
+        return add_node(p, .type_name, bt, 0, 0);
+    }
+    if at(p, .kw_void) {
+        let vt: u32 = p.tok as u32;
+        p_advance(p);
+        return add_node(p, .type_name, vt, 0, 0);
+    }
     let name_tok: u32 = p.tok as u32;
     if !expect(p, .identifier) {
         return 0;
@@ -246,6 +281,51 @@ fn parse_type(p: *mut Parser) -> u32 {
 }
 
 // ----- expression grammar (precedence-climbing, faithful to src/parser.zig) -----
+
+// Flush a temporary list of (token, node) PAIRS into `extra` as a run whose length prefix is the
+// PAIR count (not the raw element count): `extra[start]` = pairs, then that many `tok, node` pairs.
+// Used by both `struct_decl` (field name/type) and `struct_lit` (field name/value). Temp not freed.
+fn emit_pair_list(p: *mut Parser, pairs: *Vec<u32>) -> u32 {
+    let start: u32 = vec_len(u32, &p.extra) as u32;
+    let raw: usize = vec_len(u32, pairs);
+    let count: u32 = (raw / 2) as u32;
+    vec_push(u32, &p.extra, count);
+    var i: usize = 0;
+    while i < raw {
+        vec_push(u32, &p.extra, vec_get(u32, pairs, i));
+        i = i + 1;
+    }
+    return start;
+}
+
+// struct_lit := `.` `{` (`.` IDENT `=` Expr (`,`)?)* `}`  (trailing comma allowed, per MC)
+fn parse_struct_lit(p: *mut Parser) -> u32 {
+    let dot_tok: u32 = p.tok as u32;
+    p_advance(p); // `.`
+    expect(p, .l_brace);
+    var pairs: Vec<u32> = vec_new(u32, p.a);
+    if !at(p, .r_brace) {
+        while true {
+            expect(p, .dot);
+            let fname: u32 = p.tok as u32;
+            expect(p, .identifier);
+            expect(p, .equal);
+            let fval: u32 = parse_expr(p, 0);
+            vec_push(u32, &pairs, fname);
+            vec_push(u32, &pairs, fval);
+            if !eat(p, .comma) {
+                break;
+            }
+            if at(p, .r_brace) {
+                break; // trailing comma
+            }
+        }
+    }
+    expect(p, .r_brace);
+    let run: u32 = emit_pair_list(p, &pairs);
+    vec_free(u32, &pairs);
+    return add_node(p, .struct_lit, dot_tok, run, 0);
+}
 
 // primary := INT | IDENT | `(` Expr `)`
 fn parse_primary(p: *mut Parser) -> u32 {
@@ -263,6 +343,13 @@ fn parse_primary(p: *mut Parser) -> u32 {
         let inner: u32 = parse_expr(p, 0);
         expect(p, .r_paren);
         return inner; // grouping is structural only; no wrapper node
+    }
+    // Struct literal `.{ .f0 = e0, .f1 = e1, ... }` (leading `.` before a `{`). A lone leading `.`
+    // only ever introduces a struct literal in this subset (enum literals are out of scope).
+    if at(p, .dot) {
+        if at_next(p, 1, .l_brace) {
+            return parse_struct_lit(p);
+        }
     }
     // Not the start of any expression.
     record_error(p);
@@ -388,6 +475,19 @@ fn parse_stmt(p: *mut Parser) -> u32 {
         expect(p, .semicolon);
         return add_node(p, .let_decl, let_name, let_ty, let_init);
     }
+    if at(p, .kw_var) {
+        p_advance(p);
+        let var_name: u32 = p.tok as u32;
+        expect(p, .identifier);
+        var var_ty: u32 = 0;
+        if eat(p, .colon) {
+            var_ty = parse_type(p);
+        }
+        expect(p, .equal);
+        let var_init: u32 = parse_expr(p, 0);
+        expect(p, .semicolon);
+        return add_node(p, .var_decl, var_name, var_ty, var_init);
+    }
     if at(p, .kw_return) {
         let ret_tok: u32 = p.tok as u32;
         p_advance(p);
@@ -487,12 +587,43 @@ fn parse_fn(p: *mut Parser, exported: u32) -> u32 {
     return add_node(p, .fn_decl, fn_name, fn_rec, 0);
 }
 
-// decl := `export`? `fn` ...   (v0: fn only; a struct/const/global decl would branch here on its
-// leading keyword, exactly as `parse_fn` does — the `export`? prefix already generalizes.)
+// struct := `struct` IDENT `{` (IDENT `:` Type (`,`)?)* `}`  (trailing comma allowed, per MC)
+fn parse_struct(p: *mut Parser, exported: u32) -> u32 {
+    p_advance(p); // `struct`
+    let sname: u32 = p.tok as u32;
+    expect(p, .identifier);
+    expect(p, .l_brace);
+    var pairs: Vec<u32> = vec_new(u32, p.a); // (name_tok, type_node) pairs
+    if !at(p, .r_brace) {
+        while true {
+            let fname: u32 = p.tok as u32;
+            expect(p, .identifier);
+            expect(p, .colon);
+            let fty: u32 = parse_type(p);
+            vec_push(u32, &pairs, fname);
+            vec_push(u32, &pairs, fty);
+            if !eat(p, .comma) {
+                break;
+            }
+            if at(p, .r_brace) {
+                break; // trailing comma
+            }
+        }
+    }
+    expect(p, .r_brace);
+    let run: u32 = emit_pair_list(p, &pairs);
+    vec_free(u32, &pairs);
+    return add_node(p, .struct_decl, sname, run, exported);
+}
+
+// decl := `export`? (`fn` ... | `struct` ...)
 fn parse_decl(p: *mut Parser) -> u32 {
     var exported: u32 = 0;
     if eat(p, .kw_export) {
         exported = 1;
+    }
+    if at(p, .kw_struct) {
+        return parse_struct(p, exported);
     }
     if at(p, .kw_fn) {
         return parse_fn(p, exported);

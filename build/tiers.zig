@@ -381,6 +381,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-emit-test"));
     // mcc2-cli-test builds the standalone mcc2 CLI (selfhost/main.mc) and measures it at scale.
     m0_step.dependOn(ctx.cmd("mcc2-cli-test"));
+    // selfhost-struct-test exercises P5.1 STRUCT support end to end (parser+sema+emit_c -> clang).
+    m0_step.dependOn(ctx.cmd("selfhost-struct-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

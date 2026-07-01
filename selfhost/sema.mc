@@ -69,6 +69,8 @@ open enum SmErr: u32 {
     ret_mismatch,     // 5
     assign_immutable, // 6
     type_mismatch,    // 7  binary-operand / let-annotation mismatch
+    unknown_field,    // 8  member access / struct-literal field not present on the struct
+    struct_target,    // 9  struct literal `.{...}` used where no struct target type is known
 }
 
 // A resolved type. Copyable (all scalar fields), so it stores freely in `Vec`/`StrHashMap`.
@@ -86,6 +88,19 @@ struct SmSig {
     param_count: u32,
 }
 
+// One struct field: its name (recovered by lexeme offsets, like a named `SmType`) + resolved type.
+struct SmField {
+    nstart: usize,
+    nlen: usize,
+    ty: SmType,
+}
+
+// A collected struct definition: a `(start, count)` window into `SmState.fields`.
+struct SmStruct {
+    field_start: u32,
+    field_count: u32,
+}
+
 // The analyzer state + owned inputs. `p` OWNS the parser arena (see selfhost/parser.mc); free the
 // whole thing exactly once with `sema_free`. `fns`/`sigs`/`ptypes` are the pass-1 symbol table;
 // `locals` is rebuilt per function in pass 2; `cur_ret` is the function currently being checked.
@@ -95,6 +110,10 @@ struct SmState {
     sigs: Vec<SmSig>,
     ptypes: Vec<SmType>,       // flattened param types for all sigs
     locals: StrHashMap<SmType>,// current function's params + lets
+    muts: StrHashMap<u32>,     // current function's MUTABLE locals (a `var`); value 1 = mutable
+    structs: StrHashMap<u32>,  // struct name -> struct_defs index + 1 (0 = absent)
+    struct_defs: Vec<SmStruct>,
+    fields: Vec<SmField>,      // flattened fields for all structs
     cur_ret: SmType,
     err_count: u32,
     first_err: SmErr,
@@ -156,6 +175,14 @@ fn sm_name_text(s: *mut SmState, t: SmType) -> []const u8 {
     let src: []const u8 = par.source;
     let end: usize = t.nstart + t.nlen;
     return src[t.nstart..end];
+}
+
+// The lexeme naming a struct field (offsets captured at collection time, like `sm_name_text`).
+fn sm_field_name(s: *mut SmState, f: SmField) -> []const u8 {
+    let par: *mut Parser = &s.p;
+    let src: []const u8 = par.source;
+    let end: usize = f.nstart + f.nlen;
+    return src[f.nstart..end];
 }
 
 // ----- type construction from AST type nodes -----
@@ -373,6 +400,91 @@ fn sm_check_call(s: *mut SmState, node: u32) -> SmType {
     return sig.ret;
 }
 
+// Resolve `obj.field`: `obj` must be a named struct type (a bare value or a pointer-to-struct —
+// the subset dereferences implicitly). Returns the field's type, or reports `unknown_field` and
+// yields `unknown` when the base is not a known struct or the field is absent.
+fn sm_field_type(s: *mut SmState, obj: SmType, field_tok: u32) -> SmType {
+    if obj.kind.raw() != 15 {
+        sm_err(s, .unknown_field);
+        return sm_ty_unknown();
+    }
+    let sname: []const u8 = sm_name_text(s, obj);
+    let present: bool = strmap_contains(u32, &s.structs, sname);
+    if !present {
+        sm_err(s, .unknown_field);
+        return sm_ty_unknown();
+    }
+    let sref: u32 = strmap_get_or(u32, &s.structs, sname, 0);
+    let sidx: u32 = sref - 1;
+    let sd: SmStruct = vec_get(SmStruct, &s.struct_defs, sidx as usize);
+    let ftext: []const u8 = sm_tok_text(s, field_tok);
+    var fi: u32 = 0;
+    while fi < sd.field_count {
+        let f: SmField = vec_get(SmField, &s.fields, (sd.field_start + fi) as usize);
+        let fname: []const u8 = sm_field_name(s, f);
+        let m: bool = mem_eql(ftext, fname);
+        if m {
+            return f.ty;
+        }
+        fi = fi + 1;
+    }
+    sm_err(s, .unknown_field);
+    return sm_ty_unknown();
+}
+
+// Check a struct literal `.{ .f = e, ... }` against a KNOWN expected type. Each field must exist on
+// the target struct (else `unknown_field`) and its value type must match the field type. A literal
+// whose expected type is not a known struct reports `struct_target` (values are still walked for
+// nested errors).
+fn sm_check_struct_lit(s: *mut SmState, node: u32, expected: SmType) -> void {
+    let nd: Node = sm_node(s, node);
+    let run: u32 = nd.lhs;
+    let fcount: u32 = sm_extra(s, run);
+    let ek: u32 = expected.kind.raw();
+    var known: bool = false;
+    if ek == 15 {
+        let sname: []const u8 = sm_name_text(s, expected);
+        known = strmap_contains(u32, &s.structs, sname);
+    }
+    if !known {
+        sm_err(s, .struct_target);
+    }
+    var fi: u32 = 0;
+    while fi < fcount {
+        let fname_tok: u32 = sm_extra(s, run + 1 + fi * 2);
+        let val_node: u32 = sm_extra(s, run + 1 + fi * 2 + 1);
+        let vt: SmType = sm_type_of_expr(s, val_node);
+        if known {
+            let ft: SmType = sm_field_type(s, expected, fname_tok);
+            let fk: u32 = ft.kind.raw();
+            if fk != 0 {
+                let m: bool = sm_types_match(s, ft, vt);
+                if !m {
+                    sm_err(s, .type_mismatch);
+                }
+            }
+        }
+        fi = fi + 1;
+    }
+}
+
+// True when an assignment target's root binding is a mutable local (`var`). Walks through member
+// (`.f`) and index (`[i]`) chains to the root identifier; anything else is not assignable.
+fn sm_target_mutable(s: *mut SmState, node: u32) -> bool {
+    let nd: Node = sm_node(s, node);
+    if nd.kind == .ident_expr {
+        let name: []const u8 = sm_tok_text(s, nd.main_token);
+        return strmap_contains(u32, &s.muts, name);
+    }
+    if nd.kind == .field {
+        return sm_target_mutable(s, nd.lhs);
+    }
+    if nd.kind == .index {
+        return sm_target_mutable(s, nd.lhs);
+    }
+    return false;
+}
+
 // The type of an expression node (recursively). Dispatches over `NodeKind` with a `switch`; the
 // open enum forces a `_` default (there is no exhaustiveness help — see the ledger note).
 fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
@@ -399,7 +511,13 @@ fn sm_type_of_expr(s: *mut SmState, node: u32) -> SmType {
             return sm_ty_unknown();
         }
         .field => {
-            sm_type_of_expr(s, nd.lhs); // discard: field types are not tracked in the subset
+            let obj: SmType = sm_type_of_expr(s, nd.lhs);
+            return sm_field_type(s, obj, nd.main_token);
+        }
+        .struct_lit => {
+            // A struct literal is only valid where a struct target type is known (a typed `let`/
+            // `var` init or a `-> S` return); reaching it here means no target was threaded in.
+            sm_check_struct_lit(s, node, sm_ty_unknown());
             return sm_ty_unknown();
         }
         .bin_add => { return sm_arith(s, nd); }
@@ -429,19 +547,30 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
         sm_check_block(s, node);
         return;
     }
-    if nd.kind == .let_decl {
-        let it: SmType = sm_type_of_expr(s, nd.rhs);
-        var bind_ty: SmType = it;
+    if nd.kind == .let_decl || nd.kind == .var_decl {
+        let init_nd: Node = sm_node(s, nd.rhs);
+        var bind_ty: SmType = sm_ty_unknown();
         if nd.lhs != 0 {
             let ann: SmType = sm_type_from_node(s, nd.lhs);
-            let matched: bool = sm_types_match(s, ann, it);
-            if !matched {
-                sm_err(s, .type_mismatch);
+            if init_nd.kind == .struct_lit {
+                sm_check_struct_lit(s, nd.rhs, ann);
+            } else {
+                let it: SmType = sm_type_of_expr(s, nd.rhs);
+                let matched: bool = sm_types_match(s, ann, it);
+                if !matched {
+                    sm_err(s, .type_mismatch);
+                }
             }
             bind_ty = ann;
+        } else {
+            // No annotation: a struct literal has no target type here (error via sm_type_of_expr).
+            bind_ty = sm_type_of_expr(s, nd.rhs);
         }
         let name: []const u8 = sm_tok_text(s, nd.main_token);
         strmap_put(SmType, &s.locals, name, bind_ty);
+        if nd.kind == .var_decl {
+            strmap_put(u32, &s.muts, name, 1);
+        }
         return;
     }
     if nd.kind == .return_stmt {
@@ -449,6 +578,12 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
             if s.cur_ret.kind != .void_ {
                 sm_err(s, .ret_mismatch);
             }
+            return;
+        }
+        let rv_nd: Node = sm_node(s, nd.lhs);
+        if rv_nd.kind == .struct_lit {
+            // `return .{...}` in an `-> S` fn: the return type is the struct target.
+            sm_check_struct_lit(s, nd.lhs, s.cur_ret);
             return;
         }
         let vt: SmType = sm_type_of_expr(s, nd.lhs);
@@ -480,18 +615,46 @@ fn sm_check_stmt(s: *mut SmState, node: u32) -> void {
         return;
     }
     if nd.kind == .assign {
-        sm_type_of_expr(s, nd.rhs); // discard: walk rhs for errors (unknown names, etc.)
         let lnode: Node = sm_node(s, nd.lhs);
         if lnode.kind == .ident_expr {
             let name: []const u8 = sm_tok_text(s, lnode.main_token);
             let is_local: bool = strmap_contains(SmType, &s.locals, name);
             if is_local {
-                // Every binding in the P2 subset is immutable (no `var`; params immutable, G20).
+                let is_mut: bool = strmap_contains(u32, &s.muts, name);
+                if !is_mut {
+                    // A `let` local or a param — immutable (assigning it is an error).
+                    sm_err(s, .assign_immutable);
+                    return;
+                }
+                let lt: SmType = strmap_get_or(SmType, &s.locals, name, sm_ty_unknown());
+                let rt: SmType = sm_type_of_expr(s, nd.rhs);
+                let m: bool = sm_types_match(s, lt, rt);
+                if !m {
+                    sm_err(s, .type_mismatch);
+                }
+                return;
+            }
+            sm_type_of_expr(s, nd.rhs); // walk rhs for errors
+            sm_type_of_expr(s, nd.lhs); // unknown binding -> unknown-name error
+            return;
+        }
+        if lnode.kind == .field {
+            // Member assignment `a.f = e`: the root binding must be a mutable `var`.
+            let root_mut: bool = sm_target_mutable(s, nd.lhs);
+            if !root_mut {
                 sm_err(s, .assign_immutable);
                 return;
             }
+            let lt: SmType = sm_type_of_expr(s, nd.lhs); // checks the field access (unknown_field)
+            let rt: SmType = sm_type_of_expr(s, nd.rhs);
+            let m: bool = sm_types_match(s, lt, rt);
+            if !m {
+                sm_err(s, .type_mismatch);
+            }
+            return;
         }
-        sm_type_of_expr(s, nd.lhs); // discard: not a known binding -> surface an unknown-name error
+        sm_type_of_expr(s, nd.rhs); // walk both sides of any other assignment target for errors
+        sm_type_of_expr(s, nd.lhs);
         return;
     }
     if nd.kind == .expr_stmt {
@@ -524,6 +687,26 @@ fn sm_collect(s: *mut SmState, root: u32) -> void {
     while di < dcount {
         let d: u32 = sm_extra(s, drun + 1 + di);
         let dn: Node = sm_node(s, d);
+        if dn.kind == .struct_decl {
+            let srun: u32 = dn.lhs;
+            let fcount: u32 = sm_extra(s, srun);
+            let fstart: u32 = vec_len(SmField, &s.fields) as u32;
+            let par: *mut Parser = &s.p;
+            var fi: u32 = 0;
+            while fi < fcount {
+                let name_tok: u32 = sm_extra(s, srun + 1 + fi * 2);
+                let type_node: u32 = sm_extra(s, srun + 1 + fi * 2 + 1);
+                let fty: SmType = sm_type_from_node(s, type_node);
+                let fst: usize = token_start_at(&par.tl, name_tok as usize);
+                let fln: usize = token_len_at(&par.tl, name_tok as usize);
+                vec_push(SmField, &s.fields, .{ .nstart = fst, .nlen = fln, .ty = fty });
+                fi = fi + 1;
+            }
+            let sidx: u32 = vec_len(SmStruct, &s.struct_defs) as u32;
+            vec_push(SmStruct, &s.struct_defs, .{ .field_start = fstart, .field_count = fcount });
+            let sname: []const u8 = sm_tok_text(s, dn.main_token);
+            strmap_put(u32, &s.structs, sname, sidx + 1);
+        }
         if dn.kind == .fn_decl {
             let frec: u32 = dn.lhs;
             let params_run: u32 = sm_extra(s, frec + 1);
@@ -562,8 +745,9 @@ fn sm_check_fns(s: *mut SmState, root: u32) -> void {
             let params_run: u32 = sm_extra(s, frec + 1);
             let ret_node: u32 = sm_extra(s, frec + 2);
             let body: u32 = sm_extra(s, frec + 3);
-            // Reset the locals table (reusable after free) and seed the params.
+            // Reset the locals + mutability tables (reusable after free) and seed the params.
             strmap_free(SmType, &s.locals);
+            strmap_free(u32, &s.muts);
             s.cur_ret = sm_type_from_node(s, ret_node);
             let pcount: u32 = sm_extra(s, params_run);
             var pi: u32 = 0;
@@ -593,6 +777,10 @@ export fn sema_check(source: []const u8, a: *mut dyn Allocator) -> SmState {
         .sigs = vec_new(SmSig, a),
         .ptypes = vec_new(SmType, a),
         .locals = strmap_new(SmType, a),
+        .muts = strmap_new(u32, a),
+        .structs = strmap_new(u32, a),
+        .struct_defs = vec_new(SmStruct, a),
+        .fields = vec_new(SmField, a),
         .cur_ret = sm_ty_unknown(),
         .err_count = 0,
         .first_err = .none,
@@ -621,7 +809,11 @@ export fn sema_parse_err_count(s: *SmState) -> u32 {
 // Release the parser arena and all symbol tables. Call exactly once when done.
 export fn sema_free(s: *mut SmState) -> void {
     strmap_free(SmType, &s.locals);
+    strmap_free(u32, &s.muts);
+    strmap_free(u32, &s.structs);
     strmap_free(u32, &s.fns);
+    vec_free(SmStruct, &s.struct_defs);
+    vec_free(SmField, &s.fields);
     vec_free(SmSig, &s.sigs);
     vec_free(SmType, &s.ptypes);
     parser_free(&s.p);

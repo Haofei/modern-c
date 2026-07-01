@@ -214,23 +214,68 @@ fn e_expr(p: *mut Parser, sb: *mut StrBuf, n: u32) -> void {
         sb_put_str(sb, fld);
         return;
     }
+    if nd.kind == .struct_lit {
+        // Cast-less designated initializer (a target-typed compound literal is emitted by
+        // `e_struct_lit` where the annotation type is known — see `e_stmt`).
+        e_struct_lit_body(p, sb, n);
+        return;
+    }
     // Any other node kind is outside the emitter subset; emit nothing.
+}
+
+// Emit the `{ .f0 = e0, ... }` body of a struct literal (no leading cast). The field run is
+// `[count, (name_tok, val_node)*]` (see parser `struct_lit`).
+fn e_struct_lit_body(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
+    let nd: Node = e_node(p, node);
+    let run: u32 = nd.lhs;
+    let fcount: u32 = e_extra(p, run);
+    sb_put_cstr(sb, "{ ");
+    var fi: u32 = 0;
+    while fi < fcount {
+        if fi > 0 {
+            sb_put_cstr(sb, ", ");
+        }
+        let name_tok: u32 = e_extra(p, run + 1 + fi * 2);
+        let val_node: u32 = e_extra(p, run + 1 + fi * 2 + 1);
+        sb_put_cstr(sb, ".");
+        let fname: []const u8 = e_tok_text(p, name_tok);
+        sb_put_str(sb, fname);
+        sb_put_cstr(sb, " = ");
+        e_expr(p, sb, val_node);
+        fi = fi + 1;
+    }
+    sb_put_cstr(sb, " }");
+}
+
+// Emit a target-typed compound literal `(TYPE){ .f0 = e0, ... }` for a struct literal assigned to
+// a known type (a typed `let`/`var` init). `type_node` is the annotation's AST type node.
+fn e_struct_lit(p: *mut Parser, sb: *mut StrBuf, node: u32, type_node: u32) -> void {
+    sb_put_cstr(sb, "(");
+    e_type(p, sb, type_node);
+    sb_put_cstr(sb, ")");
+    e_struct_lit_body(p, sb, node);
 }
 
 // ----- statement / block emission -----
 
 fn e_stmt(p: *mut Parser, sb: *mut StrBuf, n: u32, depth: u32) -> void {
     let nd: Node = e_node(p, n);
-    if nd.kind == .let_decl {
+    if nd.kind == .let_decl || nd.kind == .var_decl {
         e_indent(sb, depth);
-        e_type(p, sb, nd.lhs); // 0 (no annotation) emits "void" via e_type; override below
-        // The subset always annotates in practice; a bare `let` with no type would emit `void`,
-        // which is not a valid C variable type — note in the report. We keep e_type's behavior.
+        e_type(p, sb, nd.lhs); // 0 (no annotation) emits "void" via e_type
+        // The subset always annotates in practice; a bare `let`/`var` with no type would emit
+        // `void`, which is not a valid C variable type. `var` lowers identically to `let` in C.
         sb_put_cstr(sb, " ");
         let name: []const u8 = e_tok_text(p, nd.main_token);
         sb_put_str(sb, name);
         sb_put_cstr(sb, " = ");
-        e_expr(p, sb, nd.rhs);
+        let init_nd: Node = e_node(p, nd.rhs);
+        if init_nd.kind == .struct_lit {
+            // Emit a target-typed compound literal using the annotation's type.
+            e_struct_lit(p, sb, nd.rhs, nd.lhs);
+        } else {
+            e_expr(p, sb, nd.rhs);
+        }
         sb_put_cstr(sb, ";\n");
         return;
     }
@@ -373,13 +418,50 @@ fn e_fn(p: *mut Parser, sb: *mut StrBuf, fn_node: u32) -> void {
     sb_put_cstr(sb, "\n\n");
 }
 
-// Emit the whole module: the fixed prelude, then one C function per `fn` decl.
+// Emit a struct declaration as a C typedef: `typedef struct NAME { T0 f0; ... } NAME;`. The field
+// run is `[count, (name_tok, type_node)*]` (see parser `struct_decl`).
+fn e_struct_decl(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
+    let nd: Node = e_node(p, node);
+    sb_put_cstr(sb, "typedef struct ");
+    let name: []const u8 = e_tok_text(p, nd.main_token);
+    sb_put_str(sb, name);
+    sb_put_cstr(sb, " {\n");
+    let run: u32 = nd.lhs;
+    let fcount: u32 = e_extra(p, run);
+    var fi: u32 = 0;
+    while fi < fcount {
+        let name_tok: u32 = e_extra(p, run + 1 + fi * 2);
+        let type_node: u32 = e_extra(p, run + 1 + fi * 2 + 1);
+        sb_put_cstr(sb, "    ");
+        e_type(p, sb, type_node);
+        sb_put_cstr(sb, " ");
+        let fname: []const u8 = e_tok_text(p, name_tok);
+        sb_put_str(sb, fname);
+        sb_put_cstr(sb, ";\n");
+        fi = fi + 1;
+    }
+    sb_put_cstr(sb, "} ");
+    sb_put_str(sb, name);
+    sb_put_cstr(sb, ";\n\n");
+}
+
+// Emit the whole module: the fixed prelude, every struct typedef (so they precede any use), then
+// one C function per `fn` decl.
 fn e_module(p: *mut Parser, sb: *mut StrBuf) -> void {
-    sb_put_cstr(sb, "#include <stdint.h>\n#include <stddef.h>\n\n");
+    sb_put_cstr(sb, "#include <stdint.h>\n#include <stddef.h>\n#include <stdbool.h>\n\n");
     let root: u32 = p.root;
     let rnode: Node = e_node(p, root);
     let run: u32 = rnode.lhs;
     let count: u32 = e_extra(p, run);
+    var si: u32 = 0;
+    while si < count {
+        let sd: u32 = e_extra(p, run + 1 + si);
+        let sdn: Node = e_node(p, sd);
+        if sdn.kind == .struct_decl {
+            e_struct_decl(p, sb, sd);
+        }
+        si = si + 1;
+    }
     var i: u32 = 0;
     while i < count {
         let d: u32 = e_extra(p, run + 1 + i);
