@@ -365,6 +365,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("vec-test"));
     // hashmap-test exercises the generic heap-backed std/collections/hashmap StrHashMap<V> (needs clang).
     m0_step.dependOn(ctx.cmd("hashmap-test"));
+    // strbuf-test exercises the growable std/strbuf StrBuf over Vec<u8> (needs clang).
+    m0_step.dependOn(ctx.cmd("strbuf-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).
