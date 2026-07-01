@@ -749,6 +749,12 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-uaccess-bench", "Page-table uaccess microbenchmark under QEMU (LLVM backend): 32x 1 MiB copy_to_user_pt + copy_from_user_pt cycle totals", &.{ "bash", "tools/mem/uaccess-bench.sh", "zig-out/bin/mcc", "llvm" });
 
+    // Phase 2.2 scheduler pick-path microbenchmark (NOT in m0): average cycles per
+    // next_runnable() round-robin pick, before/after the O(1) run-queue change.
+    _ = h.addScriptTest(ctx, "sched-bench", "Scheduler microbenchmark under QEMU: average cycles per next_runnable() round-robin pick (SCHED-CYCLES) via rdcycle", &.{ "bash", "tools/proc/sched-bench.sh", "zig-out/bin/mcc", "c" });
+
+    _ = h.addScriptTest(ctx, "llvm-sched-bench", "Scheduler microbenchmark under QEMU (LLVM backend): average cycles per next_runnable() round-robin pick", &.{ "bash", "tools/proc/sched-bench.sh", "zig-out/bin/mcc", "llvm" });
+
     // kernel/core/elf_loader: real multi-segment ELF loader (Phase 1 of the QuickJS-agent
     // plan / review F3) — maps every PT_LOAD at its vaddr with per-segment perms, zeroes bss.
     _ = h.addScriptTest(ctx, "elf-loader-test", "Multi-segment ELF64 loader under QEMU: maps every PT_LOAD at its vaddr with per-segment R/W/X perms, copies file bytes, zeroes bss; synthetic 2-segment image, asserts mappings/content/bss/perms", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });
