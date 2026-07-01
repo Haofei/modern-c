@@ -1028,6 +1028,8 @@ pub fn register(ctx: *h.Ctx) void {
     // and writes+reads every page, proving the demand-mapped frames are real.
     _ = h.addScriptTest(ctx, "sbrk-grow-test", "Demand-grown heap: a confined agent's libc heap grows past the static arena via SYS_SBRK (40 MiB, every page written+read) under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-sbrk-grow-test", "Demand-grown heap (LLVM): a confined agent's libc heap grows past the static arena via SYS_SBRK under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "sbrk-cap-test", "Demand-grown heap cap: a confined agent grows past the arena then hits the unified-ledger memory ceiling with a clean NULL (no trap) under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "c", "examples/apps/sbrk_cap.c", "SBRK-CAP-OK", "sbrk-cap" });
+    _ = h.addScriptTest(ctx, "llvm-sbrk-cap-test", "Demand-grown heap cap (LLVM): a confined agent grows past the arena then hits the unified-ledger memory ceiling with a clean NULL under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/sbrk_cap.c", "SBRK-CAP-OK", "sbrk-cap" });
 
     // WASM-agent Phase 5 CPU-runaway watchdog: a runaway agent (infinite loop, no syscalls) is
     // preempted by the machine-timer watchdog and KILLED past its CPU budget — a coarse liveness

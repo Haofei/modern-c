@@ -9,6 +9,7 @@
 import "kernel/core/elf_loader.mc";
 import "kernel/arch/riscv64/paging.mc";
 import "kernel/core/heap.mc";
+import "kernel/core/ledger.mc";     // unified resource ledger: enforces the per-agent memory grow cap
 import "kernel/core/syscall.mc";
 import "kernel/core/uaccess.mc";
 import "kernel/core/console.mc";
@@ -60,6 +61,7 @@ global g_pool_next: usize;      // bump frontier into the physical frame pool (n
 global g_pool_end: usize;       // one past the last frame in the pool
 global g_frames_ready: bool;    // app_build stood up the pool (defensive: deny sbrk if not)
 global g_brk: usize;            // the agent's current break VA (0 = not yet started -> HEAP_BASE)
+global g_mem_ledger: Ledger;    // per-agent memory accounting; its Resource.Memory limit is the grow cap
 
 // app_build status codes: the loader's typed LoadError, preserved across the u64-satp C ABI
 // boundary so callers (and tests) can tell WHY a load failed rather than seeing a bare 0.
@@ -825,14 +827,14 @@ fn sys_sbrk(delta: u64, a1: u64, a2: u64) -> u64 {
     if old > usize_max - need {
         return bitcast<u64>(E_NOMEM);
     }
-    // Per-agent grow ceiling: refuse to advance the break past HEAP_BASE + SBRK_CAP_BYTES. Enforced
-    // BEFORE mapping so an over-cap request maps nothing (the agent just gets NULL from malloc).
-    if need > SBRK_CAP_BYTES {
-        return bitcast<u64>(E_NOMEM);
-    }
-    let grown: usize = old - HEAP_BASE; // old >= HEAP_BASE (set on first call), so this cannot underflow
-    if grown > SBRK_CAP_BYTES - need {
-        return bitcast<u64>(E_NOMEM);
+    // Per-agent grow ceiling, enforced through the UNIFIED resource ledger (kernel/core/ledger.mc):
+    // charge Resource.Memory for this grow; an over-limit charge maps NOTHING and the agent just gets
+    // NULL from malloc (never a trap). ledger_charge is overflow-safe (headroom compare), so a huge
+    // `need` is rejected cleanly. The limit is g_mem_ledger's Resource.Memory ceiling, set in app_build
+    // (= SBRK_CAP_BYTES today; on real hardware this ceiling would be min(policy, FDT free-RAM window)).
+    switch ledger_charge(&g_mem_ledger, .Memory, need as u64) {
+        ok(v) => {}
+        err(e) => { return bitcast<u64>(E_NOMEM); }
     }
 
     var off: usize = 0;
@@ -910,6 +912,11 @@ export fn app_build(image_base: usize, image_len: usize, region_base: usize, reg
     g_pool_end = SBRK_POOL_BASE + SBRK_POOL_LEN; // checked add: traps if the window overflows the space
     g_frames_ready = true;
     g_brk = HEAP_BASE;
+    // The per-agent grow ceiling lives in the unified ledger: set Resource.Memory's limit to the cap
+    // (bounded by the physical pool). sys_sbrk charges this ledger per grow and fails closed on
+    // over-limit. On real hardware SBRK_CAP_BYTES/the pool would be sized from the FDT free-RAM window.
+    ledger_init(&g_mem_ledger);
+    ledger_set_limit(&g_mem_ledger, .Memory, SBRK_CAP_BYTES as u64);
 
     // M5b.2: stand up the REAL capability-checked FS tool world before the agent can issue any
     // SYS_SUBMIT. The agent gets a path cap rooted at "/ws" with read+write rights, and an
