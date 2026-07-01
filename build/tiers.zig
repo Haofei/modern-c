@@ -379,6 +379,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("selfhost-sema-test"));
     // selfhost-emit-test exercises the Phase-4 self-hosted C emitter (lex->parse->emit->clang->run).
     m0_step.dependOn(ctx.cmd("selfhost-emit-test"));
+    // mcc2-cli-test builds the standalone mcc2 CLI (selfhost/main.mc) and measures it at scale.
+    m0_step.dependOn(ctx.cmd("mcc2-cli-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

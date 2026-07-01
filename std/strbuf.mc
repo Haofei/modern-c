@@ -46,6 +46,13 @@ export fn sb_byte(sb: *StrBuf, i: usize) -> u8 {
     return vec_get(u8, &sb.v, i);
 }
 
+// The address of the contiguous backing bytes (pa(0) while nothing has been
+// appended). Paired with `sb_len`, this lets a hosted caller flush the whole
+// buffer in ONE `io_write` instead of one syscall per byte.
+export fn sb_ptr(sb: *StrBuf) -> PAddr {
+    return sb.v.data;
+}
+
 // Append one byte, growing storage if full. Amortized O(1).
 export fn sb_put_byte(sb: *mut StrBuf, b: u8) -> void {
     vec_push(u8, &sb.v, b);
