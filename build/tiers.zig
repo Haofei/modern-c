@@ -361,6 +361,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("pkg-registry-test"));
     // stack-test exercises the generic std/stack collection (needs clang).
     m0_step.dependOn(ctx.cmd("stack-test"));
+    // vec-test exercises the generic heap-backed std/collections/dynarray Vec<T> (needs clang).
+    m0_step.dependOn(ctx.cmd("vec-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

@@ -64,6 +64,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "stack-test", "Build, link, and run the generic std/stack collection", &.{ "bash", "tools/toolchain/stack-test.sh", "zig-out/bin/mcc" });
 
+    _ = h.addScriptTest(ctx, "vec-test", "Build, link, and run the generic heap-backed std/collections/dynarray (Vec<T>)", &.{ "bash", "tools/toolchain/vec-test.sh", "zig-out/bin/mcc" });
+
     _ = h.addScriptTest(ctx, "pkg-test", "Build a package from its manifest with mcc-pkg, link, and run it", &.{ "bash", "tools/toolchain/pkg-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "llvm-pkg-test", "Build a package from its manifest through LLVM, link, and run it", &.{ "bash", "tools/toolchain/llvm-pkg-test.sh", "zig-out/bin/mcc" });
