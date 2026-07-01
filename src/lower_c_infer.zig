@@ -507,6 +507,12 @@ pub fn conditionOperandTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, lo
         .unary => |node| conditionOperandTypeForEmission(ctx, node.expr.*, locals),
         .binary => numericExprTypeForEmission(ctx, expr, locals),
         .index => operandEmitType(ctx, expr, locals),
+        // A struct-field read — including one off a call result (`mk(x).v == 7`) —
+        // resolves through operandEmitType, which walks the base (calls included via
+        // source_type_for_expr) to the field's declared type. Without this a sequenced
+        // comparison in a value context (return / let-init) could not recover the
+        // operand type and failed UnsupportedCEmission.
+        .member => operandEmitType(ctx, expr, locals),
         else => null,
     };
 }

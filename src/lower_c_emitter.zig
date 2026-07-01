@@ -4333,6 +4333,7 @@ const CEmitter = struct {
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
         if (byteViewCallReturnTypeForCall(call)) |ty| return ty;
         if (self.atomicLoadReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.dynDispatchReturnTypeForCall(call, locals)) |ty| return ty;
         if (self.closureCalleeType(call.callee.*, locals)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
@@ -4358,6 +4359,22 @@ const CEmitter = struct {
         if (!std.mem.eql(u8, member.name.text, "load")) return null;
         const payload = self.atomicLocalPayload(member.base.*, locals) orelse return null;
         return simpleNameType(payload, member.name.span);
+    }
+
+    // `<open-enum expr>.raw()` yields the enum's underlying representation type
+    // (`open enum E: u32` -> `u32`), so a comparison/return whose operand is a raw
+    // conversion — `e.raw() == 1` — can be typed for emission in a value context
+    // (return / let-init) instead of failing UnsupportedCEmission. The `if`-condition
+    // path emits this inline and never needs the operand type; the sequenced value path does.
+    fn rawMethodReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (call.type_args.len != 0) return null;
+        if (call.args.len != 0) return null;
+        const member = memberCallee(call.callee.*) orelse return null;
+        if (!std.mem.eql(u8, member.name.text, "raw")) return null;
+        const enum_name = self.enumNameForValueExpr(member.base.*, locals) orelse return null;
+        const enum_decl = self.enums.get(enum_name) orelse return null;
+        if (!enum_decl.is_open) return null;
+        return enum_decl.repr;
     }
 
     fn assumeNoaliasReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -4390,6 +4407,7 @@ const CEmitter = struct {
         if (self.rawManyOffsetReturnTypeForCall(call, locals)) |ty| return ty;
         if (byteViewCallReturnTypeForCall(call)) |ty| return ty;
         if (self.atomicLoadReturnTypeForCall(call, locals)) |ty| return ty;
+        if (self.rawMethodReturnTypeForCall(call, locals)) |ty| return ty;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
         return info.return_type;
